@@ -1,8 +1,8 @@
 // Control UI tests prove self-learning config conflict recovery through the mocked Gateway.
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -16,10 +16,6 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/self-learning-config-retry",
-);
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -73,8 +69,6 @@ describeControlUiE2e("Skill Workshop self-learning config recovery mocked Gatewa
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
@@ -85,6 +79,7 @@ describeControlUiE2e("Skill Workshop self-learning config recovery mocked Gatewa
   });
 
   it("enables self-learning after refreshing and replaying a stale-hash patch", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("self-learning-config-retry");
     const context = await browser.newContext({
       locale: "en-US",
       recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },

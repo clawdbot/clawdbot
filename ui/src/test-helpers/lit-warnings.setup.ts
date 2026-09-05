@@ -1,8 +1,4 @@
-import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import { setSessionPathBuilder } from "../app-session-path-builder.ts";
 import { installSafeLocalStorageForTesting } from "./storage.ts";
-
-setSessionPathBuilder(buildControlUiSessionPath);
 
 // Lit emits a one-time dev-mode warning in test builds. Pre-mark it as issued
 // so broad UI suites stay signal-heavy instead of repeating the same console.warn.

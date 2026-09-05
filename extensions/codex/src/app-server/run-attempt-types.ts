@@ -20,10 +20,6 @@ export type CodexRunAttemptOptions = {
     gatewayTimeoutMs?: number;
     hookTimeoutSec?: number;
   };
-  turnCompletionIdleTimeoutMs?: number;
-  turnAssistantCompletionIdleTimeoutMs?: number;
-  postToolRawAssistantCompletionIdleTimeoutMs?: number;
-  turnTerminalIdleTimeoutMs?: number;
   clientFactory?: CodexAppServerClientFactory;
 };
 

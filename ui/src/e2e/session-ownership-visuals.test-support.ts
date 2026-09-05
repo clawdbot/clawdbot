@@ -1,4 +1,27 @@
-import type { BrowserContext, Locator, Page } from "playwright";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { Browser, Locator, Page } from "playwright";
+import { expect } from "vitest";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
+
+export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+export function createSessionOwnershipProofContext(
+  owner: { readonly artifactDir: string; readonly browser: Browser },
+  directory: "drafts-ux" | "session-owner-stack",
+) {
+  const viewport = { height: 800, width: 1200 };
+  return owner.browser.newContext({
+    viewport,
+    ...(captureUiProofEnabled
+      ? { recordVideo: { dir: path.join(owner.artifactDir, directory), size: viewport } }
+      : {}),
+  });
+}
 
 type AvatarFixture = {
   id: string;
@@ -6,31 +29,18 @@ type AvatarFixture = {
   label: string;
 };
 
-async function createAvatarPng(context: BrowserContext, background: string, label: string) {
-  const avatarPage = await context.newPage();
-  try {
-    await avatarPage.setViewportSize({ width: 64, height: 64 });
-    await avatarPage.setContent(
-      `<body style="margin:0;width:64px;height:64px;display:grid;place-items:center;background:${background};color:white;font:700 26px system-ui">${label}</body>`,
-    );
-    return await avatarPage.screenshot({ animations: "disabled", type: "png" });
-  } finally {
-    await avatarPage.close().catch(() => {});
-  }
-}
-
-export async function routeAvatarFixtures(
-  context: BrowserContext,
-  page: Page,
-  fixtures: readonly AvatarFixture[],
-) {
+export async function routeAvatarFixtures(page: Page, fixtures: readonly AvatarFixture[]) {
   await Promise.all(
-    fixtures.map(async ({ id, background, label }) => {
-      const body = await createAvatarPng(context, background, label);
-      await page.route(`**/api/users/${id}/avatar*`, (route) =>
-        route.fulfill({ body, contentType: "image/png", status: 200 }),
-      );
-    }),
+    fixtures.map(({ id, background, label }) =>
+      page.route(`**/api/users/${id}/avatar*`, (route) =>
+        route.fulfill({
+          // Static input assets must not depend on browser screenshot availability.
+          body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" fill="${background}"/><text x="32" y="32" text-anchor="middle" dominant-baseline="central" fill="white" style="font:700 26px system-ui">${label}</text></svg>`,
+          contentType: "image/svg+xml",
+          status: 200,
+        }),
+      ),
+    ),
   );
 }
 
@@ -47,4 +57,64 @@ export async function avatarLabelCenterDelta(row: Locator) {
       avatarBounds.top + avatarBounds.height / 2 - (labelBounds.top + labelBounds.height / 2),
     );
   });
+}
+
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  surface: Locator,
+  fileName: string,
+  content: readonly Locator[],
+) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(path.join(owner.artifactDir, "drafts-ux"), { recursive: true });
+  await writeFile(
+    path.join(owner.artifactDir, "drafts-ux", fileName),
+    await takeControlUiViewportScreenshot(surface.page(), surface, content),
+  );
+}
+
+export async function captureSessionOwnerProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(path.join(owner.artifactDir, "session-owner-stack"), { recursive: true });
+  await writeFile(
+    path.join(owner.artifactDir, "session-owner-stack", fileName),
+    await takeControlUiElementScreenshot(page, page.locator(".sidebar-sessions"), [
+      page.locator(".sidebar-recent-session").first(),
+    ]),
+  );
+}
+
+export async function captureSessionOwnerPageProof(
+  owner: { readonly artifactDir: string },
+  surface: Locator,
+  fileName: string,
+  content: readonly Locator[],
+) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(path.join(owner.artifactDir, "session-owner-stack"), { recursive: true });
+  await writeFile(
+    path.join(owner.artifactDir, "session-owner-stack", fileName),
+    await takeControlUiViewportScreenshot(surface.page(), surface, content),
+  );
+}
+
+export async function openSidebarSortMenu(page: Page) {
+  const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+  await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
+  await filterAndSort.click();
+  const menu = page.locator(".sidebar-session-sort-menu");
+  await waitForControlUiProofSurface(menu.locator('[part="menu"]'), [
+    menu.locator("wa-dropdown-item").first(),
+  ]);
+  return menu;
 }

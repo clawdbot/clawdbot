@@ -5,6 +5,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -75,6 +76,7 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
+  resolveHumanDelayConfig: vi.fn(() => undefined),
 }));
 
 const { createTelegramBot } = await import("./bot.js");
@@ -114,25 +116,6 @@ function photoUpdate(params: { updateId: number; messageId: number; caption?: st
   };
 }
 
-function singletonPhotoUpdate(params: { updateId: number; messageId: number }) {
-  const update = photoUpdate(params);
-  const { media_group_id: _mediaGroupId, ...message } = update.message;
-  return { ...update, message };
-}
-
-function textUpdate(params: { updateId: number; messageId: number; text: string }) {
-  return {
-    update_id: params.updateId,
-    message: {
-      message_id: params.messageId,
-      date: 1_736_380_800 + params.messageId,
-      chat: { id: 111, type: "private" as const, first_name: "Ada" },
-      from: { id: 111, is_bot: false, first_name: "Ada" },
-      text: params.text,
-    },
-  };
-}
-
 function forwardedTextUpdate(params: { updateId: number; messageId: number; text: string }) {
   return {
     update_id: params.updateId,
@@ -152,15 +135,25 @@ function forwardedTextUpdate(params: { updateId: number; messageId: number; text
   };
 }
 
-function createBotApiTransport(params: { onGetFile?: (call: number) => Response } = {}) {
+function textUpdate(params: { updateId: number; messageId: number; text: string }) {
+  return {
+    update_id: params.updateId,
+    message: {
+      message_id: params.messageId,
+      date: 1_736_380_800 + params.messageId,
+      chat: { id: 111, type: "private" as const, first_name: "Ada" },
+      from: { id: 111, is_bot: false, first_name: "Ada" },
+      text: params.text,
+    },
+  };
+}
+
+function createBotApiTransport() {
   let getFileCall = 0;
   const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
     const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
     if (url.includes("/getFile")) {
       getFileCall += 1;
-      if (params.onGetFile) {
-        return params.onGetFile(getFileCall);
-      }
       return new Response(
         JSON.stringify({
           ok: true,
@@ -198,6 +191,7 @@ function createTelegramDeps(stateDir: string): TelegramBotDeps {
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-test" },
       modelNames: new Map<string, string>(),
+      modelCatalog: [],
     }),
     listSkillCommandsForAgents: () => [],
     wasSentByBot: () => false,
@@ -341,84 +335,6 @@ describe("Telegram durable ingress coalescing", () => {
     activeResources.push(resources);
     return resources;
   }
-
-  it.each([
-    {
-      label: "current-message",
-      update: singletonPhotoUpdate({ updateId: 601, messageId: 1 }),
-      expectBufferedFailure: false,
-    },
-    {
-      label: "buffered media-group",
-      update: photoUpdate({ updateId: 602, messageId: 2 }),
-      expectBufferedFailure: true,
-    },
-  ])(
-    "cancels $label hydration at the claim watchdog and releases the same-chat lane",
-    async ({ update, expectBufferedFailure }) => {
-      const getFile = vi.fn(
-        () =>
-          new Response(
-            JSON.stringify({
-              ok: false,
-              error_code: 429,
-              description: "Too Many Requests: retry after 60",
-              parameters: { retry_after: 60 },
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          ),
-      );
-      const runtimeError = vi.fn();
-      const telegramTransport = createBotApiTransport({ onGetFile: getFile });
-      const { monitor } = await createMonitor({
-        telegramTransport,
-        adoptionStallTimeoutMs: 120,
-        onRuntimeError: runtimeError,
-      });
-      const nextUpdateId = update.update_id + 10;
-      const next = textUpdate({
-        updateId: nextUpdateId,
-        messageId: update.message.message_id + 10,
-        text: "next message after stalled media",
-      });
-      monitor.start();
-
-      await monitor.admit(update);
-      await vi.waitFor(() => expect(getFile).toHaveBeenCalledOnce(), {
-        timeout: 1_000,
-        interval: 5,
-      });
-      const nextAdmittedAt = Date.now();
-      await monitor.admit(next);
-      const turn = await awaitSingleDownstreamTurn();
-
-      expect(Date.now() - nextAdmittedAt).toBeLessThan(1_000);
-      expect(turn.Body).toContain("next message after stalled media");
-      expect(turn.Body).not.toContain("<media:image>");
-      const queue = openTelegramIngressQueue(spoolDir);
-      await vi.waitFor(async () => {
-        expect(await queue.listFailed?.({ limit: "all" })).toEqual([
-          expect.objectContaining({
-            id: telegramQueueEventId(update.update_id),
-            reason: "handler-timeout",
-          }),
-        ]);
-      });
-      await expect(
-        queue.enqueue(telegramQueueEventId(nextUpdateId), {} as never),
-      ).resolves.toMatchObject({ kind: "completed" });
-      if (expectBufferedFailure) {
-        await vi.waitFor(() => expect(runtimeError).toHaveBeenCalledOnce());
-      } else {
-        expect(runtimeError).not.toHaveBeenCalled();
-      }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 50);
-      });
-      expect(getFile).toHaveBeenCalledOnce();
-      expect(downstreamTurns).toHaveBeenCalledOnce();
-    },
-  );
 
   it("coalesces album members admitted a few milliseconds apart", async () => {
     const { monitor, telegramTransport } = await createMonitor();
@@ -564,6 +480,55 @@ describe("Telegram durable ingress coalescing", () => {
     );
     expect(downstreamTurns).toHaveBeenCalledOnce();
     expect(runtimeError).toHaveBeenCalledOnce();
+
+    await monitor.stop();
+    await telegramTransport.close();
+  });
+
+  it("bounds repeated session-start conflicts and drains the next Telegram update", async () => {
+    const poison = textUpdate({ updateId: 801, messageId: 1, text: "poison" });
+    const after = textUpdate({ updateId: 802, messageId: 2, text: "after" });
+    const poisonId = telegramQueueEventId(poison.update_id);
+    const sessionError = Object.assign(
+      new Error('Session "agent:main:telegram:direct:111" changed while starting work. Retry.'),
+      { code: "SESSION_WORK_START_CHANGED" },
+    );
+    downstreamTurns.mockImplementation(async (turn) => {
+      if ((turn.BodyForAgent ?? turn.Body ?? "").includes("poison")) {
+        throw sessionError;
+      }
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    await writeTelegramSpooledUpdate({ spoolDir, update: poison });
+    await writeTelegramSpooledUpdate({ spoolDir, update: after });
+    const queue = openTelegramIngressQueue(spoolDir);
+    for (let attempt = 1; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+      const claim = await queue.claim(poisonId, { ownerId: `proof:${attempt}` });
+      if (!claim) {
+        throw new Error(`Expected setup claim ${attempt}`);
+      }
+      await queue.release(claim, {
+        lastError: sessionError.message,
+        releasedAt: Date.now() - 60 * 60 * 1_000,
+      });
+    }
+    const runtimeError = vi.fn();
+    const { monitor, telegramTransport } = await createMonitor({ onRuntimeError: runtimeError });
+
+    monitor.start();
+    await vi.waitFor(async () => {
+      expect(await queue.listFailed?.({ limit: "all" })).toEqual([
+        expect.objectContaining({ id: poisonId, reason: "session-start-conflict-retry-limit" }),
+      ]);
+    });
+    await vi.waitFor(async () => {
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+    });
+    expect(
+      downstreamTurns.mock.calls.some(([turn]) =>
+        (turn.BodyForAgent ?? turn.Body ?? "").includes("after"),
+      ),
+    ).toBe(true);
 
     await monitor.stop();
     await telegramTransport.close();

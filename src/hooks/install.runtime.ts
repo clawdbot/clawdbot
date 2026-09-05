@@ -7,10 +7,7 @@ import {
   resolveInstallModeOptions,
   resolveTimedInstallModeOptions,
 } from "../infra/install-mode-options.js";
-import {
-  installPackageDir,
-  installPackageDirWithManifestDeps,
-} from "../infra/install-package-dir.js";
+import { installPackageDir } from "../infra/install-package-dir.js";
 import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
@@ -32,7 +29,6 @@ export {
   pathExists as fileExists,
   installFromValidatedNpmSpecArchive,
   installPackageDir,
-  installPackageDirWithManifestDeps,
   isPathInside,
   isPathInsideWithRealpath,
   readJson as readJsonFile,

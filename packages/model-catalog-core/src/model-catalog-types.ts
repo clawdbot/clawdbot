@@ -43,6 +43,8 @@ export type ModelCatalogCompatConfig = {
   supportsReasoningEffort?: boolean;
   /** Whether the model accepts the temperature parameter (GPT-5.6 family rejects it). */
   supportsTemperature?: boolean;
+  /** Whether the provider honors top-level `instructions` on Responses requests. */
+  supportsInstructions?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
   supportsJsonSchemaResponseFormat?: boolean;
@@ -292,6 +294,8 @@ export type ModelCatalogSuppression = {
 
 /** Raw model catalog manifest shape. */
 export type ModelCatalog = {
+  /** Publication-time opt-in: owned OpenClaw provider id -> models.dev provider id. */
+  modelsDev?: Record<string, string>;
   providers?: Record<string, ModelCatalogProvider>;
   aliases?: Record<string, ModelCatalogAlias>;
   suppressions?: ModelCatalogSuppression[];
@@ -300,9 +304,8 @@ export type ModelCatalog = {
 };
 
 /** Normalized model catalog row used by runtime lookup and UI surfaces. */
-export type NormalizedModelCatalogRow = {
+export type NormalizedModelCatalogRow = Omit<ModelCatalogModel, "upstreamModel"> & {
   provider: string;
-  id: string;
   ref: string;
   mergeKey: string;
   name: string;
@@ -310,20 +313,4 @@ export type NormalizedModelCatalogRow = {
   input: ModelCatalogInput[];
   reasoning: boolean;
   status: ModelCatalogStatus;
-  api?: ModelCatalogApi;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  contextWindow?: number;
-  contextWindows?: ModelCatalogContextWindowOption[];
-  contextWindowDefault?: string;
-  contextTokens?: number;
-  maxTokens?: number;
-  thinkingLevelMap?: ModelCatalogThinkingLevelMap;
-  cost?: ModelCatalogCost;
-  compat?: ModelCatalogCompatConfig;
-  mediaInput?: ModelCatalogMediaInputConfig;
-  statusReason?: string;
-  replaces?: string[];
-  replacedBy?: string;
-  tags?: string[];
 };

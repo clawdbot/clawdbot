@@ -22,6 +22,10 @@ describe("Buzz QA CLI", () => {
     const qa = new Command();
     buzzQaCliRegistration.register(qa);
 
+    expect(qa.commands.find((command) => command.name() === "buzz")?.helpInformation()).toMatch(
+      /default: file with --credential-file; otherwise\s+shared environment/u,
+    );
+
     await qa.parseAsync([
       "node",
       "openclaw",

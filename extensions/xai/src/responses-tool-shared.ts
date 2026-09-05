@@ -98,7 +98,7 @@ export async function requestXaiResponsesTool<T>(
   );
 }
 
-export function extractXaiWebSearchContent(
+function extractXaiWebSearchContent(
   data: XaiWebSearchResponse,
   maxContentChars?: number,
 ): {
@@ -195,7 +195,7 @@ export function requireXaiResponseTextAndCitations(
   const { text, annotationCitations, truncated, retainedRawChars, inlineCitationOffsetsSafe } =
     extractXaiWebSearchContent(data, maxContentChars);
   if (!text) {
-    throw new Error(`${label}: malformed JSON response`);
+    throw new Error(`${label}: no answer text returned; try a simpler request`);
   }
   const explicitCitations = new Set<string>();
   if (Array.isArray(data.citations)) {

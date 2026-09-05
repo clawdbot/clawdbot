@@ -12,12 +12,11 @@ import {
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
 import {
   buildPortableAuthProfileStoreForAgentCopy,
   ensureAuthProfileStore,
-  persistAuthProfileBatch,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
@@ -38,6 +37,8 @@ import {
   transformConfigWithPendingPluginInstalls,
 } from "../plugins/install-record-commit.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { persistProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
+import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -78,7 +79,7 @@ function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): A
 function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileStore | null {
   const store = loadPersistedAuthProfileStore(agentDir);
   if (!store && inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing") {
-    throw new AuthProfileStoreUnreadableError(agentDir);
+    throw new AuthProfileStoreUnreadableError(resolveAuthProfileDatabasePath(agentDir));
   }
   return store;
 }
@@ -285,15 +286,25 @@ export async function agentsAddCommand(
       workspace: workspaceDir,
       agentDir,
     });
-    const stagedAuthProfiles: Array<
-      Parameters<typeof persistAuthProfileBatch>[0]["profiles"][number]
-    > = [];
+    const stagedAuthProfiles: Array<ProviderAuthProfile & { replaceExisting?: boolean }> = [];
     let stagedAuthOrder: AuthProfileStore["order"];
     let reportPortableAuthCopy: (() => Promise<void>) | undefined;
 
-    const defaultAgentId = resolveDefaultAgentId(cfg);
-    if (defaultAgentId !== agentId) {
-      const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
+    const copySourceAgentId =
+      tryResolveLegacyCompatibilityAgentId(cfg) ??
+      (await prompter.select({
+        message: "Copy auth profiles from another agent?",
+        initialValue: "__skip__",
+        options: [
+          { value: "__skip__", label: "Skip copying auth profiles" },
+          ...listAgentEntries(cfg)
+            .map((agent) => normalizeAgentId(agent.id))
+            .filter((id) => id !== agentId)
+            .map((id) => ({ value: id, label: id })),
+        ],
+      }));
+    if (copySourceAgentId !== "__skip__" && copySourceAgentId !== agentId) {
+      const sourceAgentDir = resolveAgentDir(cfg, copySourceAgentId);
       const sourceAuthPath = resolveAuthProfileDatabasePath(sourceAgentDir);
       const destAuthPath = resolveAuthProfileDatabasePath(agentDir);
       const sharedMainAgentPath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir());
@@ -322,7 +333,7 @@ export async function agentsAddCommand(
           Object.keys(destStore?.profiles ?? {}).length === 0
         ) {
           const shouldCopy = await prompter.confirm({
-            message: `Copy portable auth profiles from "${defaultAgentId}"?`,
+            message: `Copy portable auth profiles from "${copySourceAgentId}"?`,
             initialValue: false,
           });
           if (shouldCopy) {
@@ -330,7 +341,7 @@ export async function agentsAddCommand(
             const copiedOAuthProfileIds = copiedProfileIds.filter(
               (profileId) => sourceStore.profiles[profileId]?.type === "oauth",
             );
-            const sourceAgentId = defaultAgentId;
+            const sourceAgentId = copySourceAgentId;
             const sourceInheritedMain = sourceIsInheritedMain;
             const destinationAgentDir = agentDir;
             for (const [profileId, credential] of Object.entries(portable.store.profiles)) {
@@ -356,7 +367,7 @@ export async function agentsAddCommand(
             };
           }
         } else if (skippedOAuthProfiles) {
-          const sourceAgentId = defaultAgentId;
+          const sourceAgentId = copySourceAgentId;
           const sourceInheritedMain = sourceIsInheritedMain;
           reportPortableAuthCopy = async () => {
             await prompter.note(
@@ -424,6 +435,8 @@ export async function agentsAddCommand(
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
     nextConfig = await setupChannels(nextConfig, wizardRuntime, prompter, {
+      workspaceDir,
+      deferStatusUntilSelection: true,
       allowIMessageInstall: true,
       allowSignalInstall: true,
       onSelection: (value) => {
@@ -484,6 +497,7 @@ export async function agentsAddCommand(
             profiles: stagedAuthProfiles,
             ...(stagedAuthOrder ? { order: stagedAuthOrder } : {}),
             agentDir,
+            config: nextConfig,
           }
         : undefined;
 
@@ -495,7 +509,7 @@ export async function agentsAddCommand(
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
       const authPersistence = stagedAuthBatch
-        ? await persistAuthProfileBatch(stagedAuthBatch)
+        ? await persistProviderAuthProfileBatch(stagedAuthBatch)
         : undefined;
       try {
         nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
@@ -528,7 +542,7 @@ export async function agentsAddCommand(
           ...(stagedAuthBatch
             ? {
                 prepareConfigCommit: async () =>
-                  (await persistAuthProfileBatch(stagedAuthBatch)).rollback,
+                  (await persistProviderAuthProfileBatch(stagedAuthBatch)).rollback,
               }
             : {}),
         });

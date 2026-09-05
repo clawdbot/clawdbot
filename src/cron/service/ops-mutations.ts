@@ -15,15 +15,19 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { isHeartbeatTaskDeclarationKey } from "../heartbeat-task.js";
-import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
+import { systemOwnedDeclarationKeyNamespace } from "../system-owned-declaration.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
-import { cronJobUsesToolRuntime } from "../tools-allow.js";
-import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../types.js";
+import {
+  isSystemOwnedCronPayloadKind,
+  type CronJob,
+  type CronJobCreate,
+  type CronJobPatch,
+  type CronStoredJob,
+} from "../types.js";
 import {
   computeJobNextRunAtMs,
   findJobOrThrow,
@@ -32,6 +36,7 @@ import {
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
 } from "./jobs-scheduling.js";
+import { reconcileRuntimeAuthority } from "./jobs-tool-policy.js";
 import { cronPatchTouchesDeliveryResolution } from "./jobs-validation.js";
 import { applyJobPatch, applyDeclarativeJobSpec, createJob } from "./jobs.js";
 import {
@@ -53,6 +58,7 @@ import type {
 import { emit } from "./state.js";
 import {
   ensureLoaded,
+  ensureLoadedForOperation,
   persist,
   persistOrRestore,
   pruneCronJobScratchAfterCommit,
@@ -263,52 +269,13 @@ function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     payload: job.payload,
     scheduledToolPolicy: job.scheduledToolPolicy,
     toolsAllowProvenance: job.toolsAllowProvenance,
+    toolsAllowExecTarget: job.toolsAllowExecTarget,
     runtimeAuthority: job.runtimeAuthority,
     runtimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired,
     delivery: job.delivery,
     displayName: job.displayName,
     ...(includeEnabled ? { enabled: job.enabled } : {}),
   };
-}
-
-function reconcileRuntimeAuthority(params: {
-  job: CronStoredJob;
-  captured: boolean;
-  runtimeAuthority?: CronRuntimeAuthority;
-  explicitlyMutatesToolsAllow: boolean;
-}): void {
-  if (!cronJobUsesToolRuntime(params.job)) {
-    // Runtime authority cannot survive a payload transition into a path that
-    // does not execute the captured tool surface and later reappear on reuse.
-    delete params.job.runtimeAuthority;
-    delete params.job.runtimeAuthorityRecoveryRequired;
-    return;
-  }
-  if (params.captured) {
-    delete params.job.runtimeAuthorityRecoveryRequired;
-    const runtimeAuthority = params.runtimeAuthority
-      ? cloneCronRuntimeAuthority(params.runtimeAuthority)
-      : undefined;
-    if (params.runtimeAuthority && !runtimeAuthority) {
-      throw new TypeError("captured cron runtime authority is invalid");
-    }
-    if (runtimeAuthority) {
-      params.job.runtimeAuthority = runtimeAuthority;
-    } else {
-      // A fresh exact-surface capture with no runtime authority intentionally
-      // replaces any older runtime-specific grant instead of retaining it.
-      delete params.job.runtimeAuthority;
-    }
-    return;
-  }
-  if (params.explicitlyMutatesToolsAllow) {
-    // Explicit tool caps are a complete replacement. Runtime-owned authority
-    // may be restored only by another authenticated exact-surface capture.
-    if (params.job.runtimeAuthority) {
-      params.job.runtimeAuthorityRecoveryRequired = true;
-      delete params.job.runtimeAuthority;
-    }
-  }
 }
 
 function consumeRuntimeAuthorityMutationOptions(
@@ -333,15 +300,20 @@ export async function add(
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     const declarationKey = normalizeOptionalString(input.declarationKey);
-    if (input.payload?.kind === "heartbeat" && opts?.systemOwned !== true) {
-      throw new Error("heartbeat payloads are system-owned; jobs cannot be created with them");
+    if (
+      input.payload &&
+      isSystemOwnedCronPayloadKind(input.payload.kind) &&
+      opts?.systemOwned !== true
+    ) {
+      throw new Error("system-owned payloads cannot be created by cron clients");
     }
-    if (isHeartbeatTaskDeclarationKey(declarationKey) && opts?.systemOwned !== true) {
+    const systemOwnedDeclarationNamespace = systemOwnedDeclarationKeyNamespace(declarationKey);
+    if (systemOwnedDeclarationNamespace && opts?.systemOwned !== true) {
       throw new Error(
-        'cron declarationKey namespace "heartbeat-task:" is system-owned; jobs cannot be created with it',
+        `cron declarationKey namespace "${systemOwnedDeclarationNamespace}" is system-owned; jobs cannot be created with it`,
       );
     }
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForOperation(state);
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
@@ -370,12 +342,10 @@ export async function add(
     const configuredChannels = await resolveConfiguredChannelsForValidation(state);
 
     if (existing) {
-      // A declarative upsert may not repurpose an existing heartbeat monitor
+      // A declarative upsert may not repurpose an existing system-owned monitor
       // with a different payload; only the gateway's own convergence touches it.
-      if (existing.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
-        throw new Error(
-          "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
-        );
+      if (isSystemOwnedCronPayloadKind(existing.payload.kind) && opts?.systemOwned !== true) {
+        throw new Error("system-owned monitor jobs cannot be edited by cron clients");
       }
       const now = state.deps.nowMs();
       const nextJob = structuredClone(existing);
@@ -386,6 +356,7 @@ export async function add(
         cronConfig: state.deps.cronConfig,
         scheduledToolPolicy: opts?.scheduledToolPolicy,
         toolsAllowProvenance: opts?.toolsAllowProvenance,
+        toolsAllowExecTarget: opts?.toolsAllowExecTarget,
         configuredChannels,
       });
       const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
@@ -431,10 +402,14 @@ export async function add(
     const job = createJob(state, creationInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
+      toolsAllowExecTarget: opts?.toolsAllowExecTarget,
       configuredChannels,
     });
     if (opts?.createdActor) {
       job.createdActor = structuredClone(opts.createdActor);
+    }
+    if (opts?.skillLibrarySelections) {
+      job.skillLibrarySelections = structuredClone(opts.skillLibrarySelections);
     }
     const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
     reconcileRuntimeAuthority({
@@ -489,9 +464,11 @@ export async function add(
 export async function removeStaleJobFamily(
   state: CronServiceState,
   family: { declarationKey: string; name: string; ownerPluginTag: string },
+  opts?: { commitGuard?: () => void },
 ): Promise<number> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForOperation(state);
+    opts?.commitGuard?.();
     return removeStaleCronJobFamilyRows(state.deps.storePath, family);
   });
 }
@@ -506,20 +483,17 @@ async function updateLoadedJob(params: {
   const { state, id, patch, precondition, opts } = params;
   warnIfDisabled(state, "update");
   // Mirrors the add-time boundary: no caller may patch a job into (or edit)
-  // the system-owned heartbeat payload; the gateway converges via add only.
-  if (patch.payload?.kind === "heartbeat") {
-    throw new Error("heartbeat payloads are system-owned; jobs cannot be patched to them");
+  // a system-owned monitor payload; the gateway converges via add only.
+  if (patch.payload && isSystemOwnedCronPayloadKind(patch.payload.kind)) {
+    throw new Error("system-owned payloads cannot be patched by cron clients");
   }
-  await ensureLoaded(state, { skipRecompute: true });
+  await ensureLoadedForOperation(state);
   const job = findJobOrThrow(state, id);
   // Existing monitors are config-driven: any patch (disable, reschedule,
-  // repurpose) would silently diverge from agents.*.heartbeat until the next
-  // reconcile, so updates are rejected outright. Removal stays allowed — a
-  // removed monitor self-heals at the next convergence.
-  if (job.payload.kind === "heartbeat") {
-    throw new Error(
-      "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
-    );
+  // repurpose) would silently diverge from its owner until the next reconcile,
+  // so updates are rejected outright. Removal stays allowed only to the owner.
+  if (isSystemOwnedCronPayloadKind(job.payload.kind)) {
+    throw new Error("system-owned monitor jobs cannot be edited by cron clients");
   }
   const now = state.deps.nowMs();
   const configuredChannels = cronPatchTouchesDeliveryResolution(patch)
@@ -533,6 +507,7 @@ async function updateLoadedJob(params: {
     cronConfig: state.deps.cronConfig,
     scheduledToolPolicy: opts?.scheduledToolPolicy,
     toolsAllowProvenance: opts?.toolsAllowProvenance,
+    toolsAllowExecTarget: opts?.toolsAllowExecTarget,
     configuredChannels,
   });
   if (patch.agentId !== undefined) {
@@ -608,7 +583,7 @@ export async function remove(
   const result = await locked(state, async () => {
     warnIfDisabled(state, "remove");
     const previousStore = state.store;
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForOperation(state);
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
@@ -620,12 +595,10 @@ export async function remove(
       return { ok: true, removed: false } as const;
     }
     // Config is the monitor's source of truth: ad-hoc deletion would disable
-    // heartbeats until an unrelated reload, so only gateway reconciliation
+    // the feature until an unrelated reload, so only gateway reconciliation
     // (stale-monitor cleanup) may remove one.
-    if (removedJob.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
-      throw new Error(
-        "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
-      );
+    if (isSystemOwnedCronPayloadKind(removedJob.payload.kind) && opts?.systemOwned !== true) {
+      throw new Error("system-owned monitor jobs cannot be removed by cron clients");
     }
     opts?.commitGuard?.();
     const snapshot = snapshotStoreForRollback(state);
@@ -640,7 +613,7 @@ export async function remove(
       postPersistNotifications,
       suppressScheduledJobId: id,
     });
-    const activeMarker = noteActiveCronJobRemoval(id);
+    const activeMarker = noteActiveCronJobRemoval(id, opts?.commitGuard);
     const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
     const sessionStorePath =
       state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
@@ -707,7 +680,7 @@ export async function removeAgentJobsTransactional<T>(
 ): Promise<T> {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove agent jobs");
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForOperation(state);
     const id = normalizeOptionalAgentId(agentId);
     if (!id || !state.store) {
       return await commit();
@@ -747,11 +720,18 @@ export async function removeAgentJobsTransactional<T>(
         }
         throw error;
       }
-      state.store = snapshot.store;
-      state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
       try {
-        if (!(await persist(state))) {
-          throw new Error("cron: rollback store write did not complete", { cause: error });
+        if (state.deps.cronEnabled) {
+          state.store = snapshot.store;
+          state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+          if (!(await persist(state))) {
+            throw new Error("cron: rollback store write did not complete", { cause: error });
+          }
+        } else {
+          const deletedSnapshot = snapshotStoreForRollback(state);
+          state.store = snapshot.store;
+          state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+          await persistOrRestore(state, deletedSnapshot, { preserveConcurrentAdds: true });
         }
         armTimer(state);
       } catch (rollbackError) {

@@ -22,6 +22,7 @@ import type {
 
 const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
 const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;
+const MAX_PROPOSAL_DIRECTORY_DEPTH = 8;
 const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 160;
 
 type SkillProposalDraftValidationError = {
@@ -128,12 +129,20 @@ export async function readSkillProposalDraftDirectory(dirPath: string): Promise<
     symlinks: "reject",
   });
   const scanned = await walkDirectory(absoluteDir, {
-    maxDepth: 8,
+    // Read one extra level to reject, rather than omit, deeper supporting files.
+    maxDepth: MAX_PROPOSAL_DIRECTORY_DEPTH + 1,
     maxEntries: MAX_PROPOSAL_DIRECTORY_ENTRIES,
     symlinks: "include",
   });
-  if (scanned.truncated) {
-    throw new Error("Proposal directory has too many entries.");
+  if (
+    scanned.truncated ||
+    scanned.entries.some((entry) => entry.depth > MAX_PROPOSAL_DIRECTORY_DEPTH)
+  ) {
+    throw new Error("Proposal directory exceeds traversal limits.");
+  }
+  const failed = scanned.failedDirs[0];
+  if (failed) {
+    throw failed.error;
   }
   const supportFiles: SkillProposalSupportFileInput[] = [];
   for (const entry of scanned.entries.toSorted((a, b) =>

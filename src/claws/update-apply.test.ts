@@ -2,8 +2,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ClawCronUpdateError } from "./cron-update.js";
 import type { buildClawAddPlan } from "./lifecycle.js";
+import { ClawPackageUpdateError } from "./package-update.js";
 import {
   persistClawInstallRecord,
   readClawInstallRecord,
@@ -19,6 +21,7 @@ import { applyClawUpdatePlan } from "./update-apply.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(closeOpenClawStateDatabaseForTest);
 
 const source: ClawSourceIdentity = {
   kind: "package",
@@ -778,44 +781,145 @@ describe("applyClawUpdatePlan", () => {
     expect(applyPackage).toHaveBeenCalledOnce();
   });
 
-  it("rolls workspace and MCP changes back when root provenance cannot advance", async () => {
-    const updatePlan = plan([
-      {
-        kind: "workspaceFile",
-        id: "SOUL.md",
-        action: "change",
-        target: "/tmp/workspace-worker/SOUL.md",
-        blocked: false,
-        reason: "target changed",
-      },
-    ]);
-    const workspaceRollback = vi.fn(async () => undefined);
-    const mcpRollback = vi.fn(async () => undefined);
-
-    await expect(
-      applyClawUpdatePlan(
-        updatePlan,
-        { targetManifest: manifest, targetSource: source },
+  const agentAndCronRollbackFailures = [
+    "agent rollback failed: agent",
+    "package rollback incomplete: package",
+    "MCP rollback failed: MCP",
+    "workspace rollback failed: workspace",
+  ] as const;
+  it.each([
+    ["provenance", false, []],
+    [
+      "package",
+      true,
+      [
+        "package artifact rollback is unavailable",
+        "MCP rollback failed: MCP",
+        "workspace rollback failed: workspace",
+      ],
+    ],
+    ["agent", true, agentAndCronRollbackFailures],
+    ["cron", true, agentAndCronRollbackFailures],
+    [
+      "provenance",
+      true,
+      [
+        "agent rollback failed: agent",
+        "package rollback incomplete: package",
+        "cron rollback failed: cron",
+        "MCP rollback failed: MCP",
+        "workspace rollback failed: workspace",
+      ],
+    ],
+  ] as const)(
+    "rolls back completed steps after %s failure (rollback errors: %s)",
+    async (stage, rollbackErrors, failures) => {
+      const actions: ClawUpdatePlan["actions"] = [
         {
-          config: {},
-          ...consent(updatePlan),
-          rebuildPlan: vi.fn(async () => updatePlan),
-          buildAddPlan: vi.fn(async () => addPlan),
-          readInstall: vi.fn(() => install),
-          applyWorkspace: vi.fn(async () => ({
-            appliedPaths: ["SOUL.md"],
-            rollback: workspaceRollback,
-          })),
-          applyMcp: vi.fn(async () => ({ appliedNames: [], rollback: mcpRollback })),
-          persistInstall: vi.fn(() => {
-            throw new Error("provenance race");
-          }),
+          kind: "workspaceFile",
+          id: "SOUL.md",
+          action: "change",
+          target: "/tmp/workspace-worker/SOUL.md",
+          blocked: false,
+          reason: "target changed",
         },
-      ),
-    ).rejects.toMatchObject({ code: "provenance_update_failed" });
-    expect(mcpRollback).toHaveBeenCalledOnce();
-    expect(workspaceRollback).toHaveBeenCalledOnce();
-  });
+      ];
+      if (rollbackErrors) {
+        actions.push(
+          {
+            kind: "package",
+            id: "skill:legacy",
+            action: "release",
+            target: "packages.skill:legacy",
+            blocked: false,
+            reason: "target releases package ownership",
+          },
+          {
+            kind: "agent",
+            id: "worker",
+            action: "change",
+            target: 'agents.entries["worker"]',
+            blocked: false,
+            reason: "target changed",
+          },
+        );
+      }
+      const updatePlan = plan(actions);
+      const env = { OPENCLAW_STATE_DIR: join(tempDirs.make("openclaw-claw-rollback-"), "state") };
+      const failure =
+        stage === "package"
+          ? new ClawPackageUpdateError("package failed", true)
+          : new Error(stage === "provenance" ? "provenance race" : `${stage} failed`);
+      const rollback = (name: string) =>
+        rollbackErrors ? vi.fn<() => Promise<void>>().mockRejectedValue(name)() : Promise.resolve();
+      let mcpFinished = false;
+      const mcpRollback = vi.fn(async () => {
+        await Promise.resolve();
+        mcpFinished = true;
+        await rollback("MCP");
+      });
+      const workspaceRollback = vi.fn(async function (this: unknown) {
+        expect(this).toBe(workspaceExecution);
+        await rollback("workspace");
+      });
+      const workspaceExecution = {
+        appliedPaths: ["SOUL.md"],
+        get rollback() {
+          expect(mcpFinished).toBe(true);
+          return workspaceRollback;
+        },
+      };
+      let config: OpenClawConfig = {};
+      let commits = 0;
+
+      await expect(
+        applyClawUpdatePlan(
+          updatePlan,
+          { targetManifest: manifest, targetSource: source },
+          {
+            config,
+            env,
+            ...consent(updatePlan),
+            rebuildPlan: vi.fn(async () => updatePlan),
+            buildAddPlan: vi.fn(async () => addPlan),
+            readInstall: vi.fn(() => install),
+            applyWorkspace: vi.fn(async () => workspaceExecution),
+            applyMcp: vi.fn(async () => ({ appliedNames: [], rollback: mcpRollback })),
+            applyPackage: vi.fn(async () => {
+              if (stage === "package") {
+                throw failure;
+              }
+              return { appliedIds: ["skill:legacy"], rollback: () => rollback("package") };
+            }),
+            commitConfig: async (transform) => {
+              config = transform(config);
+              if (++commits === 1) {
+                if (stage === "agent") {
+                  throw failure;
+                }
+              } else {
+                await rollback("agent");
+              }
+            },
+            applyCron: vi.fn(async () => {
+              if (stage === "cron") {
+                throw failure;
+              }
+              return { appliedIds: [], rollback: () => rollback("cron") };
+            }),
+            persistInstall: vi.fn(() => {
+              throw failure;
+            }),
+          },
+        ),
+      ).rejects.toMatchObject({
+        code: rollbackErrors ? "update_partial" : "provenance_update_failed",
+        message: [failure.message, ...failures].join("; "),
+      });
+      expect(mcpRollback).toHaveBeenCalledOnce();
+      expect(workspaceRollback).toHaveBeenCalledOnce();
+    },
+  );
 
   it("restores the agent when the config commit throws after transforming state", async () => {
     const currentAgent = { id: "worker", name: "Worker" };

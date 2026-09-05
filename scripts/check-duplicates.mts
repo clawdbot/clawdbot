@@ -8,6 +8,7 @@ const jscpdBin = resolveRepoToolBinPath("jscpd", { cwd: repoRoot });
 
 const targets = [
   ".github/actions",
+  ".github/codeql/openclaw-boundary/tests",
   "src",
   "extensions",
   "examples",

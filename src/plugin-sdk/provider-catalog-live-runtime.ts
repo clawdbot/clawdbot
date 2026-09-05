@@ -1,6 +1,7 @@
 import { normalizeOptionalString as readLiveModelCatalogString } from "../../packages/normalization-core/src/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
-import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import type {
   ProviderCatalogContext,
@@ -9,14 +10,17 @@ import type {
 } from "../plugins/types.js";
 import {
   buildOpenAICompatibleLiveModels,
+  isUpstreamProviderCatalogModel,
   readLiveModelCatalogBooleanField,
+  readLiveModelCatalogId,
   readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogRecord,
   readLiveModelCatalogStringField,
+  type UpstreamProviderCatalog,
+  type UpstreamProviderCatalogModel,
 } from "./provider-catalog-live-normalize.internal.js";
 import {
   buildSingleProviderApiKeyCatalog,
-  clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
 } from "./provider-catalog-shared.js";
 import type { ManifestProviderCatalogEntry } from "./provider-catalog-shared.js";
@@ -39,12 +43,23 @@ export type LiveModelCatalogHeaderContext = {
   discoveryApiKey?: string;
 };
 
-export { clearLiveCatalogCacheForTests };
+export { clearLiveCatalogCacheForTests } from "./provider-catalog-shared.js";
 export {
   readLiveModelCatalogBooleanField,
   readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogStringField,
 };
+export {
+  listProviderCatalogSnapshotEntries,
+  projectProviderCatalogSnapshotRows,
+  projectUpstreamProviderCatalogSnapshot,
+  type ProviderCatalogSnapshot,
+} from "./provider-catalog-snapshot.internal.js";
+export type {
+  ProjectedUpstreamProviderCatalogModel,
+  UpstreamProviderCatalog,
+  UpstreamProviderCatalogModel,
+} from "./provider-catalog-live-normalize.internal.js";
 
 export type FetchLiveProviderModelIdsParams = {
   providerId: string;
@@ -71,6 +86,15 @@ export type CachedLiveProviderModelRowsParams = FetchLiveProviderModelRowsParams
   shouldCacheRows?: (rows: readonly unknown[]) => boolean;
 };
 
+export type GetCachedUpstreamProviderCatalogParams = {
+  endpoint: string;
+  providerId: string;
+  fetchGuard?: LiveModelCatalogFetchGuard;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  ttlMs?: number;
+};
+
 export type LiveModelRowProjection<T extends ModelDefinitionConfig = ModelDefinitionConfig> = (
   rows: readonly unknown[],
   fallback: ModelProviderConfig,
@@ -84,6 +108,9 @@ export type LiveModelRowProjection<T extends ModelDefinitionConfig = ModelDefini
 // and grows) while still bounding memory, matching the existing bounded reads
 // for provider error bodies.
 const LIVE_MODEL_CATALOG_BODY_MAX_BYTES = 4 * 1024 * 1024;
+// Shared upstream feeds cover many providers and already exceed the ordinary
+// single-provider ceiling; bound this explicitly without weakening that limit.
+const UPSTREAM_PROVIDER_CATALOG_BODY_MAX_BYTES = 8 * 1024 * 1024;
 const LIVE_MODEL_CATALOG_MAX_PAGES = 50;
 
 export class LiveModelCatalogHttpError extends Error {
@@ -164,21 +191,6 @@ function readDefaultLiveModelCatalogRows(body: unknown): readonly unknown[] {
   throw new Error("Live model catalog response must be an array or { data: [] }");
 }
 
-function readDefaultLiveModelId(row: unknown): string | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const candidate = row as { id?: unknown; object?: unknown };
-  if (candidate.object !== undefined && candidate.object !== "model") {
-    return undefined;
-  }
-  if (typeof candidate.id !== "string") {
-    return undefined;
-  }
-  const modelId = candidate.id.trim();
-  return modelId || undefined;
-}
-
 function normalizeLiveModelCatalogRequestApiKey(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed || isNonSecretApiKeyMarker(trimmed)) {
@@ -191,7 +203,8 @@ function selectLiveModelCatalogRequestApiKey(
   ctx: LiveModelCatalogHeaderContext,
 ): string | undefined {
   return (
-    normalizeLiveModelCatalogRequestApiKey(ctx.discoveryApiKey) ??
+    // Explicit discovery credentials are resolved bytes; only apiKey can be a placeholder.
+    readLiveModelCatalogString(ctx.discoveryApiKey) ??
     normalizeLiveModelCatalogRequestApiKey(ctx.apiKey)
   );
 }
@@ -222,15 +235,86 @@ function buildHeaders(
   return headers;
 }
 
-async function readLiveModelCatalogJson(response: Response, timeoutMs: number): Promise<unknown> {
-  const buffer = await readResponseWithLimit(response, LIVE_MODEL_CATALOG_BODY_MAX_BYTES, {
-    chunkTimeoutMs: timeoutMs,
+async function readLiveModelCatalogJson(
+  response: Response,
+  params: { label: string; timeoutMs: number; maxBytes?: number; requestHeaders?: HeadersInit },
+): Promise<unknown> {
+  return await readProviderJsonResponse(response, params.label, {
+    chunkTimeoutMs: params.timeoutMs,
+    maxBytes: params.maxBytes ?? LIVE_MODEL_CATALOG_BODY_MAX_BYTES,
+    requestHeaders: params.requestHeaders,
     onOverflow: ({ size, maxBytes }) =>
       new Error(`Live model catalog response exceeded ${maxBytes} bytes (${size} bytes received)`),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Live model catalog response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
+}
+
+/** Loads one provider from a shared public metadata feed only when explicitly requested. */
+export async function getCachedUpstreamProviderCatalog(
+  params: GetCachedUpstreamProviderCatalogParams,
+): Promise<UpstreamProviderCatalog | undefined> {
+  const body = await getCachedLiveCatalogValue({
+    // Provider ids intentionally stay out of this key: sibling providers share
+    // one upstream document and must not download it once per provider.
+    keyParts: ["upstream-provider-catalog", params.endpoint],
+    ttlMs: params.ttlMs ?? 300_000,
+    load: async () => {
+      const timeoutMs = params.timeoutMs ?? 15_000;
+      const { response, release } = await (params.fetchGuard ?? fetchWithSsrFGuard)({
+        url: params.endpoint,
+        init: { headers: { Accept: "application/json" } },
+        signal: params.signal,
+        timeoutMs,
+        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
+        requireHttps: true,
+        auditContext: "upstream-provider-catalog-discovery",
+      });
+      try {
+        if (!response.ok) {
+          await cancelUnreadResponseBody(response);
+          throw new LiveModelCatalogHttpError("upstream-provider-catalog", response.status);
+        }
+        const catalog = readLiveModelCatalogRecord(
+          await readLiveModelCatalogJson(response, {
+            label: "upstream-provider-catalog",
+            timeoutMs,
+            maxBytes: UPSTREAM_PROVIDER_CATALOG_BODY_MAX_BYTES,
+          }),
+        );
+        if (!catalog) {
+          throw new Error("Upstream provider catalog response must be an object");
+        }
+        return catalog;
+      } finally {
+        await release();
+      }
+    },
+  });
+
+  const provider = readLiveModelCatalogRecord(body[params.providerId]);
+  const models = readLiveModelCatalogRecord(provider?.models);
+  if (
+    !provider ||
+    !models ||
+    readLiveModelCatalogStringField(provider, "id") !== params.providerId
+  ) {
+    return undefined;
+  }
+  return {
+    id: params.providerId,
+    ...(readLiveModelCatalogStringField(provider, "api")
+      ? { api: readLiveModelCatalogStringField(provider, "api") }
+      : {}),
+    ...(readLiveModelCatalogStringField(provider, "npm")
+      ? { npm: readLiveModelCatalogStringField(provider, "npm") }
+      : {}),
+    models: Object.fromEntries(
+      Object.entries(models).filter((entry): entry is [string, UpstreamProviderCatalogModel] =>
+        isUpstreamProviderCatalogModel(entry[1]),
+      ),
+    ),
+  };
 }
 
 function readLiveModelCatalogNextUrl(body: unknown): string | undefined {
@@ -358,7 +442,11 @@ async function fetchLiveProviderModelCatalogPage(
       await cancelUnreadResponseBody(response);
       throw new LiveModelCatalogHttpError(params.providerId, response.status);
     }
-    const body = await readLiveModelCatalogJson(response, params.timeoutMs);
+    const body = await readLiveModelCatalogJson(response, {
+      label: `${params.providerId} model discovery`,
+      timeoutMs: params.timeoutMs,
+      requestHeaders,
+    });
     return {
       body,
       finalUrl,
@@ -452,7 +540,7 @@ export async function fetchLiveProviderModelIds(
   params: FetchLiveProviderModelIdsParams,
 ): Promise<string[]> {
   const rows = await fetchLiveProviderModelRows(params);
-  const readModelId = params.readModelId ?? readDefaultLiveModelId;
+  const readModelId = params.readModelId ?? readLiveModelCatalogId;
   const seen = new Set<string>();
   const modelIds: string[] = [];
   for (const row of rows) {

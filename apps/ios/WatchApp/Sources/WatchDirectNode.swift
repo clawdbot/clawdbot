@@ -101,6 +101,7 @@ final class WatchDirectNode {
 
     private let networkMetrics: WatchURLSessionMetrics
     private let urlSession: URLSession
+    private let notificationCenter = LiveNotificationCenter()
     private var configuration: PersistedConfiguration?
     private var connectTask: Task<Void, Never>?
     private var activeSession: ActiveSession?
@@ -443,15 +444,14 @@ final class WatchDirectNode {
             method: "GET",
             token: nil)
         let challenge = try JSONDecoder().decode(ChallengeResponse.self, from: challengeData)
-        let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
+        let notificationStatus = await self.notificationCenter.authorizationStatus()
         let params = try connectParams(
             identity: identity,
             nonce: challenge.nonce,
             // Older watch-node Gateways omitted ts; retain their original local-clock behavior.
             signedAtMs: challenge.ts ?? Int64(Date().timeIntervalSince1970 * 1000),
             credential: credential,
-            notificationsAuthorized: notificationSettings.authorizationStatus == .authorized
-                || notificationSettings.authorizationStatus == .provisional)
+            notificationsAuthorized: notificationStatus == .authorized || notificationStatus == .provisional)
         let connectData = try await request(
             baseURL: baseURL,
             path: "connect",
@@ -642,9 +642,8 @@ final class WatchDirectNode {
                 code: .invalidRequest,
                 message: "INVALID_REQUEST: empty notification")
         }
-        let center = UNUserNotificationCenter.current()
-        let settings = await center.notificationSettings()
-        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+        let status = await self.notificationCenter.authorizationStatus()
+        guard status == .authorized || status == .provisional else {
             return Self.errorResponse(
                 id: request.id,
                 code: .unavailable,
@@ -664,7 +663,7 @@ final class WatchDirectNode {
         }
         let sound = params.sound?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         content.sound = sound.map { ["none", "silent", "off"].contains($0) } == true ? nil : .default
-        try await center.add(UNNotificationRequest(
+        try await self.notificationCenter.add(UNNotificationRequest(
             identifier: UUID().uuidString,
             content: content,
             trigger: nil))

@@ -24,6 +24,7 @@ import {
   providerOperationRetryConfig,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import { notifyLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildGuardedModelFetch,
   coerceTransportToolCallArguments,
@@ -121,6 +122,9 @@ type GoogleVideoSlots = Map<Record<string, unknown>, VideoContent>;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
 const GOOGLE_SSE_EVENT_BOUNDARY_RE = /(?:\r\n|\r(?!\n)|\n){2}/u;
+// Compare Google-owned publisher resources without changing outbound request paths.
+const GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX =
+  /^(?:projects\/[^/]+\/locations\/[^/]+\/)?publishers\/google\/models\//u;
 
 type GoogleTransportContentBlock =
   | { type: "text"; text: string; textSignature?: string }
@@ -142,6 +146,7 @@ const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
 
 type GoogleSseChunk = {
   responseId?: string;
+  modelVersion?: string;
   promptFeedback?: {
     blockReason?: string;
     blockReasonMessage?: string;
@@ -563,6 +568,7 @@ function convertGoogleMessages(
 ) {
   const contents: Array<Record<string, unknown>> = [];
   const replayToolCallThoughtSignatures = new Map<string, string>();
+  const sameRouteToolCallIds = new Set<string>();
   const shouldReplayToolCallThoughtSignature = requiresToolCallThoughtSignature(model.id);
   const routeModel = normalizeGoogleTransportModelRoute(model);
   const transformedMessages = transformTransportMessages(
@@ -654,6 +660,9 @@ function convertGoogleMessages(
           continue;
         }
         if (block.type === "toolCall") {
+          if (isSameRoute) {
+            sameRouteToolCallIds.add(block.id);
+          }
           const replayKey = toolCallThoughtSignatureReplayKey(block);
           const replayedThoughtSignature =
             shouldReplayToolCallThoughtSignature && isSameRoute
@@ -679,7 +688,7 @@ function convertGoogleMessages(
             functionCall: {
               name: block.name,
               args: coerceTransportToolCallArguments(block.arguments),
-              ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
+              ...(isSameRoute || requiresToolCallId(model.id) ? { id: block.id } : {}),
             },
             ...(thoughtSignature ? { thoughtSignature } : {}),
           });
@@ -720,7 +729,9 @@ function convertGoogleMessages(
           ...(modelSupportsMultimodalFunctionResponse && imageParts.length > 0
             ? { parts: imageParts }
             : {}),
-          ...(requiresToolCallId(model.id) ? { id: msg.toolCallId } : {}),
+          ...(sameRouteToolCallIds.has(msg.toolCallId) || requiresToolCallId(model.id)
+            ? { id: msg.toolCallId }
+            : {}),
         },
       };
       if (activeToolResultParts) {
@@ -1327,17 +1338,30 @@ async function* parseGoogleSseChunks(
       signal?.throwIfAborted();
       if (done) {
         buffer += decoder.decode();
-        if (
-          buffer
-            .split(/\r\n|\n|\r/u)
-            .some((line) => line.startsWith("data:") && line.slice(5).trim().length > 0)
-        ) {
+        const trailingData = buffer
+          .split(/\r\n|\n|\r/u)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim())
+          .join("\n");
+        const trailingPayload = trailingData || buffer.trim();
+        if (!trailingPayload || (!trailingData && !trailingPayload.startsWith("{"))) {
+          completed = true;
+          break;
+        }
+        let trailingChunk: unknown;
+        try {
+          trailingChunk = JSON.parse(trailingPayload);
+        } catch {
           throw new Error("Google SSE stream ended with an incomplete frame");
         }
-        completed = true;
-        break;
+        if (!isRecord(trailingChunk) || !isRecord(trailingChunk.error)) {
+          throw new Error("Google SSE stream ended with an incomplete frame");
+        }
+        // Provider errors can arrive as bare JSON or data frames without their final delimiter.
+        buffer = `data: ${JSON.stringify(trailingChunk)}\n\n`;
+      } else {
+        buffer += decoder.decode(value, { stream: true });
       }
-      buffer += decoder.decode(value, { stream: true });
       let boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
       while (boundary) {
         const rawEvent = buffer.slice(0, boundary.index);
@@ -1529,7 +1553,16 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                 yield* sse.chunks;
               })(sse.firstChunk);
         for await (const chunk of chunks) {
+          notifyLlmRequestActivity(options?.signal);
           output.responseId ||= chunk.responseId;
+          const responseModel = normalizeOptionalString(chunk.modelVersion);
+          if (
+            responseModel &&
+            resolveGoogleModelPath(model.id.replace(GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX, "")) !==
+              resolveGoogleModelPath(responseModel.replace(GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX, ""))
+          ) {
+            output.responseModel ||= responseModel;
+          }
           updateUsage(output, model, chunk, knownUsage);
           const candidate = chunk.candidates?.[0];
           const promptFeedback = chunk.promptFeedback;
@@ -1662,7 +1695,10 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
               }
             }
           }
-          if (typeof candidate?.finishReason === "string") {
+          if (
+            typeof candidate?.finishReason === "string" &&
+            candidate.finishReason !== "FINISH_REASON_UNSPECIFIED"
+          ) {
             sawTerminalReason = true;
             output.stopReason = mapStopReasonString(candidate.finishReason);
             if (output.stopReason === "error") {

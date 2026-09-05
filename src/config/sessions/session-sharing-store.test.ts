@@ -1,7 +1,10 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   closeOpenClawAgentDatabasesForTest,
+  isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
@@ -20,6 +23,34 @@ import {
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("session sharing store", () => {
+  it("reads existing and missing memberships without opening or creating writable databases", async () => {
+    await withTestDir({ prefix: "openclaw-session-sharing-readonly-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      const missingScope = { agentId: "missing", env, sessionKey: "agent:missing:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
+      addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env });
+      const missingPath = resolveOpenClawAgentSqlitePath({ agentId: missingScope.agentId, env });
+      closeOpenClawAgentDatabasesForTest();
+
+      expect(listSessionMembers(scope)).toEqual([
+        { identityId: "guest", addedBy: "owner", addedAt: 2 },
+      ]);
+      expect(listSessionMembershipKeys(scope, [scope.sessionKey], "guest")).toEqual(
+        new Set([scope.sessionKey]),
+      );
+      expect(isSessionMember(scope, "guest")).toBe(true);
+      expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+      expect(listSessionMembers(missingScope)).toEqual([]);
+      expect(listSessionMembershipKeys(missingScope, [missingScope.sessionKey], "guest")).toEqual(
+        new Set(),
+      );
+      expect(isSessionMember(missingScope, "guest")).toBe(false);
+      expect(fs.existsSync(missingPath)).toBe(false);
+    });
+  });
+
   it("keeps deterministic membership rows", async () => {
     await withTestDir({ prefix: "openclaw-session-sharing-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };

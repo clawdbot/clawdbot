@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveProviderContext,
   type ProviderStreamOptions,
@@ -11,6 +11,12 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import { SessionManager } from "../../sessions/index.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { testing as extraParamsTesting } from "../extra-params.test-support.js";
+import {
+  clearEmbeddedSessionPromptStates,
+  createToolResultPromptProjectionState,
+  getEmbeddedSessionPromptState,
+} from "../session-prompt-state.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import {
   prepareEmbeddedAttemptTransport,
@@ -30,6 +36,7 @@ const MP4 = Buffer.from("0000001c6674797069736f6d0000000069736f6d000000000000000
 
 function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
   const sessionManager = SessionManager.inMemory();
+  const runAbortDeadlineAtMs = Date.now() + 600_000;
   return {
     attempt: {
       runId: "run-settle-1",
@@ -48,6 +55,7 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
       messages: [],
     },
     sessionManager,
+    toolResultPromptProjectionState: createToolResultPromptProjectionState(),
     withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
     subscription: {
       toolMetas: [],
@@ -70,12 +78,12 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
       timedOutDuringCompaction: false,
     }),
     markTimedOutDuringCompaction: vi.fn(),
-    runAbortDeadlineAtMs: Date.now() + 600_000,
+    getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
     runAbortSignal: new AbortController().signal,
     isProbeSession: true,
     abortable: async <T>(promise: Promise<T>) => await promise,
     prePromptMessageCount: 0,
-    toolSearchTargetTranscriptProjections: [],
+    nestedToolActivities: [],
     cache: {
       observabilityEnabled: false,
       changesForTurn: null,
@@ -120,14 +128,108 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     expect(flushed).toHaveBeenCalledWith({ reason: "pre_compaction", attemptAccepted: false });
     expect(result.sessionIdUsed).toBe("sess-settle-1");
   });
+
+  it("persists the active projection after session-state eviction", async () => {
+    const sessionId = "cache-ttl-settle-evicted";
+    const otherSessionIds = Array.from({ length: 65 }, (_, index) => `cache-ttl-other-${index}`);
+    const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+    const key = "tool:old-read:42";
+    state.replacements.set(key, {
+      message: {
+        role: "toolResult",
+        toolCallId: "old-read",
+        toolName: "read",
+        content: [{ type: "text", text: "kept prefix\n...\nkept suffix" }],
+        isError: false,
+        timestamp: 42,
+      },
+      cacheTtl: "soft",
+    });
+    state.sourceTextByKey.set(key, ["original full output"]);
+    state.frozen.add(key);
+    const input = {
+      ...createSettleFixture(),
+      toolResultPromptProjectionState: state,
+    };
+    input.attempt = {
+      ...input.attempt,
+      sessionId,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      model: { ...input.attempt.model, api: "anthropic-messages" },
+      config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
+    };
+    try {
+      for (const otherSessionId of otherSessionIds) {
+        getEmbeddedSessionPromptState(otherSessionId);
+      }
+      expect(getEmbeddedSessionPromptState(sessionId).toolResults).not.toBe(state);
+
+      await settleEmbeddedAttemptStream(input);
+
+      expect(input.sessionManager.getEntries()).toContainEqual(
+        expect.objectContaining({
+          type: "custom",
+          customType: "openclaw.cache-ttl",
+          data: expect.objectContaining({
+            prunedToolResults: [{ key, mode: "soft" }],
+          }),
+        }),
+      );
+    } finally {
+      clearEmbeddedSessionPromptStates([sessionId, ...otherSessionIds]);
+    }
+  });
 });
 
 describe("prepareEmbeddedAttemptTransport", () => {
+  beforeEach(() => {
+    // These cases own prepared auth/config, not runtime plugin discovery.
+    extraParamsTesting.setProviderRuntimeDepsForTest({ wrapProviderStreamFn: () => undefined });
+  });
   afterEach(() => {
+    extraParamsTesting.resetProviderRuntimeDepsForTest();
     registerProviderStreamForModel.mockReset();
   });
 
-  it("applies the prepared transport to the live agent owner", async () => {
+  it.each([
+    {
+      compaction: true,
+      apiKey: "test-api-key",
+      replayEnabled: true,
+      pruning: false,
+      clearing: false,
+    },
+    {
+      compaction: true,
+      apiKey: "test-sk-ant-oat-oauth",
+      replayEnabled: false,
+      pruning: true,
+      clearing: false,
+    },
+    {
+      compaction: false,
+      apiKey: "test-api-key",
+      replayEnabled: false,
+      pruning: true,
+      clearing: true,
+    },
+    {
+      compaction: true,
+      apiKey: "test-api-key",
+      replayEnabled: true,
+      pruning: true,
+      clearing: true,
+    },
+    {
+      compaction: false,
+      apiKey: "test-api-key",
+      replayEnabled: false,
+      pruning: true,
+      clearing: false,
+      baseUrl: "https://proxy.example.test/anthropic",
+    },
+  ])("prepares transport and replay from resolved auth/config: %j", async (testCase) => {
     const streamFn = vi.fn();
     bindStreamLlmRuntime(streamFn, {
       streamSimple: streamFn,
@@ -141,21 +243,30 @@ describe("prepareEmbeddedAttemptTransport", () => {
     };
     const input = {
       attempt: {
-        config: {},
-        model: {
-          api: "test-api",
-          provider: "test-provider",
-          id: "test-model",
+        config: {
+          agents: {
+            defaults: { contextPruning: { mode: testCase.pruning ? "cache-ttl" : "off" } },
+          },
         },
-        modelId: "test-model",
-        provider: "test-provider",
+        model: {
+          api: "anthropic-messages",
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          baseUrl: testCase.baseUrl ?? "https://api.anthropic.com",
+        },
+        modelId: "claude-sonnet-4-6",
+        provider: "anthropic",
         promptCacheKey: undefined,
         resolvedApiKey: undefined,
+        authStorage: { getApiKey: async () => testCase.apiKey },
         runId: "run-transport-1",
         runtimePlan: {
           auth: { forwardedAuthProfileId: undefined },
           transport: {
-            resolveExtraParams: () => ({ transport: "sse" }),
+            resolveExtraParams: () => ({
+              transport: "sse",
+              anthropicServerCompaction: testCase.compaction,
+            }),
           },
         },
         sessionId: "sess-transport-1",
@@ -172,8 +283,8 @@ describe("prepareEmbeddedAttemptTransport", () => {
       agentDir: "/agent",
       abortSignal: new AbortController().signal,
       getProviderRuntimeHandle: () => ({
-        provider: "test-provider",
-        modelId: "test-model",
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
       }),
       sandboxSessionKey: "agent:main:test",
       codeModeControlsEnabled: false,
@@ -187,6 +298,8 @@ describe("prepareEmbeddedAttemptTransport", () => {
 
     expect(result.effectiveAgentTransport).toBe("sse");
     expect(session.agent.transport).toBe("sse");
+    expect(result.compactionReplayEnabled).toBe(testCase.replayEnabled);
+    expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
   });
 
   it("materializes native video from the prepared session agent workspace", async () => {

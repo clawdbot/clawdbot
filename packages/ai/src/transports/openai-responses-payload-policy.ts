@@ -62,6 +62,7 @@ type OpenAIResponsesPayloadPolicy = {
   shouldStripPromptCache: boolean;
   shouldStripStore: boolean;
   useServerCompaction: boolean;
+  usesInstructionsField: boolean;
 };
 
 type OpenAIResponsesPayloadCapabilities = {
@@ -70,6 +71,7 @@ type OpenAIResponsesPayloadCapabilities = {
   shouldStripResponsesPromptCache: boolean;
   supportsResponsesStoreField: boolean;
   usesKnownNativeOpenAIRoute: boolean;
+  usesVerifiedInstructionsEndpoint: boolean;
 };
 
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
@@ -217,7 +219,7 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 
 function readCompatPayloadBoolean(
   compat: unknown,
-  key: "supportsPromptCacheKey" | "supportsStore",
+  key: "supportsInstructions" | "supportsPromptCacheKey" | "supportsStore",
 ): boolean | undefined {
   if (!compat || typeof compat !== "object") {
     return undefined;
@@ -242,6 +244,29 @@ function resolveOpenAIResponsesPayloadCapabilities(
   const usesKnownNativeOpenAIRoute =
     endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint;
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
+  // Recognizing a hostname (routing it to a named endpointClass) is not the
+  // same as having confirmed that host's Responses API honors `instructions`
+  // -- OpenClaw bundles many named classes (Cerebras, Groq, Mistral,
+  // OpenCode, GitHub Copilot, ...) purely for SSRF/base-URL matching and
+  // other unrelated capability detection, with no contract proof either way
+  // for `instructions` specifically. Only two routes are actually verified:
+  // native OpenAI (definitionally, it's OpenAI's own API) and xAI's main
+  // route (confirmed via direct testing -- see the xAI compact-endpoint
+  // opt-out carve-out below, discovered by testing the real API). Every
+  // other named class defaults the same as an explicit custom/local proxy;
+  // `compat.supportsInstructions: true` opts a confirmed-working route in.
+  // Deliberately narrower than usesKnownNativeOpenAIRoute (used above for
+  // reasoning/service-tier/input-status policy): that boolean also covers
+  // azure-openai, which has never been verified for `instructions`
+  // specifically -- Azure mirrors OpenAI's API closely, but "closely" isn't
+  // a contract, and this file's whole point is not assuming one without
+  // evidence.
+  const usesVerifiedNativeOpenAIRoute =
+    endpointClass === "default"
+      ? provider === "openai"
+      : endpointClass === "openai-public" || endpointClass === "openai";
+  const usesVerifiedInstructionsEndpoint =
+    usesVerifiedNativeOpenAIRoute || endpointClass === "xai-native";
   const promptCacheKeySupport = readCompatPayloadBoolean(model.compat, "supportsPromptCacheKey");
   const shouldStripResponsesPromptCache =
     promptCacheKeySupport === true
@@ -273,6 +298,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
     usesKnownNativeOpenAIRoute,
+    usesVerifiedInstructionsEndpoint,
   };
 }
 
@@ -388,6 +414,20 @@ export function resolveOpenAIResponsesPayloadPolicy(
     model,
     options.extraParams,
   );
+  // Defaults on only for the two routes actually confirmed to honor
+  // `instructions` (see usesVerifiedInstructionsEndpoint above: native
+  // OpenAI, and xAI's main route by direct test). Every other route --
+  // including bundled-but-unverified named classes and arbitrary
+  // custom/local proxies -- defaults off: HTTP continuation is unreachable
+  // there anyway (openai-responses-websocket.ts requires the exact native
+  // OpenAI base URL), so there is nothing to gain from `instructions` and
+  // real risk of an unconfirmed route silently dropping the field along
+  // with the system prompt. `compat.supportsInstructions` always overrides
+  // the default in either direction -- explicit `false` opts a verified
+  // route out (confirmed necessary for xAI's compact endpoint specifically);
+  // explicit `true` opts any other route in once confirmed.
+  const instructionsCompat = readCompatPayloadBoolean(model.compat, "supportsInstructions");
+  const usesInstructionsField = instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint;
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
@@ -402,6 +442,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
       readCompatPayloadBoolean(model.compat, "supportsStore") === false &&
       isResponsesApi,
     useServerCompaction: options.enableServerCompaction === true && serverCompactionPlan.enabled,
+    usesInstructionsField,
   };
 }
 

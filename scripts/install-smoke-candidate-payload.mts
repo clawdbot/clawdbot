@@ -135,6 +135,13 @@ import tarfile
 mode, archive_path, member_name = sys.argv[1:]
 with tarfile.open(archive_path, "r:gz") as archive:
     members = archive.getmembers()
+    if mode == "package-metadata":
+        files = [member for member in members if member.isfile()]
+        print(json.dumps({
+            "entryCount": len(files),
+            "unpackedSize": sum(member.size for member in files),
+        }))
+        sys.exit(0)
     if mode == "repo-file":
         requested_name = member_name
         roots = {
@@ -169,40 +176,6 @@ with tarfile.open(archive_path, "r:gz") as archive:
   return result.stdout;
 }
 
-function readPackageVersionFromPackJson(value: unknown): {
-  filename: string;
-  normalized: unknown[];
-  version: string;
-} {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error("candidate pack metadata must contain at least one package result");
-  }
-  const last = value.at(-1);
-  if (!last || typeof last !== "object" || Array.isArray(last)) {
-    throw new Error("candidate pack metadata must end with a package result");
-  }
-  const record = last as Record<string, unknown>;
-  const filename = record.filename;
-  if (
-    typeof filename !== "string" ||
-    filename !== path.basename(filename) ||
-    filename !== path.win32.basename(filename) ||
-    !/^openclaw-[A-Za-z0-9._-]+\.tgz$/u.test(filename)
-  ) {
-    throw new Error("candidate pack metadata contains an unsafe tarball filename");
-  }
-  const version = assertVersion(record.version, "candidate pack version");
-  return {
-    filename,
-    normalized: value.map((entry, index) =>
-      index === value.length - 1 && entry && typeof entry === "object" && !Array.isArray(entry)
-        ? { ...entry, filename: "candidate.tgz" }
-        : entry,
-    ),
-    version,
-  };
-}
-
 function readPackageJsonFromTarball(tarballPath: string): Record<string, unknown> {
   const raw = runPythonTarReader(["member", tarballPath, "package/package.json"]);
   try {
@@ -213,6 +186,29 @@ function readPackageJsonFromTarball(tarballPath: string): Record<string, unknown
     return value as Record<string, unknown>;
   } catch (error) {
     throw new Error("candidate package tarball has invalid package/package.json", { cause: error });
+  }
+}
+
+function readPackageTarballMetadata(tarballPath: string): {
+  entryCount: number;
+  unpackedSize: number;
+} {
+  const raw = runPythonTarReader(["package-metadata", tarballPath, ""]);
+  try {
+    const value = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
+    if (
+      typeof value.entryCount !== "number" ||
+      !Number.isSafeInteger(value.entryCount) ||
+      value.entryCount < 1 ||
+      typeof value.unpackedSize !== "number" ||
+      !Number.isSafeInteger(value.unpackedSize) ||
+      value.unpackedSize < 0
+    ) {
+      throw new Error("package metadata has invalid archive sizes");
+    }
+    return { entryCount: value.entryCount, unpackedSize: value.unpackedSize };
+  } catch (error) {
+    throw new Error("candidate package tarball metadata is invalid", { cause: error });
   }
 }
 
@@ -231,19 +227,15 @@ export async function sealInstallSmokeCandidatePayload(
     throw new Error("candidate payload output directory must be empty");
   }
 
-  const packJsonPath = path.join(options.packageDir, "pack.json");
-  const pack = readPackageVersionFromPackJson(
-    await readJson(packJsonPath, "candidate pack metadata"),
-  );
-  const sourceTarballPath = path.join(options.packageDir, pack.filename);
+  const sourceTarballPath = path.join(options.packageDir, "candidate.tgz");
   await assertRegularFile(sourceTarballPath, "candidate package tarball");
   const packageJson = readPackageJsonFromTarball(sourceTarballPath);
   if (packageJson.name !== "openclaw") {
     throw new Error("candidate package tarball must contain the openclaw package");
   }
-  if (packageJson.version !== pack.version) {
-    throw new Error("candidate package tarball version does not match pack metadata");
-  }
+  const packageVersion = assertVersion(packageJson.version, "candidate package version");
+  const packageMetadata = readPackageTarballMetadata(sourceTarballPath);
+  const packageSize = (await fs.stat(sourceTarballPath)).size;
 
   // Re-read installers from the immutable source archive after candidate execution. Candidate
   // build hooks never get a writable handle to the sealed scripts consumed by privileged jobs.
@@ -260,7 +252,20 @@ export async function sealInstallSmokeCandidatePayload(
   await fs.copyFile(sourceTarballPath, path.join(options.outputDir, "candidate.tgz"));
   await writeExclusive(
     path.join(options.outputDir, "candidate-pack.json"),
-    `${JSON.stringify(pack.normalized, null, 2)}\n`,
+    `${JSON.stringify(
+      [
+        {
+          entryCount: packageMetadata.entryCount,
+          filename: "candidate.tgz",
+          name: "openclaw",
+          size: packageSize,
+          unpackedSize: packageMetadata.unpackedSize,
+          version: packageVersion,
+        },
+      ],
+      null,
+      2,
+    )}\n`,
   );
   await writeExclusive(path.join(options.outputDir, "install.sh"), installScript);
   await writeExclusive(path.join(options.outputDir, "install-cli.sh"), cliInstallScript);
@@ -273,7 +278,7 @@ export async function sealInstallSmokeCandidatePayload(
   const manifest: InstallSmokeCandidatePayloadManifest = {
     ...identity,
     files,
-    packageVersion: pack.version,
+    packageVersion,
     schema: SCHEMA,
     sourceArchiveSha256: await sha256File(options.archivePath),
   };

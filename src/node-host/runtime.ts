@@ -6,6 +6,10 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import {
+  NODE_CLAUDE_SKILLS_CAPABILITY,
+  NODE_CLAUDE_SKILLS_MESSAGE_BYTES,
+} from "../infra/node-claude-skill-protocol.js";
+import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
   NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
@@ -26,6 +30,7 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
+import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
 import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } from "./invoke.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
@@ -262,6 +267,8 @@ export async function prepareNodeHostRuntime(params?: {
   enableWorkerRuns?: boolean;
   /** Process-scoped worker hosting for environment-managed disposable nodes. */
   forceWorkerRuns?: boolean;
+  /** Disposable cloud nodes expose computer control only through the private carrier. */
+  ephemeral?: boolean;
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
   installedAppsSharingEnabled?: boolean;
@@ -355,13 +362,18 @@ export async function prepareNodeHostRuntime(params?: {
     }
   }
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
+  // Disposable desktops belong to their environment carrier. Publishing them
+  // would also expose cloud workers as ordinary paired computers.
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
       ...new Set([
         "system",
         "mcp",
+        ...(claudePath ? [NODE_CLAUDE_SKILLS_CAPABILITY] : []),
         ...(installedAppsSharingEnabled ? ["device"] : []),
-        ...pluginManifest.caps,
+        ...pluginManifest.caps.filter(
+          (cap) => params?.ephemeral !== true || (cap !== "computer" && cap !== "screen"),
+        ),
       ]),
     ].toSorted(),
     commands: [
@@ -374,10 +386,16 @@ export async function prepareNodeHostRuntime(params?: {
         ...(desktopStreamingEnabled ? [NODE_DESKTOP_STREAM_COMMAND] : []),
         ...(installedAppsSharingEnabled ? [NODE_DEVICE_APPS_COMMAND] : []),
         ...(claudePath ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : []),
-        ...pluginManifest.commands,
+        ...pluginManifest.commands.filter(
+          (command) =>
+            params?.ephemeral !== true ||
+            (command !== "screen.snapshot" && command !== "computer.act"),
+        ),
       ]),
     ].toSorted(),
-    ...(pluginManifest.computerUse ? { computerUse: pluginManifest.computerUse } : {}),
+    ...(params?.ephemeral !== true && pluginManifest.computerUse
+      ? { computerUse: pluginManifest.computerUse }
+      : {}),
     pathEnv,
   });
   const manifest = buildManifest(pluginNodeHost);
@@ -397,6 +415,7 @@ export async function prepareNodeHostRuntime(params?: {
     }) {
       const mcpAbort = new AbortController();
       let closing = false;
+      let connectionGeneration = 0;
       let closePromise: Promise<void> | undefined;
       let initializationRetry: ReturnType<typeof setTimeout> | undefined;
       const workerWorkspace =
@@ -449,7 +468,7 @@ export async function prepareNodeHostRuntime(params?: {
       if (workerSupervisor && !preparedContainerInitialized) {
         initializeWorkerSupervisor();
       }
-      const skillBins = new SkillBinsCache(client, pathEnv);
+      let skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
       let pluginDisconnectCleanup: Promise<void> = Promise.resolve();
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
@@ -510,8 +529,16 @@ export async function prepareNodeHostRuntime(params?: {
       }
       return {
         async invoke(frame) {
+          const generation = connectionGeneration;
           await pluginDisconnectCleanup;
-          const duplexCommand = duplexEnabled && isRegisteredNodeHostCommandDuplex(frame.command);
+          if (closing || generation !== connectionGeneration) {
+            return;
+          }
+          const claudeSkills =
+            frame.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND &&
+            requestsClaudeNodeSkillRuntime(frame.paramsJSON);
+          const duplexCommand =
+            duplexEnabled && (claudeSkills || isRegisteredNodeHostCommandDuplex(frame.command));
           const progressEnabled = duplexCommand || frame.command === NODE_DESKTOP_STREAM_COMMAND;
           const controller = new AbortController();
           // Every command must remain cancellable after dispatch; only duplex
@@ -552,6 +579,7 @@ export async function prepareNodeHostRuntime(params?: {
           const framedIo =
             input && progress
               ? createNodeDuplexEndpoint({
+                  ...(claudeSkills ? { maxMessageBytes: NODE_CLAUDE_SKILLS_MESSAGE_BYTES } : {}),
                   sendFrame: async (payloadJSON) => await progress.write(payloadJSON),
                   onError: (error) => {
                     active.framedFailure = error;
@@ -616,6 +644,9 @@ export async function prepareNodeHostRuntime(params?: {
               installedAppsSharingEnabled,
               installedAppsPlatform: platform,
               pluginCommandContext,
+              ...(params?.ephemeral === true
+                ? { workerComputer: { capabilities: () => resolvePluginNodeHost().computerUse } }
+                : {}),
               ...(workerBundleInstaller ? { workerBundleInstaller } : {}),
               ...(workerSupervisor ? { workerSupervisor } : {}),
               ...(workerWorkspace ? { workerWorkspace } : {}),
@@ -639,6 +670,9 @@ export async function prepareNodeHostRuntime(params?: {
           activeInvokes.get(invokeId)?.controller.abort();
         },
         cancelAll() {
+          connectionGeneration += 1;
+          // Retired refreshes may still finish; their cache must never serve the next connection.
+          skillBins = new SkillBinsCache(client, pathEnv);
           for (const active of activeInvokes.values()) {
             active.controller.abort();
           }

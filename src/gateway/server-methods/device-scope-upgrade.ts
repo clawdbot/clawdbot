@@ -76,7 +76,14 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       return;
     }
     const rolePolicy = resolveOperatorRolePolicy(client, context.getRuntimeConfig());
-    if (rolePolicy && requestedScopes.some((scope) => !rolePolicy.scopes.includes(scope))) {
+    if (
+      rolePolicy &&
+      !roleScopesAllow({
+        role: "operator",
+        requestedScopes,
+        allowedScopes: rolePolicy.scopes,
+      })
+    ) {
       respond(
         false,
         undefined,
@@ -184,12 +191,15 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       return;
     }
     if (result.status === "approved") {
+      // Approval may outlive a role change; use the current ceiling before releasing the token.
       const rolePolicy = resolveOperatorRolePolicy(client, context.getRuntimeConfig());
       if (
         rolePolicy &&
-        result.scopes.some(
-          (scope) => !rolePolicy.scopes.some((allowedScope) => allowedScope === scope),
-        )
+        !roleScopesAllow({
+          role: "operator",
+          requestedScopes: result.scopes,
+          allowedScopes: rolePolicy.scopes,
+        })
       ) {
         respond(
           false,

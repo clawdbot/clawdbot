@@ -10,23 +10,8 @@ final class SettingsWindowLayoutTests: XCTestCase {
     func testInactivePanesCollapseAndRetainScrollPosition() async throws {
         let state = AppState(preview: true)
         state.nativeSettingsPanesEnabled = true
-        let hosting = NSHostingView(rootView: SettingsRootView(
-            state: state,
-            updater: nil,
-            initialTab: .permissions))
-        hosting.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: SettingsTab.windowWidth,
-            height: SettingsTab.windowHeight)
-        let window = NSWindow(
-            contentRect: hosting.frame,
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = hosting
-        Self.retainedWindows.append(window)
+        let (hosting, window) = Self.makeWindow(state: state)
+        defer { window.orderOut(nil) }
 
         try await Self.waitForLayout(hosting, stage: "initial permissions scroll") {
             Self.detailScrollView(in: hosting) != nil
@@ -58,14 +43,85 @@ final class SettingsWindowLayoutTests: XCTestCase {
         try await Self.waitForLayout(hosting, stage: "permissions collapse after settings mode change") {
             permissionsScroll.frame.isEmpty
         }
+    }
 
-        window.orderOut(nil)
+    func testPanesFitAfterShrinkingAndEnlargingWindow() async throws {
+        let state = AppState(preview: true)
+        state.connectionMode = .remote
+        state.remoteTransport = .direct
+        state.remoteUrl = "wss://gateway.example.test"
+        state.remoteTarget = "user@gateway.example.test"
+        let (hosting, window) = Self.makeWindow(state: state)
+        defer { window.orderOut(nil) }
+
+        try await Self.waitForLayout(hosting, stage: "initial permissions layout") {
+            Self.detailScrollView(in: hosting) != nil
+        }
+        for (size, transport) in [
+            (NSSize(width: 1000, height: 620), AppState.RemoteTransport.direct),
+            (NSSize(width: 1120, height: 790), .direct),
+            (NSSize(width: 1000, height: 620), .ssh),
+        ] {
+            state.remoteTransport = transport
+            window.setContentSize(size)
+            try await Self.waitForLayout(hosting, stage: "resized detail at \(size)") {
+                Self.detailScrollView(in: hosting) != nil
+            }
+            for tab in [SettingsTab.general, .connection, .permissions] {
+                let previous = try XCTUnwrap(Self.detailScrollView(in: hosting))
+                NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
+                try await Self.waitForLayout(hosting, stage: "\(tab.title) at \(size)") {
+                    previous.frame.isEmpty && Self.detailScrollView(in: hosting) != nil
+                }
+                let scroll = try XCTUnwrap(Self.detailScrollView(in: hosting))
+                let frame = scroll.convert(scroll.bounds, to: hosting)
+                XCTAssertEqual(hosting.bounds.width, size.width, accuracy: 1)
+                XCTAssertEqual(hosting.bounds.height, size.height, accuracy: 1)
+                XCTAssertTrue(
+                    hosting.bounds.insetBy(dx: -1, dy: -1).contains(frame),
+                    "\(tab.title) detail \(frame) exceeds available bounds \(hosting.bounds)")
+
+                if tab == .connection {
+                    let document = try XCTUnwrap(scroll.documentView)
+                    let endpoint = transport == .direct ? state.remoteUrl : state.remoteTarget
+                    let field = try XCTUnwrap(Self.descendants(of: NSTextField.self, in: document)
+                        .first { $0.stringValue == endpoint })
+                    let fieldFrame = field.convert(field.bounds, to: hosting)
+                    XCTAssertGreaterThanOrEqual(fieldFrame.minX, frame.minX - 1)
+                    XCTAssertLessThanOrEqual(fieldFrame.maxX, frame.maxX + 1)
+                }
+            }
+        }
+    }
+
+    private static func makeWindow(state: AppState) -> (NSView, NSWindow) {
+        let tailscale = TailscaleService(
+            isInstalled: false,
+            isRunning: false,
+            appInstallationProbe: { false },
+            cliInstallationProbe: { false },
+            statusDataLoader: { _ in throw URLError(.notConnectedToInternet) })
+        let hosting = NSHostingView(rootView: SettingsRootView(
+            state: state,
+            updater: nil,
+            initialTab: .permissions)
+            .environment(tailscale))
+        hosting.frame = NSRect(
+            x: 0, y: 0, width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
+        let window = NSWindow(
+            contentRect: hosting.frame,
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        Self.retainedWindows.append(window)
+        return (hosting, window)
     }
 
     private static func detailScrollView(in view: NSView) -> NSScrollView? {
         self.descendants(of: NSScrollView.self, in: view).first { scrollView in
-            guard scrollView.frame.width > 500, let documentView = scrollView.documentView else { return false }
-            return documentView.bounds.height > scrollView.contentView.bounds.height + 1
+            scrollView.frame.width > 500 && !scrollView.frame.isEmpty
         }
     }
 

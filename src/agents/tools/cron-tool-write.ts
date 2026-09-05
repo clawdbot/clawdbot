@@ -140,6 +140,7 @@ function isCronJobConfigRevisionConflict(error: unknown): boolean {
 export async function updateCronJobFromAgentTool(params: {
   id: string;
   patch: Record<string, unknown>;
+  adminManagement?: boolean;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
   creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
   resolveCreatorToolAuthority?: (options?: {
@@ -171,7 +172,7 @@ export async function updateCronJobFromAgentTool(params: {
       resolveCreatorToolAuthority,
       operationSignal: params.operationSignal,
     });
-    if (callerIncludedPayloadPatch) {
+    if (callerIncludedPayloadPatch && !params.adminManagement) {
       // Kind-less caller payloads inherit the stored kind above. Recheck those
       // edits, but not a toolsAllow cap synthesized internally.
       assertNoCronShellExecution(prepared.patch);

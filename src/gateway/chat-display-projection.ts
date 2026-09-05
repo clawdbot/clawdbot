@@ -1,6 +1,7 @@
 // Public chat display projection facade.
 export { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
 export {
+  createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,

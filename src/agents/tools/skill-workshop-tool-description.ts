@@ -18,5 +18,5 @@ export function buildSkillWorkshopToolDescription(params: {
       : params.autonomousMode === "propose"
         ? "A foreground patch to a skill used in this run stays pending for review."
         : "A foreground patch to a skill used in this run is scanned and applied immediately.";
-  return `${SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY} Read, patch, create, update, revise, inspect, evaluate, and apply reusable-procedure skill proposals. Restore the backup retained by the last collection cleanup when the user asks to undo it. ${repairPolicy}\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+  return `${SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY} Read, prepare an exact bounded patch, patch, create, update, revise, inspect, evaluate, and apply reusable-procedure skill proposals. Restore the backup retained by the last collection cleanup when the user asks to undo it. ${repairPolicy}\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
 }

@@ -2,11 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { recoverPendingSessionDeliveries } from "../../../infra/session-delivery-queue-recovery.js";
 import {
   moveSessionDeliveryToFailed,
   prepareClaimedSessionDelivery,
+  releaseSessionDeliveryClaim,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
+  type QueuedSessionDelivery,
 } from "../../../infra/session-delivery-queue-storage.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import {
@@ -20,12 +23,14 @@ import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { suspendPendingFinalDelivery } from "../registry/subagent-registry-lifecycle-cleanup.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   admitSubagentCompletionDelivery,
+  blockSubagentCompletionDelivery,
   settleSubagentCompletionDelivery,
 } from "./subagent-completion-admission.store.js";
 import {
@@ -56,6 +61,7 @@ describe("atomic subagent completion admission store", () => {
     subagentRuns.clear();
     resetTaskRegistryForTests({ persist: false });
     closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
   });
 
   function records() {
@@ -68,6 +74,7 @@ describe("atomic subagent completion admission store", () => {
       scopeKind: "session",
       childSessionKey: "agent:main:subagent:child",
       runId: "task-run",
+      requesterAgentId: "main",
       task: "finish the work",
       status: "succeeded",
       deliveryStatus: "session_queued",
@@ -83,6 +90,8 @@ describe("atomic subagent completion admission store", () => {
       childSessionKey: task.childSessionKey,
       requesterSessionKey: task.requesterSessionKey,
       requesterDisplayKey: task.requesterSessionKey,
+      requesterAgentId: "main",
+      requesterOrigin: { channel: "discord", to: "channel:requester", accountId: "primary" },
       task: task.task,
       createdAt: task.createdAt,
       endedAt: task.endedAt,
@@ -131,6 +140,43 @@ describe("atomic subagent completion admission store", () => {
     database.db.exec(
       "DELETE FROM delivery_queue_entries; DELETE FROM subagent_runs; DELETE FROM task_runs;",
     );
+  }
+
+  function persistOwner(input = records()) {
+    settleSubagentCompletionDelivery({
+      subagent: input.subagent,
+      task: input.task,
+      databaseOptions: { database },
+    });
+    subagentRuns.set(input.subagent.runId, input.subagent);
+    ensureTaskRegistryReady();
+    publishTaskRecordAfterAtomicStore(input.task);
+    return input;
+  }
+
+  function systemEvents() {
+    return (
+      database.db
+        .prepare(
+          "SELECT id, status, entry_json FROM delivery_queue_entries WHERE entry_kind = 'systemEvent' ORDER BY id",
+        )
+        .all() as Array<{ id: string; status: string; entry_json: string }>
+    ).map((row) =>
+      Object.assign(row, { entry: JSON.parse(row.entry_json) as Record<string, unknown> }),
+    );
+  }
+
+  function resetOwners(): void {
+    clearRows();
+    subagentRuns.clear();
+    resetTaskRegistryForTests({ persist: false });
+    database = openOpenClawStateDatabase({ path: path.join(tempDir, "state.sqlite") });
+  }
+
+  function useDefaultDatabase(): void {
+    closeOpenClawStateDatabaseForTest();
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    database = openOpenClawStateDatabase();
   }
 
   it.each(["queue", "subagent", "task"] as const)(
@@ -221,6 +267,221 @@ describe("atomic subagent completion admission store", () => {
     expect(rowCount("task_runs")).toBe(0);
   });
 
+  it.each(["queue", "subagent", "task"] as const)(
+    "rolls blocked state and its durable alert back after the %s mutation",
+    (cut) => {
+      const input = persistOwner();
+      const table =
+        cut === "queue"
+          ? "delivery_queue_entries"
+          : cut === "subagent"
+            ? "subagent_runs"
+            : "task_runs";
+      database.db.exec(`
+        CREATE TRIGGER fail_blocked_${cut}
+        AFTER ${cut === "queue" ? "INSERT" : "UPDATE"} ON ${table}
+        BEGIN
+          SELECT RAISE(ABORT, 'cut:${cut}');
+        END;
+      `);
+
+      expect(() =>
+        blockSubagentCompletionDelivery({
+          subagent: input.subagent,
+          taskId: input.task.taskId,
+          reason: "requester unavailable",
+          suspendedReason: "permanent_failure",
+          databaseOptions: { database },
+        }),
+      ).toThrow(`cut:${cut}`);
+      expect(systemEvents()).toEqual([]);
+      expect(
+        JSON.parse(
+          (
+            database.db
+              .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+              .get(input.subagent.runId) as { payload_json: string }
+          ).payload_json,
+        ),
+      ).toMatchObject({ delivery: { status: "in_progress", queueId: input.queueEntry.id } });
+      expect(
+        database.db
+          .prepare("SELECT delivery_status, terminal_outcome FROM task_runs WHERE task_id = ?")
+          .get(input.task.taskId),
+      ).toMatchObject({ delivery_status: "session_queued", terminal_outcome: "succeeded" });
+      database.db.exec(`DROP TRIGGER fail_blocked_${cut}`);
+      resetOwners();
+    },
+  );
+
+  it("routes and deduplicates one blocked alert per completion generation", async () => {
+    const input = records();
+    input.task.requesterSessionKey = "agent:main:cron:job-1:run:abc:subagent:child";
+    input.task.ownerKey = input.task.requesterSessionKey;
+    input.subagent.requesterSessionKey = input.task.requesterSessionKey;
+    input.subagent.requesterDisplayKey = input.task.requesterSessionKey;
+    persistOwner(input);
+
+    const block = () =>
+      blockSubagentCompletionDelivery({
+        subagent: input.subagent,
+        taskId: input.task.taskId,
+        reason: "requester unavailable",
+        suspendedReason: "permanent_failure",
+        databaseOptions: { database },
+      });
+    expect(block()).toBe(true);
+    expect(block()).toBe(true);
+    expect(systemEvents()).toHaveLength(1);
+    expect(systemEvents()[0]?.entry).toMatchObject({
+      kind: "systemEvent",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      deliveryContext: {
+        channel: "discord",
+        to: "channel:requester",
+        accountId: "primary",
+      },
+    });
+    expect(getTaskById(input.task.taskId)).toMatchObject({
+      deliveryStatus: "failed",
+      terminalOutcome: "blocked",
+    });
+    expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
+      status: "suspended",
+      disposition: "permanent_failure",
+    });
+    const storedSubagent = JSON.parse(
+      (
+        database.db
+          .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+          .get(input.subagent.runId) as { payload_json: string }
+      ).payload_json,
+    );
+    expect(storedSubagent.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
+
+    await expect(
+      retrySubagentCompletionDelivery(input.task.taskId, { database }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(block()).toBe(true);
+    expect(new Set(systemEvents().map((event) => event.id)).size).toBe(2);
+
+    resetOwners();
+    const global = records();
+    global.task.requesterSessionKey = "global";
+    global.task.ownerKey = "global";
+    global.subagent.requesterSessionKey = "global";
+    global.subagent.requesterDisplayKey = "global";
+    persistOwner(global);
+    expect(
+      blockSubagentCompletionDelivery({
+        subagent: global.subagent,
+        taskId: global.task.taskId,
+        reason: "requester unavailable",
+        suspendedReason: "expiry",
+        databaseOptions: { database },
+      }),
+    ).toBe(true);
+    expect(systemEvents()[0]?.entry).toMatchObject({
+      kind: "systemEvent",
+      sessionKey: "global",
+      agentId: "main",
+    });
+
+    resetOwners();
+    const silent = records();
+    silent.task.notifyPolicy = "silent";
+    persistOwner(silent);
+    expect(
+      blockSubagentCompletionDelivery({
+        subagent: silent.subagent,
+        taskId: silent.task.taskId,
+        reason: "requester unavailable",
+        suspendedReason: "expiry",
+        databaseOptions: { database },
+      }),
+    ).toBe(true);
+    expect(systemEvents()).toEqual([]);
+  });
+
+  it("persists requester-settle suppression with a non-suspended block", () => {
+    const input = persistOwner();
+    expect(
+      blockSubagentCompletionDelivery({
+        subagent: input.subagent,
+        taskId: input.task.taskId,
+        reason: "requester settle wake failed",
+        databaseOptions: { database },
+      }),
+    ).toBe(true);
+    expect(subagentRuns.get(input.subagent.runId)).toMatchObject({
+      delivery: { status: "failed" },
+      suppressCompletionDelivery: true,
+    });
+  });
+
+  it("uses the same blocked intent for ordinary and correlated exhaustion", async () => {
+    useDefaultDatabase();
+    const ordinary = persistOwner();
+    suspendPendingFinalDelivery(
+      {
+        options: {
+          runs: subagentRuns,
+          resumedRuns: new Set<string>(),
+          resolveSubagentTask: () => ({ lookup: "available", task: ordinary.task }),
+        },
+        hasScheduledRequesterSettleWakeRun: () => true,
+      } as unknown as Parameters<typeof suspendPendingFinalDelivery>[0],
+      {
+        runId: ordinary.subagent.runId,
+        entry: ordinary.subagent,
+        reason: "permanent_failure",
+        error: "requester unavailable",
+      },
+    );
+    const ordinaryId = systemEvents()[0]?.id;
+
+    resetOwners();
+    useDefaultDatabase();
+    const correlated = persistOwner();
+    await settleCorrelatedSubagentDelivery(correlated.queueEntry, "moved-to-failed");
+    expect(systemEvents()).toHaveLength(1);
+    expect(systemEvents()[0]?.id).toBe(ordinaryId);
+  });
+
+  it("recovers a committed blocked alert once and leaves a completed tombstone", async () => {
+    useDefaultDatabase();
+    const input = persistOwner();
+    expect(
+      blockSubagentCompletionDelivery({
+        subagent: input.subagent,
+        taskId: input.task.taskId,
+        reason: "requester unavailable",
+        suspendedReason: "permanent_failure",
+        databaseOptions: { database },
+      }),
+    ).toBe(true);
+    const queueId = systemEvents()[0]?.id;
+    if (!queueId) {
+      throw new Error("blocked alert was not queued");
+    }
+    const deliver = vi.fn(async () => undefined);
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    await expect(recoverPendingSessionDeliveries({ deliver, log })).resolves.toMatchObject({
+      recovered: 1,
+    });
+    await expect(recoverPendingSessionDeliveries({ deliver, log })).resolves.toMatchObject({
+      recovered: 0,
+    });
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(
+      database.db
+        .prepare("SELECT status FROM delivery_queue_entries WHERE id = ?")
+        .get(queueId) as { status: string },
+    ).toEqual({ status: "completed" });
+  });
+
   it("dead-letters expired orphan generations before resolving their logical owner", () => {
     const { queueEntry } = records();
     if (queueEntry.kind !== "agentTurn" || queueEntry.owner?.kind !== "subagent_completion") {
@@ -243,7 +504,7 @@ describe("atomic subagent completion admission store", () => {
     );
   });
 
-  it("keeps canonical owner payload through failure and clears it after redrive success", async () => {
+  it("recovers canonical completion guidance after restart and clears payload after redrive success", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
       closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase();
@@ -264,6 +525,13 @@ describe("atomic subagent completion admission store", () => {
         message: "placeholder",
         messageId: "completion-owner-state",
         idempotencyKey: "completion-owner-state",
+        route: {
+          channel: "discord",
+          to: "channel:requester",
+          accountId: "primary",
+          chatType: "channel" as const,
+        },
+        expectedMediaUrls: ["https://example.com/result.png"],
       };
 
       const first = admitCorrelatedSubagentSessionDelivery({
@@ -314,7 +582,52 @@ describe("atomic subagent completion admission store", () => {
         retainOnFailure: true,
       });
 
-      await settleCorrelatedSubagentDelivery(secondEntry, "recovered");
+      await releaseSessionDeliveryClaim(second.id);
+      resetTaskRegistryForTests({ persist: false });
+      subagentRuns.clear();
+      closeOpenClawStateDatabaseForTest();
+      database = openOpenClawStateDatabase();
+      for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
+        subagentRuns.set(runId, entry);
+      }
+      ensureTaskRegistryReady();
+
+      const delivered: QueuedSessionDelivery[] = [];
+      const deliver = vi.fn(async (entry: QueuedSessionDelivery) => {
+        delivered.push(resolveCorrelatedSubagentDelivery(entry));
+      });
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const onSettled = vi.fn(settleCorrelatedSubagentDelivery);
+      await expect(
+        recoverPendingSessionDeliveries({ deliver, log, onSettled }),
+      ).resolves.toMatchObject({ recovered: 2, failed: 0 });
+      const recovered = delivered.find((entry) => entry.id === second.id);
+      expect(recovered).toMatchObject({
+        kind: "agentTurn",
+        sessionKey: payload.sessionKey,
+        route: payload.route,
+        expectedMediaUrls: payload.expectedMediaUrls,
+        message: expect.stringContaining("canonical result"),
+      });
+      if (recovered?.kind !== "agentTurn" || secondEntry.kind !== "agentTurn") {
+        throw new Error("correlated completion changed queue entry kind");
+      }
+      for (const message of [recovered.message, secondEntry.message]) {
+        expect(message).toContain("This completion ends one child run");
+        expect(message).toContain("Compare the result with the requested outcome");
+        expect(message).toContain("in-scope fixable blockers require continued work");
+        expect(message).toContain("new user authority or an unavailable external decision");
+      }
+      await expect(
+        recoverPendingSessionDeliveries({ deliver, log, onSettled }),
+      ).resolves.toMatchObject({ recovered: 0 });
+      expect(delivered.filter((entry) => entry.id === second.id)).toHaveLength(1);
+      expect(onSettled.mock.calls.filter(([entry]) => entry.id === second.id)).toHaveLength(1);
+      expect(
+        database.db
+          .prepare("SELECT status FROM delivery_queue_entries WHERE id = ?")
+          .get(second.id),
+      ).toEqual({ status: "completed" });
       expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
         status: "delivered",
         queueId: undefined,
@@ -376,9 +689,7 @@ describe("atomic subagent completion admission store", () => {
       };
       delete legacyPayload.completion!.fallbackResultText;
       database.db
-        .prepare(
-          "UPDATE subagent_runs SET payload_json = ?, fallback_frozen_result_text = NULL WHERE run_id = ?",
-        )
+        .prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?")
         .run(JSON.stringify(legacyPayload), input.subagent.runId);
       database.db
         .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")

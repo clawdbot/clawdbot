@@ -14,6 +14,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
+import { verifyBackupArchive } from "./backup-verify.js";
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -114,6 +115,54 @@ async function writeArchive(params: {
 }
 
 describe("backupRestoreCommand", () => {
+  it.for([
+    { targetForm: "qualified", suffix: "" },
+    { targetForm: "root-relative", suffix: "" },
+    { targetForm: "qualified", suffix: " " },
+    { targetForm: "root-relative", suffix: " " },
+  ])(
+    "restores verified $targetForm hardlinks with suffix '$suffix'",
+    async ({ targetForm, suffix }, ctx) => {
+      if (suffix && process.platform === "win32") {
+        ctx.skip(); // Windows cannot preserve a trailing space in a filename.
+      }
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-backup-restore-hardlink-", scenario: "minimal" },
+        async (state) => {
+          const archivePath = state.path("backup.tar.gz");
+          const targetPath = state.path("restored");
+          const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
+          const payloadPath = `${buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json")}${suffix}`;
+          const hardlinkPath = `${archiveRoot}/payload/config-link${suffix}`;
+          await writeArchive({
+            archivePath,
+            archiveRoot,
+            payloadPath,
+            extraEntries: [
+              encodeTarEntry({
+                path: hardlinkPath,
+                type: "Link",
+                linkpath:
+                  targetForm === "qualified"
+                    ? payloadPath
+                    : path.posix.relative(archiveRoot, payloadPath),
+              }),
+            ],
+          });
+
+          await expect(verifyBackupArchive(archivePath)).resolves.toMatchObject({ ok: true });
+          await expect(
+            backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+          ).resolves.toMatchObject({ ok: true, entryCount: 3 });
+          const original = path.join(targetPath, payloadPath);
+          const linked = path.join(targetPath, hardlinkPath);
+          await expect(fs.readFile(linked, "utf8")).resolves.toBe("{}\n");
+          expect((await fs.stat(linked)).ino).toBe((await fs.stat(original)).ino);
+        },
+      );
+    },
+  );
+
   it("round-trips a backup into a fresh target with matching inventory and readable databases", async () => {
     await withOpenClawTestState(
       {

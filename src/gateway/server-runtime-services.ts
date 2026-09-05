@@ -20,6 +20,7 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
+import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { assertQueuedConversationDeliveryAttemptAuthorized } from "./conversation-route-ownership.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import {
@@ -73,7 +74,9 @@ export function startGatewayCronWithLogging(params: {
       // admission fence; restart and suspension cannot race past this point.
       params.onStartError?.(err);
     }
-  }).catch((err: unknown) => params.logCron.error(`failed to enter start root: ${String(err)}`));
+  }, "runtime:cron-start").catch((err: unknown) =>
+    params.logCron.error(`failed to enter start root: ${String(err)}`),
+  );
 }
 
 export async function clearGatewayMaintenanceHandles(
@@ -89,7 +92,7 @@ export async function clearGatewayMaintenanceHandles(
   clearInterval(maintenance.dedupeCleanup);
   await maintenance.stopMediaCleanup();
   clearInterval(maintenance.worktreeCleanup);
-  maintenance.skillCuratorCleanup();
+  maintenance.skillUsageCleanup();
 }
 
 /** Schedules post-ready maintenance and cancels/cleans handles if shutdown wins the race. */
@@ -141,7 +144,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
       if (!params.isClosing()) {
         params.recordPostReadyMemory();
       }
-    }).catch((err: unknown) =>
+    }, "runtime:maintenance").catch((err: unknown) =>
       params.log.warn(`gateway post-ready maintenance deferred task failed: ${String(err)}`),
     );
   }, params.delayMs);
@@ -221,6 +224,7 @@ function startPendingOutboundDeliveryRecovery(params: {
           deliver: deliverWithCurrentConversationAuthority,
           log: logRecovery,
           cfg,
+          shouldContinue: () => !stopped,
         });
         return;
       }
@@ -233,8 +237,11 @@ function startPendingOutboundDeliveryRecovery(params: {
         log: logRecovery,
         deliver: deliverWithCurrentConversationAuthority,
         selectEntry: () => ({ match: true, bypassBackoff: false }),
+        shouldContinue: () => !stopped,
       });
-    }).catch((err: unknown) => params.log.error(`Delivery recovery failed: ${String(err)}`));
+    }, "runtime:delivery-recovery").catch((err: unknown) =>
+      params.log.error(`Delivery recovery failed: ${String(err)}`),
+    );
     const settled: Promise<void> = recovery.finally(() => {
       if (inFlight === settled) {
         inFlight = null;
@@ -279,13 +286,15 @@ function startPendingSessionDeliveryRuntime(params: {
   log: GatewayRuntimeServiceLogger;
   maxEnqueuedAt: number;
   resolveGatewayContext?: GatewayContextResolver;
-}): () => void {
+}): () => Promise<void> {
   let stopped = false;
-  let stopRuntime: (() => void) | undefined;
+  let recovery: Promise<void> | undefined;
+  let stopPromise: Promise<void> | undefined;
+  let stopRuntime: (() => Promise<void>) | undefined;
   // Delay session continuation recovery so the gateway has time to publish ready state and
   // request routing before replaying restart-sentinel deliveries.
   const timer = setTimeout(() => {
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
+    recovery = runWithGatewayIndependentRootWorkAdmission(async () => {
       const {
         deliverQueuedSessionDelivery,
         recoverPendingRestartContinuationDeliveries,
@@ -320,9 +329,11 @@ function startPendingSessionDeliveryRuntime(params: {
       } finally {
         // Recovery and scheduling are independent safeguards. A transient
         // recovery failure must not leave persisted rows without timers.
-        await schedulePendingSessionDeliveries();
+        if (!stopped) {
+          await schedulePendingSessionDeliveries();
+        }
       }
-    }).catch((err: unknown) =>
+    }, "runtime:session-delivery-recovery").catch((err: unknown) =>
       params.log.error(`Session delivery recovery failed: ${String(err)}`),
     );
   }, 1_250);
@@ -330,8 +341,10 @@ function startPendingSessionDeliveryRuntime(params: {
   return () => {
     stopped = true;
     clearTimeout(timer);
-    stopRuntime?.();
-    stopRuntime = undefined;
+    // Join the import as well as admitted recovery and drains before their
+    // Gateway dependencies disappear. Clearing the timer alone cannot do that.
+    stopPromise ??= Promise.all([recovery, stopRuntime?.()]).then(() => {});
+    return stopPromise;
   };
 }
 
@@ -347,13 +360,13 @@ export function activateGatewayScheduledServices(params: {
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
   resolveGatewayContext?: GatewayContextResolver;
-}): { heartbeatRunner: HeartbeatRunner; stopOutboundDeliveryRecovery: () => Promise<void> } {
+}): { heartbeatRunner: HeartbeatRunner; stopDeliveryRecovery: () => Promise<void> } {
   if (params.minimalTestGateway) {
     // Minimal gateways keep handles callable but inert so tests can share shutdown paths with
     // production starts without launching background loops.
     return {
       heartbeatRunner: createNoopHeartbeatRunner(),
-      stopOutboundDeliveryRecovery: async () => {},
+      stopDeliveryRecovery: async () => {},
     };
   }
   if (
@@ -366,6 +379,16 @@ export function activateGatewayScheduledServices(params: {
       .child("heartbeat")
       .warn(
         "scheduled heartbeats are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
+      );
+  }
+  if (
+    !params.cronState.cronEnabled &&
+    resolveSkillWorkshopConfig(params.cfgAtStart).autonomous.mode === "auto"
+  ) {
+    params.log
+      .child("skill-workshop")
+      .warn(
+        "scheduled skill collection reviews are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
       );
   }
   // Scheduled heartbeat wakes fire from a timer with no Gateway request, so
@@ -408,17 +431,25 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
+  let deliveryRecoveryStopPromise: Promise<void> | undefined;
+  const stopDeliveryRecovery = () => {
+    // Both owners fence synchronously before the close prelude awaits either.
+    deliveryRecoveryStopPromise ??= Promise.all([
+      stopOutboundDeliveryRecovery(),
+      stopSessionDeliveryRuntime(),
+    ]).then(() => {});
+    return deliveryRecoveryStopPromise;
+  };
   const heartbeatRunnerWithUpstreamMonitor: HeartbeatRunner = {
     updateConfig: heartbeatRunner.updateConfig,
     stop: () => {
-      void stopOutboundDeliveryRecovery();
-      stopSessionDeliveryRuntime();
+      void stopDeliveryRecovery();
       sessionUpstreamMonitor.stop();
       heartbeatRunner.stop();
     },
   };
   return {
     heartbeatRunner: heartbeatRunnerWithUpstreamMonitor,
-    stopOutboundDeliveryRecovery,
+    stopDeliveryRecovery,
   };
 }

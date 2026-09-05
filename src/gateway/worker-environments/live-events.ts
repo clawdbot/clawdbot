@@ -36,6 +36,7 @@ import {
   type LiveEventTarget,
   type WorkerLiveSessionBinding,
 } from "./live-event-session-binding.js";
+import { captureWorkerTurnDiagnosticRecorder } from "./worker-turn-run-owner.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
@@ -46,6 +47,7 @@ const MAX_FENCED_ENVIRONMENTS = 4096;
 type PendingLiveEvent = {
   request: WorkerLiveEventParams;
   sizeBytes: number;
+  recordDiagnostic?: ReturnType<typeof captureWorkerTurnDiagnosticRecorder>;
 };
 
 type OwnedLiveRun = {
@@ -56,14 +58,15 @@ type OwnedLiveRun = {
   trajectoryRecorder: WorkerLiveTrajectoryRecorder;
 };
 
-type WorkerLiveCredentialRotation = Readonly<{
-  credentialHash: string;
-  environmentId: string;
-  newProcessTurn?: boolean;
-  previousCredentialHash: string;
-  runEpoch: number;
-  sessionId: string;
-}>;
+type WorkerLiveCredentialRotation = Readonly<
+  {
+    credentialHash: string;
+    environmentId: string;
+    previousCredentialHash: string;
+    runEpoch: number;
+    sessionId: string;
+  } & ({ newProcessTurn: true; ackedSeq: number } | { newProcessTurn?: false })
+>;
 
 type LiveEventWindow = {
   activeRuns: Map<string, OwnedLiveRun>;
@@ -173,13 +176,21 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       window.runEpoch === rotation.runEpoch
     ) {
       if (rotation.newProcessTurn === true) {
+        if (
+          !Number.isSafeInteger(rotation.ackedSeq) ||
+          rotation.ackedSeq < 0 ||
+          rotation.ackedSeq > window.ackedSeq
+        ) {
+          return false;
+        }
         // A per-turn credential is an unforgeable process boundary. Retire only
-        // the prior process's transient run claims/fences while preserving the
-        // durable ACK cursor; cron may intentionally reuse its durable run id.
+        // the prior process's transient state and rewind previews to the durable
+        // ACK cursor; cron may intentionally reuse its durable run id.
         for (const [runId, owned] of window.activeRuns) {
           releaseAgentRunContext(runId, owned.claimId);
         }
         window.activeRuns.clear();
+        window.ackedSeq = rotation.ackedSeq;
         window.pending.clear();
         window.pendingBytes = 0;
         window.terminalRuns.clear();
@@ -367,7 +378,25 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         return resyncRequired(0);
       }
       if (windows.size >= maxSessions) {
-        return capacityExceeded();
+        // Attached sessions keep windows for the gateway's lifetime, so at the cap
+        // evict the oldest registry-quiescent window (stale activeRuns look busy);
+        // it rebinds via resync. Reject only when every window has an active run.
+        let evicted = false;
+        for (const candidate of windows.values()) {
+          const busy = [...candidate.activeRuns.entries()].some(
+            ([runId, owned]) =>
+              getAgentRunContextOwnerStatus(runId, owned.claimId, owned.lifecycleGeneration) ===
+              "active",
+          );
+          if (!busy) {
+            clearWindow(candidate);
+            evicted = true;
+            break;
+          }
+        }
+        if (!evicted) {
+          return capacityExceeded();
+        }
       }
       window = {
         activeRuns: new Map(),
@@ -547,6 +576,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     window: LiveEventWindow,
     request: WorkerLiveEventParams,
     allowBufferedTerminalCapacity: boolean,
+    recordDiagnostic: PendingLiveEvent["recordDiagnostic"],
   ): WorkerLiveEventFailure | undefined => {
     const owned = claimRun(window, request.runId, allowBufferedTerminalCapacity);
     if ("ok" in owned) {
@@ -574,6 +604,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       emitAgentEventForOwner(event, owned.claimId);
     }
     recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
+    recordDiagnostic?.(request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
@@ -581,13 +612,15 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   const drain = (
     window: LiveEventWindow,
     first: WorkerLiveEventParams,
+    firstDiagnostic: PendingLiveEvent["recordDiagnostic"],
     firstPending?: PendingLiveEvent,
   ): WorkerLiveEventApplicationResult => {
     let request: WorkerLiveEventParams | undefined = first;
     let buffered = firstPending;
+    let recordDiagnostic = firstPending ? firstPending.recordDiagnostic : firstDiagnostic;
     let publishedPrefix = false;
     while (request) {
-      const failed = publish(window, request, buffered !== undefined);
+      const failed = publish(window, request, buffered !== undefined, recordDiagnostic);
       if (failed) {
         if (failed.details.reason === "capacity-exceeded" && buffered) {
           // Keep the ordered tail retryable while the active prefix claim drains.
@@ -627,6 +660,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       }
       request = next.request;
       buffered = next;
+      recordDiagnostic = next.recordDiagnostic;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
@@ -651,6 +685,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if ("ok" in window) {
       return window;
     }
+    const recordDiagnostic = captureWorkerTurnDiagnosticRecorder(params.identity);
     const { seq } = params.request;
     const expectedSeq = window.ackedSeq + 1;
     if (seq > window.ackedSeq + windowSize) {
@@ -658,7 +693,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (seq === expectedSeq) {
       const pending = window.pending.get(seq);
-      return drain(window, pending?.request ?? params.request, pending);
+      return drain(window, pending?.request ?? params.request, recordDiagnostic, pending);
     }
     if (window.pending.has(seq)) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
@@ -667,7 +702,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (window.pendingBytes + sizeBytes > maxPendingBytes) {
       return resyncWindow(window);
     }
-    window.pending.set(seq, { request: params.request, sizeBytes });
+    window.pending.set(seq, { request: params.request, sizeBytes, recordDiagnostic });
     window.pendingBytes += sizeBytes;
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };

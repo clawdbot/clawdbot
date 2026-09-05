@@ -1,5 +1,11 @@
 import { vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import {
+  getPreparedModelFullCatalogAuth,
+  setPreparedModelFullCatalogAuth,
+} from "./prepared-model-runtime-auth.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 type LoadStaticCatalog =
@@ -25,9 +31,11 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
   },
   preparedAuthStore: undefined as import("./auth-profiles/types.js").AuthProfileStore | undefined,
+  credentialsRevision: 0,
   preparedAuthMaterializations:
     [] as import("./auth-profiles/runtime-materializations.js").RuntimeAuthMaterialization[],
   authStorage: {
@@ -45,6 +53,8 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
+  createPreparedModelCatalogWorker:
+    vi.fn<typeof import("./prepared-model-catalog-worker.js").createPreparedModelCatalogWorker>(),
   configuredAgentIds: [] as string[],
   configuredAgentIdsError: undefined as Error | undefined,
   configuredAgentDirs: new Map<string, string>(),
@@ -52,8 +62,8 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   createStaticCatalogResolver: vi.fn<CreateStaticCatalogResolver>(),
   discoverAuthStorage: vi.fn((..._args: unknown[]) => undefined as unknown),
   discoverModels: vi.fn(),
-  ensureOpenClawModelsJson: vi.fn(async (..._args: unknown[]) => ({
-    agentDir: "/tmp/agent",
+  ensureOpenClawModelsJson: vi.fn(async (...args: unknown[]) => ({
+    agentDir: String(args[1]),
     wrote: false,
   })),
   loadAgentRuntimePluginRegistryHandle: vi.fn(),
@@ -64,18 +74,29 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     pluginCatalogs: [],
   })),
   prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({ entries: [] })),
-  runPreparedModelCatalogWorker: vi.fn(async (..._args: unknown[]) => ({
-    entries: [],
-    routeVariants: [],
-  })),
+  runPreparedModelCatalogWorker: vi.fn(
+    async (..._args: unknown[]): Promise<ModelCatalogSnapshot> => ({
+      entries: [],
+      routeVariants: [],
+    }),
+  ),
+  runtimeSyntheticAuthProviderRefs: [] as string[],
   resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
   resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
   warn: vi.fn(),
   mutationListener: undefined as
-    | ((event: { agentDir?: string; affectsInheritedStores: boolean }) => void)
+    | ((event: {
+        agentDir?: string;
+        affectsInheritedStores: boolean;
+        profileSetChanged?: boolean;
+      }) => void)
     | undefined,
   mutationListeners: new Set<
-    (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
+    (event: {
+      agentDir?: string;
+      affectsInheritedStores: boolean;
+      profileSetChanged?: boolean;
+    }) => void
   >(),
   materializationListeners: new Set<
     (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
@@ -89,39 +110,40 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("./prepared-model-catalog-worker.js", () => ({
-  createPreparedModelCatalogWorkerInput: ({
-    agentFacts,
-  }: {
-    agentFacts: {
-      input: unknown;
-      authStore: unknown;
-      providerIds: unknown;
+  createPreparedModelCatalogWorker: (
+    ...factoryArgs: Parameters<typeof preparedModelRuntimeMocks.createPreparedModelCatalogWorker>
+  ) => {
+    preparedModelRuntimeMocks.createPreparedModelCatalogWorker(...factoryArgs);
+    return {
+      loadCatalog: async (...args: unknown[]) => {
+        const catalog = await preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args);
+        // Real worker replies always pair inventory with the observed auth generation.
+        setPreparedModelFullCatalogAuth(
+          catalog,
+          getPreparedModelFullCatalogAuth(catalog) ?? {
+            authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
+            authModes: {},
+          },
+        );
+        return catalog;
+      },
+      loadAuth: () =>
+        Promise.resolve({
+          authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
+          authModes: {},
+        }),
     };
-  }) => ({
-    kind: "catalog",
-    generationFingerprint: "test-generation",
-    input: agentFacts.input,
-    authStore: agentFacts.authStore,
-    providerIds: agentFacts.providerIds,
-  }),
-  createPreparedModelCatalogWorker: () => ({
-    loadCatalog: (...args: unknown[]) =>
-      preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args),
-    loadAuth: () =>
-      Promise.resolve({
-        authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
-        authModes: {},
-      }),
-  }),
+  },
 }));
 
-vi.mock("./model-catalog.js", () => ({
+vi.mock("./model-catalog.js", async () => ({
+  findModelCatalogEntry: (await import("./model-catalog-lookup.js")).findModelCatalogEntry,
   buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
     preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
 }));
 
 vi.mock("./agent-auth-discovery.js", () => ({
-  resolveAmbientAgentCredentialsForDiscovery: (...args: unknown[]) =>
+  prepareAmbientAgentCredentialsForDiscovery: async (...args: unknown[]) =>
     preparedModelRuntimeMocks.resolveAmbientCredentials(...args),
 }));
 
@@ -167,10 +189,11 @@ vi.mock("./agent-model-discovery.js", () => ({
 }));
 
 vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
-  resolveRuntimeSyntheticAuthProviderRefs: () => [],
+  resolveRuntimeSyntheticAuthProviderRefs: () =>
+    preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs,
 }));
 
-vi.mock("./agent-scope.js", () => ({
+const agentScopeMocks = vi.hoisted(() => ({
   listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
   listAgentIds: () => {
     if (preparedModelRuntimeMocks.configuredAgentIdsError) {
@@ -178,21 +201,25 @@ vi.mock("./agent-scope.js", () => ({
     }
     return preparedModelRuntimeMocks.configuredAgentIds;
   },
-  resolveAgentDir: (_config: unknown, agentId: string) =>
-    preparedModelRuntimeMocks.configuredAgentDirs.get(agentId) ??
-    (agentId === "default" ? "/tmp/unused-agent" : `/tmp/configured-${agentId}`),
+  resolveAgentDir: vi.fn<(_config: unknown, agentId: string) => string>(),
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
     preparedModelRuntimeMocks.configuredWorkspaces.get(agentId) ??
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   tryResolveConfiguredAgentWorkspaceDir: () => "/tmp/unused-workspace",
   tryResolveSystemAgentWorkspaceDir: () => "/tmp/unused-workspace",
   resolveAmbientOwnerAgentId: () => "default",
-  resolveDefaultAgentDir: () => "/tmp/unused-agent",
+  resolveDefaultAgentDir: vi.fn<() => string>(),
   resolveDefaultAgentId: () => "default",
   resolveAgentConfig: (config: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
     config.agents?.list?.find((entry) => entry.id === agentId),
   resolveAgentEffectiveModelPrimary: () => undefined,
   resolveAgentModelFallbacksOverride: () => undefined,
+  resolveEffectiveModelFallbacks: () => undefined,
+  resolveModelFallbackAvailability: () => ({
+    kind: "none_configured" as const,
+    source: "explicit" as const,
+  }),
+  resolveSubagentSpawnModelFallbacksOverride: () => undefined,
   resolveRunModelFallbacksOverride: () => undefined,
   resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
     defaultAgentId: "default",
@@ -200,15 +227,34 @@ vi.mock("./agent-scope.js", () => ({
   }),
 }));
 
+// The projection is a pure function; use the real implementation so tests that
+// swap in real availability resolvers (reply-fallback) keep prod semantics.
+vi.mock("./agent-scope.js", async () => ({
+  ...agentScopeMocks,
+  modelFallbackOverrideFromAvailability: (
+    await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js")
+  ).modelFallbackOverrideFromAvailability,
+}));
+vi.mock("./agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
+  listAgentIds: agentScopeMocks.listAgentIds,
+  resolveAgentDir: agentScopeMocks.resolveAgentDir,
+  resolveAgentWorkspaceDir: agentScopeMocks.resolveAgentWorkspaceDir,
+}));
+
 vi.mock("./legacy-inherited-auth-dir.js", () => ({
-  resolveLegacyInheritedAuthDir: () => "/tmp/unused-agent",
+  resolveLegacyInheritedAuthDir: () => agentScopeMocks.resolveDefaultAgentDir(),
 }));
 
 vi.mock("./auth-profiles/runtime-materializations.js", () => ({
   getPreparedRuntimeAuthMaterializations: () =>
     preparedModelRuntimeMocks.preparedAuthMaterializations,
   registerRuntimeAuthMaterializationMutationListener: (
-    listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
+    listener: (event: {
+      agentDir?: string;
+      affectsInheritedStores: boolean;
+      profileSetChanged?: boolean;
+    }) => void,
   ) => {
     preparedModelRuntimeMocks.materializationListeners.add(listener);
     return () => preparedModelRuntimeMocks.materializationListeners.delete(listener);
@@ -272,6 +318,8 @@ vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshotCore: () => preparedModelRuntimeMocks.preparedAuthStore,
   getRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
   getRuntimeAuthProfileStoreSnapshotRevision: () => 0,
+  getRuntimeAuthProfileStoreCredentialsRevision: () =>
+    preparedModelRuntimeMocks.credentialsRevision,
   registerRuntimeAuthProfileStoreMutationListener: (
     listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
   ) => {
@@ -334,13 +382,23 @@ export function getPreparedModelRuntimeTestApi(): PreparedModelRuntimeTestApi {
   ] as PreparedModelRuntimeTestApi;
 }
 
-export function resetPreparedModelRuntimeHarness(): void {
+export function resetPreparedModelRuntimeHarness(state: OpenClawTestState): void {
   getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+  agentScopeMocks.resolveAgentDir
+    .mockReset()
+    .mockImplementation(
+      (_config, agentId) =>
+        preparedModelRuntimeMocks.configuredAgentDirs.get(agentId) ?? state.agentDir(agentId),
+    );
+  agentScopeMocks.resolveDefaultAgentDir
+    .mockReset()
+    .mockImplementation(() => agentScopeMocks.resolveAgentDir(undefined, "default"));
   preparedModelRuntimeMocks.authStorage.getAll.mockReset().mockReturnValue({
     custom: { type: "api_key", key: "test-key" },
   });
   preparedModelRuntimeMocks.authStorage.getOAuthProviders.mockReset().mockReturnValue([]);
   preparedModelRuntimeMocks.preparedAuthStore = undefined;
+  preparedModelRuntimeMocks.credentialsRevision = 0;
   preparedModelRuntimeMocks.preparedAuthMaterializations = [];
   preparedModelRuntimeMocks.modelRegistry.fork
     .mockReset()
@@ -350,13 +408,17 @@ export function resetPreparedModelRuntimeHarness(): void {
   preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot
     .mockReset()
     .mockResolvedValue({ entries: [], routeVariants: [] });
+  preparedModelRuntimeMocks.createPreparedModelCatalogWorker.mockClear();
   preparedModelRuntimeMocks.discoverAuthStorage
     .mockReset()
     .mockImplementation(() => preparedModelRuntimeMocks.authStorage);
   preparedModelRuntimeMocks.discoverModels.mockReset();
   preparedModelRuntimeMocks.ensureOpenClawModelsJson
     .mockReset()
-    .mockResolvedValue({ agentDir: "/tmp/agent", wrote: false });
+    .mockImplementation(async (_config, agentDir) => ({
+      agentDir: String(agentDir),
+      wrote: false,
+    }));
   preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle
     .mockReset()
     .mockReturnValue(createEmptyPluginRegistry());
@@ -373,6 +435,7 @@ export function resetPreparedModelRuntimeHarness(): void {
     entries: [],
     routeVariants: [],
   });
+  preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs = [];
   preparedModelRuntimeMocks.resolveAmbientCredentials.mockReset().mockReturnValue({});
   preparedModelRuntimeMocks.resolveStaticCatalogModel.mockReset().mockReturnValue(undefined);
   preparedModelRuntimeMocks.createStaticCatalogResolver
@@ -383,4 +446,19 @@ export function resetPreparedModelRuntimeHarness(): void {
   preparedModelRuntimeMocks.configuredAgentIdsError = undefined;
   preparedModelRuntimeMocks.configuredAgentDirs.clear();
   preparedModelRuntimeMocks.configuredWorkspaces.clear();
+}
+
+export async function cleanupPreparedModelRuntimeHarness(
+  state: OpenClawTestState,
+  failed: boolean,
+): Promise<void> {
+  // A failed assertion may precede an async owner's terminal join. Reset is not a drain;
+  // keep that namespace alive rather than deleting files a late build may still capture.
+  if (failed) {
+    await state.restoreEnv();
+    console.warn(`Retained prepared-model fixture after failed test: ${state.root}`);
+    return;
+  }
+  getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+  await state.cleanup();
 }

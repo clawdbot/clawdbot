@@ -237,6 +237,13 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
     );
   }
 
+  /** Replace a runtime-owned tool surface without restarting its active agent loop. */
+  replaceCustomTools(customTools: ToolDefinition[], activeToolNames: string[]): void {
+    this.customTools = customTools;
+    this.allowedToolNames = new Set(activeToolNames);
+    this.refreshToolRegistry({ activeToolNames });
+  }
+
   private refreshToolRegistry(options?: {
     activeToolNames?: string[];
     includeAllExtensionTools?: boolean;

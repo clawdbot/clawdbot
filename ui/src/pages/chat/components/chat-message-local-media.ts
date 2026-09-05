@@ -14,7 +14,7 @@ export function isLocalAssistantAttachmentSource(source: string): boolean {
   );
 }
 
-function isCanonicalInboundMediaSource(source: string): boolean {
+export function isCanonicalInboundMediaSource(source: string): boolean {
   // Match the raw one-segment form first; URL parsing would erase dot segments.
   const match = /^media:\/\/inbound\/([^/?#]+)$/i.exec(source.trim());
   if (!match?.[1]) {
@@ -96,7 +96,7 @@ export function isLocalAttachmentPreviewAllowed(
     ? [canonicalizeLocalPathForComparison(normalizedSource)]
     : source.trim().startsWith("~")
       ? resolveHomeCandidatesFromRoots(localMediaPreviewRoots).map((home) =>
-          canonicalizeLocalPathForComparison(source.trim().replace(/^~(?=$|[\\/])/, home)),
+          canonicalizeLocalPathForComparison(source.trim().replace(/^~(?=$|[\\/])/, () => home)),
         )
       : [];
   if (comparableSources.length === 0) {

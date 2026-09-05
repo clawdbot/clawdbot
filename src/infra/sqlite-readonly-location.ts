@@ -8,6 +8,7 @@ import {
   requireNodeSqlite,
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   createPrivateSqliteTempDirectory,
@@ -590,14 +591,6 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
   });
 }
 
-function resolveSqliteReadOnlyWorkerUrl(): URL {
-  return resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "sqlite-readonly-location.worker",
-    distWorkerPath: "infra/sqlite-readonly-location.worker.js",
-  });
-}
-
 function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWorkerResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -663,7 +656,7 @@ function adoptSqliteReadOnlyWorkerResult(params: {
 export async function prepareSqliteReadOnlyLocation(
   pathname: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  const workerUrl = resolveSqliteReadOnlyWorkerUrl();
+  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
   return await new Promise((resolve, reject) => {
     execFile(
       process.execPath,
@@ -689,7 +682,7 @@ export async function prepareSqliteReadOnlyLocation(
 export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
 ): PreparedSqliteReadOnlyLocation {
-  const workerUrl = resolveSqliteReadOnlyWorkerUrl();
+  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
   const result = spawnSync(
     process.execPath,
     [

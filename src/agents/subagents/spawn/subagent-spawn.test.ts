@@ -3,9 +3,13 @@ import os from "node:os";
 // persistence, registry registration, and lifecycle event emission.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveUserPath } from "../../../utils.js";
+import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
@@ -35,6 +39,14 @@ const hoisted = vi.hoisted(() => ({
   resolveContextEngineMock: vi.fn(),
   countActiveRunsForSessionMock: vi.fn(),
   listSwarmRunsForGroupMock: vi.fn(),
+  resolveSandboxRuntimeStatusMock: vi.fn<
+    (params: { sessionKey?: string }) => {
+      sandboxed: boolean;
+      sandboxRequired: boolean;
+      isolationSubject?: import("../../sandbox/types.js").SandboxIsolationSubject;
+      createdActor?: import("../../../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+    }
+  >(),
   configOverride: {} as Record<string, unknown>,
 }));
 
@@ -90,10 +102,11 @@ type InheritedSpawnPreferenceCase = {
   expected: string | boolean;
   agentDefaults?: Readonly<Record<string, unknown>>;
   requesterAgent?: Readonly<Record<string, unknown>>;
-  sessionStoreUnavailable?: boolean;
-  swarmEnabled?: boolean;
+  requesterPreferenceReadFails?: boolean;
   collect?: boolean;
   requesterRunId?: string;
+  requesterThinkingLevel?: ThinkLevel;
+  thinkingOverride?: string;
 };
 
 const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
@@ -105,22 +118,45 @@ const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
     expected: "high",
   },
   {
+    name: "inherits active-turn Ultra instead of the stored session thinking level",
+    task: "inherit active thinking",
+    requesterState: { thinkingLevel: "medium" },
+    requesterThinkingLevel: "ultra",
+    preferenceKey: "thinkingLevel",
+    expected: "ultra",
+  },
+  {
+    name: "inherits active-turn off instead of a stored Ultra override",
+    task: "inherit active thinking off",
+    requesterState: { thinkingLevel: "ultra" },
+    requesterThinkingLevel: "off",
+    preferenceKey: "thinkingLevel",
+    expected: "off",
+  },
+  {
+    name: "keeps explicit child thinking ahead of active-turn Ultra",
+    task: "override active thinking",
+    requesterState: { thinkingLevel: "medium" },
+    requesterThinkingLevel: "ultra",
+    thinkingOverride: "low",
+    preferenceKey: "thinkingLevel",
+    expected: "low",
+  },
+  {
     name: "inherits requester fast mode for collector children",
     task: "inherit fast mode",
     requesterState: { fastMode: "auto" },
     preferenceKey: "fastMode",
     expected: "auto",
-    swarmEnabled: true,
     collect: true,
     requesterRunId: "parent-run",
   },
   {
-    name: "inherits requester fast mode for ordinary children when Swarm is enabled",
+    name: "inherits requester fast mode for ordinary children with default Swarm config",
     task: "inherit ordinary fast mode",
     requesterState: { fastMode: true },
     preferenceKey: "fastMode",
     expected: true,
-    swarmEnabled: true,
   },
   {
     name: "persists inherited requester thinking off",
@@ -138,11 +174,11 @@ const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
     expected: "high",
   },
   {
-    name: "falls back to requester agent thinkingDefault when caller session store cannot be read",
-    task: "inherit agent thinking default without session store",
+    name: "uses requester agent thinkingDefault after a failed preference read",
+    task: "inherit agent thinking default after a preference read failure",
     requesterState: {},
     requesterAgent: { thinkingDefault: "high" },
-    sessionStoreUnavailable: true,
+    requesterPreferenceReadFails: true,
     preferenceKey: "thinkingLevel",
     expected: "high",
   },
@@ -155,10 +191,11 @@ const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
     expected: "medium",
   },
   {
-    name: "applies requester-agent subagent thinking before caller session thinking",
+    name: "applies requester-agent subagent thinking before active-turn thinking",
     task: "requester policy thinking",
     requesterState: { thinkingLevel: "high" },
     requesterAgent: { subagents: { thinking: "medium" } },
+    requesterThinkingLevel: "ultra",
     preferenceKey: "thinkingLevel",
     expected: "medium",
   },
@@ -185,7 +222,7 @@ describe("spawnSubagentDirect seam flow", () => {
       countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
       listSwarmRunsForGroup: hoisted.listSwarmRunsForGroupMock,
       resolveSubagentSpawnModelSelection: () => "openai/gpt-5.4",
-      resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
+      resolveSandboxRuntimeStatus: hoisted.resolveSandboxRuntimeStatusMock,
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
   });
@@ -213,6 +250,10 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.resolveContextEngineMock.mockReset().mockResolvedValue({});
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
     hoisted.listSwarmRunsForGroupMock.mockReset().mockReturnValue([]);
+    hoisted.resolveSandboxRuntimeStatusMock.mockReset().mockReturnValue({
+      sandboxed: false,
+      sandboxRequired: false,
+    });
     hoisted.resolveAgentConfigMock.mockImplementation(
       (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
         cfg.agents?.list?.find((agent) => agent.id === agentId),
@@ -239,6 +280,7 @@ describe("spawnSubagentDirect seam flow", () => {
   });
 
   it("rejects direct swarm parameters while tools.swarm is disabled", async () => {
+    hoisted.configOverride = createConfigOverride({ tools: { swarm: false } });
     const result = await spawnSubagentDirect(
       { task: "collect", collect: true },
       { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
@@ -418,6 +460,7 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.sessionKey).toBe(result.childSessionKey);
+    expect(result.expectsCompletionMessage).toBe(false);
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput).toMatchObject({
       runId: result.runId,
@@ -1120,6 +1163,71 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
+  it("reconciles a transport-ambiguous dispatch so an accepted run is surfaced instead of misreported as an error", async () => {
+    let dispatchAttempts = 0;
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; timeoutMs?: number }) => {
+        if (request.method === "agent") {
+          dispatchAttempts += 1;
+          if (dispatchAttempts === 1) {
+            throw new Error("gateway timeout after 60000ms");
+          }
+          if (dispatchAttempts === 2) {
+            return {
+              runId: "accepted-ambig-run",
+              status: "in_flight",
+              admissionPending: true,
+            };
+          }
+          return { runId: "accepted-ambig-run", status: "in_flight" };
+        }
+        return request.method?.startsWith("sessions.") ? { ok: true } : {};
+      },
+    );
+    const context = { agentSessionKey: "agent:main:main" };
+
+    const result = await spawnSubagentDirect({ task: "ambiguous child" }, context);
+
+    expect(dispatchAttempts).toBe(3);
+    const agentRequests = gatewayRequestRecords().filter((request) => request.method === "agent");
+    expect(agentRequests.map((request) => request.params)).toEqual([
+      agentRequests[0]?.params,
+      agentRequests[0]?.params,
+      agentRequests[0]?.params,
+    ]);
+    expect(agentRequests.slice(1).map((request) => request.timeoutMs)).toEqual([800, 800]);
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "accepted-ambig-run",
+      childSessionKey: expect.any(String),
+    });
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not register a child when reconciliation finds a terminal run", async () => {
+    let dispatchAttempts = 0;
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent" && ++dispatchAttempts === 1) {
+        throw new Error("gateway timeout after 60000ms");
+      }
+      return request.method === "agent"
+        ? { runId: "stopped-run", status: "timeout" }
+        : { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "ambiguous terminal child" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(dispatchAttempts).toBe(2);
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("no active subagent run (status: timeout)"),
+    });
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
   it("shares pending child capacity between native and visible spawn paths", async () => {
     const { maybeSpawnVisibleSession } = await import("../../tools/sessions-spawn-visible.js");
     hoisted.configOverride = createConfigOverride({
@@ -1158,6 +1266,7 @@ describe("spawnSubagentDirect seam flow", () => {
       label: "",
       runtime: "subagent",
       sandbox: "inherit",
+      expectsCompletionMessage: true,
       options: {
         agentSessionKey: controllerSessionKey,
         completionOwnerKey: "agent:main:main",
@@ -1315,50 +1424,76 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
-  it("registers the target agent id for cross-agent task attribution", async () => {
-    hoisted.configOverride = createConfigOverride({
-      session: {
-        scope: "global",
-      },
-      agents: {
-        defaults: {
-          workspace: os.tmpdir(),
+  it.each(["off", "all"] as const)(
+    "uses the global requester sandbox mode %s for cross-agent spawns",
+    async (sandboxMode) => {
+      let persistedStore: Record<string, Record<string, unknown>> | undefined;
+      installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+        onStore: (store) => {
+          persistedStore = store;
         },
-        list: [
-          {
-            id: "main",
-            workspace: "/tmp/workspace-main",
-            subagents: {
-              allowAgents: ["worker"],
+      });
+      hoisted.configOverride = createConfigOverride({
+        session: {
+          scope: "global",
+        },
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            workspace: os.tmpdir(),
+          },
+          list: [
+            {
+              id: "main",
+              sandbox: { mode: sandboxMode },
+              workspace: "/tmp/workspace-main",
+              subagents: {
+                allowAgents: ["worker"],
+              },
             },
-          },
-          {
-            id: "worker",
-            workspace: "/tmp/workspace-worker",
-          },
-        ],
-      },
-    });
+            {
+              id: "worker",
+              workspace: "/tmp/workspace-worker",
+            },
+          ],
+        },
+      });
 
-    const result = await spawnSubagentDirect(
-      {
-        task: "attribute worker run",
-        agentId: "worker",
-      },
-      {
-        agentSessionKey: "global",
-        requesterAgentIdOverride: "main",
-      },
-    );
+      hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(resolveSandboxRuntimeStatus);
 
-    expect(result.status).toBe("accepted");
-    expect(result.childSessionKey).toMatch(/^agent:worker:subagent:/);
-    const registerInput = firstRegisteredSubagentRun();
-    expect(registerInput.childSessionKey).toBe(result.childSessionKey);
-    expect(registerInput.agentId).toBe("worker");
-    expect(registerInput.requesterSessionKey).toBe("global");
-    expect(registerInput.requesterAgentId).toBe("main");
-  });
+      const result = await spawnSubagentDirect(
+        {
+          task: "attribute worker run",
+          agentId: "worker",
+        },
+        {
+          agentSessionKey: "global",
+          requesterAgentIdOverride: "main",
+          sessionPermissionPolicy: { mode: "guarded", root: "/tmp/workspace-main" },
+        },
+      );
+
+      if (sandboxMode === "all") {
+        expect(result).toMatchObject({
+          status: "forbidden",
+          error: expect.stringContaining("cannot spawn unsandboxed"),
+        });
+        expectNoChildSpawnSideEffects();
+        return;
+      }
+      expect(result.status).toBe("accepted");
+      expect(result.childSessionKey).toMatch(/^agent:worker:subagent:/);
+      expect(persistedStore?.[result.childSessionKey as string]).toMatchObject({
+        permissionMode: "guarded",
+        sessionRoot: resolveUserPath("/tmp/workspace-worker"),
+      });
+      const registerInput = firstRegisteredSubagentRun();
+      expect(registerInput.childSessionKey).toBe(result.childSessionKey);
+      expect(registerInput.agentId).toBe("worker");
+      expect(registerInput.requesterSessionKey).toBe("global");
+      expect(registerInput.requesterAgentId).toBe("main");
+    },
+  );
 
   it("accepts a spawned run across session patching, runtime-model persistence, registry registration, and lifecycle emission", async () => {
     const operations: string[] = [];
@@ -1399,6 +1534,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.status).toBe("accepted");
     expect(result.runId).toBe("run-1");
     expect(result.mode).toBe("run");
+    expect(result.expectsCompletionMessage).toBe(true);
     expect(result.modelApplied).toBe(true);
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
 
@@ -1458,6 +1594,78 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams.provider).toBe("openai");
     expect(agentParams.model).toBe("gpt-5.4");
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
+  it.each([
+    { required: false, source: "profile", sandbox: "inherit" },
+    { required: true, source: "profile", sandbox: "inherit" },
+    { required: true, source: "profile", sandbox: "require" },
+    { required: true, source: "channel", sandbox: "inherit" },
+    { required: true, source: "unknown", sandbox: "inherit" },
+  ] as const)(
+    "inherits native child $source provenance from a required parent ($required) with sandbox=$sandbox",
+    async ({ required, source, sandbox }) => {
+      await withOpenClawTestState({ prefix: "openclaw-spawn-required-parent-" }, async (state) => {
+        const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+        const parentSessionKey = "agent:main:main";
+        const actor = { type: "human", source, id: "profile-native-creator" } as const;
+        const parent = await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: parentSessionKey, storePath },
+          {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            createdVia: "operator",
+            createdActor: actor,
+            ...(required ? { sandbox: "required" } : {}),
+          },
+        );
+        hoisted.loadSessionStoreMock.mockReturnValue({ [parentSessionKey]: parent });
+        hoisted.configOverride = createConfigOverride({
+          session: { store: storePath },
+          agents: {
+            defaults: { sandbox: { mode: "off" } },
+            entries: { main: { workspace: state.workspaceDir } },
+          },
+        });
+        hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(resolveSandboxRuntimeStatus);
+        let persistedStore: Record<string, Record<string, unknown>> | undefined;
+        installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+          onStore: (store) => {
+            persistedStore = store;
+          },
+        });
+
+        const result = await spawnSubagentDirect(
+          { task: "continue under the parent's isolation policy", sandbox },
+          { agentSessionKey: parentSessionKey },
+        );
+
+        expect(result.status).toBe("accepted");
+        const entry = persistedStore?.[result.childSessionKey as string];
+        expect(entry).toMatchObject({
+          createdVia: "spawn",
+          createdActor: required ? actor : { type: "agent", id: "main" },
+          parentSessionKey,
+        });
+        expect(entry?.sandbox).toBe(required ? "required" : undefined);
+      });
+    },
+  );
+
+  it("rejects a configured-sandbox parent spawning an unsandboxed native child before side effects", async () => {
+    hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({
+      sandboxed: sessionKey === "agent:main:main",
+      sandboxRequired: false,
+    }));
+    const result = await spawnSubagentDirect(
+      { task: "try an unsandboxed child" },
+      { agentSessionKey: "agent:main:main" },
+    );
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("cannot spawn unsandboxed"),
+    });
+    expectNoChildSpawnSideEffects();
   });
 
   it("dispatches spawned agent runs in process when a gateway context is available", async () => {
@@ -1564,6 +1772,43 @@ describe("spawnSubagentDirect seam flow", () => {
     );
   });
 
+  it.each([
+    { label: "default", mode: undefined },
+    { label: "read-only", mode: "read-only" },
+    { label: "guarded", mode: "guarded" },
+    { label: "workspace", mode: "workspace" },
+    { label: "full", mode: "full" },
+  ] as const)(
+    "inherits the parent's $label permission mode in a hidden child",
+    async ({ mode }) => {
+      const sessionRoot = resolveUserPath("/tmp/workspace-main");
+      let persistedStore: Record<string, Record<string, unknown>> | undefined;
+      installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+        onStore: (store) => {
+          persistedStore = store;
+        },
+      });
+
+      const result = await spawnSubagentDirect(
+        { task: "inherit the parent permission policy" },
+        {
+          agentSessionKey: "agent:main:main",
+          workspaceDir: sessionRoot,
+          ...(mode ? { sessionPermissionPolicy: { mode, root: sessionRoot } } : {}),
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      const childEntry = persistedStore?.[result.childSessionKey as string];
+      if (mode) {
+        expect(childEntry).toMatchObject({ permissionMode: mode, sessionRoot });
+      } else {
+        expect(childEntry).not.toHaveProperty("permissionMode");
+        expect(childEntry).not.toHaveProperty("sessionRoot");
+      }
+    },
+  );
+
   it.each(inheritedSpawnPreferenceCases)(
     "$name",
     async ({
@@ -1573,30 +1818,25 @@ describe("spawnSubagentDirect seam flow", () => {
       expected,
       agentDefaults,
       requesterAgent,
-      sessionStoreUnavailable,
-      swarmEnabled,
+      requesterPreferenceReadFails,
       collect,
       requesterRunId,
+      requesterThinkingLevel,
+      thinkingOverride,
     }) => {
-      if (agentDefaults || requesterAgent || swarmEnabled) {
+      if (agentDefaults || requesterAgent) {
         hoisted.configOverride = createConfigOverride({
-          ...(agentDefaults || requesterAgent
-            ? {
-                agents: {
-                  defaults: { workspace: os.tmpdir(), ...agentDefaults },
-                  list: [{ id: "main", workspace: "/tmp/workspace-main", ...requesterAgent }],
-                },
-              }
-            : {}),
-          ...(swarmEnabled ? { tools: { swarm: true } } : {}),
+          agents: {
+            defaults: { workspace: os.tmpdir(), ...agentDefaults },
+            list: [{ id: "main", workspace: "/tmp/workspace-main", ...requesterAgent }],
+          },
         });
       }
-      if (sessionStoreUnavailable) {
-        hoisted.loadSessionStoreMock.mockImplementation(() => {
-          throw new Error("store unavailable");
+      hoisted.loadSessionStoreMock.mockReturnValue({ "agent:main:main": requesterState });
+      if (requesterPreferenceReadFails) {
+        hoisted.loadSessionStoreMock.mockImplementationOnce(() => {
+          throw new Error("preference read unavailable");
         });
-      } else {
-        hoisted.loadSessionStoreMock.mockReturnValue({ "agent:main:main": requesterState });
       }
       let persistedStore: Record<string, Record<string, unknown>> | undefined;
       installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
@@ -1606,8 +1846,12 @@ describe("spawnSubagentDirect seam flow", () => {
       });
 
       const result = await spawnSubagentDirect(
-        { task, ...(collect ? { collect: true } : {}) },
-        { agentSessionKey: "agent:main:main", ...(requesterRunId ? { requesterRunId } : {}) },
+        { task, thinking: thinkingOverride, ...(collect ? { collect: true } : {}) },
+        {
+          agentSessionKey: "agent:main:main",
+          ...(requesterRunId ? { requesterRunId } : {}),
+          requesterThinkingLevel,
+        },
       );
 
       expect(result.status).toBe("accepted");
@@ -2125,27 +2369,28 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(params.message).toContain("[Subagent Task]");
     expect(params.message).toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
     expect(params.message).toContain("  keep indentation");
-    expect(params.message).not.toContain("**Your Role**");
-    expect(params.extraSystemPrompt).toBe("system-prompt");
+    expect(params.message).not.toContain("## Your Role");
+    expect(params.message?.match(/UNIQUE_LONG_SUBAGENT_TASK_TOKEN/g)).toHaveLength(1);
+    expect(params.extraSystemPrompt).toContain("completion event");
+    expect(params.extraSystemPrompt).not.toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
   });
 
-  it("returns an error when the initial child session patch is rejected", async () => {
-    hoisted.callGatewayMock.mockImplementation(
-      async (request: { method?: string; params?: unknown }) => {
-        if (request.method === "agent") {
-          return { runId: "run-1", status: "accepted", acceptedAt: 1000 };
-        }
-        if (request.method === "sessions.delete") {
-          return { ok: true };
-        }
-        return {};
-      },
-    );
-    hoisted.updateSessionStoreMock.mockRejectedValueOnce(new Error("invalid model: bad-model"));
+  it.each([
+    { phase: "parent snapshot", message: "parent session unavailable" },
+    { phase: "child patch", message: "invalid model: bad-model" },
+  ])("returns an error when the initial $phase fails", async ({ phase, message }) => {
+    const error = new Error(message);
+    if (phase === "parent snapshot") {
+      hoisted.loadSessionStoreMock.mockImplementation(() => {
+        throw error;
+      });
+    } else {
+      hoisted.updateSessionStoreMock.mockRejectedValueOnce(error);
+    }
 
     const result = await spawnSubagentDirect(
       {
-        task: "verify patch rejection",
+        task: "verify failed child creation",
         model: "bad-model",
       },
       {
@@ -2156,12 +2401,13 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result.status).toBe("error");
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
-    expect(result.error ?? "").toContain("invalid model");
-    expect(
-      hoisted.callGatewayMock.mock.calls.some(
-        (call) => (call[0] as { method?: string }).method === "agent",
-      ),
-    ).toBe(false);
+    expect(result.error).toContain(message);
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(
+      phase === "parent snapshot" ? 0 : 1,
+    );
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

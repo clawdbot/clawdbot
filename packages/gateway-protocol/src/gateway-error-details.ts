@@ -33,6 +33,8 @@ export const GatewayErrorDetailCodes = {
   PROJECT_CLONE_FAILED: "PROJECT_CLONE_FAILED",
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
   WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
+  SETUP_ADMISSION_BUSY: "SETUP_ADMISSION_BUSY",
+  GITHUB_PUBLICATION_SELECTION_REJECTED: "GITHUB_PUBLICATION_SELECTION_REJECTED",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -67,6 +69,17 @@ export type UserPrefsLimitExceededErrorDetails = {
 export type UnknownAgentIdErrorDetails = {
   code: typeof GatewayErrorDetailCodes.UNKNOWN_AGENT_ID;
   agentId: string;
+};
+
+/** Setup rejected before its task or wizard session was admitted. */
+export type SetupAdmissionBusyErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY;
+};
+
+/** This invocation rejected its selection before admission; earlier calls may still be pending. */
+export type GitHubPublicationSelectionRejectedErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED;
+  idempotencyKey: string;
 };
 
 /** Missing or expired process-local setup wizard session. */
@@ -104,7 +117,9 @@ export type GatewayErrorDetails =
   | SkillProposalRevisionChangedErrorDetails
   | ProjectCloneErrorDetails
   | UnknownAgentIdErrorDetails
-  | WizardNotFoundErrorDetails;
+  | WizardNotFoundErrorDetails
+  | SetupAdmissionBusyErrorDetails
+  | GitHubPublicationSelectionRejectedErrorDetails;
 
 type GatewayErrorLike = {
   code?: unknown;
@@ -115,6 +130,20 @@ type GatewayErrorLike = {
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*([a-z0-9._-]+)/i;
 const SHA256_PATTERN = /^[a-fA-F0-9]{64}$/;
+
+export function readGitHubPublicationSelectionRejectedError(
+  error: unknown,
+): GitHubPublicationSelectionRejectedErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  return record?.code === ErrorCodes.UNAVAILABLE &&
+    details?.code === GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED &&
+    Object.keys(details).length === 2 &&
+    typeof details.idempotencyKey === "string" &&
+    details.idempotencyKey.length > 0
+    ? { code: details.code, idempotencyKey: details.idempotencyKey }
+    : null;
+}
 
 /** Reads a typed cron lookup miss without parsing operator-facing prose. */
 export function readCronJobNotFoundError(error: unknown): CronJobNotFoundErrorDetails | null {

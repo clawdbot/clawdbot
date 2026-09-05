@@ -9,6 +9,7 @@ export const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
 const DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS = 30;
 const DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS = 60;
 const TAVILY_API_KEY_ENV_VAR = "TAVILY_API_KEY";
+export const TAVILY_API_KEY_CONFIG_PATH = "plugins.entries.tavily.config.webSearch.apiKey";
 
 type TavilySearchConfig =
   | {
@@ -45,11 +46,7 @@ function resolveConfiguredSecret(value: unknown, path: string, cfg?: OpenClawCon
 
 export function resolveTavilyApiKey(cfg?: OpenClawConfig): string | undefined {
   const search = resolveTavilySearchConfig(cfg);
-  const resolved = resolveConfiguredSecret(
-    search?.apiKey,
-    "plugins.entries.tavily.config.webSearch.apiKey",
-    cfg,
-  );
+  const resolved = resolveConfiguredSecret(search?.apiKey, TAVILY_API_KEY_CONFIG_PATH, cfg);
   if (resolved.status === "available") {
     return resolved.value;
   }

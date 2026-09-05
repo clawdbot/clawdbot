@@ -22,11 +22,12 @@ describe("SessionRowSchema", () => {
         assignedAt: 42,
       },
       participants: [
-        { type: "human", id: "profile-bob", label: "Bob" },
-        { type: "agent", id: "research", label: "Research" },
+        { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
+        { identity: { type: "agent", id: "research" }, label: "Research" },
       ],
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      archiveReason: "manual",
       icon: "🦞",
       channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
       visibility: "suggest",
@@ -38,6 +39,8 @@ describe("SessionRowSchema", () => {
     const roundTripped = structuredClone(row);
 
     expect(SessionRowSchema.properties.activeLeafEntryId).toBeDefined();
+    expect(SessionRowSchema.properties.activeModel).toBeDefined();
+    expect(SessionRowSchema.properties.activeModelProvider).toBeDefined();
     expect(SessionRowSchema.properties.lastRunId).toBeDefined();
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, activeLeafEntryId: null })).toBe(true);
@@ -45,8 +48,23 @@ describe("SessionRowSchema", () => {
       Value.Check(SessionRowSchema, {
         ...roundTripped,
         participants: Array.from({ length: 5 }, (_, index) => ({
-          type: "human",
-          id: `profile-${index}`,
+          identity: { type: "profile", id: `profile-${index}` },
+        })),
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(SessionRowSchema, {
+        ...roundTripped,
+        expandedParticipants: Array.from({ length: 32 }, (_, index) => ({
+          identity: { type: "profile", id: `profile-${index}` },
+        })),
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionRowSchema, {
+        ...roundTripped,
+        expandedParticipants: Array.from({ length: 33 }, (_, index) => ({
+          identity: { type: "profile", id: `profile-${index}` },
         })),
       }),
     ).toBe(false);
@@ -56,6 +74,7 @@ describe("SessionRowSchema", () => {
       createdActor: { avatarUrl: "/api/users/profile-ada/avatar?v=7" },
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      archiveReason: "manual",
       channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
       visibility: "suggest",
       sharingRole: "owner",
@@ -67,6 +86,9 @@ describe("SessionRowSchema", () => {
       false,
     );
     expect(Value.Check(SessionRowSchema, { ...roundTripped, lastRunId: "" })).toBe(false);
+    expect(Value.Check(SessionRowSchema, { ...roundTripped, archiveReason: "unknown" })).toBe(
+      false,
+    );
   });
 
   it("keeps sessions.assignOwner target actors closed and non-empty", () => {
@@ -82,5 +104,25 @@ describe("SessionRowSchema", () => {
 
     expect(accepted.every(validateSessionsAssignOwnerParams)).toBe(true);
     expect(rejected.every((value) => !validateSessionsAssignOwnerParams(value))).toBe(true);
+  });
+
+  it.each(["user", "auto", null] as const)("accepts model override source %s", (source) => {
+    expect(
+      Value.Check(SessionRowSchema, {
+        key: "agent:main:main",
+        kind: "global",
+        modelOverrideSource: source,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an invalid model override source", () => {
+    expect(
+      Value.Check(SessionRowSchema, {
+        key: "agent:main:main",
+        kind: "global",
+        modelOverrideSource: "session",
+      }),
+    ).toBe(false);
   });
 });

@@ -1,9 +1,9 @@
+import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
 // Discord tests cover runtime.presence plugin behavior.
 import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayPlugin } from "../internal/gateway.js";
 import { clearGateways, registerGateway } from "../monitor/gateway-registry.js";
-import type { ActionGate } from "../runtime-api.js";
 import { handleDiscordAction } from "./runtime.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
 
@@ -90,6 +90,11 @@ describe("handleDiscordPresenceAction", () => {
       expectedActivities: [{ name: "", type: 4, state: "Vibing" }],
     },
     {
+      name: "mixed-case competing activity",
+      params: { activityType: "CoMpEtInG", activityName: "a tournament" },
+      expectedActivities: [{ name: "a tournament", type: 5 }],
+    },
+    {
       name: "activity with state",
       params: { activityType: "playing", activityName: "My Game", activityState: "In the lobby" },
       expectedActivities: [{ name: "My Game", type: 0, state: "In the lobby" }],
@@ -129,6 +134,16 @@ describe("handleDiscordPresenceAction", () => {
   ])("rejects $name", async ({ params, expectedMessage }) => {
     await expect(setPresence(params)).rejects.toThrow(expectedMessage);
   });
+
+  it.each(["constructor", "__proto__", "toString", "valueOf"])(
+    "rejects Object.prototype activityType %s instead of sending it to the gateway",
+    async (activityType) => {
+      await expect(setPresence({ activityType, activityName: "x" })).rejects.toThrow(
+        /Invalid activityType/,
+      );
+      expect(mockUpdatePresence).not.toHaveBeenCalled();
+    },
+  );
 
   it("defaults status to online", async () => {
     await setPresence({ activityType: "playing", activityName: "test" });

@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
+import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   cleanupSystemAgentSession,
@@ -218,7 +219,7 @@ describe("runSystemAgentTurn", () => {
     expect(session.cliSession).toBeUndefined();
   });
 
-  it("uses a distinct transcript for each chat session", async () => {
+  it("isolates conversation identities and resumes the same transcript", async () => {
     useTempStateDir();
     const config = {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -232,26 +233,20 @@ describe("runSystemAgentTurn", () => {
       readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
     };
 
-    await runSystemAgentTurnWithDeps(
-      {
-        input: "hello",
-        overview,
-        surface: "gateway",
-        approvalArmed: false,
-        session: first,
-      },
-      deps,
+    for (const session of [first, second, first]) {
+      await runSystemAgentTurnWithDeps(
+        { input: "hello", overview, surface: "gateway", approvalArmed: false, session },
+        deps,
+      );
+    }
+
+    const [firstCall, secondCall, resumedCall] = mocks.runEmbeddedAgent.mock.calls.map(
+      ([params]) => params,
     );
-    await runSystemAgentTurnWithDeps(
-      {
-        input: "hello",
-        overview,
-        surface: "gateway",
-        approvalArmed: false,
-        session: second,
-      },
-      deps,
-    );
+    expect(firstCall?.sessionKey).toBe(`agent:openclaw:${first.sessionId}`);
+    expect(secondCall?.sessionKey).toBe(`agent:openclaw:${second.sessionId}`);
+    expect(resumedCall?.sessionKey).toBe(firstCall?.sessionKey);
+    expect(resumedCall?.sessionManager).toBe(first.sessionManager);
 
     const firstPath = requireValue(
       mocks.runEmbeddedAgent.mock.calls[0]?.[0]?.sessionFile,
@@ -320,7 +315,8 @@ describe("runSystemAgentTurn", () => {
       agentDir,
       authProfileId: "claude-cli:ops",
       agentId: "openclaw",
-      sessionKey: "agent:openclaw:main",
+      sessionKey: `agent:openclaw:${session.sessionId}`,
+      runtimePolicySessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
       sessionFile: `in-memory:${session.sessionId}`,
@@ -494,14 +490,13 @@ describe("runSystemAgentTurn", () => {
       },
     );
 
-    expect(runCliAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "claude-cli",
-        model: "claude-opus-4-8",
-        agentDir,
-        authProfileId: "anthropic:claude-cli",
-      }),
-    );
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      agentDir,
+    });
+    expect(runCliAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
   });
 
   it("reuses the guarded CLI binding when a denied proposal becomes approved", async () => {
@@ -807,12 +802,14 @@ describe("runSystemAgentTurn", () => {
     expect(call).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",
+      systemAgentTool: { agentId: "ops" },
       agentDir,
       authProfileId: "openai:ops",
       authProfileIdSource: "user",
       agentHarnessRuntimeOverride: "codex",
       agentId: "openclaw",
-      sessionKey: "agent:openclaw:main",
+      sessionKey: `agent:openclaw:${session.sessionId}`,
+      sandboxSessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
       sessionFile: `in-memory:${session.sessionId}`,
@@ -830,6 +827,60 @@ describe("runSystemAgentTurn", () => {
     expect(requireValue(call.systemAgentTool, "missing embedded OpenClaw tool").proposalRef).toBe(
       session.proposalRef,
     );
+  });
+
+  it("threads operator-approval-only into the real ring-zero tool and stages the delegated proposal", async () => {
+    useTempStateDir();
+    const config = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } satisfies OpenClawConfig;
+    const { session, deps } = await createVerifiedSession(config);
+    const runEmbeddedAgent = vi.fn(async (params: RunEmbeddedAgentParams) => {
+      const options = params.systemAgentTool;
+      if (!options) {
+        throw new Error("missing system agent tool options");
+      }
+      const tool = createSystemAgentTool(options);
+      const result = await tool.execute("delegated-turn", {
+        action: "config_set",
+        path: "agents.defaults.subagents.thinking",
+        value: "high",
+        approved: true,
+      });
+      const text = (result as { content: Array<{ type: string; text?: string }> }).content
+        .map((block) => block.text ?? "")
+        .filter(Boolean)
+        .join("\n");
+      return { meta: { finalAssistantVisibleText: text } };
+    });
+
+    const reply = await runSystemAgentTurnWithDeps(
+      {
+        input: "switch the thinking level",
+        overview: { defaultModel: "openai/gpt-5.5" } as never,
+        surface: "gateway",
+        approvalArmed: false,
+        operatorApprovalOnly: true,
+        session,
+      },
+      {
+        ...deps,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
+      },
+    );
+
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemAgentTool: expect.objectContaining({ operatorApprovalOnly: true }),
+      }),
+    );
+    expect(reply?.text).toContain("requesting session's permission policy");
+    expect(reply?.text).toContain("returns the final outcome");
+    expect(reply?.text).not.toContain("OpenClaw operator UI");
+    expect(reply?.text).not.toContain("ask the user to reply yes");
+    // Staging still registers the exact proposal for host authorization.
+    expect(session.proposalRef.current).toBeDefined();
   });
 
   it("rejects a low-level session without verified inference before lookup or run", async () => {

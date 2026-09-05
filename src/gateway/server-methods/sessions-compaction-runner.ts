@@ -8,7 +8,8 @@ import { isIndexedSessionEntry } from "../../agents/sessions/session-manager-cod
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCurrentSessionPrimaryConversation } from "../../config/sessions/conversation-registry.js";
 import {
   loadTranscriptEvents,
   resolveSessionTranscriptRuntimeTarget,
@@ -24,6 +25,7 @@ type GatewaySessionCompactionParams = {
   agentId: string;
   cfg: OpenClawConfig;
   entry: SessionEntry;
+  runId?: string;
   sessionId: string;
   sessionKey: string;
   sessionStoreKey: string;
@@ -85,6 +87,7 @@ export async function preflightGatewaySessionCompaction(
 
 export async function runGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
+  host?: Parameters<typeof compactEmbeddedAgentSession>[1],
 ): Promise<Awaited<ReturnType<typeof compactEmbeddedAgentSession>>> {
   const transcriptTarget = await resolveGatewayCompactionTranscriptTarget(params);
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
@@ -99,39 +102,52 @@ export async function runGatewaySessionCompaction(
     entry: params.entry,
     cfg: params.cfg,
   });
-  return await compactEmbeddedAgentSession({
-    contextEngineAgentId: params.agentId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    sessionTarget: {
-      agentId: params.agentId,
+  const primaryConversation = resolveCurrentSessionPrimaryConversation(transcriptTarget);
+  return await compactEmbeddedAgentSession(
+    {
+      contextEngineAgentId: params.agentId,
+      runId: params.runId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      agentId: params.agentId,
+      sessionTarget: {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      allowGatewaySubagentBinding: true,
+      sessionFile: transcriptTarget.sessionKey,
+      workspaceDir,
+      cwd: normalizeOptionalString(params.entry.spawnedCwd),
+      config: params.cfg,
+      // Current delivery owns the account; origin can retain historical identity.
+      // Group session keys do not carry an account themselves.
+      agentAccountId:
+        params.entry.delivery?.kind === "external"
+          ? params.entry.delivery.context?.accountId
+          : undefined,
+      conversationRoutePeerId: primaryConversation?.routeContext?.peerId,
+      chatType: primaryConversation?.kind,
+      provider: resolvedModel.provider,
+      model: resolvedModel.model,
+      authProfileId:
+        compactionCliTarget.cliSessionBinding?.authProfileId ?? params.entry.authProfileOverride,
+      authProfileIdSource: resolveCollapsedSessionAuthPinSource(params.entry),
+      agentHarnessId: compactionCliTarget.agentHarnessId,
+      cliSessionId: compactionCliTarget.cliSessionId,
+      cliSessionBinding: compactionCliTarget.cliSessionBinding,
+      sessionEntry: params.entry,
+      modelSelectionLocked: params.entry.modelSelectionLocked === true,
+      thinkLevel: normalizeThinkLevel(params.entry.thinkingLevel),
+      reasoningLevel: normalizeReasoningLevel(params.entry.reasoningLevel),
+      bashElevated: {
+        enabled: false,
+        allowed: false,
+        defaultLevel: "off",
+      },
+      trigger: "manual",
     },
-    allowGatewaySubagentBinding: true,
-    sessionFile: transcriptTarget.sessionKey,
-    workspaceDir,
-    cwd: normalizeOptionalString(params.entry.spawnedCwd),
-    config: params.cfg,
-    provider: resolvedModel.provider,
-    model: resolvedModel.model,
-    authProfileId:
-      compactionCliTarget.cliSessionBinding?.authProfileId ?? params.entry.authProfileOverride,
-    authProfileIdSource: resolveSessionAuthProfileOverrideSource(params.entry),
-    agentHarnessId: compactionCliTarget.agentHarnessId,
-    cliSessionId: compactionCliTarget.cliSessionId,
-    cliSessionBinding: compactionCliTarget.cliSessionBinding,
-    sessionEntry: params.entry,
-    modelSelectionLocked: params.entry.modelSelectionLocked === true,
-    thinkLevel: normalizeThinkLevel(params.entry.thinkingLevel),
-    reasoningLevel: normalizeReasoningLevel(params.entry.reasoningLevel),
-    bashElevated: {
-      enabled: false,
-      allowed: false,
-      defaultLevel: "off",
-    },
-    trigger: "manual",
-  });
+    host,
+  );
 }

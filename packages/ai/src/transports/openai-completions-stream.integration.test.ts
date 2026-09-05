@@ -1,6 +1,11 @@
 import { createServer } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticRunProgress,
+  resetDiagnosticRunActivityForTest,
+} from "../../../../src/logging/diagnostic-run-activity.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime } from "../stream.js";
 import { shouldEmitOpenAICompletionsReasoning } from "./openai-completions-stream.js";
@@ -8,6 +13,10 @@ import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-t
 import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
 
 describe("openai completions stream", () => {
+  afterAll(() => {
+    resetDiagnosticRunActivityForTest();
+  });
+
   it("emits Qwen thinking streams when enabled without reasoning_effort support", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const server = createServer((req, res) => {
@@ -219,9 +228,16 @@ describe("openai completions stream", () => {
       // a loaded runner stretches every inter-chunk gap, and one gap wider than
       // the timeout inverts the ratio into a false idle timeout.
       const idleTimeoutMs = 1_000;
+      const sessionProgressStaleMs = 750;
       const reasoningChunkDelayMs = 5;
       const hiddenReasoningDurationMs = idleTimeoutMs + 200;
+      const runId = `hidden-${reasoningField}-run`;
       let hiddenReasoningElapsedMs = 0;
+      let crossedSessionProgressThreshold = false;
+      let resolveSessionProgressThreshold!: () => void;
+      const sessionProgressThresholdReached = new Promise<void>((resolve) => {
+        resolveSessionProgressThreshold = resolve;
+      });
       const server = createServer((req, res) => {
         req.resume();
         req.on("end", () => {
@@ -237,6 +253,13 @@ describe("openai completions stream", () => {
               return;
             }
             hiddenReasoningElapsedMs = Date.now() - hiddenReasoningStartedAt;
+            if (
+              !crossedSessionProgressThreshold &&
+              hiddenReasoningElapsedMs > sessionProgressStaleMs + 100
+            ) {
+              crossedSessionProgressThreshold = true;
+              resolveSessionProgressThreshold();
+            }
             if (hiddenReasoningElapsedMs < hiddenReasoningDurationMs) {
               const reasoningChunk = {
                 id: "chatcmpl-local-reasoning",
@@ -284,10 +307,16 @@ describe("openai completions stream", () => {
           reasoning: false,
         });
         const onIdleTimeout = vi.fn();
+        markDiagnosticRunProgress({
+          runId,
+          sessionId: runId,
+          reason: "model_call:started",
+        });
         const streamFn = streamWithIdleTimeout(
           createOpenAICompletionsTransportStreamFn(),
           idleTimeoutMs,
           onIdleTimeout,
+          { runId },
         );
         const stream = streamFn(
           model,
@@ -301,14 +330,23 @@ describe("openai completions stream", () => {
 
         let text = "";
         let thinking = "";
-        for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
-          if (event.type === "text_delta") {
-            text += event.delta ?? "";
+        const collectStream = (async () => {
+          for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
+            if (event.type === "text_delta") {
+              text += event.delta ?? "";
+            }
+            if (event.type === "thinking_delta") {
+              thinking += event.delta ?? "";
+            }
           }
-          if (event.type === "thinking_delta") {
-            thinking += event.delta ?? "";
-          }
-        }
+        })();
+
+        await sessionProgressThresholdReached;
+        const activity = getDiagnosticSessionActivitySnapshot({ sessionId: runId });
+        expect(activity.lastProgressAgeMs).toBeLessThan(sessionProgressStaleMs);
+        expect(activity.lastProgressReason).toBe("model_call:stream_progress");
+
+        await collectStream;
 
         expect(text).toBe("OK");
         expect(thinking).toBe("");

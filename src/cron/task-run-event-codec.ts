@@ -41,6 +41,7 @@ export function cronRunLogEntryFromEvent(
     delivered: event.delivered,
     deliveryStatus: event.deliveryStatus,
     deliveryError: event.deliveryError,
+    deliverySuppressionReason: event.deliverySuppressionReason,
     failureNotificationDelivery: event.failureNotificationDelivery,
     delivery: event.delivery,
     sessionId: event.sessionId,

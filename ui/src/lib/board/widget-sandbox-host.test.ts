@@ -19,6 +19,23 @@ function widget(): BoardWidget {
   };
 }
 
+function notifyProxyReady(
+  host: BoardWidgetSandboxHost,
+  frame: HTMLIFrameElement,
+  sandboxUrl = SANDBOX_URL,
+): void {
+  host.handleMessage(
+    new MessageEvent("message", {
+      source: frame.contentWindow,
+      origin: "https://sandbox.example",
+      data: {
+        method: "ui/notifications/sandbox-proxy-ready",
+        params: { sandboxUrl },
+      },
+    }),
+  );
+}
+
 async function offerBridgePort(
   host: BoardWidgetSandboxHost,
   frame: HTMLIFrameElement,
@@ -80,7 +97,7 @@ afterEach(() => {
 });
 
 describe("BoardWidgetSandboxHost", () => {
-  it("loads ticketed HTML only after the dedicated proxy is ready", async () => {
+  it("fetches ticketed HTML while the proxy starts and delivers it only after readiness", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
     const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
@@ -104,21 +121,16 @@ describe("BoardWidgetSandboxHost", () => {
       onError: vi.fn(),
     });
 
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(postMessage).not.toHaveBeenCalled();
+    expect(onLoaded).not.toHaveBeenCalled();
+
+    notifyProxyReady(host, frame);
 
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
     expect(fetchMock).toHaveBeenCalledWith(
       "https://gateway.example/__openclaw__/board/weather?bt=ticket",
-      { cache: "no-store" },
+      { cache: "no-store", signal: expect.any(AbortSignal) },
     );
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -127,6 +139,50 @@ describe("BoardWidgetSandboxHost", () => {
       }),
       "https://sandbox.example",
     );
+  });
+
+  it("delivers passive preview HTML without accepting its capability bridge", async () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<!doctype html><p>weather</p>")),
+    );
+    const client = { request: vi.fn(async () => ({ ok: true })) };
+    const onLoaded = vi.fn();
+    const host = new BoardWidgetSandboxHost({
+      frame,
+      widget: widget(),
+      sandboxOrigin: "https://sandbox.example",
+      sandboxUrl: SANDBOX_URL,
+      sourceOrigin: "https://gateway.example",
+      client,
+      bridgeEnabled: false,
+      resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
+      confirmPrompt: () => true,
+      onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
+      onUnauthorized: vi.fn(),
+      onReadyTimeout: vi.fn(),
+      onLoaded,
+      onError: vi.fn(),
+    });
+
+    notifyProxyReady(host, frame);
+    await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
+    const channel = new MessageChannel();
+    const close = vi.spyOn(channel.port1, "close");
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: { type: "openclaw:widget-bridge-port-offer" },
+        ports: [channel.port1],
+      }),
+    );
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(client.request).not.toHaveBeenCalled();
   });
 
   it("routes transient document fetch failures through the refresh budget", async () => {
@@ -155,16 +211,7 @@ describe("BoardWidgetSandboxHost", () => {
       onError,
     });
 
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    notifyProxyReady(host, frame);
 
     await vi.waitFor(() => expect(onLoadFailed).toHaveBeenCalledWith(widget()));
     expect(onError).not.toHaveBeenCalled();
@@ -195,16 +242,7 @@ describe("BoardWidgetSandboxHost", () => {
       onError: vi.fn(),
     });
 
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
     const hostMessage = vi.fn();
     await offerBridgePort(host, frame, hostMessage);
@@ -262,16 +300,7 @@ describe("BoardWidgetSandboxHost", () => {
       onError: vi.fn(),
     };
     const host = new BoardWidgetSandboxHost(baseOptions);
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledOnce());
     const bridgePort = await offerBridgePort(host, frame);
     const bridgeResponse = vi.fn();
@@ -332,16 +361,7 @@ describe("BoardWidgetSandboxHost", () => {
       onLoaded: vi.fn(),
       onError: vi.fn(),
     });
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     const promptRequest = {
       type: "openclaw:widget-bridge-request",
@@ -406,16 +426,7 @@ describe("BoardWidgetSandboxHost", () => {
         onLoaded: loaded,
         onError: vi.fn(),
       });
-      host.handleMessage(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          origin: "https://sandbox.example",
-          data: {
-            method: "ui/notifications/sandbox-proxy-ready",
-            params: { sandboxUrl: SANDBOX_URL },
-          },
-        }),
-      );
+      notifyProxyReady(host, frame);
       await vi.waitFor(() => expect(loaded).toHaveBeenCalledOnce());
       return { frame, port: await offerBridgePort(host, frame) };
     };
@@ -494,16 +505,7 @@ describe("BoardWidgetSandboxHost", () => {
       onError: vi.fn(),
     };
     const host = new BoardWidgetSandboxHost(baseOptions);
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledOnce());
     const bridgePort = await offerBridgePort(host, frame);
     const responses: unknown[] = [];
@@ -611,16 +613,7 @@ describe("BoardWidgetSandboxHost", () => {
       onError: vi.fn(),
     };
     const host = new BoardWidgetSandboxHost(baseOptions);
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledOnce());
     const bridgePort = await offerBridgePort(host, frame);
     const responses: unknown[] = [];
@@ -694,16 +687,7 @@ describe("BoardWidgetSandboxHost", () => {
       onError: vi.fn(),
     };
     const host = new BoardWidgetSandboxHost(baseOptions);
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
     postMessage.mockClear();
 
@@ -723,6 +707,7 @@ describe("BoardWidgetSandboxHost", () => {
   it("waits for the exact sandbox CSP navigation before delivering replacement HTML", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
     const wideSandboxUrl = `${SANDBOX_URL}?csp=wide`;
     const narrowSandboxUrl = `${SANDBOX_URL}?csp=narrow`;
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>policy</p>"));
@@ -743,20 +728,11 @@ describe("BoardWidgetSandboxHost", () => {
       onError: vi.fn(),
     };
     const host = new BoardWidgetSandboxHost(baseOptions);
-    const ready = (sandboxUrl: string) =>
-      host.handleMessage(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          origin: "https://sandbox.example",
-          data: {
-            method: "ui/notifications/sandbox-proxy-ready",
-            params: { sandboxUrl },
-          },
-        }),
-      );
+    const ready = (sandboxUrl: string) => notifyProxyReady(host, frame, sandboxUrl);
 
     ready(wideSandboxUrl);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledOnce());
+    postMessage.mockClear();
     host.update({
       ...baseOptions,
       sandboxUrl: narrowSandboxUrl,
@@ -769,12 +745,19 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=replacement-ticket",
     });
 
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(postMessage).not.toHaveBeenCalled();
     ready(wideSandboxUrl);
     await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(postMessage).not.toHaveBeenCalled();
 
     ready(narrowSandboxUrl);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledTimes(2));
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "ui/notifications/sandbox-resource-ready" }),
+      "https://sandbox.example",
+    );
+    host.dispose();
   });
 
   it("reloads a deleted and recreated widget without reloading routine ticket renewals", async () => {
@@ -799,16 +782,7 @@ describe("BoardWidgetSandboxHost", () => {
       onError: vi.fn(),
     };
     const host = new BoardWidgetSandboxHost(baseOptions);
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
 
     host.update({
@@ -857,16 +831,7 @@ describe("BoardWidgetSandboxHost", () => {
     const reloadFrame = vi.spyOn(frame, "src", "set");
 
     host.setActive(false);
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    notifyProxyReady(host, frame);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(onReadyTimeout).not.toHaveBeenCalled();
@@ -903,16 +868,7 @@ describe("BoardWidgetSandboxHost", () => {
       onLoaded,
       onError: vi.fn(),
     });
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
     const bridgePort = await offerBridgePort(host, frame);
     const retainedFrame = host.frame;
@@ -987,16 +943,7 @@ describe("BoardWidgetSandboxHost", () => {
       onLoaded,
       onError: vi.fn(),
     });
-    host.handleMessage(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: {
-          method: "ui/notifications/sandbox-proxy-ready",
-          params: { sandboxUrl: SANDBOX_URL },
-        },
-      }),
-    );
+    notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(sourceFetches).toBe(1));
 
     host.setActive(false);

@@ -55,7 +55,7 @@ function mockMinGitDownload(params: {
 
 describe("Parallels Windows MinGit preparation", () => {
   it("bounds and verifies the host asset download", async () => {
-    const assetName = "MinGit-2.55.0.4-64-bit.zip";
+    const assetName = "MinGit-2.55.0.5-64-bit.zip";
     const assetUrl = `https://example.test/${assetName}`;
     const targetDir = tempDirs.make("openclaw-windows-smoke-");
     const targetPath = path.join(targetDir, assetName);
@@ -88,7 +88,7 @@ describe("Parallels Windows MinGit preparation", () => {
   });
 
   it("rejects a MinGit fallback whose bytes do not match the release digest", async () => {
-    const assetName = "MinGit-2.55.0.4-arm64.zip";
+    const assetName = "MinGit-2.55.0.5-arm64.zip";
     const assetUrl = `https://example.test/${assetName}`;
     const targetDir = tempDirs.make("openclaw-windows-smoke-");
     mockMinGitDownload({

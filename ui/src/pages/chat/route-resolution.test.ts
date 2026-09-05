@@ -1,11 +1,13 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { createRouter } from "@openclaw/uirouter";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError, type GatewayEventListener } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   resolveSessionPreferredFaceForKey,
@@ -13,8 +15,6 @@ import {
   SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import { patchChatSessionLabel } from "./chat-state-route.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const uuid = "12345678-90ab-cdef-1234-567890abcdef";
@@ -53,19 +53,44 @@ function contextFor(
   }) => SessionsListResult | null,
   cachedSessions: GatewaySessionRow[] = [],
 ) {
+  const router = createRouter({ routes: [] });
+  const lifecycle = new AbortController();
+  const gatewayListeners = new Set<Parameters<ApplicationContext["gateway"]["subscribe"]>[0]>();
+  const eventListeners = new Set<GatewayEventListener>();
+  onTestFinished(() => {
+    lifecycle.abort();
+    router.stop();
+    expect(gatewayListeners.size).toBe(0);
+    expect(eventListeners.size).toBe(0);
+  });
   const client = {};
   const list = vi.fn(async (options: { search?: string; offset?: number } = {}) =>
     listResult(options),
   );
   const context = {
     basePath: "",
+    // These tests invoke the loader directly; there is no outlet-owned match.
+    router,
+    lifecycleAbortSignal: lifecycle.signal,
     gateway: {
-      snapshot: { phase: "connected", client, hello: null },
-      subscribe: vi.fn(() => () => undefined),
+      snapshot: {
+        phase: "connected",
+        client,
+        hello: null,
+        sessionKey: "agent:roboclaw:main",
+      },
+      subscribe: (listener: Parameters<ApplicationContext["gateway"]["subscribe"]>[0]) => {
+        gatewayListeners.add(listener);
+        return () => gatewayListeners.delete(listener);
+      },
+      subscribeEvents: (listener: GatewayEventListener) => {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
     },
     agents: { state: { agentsList: { mainKey: "main" } } },
     agentSelection: { state: { selectedId: "roboclaw" } },
-    sessions: { state: { result: result(cachedSessions) }, list },
+    sessions: { state: { result: result(cachedSessions) }, canonicalListRevision: 0, list },
   } as unknown as ApplicationContext;
   return { context, list };
 }
@@ -78,7 +103,7 @@ function installShortResolver(
     : { ok: false },
 ) {
   const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
-    if (method === "sessions.resolve") {
+    if (method === "sessions.resolve" || method === "chat.startup") {
       const present = ({ key }: { key: string }) => {
         const session = rows.find((candidate) => candidate.key === key);
         return {
@@ -88,12 +113,13 @@ function installShortResolver(
           ...(session?.boardFace ? { boardFace: session.boardFace } : {}),
         };
       };
-      return resolved.ok
+      const resolution = resolved.ok
         ? { ok: true, ...present(resolved) }
         : {
             ok: false,
             ...(resolved.candidates ? { candidates: resolved.candidates.map(present) } : {}),
           };
+      return method === "chat.startup" ? { resolution, messages: [] } : resolution;
     }
     throw new Error(`Unexpected gateway request: ${method}`);
   });
@@ -108,26 +134,6 @@ function targetLocation(target: ReturnType<typeof sessionNavigationTarget>) {
 }
 
 describe("gateway-backed session route resolution", () => {
-  it("patches a canonical global session on the selected agent", async () => {
-    const patch = vi.fn(async () => ({}));
-    const state = {
-      sessionKey: "global",
-      assistantAgentId: "research",
-      agentsList: null,
-      hello: null,
-    } as ChatPageHost;
-
-    const sessions = { patch } as unknown as Pick<SessionCapability, "patch">;
-
-    await patchChatSessionLabel(state, sessions, "global", "Research thread");
-
-    expect(patch).toHaveBeenCalledWith(
-      "global",
-      { label: "Research thread" },
-      { agentId: "research" },
-    );
-  });
-
   it("resolves a non-default agent's canonical global face from its scoped row", async () => {
     const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
     const { context, list } = contextFor(({ agentId, search }) =>
@@ -277,7 +283,7 @@ describe("gateway-backed session route resolution", () => {
       loadChatRoute(context, targetLocation(target), "chat", new AbortController().signal),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: catalogKey,
+      sessionKey: `agent:roboclaw:${catalogKey}`,
       agentId: "roboclaw",
       draft: undefined,
       face: "dashboard",
@@ -477,11 +483,12 @@ describe("gateway-backed session route resolution", () => {
     // Both ids start with 12345678; the slug says which one, so the short link still
     // resolves instead of bouncing to the chooser.
     expect(loaded).toMatchObject({ kind: "session", sessionKey: rows[1]?.key });
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", {
+    expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
       shortId: "12345678",
       slugHint: "deploy-monitor",
       agentId: "roboclaw",
-      allowMissing: true,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
     expect(request).toHaveBeenCalledOnce();
   });
@@ -508,7 +515,7 @@ describe("gateway-backed session route resolution", () => {
     const { context, list } = contextFor(() => result([]));
     const rejection = new GatewayRequestError({
       code: "INVALID_REQUEST",
-      message: "invalid sessions.resolve params: at root: unexpected property 'shortId'",
+      message: "invalid chat.startup params: at root: unexpected property 'shortId'",
     });
     const request = vi.fn(async () => {
       throw rejection;
@@ -529,15 +536,8 @@ describe("gateway-backed session route resolution", () => {
   it("rejects a short-route result after navigation ownership is aborted", async () => {
     const storedRow = row({ displayName: "Deploy monitor" });
     const { context, list } = contextFor(() => result([storedRow]));
-    let finishResolution:
-      | ((result: { ok: true; key: string; agentId: string }) => void)
-      | undefined;
-    const request = vi.fn(
-      async () =>
-        await new Promise<{ ok: true; key: string; agentId: string }>((resolve) => {
-          finishResolution = resolve;
-        }),
-    );
+    const resolution = createDeferred<{ resolution: SessionsResolveResult; messages: unknown[] }>();
+    const request = vi.fn(() => resolution.promise);
     (context.gateway.snapshot.client as unknown as { request: typeof request }).request = request;
     const controller = new AbortController();
     const navigation = loadChatRoute(
@@ -549,7 +549,10 @@ describe("gateway-backed session route resolution", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     const reason = new Error("navigation superseded");
     controller.abort(reason);
-    finishResolution?.({ ok: true, key: storedRow.key, agentId: "roboclaw" });
+    resolution.resolve({
+      resolution: { ok: true, key: storedRow.key, agentId: "roboclaw" },
+      messages: [],
+    });
 
     await expect(navigation).rejects.toBe(reason);
     expect(list).not.toHaveBeenCalled();
@@ -781,8 +784,9 @@ describe("gateway-backed session route resolution", () => {
     expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678", truncated: true });
   });
 
-  it("returns not found when the gateway has no short-id match", async () => {
+  it("routes a missing-session exit to the route agent's main session", async () => {
     const { context, list } = contextFor(() => result([]));
+    context.gateway.snapshot.sessionKey = "agent:main:saved-active-session";
     const request = installShortResolver(context, [], { ok: false });
 
     const loaded = await loadChatRoute(
@@ -792,7 +796,12 @@ describe("gateway-backed session route resolution", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({
+      kind: "missing-session",
+      face: "chat",
+      currentSessionHref: "/chat/roboclaw",
+      sessionsHref: "/sessions",
+    });
     expect(list).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "roboclaw", search: "agent:roboclaw:deadbeef" }),
     );
@@ -871,7 +880,7 @@ describe("gateway-backed session route resolution", () => {
       ),
     ).resolves.toMatchObject({ kind: "session", sessionKey: shortMatch.key });
     expect(request).toHaveBeenCalledWith(
-      "sessions.resolve",
+      "chat.startup",
       expect.objectContaining({ shortId: "567890abcdef" }),
     );
   });
@@ -915,15 +924,16 @@ describe("gateway-backed session route resolution", () => {
 
     expect(loaded).toMatchObject({ kind: "session", sessionKey: short.key });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", {
+    expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
       shortId: "deadbeef",
       slugHint: "default-mode",
       agentId: "roboclaw",
-      allowMissing: true,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
   });
 
-  it("returns not found when neither a literal key nor slug resolves", async () => {
+  it("returns a persistent missing-session state when neither a literal key nor slug resolves", async () => {
     const { context, list } = contextFor(() => result([]));
     const loaded = await loadChatRoute(
       context,
@@ -932,8 +942,36 @@ describe("gateway-backed session route resolution", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({
+      kind: "missing-session",
+      face: "chat",
+      currentSessionHref: "/chat/roboclaw",
+      sessionsHref: "/sessions",
+    });
     expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a capped slug lookup nonterminal while later matches remain possible", async () => {
+    const exactKey = "agent:roboclaw:unknown-thread";
+    const laterMatch = row({ displayName: "Unknown thread" });
+    const { context, list } = contextFor(({ search, offset = 0 }) => {
+      if (search === exactKey) {
+        return result([]);
+      }
+      return offset === 100
+        ? result([laterMatch], { offset })
+        : result([], { hasMore: true, nextOffset: offset + 20, offset });
+    });
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/unknown-thread", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "ambiguous", candidates: [], truncated: true });
+    expect(list).toHaveBeenCalledTimes(6);
+    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ offset: 100 }));
   });
 
   it("resolves a cached literal without a gateway round-trip", async () => {

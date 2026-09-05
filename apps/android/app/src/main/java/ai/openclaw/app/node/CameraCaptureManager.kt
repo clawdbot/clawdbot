@@ -61,10 +61,14 @@ internal class CameraClipSession(
     return file
   }
 
-  fun transferFile(): File {
+  fun transferFile(onTransfer: (File) -> Unit): File {
     check(!closed) { "camera clip session is closed" }
     return checkNotNull(temporaryFile) { "camera clip session has no file" }
-      .also { temporaryFile = null }
+      .also { file ->
+        // Claim ownership before release because cancellation can discard a dispatched FilePayload.
+        onTransfer(file)
+        temporaryFile = null
+      }
   }
 
   override fun close() {
@@ -194,6 +198,7 @@ class CameraCaptureManager(
             initialWidth = scaled.width,
             initialHeight = scaled.height,
             startQuality = (quality * 100.0).roundToInt().coerceIn(10, 100),
+            minQuality = (quality * 100.0).roundToInt().coerceIn(10, 20),
             maxBytes = maxEncodedBytes,
             encode = { width, height, q ->
               val bitmap =
@@ -224,7 +229,10 @@ class CameraCaptureManager(
 
   /** Records a short MP4 clip into a temporary cache file for the caller to encode/delete. */
   @SuppressLint("MissingPermission")
-  suspend fun clip(paramsJson: String?): FilePayload =
+  suspend fun clip(
+    paramsJson: String?,
+    onFileReady: (File) -> Unit,
+  ): FilePayload =
     withContext(Dispatchers.Main) {
       ensureCameraPermission()
       val params = parseJsonParamsObject(paramsJson)
@@ -306,7 +314,7 @@ class CameraCaptureManager(
         }
 
         FilePayload(
-          file = session.transferFile(),
+          file = session.transferFile(onFileReady),
           durationMs = durationMs.toLong(),
           hasAudio = includeAudio,
         )

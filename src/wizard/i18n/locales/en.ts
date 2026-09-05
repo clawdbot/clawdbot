@@ -97,6 +97,12 @@ export const en = {
       tokenPromptGenerate: "Gateway token (blank to generate)",
       tokenStoreProvisioned:
         "Generated a gateway token and stored it in the OpenClaw secret store as {name}. Config keeps only a reference; inspect it with `openclaw secrets store list`.",
+      trustedProxyAllowLoopback: "Allow loopback trusted-proxy authentication?",
+      trustedProxyLoopbackTitle: "Loopback proxy security warning",
+      trustedProxyLoopbackWarning:
+        "Any local process can impersonate a loopback reverse proxy by sending identity headers to the Gateway.\nOnly enable this when the reverse proxy is the sole local listener for incoming user traffic, direct Gateway access is locked down, and you trust local processes.\nThe proxy must authenticate users and strip or overwrite client-supplied identity headers.",
+      trustedProxyLoopbackRefused:
+        "Loopback proxy requests will be rejected at runtime (trusted_proxy_loopback_source).\nUse a non-loopback proxy address, or rerun gateway configuration and explicitly allow loopback after reviewing the security warning.\nDocs: https://docs.openclaw.ai/gateway/trusted-proxy-auth",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -116,7 +122,7 @@ export const en = {
       enable: "Enable {shell} shell completion for {cli}?",
       installed: "Shell completion installed. {reloadHint}",
       profileNotWritable:
-        "Shell completion was not changed: {profile} is not writable. Run `{command}` against a writable profile file.",
+        "Automatic shell completion installation failed (permission or read-only error at {profile}). For this {shell} session only, run:\n{command}",
       reloadPowerShell: "Restart your shell or run: {command}",
       reloadShell: "Restart your shell or run: source {profile}",
       title: "Shell completion",
@@ -252,7 +258,7 @@ export const en = {
       directAccessTitle: "Direct remote",
       enterUrlManually: "Enter URL manually",
       foundGateways: "Found {count} gateway(s)",
-      fingerprintMissing: "not advertised (connection will not be pinned)",
+      fingerprintMissing: "not advertised",
       gatewayPasswordStoredMessage: "Where is this gateway password stored?",
       gatewayTokenStoredMessage: "Where is this gateway token stored?",
       insecureRemoteUrl:
@@ -276,6 +282,28 @@ export const en = {
       websocketUrl: "Gateway WebSocket URL",
     },
     guided: {
+      quickstartSilentFailures:
+        "{count} detected option(s) did not respond; continuing with the verified route.",
+      laneQuestion: "How would you like to start?",
+      laneSecurityLine:
+        "OpenClaw runs an AI agent with real access to this machine. Security guide: https://docs.openclaw.ai/gateway/security",
+      laneQuickLabel: "Quick start (recommended)",
+      laneQuickHint: "Find AI access on this machine, verify it, then open the web dashboard.",
+      laneCustomLabel: "Custom setup",
+      laneCustomHint: "Walk through every setup option.",
+      quickstartRoute: "Using {label}. You can change it later in the dashboard or setup wizard.",
+      quickstartManual:
+        'Quick start found no usable AI access. Continuing with manual provider setup; quick-start defaults are kept (agent "main", full access).',
+      quickstartDashboard: "Dashboard: {url}",
+      quickstartForeground: "Gateway is running in the foreground. Press Ctrl+C to stop.",
+      quickstartBackground:
+        "To keep the Gateway running in the background later: openclaw gateway install",
+      quickstartReopen:
+        "Run openclaw to open the TUI, or openclaw dashboard to reopen the web dashboard.",
+      quickstartBrowserUnavailable:
+        "The browser handoff did not finish. The Gateway is still running; open the dashboard when you are ready.",
+      quickstartGatewayPending:
+        "The Gateway is not reachable yet. Keep this terminal open and run openclaw gateway status to check startup.",
       accessFullHint: "Recommended. I look for AI apps and keys on this machine and test them.",
       accessFullLabel: "Full access — find everything automatically",
       accessGuardedHint: "I ask once before looking around, or you configure manually.",
@@ -1120,8 +1148,9 @@ export const en = {
       dashboardWhenReady: "When you're ready: {command}",
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
-      daemonRuntimeNodeHint:
-        "Required because OpenClaw state uses node:sqlite; Bun cannot run the Gateway.",
+      daemonRuntimeNodeHint: "Primary and recommended runtime for managed services.",
+      daemonRuntimeBun: "Bun 1.4+",
+      daemonRuntimeBunHint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',
@@ -1139,8 +1168,6 @@ export const en = {
       gatewayServiceRestarted: "Gateway service restarted.",
       gatewayServiceRestarting: "Restarting Gateway service...",
       gatewayServiceRestartScheduled: "Gateway service restart scheduled.",
-      gatewayServiceUninstalled: "Gateway service uninstalled.",
-      gatewayServiceUninstalling: "Uninstalling Gateway service...",
       gatewayTokenGenerate: "Generate token: {command}",
       gatewayTokenShared: "Gateway token: shared auth for the Gateway + Control UI.",
       gatewayTokenStored:

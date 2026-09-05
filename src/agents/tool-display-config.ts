@@ -84,6 +84,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Process",
       detailKeys: ["sessionId"],
     },
+    gateway_process: {
+      emoji: "🧰",
+      title: "Background Shell",
+      detailKeys: ["action", "sessionId"],
+    },
     read: {
       emoji: "📖",
       title: "Read",
@@ -224,6 +229,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "❓",
       title: "Ask User",
       detailKeys: ["questions.0.question"],
+    },
+    secrets: {
+      emoji: "🔑",
+      title: "Secrets",
+      detailKeys: ["action", "name", "kind"],
     },
     suggest_task: {
       emoji: "✨",

@@ -88,7 +88,7 @@ export function hasCurrentProcessOwner(params: {
   return params.activeSessionIds.size === 0 && params.activeSessionKeys.has(params.sessionKey);
 }
 
-export async function resolveRestartRecoveryStorePaths(params: {
+export async function discoverRestartRecoveryStorePaths(params: {
   cfg?: OpenClawConfig;
   stateDir?: string;
 }): Promise<string[]> {
@@ -121,9 +121,17 @@ export async function resolveRestartRecoveryStorePaths(params: {
       storePaths.add(path.join(sessionsDir, "sessions.json"));
     }
   }
-  // Agent databases also hold auth and model-catalog state. Enter the writer
-  // lane only when the session owner proves that a running row may need repair.
-  return [...storePaths]
-    .filter((storePath) => hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]))
-    .toSorted((a, b) => a.localeCompare(b));
+  return [...storePaths].toSorted((a, b) => a.localeCompare(b));
+}
+
+export async function resolveRestartRecoveryStorePaths(
+  params: Parameters<typeof discoverRestartRecoveryStorePaths>[0],
+): Promise<string[]> {
+  const stateDir = params.stateDir ?? resolveStateDir(process.env);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  // Startup recovery needs running rows; shutdown must also mark queued turns
+  // whose session still carries a prior terminal status.
+  return (await discoverRestartRecoveryStorePaths(params)).filter((storePath) =>
+    hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]),
+  );
 }

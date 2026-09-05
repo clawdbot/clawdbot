@@ -1,5 +1,6 @@
 {
   "id": "xai",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true
   },
@@ -91,6 +92,7 @@
     {
       "provider": "xai",
       "method": "api-key",
+      "personalAccount": true,
       "choiceId": "xai-api-key",
       "appGuidedSecret": true,
       "choiceLabel": "xAI API key",
@@ -106,6 +108,7 @@
     {
       "provider": "xai",
       "method": "oauth",
+      "personalAccount": true,
       "choiceId": "xai-oauth",
       "appGuidedAuth": "device-code",
       "choiceLabel": "xAI OAuth",
@@ -193,6 +196,7 @@
   },
   "contracts": {
     "webSearchProviders": ["grok"],
+    "usageProviders": ["xai"],
     "videoGenerationProviders": ["xai"],
     "mediaUnderstandingProviders": ["xai"],
     "speechProviders": ["xai"],

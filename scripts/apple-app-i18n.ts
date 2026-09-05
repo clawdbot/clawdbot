@@ -25,16 +25,6 @@ const IOS_SOURCE_PREFIXES = [
   SHARED_CHAT_UI_SOURCE_PREFIX,
   "apps/shared/OpenClawKit/Sources/OpenClawKit/",
 ] as const;
-const APPLE_CATALOG_KINDS = new Set([
-  "conditional-branch",
-  "ui-call",
-  "ui-call-multiline",
-  "ui-localized-call",
-  "ui-localized-call-multiline",
-  "ui-modifier",
-  "ui-named-argument",
-  "ui-named-argument-multiline",
-]);
 const IOS_CATALOG_EXCLUSIONS = new Set([
   // Product names and preview-only single-character fixtures are intentionally verbatim.
   "OpenClaw",
@@ -207,12 +197,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     'format: String(localized: "Recognizer error: %@")',
     'self.statusText = String(localized: "Triggered")',
   ],
-  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
-    "subtitle: .verbatim(self.agentTotalText)",
-    'AttributedString(localized: "^[\\(count) agent](inflect: true) total")',
-    "func agentMenuRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue",
-    "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
-  ],
   "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
     "private func nodeDetailRow(\n        _ title: OpenClawTextValue,\n        copyLabel: LocalizedStringKey",
     "private func nodeListCard(title: OpenClawTextValue, values: [String])",
@@ -333,11 +317,6 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
     "Text(self.entry.detailText)",
     "Text(account.displayName)",
     "Text(account.detailText)",
-  ],
-  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
-    'subtitle: .verbatim("\\(self.sortedAgents.count) total")',
-    "func agentMenuRow(\n        icon: String,\n        title: String",
-    "func metricTile(\n        icon: String,\n        title: String",
   ],
   "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
     "private func nodeDetailRow(_ title: String",
@@ -574,29 +553,24 @@ async function readOptionalFile(filePath: string): Promise<string | null> {
   }
 }
 
-function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
-  return (
-    entry.surface === "apple" &&
-    entry.sites.some(
-      (site) =>
-        IOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
-        APPLE_CATALOG_KINDS.has(site.kind),
-    ) &&
-    (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
-    !IOS_CATALOG_EXCLUSIONS.has(entry.source)
-  );
+function isAppleCatalogKind(kind: string): boolean {
+  return kind === "conditional-branch" || kind.startsWith("ui-");
 }
 
-function isMacosCatalogEntry(entry: NativeSourceEntry): boolean {
+function isAppleCatalogEntry(
+  entry: NativeSourceEntry,
+  sourcePrefixes: readonly string[],
+  exclusions: ReadonlySet<string>,
+): boolean {
   return (
     entry.surface === "apple" &&
     entry.sites.some(
       (site) =>
-        MACOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
-        APPLE_CATALOG_KINDS.has(site.kind),
+        sourcePrefixes.some((prefix) => site.path.startsWith(prefix)) &&
+        isAppleCatalogKind(site.kind),
     ) &&
-    !entry.source.includes("\\(") &&
-    !MACOS_CATALOG_EXCLUSIONS.has(entry.source)
+    (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
+    !exclusions.has(entry.source)
   );
 }
 
@@ -728,7 +702,9 @@ export function buildIosCatalog(
   nativeSource: NativeSourceArtifact,
   translations: readonly NativeTranslationArtifact[],
 ): AppleCatalogBuild {
-  return buildAppleCatalog(existingCatalog, nativeSource, translations, isIosCatalogEntry);
+  return buildAppleCatalog(existingCatalog, nativeSource, translations, (entry) =>
+    isAppleCatalogEntry(entry, IOS_SOURCE_PREFIXES, IOS_CATALOG_EXCLUSIONS),
+  );
 }
 
 export function buildMacosCatalog(
@@ -736,7 +712,9 @@ export function buildMacosCatalog(
   nativeSource: NativeSourceArtifact,
   translations: readonly NativeTranslationArtifact[],
 ): AppleCatalogBuild {
-  return buildAppleCatalog(existingCatalog, nativeSource, translations, isMacosCatalogEntry);
+  return buildAppleCatalog(existingCatalog, nativeSource, translations, (entry) =>
+    isAppleCatalogEntry(entry, MACOS_SOURCE_PREFIXES, MACOS_CATALOG_EXCLUSIONS),
+  );
 }
 
 async function listSwiftFiles(directory: string): Promise<string[]> {
@@ -760,10 +738,21 @@ async function listSwiftFiles(directory: string): Promise<string[]> {
 }
 
 async function validateRuntimeInterpolationPaths(): Promise<void> {
-  const roots = IOS_SOURCE_PREFIXES.map((prefix) => path.join(ROOT, prefix));
-  const files = (await Promise.all(roots.map(listSwiftFiles))).flat();
+  const roots = [...new Set([...IOS_SOURCE_PREFIXES, ...MACOS_SOURCE_PREFIXES])];
+  const files = new Set(
+    (
+      await Promise.all(
+        roots.map((prefix) => {
+          const sourcePath = path.join(ROOT, prefix);
+          return prefix.endsWith(".swift")
+            ? Promise.resolve([sourcePath])
+            : listSwiftFiles(sourcePath);
+        }),
+      )
+    ).flat(),
+  );
   const violations: string[] = [];
-  for (const file of files) {
+  for (const file of [...files].toSorted()) {
     const source = await readFile(file, "utf8");
     for (const label of findAmbiguousRuntimeInterpolations(source)) {
       violations.push(`${path.relative(ROOT, file)}: ${label}`);

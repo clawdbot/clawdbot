@@ -1,16 +1,15 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type, type TSchema } from "typebox";
 import { closedObject } from "./closed-object.js";
+import {
+  CronDateTimestampMsSchema,
+  MAX_DATE_TIMESTAMP_MS,
+  cronAgentTurnPayloadSchema,
+  cronCommandPayloadSchema,
+  cronScriptPayloadSchema,
+} from "./cron-shared.js";
 import { FailoverReasonSchema } from "./failover-reason.js";
 import { NonEmptyString } from "./primitives.js";
-
-// ECMAScript Date's inclusive timestamp limit. Keep public schedule numbers
-// inside the range the scheduler can represent and serialize.
-const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
-const CronDateTimestampMsSchema = Type.Integer({
-  minimum: 0,
-  maximum: MAX_DATE_TIMESTAMP_MS,
-});
 
 /**
  * Cron scheduler protocol schemas.
@@ -18,69 +17,6 @@ const CronDateTimestampMsSchema = Type.Integer({
  * These contracts describe scheduled agent turns, system events, delivery
  * routing, run history, and mutable job state shared by gateway RPC clients.
  */
-
-/** Builds create/patch payload variants while preserving per-call field optionality. */
-function cronAgentTurnPayloadSchema<
-  TMessage extends TSchema,
-  TModel extends TSchema,
-  TFallbacks extends TSchema,
-  TToolsAllow extends TSchema,
-  TThinking extends TSchema,
->(params: {
-  message: TMessage;
-  model: TModel;
-  fallbacks: TFallbacks;
-  toolsAllow: TToolsAllow;
-  thinking: TThinking;
-}) {
-  return closedObject({
-    kind: Type.Literal("agentTurn"),
-    message: params.message,
-    model: Type.Optional(params.model),
-    fallbacks: Type.Optional(params.fallbacks),
-    thinking: Type.Optional(params.thinking),
-    timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-    allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-    lightContext: Type.Optional(Type.Boolean()),
-    toolsAllow: Type.Optional(params.toolsAllow),
-    // Server-managed marker for auto-stamped defaults; persisted so CLI cron
-    // runs can drop only the cap that was never user-explicit.
-    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
-  });
-}
-
-/** Builds command payload variants while preserving create/patch argv optionality. */
-function cronCommandPayloadSchema<TArgv extends TSchema, TToolsAllow extends TSchema>(params: {
-  argv: TArgv;
-  toolsAllow: TToolsAllow;
-}) {
-  return closedObject({
-    kind: Type.Literal("command"),
-    argv: params.argv,
-    cwd: Type.Optional(Type.String({ minLength: 1 })),
-    env: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.String())),
-    input: Type.Optional(Type.String()),
-    timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-    noOutputTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-    outputMaxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
-    toolsAllow: Type.Optional(params.toolsAllow),
-    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
-  });
-}
-
-function cronScriptPayloadSchema<TScript extends TSchema, TToolsAllow extends TSchema>(params: {
-  script: TScript;
-  toolsAllow: TToolsAllow;
-}) {
-  return closedObject({
-    kind: Type.Literal("script"),
-    script: params.script,
-    timeoutSeconds: Type.Optional(Type.Number({ minimum: 1 })),
-    toolBudget: Type.Optional(Type.Integer({ minimum: 1 })),
-    toolsAllow: Type.Optional(params.toolsAllow),
-    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
-  });
-}
 
 /** Session target accepted by cron jobs. */
 const CronSessionTargetSchema = Type.Union([
@@ -316,7 +252,7 @@ const CronPayloadSchema = Type.Union([
 ]);
 
 /**
- * Reported payloads add the system-owned heartbeat monitor kind; it is
+ * Reported payloads add system-owned monitor kinds; they are
  * gateway-converged only, so create/patch schemas intentionally omit it.
  */
 const CronReportedPayloadSchema = Type.Union([
@@ -325,6 +261,7 @@ const CronReportedPayloadSchema = Type.Union([
   CronCommandPayloadSchema,
   CronScriptPayloadSchema,
   closedObject({ kind: Type.Literal("heartbeat") }),
+  closedObject({ kind: Type.Literal("skillCollectionReview") }),
 ]);
 
 /** Partial cron payload for job updates. */
@@ -508,6 +445,7 @@ export const CronJobStateSchema = closedObject({
   lastDelivered: Type.Optional(Type.Boolean()),
   lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
   lastDeliveryError: Type.Optional(Type.String()),
+  deliverySuppressionReason: Type.Optional(Type.String()),
   lastFailureNotificationDelivered: Type.Optional(Type.Boolean()),
   lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
   lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
@@ -613,6 +551,7 @@ export const CronJobSchema = closedObject({
   lastDelivered: Type.Optional(Type.Boolean()),
   lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
   lastDeliveryError: Type.Optional(Type.String()),
+  deliverySuppressionReason: Type.Optional(Type.String()),
   lastFailureNotificationDelivered: Type.Optional(Type.Boolean()),
   lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
   lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
@@ -692,15 +631,31 @@ export const CronAddParamsSchema = closedObject({
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
 });
 
+/** Dry-run delivery route shown at create and list time without sending. */
+export const CronDeliveryPreviewSchema = closedObject({
+  label: Type.String(),
+  detail: Type.String(),
+});
+
 /** Successful declaration-key convergence result. */
 export const CronDeclarativeAddResultSchema = closedObject({
   created: Type.Boolean(),
   updated: Type.Optional(Type.Boolean()),
   job: CronJobSchema,
+  deliveryPreview: Type.Optional(CronDeliveryPreviewSchema),
+});
+
+/** Imperative create result: the public job plus an optional create-time preview. */
+export const CronAddJobResultSchema = closedObject({
+  ...CronJobSchema.properties,
+  deliveryPreview: Type.Optional(CronDeliveryPreviewSchema),
 });
 
 /** Successful result from imperative create or declaration-key convergence. */
-export const CronAddResultSchema = Type.Union([CronJobSchema, CronDeclarativeAddResultSchema]);
+export const CronAddResultSchema = Type.Union([
+  CronAddJobResultSchema,
+  CronDeclarativeAddResultSchema,
+]);
 
 /** Mutable cron job fields accepted by update APIs. */
 const CronJobPatchSchema = closedObject({
@@ -772,6 +727,7 @@ export const CronRunLogEntrySchema = closedObject({
   delivered: Type.Optional(Type.Boolean()),
   deliveryStatus: Type.Optional(CronDeliveryStatusSchema),
   deliveryError: Type.Optional(Type.String()),
+  deliverySuppressionReason: Type.Optional(Type.String()),
   failureNotificationDelivery: Type.Optional(CronFailureNotificationDeliverySchema),
   delivery: Type.Optional(CronDeliveryTraceSchema),
   sessionId: Type.Optional(NonEmptyString),

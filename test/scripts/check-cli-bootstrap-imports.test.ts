@@ -141,6 +141,11 @@ describe("check-cli-bootstrap-imports", () => {
       "dist/worker/workspace-rsync-receiver.mjs",
       'import path from "node:path";\nexport const receiver = Boolean(path);\n',
     );
+    writeFixture(
+      root,
+      "dist/worker/github-exec-launcher.mjs",
+      'import fs from "node:fs";\nexport const launcher = Boolean(fs);\n',
+    );
 
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
   });
@@ -159,6 +164,7 @@ describe("check-cli-bootstrap-imports", () => {
       ].join("\n"),
     );
     writeFixture(root, "dist/worker/workspace-rsync-receiver.mjs", "export {};\n");
+    writeFixture(root, "dist/worker/github-exec-launcher.mjs", 'import "yaml";\n');
     writeFixture(root, "dist/worker/lazy.mjs", "export {};\n");
     writeFixture(
       root,
@@ -167,6 +173,7 @@ describe("check-cli-bootstrap-imports", () => {
     );
 
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
+      'Worker deploy artifact dist/worker/github-exec-launcher.mjs retains runtime import "yaml" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "../../package.json" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "./lazy.mjs" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "@openclaw/fs-safe/temp" instead of bundling it.',
@@ -176,4 +183,33 @@ describe("check-cli-bootstrap-imports", () => {
       "Worker deploy artifact must not contain a dependency manifest or lifecycle scripts.",
     ]);
   });
+
+  it.each(["two", "three", "default"] as const)(
+    "requires the %s-artifact worker deployment contract",
+    (contract) => {
+      const root = makeTempRoot();
+      const workerDeployEntrypoints = [
+        "dist/worker/worker.mjs",
+        "dist/worker/workspace-rsync-receiver.mjs",
+      ];
+      for (const entrypoint of workerDeployEntrypoints) {
+        writeFixture(root, entrypoint, "export {};\n");
+      }
+      if (contract === "three") {
+        workerDeployEntrypoints.push("dist/worker/github-exec-launcher.mjs");
+      }
+      expect(
+        collectWorkerDeployArtifactErrors({
+          rootDir: root,
+          workerDeployEntrypoints: contract === "default" ? undefined : workerDeployEntrypoints,
+        }),
+      ).toEqual(
+        contract === "two"
+          ? []
+          : [
+              "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing. Run pnpm build first.",
+            ],
+      );
+    },
+  );
 });

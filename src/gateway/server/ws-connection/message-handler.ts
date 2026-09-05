@@ -13,6 +13,10 @@ import {
   validateConnectParams,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_RESTART_UNAVAILABLE_REASON,
+  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+} from "../../../../packages/gateway-protocol/src/restart-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import {
   releaseNodePairingCleanupClaim,
@@ -38,6 +42,7 @@ import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approv
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
+import { resolveGatewayWsBrowserOrigin } from "../ws-origin-policy.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
 import { isStartupNodeConnect } from "./connect-admission.js";
 import { authenticateGatewayConnect } from "./connect-auth.js";
@@ -162,10 +167,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   const runDetachedConnectWork = (run: () => Promise<void>, onError: (error: unknown) => void) => {
     // Connect-triggered mutations outlive hello-ok. Give each tail its own
     // root lease so suspension cannot report ready while one is still active.
-    void runWithGatewayIndependentRootWorkAdmission(run).catch(onError);
+    void params.connectionWork
+      .track(() =>
+        runWithGatewayIndependentRootWorkAdmission(run, "ws:preauth", params.connectionWork.signal),
+      )
+      .catch(onError);
   };
 
-  const handleMessage = async (data: RawData) => {
+  const handleMessage = async (data: RawData, admission?: "continuation") => {
     if (isClosed()) {
       return;
     }
@@ -351,7 +360,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           reportedClientIp,
           reportedClientIpSource,
           hasBrowserOriginHeader,
-          enforceOriginCheckForAnyClient,
+          browserOrigin: resolveGatewayWsBrowserOrigin({
+            client: connectParams.client,
+            requestHost,
+            origin: requestOrigin,
+            isLocalClient,
+            enforceOriginCheckForAnyClient,
+          }),
           browserRateLimitClientIp,
           authRateLimiter,
           clientLabel,
@@ -376,7 +391,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
         return;
       }
-      await authenticatedRequestDispatcher.dispatch(parsed, client);
+      await authenticatedRequestDispatcher.dispatch(
+        parsed,
+        client,
+        rawDataByteLength(data),
+        admission,
+      );
     } catch (err) {
       await releasePendingNodePairingCleanup();
       logGateway.error(`parse/handle error: ${String(err)}`);
@@ -430,7 +450,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
 
     const restartDraining = isGatewayRestartDraining();
-    const reason = restartDraining ? "gateway-restarting" : "gateway-suspending";
+    const reason = restartDraining
+      ? GATEWAY_RESTART_UNAVAILABLE_REASON
+      : GATEWAY_SUSPEND_UNAVAILABLE_REASON;
     const operation = restartDraining ? "restart" : "suspension";
     const phase = getGatewaySuspendAdmissionPhase();
     setLastFrameMeta({ type: "req", method: "connect", id: parsed.id });
@@ -459,12 +481,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     return true;
   };
 
-  const handleIncomingMessage = async (data: RawData) => {
+  const handleIncomingMessage = async (data: RawData, requestAdmission?: "continuation") => {
     if (getClient()) {
-      await handleMessage(data);
+      await handleMessage(data, requestAdmission);
       return;
     }
-    const admission = tryBeginGatewayRootWorkAdmission();
+    const admission = tryBeginGatewayRootWorkAdmission("ws:connect");
     if (!admission) {
       if (
         isGatewayRestartDraining() &&
@@ -484,13 +506,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       }
       if (
         !isGatewayRestartDraining() &&
-        getGatewaySuspendAdmissionPhase() === "prepared" &&
+        (getGatewaySuspendAdmissionPhase() === "draining" ||
+          getGatewaySuspendAdmissionPhase() === "prepared") &&
         isPreparedControlConnect(data)
       ) {
-        // Refuse-only suspension fences work, not control-plane visibility. Only
-        // operator connects are admitted while prepared, and they can only reach
-        // suspend-control methods after handshake; node and worker connects would
-        // attach presence/registry state, so they stay refused.
+        // Suspension fences work, not authenticated owner recovery. Operators
+        // can reconnect throughout the held lease; node and worker connects
+        // would attach presence/registry state, so they stay refused.
         await handleMessage(data);
         return;
       }
@@ -510,8 +532,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   };
 
   socket.on("message", (data) => {
-    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-      handleIncomingMessage(data),
-    );
+    // Capture receipt before any await: older requests keep their admitted lifetime,
+    // while shutdown frames may only settle an exact pending node owner.
+    const admission = params.connectionWork.isClosing ? "continuation" : undefined;
+    if (admission && getClient()?.connect.role !== "node") {
+      return;
+    }
+    void params.connectionWork
+      .track(() =>
+        runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
+          handleIncomingMessage(data, admission),
+        ),
+      )
+      .catch((error: unknown) => {
+        logGateway.error(`request dispatch failed conn=${connId}: ${formatForLog(error)}`);
+      });
   });
 }

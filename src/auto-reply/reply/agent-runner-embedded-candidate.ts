@@ -1,20 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
-import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
-import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import type {
+  CompactionAccountingFact,
+  RunEmbeddedAgentInternalParams,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
-import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
-import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
-import {
-  AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  resolveAgentRunErrorLifecycleFields,
-} from "../../agents/run-termination.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isTrustedMessageActionTurnIngress,
   mintMessageActionTurnCapability,
@@ -22,88 +15,45 @@ import {
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { logVerbose } from "../../globals.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
 import type { PartialReplyPayload } from "../get-reply-options.types.js";
-import type { ThinkLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  createAgentLifecycleTerminalBackstop,
-  type AgentLifecycleTerminalBackstop,
-} from "./agent-lifecycle-terminal.js";
+import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import {
   createAgentRunEventHandler,
   type MessageToolDeliveryState,
 } from "./agent-runner-event-handler.js";
-import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import type { createAgentTurnPresentation } from "./agent-runner-presentation.js";
-import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
+import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
-import type { FollowupRun } from "./queue.js";
-import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
+import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import {
   bindSourceReplyDeliveryRuntime,
   readSourceReplyDeliveryRuntime,
 } from "./source-reply-delivery-runtime.js";
 
-type EmbeddedPresentation = Pick<
-  ReturnType<typeof createAgentTurnPresentation>,
-  | "classifyStreamingPartial"
-  | "sanitizeStreamingText"
-  | "normalizeStreamingText"
-  | "startPresentationWhileTyping"
-  | "blockReplyHandler"
->;
-
-export async function runEmbeddedFallbackCandidate(params: {
-  preparedRunAdmission: PreparedAgentRunAdmission;
-  turn: AgentTurnParams;
-  effectiveRun: FollowupRun["run"];
-  candidateRun: FollowupRun["run"];
-  runtimeConfig: OpenClawConfig;
-  provider: string;
-  model: string;
-  sessionRuntimeOverride?: string;
-  candidateThinkLevel?: ThinkLevel;
-  candidateFastMode: Pick<RunEmbeddedAgentParams, "fastMode" | "fastModeAutoOnSeconds">;
-  runLane: RunEmbeddedAgentParams["lane"];
-  runId: string;
-  getLifecycleGeneration: () => string;
-  onLifecycleGeneration: (generation: string) => void;
-  runAbortSignal?: AbortSignal;
-  allowTransientCooldownProbe?: boolean;
-  isFinalFallbackAttempt?: boolean;
-  suppressQueuedUserPersistenceForCandidate: boolean;
-  suppressAssistantErrorPersistenceForCandidate: boolean;
-  onAssistantErrorMessagePersisted: () => void;
-  userTurnTranscriptRecorder: NonNullable<AgentTurnParams["opts"]>["userTurnTranscriptRecorder"];
-  contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
-  onContextEngineTurnCandidate: RunEmbeddedAgentParams["onContextEngineTurnCandidate"];
-  notifyUserMessagePersisted: () => void;
-  fastModeStartedAtMs: number;
-  fastModeAutoProgressState: FastModeAutoProgressState;
-  bootstrapContextRunKind: BootstrapContextRunKind;
-  bootstrapPromptWarningSignaturesSeen: string[];
-  currentTurnImages: Awaited<
-    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnImages>
-  >;
-  signalExecutionPhaseForTyping: NonNullable<
-    Parameters<typeof runEmbeddedAgent>[0]["onExecutionPhase"]
-  >;
-  notifyAgentRunStart: () => void;
-  notifyUserAboutCompaction: boolean;
-  messageToolDeliveryState: MessageToolDeliveryState;
-  preserveProgressCallbackStartOrder: boolean;
-  githubPublicationAvailable: boolean;
-  presentation: EmbeddedPresentation;
-  timing: AgentTurnTimingTracker;
-  onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
-  onCompactionCount: (count: number) => void;
-}): Promise<{
+export async function runEmbeddedFallbackCandidate(
+  params: AgentFallbackCandidateCommonParams & {
+    effectiveRun: AgentFallbackCandidateCommonParams["candidateRun"];
+    sessionRuntimeOverride?: string;
+    getLifecycleGeneration: () => string;
+    onLifecycleGeneration: (generation: string) => void;
+    allowTransientCooldownProbe?: boolean;
+    suppressAssistantErrorPersistenceForCandidate: boolean;
+    onAssistantErrorMessagePersisted: () => void;
+    notifyUserAboutCompaction: boolean;
+    messageToolDeliveryState: MessageToolDeliveryState;
+    githubPublicationAvailable: boolean;
+    onCompactionFacts: (facts: {
+      accounting?: CompactionAccountingFact;
+      postCompactionModelAttempted: boolean;
+    }) => void;
+  },
+): Promise<{
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
@@ -114,7 +64,7 @@ export async function runEmbeddedFallbackCandidate(params: {
     ...params.candidateFastMode,
     thinkLevel: params.candidateThinkLevel,
   };
-  const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
+  const { embeddedContext, senderContext, runBaseParams } = await buildEmbeddedRunExecutionParams({
     run: candidateRun,
     replyRoute: turn.followupRun,
     sessionCtx: turn.sessionCtx,
@@ -187,23 +137,16 @@ export async function runEmbeddedFallbackCandidate(params: {
         })
       : undefined;
   let attemptCompactionCount = 0;
+  let postCompactionModelAttempted = false;
+  let compactionAccounting: CompactionAccountingFact | undefined;
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
     sessionKey: turn.sessionKey,
     getLifecycleGeneration: params.getLifecycleGeneration,
-    resolveTerminationFields: (error) => ({
-      ...resolveAgentRunErrorLifecycleFields(error, params.runAbortSignal),
-      ...(isReplyOperationRestartAbort(turn.replyOperation)
-        ? {
-            aborted: true as const,
-            stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-          }
-        : {}),
-    }),
+    resolveTerminationFields: (error) =>
+      resolveReplyOperationTerminationFields(error, params.runAbortSignal, turn.replyOperation),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
-  const toolAuthorityRoute = { provider: embeddedRunProvider, model: params.model };
-  turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   try {
     // Profiler milestone. Exposes pre-dispatch delay without normal-path logging.
     params.timing.logMilestoneIfSlow({
@@ -235,7 +178,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         contextWindow: turn.getActiveSessionEntry()?.contextWindow,
         lane: params.runLane,
         provider: embeddedRunProvider,
-        agentHarnessId: embeddedRunHarnessOverride,
+        agentHarnessId: resolveSessionPinnedHarnessId(turn.getActiveSessionEntry()),
         agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
         agentHarnessRuntimePreparationHint:
           agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
@@ -265,18 +208,19 @@ export async function runEmbeddedFallbackCandidate(params: {
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistenceForCandidate,
         onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+        prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
+        onAutoCompactionSucceeded: (count) => {
+          attemptCompactionCount = Math.max(attemptCompactionCount, count);
+        },
         toolResultFormat: (() => {
           const channel = resolveMessageChannel(turn.sessionCtx.Surface, turn.sessionCtx.Provider);
           return !channel || isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
         })(),
         toolProgressDetail: turn.toolProgressDetail,
-        suppressToolErrorWarnings: turn.opts?.suppressToolErrorWarnings,
         toolsAllow: turn.opts?.toolsAllow,
         disableTools: turn.opts?.disableTools,
-        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
-          turn.followupRun,
-          toolAuthorityRoute,
-        ),
+        // Marks reply-owned policy; final attempt preparation binds its concrete route.
+        toolAuthorityFingerprint: turn.replyOperation?.toolAuthorityFingerprint,
         enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         bootstrapContextMode: turn.opts?.bootstrapContextMode,
@@ -286,12 +230,22 @@ export async function runEmbeddedFallbackCandidate(params: {
         abortSignal: params.runAbortSignal,
         replyOperation: turn.replyOperation,
         deferTerminalLifecycle: true,
+        onCompactionAccounting: (fact) => {
+          compactionAccounting = fact;
+        },
+        onDeferredLifecycleOwner: params.deferredLifecycle.adopt,
+        onDeferredLifecycleAbort: params.deferredLifecycle.abort,
         onExecutionStarted: (info) => {
           if (info?.lifecycleGeneration) {
             params.onLifecycleGeneration(info.lifecycleGeneration);
           }
         },
-        onExecutionPhase: params.signalExecutionPhaseForTyping,
+        onExecutionPhase: (info) => {
+          if (info.phase === "model_call_started" && attemptCompactionCount > 0) {
+            postCompactionModelAttempted = true;
+          }
+          params.signalExecutionPhaseForTyping(info);
+        },
         onLaneWait: ({ waiting }) => {
           const replyOperation = turn.replyOperation;
           if (waiting && replyOperation) {
@@ -321,33 +275,14 @@ export async function runEmbeddedFallbackCandidate(params: {
             mediaUrls: payload.mediaUrls,
           };
           const onPartialReply = turn.opts?.onPartialReply;
-          if (!params.preserveProgressCallbackStartOrder) {
-            await turn.typingSignals.signalTextDelta(textForTyping);
-            if (!onPartialReply) {
-              return false;
-            }
-            return await onPartialReply(partialPayload);
-          }
-          if (!onPartialReply) {
-            await turn.typingSignals.signalTextDelta(textForTyping);
-            return false;
-          }
-          return await params.presentation.startPresentationWhileTyping(
+          return await params.presentation.presentWithTyping(
             turn.typingSignals.signalTextDelta(textForTyping),
-            () => onPartialReply(partialPayload),
+            () => (onPartialReply ? onPartialReply(partialPayload) : false),
           );
         },
         onAssistantMessageStart: async () => {
-          if (!params.preserveProgressCallbackStartOrder) {
-            await turn.typingSignals.signalMessageStart();
-            await turn.opts?.onAssistantMessageStart?.();
-            return;
-          }
-          await params.presentation.startPresentationWhileTyping(
-            turn.typingSignals.signalMessageStart(),
-            async () => {
-              await turn.opts?.onAssistantMessageStart?.();
-            },
+          await params.presentation.presentWithTyping(turn.typingSignals.signalMessageStart(), () =>
+            turn.opts?.onAssistantMessageStart?.(),
           );
         },
         onReasoningStream:
@@ -356,26 +291,15 @@ export async function runEmbeddedFallbackCandidate(params: {
                 if (turn.followupRun.run.silentExpected) {
                   return;
                 }
-                if (!params.preserveProgressCallbackStartOrder) {
-                  await turn.typingSignals.signalReasoningDelta();
-                  await turn.opts?.onReasoningStream?.({
-                    text: payload.text,
-                    mediaUrls: payload.mediaUrls,
-                    isReasoningSnapshot: payload.isReasoningSnapshot,
-                    requiresReasoningProgressOptIn: payload.requiresReasoningProgressOptIn,
-                  });
-                  return;
-                }
-                await params.presentation.startPresentationWhileTyping(
+                await params.presentation.presentWithTyping(
                   turn.typingSignals.signalReasoningDelta(),
-                  async () => {
-                    await turn.opts?.onReasoningStream?.({
+                  () =>
+                    turn.opts?.onReasoningStream?.({
                       text: payload.text,
                       mediaUrls: payload.mediaUrls,
                       isReasoningSnapshot: payload.isReasoningSnapshot,
                       requiresReasoningProgressOptIn: payload.requiresReasoningProgressOptIn,
-                    });
-                  },
+                    }),
                 );
               }
             : undefined,
@@ -461,7 +385,17 @@ export async function runEmbeddedFallbackCandidate(params: {
       ),
     };
   } finally {
-    params.onCompactionCount(attemptCompactionCount);
+    // Runtime event/result counts are observable, but cannot prove a durable write target.
+    const accounting: CompactionAccountingFact | undefined =
+      compactionAccounting ??
+      (attemptCompactionCount > 0
+        ? {
+            kind: "presentation-only",
+            count: attemptCompactionCount,
+            currentContextSnapshot: { tokens: undefined },
+          }
+        : undefined);
+    params.onCompactionFacts({ accounting, postCompactionModelAttempted });
     revokeMessageActionTurnCapability(messageActionTurnCapability);
   }
 }

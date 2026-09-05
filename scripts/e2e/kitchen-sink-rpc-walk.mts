@@ -14,6 +14,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { appendBoundedTail } from "../lib/bounded-output-tail.mjs";
 import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
@@ -24,6 +25,7 @@ import {
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../lib/windows-taskkill.mjs";
+import { fixtureCapabilityConsentArgs } from "./lib/package-compat.mjs";
 import { readTextFileTail } from "./lib/text-file-utils.mjs";
 
 type JsonRecord = Record<string, unknown>;
@@ -461,20 +463,6 @@ function readJson(file: string): unknown {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-export function appendBoundedOutput(
-  buffer: CapturedOutput,
-  chunk: string | Uint8Array,
-  maxChars = resolveKitchenSinkRpcConfig().outputCaptureChars,
-) {
-  const text = String(chunk);
-  const combined = `${buffer.text}${text}`;
-  const overflowChars = Math.max(0, combined.length - maxChars);
-  return {
-    text: overflowChars > 0 ? combined.slice(overflowChars) : combined,
-    truncatedChars: buffer.truncatedChars + overflowChars,
-  };
-}
-
 function formatCapturedOutput(label: string, buffer: CapturedOutput) {
   return buffer.truncatedChars > 0
     ? `[${label} truncated ${buffer.truncatedChars} chars]\n${buffer.text}`
@@ -582,10 +570,10 @@ export function runCommand(
       forceKillTimer.unref();
     }, resolvedTimeoutMs);
     child.stdout?.on("data", (chunk) => {
-      stdout = appendBoundedOutput(stdout, chunk, outputCaptureChars);
+      stdout = appendBoundedTail(stdout, chunk, outputCaptureChars);
     });
     child.stderr?.on("data", (chunk) => {
-      stderr = appendBoundedOutput(stderr, chunk, outputCaptureChars);
+      stderr = appendBoundedTail(stderr, chunk, outputCaptureChars);
     });
     child.on("error", (error) => {
       clearTimeout(timer);
@@ -1217,7 +1205,7 @@ function isRetryableTransientNetworkError(error: unknown, seen = new Set<unknown
   const message =
     candidate instanceof Error ? candidate.message : typeof candidate === "string" ? candidate : "";
   const code = asRecord(candidate).code;
-  const text = `${String(code ?? "")} ${message}`;
+  const text = `${typeof code === "string" ? code : ""} ${message}`;
   if (
     /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/iu.test(text) ||
     /\b(?:fetch failed|socket hang up|connection reset)\b/iu.test(text)
@@ -1980,7 +1968,7 @@ export async function assertOperatorRpcDenied(
   } catch (error) {
     const candidate = asRecord(error);
     const gatewayCode = candidate.gatewayCode;
-    const message = String(candidate.message ?? "");
+    const message = typeof candidate.message === "string" ? candidate.message : "";
     if (gatewayCode === "INVALID_REQUEST" && message.includes("unauthorized role: operator")) {
       return;
     }
@@ -2754,12 +2742,27 @@ async function main() {
   let sampleTimer: ReturnType<typeof setInterval> | undefined;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
-    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC, "--force"], env, {
-      ...commandResourceOptions,
-      requireResourceSample: true,
-      resourceLabel: "plugins install",
-      timeoutMs: config.installTimeoutMs,
-    });
+    const installHelp = await runOpenClaw(runner, ["plugins", "install", "--help"], env);
+    if (installHelp.stdoutTruncatedChars > 0) {
+      throw new Error("Plugin fixture help probe output was truncated");
+    }
+    await runOpenClaw(
+      runner,
+      [
+        "plugins",
+        "install",
+        PLUGIN_SPEC,
+        "--force",
+        ...fixtureCapabilityConsentArgs(installHelp.stdout),
+      ],
+      env,
+      {
+        ...commandResourceOptions,
+        requireResourceSample: true,
+        resourceLabel: "plugins install",
+        timeoutMs: config.installTimeoutMs,
+      },
+    );
     runner = resolveOpenClawRunner();
     console.log(`Kitchen Sink RPC runtime runner: ${runner.label}`);
     configureKitchenSink(env, port);

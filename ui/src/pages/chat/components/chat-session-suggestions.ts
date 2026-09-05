@@ -48,42 +48,46 @@ export function renderChatSessionSuggestions(props: {
           <article class="session-suggestion" data-suggestion-id=${suggestion.id}>
             <span class="session-suggestion__author">${author}</span>
             <span class="session-suggestion__text">${suggestion.text}</span>
-            ${canResolve && suggestion.state === "pending"
-              ? html`
-                  <div class="session-suggestion__actions">
-                    ${props.archived
-                      ? nothing
-                      : html`
-                          ${actionButton({
-                            icon: icons.arrowUp,
-                            label: t("chat.sessionSuggestions.sendNow", { author }),
-                            busy,
-                            onClick: () => props.onResolve(suggestion, "send"),
-                          })}
-                          ${actionButton({
-                            icon: icons.check,
-                            label: t("chat.sessionSuggestions.queue", { author }),
-                            busy,
-                            onClick: () => props.onResolve(suggestion, "queue"),
-                          })}
-                          ${actionButton({
-                            icon: icons.edit,
-                            label: t("chat.sessionSuggestions.edit", { author }),
-                            busy,
-                            onClick: () => props.onResolve(suggestion, "edit"),
-                          })}
-                        `}
-                    ${actionButton({
-                      icon: icons.trash,
-                      label: t("chat.sessionSuggestions.dismiss", { author }),
-                      busy,
-                      onClick: () => props.onResolve(suggestion, "dismiss"),
-                    })}
-                  </div>
-                `
-              : html`<span class="session-suggestion__state"
-                  >${t(`chat.sessionSuggestions.state.${suggestion.state}`)}</span
-                >`}
+            ${
+              canResolve && suggestion.state === "pending"
+                ? html`
+                    <div class="session-suggestion__actions">
+                      ${
+                        props.archived
+                          ? nothing
+                          : html`
+                              ${actionButton({
+                                icon: icons.arrowUp,
+                                label: t("chat.sessionSuggestions.sendNow", { author }),
+                                busy,
+                                onClick: () => props.onResolve(suggestion, "send"),
+                              })}
+                              ${actionButton({
+                                icon: icons.check,
+                                label: t("chat.sessionSuggestions.queue", { author }),
+                                busy,
+                                onClick: () => props.onResolve(suggestion, "queue"),
+                              })}
+                              ${actionButton({
+                                icon: icons.edit,
+                                label: t("chat.sessionSuggestions.edit", { author }),
+                                busy,
+                                onClick: () => props.onResolve(suggestion, "edit"),
+                              })}
+                            `
+                      }
+                      ${actionButton({
+                        icon: icons.trash,
+                        label: t("chat.sessionSuggestions.dismiss", { author }),
+                        busy,
+                        onClick: () => props.onResolve(suggestion, "dismiss"),
+                      })}
+                    </div>
+                  `
+                : html`<span class="session-suggestion__state"
+                    >${t(`chat.sessionSuggestions.state.${suggestion.state}`)}</span
+                  >`
+            }
           </article>
         `;
       })}

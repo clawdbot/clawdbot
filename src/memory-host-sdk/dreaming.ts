@@ -12,11 +12,11 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
-  listAgentEntries,
+  listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const DEFAULT_MEMORY_DREAMING_ENABLED = true;
@@ -286,10 +286,6 @@ function resolveExecutionConfig(
     ...(typeof temperature === "number" ? { temperature } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
   };
-}
-
-function normalizePathForComparison(input: string): string {
-  return resolveWorkspaceStateIdentity(input).workspacePath;
 }
 
 function formatLocalIsoDay(epochMs: number): string {
@@ -584,20 +580,7 @@ export function resolveMemoryDreamingWorkspaces(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspace[] {
-  const configured = listAgentEntries(cfg);
-  const agentIds: string[] = [];
-  const seenAgents = new Set<string>();
-  for (const entry of configured) {
-    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
-      continue;
-    }
-    const id = normalizeOptionalLowercaseString(entry.id);
-    if (!id || seenAgents.has(id)) {
-      continue;
-    }
-    seenAgents.add(id);
-    agentIds.push(id);
-  }
+  const agentIds = listAgentIds(cfg);
   if (agentIds.length === 0) {
     agentIds.push(resolveDefaultAgentId(cfg));
   }
@@ -609,7 +592,7 @@ export function resolveMemoryDreamingWorkspaces(
       return;
     }
     const agentId = normalizeOptionalLowercaseString(agentIdRaw) || resolveDefaultAgentId(cfg);
-    const key = normalizePathForComparison(workspaceDir);
+    const key = resolveWorkspaceStateIdentity(workspaceDir).workspacePath;
     const existing = byWorkspace.get(key);
     if (existing) {
       if (!existing.agentIds.includes(agentId)) {

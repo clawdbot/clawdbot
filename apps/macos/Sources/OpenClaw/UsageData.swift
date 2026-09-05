@@ -18,12 +18,6 @@ struct GatewayUsageSummary: Codable {
     let updatedAt: Double
     let providers: [GatewayUsageProvider]
     let refreshing: Bool?
-
-    init(updatedAt: Double, providers: [GatewayUsageProvider], refreshing: Bool? = nil) {
-        self.updatedAt = updatedAt
-        self.providers = providers
-        self.refreshing = refreshing
-    }
 }
 
 struct UsageRow: Identifiable {
@@ -103,16 +97,5 @@ extension GatewayUsageSummary {
                 resetAt: nil,
                 errorText: error)
         }
-    }
-}
-
-@MainActor
-enum UsageLoader {
-    static func loadSummary() async throws -> GatewayUsageSummary {
-        let data = try await ControlChannel.shared.request(
-            method: "usage.status",
-            params: nil,
-            timeoutMs: 5000)
-        return try JSONDecoder().decode(GatewayUsageSummary.self, from: data)
     }
 }

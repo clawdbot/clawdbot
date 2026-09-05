@@ -75,6 +75,23 @@ describe("live device scope upgrade", () => {
     return { ...paired, ws, hello };
   }
 
+  async function openScopeLessDevice(name: string) {
+    const paired = await issueOperatorToken({
+      name,
+      approvedScopes: [],
+      clientId: GATEWAY_CLIENT_IDS.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+    const ws = await openTrackedWs(started.port);
+    const hello = await connectOk(ws, {
+      skipDefaultAuth: true,
+      deviceToken: paired.token,
+      deviceIdentityPath: paired.identityPath,
+      scopes: [],
+    });
+    return { ...paired, ws, hello };
+  }
+
   async function openLimitedBrowserDevice(name: string) {
     const { identityPath, identity } = loadDeviceIdentity(name);
     const ws = await openTrackedWs(started.port, { origin: BROWSER_ORIGIN });
@@ -96,6 +113,21 @@ describe("live device scope upgrade", () => {
       deviceToken: auth?.deviceToken ?? "",
     };
   }
+
+  test("lets a paired scope-less operator request access recovery", async () => {
+    const limited = await openScopeLessDevice("live-scope-upgrade-scope-less");
+    try {
+      const registration = await rpcReq<{ requestId: string }>(
+        limited.ws,
+        "device.scopes.requestUpgrade",
+        { scopes: FULL_SCOPES },
+      );
+      expect(registration.ok, JSON.stringify(registration.error)).toBe(true);
+      expect(registration.payload?.requestId).toBeTypeOf("string");
+    } finally {
+      limited.ws.close();
+    }
+  });
 
   test("returns the rotated token after approval and reconnects with admin scopes", async () => {
     const limited = await openLimitedDevice("live-scope-upgrade-approved");

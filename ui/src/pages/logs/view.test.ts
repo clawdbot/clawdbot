@@ -24,6 +24,7 @@ function createLevelFilters(overrides: Partial<Record<LogLevel, boolean>> = {}) 
 function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
   return {
     loading: false,
+    refreshDisabled: false,
     status: { error: null, hasLoaded: false, stale: false },
     file: null,
     entries: [
@@ -86,6 +87,45 @@ afterEach(async () => {
 });
 
 describe("renderLogs", () => {
+  it("does not claim the log is empty before the initial load completes", () => {
+    const container = document.createElement("div");
+
+    render(renderLogs(createProps({ loading: true, entries: [] })), container);
+
+    expect(container.textContent).not.toContain("No log entries.");
+    expect(container.querySelector('[role="status"]')).not.toBeNull();
+  });
+
+  it("does not show loading when no initial request is pending", () => {
+    const container = document.createElement("div");
+
+    render(renderLogs(createProps({ loading: false, entries: [] })), container);
+
+    expect(container.textContent).not.toContain("No log entries.");
+    expect(container.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it("disables refresh actions while the gateway cannot accept them", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderLogs(
+        createProps({
+          refreshDisabled: true,
+          status: { error: "logs unavailable", hasLoaded: false, stale: false },
+        }),
+      ),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLButtonElement>(".settings-section__actions .btn")?.disabled,
+    ).toBe(true);
+    expect(
+      container.querySelector<HTMLButtonElement>(".logs-refresh-status button")?.disabled,
+    ).toBe(true);
+  });
+
   it("renders the subtitle under the section header", () => {
     const container = document.createElement("div");
 

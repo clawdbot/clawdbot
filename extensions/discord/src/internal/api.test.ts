@@ -30,7 +30,7 @@ import {
   pinChannelMessage,
   searchGuildMessages,
   sendChannelTyping,
-} from "./api.js";
+} from "./discord.js";
 import { createFakeRestClient } from "./test-builders.test-support.js";
 
 describe("Discord REST API helpers", () => {

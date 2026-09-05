@@ -32,6 +32,19 @@ export type WorkerWorkspacePendingResult = {
   stagedResultRef: string | null;
 };
 
+function matchesWorkspaceResultGeneration(
+  placement: WorkerSessionPlacementRecord,
+  generation: number,
+): boolean {
+  // Reclaim reserves after drain; ordinary turns reserve before it. Both exact
+  // durable result generations remain recoverable without restoring live authority.
+  return (
+    (placement.state === "active" || placement.state === "draining") &&
+    (placement.generation === generation ||
+      (placement.state === "draining" && placement.generation === generation + 1))
+  );
+}
+
 export function isCurrentWorkerWorkspacePendingResultOwner(
   placement: WorkerSessionPlacementRecord | undefined,
   pending: WorkerWorkspacePendingResult,
@@ -55,10 +68,7 @@ export function isCurrentWorkerWorkspacePendingResultOwner(
       owner: placementTurnOwner(placement),
     });
   }
-  return (
-    placement.generation ===
-    (placement.state === "active" ? pending.placementGeneration : pending.placementGeneration + 1)
-  );
+  return matchesWorkspaceResultGeneration(placement, pending.placementGeneration);
 }
 
 function matchesWorkspaceResultClaim(
@@ -70,10 +80,6 @@ function matchesWorkspaceResultClaim(
     placement.state === "active" || placement.state === "draining"
       ? placementTurnOwner(placement)
       : undefined;
-  const recoveryGenerationMatches =
-    placement.state === "active"
-      ? placement.generation === claim.placementGeneration
-      : placement.state === "draining" && placement.generation === claim.placementGeneration + 1;
   return (
     row.session_id === claim.sessionId &&
     row.environment_id === placement.environmentId &&
@@ -83,7 +89,7 @@ function matchesWorkspaceResultClaim(
     row.run_id === claim.runId &&
     (isCurrentPlacementTurnClaim(placement, claim) ||
       // Restart revokes local authority; only the exact durable result may finish.
-      (recoveryGenerationMatches &&
+      (matchesWorkspaceResultGeneration(placement, claim.placementGeneration) &&
         placement.turnClaim === null &&
         recoveryOwner?.kind === "local" &&
         claim.owner.kind === "local" &&

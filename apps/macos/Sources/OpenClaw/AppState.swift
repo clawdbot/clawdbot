@@ -5,11 +5,6 @@ import OpenClawKit
 import ServiceManagement
 import SwiftUI
 
-private enum RemoteTLSFingerprintUpdate {
-    case preserve
-    case replace(String?)
-}
-
 @MainActor
 final class VoiceWakeGlobalSyncScheduler {
     private let delay: @Sendable () async throws -> Void
@@ -79,16 +74,10 @@ enum ExecApprovalsPolicyLoadState: Equatable {
 @Observable
 final class AppState {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
-    private static let execApprovalsReadRetryAttempts = 5
 
     let isPreview: Bool
-    @ObservationIgnored private let execApprovalsDefaultsAsyncResolver:
-        @MainActor () async -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
-    @ObservationIgnored private let execApprovalsReadRetryDelay: Duration
     @ObservationIgnored private let gatewayConfigSaver: ([String: Any]) -> Bool
     @ObservationIgnored let bundleLocationAllowsPersistentIntegration: Bool
-    @ObservationIgnored private var execApprovalsReadRetryTask: Task<Void, Never>?
-    @ObservationIgnored private var execApprovalsReadGeneration = 0
     @ObservationIgnored private var isHydratingLaunchAtLogin = false
     private var isInitializing = true
     private var isApplyingGatewayConfig = false
@@ -284,6 +273,15 @@ final class AppState {
     /// Gateway-provided UI accent color (hex). Optional; clients provide a default.
     var seamColorHex: String?
 
+    /// Caller's per-profile accent (users.prefs.get). Kept separate from
+    /// seamColorHex so settings-pane config refreshes cannot clobber it.
+    var profileAccentHex: String?
+
+    /// Accent the UI renders: the profile accent wins over the gateway seam color.
+    var effectiveAccentHex: String? {
+        self.profileAccentHex ?? self.seamColorHex
+    }
+
     var iconOverride: IconOverrideSelection {
         didSet { self.ifNotPreview { AppDefaults.standard.set(self.iconOverride.rawValue, forKey: iconOverrideKey) } }
     }
@@ -357,10 +355,6 @@ final class AppState {
     var activeComputerPresenceEnabled: Bool {
         didSet { self.scheduleActiveComputerPresenceUpdate() }
     }
-
-    var execApprovalMode: ExecApprovalQuickMode
-    var execApprovalPolicyLoadState: ExecApprovalsPolicyLoadState
-    var execApprovalMutationError: String?
 
     /// Tracks whether the Canvas panel is currently visible (not persisted).
     var canvasPanelVisible: Bool = false
@@ -447,10 +441,10 @@ final class AppState {
         guard !fields.isEmpty else { return nil }
         let fieldNames = fields.map(\.displayName)
         let fieldList = ListFormatter.localizedString(byJoining: fieldNames)
-        let message = String(localized: """
-        These settings changed outside the app while you were editing: \(fieldList). \
+        let message = String(format: String(localized: """
+        These settings changed outside the app while you were editing: %@. \
         Choose which version to keep.
-        """)
+        """), fieldList)
         return GatewayConfigConflict(
             fields: fields,
             fieldNames: fieldNames,
@@ -479,13 +473,6 @@ final class AppState {
 
     init(
         preview: Bool = false,
-        execApprovalsDefaultsAsyncResolver: @escaping @MainActor () async -> Result<
-            ExecApprovalsResolvedDefaults,
-            ExecApprovalsReadError,
-        > = {
-            await ExecApprovalsStore.resolveDefaultsAsyncResult()
-        },
-        execApprovalsReadRetryDelay: Duration = .milliseconds(250),
         gatewayConfigSaver: @escaping ([String: Any]) -> Bool = { OpenClawConfigFile.saveDict($0) })
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
@@ -493,8 +480,6 @@ final class AppState {
         self.bundleLocationAllowsPersistentIntegration =
             !AppProfile.current.isActive &&
             (isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration())
-        self.execApprovalsDefaultsAsyncResolver = execApprovalsDefaultsAsyncResolver
-        self.execApprovalsReadRetryDelay = execApprovalsReadRetryDelay
         self.gatewayConfigSaver = gatewayConfigSaver
         let onboardingSeen = AppDefaults.standard.bool(forKey: onboardingSeenKey)
         self.isPaused = AppLaunchRuntimePlan.current.resolvePaused(AppDefaults.standard.bool(forKey: pauseDefaultsKey))
@@ -547,6 +532,7 @@ final class AppState {
             AppDefaults.standard.set(true, forKey: talkShiftToStopEnabledKey)
         }
         self.seamColorHex = nil
+        self.profileAccentHex = nil
         if let storedHeartbeats = AppDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
             self.heartbeatsEnabled = storedHeartbeats
         } else {
@@ -608,8 +594,6 @@ final class AppState {
         self.quickChatEnabled = AppDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
         (self.cookieSyncEnabled, self.cookieSyncIntoProfile, self.cookieSyncDomains) = Self.loadCookieSyncDefaults()
         self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
-        self.execApprovalMode = .deny
-        self.execApprovalPolicyLoadState = .loading
         self.peekabooBridgeEnabled = AppLaunchRuntimePlan.current.resolvePeekabooBridgeEnabled(
             AppDefaults.standard.object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true)
         if !self.isPreview, !AppProfile.current.isActive {
@@ -638,9 +622,6 @@ final class AppState {
         }
         self.isInitializing = false
         if !self.isPreview {
-            scheduleExecApprovalModeReadRetry()
-        }
-        if !self.isPreview {
             self.startConfigWatcher()
         }
     }
@@ -654,7 +635,6 @@ final class AppState {
 
     @MainActor
     deinit {
-        self.execApprovalsReadRetryTask?.cancel()
         self.gatewayConfigSyncTask?.cancel()
         self.configWatcher?.stop()
     }
@@ -755,12 +735,10 @@ extension AppState {
             }
 
             if draft.dirtyFields.contains(.remoteUrl) {
-                let trimmedUrl = draft.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmedUrl.isEmpty {
-                    changed = Self.updateGatewayString(&remote, key: "url", value: nil) || changed
-                } else if let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) {
-                    changed = Self.updateGatewayString(&remote, key: "url", value: normalizedUrl) || changed
-                }
+                // Reconciliation needs the incomplete draft too, or it mistakes the
+                // unchanged disk URL for a saved edit. gatewayDraftCanPersist gates writes.
+                let url = GatewayRemoteConfig.normalizeGatewayUrlString(draft.remoteUrl) ?? draft.remoteUrl
+                changed = Self.updateGatewayString(&remote, key: "url", value: url) || changed
             }
 
         case .ssh:
@@ -1120,16 +1098,10 @@ extension AppState {
     }
 
     func setTalkEnabled(_ enabled: Bool) async {
-        guard voiceWakeSupported else {
-            self.talkEnabled = false
-            await GatewayConnection.shared.talkMode(enabled: false, phase: "disabled")
-            return
-        }
-
-        self.talkEnabled = enabled
+        self.talkEnabled = enabled && voiceWakeSupported
         guard !self.isPreview else { return }
 
-        if !enabled {
+        if !self.talkEnabled {
             await GatewayConnection.shared.talkMode(enabled: false, phase: "disabled")
             return
         }
@@ -1174,7 +1146,7 @@ extension AppState {
     }
 }
 
-// MARK: - Exec approval settings
+// MARK: - App state helpers
 
 extension AppState {
     private func ifNotPreview(_ action: () -> Void) {
@@ -1190,119 +1162,19 @@ extension AppState {
     {
         !isInitializing && !isHydrating && (!isEnabling || bundleLocationAllowsPersistentIntegration)
     }
-
-    var execApprovalPolicyAvailable: Bool {
-        self.execApprovalPolicyLoadState.isAvailable
-    }
-
-    var execApprovalLoadError: String? {
-        self.execApprovalPolicyLoadState.errorMessage
-    }
-
-    func updateExecApprovalMode(_ mode: ExecApprovalQuickMode) {
-        guard !self.isPreview else {
-            self.syncExecApprovalMode(mode)
-            return
-        }
-        let result = ExecApprovalsStore.updateDefaults { defaults in
-            defaults.security = mode.security
-            defaults.ask = mode.ask
-        }
-        self.applyExecApprovalModeMutation(mode, result: result)
-    }
-
-    func applyExecApprovalModeMutation(
-        _ mode: ExecApprovalQuickMode,
-        result: Result<Void, ExecApprovalsMutationError>)
-    {
-        switch result {
-        case .success:
-            self.syncExecApprovalMode(mode)
-        case let .failure(error):
-            self.execApprovalMutationError = error.message
-        }
-    }
-
-    func syncExecApprovalMode(_ mode: ExecApprovalQuickMode) {
-        self.execApprovalsReadGeneration += 1
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalsReadRetryTask = nil
-        self.execApprovalMode = mode
-        self.execApprovalPolicyLoadState = .available
-        self.execApprovalMutationError = nil
-    }
-
-    func retryExecApprovalModeRead() {
-        self.scheduleExecApprovalModeReadRetry()
-    }
-
-    func waitForExecApprovalModeRead() async {
-        await self.execApprovalsReadRetryTask?.value
-    }
-
-    func recoverExecApprovalModeRead(maxAttempts: Int) async {
-        self.execApprovalsReadGeneration += 1
-        let generation = self.execApprovalsReadGeneration
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalsReadRetryTask = nil
-        await self.performExecApprovalModeReadAttempts(
-            maxAttempts: maxAttempts,
-            generation: generation)
-    }
-
-    private func performExecApprovalModeReadAttempts(maxAttempts: Int, generation: Int) async {
-        guard self.execApprovalsReadGeneration == generation else { return }
-        guard maxAttempts > 0 else {
-            self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
-            return
-        }
-        self.execApprovalPolicyLoadState = .loading
-        for attempt in 0..<maxAttempts {
-            if attempt > 0 {
-                do {
-                    try await Task.sleep(for: self.execApprovalsReadRetryDelay)
-                } catch {
-                    return
-                }
-            }
-            guard self.execApprovalsReadGeneration == generation else { return }
-            let result = await execApprovalsDefaultsAsyncResolver()
-            guard self.execApprovalsReadGeneration == generation else { return }
-            switch result {
-            case let .success(defaults):
-                self.syncExecApprovalMode(
-                    ExecApprovalQuickMode.from(security: defaults.security, ask: defaults.ask))
-                return
-            case let .failure(.migrationRequired(error)):
-                self.execApprovalPolicyLoadState = .unavailable(
-                    ExecApprovalsReadError.migrationRequired(error).message)
-                return
-            case .failure(.unavailable):
-                continue
-            }
-        }
-        guard self.execApprovalsReadGeneration == generation else { return }
-        self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
-    }
-
-    private func scheduleExecApprovalModeReadRetry() {
-        self.execApprovalsReadGeneration += 1
-        let generation = self.execApprovalsReadGeneration
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalPolicyLoadState = .loading
-        self.execApprovalsReadRetryTask = Task { [weak self] in
-            await self?.performExecApprovalModeReadAttempts(
-                maxAttempts: Self.execApprovalsReadRetryAttempts,
-                generation: generation)
-        }
-    }
 }
 
 extension AppState {
+    struct PrimaryGatewayConfiguration: Equatable, Sendable {
+        let url: URL
+        let token: String?
+        let tlsFingerprint: String?
+    }
+
     private static func syncedGatewayRoot(
         currentRoot: [String: Any],
         draft: GatewayConfigSyncDraft,
-        remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate = .preserve)
+        primaryGateway: PrimaryGatewayConfiguration? = nil)
         -> (root: [String: Any], changed: Bool)
     {
         var root = currentRoot
@@ -1348,11 +1220,14 @@ extension AppState {
             remote = updated.remote
             remoteChanged = updated.changed
         }
-        if case let .replace(fingerprint) = remoteTLSFingerprintUpdate {
+        if let primaryGateway {
+            // An explicit Gateway replacement owns the complete auth bundle;
+            // an old password must never reach the new Gateway's native dashboard.
+            remoteChanged = Self.updateGatewayString(&remote, key: "password", value: nil) || remoteChanged
             remoteChanged = Self.updateGatewayString(
                 &remote,
                 key: "tlsFingerprint",
-                value: fingerprint) || remoteChanged
+                value: primaryGateway.tlsFingerprint) || remoteChanged
         }
         if remoteChanged {
             if remote.isEmpty {
@@ -1431,25 +1306,33 @@ extension AppState {
 
     @discardableResult
     func syncGatewayConfigNow() -> Bool {
-        self.syncGatewayConfigNow(remoteTLSFingerprintUpdate: .preserve)
+        self.syncGatewayConfigNow(primaryGateway: nil)
     }
 
     @discardableResult
-    func syncGatewayConfigNow(remoteTLSFingerprint: String?) -> Bool {
-        self.syncGatewayConfigNow(remoteTLSFingerprintUpdate: .replace(remoteTLSFingerprint))
+    func replacePrimaryGateway(_ configuration: PrimaryGatewayConfiguration) -> Bool {
+        self.syncGatewayConfigNow(primaryGateway: configuration)
     }
 
-    private func syncGatewayConfigNow(remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate) -> Bool {
+    private func syncGatewayConfigNow(primaryGateway: PrimaryGatewayConfiguration?) -> Bool {
         guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return true }
+        let previousSyncState = self.gatewayConfigSyncState
         self.setGatewayConfigSyncState(.pending)
 
         let currentRoot = OpenClawConfigFile.loadDict()
         self.applyConfigOverrides(currentRoot)
         guard self.conflictedGatewayConfigFields.isEmpty else { return false }
 
-        let draft = self.gatewayConfigDraft()
+        var draft = self.gatewayConfigDraft()
+        if let primaryGateway {
+            draft.connectionMode = .remote
+            draft.remoteTransport = .direct
+            draft.remoteUrl = primaryGateway.url.absoluteString
+            draft.remoteToken = primaryGateway.token ?? ""
+            draft.dirtyFields.formUnion([.mode, .remoteTransport, .remoteUrl, .remoteToken])
+        }
         guard Self.gatewayDraftCanPersist(draft) else {
-            self.setGatewayConfigSyncState(.failed)
+            self.setGatewayConfigSyncState(primaryGateway == nil ? .failed : previousSyncState)
             return false
         }
 
@@ -1457,30 +1340,33 @@ extension AppState {
         let synced = Self.syncedGatewayRoot(
             currentRoot: currentRoot,
             draft: draft,
-            remoteTLSFingerprintUpdate: remoteTLSFingerprintUpdate)
-        guard synced.changed else {
-            self.acknowledgeGatewayConfigPersistence(draft.dirtyFields, root: currentRoot)
-            self.setGatewayConfigSyncState(.current)
-            return true
-        }
-        guard self.gatewayConfigSaver(synced.root) else {
-            self.setGatewayConfigSyncState(.failed)
+            primaryGateway: primaryGateway)
+        guard !synced.changed || self.gatewayConfigSaver(synced.root) else {
+            self.setGatewayConfigSyncState(primaryGateway == nil ? .failed : previousSyncState)
             Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
             return false
         }
-        self.acknowledgeGatewayConfigPersistence(draft.dirtyFields, root: synced.root)
+        self.acknowledgeGatewayConfigPersistence(draft, root: synced.root)
+        if primaryGateway != nil {
+            // Publish the selection only after its endpoint and credentials commit.
+            if synced.changed, !self.isPreview {
+                WebChatManager.shared.resetPrimaryConnections()
+            }
+            self.applyGatewayConfigView(synced.root, forcing: Self.gatewayConfigFieldsPersisted(by: draft))
+        }
         self.lastConfigFingerprint = Self.configFingerprint(synced.root)
         self.setGatewayConfigSyncState(.current)
-        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        if synced.changed {
+            NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        }
         return true
     }
 
     private func acknowledgeGatewayConfigPersistence(
-        _ fields: Set<GatewayConfigField>,
+        _ draft: GatewayConfigSyncDraft,
         root: [String: Any])
     {
-        let persistedFields = Self.gatewayConfigFieldsPersisted(by: self.gatewayConfigDraft())
-            .intersection(fields)
+        let persistedFields = Self.gatewayConfigFieldsPersisted(by: draft)
         self.dirtyGatewayConfigFields.subtract(persistedFields)
         self.conflictedGatewayConfigFields.subtract(persistedFields)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(root)
@@ -1680,7 +1566,7 @@ extension AppState {
 
 @MainActor
 enum AppStateStore {
-    static let shared = AppState()
+    static let shared = AppState(preview: ProcessInfo.processInfo.isPreview)
 
     static func updateLaunchAtLogin(enabled: Bool) {
         Task.detached(priority: .utility) {

@@ -10,9 +10,8 @@ import {
 } from "../../infra/clawhub-artifacts.js";
 import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
 import {
+  checkClawHubPackageTrust,
   type ClawHubTrustErrorCode,
-  ensureClawHubPackageTrustAcknowledged,
-  type ClawHubRiskAcknowledgementRequest,
 } from "../../infra/clawhub-install-trust.js";
 import {
   CLAWHUB_SKILLS_SH_TRUST_LABEL,
@@ -68,8 +67,7 @@ export type ClawHubInstallParams = {
   baseUrl?: string;
   force?: boolean;
   forceInstall?: boolean;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+  confirmInstall?: () => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
@@ -430,7 +428,7 @@ function assertInstallResolutionAllowed(
   return { ...resolution, github: { ...resolution.github, commit } };
 }
 
-export async function ensureClawHubSkillTrustAcknowledged(
+export async function checkClawHubSkillTrust(
   params: ClawHubInstallParams & { version: string; skipClawHubTrustCheck?: boolean },
 ): Promise<
   | { ok: true; warning?: string }
@@ -439,7 +437,7 @@ export async function ensureClawHubSkillTrustAcknowledged(
   if (params.skipClawHubTrustCheck) {
     return { ok: true };
   }
-  const result = await ensureClawHubPackageTrustAcknowledged({
+  const result = await checkClawHubPackageTrust({
     subject: {
       kind: "skill",
       packageName: params.slug,
@@ -448,10 +446,9 @@ export async function ensureClawHubSkillTrustAcknowledged(
     },
     version: params.version,
     baseUrl: params.baseUrl,
-    acknowledgeClawHubRisk: params.acknowledgeClawHubRisk,
-    onClawHubRisk: params.onClawHubRisk,
     logger: params.logger,
     mode: params.force ? "update" : "install",
+    confirmInstall: params.confirmInstall,
   });
   return result.ok
     ? { ok: true, ...(result.warning ? { warning: result.warning } : {}) }
@@ -488,7 +485,7 @@ export async function performClawHubSkillInstall(
       detail = resolved.detail;
       version = resolved.version;
       official = isDefaultOfficialClawHubSkillSource({ baseUrl: params.baseUrl, detail });
-      const trust = await ensureClawHubSkillTrustAcknowledged({
+      const trust = await checkClawHubSkillTrust({
         ...params,
         version,
         skipClawHubTrustCheck: official,
@@ -553,7 +550,7 @@ export async function performClawHubSkillInstall(
         });
       } else {
         version = resolution.archive.version;
-        const trust = await ensureClawHubSkillTrustAcknowledged({
+        const trust = await checkClawHubSkillTrust({
           ...params,
           version,
           skipClawHubTrustCheck: official,

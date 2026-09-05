@@ -13,6 +13,7 @@ import {
   visibleSettingsNavigationGroups,
 } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { t } from "../i18n/index.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import type { IconName } from "./icons.ts";
@@ -32,6 +33,7 @@ type CommandPaletteCatalogItem = {
   icon: IconName;
   category: CommandPaletteCatalogCategory;
   routeId: RouteId;
+  agentId?: string;
   description?: string;
   searchText?: string;
 };
@@ -215,6 +217,7 @@ export function toCommandPaletteItems(
     icon: item.icon,
     category: item.category,
     action: `nav:${item.routeId}`,
+    agentId: item.agentId,
     description: item.description,
     searchText: item.searchText,
   }));
@@ -234,8 +237,9 @@ const APP_CARDS = [
 
 export function getStaticCommandPaletteCatalogItems(
   canAdmin: boolean,
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): CommandPaletteCatalogItem[] {
-  const settings = visibleSettingsNavigationGroups(canAdmin)
+  const settings = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings)
     .flatMap((group) => group.routes)
     .concat(SETTINGS_SEARCHABLE_SUBPAGE_ROUTES)
     .map((routeId) => ({
@@ -298,6 +302,7 @@ export async function loadCommandPaletteCatalogItems(params: {
       icon: "bot" as const,
       category: "agents" as const,
       routeId: "agents" as const,
+      agentId: agent.id,
       description: agent.id,
       searchText: [agent.id, agent.workspace, agent.model?.primary, agent.identity?.theme]
         .filter(Boolean)
@@ -333,7 +338,8 @@ export async function loadCommandPaletteCatalogItems(params: {
         .join(" "),
     })),
     ...(models?.models ?? []).map((model) => ({
-      id: `model-${model.provider}-${model.id}`,
+      // Both IDs can contain separators; selection needs a lossless pair.
+      id: `model-${JSON.stringify([model.provider, model.id])}`,
       label: model.name || model.id,
       icon: "brain" as const,
       category: "models" as const,

@@ -215,10 +215,8 @@ export async function startLaunchAgent({
     reportMutation("enable");
   }
 
-  const start = await execLaunchctl(["kickstart", serviceTarget]);
-  if (start.code === 0) {
-    reportMutation("kickstart");
-  } else if (isLaunchctlNotLoaded(start)) {
+  let start = await execLaunchctl(["kickstart", serviceTarget]);
+  if (isLaunchctlNotLoaded(start)) {
     await bootstrapLaunchAgentOrThrow({
       domain,
       serviceTarget,
@@ -227,14 +225,19 @@ export async function startLaunchAgent({
       onMutation: reportMutation,
       skipEnable: enabled,
     });
-  } else {
+    // Loading does not start demand-only jobs. Without -k, an auto-started job is left running.
+    start = await execLaunchctl(["kickstart", serviceTarget]);
+  }
+  if (start.code !== 0) {
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
+  reportMutation("kickstart");
 
   writeLaunchAgentActionLine(stdout, "Started LaunchAgent", serviceTarget);
 }
 
 export async function restartLaunchAgent({
+  preserveDefinition,
   stdout,
   env,
   warn,
@@ -248,17 +251,53 @@ export async function restartLaunchAgent({
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await assertNoSystemLaunchDaemonOwnership(label);
 
-  // Restart requests issued from inside the managed gateway process tree need a
-  // detached handoff. A direct `kickstart -k` would terminate the caller before
-  // it can finish the restart command.
-  if (isCurrentProcessLaunchdServiceLabel(label)) {
-    const plistReloadNeeded = await rewriteLaunchAgentPlistForRestart({
+  const detached = isCurrentProcessLaunchdServiceLabel(label);
+  if (!detached) {
+    const { port: cleanupPort, probeHosts } = await resolveLaunchAgentGatewayContext(serviceEnv);
+    if (cleanupPort !== null) {
+      cleanStaleGatewayProcessesSync(cleanupPort, {
+        // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
+        // during enumeration must be protected before candidate filtering/signals.
+        resolveProtectedPid: () => readLaunchAgentPidForCleanupSync(serviceTarget),
+      });
+      const diagnostics = await inspectPortUsage(cleanupPort, {
+        probeHosts,
+      }).catch(() => null);
+      if (diagnostics?.status === "busy") {
+        const runtime = await readLaunchAgentRuntime(serviceEnv);
+        const managedPid = runtime.pid;
+        // Only the current supervised PID may keep the port busy before a
+        // disruptive restart. Re-read after cleanup to close over a concurrent
+        // launchd respawn rather than trusting the protected pre-cleanup PID.
+        const ownedByLaunchAgent =
+          managedPid !== undefined &&
+          diagnostics.listeners.length > 0 &&
+          diagnostics.listeners.every((listener) => listener.pid === managedPid);
+        if (!ownedByLaunchAgent) {
+          throw new Error(
+            [
+              `gateway port ${cleanupPort} is busy but is not verifiably owned by LaunchAgent ${label}`,
+              ...formatPortDiagnostics(diagnostics),
+            ].join("\n"),
+          );
+        }
+      }
+    }
+  }
+  // Preservation permits native activation only, including detached handoffs.
+  const plistReloadNeeded =
+    !preserveDefinition &&
+    (await rewriteLaunchAgentPlistForRestart({
       env: serviceEnv,
       label,
       plistPath,
       stdout,
       warn,
-    });
+    }));
+  // Restart requests issued from inside the managed gateway process tree need a
+  // detached handoff. A direct `kickstart -k` would terminate the caller before
+  // it can finish the restart command.
+  if (detached) {
     const handoff = scheduleDetachedLaunchdRestartHandoff({
       env: serviceEnv,
       mode: plistReloadNeeded ? "reload" : "kickstart",
@@ -271,44 +310,6 @@ export async function restartLaunchAgent({
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
   }
-
-  const { port: cleanupPort, probeHosts } = await resolveLaunchAgentGatewayContext(serviceEnv);
-  if (cleanupPort !== null) {
-    cleanStaleGatewayProcessesSync(cleanupPort, {
-      // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
-      // during enumeration must be protected before candidate filtering/signals.
-      resolveProtectedPid: () => readLaunchAgentPidForCleanupSync(serviceTarget),
-    });
-    const diagnostics = await inspectPortUsage(cleanupPort, {
-      probeHosts,
-    }).catch(() => null);
-    if (diagnostics?.status === "busy") {
-      const runtime = await readLaunchAgentRuntime(serviceEnv);
-      const managedPid = runtime.pid;
-      // Only the current supervised PID may keep the port busy before a
-      // disruptive restart. Re-read after cleanup to close over a concurrent
-      // launchd respawn rather than trusting the protected pre-cleanup PID.
-      const ownedByLaunchAgent =
-        managedPid !== undefined &&
-        diagnostics.listeners.length > 0 &&
-        diagnostics.listeners.every((listener) => listener.pid === managedPid);
-      if (!ownedByLaunchAgent) {
-        throw new Error(
-          [
-            `gateway port ${cleanupPort} is busy but is not verifiably owned by LaunchAgent ${label}`,
-            ...formatPortDiagnostics(diagnostics),
-          ].join("\n"),
-        );
-      }
-    }
-  }
-  const plistReloadNeeded = await rewriteLaunchAgentPlistForRestart({
-    env: serviceEnv,
-    label,
-    plistPath,
-    stdout,
-    warn,
-  });
 
   // `openclaw gateway restart` is an explicit operator request to bring the
   // LaunchAgent back, so clear any persisted disabled state before restart.
@@ -391,7 +392,7 @@ export async function restartLaunchAgent({
     );
   }
 
-  // If the service was previously booted out, re-register the rewritten plist and retry.
+  // A preserved plist may be demand-only; bootstrap alone only registers it.
   await bootstrapLaunchAgentOrThrow({
     domain,
     serviceTarget,
@@ -399,6 +400,13 @@ export async function restartLaunchAgent({
     actionHint: "openclaw gateway restart",
     onMutation: reportMutation,
   });
+  if (preserveDefinition) {
+    const kick = await execLaunchctl(["kickstart", serviceTarget]);
+    if (kick.code !== 0) {
+      throw new Error(`launchctl kickstart failed: ${kick.stderr || kick.stdout}`.trim());
+    }
+    reportMutation("kickstart");
+  }
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
   return { outcome: "completed" };
 }

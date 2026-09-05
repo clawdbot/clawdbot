@@ -1,12 +1,12 @@
-import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Discord plugin module implements runtime.shared behavior.
 import {
   parseAvailableTags,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readStringParam,
-} from "../runtime-api.js";
-import type { OpenClawConfig } from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   DiscordChannelCreate,
   DiscordChannelEdit,

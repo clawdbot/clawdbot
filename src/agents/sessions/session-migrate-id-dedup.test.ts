@@ -41,16 +41,14 @@ function writeV1File(dir: string): string {
 }
 
 describe("v1 session migration id assignment", () => {
-  it("keeps migrated entry ids unique even when the id generator first collides", () => {
+  it("assigns full entry ids while preserving parent linkage", () => {
     const dir = mkdtempSync(join(tmpdir(), "oc-v1mig-"));
     const file = writeV1File(dir);
 
+    const firstId = "deadbeef-0000-4000-8000-000000000000";
+    const secondId = "deadbeef-0000-4000-8000-000000000001";
     uuidQueue.length = 0;
-    uuidQueue.push(
-      "deadbeef-0000-4000-8000-000000000000",
-      "deadbeef-0000-4000-8000-000000000000",
-      "cafef00d-0000-4000-8000-000000000000",
-    );
+    uuidQueue.push(firstId, secondId);
 
     const sm = openFileBackedSessionManagerForTest(file, dir);
 
@@ -64,7 +62,7 @@ describe("v1 session migration id assignment", () => {
 
     expect(messages).toHaveLength(2);
     const ids = messages.map((m) => m.id);
-    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual([firstId, secondId]);
     expect(expectDefined(messages[1], "messages[1] test invariant").parentId).toBe(
       expectDefined(messages[0], "messages[0] test invariant").id,
     );

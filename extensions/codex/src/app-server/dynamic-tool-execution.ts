@@ -5,6 +5,7 @@
 import {
   embeddedAgentLog,
   formatToolExecutionErrorMessage,
+  normalizeQuestionTimeoutSeconds,
   resolveToolExecutionErrorKind,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -141,8 +142,8 @@ function formatDynamicToolTimeoutDetails(params: {
 }
 
 /**
- * Runs a dynamic tool call with run-abort and per-call timeout handling,
- * returning a Codex protocol response instead of throwing.
+ * Runs a dynamic tool call with run-abort and the budget prepared by
+ * resolveDynamicToolCallTimeoutMs, preserving tool-specific completion grace.
  */
 export async function handleDynamicToolCallWithTimeout(params: {
   call: CodexDynamicToolCallParams;
@@ -255,7 +256,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
     resolveAbort = resolve;
   });
   const timeoutPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
-    const timeoutMs = clampDynamicToolTimeoutMs(params.timeoutMs);
+    const { timeoutMs } = params;
     timeout = setTimeout(() => {
       timedOut = true;
       const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
@@ -504,6 +505,26 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
 }): number {
+  const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
+  if (
+    params.call.tool === "openclaw" ||
+    params.call.tool === "ask_user" ||
+    (params.call.tool === "secrets" && args?.action === "request")
+  ) {
+    try {
+      // Human entry owns a validated wait longer than ordinary tool execution.
+      // OpenClaw delegation uses that default for its ten-minute approval plus
+      // staging/application; it has no model-authored timeout override.
+      const timeoutSeconds = params.call.tool === "openclaw" ? undefined : args?.timeoutSeconds;
+      return (
+        normalizeQuestionTimeoutSeconds(timeoutSeconds) * 1_000 +
+        CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
+      );
+    } catch {
+      // Invalid input still reaches the tool's validation under the ordinary watchdog.
+      return CODEX_DYNAMIC_TOOL_TIMEOUT_MS;
+    }
+  }
   if (params.call.tool === "computer") {
     return clampDynamicToolTimeoutMs(readComputerToolTimeoutMs(params.call.arguments));
   }
@@ -534,6 +555,18 @@ export function resolveDynamicToolCallTimeoutMs(params: {
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
       CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  );
+}
+
+/** Transport guard stays outside the handler's bounded tool wait and completion grace. */
+export function resolveDynamicToolServerRequestTimeoutMs(
+  call?: CodexDynamicToolCallParams,
+): number {
+  return (
+    Math.max(
+      CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+      call ? resolveDynamicToolCallTimeoutMs({ call, config: undefined }) : 0,
+    ) + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
   );
 }
 

@@ -15,13 +15,25 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
-    <script>
+    <script data-cfasync="false">
       // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
       globalThis.__zod_globalConfig ??= {};
       globalThis.__zod_globalConfig.jitless = true;
 
       (function () {
-        var THEMES = { claw: 1, knot: 1, dash: 1 };
+        var THEMES = {
+          claw: 1,
+          knot: 1,
+          dash: 1,
+          absolutely: 1,
+          tide: 1,
+          beacon: 1,
+          phosphor: 1,
+          crt: 1,
+          manuscript: 1,
+          rose: 1,
+          miami: 1,
+        };
         var MODES = { system: 1, light: 1, dark: 1 };
         var LEGACY = {
           dark: "claw:dark",
@@ -40,8 +52,7 @@
               if (raw) break;
             }
           }
-          if (!raw) return;
-          var s = JSON.parse(raw);
+          var s = raw ? JSON.parse(raw) : null;
           var t = s && s.theme;
           var m = s && s.themeMode;
           if (typeof t !== "string") t = "";
@@ -52,18 +63,45 @@
           if (mode === "system") {
             mode = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
           }
-          var resolved =
-            theme === "knot"
-              ? mode === "light"
-                ? "openknot-light"
-                : "openknot"
-              : theme === "dash"
-                ? mode === "light"
-                  ? "dash-light"
-                  : "dash"
-                : mode === "light"
-                  ? "light"
-                  : "dark";
+          // family -> [dark, light] resolved names. Kept in lockstep with
+          // resolveTheme() in app/theme.ts and the files in public/themes.
+          var FAMILIES = {
+            knot: ["openknot", "openknot-light"],
+            dash: ["dash", "dash-light"],
+            absolutely: ["absolutely", "absolutely-light"],
+            tide: ["tide", "tide-light"],
+            beacon: ["beacon", "beacon-light"],
+            phosphor: ["phosphor", "phosphor-light"],
+            crt: ["crt", "crt-light"],
+            manuscript: ["manuscript", "manuscript-light"],
+            rose: ["rose", "rose-light"],
+            miami: ["miami", "miami-light"],
+          };
+          var pair = FAMILIES[theme];
+          var resolved = pair
+            ? pair[mode === "light" ? 1 : 0]
+            : mode === "light"
+              ? "light"
+              : "dark";
+          if (pair) {
+            // Script-created links need explicit render blocking before first paint.
+            // The gateway stamps the mount prefix and asset version before this runs.
+            var base =
+              document.documentElement.getAttribute("data-openclaw-control-ui-base-path") || "";
+            var buildId = document.documentElement.getAttribute(
+              "data-openclaw-control-ui-build-id",
+            );
+            var version = buildId ? "?v=" + encodeURIComponent(buildId) : "";
+            var palette = document.createElement("link");
+            palette.rel = "stylesheet";
+            palette.setAttribute("blocking", "render");
+            palette.id = "openclaw-theme-palette-" + theme;
+            palette.onerror = function () {
+              palette.remove();
+            };
+            palette.href = base + "/themes/" + theme + ".css" + version;
+            document.head.appendChild(palette);
+          }
           document.documentElement.setAttribute("data-theme", resolved);
           var resolvedMode = resolved.includes("light") ? "light" : "dark";
           document.documentElement.setAttribute("data-theme-mode", resolvedMode);
@@ -104,6 +142,70 @@
 
       html[data-theme="dash-light"] {
         background: #f7f2ec;
+      }
+
+      html[data-theme="absolutely"] {
+        background: #1c1c1a;
+      }
+
+      html[data-theme="absolutely-light"] {
+        background: #faf9f5;
+      }
+
+      html[data-theme="tide"] {
+        background: #10151b;
+      }
+
+      html[data-theme="tide-light"] {
+        background: #f7f9fb;
+      }
+
+      html[data-theme="beacon"] {
+        background: #000000;
+      }
+
+      html[data-theme="beacon-light"] {
+        background: #ffffff;
+      }
+
+      html[data-theme="phosphor"] {
+        background: #0a0f0a;
+      }
+
+      html[data-theme="phosphor-light"] {
+        background: #f4f7f4;
+      }
+
+      html[data-theme="crt"] {
+        background: #090a09;
+      }
+
+      html[data-theme="crt-light"] {
+        background: #f5f5f4;
+      }
+
+      html[data-theme="manuscript"] {
+        background: #211e18;
+      }
+
+      html[data-theme="manuscript-light"] {
+        background: #f6f1e4;
+      }
+
+      html[data-theme="rose"] {
+        background: #191724;
+      }
+
+      html[data-theme="rose-light"] {
+        background: #faf4ed;
+      }
+
+      html[data-theme="miami"] {
+        background: #140f1e;
+      }
+
+      html[data-theme="miami-light"] {
+        background: #f7f3f6;
       }
 
       body {
@@ -295,7 +397,7 @@
         </div>
       </div>
     </section>
-    <script>
+    <script data-cfasync="false">
       (function () {
         var app = document.querySelector("openclaw-app");
         var fallback = document.getElementById("openclaw-mount-fallback");
@@ -460,6 +562,6 @@
         }
       })();
     </script>
-    <script type="module" src="/src/main.ts"></script>
+    <script data-cfasync="false" type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -4,6 +4,8 @@ import type { Result } from "@openclaw/normalization-core/result";
 import type { Command } from "commander";
 import type { MessageReceipt } from "../channels/message/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ApprovalScope } from "../infra/approval-scope.js";
+import type { InternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
 import type {
   DiagnosticEventPrivateData,
   DiagnosticEventInput,
@@ -14,6 +16,7 @@ import type { DiagnosticTracePropagationBridge as DiagnosticTracePropagationBrid
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { PluginLogger } from "./logger-types.js";
+import type { OpenClawPluginNodeWorkspace } from "./types.node-host.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 type DiagnosticTracePropagationBridge = DiagnosticTracePropagationBridgeContract<
@@ -221,6 +224,7 @@ type OpenClawPluginNodeInvokePolicyApprovalRuntime = {
   request: (input: {
     title: string;
     description: string;
+    scope?: ApprovalScope;
     severity?: "info" | "warning" | "critical";
     toolName?: string;
     toolCallId?: string;
@@ -259,8 +263,16 @@ export type OpenClawPluginNodeInvokePolicyContext = {
     family: string;
   };
   approvals?: OpenClawPluginNodeInvokePolicyApprovalRuntime;
+  /** Full covers only the selected harness's declared node commands; undefined requires a human decision. */
+  invokeNodeWithSessionFull?: (input: {
+    workspace: OpenClawPluginNodeWorkspace;
+    /** Called only after the host authorizes this exact admitted Full launch. */
+    createParams: () => unknown;
+  }) => Promise<OpenClawPluginNodeInvokeTransportResult | undefined>;
   invokeNode: (input?: {
     params?: unknown;
+    /** Bind an approved launch to its admitted managed workspace, when present. */
+    workspace?: OpenClawPluginNodeWorkspace;
     timeoutMs?: number;
     idempotencyKey?: string;
   }) => Promise<OpenClawPluginNodeInvokeTransportResult>;
@@ -292,6 +304,14 @@ export type OpenClawPluginNodeInvokePolicy = {
    * explicitly allowed by config.
    */
   dangerous?: boolean;
+  /**
+   * Explicitly permits one approval to cover later launches on the same managed placement.
+   * The scope is a stable semantic capability key, never user or action arguments.
+   */
+  standingApproval?: {
+    kind: "placement";
+    scope: string;
+  };
   /**
    * iOS foreground-restricted commands should be queued for foreground delivery
    * when an iOS node reports BACKGROUND_UNAVAILABLE.
@@ -352,6 +372,8 @@ export type OpenClawPluginServiceContext = {
   stateDir: string;
   logger: PluginLogger;
   serviceHealth?: OpenClawPluginServiceHealth;
+  /** Gateway-owned scheduler access, revoked when this service stops. */
+  getCron?: () => import("./hook-types.js").PluginHookGatewayCronService | undefined;
   gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -365,6 +387,7 @@ export type OpenClawPluginServiceContext = {
         metadata: DiagnosticEventMetadata,
         privateData: DiagnosticEventPrivateData,
       ) => void,
+      filter?: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]>,
     ) => () => void;
     registerTracePropagationBridge?: (bridge: DiagnosticTracePropagationBridge) => () => void;
   };
@@ -373,6 +396,8 @@ export type OpenClawPluginServiceContext = {
 /** Background service registered by a plugin during `register(api)`. */
 export type OpenClawPluginService = {
   id: string;
+  /** Restart this service with committed config when one of these paths changes. */
+  reload?: { configPrefixes: readonly string[] };
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };

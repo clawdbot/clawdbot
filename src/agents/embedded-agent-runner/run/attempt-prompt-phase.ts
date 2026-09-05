@@ -19,15 +19,15 @@ import {
 } from "./attempt-prompt-preflight.js";
 import {
   handleEmbeddedAttemptPromptError,
-  prepareEmbeddedAttemptPromptExecution,
   submitEmbeddedAttemptPrompt,
 } from "./attempt-prompt-submit.js";
 import {
-  applyPromptBuildToolsAllow,
+  type createPromptBuildToolPolicy,
   observeEmbeddedAttemptPrompt,
 } from "./attempt-prompt-support.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 type PromptAssemblyInput = Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0];
 type PromptAssemblyResult = Awaited<ReturnType<typeof prepareEmbeddedAttemptPromptAssembly>>;
@@ -75,7 +75,6 @@ type PromptObservationPhaseInput = Omit<
   | "systemPromptForHook"
   | "transcriptLeafId"
 >;
-type PromptToolSurface = ReturnType<typeof applyPromptBuildToolsAllow>;
 type PromptPreflightPhaseInput = Omit<
   PromptPreflightInput,
   | "attempt"
@@ -93,6 +92,7 @@ type PromptPreflightPhaseInput = Omit<
 };
 type PromptSubmissionPhaseInput = Pick<
   PromptSubmissionInput,
+  | "appendOnlyRuntimeContext"
   | "promptActiveSession"
   | "sessionPromptState"
   | "toolResultPromptProjectionState"
@@ -115,16 +115,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     signal: AbortSignal;
   };
   observation: PromptObservationPhaseInput;
-  toolPolicy: {
-    baseline: Parameters<typeof applyPromptBuildToolsAllow>[0]["baseline"];
-    effectiveTools: Array<{ name: string }>;
-    uncompactedEffectiveTools: Array<{ name: string }>;
-    tools: Array<{ name: string }>;
-    toolSearchCatalogRef?: Parameters<typeof applyPromptBuildToolsAllow>[0]["catalogRef"];
-    codeModeControlsEnabled: boolean;
-    coreReadAuthorized: boolean;
-    forceToolNames?: readonly string[];
-  };
+  toolPolicy: ReturnType<typeof createPromptBuildToolPolicy>;
   preflight: PromptPreflightPhaseInput;
   submission: PromptSubmissionPhaseInput;
   lifecycle: {
@@ -138,7 +129,6 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     setPromptCacheChangesForTurn: (
       changes: PromptAssemblyResult["promptCacheChangesForTurn"],
     ) => void;
-    setCodeModeReconciliationReadAuthorized: (value: boolean) => void;
     setFinalPromptText: (prompt: string) => void;
     markBeforeAgentRunBlocked: (outcome: BeforeAgentRunOutcome) => void;
     markYieldAborted: () => void;
@@ -180,6 +170,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       request,
       sessionAgentId: input.context.sessionAgentId,
       sessionManager,
+      toolResultPromptProjectionState: input.context.toolResultPromptProjectionState,
       prePromptMessageCount: input.lifecycle.getPrePromptMessageCount(),
       replaceSessionMessages: (messages) => {
         activeSession.agent.state.messages = messages;
@@ -194,6 +185,19 @@ export async function runEmbeddedAttemptPromptPhase(input: {
   };
 
   const promptStartedAt = Date.now();
+
+  const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
+    attempt,
+    activeSession,
+    sessionManager,
+    ...input.assembly,
+    applyPromptBuildToolsAllow: (toolsAllow) => {
+      return input.toolPolicy.apply(toolsAllow).activeToolNames;
+    },
+    setLeasedSteering: (lease) => {
+      leasedSteering = lease;
+    },
+  });
   if (input.emptyExplicitToolAllowlistError) {
     patchState({
       promptError: input.emptyExplicitToolAllowlistError,
@@ -202,41 +206,16 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     skipPromptSubmission = true;
     log.warn(`[tools] ${input.emptyExplicitToolAllowlistError.message}`);
   }
-
-  let promptToolSurface: PromptToolSurface | undefined;
-  const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
-    attempt,
-    activeSession,
-    sessionManager,
-    ...input.assembly,
-    applyPromptBuildToolsAllow: (toolsAllow) => {
-      promptToolSurface = applyPromptBuildToolsAllow({
-        session: activeSession,
-        toolsAllow,
-        baseline: input.toolPolicy.baseline,
-        effectiveTools: input.toolPolicy.effectiveTools,
-        uncompactedEffectiveTools: input.toolPolicy.uncompactedEffectiveTools,
-        tools: input.toolPolicy.tools,
-        catalogRef: input.toolPolicy.toolSearchCatalogRef,
-        codeModeControlsEnabled: input.toolPolicy.codeModeControlsEnabled,
-        coreReadAuthorized: input.toolPolicy.coreReadAuthorized,
-        forceToolNames: input.toolPolicy.forceToolNames,
-      });
-      input.lifecycle.setCodeModeReconciliationReadAuthorized(promptToolSurface.coreReadAuthorized);
-      return promptToolSurface.activeToolNames;
-    },
-    setLeasedSteering: (lease) => {
-      leasedSteering = lease;
-    },
-  });
   const { hookCtx, promptBuildPrependContext, promptBuildAppendContext, transcriptLeafId } =
     promptAssembly;
   leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
   input.lifecycle.setPromptCacheChangesForTurn(promptAssembly.promptCacheChangesForTurn);
 
   try {
+    const canClaimHeartbeatOutcome =
+      attempt.trigger === "user" && attempt.sessionPersistence !== "detached";
     const heartbeatOutcomeContext =
-      attempt.trigger === "user" && attempt.sessionKey
+      canClaimHeartbeatOutcome && attempt.sessionKey
         ? buildHeartbeatOutcomeContext(
             claimHeartbeatOutcomeForRun({
               agentId: input.context.sessionAgentId,
@@ -322,13 +301,9 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       ...input.lifecycle.readState(),
       skipPromptSubmission: observeEmbeddedAttemptPrompt({
         ...input.observation,
-        ...(promptToolSurface
-          ? {
-              effectiveTools: promptToolSurface.effectiveTools,
-              tools: promptToolSurface.tools,
-              uncompactedEffectiveTools: promptToolSurface.uncompactedEffectiveTools,
-            }
-          : {}),
+        effectiveTools: input.toolPolicy.current.effectiveTools,
+        tools: input.toolPolicy.current.tools,
+        uncompactedEffectiveTools: input.toolPolicy.current.uncompactedEffectiveTools,
         attempt,
         contextTokenBudget: promptContext.contextTokenBudget,
         effectivePrompt: promptContext.effectivePrompt,

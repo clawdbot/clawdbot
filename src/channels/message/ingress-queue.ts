@@ -16,6 +16,7 @@ import type {
   DB as OpenClawStateKyselyDatabase,
 } from "../../state/openclaw-state-db.generated.js";
 import {
+  openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -251,6 +252,13 @@ export type CreateChannelIngressQueueOptions = {
   accountId?: string;
   stateDir?: string;
   now?: () => number;
+  /**
+   * `read-only` reads through the existing-database read-only opener, which never
+   * creates, migrates, chmods or configures the shared state file. Callers that must
+   * not touch durable state before they own it - Doctor detection runs before the
+   * exclusive maintenance lock - use it so listing cannot take a write path.
+   */
+  access?: "read-write" | "read-only";
 };
 
 type ChannelIngressDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
@@ -279,6 +287,35 @@ export function openChannelIngressDatabase(stateDir?: string) {
   return openOpenClawStateDatabase({
     env: stateDir ? createStateDirEnv(stateDir) : process.env,
   });
+}
+
+type ChannelIngressReadHandle = {
+  db: DatabaseSync;
+  release: () => void;
+};
+
+/**
+ * Resolve a database handle for listing. Read-only callers get the non-creating opener
+ * and own closing it; read-write callers keep the shared cached handle they already had.
+ */
+async function openChannelIngressDatabaseForListing(
+  stateDir: string | undefined,
+  access: "read-write" | "read-only",
+): Promise<ChannelIngressReadHandle | undefined> {
+  if (access !== "read-only") {
+    return { db: openChannelIngressDatabase(stateDir).db, release: () => {} };
+  }
+  const env = stateDir ? createStateDirEnv(stateDir) : process.env;
+  const database = await openExistingOpenClawStateDatabaseReadOnly({ env });
+  if (!database) {
+    return undefined;
+  }
+  return {
+    db: database.db,
+    release: () => {
+      database.walMaintenance.close();
+    },
+  };
 }
 
 export function getChannelIngressKysely(db: DatabaseSync) {
@@ -541,6 +578,55 @@ function queueNameForParts(channelId: string, accountId: string): string {
   return JSON.stringify([channelId, accountId]);
 }
 
+/** Lists account ids that hold any ingress rows for a channel, so doctor
+ *  migrations can sweep durable state whose account is gone from config. */
+export function listChannelIngressQueueAccountIds(params: {
+  channelId: string;
+  stateDir?: string;
+}): string[] {
+  const channelId = normalizePart(params.channelId, "unknown");
+  const database = openChannelIngressDatabase(params.stateDir);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getChannelIngressKysely(database.db)
+      .selectFrom("channel_ingress_events")
+      .select("account_id")
+      .distinct()
+      .where("channel_id", "=", channelId)
+      .orderBy("account_id", "asc"),
+  ).rows;
+  return rows.map((row) => row.account_id);
+}
+
+/**
+ * Account discovery for callers that must not touch durable state yet. Uses the
+ * non-creating read-only opener, so an absent store yields no accounts instead of
+ * being created and migrated by the lookup itself.
+ */
+export async function listChannelIngressQueueAccountIdsReadOnly(params: {
+  channelId: string;
+  stateDir?: string;
+}): Promise<string[]> {
+  const channelId = normalizePart(params.channelId, "unknown");
+  const handle = await openChannelIngressDatabaseForListing(params.stateDir, "read-only");
+  if (!handle) {
+    return [];
+  }
+  try {
+    return executeSqliteQuerySync(
+      handle.db,
+      getChannelIngressKysely(handle.db)
+        .selectFrom("channel_ingress_events")
+        .select("account_id")
+        .distinct()
+        .where("channel_id", "=", channelId)
+        .orderBy("account_id", "asc"),
+    ).rows.map((row) => row.account_id);
+  } finally {
+    handle.release();
+  }
+}
+
 /** Creates a durable channel/account-scoped ingress queue backed by the OpenClaw state database. */
 export function createChannelIngressQueue<
   TPayload,
@@ -553,6 +639,7 @@ export function createChannelIngressQueue<
   const accountId = normalizePart(options.accountId, "default");
   const queueName = queueNameForParts(channelId, accountId);
   const now = options.now ?? Date.now;
+  const access = options.access ?? "read-write";
 
   const enqueue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["enqueue"] = async (
     id,
@@ -648,52 +735,60 @@ export function createChannelIngressQueue<
     TMetadata,
     TCompletedMetadata
   >["listPending"] = async (listOptions) => {
-    const { db } = openChannelIngressDatabase(options.stateDir);
-    const kysely = getChannelIngressKysely(db);
-    const limit = normalizeLimit(listOptions?.limit);
-    const records: Array<ChannelIngressQueueRecord<TPayload, TMetadata>> = [];
-    let lastRow: ChannelIngressRow | undefined;
-    while (records.length < limit) {
-      let pageQuery = kysely
-        .selectFrom("channel_ingress_events")
-        .selectAll()
-        .where("queue_name", "=", queueName)
-        .where("status", "=", "pending");
-      if (lastRow) {
-        const cursor = lastRow;
-        pageQuery =
-          listOptions?.orderBy === "id"
-            ? pageQuery.where("event_id", ">", cursor.event_id)
-            : pageQuery.where((eb) =>
-                eb.or([
-                  eb("received_at", ">", cursor.received_at),
-                  eb.and([
-                    eb("received_at", "=", cursor.received_at),
-                    eb("event_id", ">", cursor.event_id),
+    const handle = await openChannelIngressDatabaseForListing(options.stateDir, access);
+    if (!handle) {
+      return [];
+    }
+    const { db } = handle;
+    try {
+      const kysely = getChannelIngressKysely(db);
+      const limit = normalizeLimit(listOptions?.limit);
+      const records: Array<ChannelIngressQueueRecord<TPayload, TMetadata>> = [];
+      let lastRow: ChannelIngressRow | undefined;
+      while (records.length < limit) {
+        let pageQuery = kysely
+          .selectFrom("channel_ingress_events")
+          .selectAll()
+          .where("queue_name", "=", queueName)
+          .where("status", "=", "pending");
+        if (lastRow) {
+          const cursor = lastRow;
+          pageQuery =
+            listOptions?.orderBy === "id"
+              ? pageQuery.where("event_id", ">", cursor.event_id)
+              : pageQuery.where((eb) =>
+                  eb.or([
+                    eb("received_at", ">", cursor.received_at),
+                    eb.and([
+                      eb("received_at", "=", cursor.received_at),
+                      eb("event_id", ">", cursor.event_id),
+                    ]),
                   ]),
-                ]),
-              );
-      }
-      const orderedQuery =
-        listOptions?.orderBy === "id"
-          ? pageQuery.orderBy("event_id", "asc")
-          : pageQuery.orderBy("received_at", "asc").orderBy("event_id", "asc");
-      const rows = executeSqliteQuerySync(db, orderedQuery.limit(LIST_PENDING_BATCH_SIZE)).rows;
-      for (const row of rows) {
-        const record = baseRecord<TPayload, TMetadata>(row);
-        if (record) {
-          records.push(record);
-          if (records.length === limit) {
-            break;
+                );
+        }
+        const orderedQuery =
+          listOptions?.orderBy === "id"
+            ? pageQuery.orderBy("event_id", "asc")
+            : pageQuery.orderBy("received_at", "asc").orderBy("event_id", "asc");
+        const rows = executeSqliteQuerySync(db, orderedQuery.limit(LIST_PENDING_BATCH_SIZE)).rows;
+        for (const row of rows) {
+          const record = baseRecord<TPayload, TMetadata>(row);
+          if (record) {
+            records.push(record);
+            if (records.length === limit) {
+              break;
+            }
           }
         }
+        if (rows.length < LIST_PENDING_BATCH_SIZE) {
+          break;
+        }
+        lastRow = rows.at(-1);
       }
-      if (rows.length < LIST_PENDING_BATCH_SIZE) {
-        break;
-      }
-      lastRow = rows.at(-1);
+      return records;
+    } finally {
+      handle.release();
     }
-    return records;
   };
 
   const listClaims: ChannelIngressQueue<
@@ -701,40 +796,56 @@ export function createChannelIngressQueue<
     TMetadata,
     TCompletedMetadata
   >["listClaims"] = async () => {
-    const { db } = openChannelIngressDatabase(options.stateDir);
-    const kysely = getChannelIngressKysely(db);
-    const rows = executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("channel_ingress_events")
-        .selectAll()
-        .where("queue_name", "=", queueName)
-        .where("status", "=", "claimed")
-        .orderBy("claimed_at", "asc")
-        .orderBy("received_at", "asc")
-        .orderBy("event_id", "asc"),
-    ).rows;
-    return rows
-      .map((row) => claimedRecord<TPayload, TMetadata>(row))
-      .filter((rec): rec is ChannelIngressQueueClaim<TPayload, TMetadata> => rec !== null);
+    const handle = await openChannelIngressDatabaseForListing(options.stateDir, access);
+    if (!handle) {
+      return [];
+    }
+    const { db } = handle;
+    try {
+      const kysely = getChannelIngressKysely(db);
+      const rows = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("channel_ingress_events")
+          .selectAll()
+          .where("queue_name", "=", queueName)
+          .where("status", "=", "claimed")
+          .orderBy("claimed_at", "asc")
+          .orderBy("received_at", "asc")
+          .orderBy("event_id", "asc"),
+      ).rows;
+      return rows
+        .map((row) => claimedRecord<TPayload, TMetadata>(row))
+        .filter((rec): rec is ChannelIngressQueueClaim<TPayload, TMetadata> => rec !== null);
+    } finally {
+      handle.release();
+    }
   };
 
   const listFailed: NonNullable<
     ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["listFailed"]
   > = async (listOptions) => {
-    const { db } = openChannelIngressDatabase(options.stateDir);
-    const rows = executeSqliteQuerySync(
-      db,
-      getChannelIngressKysely(db)
-        .selectFrom("channel_ingress_events")
-        .selectAll()
-        .where("queue_name", "=", queueName)
-        .where("status", "=", "failed")
-        .orderBy("failed_at", "asc")
-        .orderBy("event_id", "asc")
-        .limit(normalizeLimit(listOptions?.limit)),
-    ).rows;
-    return rows.map((row) => failedRecord<TPayload, TMetadata>(row));
+    const handle = await openChannelIngressDatabaseForListing(options.stateDir, access);
+    if (!handle) {
+      return [];
+    }
+    const { db } = handle;
+    try {
+      const rows = executeSqliteQuerySync(
+        db,
+        getChannelIngressKysely(db)
+          .selectFrom("channel_ingress_events")
+          .selectAll()
+          .where("queue_name", "=", queueName)
+          .where("status", "=", "failed")
+          .orderBy("failed_at", "asc")
+          .orderBy("event_id", "asc")
+          .limit(normalizeLimit(listOptions?.limit)),
+      ).rows;
+      return rows.map((row) => failedRecord<TPayload, TMetadata>(row));
+    } finally {
+      handle.release();
+    }
   };
 
   const claimNext: ChannelIngressQueue<

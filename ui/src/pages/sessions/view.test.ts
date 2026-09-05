@@ -70,6 +70,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onGroupByChange: () => undefined,
     onAssignCategory: () => undefined,
     onRequestNewCategory: () => undefined,
+    onLoadMore: () => undefined,
     onPageChange: () => undefined,
     onPageSizeChange: () => undefined,
     onRefresh: () => undefined,
@@ -104,6 +105,54 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
 const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
+  it("renders local calendar date headings with their session rows", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 2, 9, 12).getTime());
+    const container = document.createElement("div");
+    try {
+      render(
+        renderSessions({
+          ...buildProps(
+            buildMultiResult([
+              { key: "today", kind: "direct", updatedAt: new Date(2026, 2, 9).getTime() },
+              { key: "yesterday", kind: "direct", updatedAt: new Date(2026, 2, 8).getTime() },
+              {
+                key: "two-days-ago",
+                kind: "direct",
+                updatedAt: new Date(2026, 2, 7, 23, 59).getTime(),
+              },
+              { key: "six-days-ago", kind: "direct", updatedAt: new Date(2026, 2, 3).getTime() },
+              { key: "older", kind: "direct", updatedAt: new Date(2026, 2, 2, 23, 59).getTime() },
+            ]),
+          ),
+          groupBy: "date",
+        }),
+        container,
+      );
+      await Promise.resolve();
+
+      expect(
+        [...container.querySelectorAll("tbody > tr")].map((row) =>
+          (
+            row.querySelector(".session-group-row__label") ?? row.querySelector(".session-link")
+          )?.textContent?.trim(),
+        ),
+      ).toEqual([
+        "Today",
+        "today",
+        "Yesterday",
+        "yesterday",
+        "This week",
+        "two-days-ago",
+        "six-days-ago",
+        "Older",
+        "older",
+      ]);
+    } finally {
+      clock.mockRestore();
+      render(null, container);
+    }
+  });
+
   it("makes every session sort header a keyboard-accessible button", async () => {
     const container = document.createElement("div");
     const onSortChange = vi.fn();
@@ -493,7 +542,14 @@ describe("sessions view", () => {
               key: "agent:main:ada",
               kind: "direct",
               updatedAt: 2,
-              owner: { actor: { type: "human", id: "profile-ada", label: "Ada Lovelace" } },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-ada",
+                  label: "Ada Lovelace",
+                  identity: { type: "profile", id: "profile-ada" },
+                },
+              },
             },
             { key: "agent:main:ownerless", kind: "direct", updatedAt: 1 },
           ]),
@@ -560,9 +616,7 @@ describe("sessions view", () => {
     const container = document.createElement("div");
     render(
       renderSessions({
-        ...buildProps(
-          buildMultiResult([{ key: "agent:main:discord:channel:1", kind: "group", updatedAt: 1 }]),
-        ),
+        ...buildProps(buildMultiResult([])),
         groupBy: "category",
         knownCategories: ["Research"],
         searchQuery: "no-such-session",
@@ -1132,7 +1186,7 @@ describe("sessions view", () => {
     ).toEqual(["Status: Queued", "Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
   });
 
-  it("renders session goals in the status cell and search index", async () => {
+  it("renders session goals in the status cell", async () => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -1177,7 +1231,7 @@ describe("sessions view", () => {
     expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
   });
 
-  it("filters by agent runtime and surfaces it in the details drawer", async () => {
+  it("renders the effective runtime including fallback in the details drawer", async () => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -1188,12 +1242,6 @@ describe("sessions view", () => {
               kind: "direct",
               updatedAt: 20,
               agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
-            },
-            {
-              key: "agent:main:pi",
-              kind: "direct",
-              updatedAt: 10,
-              agentRuntime: { id: "pi", source: "implicit" },
             },
           ]),
         ),
@@ -1214,41 +1262,6 @@ describe("sessions view", () => {
     );
     const stats = readSessionDetailStats(container);
     expect(stats.get("Runtime")).toBe("claude-cli (fallback none)");
-  });
-
-  it("does not filter terminal sessions as live when active-run flags are stale", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            {
-              key: "agent:main:done",
-              kind: "direct",
-              updatedAt: 20,
-              hasActiveRun: true,
-              status: "done",
-            },
-            {
-              key: "agent:main:running",
-              kind: "direct",
-              updatedAt: 10,
-              hasActiveRun: true,
-              status: "running",
-            },
-          ]),
-        ),
-        searchQuery: "live",
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const rows = container.querySelectorAll("tbody tr.session-data-row");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
-      "agent:main:running",
-    );
   });
 
   it("keeps raw keys for inherited identity object properties", async () => {
@@ -1522,44 +1535,6 @@ describe("sessions view", () => {
     expect(onToggleDetails).toHaveBeenCalledWith("agent:main:no-checkpoint");
   });
 
-  it("filters rows by agent identity name", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            {
-              key: "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
-              kind: "direct",
-              updatedAt: 20,
-            },
-            {
-              key: "agent:code-agent:telegram:abc123",
-              kind: "direct",
-              updatedAt: 10,
-            },
-          ]),
-        ),
-        searchQuery: "data expert",
-        agentIdentityById: {
-          "data-expert": {
-            agentId: "data-expert",
-            name: "Data Expert",
-            avatar: "",
-          },
-        },
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const rows = container.querySelectorAll("tbody tr.session-data-row");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
-      "Data Expert (dingtalk)",
-    );
-  });
-
   it("keeps session selects stable and deselects only the current page", async () => {
     const container = document.createElement("div");
     render(
@@ -1645,15 +1620,7 @@ describe("sessions view", () => {
     const onClearFilters = vi.fn();
     render(
       renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            {
-              key: "agent:main:main",
-              kind: "direct",
-              updatedAt: Date.now(),
-            },
-          ]),
-        ),
+        ...buildProps(buildMultiResult([])),
         searchQuery: "missing",
         onClearFilters,
       }),
@@ -1762,34 +1729,49 @@ describe("sessions view", () => {
     expect(facts[1]?.classList.contains("sessions-heading-fact--active")).toBe(true);
   });
 
-  it("renders a context meter with usage tone on the tokens cell", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            totalTokens: 180_000,
-            contextTokens: 200_000,
-          }),
+  it.each([
+    { total: 128_000, percent: 64, tone: "ok", value: "128k" },
+    { total: 130_000, percent: 65, tone: "warn", value: "130k" },
+    { total: 168_000, percent: 84, tone: "warn", value: "168k" },
+    { total: 170_000, percent: 85, tone: "danger", value: "170k" },
+    { total: 180_000, percent: 90, tone: "danger", value: "180k" },
+    { total: 220_000, percent: 100, tone: "danger", value: "220k" },
+  ])(
+    "preserves context usage, tooltip, and $tone tone at $percent%",
+    async ({ total, percent, tone, value }) => {
+      const container = document.createElement("div");
+      render(
+        renderSessions(
+          buildProps(
+            buildResult({
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: Date.now(),
+              totalTokens: total,
+              contextTokens: 200_000,
+            }),
+          ),
         ),
-      ),
-      container,
-    );
-    await Promise.resolve();
+        container,
+      );
+      await Promise.resolve();
 
-    const meter = container.querySelector(".session-context-meter");
-    expect(meter?.classList.contains("session-context-meter--danger")).toBe(true);
-    expect(meter?.getAttribute("aria-label")).toBe(
-      "90% of context used (180,000 / 200,000 tokens)",
-    );
-    expect(container.querySelector<HTMLElement>(".session-context-meter__fill")?.style.width).toBe(
-      "90%",
-    );
-    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe("180k / 200k");
-  });
+      const meter = container.querySelector(".session-context-meter");
+      const label = `${percent}% of context used (${total.toLocaleString()} / 200,000 tokens)`;
+      expect(meter?.classList.contains(`session-context-meter--${tone}`)).toBe(true);
+      expect(meter?.getAttribute("role")).toBe("img");
+      expect(meter?.getAttribute("aria-label")).toBe(label);
+      expect(
+        container.querySelector(".session-token-cell")?.querySelector("openclaw-tooltip")?.content,
+      ).toBe(label);
+      expect(
+        container.querySelector<HTMLElement>(".session-context-meter__fill")?.style.width,
+      ).toBe(`${percent}%`);
+      expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe(
+        `${value} / 200k`,
+      );
+    },
+  );
 
   it("keeps stale token snapshots out of the warning tones", async () => {
     const container = document.createElement("div");

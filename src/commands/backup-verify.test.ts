@@ -284,6 +284,50 @@ describe("backupVerifyCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it.each([
+    { name: "missing link target", type: "SymbolicLink" as const, detail: "linkpath required" },
+    { name: "missing path", type: "File" as const, detail: "path is required" },
+    { name: "forbidden link target", type: "File" as const, detail: "linkpath forbidden" },
+    { name: "bad checksum", type: "File" as const, detail: "checksum failure" },
+  ])("rejects a $name header after valid backup entries", async ({ name, type, detail }) => {
+    const tempDir = tempDirs.make("openclaw-backup-verify-invalid-header-");
+    const archivePath = path.join(tempDir, "invalid.tar.gz");
+    const payloadPath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/note.txt`;
+    const invalidEntry = encodeTarEntry({
+      path: name === "missing path" ? "" : `${TEST_ARCHIVE_ROOT}/payload/invalid`,
+      type,
+      ...(name === "forbidden link target" ? { linkpath: "note.txt" } : {}),
+    });
+    if (name === "bad checksum") {
+      invalidEntry.writeUInt8(invalidEntry.readUInt8(0) ^ 1, 0);
+    }
+    await fs.writeFile(
+      archivePath,
+      gzipSync(
+        Buffer.concat([
+          encodeTarEntry({
+            path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+            contents: JSON.stringify(createBackupManifest(payloadPath)),
+          }),
+          encodeTarEntry({ path: payloadPath, contents: "retained payload\n" }),
+          invalidEntry,
+          Buffer.alloc(1024),
+        ]),
+      ),
+    );
+    const runtime = createBackupVerifyRuntime();
+
+    await runCommandWithRuntime(runtime, async () => {
+      await backupVerifyCommand(runtime, { archive: archivePath });
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Backup archive verification failed: ${archivePath}. Archive is not a valid OpenClaw backup. ${detail}. Choose another archive or create a new one with \`openclaw backup create\`.`,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("verifies SQLite integrity and the canonical shared-state role", async () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
     const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
@@ -1171,6 +1215,26 @@ describe("backupVerifyCommand", () => {
             fileName: "reindex-lock.sqlite-wal",
             contents: invalidSqlite,
             archivePath: `${stateAssetArchivePath}/memory/main.sqlite.reindex-lock.sqlite-wal`,
+          },
+          {
+            fileName: "generation-writer.sqlite",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-writer.sqlite`,
+          },
+          {
+            fileName: "generation-writer.sqlite-shm",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-writer.sqlite-shm`,
+          },
+          {
+            fileName: "generation-lock.sqlite",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-lock.sqlite`,
+          },
+          {
+            fileName: "generation-lock.sqlite-journal",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-lock.sqlite-journal`,
           },
           {
             fileName: "reindex-tmp",

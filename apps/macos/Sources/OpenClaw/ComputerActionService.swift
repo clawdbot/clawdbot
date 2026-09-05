@@ -367,11 +367,13 @@ struct ComputerControlPermissionSnapshot: Equatable, Sendable {
     let postEvent: Access
     let screenCapture: Access
 
+    @MainActor
     static func probe() -> Self {
         Self(
             accessibility: AXIsProcessTrusted() ? .granted : .missing,
             postEvent: CGPreflightPostEventAccess() ? .granted : .missing,
-            screenCapture: CGPreflightScreenCaptureAccess() ? .granted : .missing)
+            screenCapture: PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
+                ? .granted : .missing)
     }
 
     var diagnostic: Diagnostic {
@@ -583,7 +585,7 @@ final class ComputerActionService {
                 guard let self else { throw CancellationError() }
                 try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: generation)
             }
-            return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
+            return OpenClawComputerActResult(ok: true)
         }
     }
     #endif

@@ -18,6 +18,7 @@ const discoveryCoreMocks = vi.hoisted(() => ({
 const syntheticAuthMocks = vi.hoisted(() => ({
   resolveRuntimeSyntheticAuthProviderRefs: vi.fn(() => []),
   resolveProviderSyntheticAuthWithPlugin: vi.fn(),
+  prepareProviderSyntheticAuthWithPlugin: vi.fn(),
 }));
 
 vi.mock("./auth-profiles/store.js", () => storeMocks);
@@ -26,16 +27,21 @@ vi.mock("./agent-auth-credentials.js", () => credentialMocks);
 
 vi.mock("./agent-auth-discovery-core.js", () => discoveryCoreMocks);
 
-vi.mock("./synthetic-auth.runtime.js", () => ({
+vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs:
     syntheticAuthMocks.resolveRuntimeSyntheticAuthProviderRefs,
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin,
+  prepareProviderSyntheticAuthWithPlugin: syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin,
 }));
 
-import { resolveAgentDiscoveryAuthFacts } from "./agent-auth-discovery.js";
+import {
+  resolveAgentDiscoveryAuthFacts,
+  resolveAmbientAgentCredentialsForDiscovery,
+  prepareAmbientAgentCredentialsForDiscovery,
+} from "./agent-auth-discovery.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 
 describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
@@ -136,6 +142,32 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
       },
     });
   });
+
+  it.each(["read", "prepare"])(
+    "keeps authoritative native auth separate from provider aliases during %s",
+    async (mode) => {
+      discoveryCoreMocks.addEnvBackedAgentCredentials.mockReturnValueOnce({
+        "claude-cli": { type: "api_key", key: "provider-key" },
+      });
+      const resolveSyntheticAuth = vi.fn((_provider: string) => undefined);
+
+      const options = {
+        env: { ANTHROPIC_API_KEY: "provider-key" },
+        syntheticAuthProviderRefs: ["claude-cli"],
+        authoritativeSyntheticAuthProviderRefs: ["claude-cli"],
+        resolveSyntheticAuth,
+      };
+      const credentials =
+        mode === "read"
+          ? resolveAmbientAgentCredentialsForDiscovery(options)
+          : await prepareAmbientAgentCredentialsForDiscovery({
+              ...options,
+              resolveSyntheticAuth: async (provider) => resolveSyntheticAuth(provider),
+            });
+      expect(credentials).toEqual({});
+      expect(resolveSyntheticAuth).toHaveBeenCalledWith("claude-cli");
+    },
+  );
 
   it.each(["oauth", "token"] as const)(
     "skips synthetic api-key fills under a %s provider pin",

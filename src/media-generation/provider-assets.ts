@@ -71,9 +71,7 @@ export async function downloadGeneratedVideoAsset(params: {
         new Error(`${params.label} exceeds ${maxBytesLocal} bytes`),
     };
     const buffer = params.validateBinaryResponse
-      ? Buffer.from(
-          await readProviderBinaryResponse(handle.response, params.label, "video", readOptions),
-        )
+      ? await readProviderBinaryResponse(handle.response, params.label, "video", readOptions)
       : await readResponseWithLimit(handle.response, maxBytes, readOptions);
     const ext = extensionForMime(mimeType)?.replace(/^\./u, "") ?? "mp4";
     return {

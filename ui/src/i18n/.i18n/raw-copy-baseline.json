@@ -27,13 +27,6 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "custodian panel"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "dashboard document"
     },
     {
@@ -49,6 +42,76 @@
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "terminal panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Atkinson Hyperlegible"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "DM Sans"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Fraunces"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Geist"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "IBM Plex Sans"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Instrument Sans"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "JetBrains Mono"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Lora"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Space Grotesk"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "System"
     },
     {
       "count": 1,
@@ -220,41 +283,6 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateConfiguredUnavailable"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateRateLimited"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateUnavailable"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateUnverified"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateVerified"
-    },
-    {
-      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",
@@ -287,41 +315,6 @@
       "name": "text",
       "path": "ui/src/pages/agents/panels-overview.ts",
       "text": "&times;"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "@BotFather"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "api.slack.com/apps"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "Developer Portal"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "signal-cli"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "web.telegram.org"
     },
     {
       "count": 1,
@@ -391,7 +384,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/updates.ts",
-      "text": "openclaw update status --json openclaw update"
+      "text": "openclaw triage"
     },
     {
       "count": 1,
@@ -457,13 +450,6 @@
       "text": "exec host=gateway/node"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/model-providers/default-models-view.ts",
-      "text": "i"
-    },
-    {
       "count": 4,
       "kind": "html-text",
       "name": "text",
@@ -474,7 +460,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/profile/profile-page.ts",
+      "path": "ui/src/pages/profile/profile-hero.ts",
       "text": "OpenClaw"
     },
     {
@@ -483,6 +469,20 @@
       "name": "text",
       "path": "ui/src/pages/skill-workshop/view.ts",
       "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/skills/library-detail.ts",
+      "text": "SKILL.md"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/skills/library-view.ts",
+      "text": "SKILL.md"
     },
     {
       "count": 1,

@@ -1,24 +1,327 @@
 // Docs link audit tests cover documentation link validation behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
+import { normalizeRoute } from "../../scripts/lib/docs-published-routes.mts";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
-const {
-  normalizeRoute,
-  prepareAnchorAuditDocsDir,
-  prepareExternalLinkAuditTree,
-  prepareMirroredDocsDir,
-  resolveRoute,
-  runDocsLinkAuditCli,
-  sanitizeDocsConfigForEnglishOnly,
-} = await import("../../scripts/docs-link-audit.mts");
+const { prepareExternalLinkAuditTree, prepareMirroredDocsDir, resolveRoute } =
+  await import("../../scripts/docs-link-audit.mts");
+
+type AuditCliCase = {
+  name: string;
+  source: string[];
+  broken: number;
+  anchors?: boolean;
+  diagnostics?: string[];
+  files?: Record<string, string>;
+  redirects?: Array<{ source: string; destination: string }>;
+};
 
 describe("docs-link-audit", () => {
   function tempEntries(prefix: string): Set<string> {
     return new Set(fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith(prefix)));
   }
+
+  it.each(["\n", "\r\n"])("preserves code literals with line ending %j", (newline) => {
+    const source = [
+      "Intro",
+      "",
+      "```md",
+      '<Card href="/same" title="Literal" />',
+      "```",
+      "",
+      "[live](/same)",
+    ].join(newline);
+    const md = createDocsMarkdown();
+    const document = parseDocsDocument(source, md, {
+      mapLink: (href: string, line: number | undefined) => ({ href, line }),
+    });
+    expect(document.links).toEqual([{ href: "/same", line: 7 }]);
+    expect(md.renderer.render(document.tokens, md.options, document.env)).toContain(
+      "&lt;Card href=&quot;/same&quot; title=&quot;Literal&quot; /&gt;",
+    );
+  });
+
+  it.each<AuditCliCase>([
+    {
+      name: "component and list fences",
+      source: [
+        "<Accordion>",
+        "    ~~~md",
+        "    [example](/hidden-tilde)",
+        "    ~~~not-a-closing-fence",
+        "    [example](/hidden-after-false-close)",
+        "    ~~~",
+        "</Accordion>",
+        "",
+        "- Example",
+        "",
+        "    ````md",
+        "    ```text",
+        "    [example](/hidden-nested)",
+        "    ```",
+        "    ````",
+        "",
+        "[real](/missing-page)",
+        "[valid](/page)",
+      ],
+      broken: 1,
+    },
+    {
+      name: "legacy malformed MDX",
+      source: [
+        "<!doctype html>",
+        "~~~md",
+        "[example](/hidden-fallback)",
+        "~~~",
+        "[real](/missing-page)",
+        "[valid](/page)",
+      ],
+      broken: 1,
+    },
+    {
+      name: "indented component prose",
+      source: ["<Accordion>", "    [real](/missing-page)", "</Accordion>", "[valid](/page)"],
+      broken: 1,
+    },
+    { name: "valid prose", source: ["[valid](/page)"], broken: 0 },
+    {
+      name: "repeated occurrences beside protected literals",
+      source: [
+        "---",
+        "title: Positions",
+        "---",
+        "```md",
+        "[hidden](/missing-page)",
+        "```",
+        "[first](/missing-page)",
+        "[second](/missing-page)",
+        "",
+        "`[hidden](/missing-page)` [third](/missing-page)",
+        "[valid](/page)",
+      ],
+      broken: 3,
+      diagnostics: [7, 8, 10].map(
+        (line) => `page.mdx:${line} :: /missing-page :: route/file not found`,
+      ),
+    },
+    {
+      name: "reference, HTML, component and normalized relative occurrences",
+      source: [
+        "[reference][missing]",
+        "",
+        "[missing]: /missing-page",
+        "",
+        '<a href="/missing-page">HTML</a>',
+        "",
+        '<Card href="/missing-page" title="Component" />',
+        "",
+        "[relative](./missing-page.md)",
+        "[valid](/page)",
+      ],
+      broken: 4,
+      diagnostics: [1, 5, 7, 9].map(
+        (line) => `page.mdx:${line} :: /missing-page :: route/file not found`,
+      ),
+    },
+    {
+      name: "unmapped expansions",
+      source: [
+        '<Snippet file="./part.txt" />',
+        "",
+        '<div class="maturity-category-docs">',
+        "[embedded](/missing-page)",
+        "</div>",
+        "",
+        "[valid](/page)",
+      ],
+      files: { "docs/part.txt": "[included](/missing-page)\n" },
+      broken: 2,
+      diagnostics: ["page.mdx:unknown :: /missing-page :: route/file not found"],
+    },
+    {
+      name: "decoded direct paths and HTML-alias targets",
+      anchors: true,
+      source: [
+        "[direct](/caf%C3%A9#known)",
+        "[literal percent](/100%25#known)",
+        "[asset](/image%20space.svg)",
+        "[redirect](/via)",
+        "[bad redirect](/invalid)",
+        "[raw Markdown redirect](/raw)",
+        "[after](/missing-page)",
+        "[external](/outside)",
+      ],
+      files: {
+        "docs/café.md": "## Known\n",
+        "docs/100%.md": "## Known\n",
+        "docs/image space.svg": "<svg />",
+      },
+      redirects: [
+        { source: "/via", destination: "https://docs.openclaw.ai/caf%C3%A9#known" },
+        { source: "/invalid", destination: "https://docs.openclaw.ai/bad%" },
+        { source: "/raw", destination: "/café.md#known" },
+        { source: "/outside", destination: "https://example.test/page#external-section" },
+      ],
+      broken: 4,
+      diagnostics: [
+        "docs.json:unknown :: /invalid :: malformed URL path",
+        "page.mdx:5 :: /invalid :: malformed URL path",
+        "page.mdx:6 :: /raw :: fragment requires an HTML page, not raw Markdown",
+        "page.mdx:7 :: /missing-page :: route/file not found",
+      ],
+    },
+    ...[false, true].map((anchors) => ({
+      name: `malformed emitted paths (anchors=${anchors})`,
+      anchors,
+      source: [
+        '<Card href="/bad%" title="Component" />',
+        "",
+        '<a href="/bad%FF">HTML</a>',
+        "",
+        '<img src="/bad%2" />',
+        "",
+        '<CTA primaryHref="/bad%zz" secondaryHref="https://docs.openclaw.ai/bad%" />',
+        "",
+        "[markdown](/bad%FF)",
+        "[reference][bad]",
+        "",
+        "[bad]: /bad%FF",
+        "",
+        "[after](/missing-page)",
+        "[valid](/page)",
+      ],
+      broken: anchors ? 8 : 7,
+      diagnostics: [
+        ":: /bad% :: malformed URL path",
+        ":: /bad%FF :: malformed URL path",
+        ":: /missing-page :: route/file not found",
+      ],
+    })),
+    {
+      name: "shared emitted fragments",
+      anchors: true,
+      broken: 4,
+      source: [
+        "## agents.defaults.cwd",
+        "",
+        '<Accordion title="Connect" id="connection">',
+        "",
+        "## Nested",
+        "",
+        "</Accordion>",
+        "",
+        "[legacy](#agents-defaults-cwd)",
+        "[canonical](#agents.defaults.cwd)",
+        "[component](#connection)",
+        "[nested](https://docs.openclaw.ai/page#nested)",
+        "[absent](#missing)",
+        "[relative](./page.mdx#connection)",
+        "[raw Markdown](/page.md#connection)",
+        "[root](/#root)",
+        "[missing root alias](/index#missing)",
+        "[unpublished permalink](/unpublished#connection)",
+        "[dropped incoming fragment](/drops#missing)",
+        "[redirect](/legacy#wrong-incoming-fragment)",
+        "[chain](/middle#also-wrong)",
+        "[reference][ref]",
+        "",
+        "[ref]: /page#connection",
+        "",
+        "```md",
+        "## Phantom",
+        "[hidden](/hidden-code)",
+        "```",
+        '<!-- <a id="phantom" href="/hidden-comment"> -->',
+      ],
+    },
+  ])(
+    "audits real CLI links after $name",
+    ({ source, broken, anchors = false, diagnostics, files = {}, redirects }) => {
+      const tempDirs: string[] = [];
+      const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-cli-");
+      const docsRoot = path.join(fixtureRoot, "docs");
+      const clawHubRoot = path.join(fixtureRoot, "clawhub");
+      const home = path.join(fixtureRoot, "home");
+      fs.mkdirSync(docsRoot);
+      fs.mkdirSync(path.join(clawHubRoot, "docs"), { recursive: true });
+      fs.mkdirSync(home);
+      fs.writeFileSync(
+        path.join(docsRoot, "docs.json"),
+        JSON.stringify({
+          navigation: [],
+          redirects:
+            redirects ??
+            (anchors && !diagnostics
+              ? [
+                  { source: "/legacy", destination: "/page#connection" },
+                  { source: "/middle", destination: "/legacy#nested" },
+                  { source: "/drops", destination: "/next" },
+                ]
+              : []),
+        }),
+      );
+      for (const [file, content] of Object.entries(files)) {
+        fs.writeFileSync(path.join(fixtureRoot, file), content);
+      }
+      if (anchors) {
+        fs.writeFileSync(path.join(docsRoot, "index.md"), "## Root\n\n[next](next#target)\n");
+        fs.writeFileSync(path.join(docsRoot, "next.md"), "## Target\n");
+      }
+      const pageSource =
+        anchors && !diagnostics ? ["---", "permalink: /unpublished", "---", ...source] : source;
+      fs.writeFileSync(path.join(docsRoot, "page.mdx"), `${pageSource.join("\n")}\n`);
+
+      try {
+        const result = spawnSync(
+          process.execPath,
+          [
+            fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url)),
+            ...(anchors ? ["--anchors"] : []),
+          ],
+          {
+            cwd: fixtureRoot,
+            encoding: "utf8",
+            env: {
+              PATH: process.env.PATH,
+              HOME: home,
+              USERPROFILE: home,
+              TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+              OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
+            },
+            timeout: 30_000,
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(broken ? 1 : 0);
+        if (!anchors) {
+          expect(result.stdout).toContain(`checked_internal_links=${broken + 1}\n`);
+        }
+        expect(result.stdout).toContain(`broken_links=${broken}\n`);
+        expect(result.stdout).not.toContain("/hidden-");
+        if (anchors && !diagnostics) {
+          expect(result.stdout).toContain("#missing :: fragment not found");
+          expect(result.stdout).toContain("/unpublished#connection :: route/file not found");
+        }
+        for (const diagnostic of diagnostics ?? []) {
+          expect(result.stdout).toContain(diagnostic);
+        }
+        if (broken && !anchors && !diagnostics) {
+          expect(result.stdout).toContain(
+            `page.mdx:${source.findIndex((line) => line.includes("/missing-page")) + 1} :: /missing-page :: route/file not found`,
+          );
+        }
+      } finally {
+        cleanupTempDirs(tempDirs);
+      }
+    },
+  );
 
   it("normalizes route fragments away", () => {
     expect(normalizeRoute("/plugins/building-plugins#registering-agent-tools")).toBe(
@@ -183,137 +486,6 @@ describe("docs-link-audit", () => {
     });
   });
 
-  it("sanitizes docs.json to English-only route targets", () => {
-    expect(
-      sanitizeDocsConfigForEnglishOnly({
-        navigation: [
-          {
-            language: "en",
-            tabs: [
-              {
-                tab: "Docs",
-                groups: [
-                  {
-                    group: "Keep",
-                    pages: ["help/testing", "zh-CN/help/testing", "ja-JP/help/testing"],
-                  },
-                ],
-              },
-            ],
-          },
-          {
-            language: "zh-Hans",
-            tabs: [{ tab: "中文", groups: [{ group: "帮助", pages: ["zh-CN/help/testing"] }] }],
-          },
-        ],
-        redirects: [
-          { source: "/help/testing", destination: "/help/testing" },
-          { source: "/zh-CN/help/testing", destination: "/help/testing" },
-          { source: "/help/testing", destination: "/ja-JP/help/testing" },
-        ],
-      }),
-    ).toEqual({
-      navigation: [
-        {
-          language: "en",
-          tabs: [
-            {
-              tab: "Docs",
-              groups: [{ group: "Keep", pages: ["help/testing"] }],
-            },
-          ],
-        },
-      ],
-      redirects: [{ source: "/help/testing", destination: "/help/testing" }],
-    });
-  });
-
-  it("builds an English-only docs tree for anchor audits", () => {
-    const tempDirs: string[] = [];
-    const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-fixture-");
-    const docsRoot = path.join(fixtureRoot, "docs");
-    fs.mkdirSync(path.join(docsRoot, "help"), { recursive: true });
-    fs.mkdirSync(path.join(docsRoot, "zh-CN", "help"), { recursive: true });
-    fs.writeFileSync(
-      path.join(docsRoot, "docs.json"),
-      `${JSON.stringify(
-        {
-          navigation: [
-            {
-              language: "en",
-              tabs: [{ tab: "Docs", groups: [{ group: "Help", pages: ["help/testing"] }] }],
-            },
-            {
-              language: "zh-Hans",
-              tabs: [{ tab: "中文", groups: [{ group: "帮助", pages: ["zh-CN/help/testing"] }] }],
-            },
-          ],
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(docsRoot, "help", "testing.md"),
-      [
-        "# testing",
-        "<!-- BEGIN GENERATED: example -->",
-        "visible <!-- a multiline",
-        "comment --> text",
-        "<!-- END GENERATED: example -->",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    fs.writeFileSync(path.join(docsRoot, "zh-CN", "help", "testing.md"), "# 测试\n", "utf8");
-
-    const anchorDocsDir = prepareAnchorAuditDocsDir(docsRoot);
-    try {
-      expect(fs.existsSync(path.join(anchorDocsDir, "help", "testing.md"))).toBe(true);
-      expect(fs.existsSync(path.join(anchorDocsDir, "zh-CN"))).toBe(false);
-      const preparedMarkdown = fs.readFileSync(
-        path.join(anchorDocsDir, "help", "testing.md"),
-        "utf8",
-      );
-      expect(preparedMarkdown).not.toContain("<!--");
-      expect(preparedMarkdown).not.toContain("BEGIN GENERATED");
-      expect(preparedMarkdown.split("\n")).toHaveLength(6);
-
-      const sanitizedDocsJson = JSON.parse(
-        fs.readFileSync(path.join(anchorDocsDir, "docs.json"), "utf8"),
-      );
-      expect(sanitizedDocsJson).toEqual({
-        navigation: [
-          {
-            language: "en",
-            tabs: [{ tab: "Docs", groups: [{ group: "Help", pages: ["help/testing"] }] }],
-          },
-        ],
-      });
-    } finally {
-      fs.rmSync(anchorDocsDir, { recursive: true, force: true });
-      cleanupTempDirs(tempDirs);
-    }
-  });
-
-  it("cleans anchor audit docs copies when docs.json is invalid", () => {
-    const tempDirs: string[] = [];
-    const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-invalid-");
-    const docsRoot = path.join(fixtureRoot, "docs");
-    fs.mkdirSync(docsRoot, { recursive: true });
-    fs.writeFileSync(path.join(docsRoot, "docs.json"), "{ invalid json", "utf8");
-
-    const before = tempEntries("openclaw-docs-anchor-audit-");
-    try {
-      expect(() => prepareAnchorAuditDocsDir(docsRoot)).toThrow();
-      const after = tempEntries("openclaw-docs-anchor-audit-");
-      expect([...after].filter((entry) => !before.has(entry))).toEqual([]);
-    } finally {
-      cleanupTempDirs(tempDirs);
-    }
-  });
-
   it("does not create mirrored docs copies for non-root docs trees", () => {
     const tempDirs: string[] = [];
     const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-mirror-");
@@ -352,142 +524,5 @@ describe("docs-link-audit", () => {
 
     const after = tempEntries("openclaw-docs-link-audit-");
     expect([...after].filter((entry) => !before.has(entry))).toEqual([]);
-  });
-
-  it("cleans mirrored docs copies when anchor prep fails", () => {
-    let mirroredCleaned = false;
-
-    expect(() =>
-      runDocsLinkAuditCli({
-        args: ["--anchors"],
-        cleanupAnchorAuditDocsDirImpl() {
-          throw new Error("anchor cleanup should not run");
-        },
-        prepareAnchorAuditDocsDirImpl() {
-          throw new Error("anchor prep failed");
-        },
-        prepareMirroredDocsDirImpl: () => ({
-          cleanup() {
-            mirroredCleaned = true;
-          },
-          dir: path.join(os.tmpdir(), "openclaw-docs-mirrored"),
-          mirroredClawHub: true,
-        }),
-      }),
-    ).toThrow("anchor prep failed");
-    expect(mirroredCleaned).toBe(true);
-  });
-
-  it("uses a pinned Mintlify package through npm for anchor validation", () => {
-    let invocation:
-      | {
-          command: string;
-          args: string[];
-          options: { cwd: string; env?: NodeJS.ProcessEnv; shell?: boolean; stdio: string };
-        }
-      | undefined;
-    let cleanedDir: string | undefined;
-    const anchorDocsDir = path.join(os.tmpdir(), "docs-link-audit-anchor");
-    fs.mkdirSync(anchorDocsDir, { recursive: true });
-
-    const exitCode = runDocsLinkAuditCli({
-      args: ["--anchors"],
-      env: { ...process.env, OPENCLAW_DOCS_LINK_SENTINEL: "1" },
-      nodeExecPath: "/opt/node/bin/node",
-      nodeVersion: "22.21.1",
-      prepareAnchorAuditDocsDirImpl() {
-        return anchorDocsDir;
-      },
-      cleanupAnchorAuditDocsDirImpl(dir) {
-        cleanedDir = dir;
-      },
-      spawnSyncImpl(command, args, options) {
-        invocation = { command, args, options };
-        return { status: 0 };
-      },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(invocation).toEqual({
-      command: "npm",
-      args: [
-        "exec",
-        "--yes",
-        "--package=mint@4.2.808",
-        "--",
-        "mint",
-        "broken-links",
-        "--check-anchors",
-      ],
-      options: expect.objectContaining({
-        cwd: anchorDocsDir,
-        env: expect.objectContaining({ OPENCLAW_DOCS_LINK_SENTINEL: "1" }),
-        shell: false,
-        stdio: "inherit",
-      }),
-    });
-    expect(cleanedDir).toBe(anchorDocsDir);
-  });
-
-  it("wraps Mintlify with Node 22 when the current Node is too new", () => {
-    const invocations: Array<{
-      command: string;
-      args: string[];
-      options: { cwd: string; stdio: string };
-    }> = [];
-    let cleanedDir: string | undefined;
-    const anchorDocsDir = path.join(os.tmpdir(), "docs-link-audit-anchor");
-    fs.mkdirSync(anchorDocsDir, { recursive: true });
-
-    const exitCode = runDocsLinkAuditCli({
-      args: ["--anchors"],
-      nodeExecPath: "/opt/node/bin/node",
-      nodeVersion: "25.3.0",
-      prepareAnchorAuditDocsDirImpl() {
-        return anchorDocsDir;
-      },
-      cleanupAnchorAuditDocsDirImpl(dir) {
-        cleanedDir = dir;
-      },
-      spawnSyncImpl(command, args, options) {
-        invocations.push({ command, args, options });
-        return { status: 0 };
-      },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(invocations).toHaveLength(2);
-    const [versionCheck, linkCheck] = invocations;
-    if (!versionCheck || !linkCheck) {
-      throw new Error("Expected Mintlify wrapper invocations");
-    }
-    expect(versionCheck).toEqual({
-      command: "fnm",
-      args: [
-        "exec",
-        "--using=22",
-        "node",
-        "-e",
-        "process.exit(Number(process.versions.node.split('.')[0]) === 22 ? 0 : 1)",
-      ],
-      options: { cwd: anchorDocsDir, stdio: "ignore" },
-    });
-    expect(linkCheck).toEqual({
-      command: "fnm",
-      args: [
-        "exec",
-        "--using=22",
-        "npm",
-        "exec",
-        "--yes",
-        "--package=mint@4.2.808",
-        "--",
-        "mint",
-        "broken-links",
-        "--check-anchors",
-      ],
-      options: { cwd: anchorDocsDir, stdio: "inherit" },
-    });
-    expect(cleanedDir).toBe(anchorDocsDir);
   });
 });

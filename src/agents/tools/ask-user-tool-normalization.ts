@@ -91,7 +91,11 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
     },
   );
 
-  const rawTimeoutSeconds = params.timeoutSeconds;
+  return { questions, timeoutSeconds: normalizeQuestionTimeoutSeconds(params.timeoutSeconds) };
+}
+
+/** Shared human-question wait contract, including credential entry and harness watchdogs. */
+export function normalizeQuestionTimeoutSeconds(rawTimeoutSeconds: unknown): number {
   if (
     rawTimeoutSeconds !== undefined &&
     (typeof rawTimeoutSeconds !== "number" ||
@@ -100,9 +104,8 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
   ) {
     throw new ToolInputError("timeoutSeconds must be an integer");
   }
-  const timeoutSeconds = Math.min(
+  return Math.min(
     MAX_ASK_USER_TIMEOUT_SECONDS,
     Math.max(MIN_ASK_USER_TIMEOUT_SECONDS, rawTimeoutSeconds ?? DEFAULT_ASK_USER_TIMEOUT_SECONDS),
   );
-  return { questions, timeoutSeconds };
 }

@@ -250,13 +250,34 @@ describe("plugin embedded-agent runtime admission", () => {
     expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
   });
 
-  it.each(["admittedRunContext", "preparedRunAdmission"] as const)(
-    "rejects a plugin-supplied %s",
+  it.each([
+    "admittedRunContext",
+    "preparedRunAdmission",
+    "onDeferredLifecycleOwner",
+    "onDeferredLifecycleAbort",
+    "compactionCountOwner",
+    "onCompactionAccounting",
+    "onContextAccountingEvent",
+  ] as const)("rejects a plugin-supplied %s", async (field) => {
+    const value = field === "compactionCountOwner" ? "caller" : {};
+    const input = { ...params, [field]: value };
+    await expect(
+      withPluginRuntimePluginIdScope("memory-plugin", () => runPluginEmbeddedAgent(input)),
+    ).rejects.toThrow("cannot supply host run authority");
+    expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
+    expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
+  });
+
+  it.each(["compactionCountOwner", "onCompactionAccounting", "onContextAccountingEvent"])(
+    "rejects inherited %s before admission",
     async (field) => {
+      const input = { ...params };
+      Object.setPrototypeOf(input, {
+        [field]: field === "compactionCountOwner" ? "caller" : vi.fn(),
+      });
+
       await expect(
-        withPluginRuntimePluginIdScope("memory-plugin", () =>
-          runPluginEmbeddedAgent({ ...params, [field]: {} } as never),
-        ),
+        withPluginRuntimePluginIdScope("memory-plugin", () => runPluginEmbeddedAgent(input)),
       ).rejects.toThrow("cannot supply host run authority");
       expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
       expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();

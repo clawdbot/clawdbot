@@ -298,7 +298,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(next.options?.allowH2).toBe(false);
   });
 
-  it("adds active managed proxy CA trust when replacing EnvHttpProxyAgent dispatcher", () => {
+  it("leaves per-hop managed TLS to the owner when replacing an env dispatcher", () => {
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
     vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
       httpProxy: "https://proxy.example:8443",
@@ -319,9 +319,9 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
         expect.objectContaining({
           httpProxy: "https://proxy.example:8443",
           httpsProxy: "https://proxy.example:8443",
-          proxyTls: expect.objectContaining({ ca: "dispatcher-ca" }),
         }),
       );
+      expect(next.options).not.toHaveProperty("proxyTls");
     } finally {
       stopActiveManagedProxyRegistration(registration);
     }
@@ -681,33 +681,43 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     });
   });
 
-  it("installs EnvHttpProxyAgent with active managed proxy CA trust", () => {
-    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
-    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
-      httpProxy: "https://proxy.example:8443",
-      httpsProxy: "https://proxy.example:8443",
-    });
-    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.example:8443"), {
-      proxyTls: { ca: "bootstrap-ca" },
-    });
-
-    try {
-      ensureGlobalUndiciEnvProxyDispatcher();
-
-      expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-      const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
-      expect(next).toBeInstanceOf(EnvHttpProxyAgent);
-      expect(next.options).toEqual({
+  it.each(["https://proxy.example:8443", "socks5://proxy.test:1080"])(
+    "rebuilds the env dispatcher when active managed CA trust changes beside %s",
+    (httpsProxy) => {
+      vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+      vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
         httpProxy: "https://proxy.example:8443",
-        httpsProxy: "https://proxy.example:8443",
-        proxyTls: { ca: "bootstrap-ca" },
-        allowH2: false,
-        clientFactory: "ip-safe-test-client-factory",
+        httpsProxy,
       });
-    } finally {
-      stopActiveManagedProxyRegistration(registration);
-    }
-  });
+      let registration = registerActiveManagedProxyUrl(new URL("https://proxy.example:8443"), {
+        proxyTls: { ca: "bootstrap-ca" },
+      });
+
+      try {
+        ensureGlobalUndiciEnvProxyDispatcher();
+
+        expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+        const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+        expect(next).toBeInstanceOf(EnvHttpProxyAgent);
+        expect(next.options).toEqual({
+          httpProxy: "https://proxy.example:8443",
+          httpsProxy,
+          allowH2: false,
+          clientFactory: "ip-safe-test-client-factory",
+        });
+        ensureGlobalUndiciEnvProxyDispatcher();
+        expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+        stopActiveManagedProxyRegistration(registration);
+        registration = registerActiveManagedProxyUrl(new URL("https://proxy.example:8443"), {
+          proxyTls: { ca: "replaced-bootstrap-ca" },
+        });
+        ensureGlobalUndiciEnvProxyDispatcher();
+        expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+      } finally {
+        stopActiveManagedProxyRegistration(registration);
+      }
+    },
+  );
 
   it("does not override unsupported custom proxy dispatcher types", () => {
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);

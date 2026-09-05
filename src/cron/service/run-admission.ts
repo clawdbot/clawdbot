@@ -10,7 +10,7 @@ import {
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptHandle,
 } from "../store/run-receipt-store.js";
-import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
@@ -576,10 +576,11 @@ export async function executeQueuedCronRun(params: {
       state,
       job: executionJob,
       startedAt: started.startedAt,
-      publicRunId: started.runReceipt.receiptId,
+      runReceipt: started.runReceipt,
     });
     const taskRunId = taskRun?.runId;
     const activeJobMarker = markCronJobActive(executionJob.id, {
+      payloadKind: executionJob.payload.kind,
       preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(executionJob),
     });
     emit(state, {

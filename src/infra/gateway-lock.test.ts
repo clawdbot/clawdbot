@@ -94,16 +94,6 @@ function createLockPayload(params: {
   };
 }
 
-function mockProcStatRead(params: { onProcRead: () => string }) {
-  const readFileSync = fsSync.readFileSync;
-  return vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-    if (filePath === `/proc/${process.pid}/stat`) {
-      return params.onProcRead();
-    }
-    return readFileSync(filePath as never, encoding as never) as never;
-  });
-}
-
 async function writeLockFile(
   env: NodeJS.ProcessEnv,
   params: { startTime: number; createdAt?: string } = { startTime: 111 },
@@ -116,14 +106,6 @@ async function writeLockFile(
   });
   await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
   return { lockPath, configPath };
-}
-
-function createEaccesProcStatSpy() {
-  return mockProcStatRead({
-    onProcRead: () => {
-      throw new Error("EACCES");
-    },
-  });
 }
 
 function createPortProbeConnectionSpy(result: "connect" | "refused") {
@@ -469,21 +451,63 @@ describe("gateway lock", () => {
     }
   });
 
-  it("ignores active-port metadata when the lock owner cannot be verified", async () => {
-    const env = await makeEnv();
-    const { lockPath, configPath } = resolveLockPath(env);
-    const payload = createLockPayload({ configPath, startTime: 111, port: 48789 });
-    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
-
-    await expect(
-      readActiveGatewayLockPort({
+  it.each([
+    { state: "missing", file: "config", expected: "absent" },
+    { state: "dead", file: "config", expected: "absent" },
+    { state: "other role", file: "state", expected: "absent" },
+    { state: "active", file: "state", expected: "active" },
+    { state: "missing port", file: "config", expected: "unavailable" },
+    ...["config", "state"].flatMap((file) =>
+      ["corrupt", "unreadable", "unknown owner"].map((state) => ({
+        state,
+        file,
+        expected: "unavailable",
+      })),
+    ),
+  ])(
+    "preserves strict lock inspection for $state $file locks without changing discovery",
+    async ({ state, file, expected }) => {
+      const env = await makeEnv();
+      const { lockPath, stateLockPath, configPath } = resolveLockPath(env);
+      const target = file === "state" ? stateLockPath : lockPath;
+      if (state !== "missing") {
+        const payload = createLockPayload({
+          configPath,
+          startTime: 111,
+          ...(state !== "missing port" ? { port: 48789 } : {}),
+          ...(state === "other role" ? { role: "sqlite-maintenance" as const } : {}),
+        });
+        await fs.writeFile(target, state === "corrupt" ? "{" : JSON.stringify(payload));
+      }
+      if (state === "unreadable") {
+        const readFile = fs.readFile;
+        vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+          if (filePath === target) {
+            throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+          }
+          return readFile(filePath, options);
+        });
+      }
+      const options = {
         env,
         lockDir: resolveTestLockDir(env),
-        platform: "darwin",
-        readProcessCmdline: () => null,
-      }),
-    ).resolves.toBeUndefined();
-  });
+        platform: "linux" as const,
+        readProcessStartTime: () => (state === "dead" ? 222 : null),
+        readProcessCmdline: () => (state === "unknown owner" ? null : ["openclaw-gateway"]),
+      };
+      await expect(readActiveGatewayLockPort(options)).resolves.toBe(
+        expected === "active" ? 48789 : undefined,
+      );
+      const strict = readActiveGatewayLockIdentity({ ...options, requireInspection: true });
+      if (expected === "unavailable") {
+        await expect(strict).rejects.toBeInstanceOf(GatewayLockError);
+      } else if (expected === "active") {
+        await expect(strict).resolves.toMatchObject({ pid: process.pid, port: 48789 });
+      } else {
+        await expect(strict).resolves.toBeUndefined();
+      }
+    },
+  );
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
     const env = await makeEnv();
@@ -601,18 +625,16 @@ describe("gateway lock", () => {
     const env = await makeEnv();
     const { stateLockPath } = resolveLockPath(env);
     await writeLockFile(env);
-    const spy = createEaccesProcStatSpy();
 
     const pending = acquireForTest(env, {
       timeoutMs: 15,
       staleMs: 10_000,
       platform: "linux",
+      readProcessStartTime: () => null,
       readProcessCmdline: () => null,
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
     await expect(fs.access(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-
-    spy.mockRestore();
   });
 
   it("keeps a verified maintenance owner when process start identity is unavailable", async () => {
@@ -631,26 +653,22 @@ describe("gateway lock", () => {
       ),
       "utf8",
     );
-    const spy = createEaccesProcStatSpy();
 
-    try {
-      await expect(
-        acquireForTest(env, {
-          timeoutMs: 15,
-          staleMs: 0,
-          platform: "linux",
-          readProcessCmdline: () => [
-            "node",
-            "/srv/openclaw/openclaw.mjs",
-            "doctor",
-            "--state-sqlite",
-            "compact",
-          ],
-        }),
-      ).rejects.toBeInstanceOf(GatewayLockError);
-    } finally {
-      spy.mockRestore();
-    }
+    await expect(
+      acquireForTest(env, {
+        timeoutMs: 15,
+        staleMs: 0,
+        platform: "linux",
+        readProcessStartTime: () => null,
+        readProcessCmdline: () => [
+          "node",
+          "/srv/openclaw/openclaw.mjs",
+          "doctor",
+          "--state-sqlite",
+          "compact",
+        ],
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
   });
 
   it("reclaims a maintenance lock when its live pid belongs to another process", async () => {
@@ -668,18 +686,14 @@ describe("gateway lock", () => {
       ),
       "utf8",
     );
-    const spy = createEaccesProcStatSpy();
 
-    try {
-      const lock = await acquireForTest(env, {
-        platform: "linux",
-        readProcessCmdline: () => ["node", "worker.js"],
-        timeoutMs: 80,
-      });
-      await expectGatewayLock(lock).release();
-    } finally {
-      spy.mockRestore();
-    }
+    const lock = await acquireForTest(env, {
+      platform: "linux",
+      readProcessStartTime: () => null,
+      readProcessCmdline: () => ["node", "worker.js"],
+      timeoutMs: 80,
+    });
+    await expectGatewayLock(lock).release();
   });
 
   it("reclaims a Windows maintenance lock when the pid creation time changed", async () => {
@@ -750,20 +764,16 @@ describe("gateway lock", () => {
       ),
       "utf8",
     );
-    const spy = createEaccesProcStatSpy();
 
-    try {
-      await expect(
-        acquireForTest(env, {
-          platform: "linux",
-          readProcessCmdline: () => null,
-          staleMs: 10_000,
-          timeoutMs: 15,
-        }),
-      ).rejects.toBeInstanceOf(GatewayLockError);
-    } finally {
-      spy.mockRestore();
-    }
+    await expect(
+      acquireForTest(env, {
+        platform: "linux",
+        readProcessStartTime: () => null,
+        readProcessCmdline: () => null,
+        staleMs: 10_000,
+        timeoutMs: 15,
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
   });
 
   it("keeps an old maintenance owner when its live identity is unreadable", async () => {
@@ -782,27 +792,22 @@ describe("gateway lock", () => {
       ),
       "utf8",
     );
-    const spy = createEaccesProcStatSpy();
 
-    try {
-      await expect(
-        acquireForTest(env, {
-          platform: "linux",
-          readProcessCmdline: () => null,
-          staleMs: 0,
-          timeoutMs: 80,
-        }),
-      ).rejects.toBeInstanceOf(GatewayLockError);
-    } finally {
-      spy.mockRestore();
-    }
+    await expect(
+      acquireForTest(env, {
+        platform: "linux",
+        readProcessStartTime: () => null,
+        readProcessCmdline: () => null,
+        staleMs: 0,
+        timeoutMs: 80,
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
   });
 
   it("keeps lock when fs.stat fails until payload is stale", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
     await writeLockFile(env);
-    const procSpy = createEaccesProcStatSpy();
     const statSpy = vi
       .spyOn(fs, "stat")
       .mockRejectedValue(Object.assign(new Error("EPERM"), { code: "EPERM" }));
@@ -811,11 +816,11 @@ describe("gateway lock", () => {
       timeoutMs: 20,
       staleMs: 10_000,
       platform: "linux",
+      readProcessStartTime: () => null,
       readProcessCmdline: () => null,
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
-    procSpy.mockRestore();
     statSpy.mockRestore();
   });
 

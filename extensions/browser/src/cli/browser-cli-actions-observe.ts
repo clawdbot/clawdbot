@@ -88,7 +88,7 @@ export function registerBrowserActionObserveCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option(
       "--timeout-ms <ms>",
-      "How long to wait for the response (default: 20000)",
+      "How long to wait for the complete response body (default: 20000)",
       (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .option("--max-chars <n>", "Max body chars to return (default: 200000)", (v: string) =>

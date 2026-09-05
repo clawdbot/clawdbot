@@ -115,11 +115,14 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       );
       if (!existing) {
         const provisional = [...this.#entries].find(
-          (candidate) => candidate.agentId === agentId && !candidate.canonicalSettled,
+          (candidate) =>
+            candidate.agentId === agentId &&
+            !candidate.canonicalSettled &&
+            this.#couldShareCanonicalIdentity(candidate.key, normalizedKey),
         );
         if (provisional) {
-          // Requested aliases cannot be compared safely until their first
-          // Gateway acknowledgment supplies the canonical wire identity.
+          // Only potentially aliased sessions need the first Gateway acknowledgment;
+          // unrelated bodies must not inherit another observer's request deadline.
           await (provisional.plainFallback ?? provisional.ready).catch(() => undefined);
           continue;
         }
@@ -386,6 +389,20 @@ export class GatewaySessionMessageSubscriptionCoordinator {
 
   #areKeysEquivalent(left: string, right: string): boolean {
     return left === right || this.#keysEquivalent?.(left, right) === true;
+  }
+
+  #couldShareCanonicalIdentity(left: string, right: string): boolean {
+    const leftBody = left.replace(/^agent:[^:]+:/i, "").toLowerCase();
+    const rightBody = right.replace(/^agent:[^:]+:/i, "").toLowerCase();
+    // Main/global routing can replace its body with a configured alias. Folding
+    // opaque peer IDs only over-serializes; it never merges distinct observers.
+    return (
+      leftBody === rightBody ||
+      leftBody === "main" ||
+      rightBody === "main" ||
+      leftBody === "global" ||
+      rightBody === "global"
+    );
   }
 }
 

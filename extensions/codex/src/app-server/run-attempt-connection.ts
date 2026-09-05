@@ -1,11 +1,11 @@
 import {
   isActiveHarnessContextEngine,
   resolveSandboxContext,
-  resolveSessionAgentIds,
   resolveUserPath,
   type FastModeAutoProgressState,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
@@ -18,7 +18,10 @@ import {
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerPreparedAuthHandoff,
 } from "./auth-bridge.js";
-import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
+import {
+  assertCodexSessionRuntimeOwnership,
+  resolveCodexBindingAppServerConnection,
+} from "./binding-connection.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   isCodexPairedNodeRemoteExecPlacementSandbox,
@@ -29,6 +32,7 @@ import {
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecPolicyForCodexAppServer,
+  type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
 import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
@@ -37,7 +41,7 @@ import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptInput } from "./run-attempt-types.js";
 import {
   createCodexSessionGenerationSupersededError,
-  reclaimCurrentCodexSessionGeneration,
+  resolveCodexSessionBinding,
   resolveCodexRunSessionBindingAuthority,
   scopeCodexRunBindingStore,
   sessionBindingIdentity,
@@ -71,9 +75,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     offAnnounced: false,
     resetAnnounced: false,
   };
-  const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker({
-    enabled: profilerEnabled,
-  });
+  const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker();
   const runtimeArtifactRequest =
     params.captureRuntimeArtifact || params.expectedRuntimeArtifact
       ? params.expectedRuntimeArtifact
@@ -83,11 +85,14 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const requirementsToml = readCodexRequirementsToml({});
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,
   });
+  // Retained policy owns native and dynamic restrictions; execution identity still owns
+  // credentials, hooks, and bindings.
+  const policyAgentId = params.sandboxAgentId ?? sessionAgentId;
   preDynamicStartupStages.mark("config");
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await ensureCodexWorkspaceDirOnce(resolvedWorkspace);
@@ -100,6 +105,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       ? params.sandbox
       : await resolveSandboxContext({
           config: params.config,
+          agentId: params.sandboxAgentId,
           sessionKey: sandboxSessionKey,
           workspaceDir: resolvedWorkspace,
         });
@@ -116,15 +122,24 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     execOverrides: params.execOverrides,
     approvals: params.permissionMode === "full" ? undefined : loadExecApprovals(),
     config: params.config,
-    agentId: sessionAgentId,
+    agentId: policyAgentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const preparedEnvironment = params.hostCapabilities.preparedEnvironment?.();
   const remoteExec = isCodexRemoteExecPlacementSandbox(sandbox);
+  const assertLocalTargetSupported = (unsupported: boolean) => {
+    if (preparedEnvironment?.localProcessEnv && unsupported) {
+      throw new Error(
+        "This runtime cannot target the diagnosed local installation. Use the saved prompt with a suggested external or manual handoff on this machine.",
+      );
+    }
+  };
+  assertLocalTargetSupported(sandbox?.enabled === true || remoteExec);
   const preparedShellEnvironment = preparedEnvironment
     ? {
         ...preparedEnvironment.credentialScrubEnv,
-        ...(!remoteExec ? preparedEnvironment.localIdentityEnv : undefined),
+        ...(sandbox?.enabled || remoteExec ? undefined : preparedEnvironment.localIdentityEnv),
+        ...preparedEnvironment.localProcessEnv,
       }
     : undefined;
   const shellEnvironment =
@@ -135,12 +150,15 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   // Selected, scrubbed, or remote identities must not let a later profile replace that decision.
   const disableLoginShell =
     remoteExec ||
+    preparedEnvironment?.localProcessEnv !== undefined ||
     preparedEnvironment?.managedLocalIdentity === true ||
     (preparedEnvironment !== undefined &&
       Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
-  const withPreparedProcessEnv = <T extends { start: { env?: Record<string, string> } }>(
-    appServer: T,
-  ) => {
+  const withPreparedProcessEnv = <T extends CodexAppServerRuntimeOptions>(appServer: T) => {
+    // Loopback WebSockets can forward to another host; their URL does not attest peer locality.
+    assertLocalTargetSupported(
+      appServer.start.transport === "websocket" || Boolean(appServer.remoteWorkspaceRoot),
+    );
     return shellEnvironment
       ? {
           ...appServer,
@@ -161,13 +179,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     : undefined;
   const isInactiveThreadBootstrapBinding = (binding: CodexAppServerThreadBinding | undefined) =>
     !activeContextEngine && binding?.contextEngine?.projection?.mode === "thread_bootstrap";
-  // The public runner carries a resolved store target. Its durable row must
-  // authorize a stable-key fence before an old generation can read its binding.
-  if (
-    bindingIdentity.kind === "session" &&
-    bindingIdentity.sessionKey &&
-    (params.sessionTarget?.storePath || params.config?.session?.store)
-  ) {
+  // Only a durable session row authorizes stable-key ownership. Caller-owned
+  // transcripts omit a store target, so classify them against the default store too.
+  if (bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
     const authority = resolveCodexRunSessionBindingAuthority({
       identity: bindingIdentity,
       config: params.config,
@@ -193,19 +207,20 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  let startupBinding = await bindingStore.read(bindingIdentity);
-  if (!startupBinding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-    const reclaimed = await reclaimCurrentCodexSessionGeneration({
-      bindingStore,
-      identity: bindingIdentity,
-      config: params.config,
-      storePath: params.sessionTarget?.storePath,
-    });
-    if (!reclaimed) {
-      throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
-    }
-    startupBinding = await bindingStore.read(bindingIdentity);
-  }
+  const { binding: admittedBinding, assertCurrent } = await resolveCodexSessionBinding({
+    reclaimStale: true,
+    bindingStore,
+    identity: bindingIdentity,
+    config: params.config,
+    storePath: params.sessionTarget?.storePath,
+    assertCurrent: params.hostCapabilities.assertActive,
+    signal: params.abortSignal,
+    assertBinding: params.expectedSessionRuntimeOwnership
+      ? (binding) =>
+          assertCodexSessionRuntimeOwnership(binding, params.expectedSessionRuntimeOwnership)
+      : undefined,
+  });
+  let startupBinding = admittedBinding;
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
   if (usesSupervisionConnection) {
@@ -318,6 +333,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const sessionPermissionCwd = resolveCodexSessionPermissionCwd({
     permissionMode: params.permissionMode,
     sessionRoot: params.sessionRoot,
+    defaultRoot: effectiveWorkspace,
     requestedCwd,
     fallbackCwd: effectiveWorkspace,
   });
@@ -334,6 +350,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       appServer,
       permissionMode: params.permissionMode,
       sessionRoot: params.sessionRoot,
+      defaultRoot: effectiveWorkspace,
       pluginConfig,
       canUseAutoReview: canUseCodexModelBackedApprovalsReviewerForModel({
         modelProvider: selection.modelProvider,
@@ -403,109 +420,122 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   } else {
     params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
-  const startupBindingBeforeRotation = startupBinding;
-  const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
-    binding: startupBinding,
-    bindingStore,
-    identity: bindingIdentity,
-    sessionFile: params.sessionFile,
-    agentDir,
-    codexHome: appServer.start.env?.CODEX_HOME,
-    config: params.config,
-    contextEngineActive: Boolean(activeContextEngine),
-  });
-  startupBinding = startupBindingResolution.binding;
-  const initialInactiveThreadBootstrapBindingForcedFreshStart =
-    initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
-  preDynamicStartupStages.mark("rotate-binding");
-  // Rotation returns the original binding on the common resume path; only a
-  // cleared or replaced native thread changes its model, policy, or connection.
-  if (startupBinding !== startupBindingBeforeRotation) {
-    reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
-    configuredAppServer = resolveRuntimeOptionsForBinding(startupBinding, {
-      modelProvider: reviewerPolicyContext.modelProvider,
-      model: reviewerPolicyContext.model,
+  try {
+    const startupBindingBeforeRotation = startupBinding;
+    const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
+      assertCurrent,
+      binding: startupBinding,
+      bindingStore,
+      identity: bindingIdentity,
+      sessionFile: params.sessionFile,
+      agentDir,
+      codexHome: appServer.start.env?.CODEX_HOME,
+      config: params.config,
+      contextEngineActive: Boolean(activeContextEngine),
+      expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,
     });
-    resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
-    appServer = resolvedAppServer.appServer;
+    startupBinding = startupBindingResolution.binding;
+    const initialInactiveThreadBootstrapBindingForcedFreshStart =
+      initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
+    preDynamicStartupStages.mark("rotate-binding");
+    // Rotation returns the original binding on the common resume path; only a
+    // cleared or replaced native thread changes its model, policy, or connection.
+    if (startupBinding !== startupBindingBeforeRotation) {
+      reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
+      configuredAppServer = resolveRuntimeOptionsForBinding(startupBinding, {
+        modelProvider: reviewerPolicyContext.modelProvider,
+        model: reviewerPolicyContext.model,
+      });
+      resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
+      appServer = resolvedAppServer.appServer;
+    }
+    const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
+      appServer,
+      permissionMode: params.permissionMode,
+      sessionRoot: params.sessionRoot,
+      defaultRoot: effectiveWorkspace,
+    });
+    if (sessionPermissionPolicy) {
+      params.permissionMode = sessionPermissionPolicy.mode;
+      params.sessionRoot = sessionPermissionPolicy.root;
+      (params.execOverrides ??= {}).mode = sessionPermissionPolicy.execMode;
+    }
+    const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+      configuredEvents: options.nativeHookRelay?.events,
+      appServer,
+    });
+    const mutable = {
+      startupBinding,
+      startupContextTokens: startupBindingResolution.startupContextTokens,
+      pluginAppServer: appServer,
+      // Captured before rotation: a rotated-away thread's observed density is the
+      // best available sample for sizing the fresh thread's continuity projection.
+      continuityCalibration: startupBindingBeforeRotation?.continuityCalibration,
+    };
+    const resolveRuntimeOptionsForCurrentBinding = (selection: {
+      modelProvider?: string;
+      model?: string;
+    }) =>
+      resolveFinalAppServer(
+        resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
+        selection,
+      ).appServer;
+    assertCurrent();
+    // Host capabilities are identity-keyed; carry generation proof separately.
+    return {
+      params,
+      assertCurrent,
+      options,
+      attemptStartedAt,
+      profilerEnabled,
+      codexModelCallTrace,
+      codexModelContentCapture,
+      codexModelCallId,
+      fastModeAutoStartedAtMs,
+      fastModeAutoProgressState,
+      preDynamicStartupStages,
+      attemptClientFactory,
+      runtimeArtifactRequest,
+      pluginConfig,
+      computerUseConfig,
+      sessionAgentId,
+      policyAgentId,
+      resolvedWorkspace,
+      sandboxSessionKey,
+      contextSessionKey,
+      sandbox,
+      agentDir,
+      shellEnvironment,
+      disableLoginShell,
+      bindingIdentity,
+      bindingStore,
+      activeContextEngine,
+      isInactiveThreadBootstrapBinding,
+      usesSupervisionConnection,
+      startupAuthProfileId,
+      startupAuthRequirement: preparedAuthRoute?.authRequirement,
+      startupPreparedAuth,
+      startupClientAuthProfileId,
+      effectiveWorkspace,
+      effectiveCwd,
+      appServer,
+      sessionPermissionPolicy,
+      nativeHookRelayEvents,
+      runAbortController,
+      terminalState,
+      abortExplicitly,
+      abortFromUpstream,
+      resolveReviewerPolicyContext,
+      resolveRuntimeOptionsForCurrentBinding,
+      mutable,
+      initialStartupBindingHadInactiveThreadBootstrap,
+      initialInactiveThreadBootstrapBindingForcedFreshStart,
+    };
+  } catch (error) {
+    // The attempt owns this listener only after connection preparation returns.
+    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    throw error;
   }
-  const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
-    appServer,
-    permissionMode: params.permissionMode,
-    sessionRoot: params.sessionRoot,
-  });
-  if (sessionPermissionPolicy) {
-    params.permissionMode = sessionPermissionPolicy.mode;
-    params.sessionRoot = sessionPermissionPolicy.root;
-    (params.execOverrides ??= {}).mode = sessionPermissionPolicy.execMode;
-  }
-  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
-    configuredEvents: options.nativeHookRelay?.events,
-    appServer,
-  });
-  const mutable = {
-    startupBinding,
-    startupContextTokens: startupBindingResolution.startupContextTokens,
-    pluginAppServer: appServer,
-    // Captured before rotation: a rotated-away thread's observed density is the
-    // best available sample for sizing the fresh thread's continuity projection.
-    continuityCalibration: startupBindingBeforeRotation?.continuityCalibration,
-  };
-  const resolveRuntimeOptionsForCurrentBinding = (selection: {
-    modelProvider?: string;
-    model?: string;
-  }) =>
-    resolveFinalAppServer(
-      resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
-      selection,
-    ).appServer;
-  return {
-    params,
-    options,
-    attemptStartedAt,
-    profilerEnabled,
-    codexModelCallTrace,
-    codexModelContentCapture,
-    codexModelCallId,
-    fastModeAutoStartedAtMs,
-    fastModeAutoProgressState,
-    preDynamicStartupStages,
-    attemptClientFactory,
-    runtimeArtifactRequest,
-    pluginConfig,
-    computerUseConfig,
-    sessionAgentId,
-    resolvedWorkspace,
-    sandboxSessionKey,
-    contextSessionKey,
-    sandbox,
-    agentDir,
-    shellEnvironment,
-    disableLoginShell,
-    bindingIdentity,
-    bindingStore,
-    activeContextEngine,
-    isInactiveThreadBootstrapBinding,
-    usesSupervisionConnection,
-    startupAuthProfileId,
-    startupAuthRequirement: preparedAuthRoute?.authRequirement,
-    startupPreparedAuth,
-    startupClientAuthProfileId,
-    effectiveWorkspace,
-    effectiveCwd,
-    appServer,
-    sessionPermissionPolicy,
-    nativeHookRelayEvents,
-    runAbortController,
-    terminalState,
-    abortExplicitly,
-    abortFromUpstream,
-    resolveReviewerPolicyContext,
-    resolveRuntimeOptionsForCurrentBinding,
-    mutable,
-    initialStartupBindingHadInactiveThreadBootstrap,
-    initialInactiveThreadBootstrapBindingForcedFreshStart,
-  };
 }
 
 export type CodexAttemptConnection = Awaited<ReturnType<typeof prepareCodexAttemptConnection>>;

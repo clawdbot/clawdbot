@@ -1,7 +1,13 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
-import { createUsageAccumulator } from "../usage-accumulator.js";
+import {
+  markCoreTtsAttemptResult,
+  markCoreTtsToolResult,
+  transferCoreTtsToolResultProvenance,
+} from "../../tools/tts-tool-result-provenance.js";
+import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { buildEmbeddedRunPayloads } from "./payloads.js";
@@ -71,19 +77,24 @@ function attemptResult(
 
 async function prepareAttempt(input: {
   attempt: EmbeddedRunAttemptWithReceiptEvidence;
+  admittedRunContext?: ReturnType<typeof createTestAdmittedRunContext>;
   currentAttemptCompletedAssistant?: AssistantMessage;
+  sourceReplyDeliveryMode?: "message_tool_only";
   terminalState: EmbeddedRunTerminalState;
 }) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
   return prepareEmbeddedRunTerminal({
     runParams: {
-      admittedRunContext: createTestAdmittedRunContext("run-focused"),
+      admittedRunContext: input.admittedRunContext ?? createTestAdmittedRunContext("run-focused"),
       sessionId: "session-focused",
       runId: "run-focused",
       workspaceDir: "/tmp/openclaw-test",
       prompt: "hi",
       trigger: "user",
       timeoutMs: 60_000,
+      ...(input.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: input.sourceReplyDeliveryMode }
+        : {}),
     },
     attempt: input.attempt,
     currentAttemptCompletedAssistant: input.currentAttemptCompletedAssistant,
@@ -104,6 +115,126 @@ describe("prepareEmbeddedRunTerminal", () => {
   beforeEach(() => {
     payloadMocks.buildEmbeddedRunPayloads.mockReset().mockReturnValue([]);
   });
+
+  it.each([
+    {
+      name: "core-attested delivered media",
+      attestedMediaUrls: ["/tmp/reply.opus"],
+      forgePublicField: false,
+      transferToolResult: undefined,
+      expectedMarkedMedia: ["/tmp/reply.opus"],
+    },
+    {
+      name: "an external harness field",
+      attestedMediaUrls: [],
+      forgePublicField: true,
+      transferToolResult: undefined,
+      expectedMarkedMedia: [],
+    },
+    {
+      name: "core-attested but non-delivered media",
+      attestedMediaUrls: ["/tmp/other.opus"],
+      forgePublicField: false,
+      transferToolResult: undefined,
+      expectedMarkedMedia: [],
+    },
+    {
+      name: "a transferred core TTS result",
+      attestedMediaUrls: [],
+      forgePublicField: false,
+      transferToolResult: "core" as const,
+      expectedMarkedMedia: ["/tmp/reply.opus"],
+    },
+    {
+      name: "a transferred plugin result",
+      attestedMediaUrls: [],
+      forgePublicField: false,
+      transferToolResult: "plugin" as const,
+      expectedMarkedMedia: [],
+    },
+  ])("accepts only $name for source-suppression delivery", async (testCase) => {
+    payloadMocks.buildEmbeddedRunPayloads.mockReturnValueOnce([
+      { text: "PRIVATE_FINAL_83636_MUST_NOT_APPEAR" },
+    ]);
+    const attempt = attemptResult({
+      toolMediaUrls: ["/tmp/reply.opus"],
+      toolAudioAsVoice: true,
+      toolTrustedLocalMedia: true,
+    });
+    const admittedRunContext = createTestAdmittedRunContext("run-focused");
+    if (testCase.attestedMediaUrls.length > 0) {
+      markCoreTtsAttemptResult(
+        attempt,
+        testCase.attestedMediaUrls,
+        admittedRunContext.operationalRunInstance,
+      );
+    }
+    if (testCase.forgePublicField) {
+      Reflect.set(attempt, "toolAutoDeliveryMediaUrls", ["/tmp/reply.opus"]);
+    }
+    if (testCase.transferToolResult) {
+      const toolResult =
+        testCase.transferToolResult === "core"
+          ? markCoreTtsToolResult({}, ["/tmp/reply.opus"])
+          : {};
+      transferCoreTtsToolResultProvenance(
+        toolResult,
+        attempt,
+        ["/tmp/reply.opus"],
+        admittedRunContext.operationalRunInstance,
+      );
+    }
+
+    const prepared = await prepareAttempt({
+      attempt,
+      admittedRunContext,
+      sourceReplyDeliveryMode: "message_tool_only",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+    const markedMedia = (prepared.payloadsWithToolMedia ?? []).filter(
+      (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+    );
+
+    expect(markedMedia.flatMap((payload) => payload.mediaUrls ?? [])).toEqual(
+      testCase.expectedMarkedMedia,
+    );
+    expect(markedMedia.every((payload) => !payload.text)).toBe(true);
+  });
+
+  it.each([
+    { assistantTexts: ["Earlier", "  Latest 😀  ", "\t\r\n"], expected: "Latest 😀" },
+    { assistantTexts: ["Earlier", "\ufeff\u2003Latest\u00a0", "\u2028"], expected: "Latest" },
+    { assistantTexts: ["Earlier", " \u200b "], expected: "\u200b" },
+    { assistantTexts: ["  First line \n second line  "], expected: "First line \n second line" },
+    { assistantTexts: ["Earlier", " \ud800text\udc00 "], expected: "\ud800text\udc00" },
+    { assistantTexts: ["", " \t\r\n", "\ufeff\u2003"], expected: undefined },
+    { assistantTexts: [], expected: undefined },
+  ])(
+    "selects final fallback text without changing its source %#",
+    async ({ assistantTexts, expected }) => {
+      const original = [...assistantTexts];
+      const prepared = await prepareAttempt({
+        attempt: attemptResult({
+          assistantTexts,
+          messagesSnapshot: [],
+          lastAssistant: undefined,
+          currentAttemptAssistant: undefined,
+          currentAttemptCompletedAssistant: undefined,
+        }),
+        terminalState: {
+          outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+          signalOwnedInterruption: false,
+        },
+      });
+
+      expect(prepared.finalAssistantVisibleText).toBe(expected);
+      expect(prepared.finalAssistantRawText).toBe(expected);
+      expect(assistantTexts).toEqual(original);
+    },
+  );
 
   it.each(["error", "aborted"] as const)(
     "does not use %s assistant text as final terminal text",
@@ -149,60 +280,85 @@ describe("prepareEmbeddedRunTerminal", () => {
     },
   );
 
-  it("uses the current completed assistant instead of stale session evidence", async () => {
-    const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
-    const finalText = "The requested update is complete.";
-    const staleAssistant = {
-      ...assistantMessage("toolUse"),
-      content: [{ type: "toolCall" as const, id: "tool_1", name: "update_plan", arguments: {} }],
-    };
-    const currentAssistant = {
-      ...assistantMessage("stop"),
-      content: [{ type: "text" as const, text: finalText }],
-      usage: {
-        ...assistantMessage("stop").usage,
-        input: 200,
-        output: 20,
-        totalTokens: 220,
-      },
-    };
-    const prepared = prepareEmbeddedRunTerminal({
-      runParams: {
-        admittedRunContext: createTestAdmittedRunContext("run-current"),
-        sessionId: "session-current",
-        runId: "run-current",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "hi",
-        trigger: "user",
-        timeoutMs: 60_000,
-      },
-      attempt: attemptResult({
-        assistantTexts: ["Analysis...", finalText],
-        toolMetas: [{ toolName: "update_plan" }],
-        lastAssistant: staleAssistant,
-        currentAttemptAssistant: currentAssistant,
-        currentAttemptCompletedAssistant: currentAssistant,
-      }),
-      currentAttemptCompletedAssistant: currentAssistant,
-      provider: "openai",
-      model: "gpt-5.4",
-      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-current",
-      outerContextTokenMeta: {},
-      usageAccumulator: createUsageAccumulator(),
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
-    });
+  it.each([true, false])(
+    "uses current-attempt attribution instead of stale session evidence (completed: %s)",
+    async (completed) => {
+      const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+      const finalText = "The requested update is complete.";
+      const nativeSelection = { provider: "native-provider", model: "native-model" };
+      const staleAssistant = {
+        ...assistantMessage("toolUse"),
+        content: [{ type: "toolCall" as const, id: "tool_1", name: "update_plan", arguments: {} }],
+      };
+      const currentAssistant = {
+        ...assistantMessage("stop"),
+        ...nativeSelection,
+        content: [{ type: "text" as const, text: finalText }],
+        usage: {
+          ...assistantMessage("stop").usage,
+          input: 200,
+          output: 20,
+          totalTokens: 220,
+        },
+      };
+      const completedAssistant = completed ? currentAssistant : undefined;
+      const prepared = prepareEmbeddedRunTerminal({
+        runParams: {
+          admittedRunContext: createTestAdmittedRunContext("run-current"),
+          sessionId: "session-current",
+          runId: "run-current",
+          workspaceDir: "/tmp/openclaw-test",
+          prompt: "hi",
+          trigger: "user",
+          timeoutMs: 60_000,
+        },
+        attempt: attemptResult({
+          assistantTexts: ["Analysis...", finalText],
+          toolMetas: [{ toolName: "update_plan" }],
+          lastAssistant: staleAssistant,
+          currentAttemptAssistant: currentAssistant,
+          currentAttemptCompletedAssistant: completedAssistant,
+          runtimeModelSelection: nativeSelection,
+        }),
+        currentAttemptCompletedAssistant: completedAssistant,
+        provider: "openai",
+        model: "gpt-5.4",
+        activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+        authProfileStore: { version: 1, profiles: {} },
+        sessionIdUsed: "session-current",
+        outerContextTokenMeta: {},
+        usageAccumulator: createUsageAccumulator(),
+        contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+        resolvedToolResultFormat: "markdown",
+        terminalState: {
+          outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+          signalOwnedInterruption: false,
+        },
+      });
 
-    expect(prepared.finalAssistantVisibleText).toBe(finalText);
-    expect(prepared.finalAssistantRawText).toBe(finalText);
-    expect(prepared.agentMeta.lastCallUsage).toMatchObject({ input: 200, output: 20, total: 220 });
-  });
+      expect(prepared.finalAssistantVisibleText).toBe(finalText);
+      expect(prepared.finalAssistantRawText).toBe(finalText);
+      expect(prepared.agentMeta).toMatchObject({
+        ...nativeSelection,
+        runtimeModelSelection: nativeSelection,
+      });
+      expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lastAssistant: completedAssistant,
+          currentAssistant: completedAssistant ?? null,
+        }),
+      );
+      if (completed) {
+        expect(prepared.agentMeta.lastCallUsage).toMatchObject({
+          input: 200,
+          output: 20,
+          total: 220,
+        });
+      } else {
+        expect(prepared.agentMeta.lastCallUsage).toBeUndefined();
+      }
+    },
+  );
 
   it("projects a Code Mode cron tool failure into terminal metadata", async () => {
     const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
@@ -357,6 +513,25 @@ describe("prepareEmbeddedRunTerminal", () => {
       expect.objectContaining({ lastAssistant: yieldedAssistant, currentAssistant: null }),
     );
   });
+
+  it("carries the canonical restart reason into terminal payload rendering", async () => {
+    await prepareAttempt({
+      attempt: attemptResult({
+        lastToolError: {
+          toolName: "gateway_exec",
+          error: "OpenClaw dynamic tool call aborted.",
+        },
+      }),
+      terminalState: {
+        outcome: { reason: "cancelled", status: "error", stopReason: "restart" },
+        signalOwnedInterruption: true,
+      },
+    });
+
+    expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ runAborted: true, runStopReason: "restart" }),
+    );
+  });
 });
 
 describe("prepareEmbeddedRunTerminal run stats", () => {
@@ -372,12 +547,8 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     model?: string;
     outerContextTokenMeta?: { contextTokens?: number };
     responseModel?: string;
-    usage?: Partial<
-      Pick<
-        ReturnType<typeof createUsageAccumulator>,
-        "input" | "output" | "cacheRead" | "cacheWrite" | "total"
-      >
-    >;
+    usage?: Parameters<typeof mergeUsageIntoAccumulator>[1];
+    attempts?: NonNullable<Parameters<typeof mergeUsageIntoAccumulator>[1]>[];
   };
 
   async function prepareStats(statsInput: StatsInput = {}) {
@@ -391,7 +562,10 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       ...(statsInput.responseModel ? { responseModel: statsInput.responseModel } : {}),
     };
     const usageAccumulator = createUsageAccumulator();
-    Object.assign(usageAccumulator, statsInput.usage);
+    mergeUsageIntoAccumulator(usageAccumulator, statsInput.usage);
+    for (const attempt of statsInput.attempts ?? []) {
+      mergeUsageIntoAccumulator(usageAccumulator, attempt);
+    }
     usageAccumulator.assistantTurns = statsInput.assistantTurns ?? 0;
     usageAccumulator.bridgeCalls = statsInput.bridgeCalls;
     return prepareEmbeddedRunTerminal({
@@ -480,6 +654,28 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     });
   });
 
+  it("reports the terminal physical attempt's redacted credential source", async () => {
+    const prepared = await prepareStats({
+      attempt: {
+        modelAttempt: {
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          credentialSource: {
+            kind: "direct",
+            evidence: "environment",
+            authorization: "declared",
+          },
+        },
+      },
+    });
+
+    expect(prepared.agentMeta.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "environment",
+      authorization: "declared",
+    });
+  });
+
   it("stamps assistantTurns from the run accumulator and omits zero", async () => {
     const counted = await prepareStats({ assistantTurns: 3 });
     expect(counted.agentMeta.assistantTurns).toBe(3);
@@ -511,6 +707,57 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     });
     // (1M*$1 + 0.5M*$2 + 2M*$0.5 + 0.25M*$4) per million tokens.
     expect(prepared.agentMeta.costUsd).toBeCloseTo(4, 10);
+  });
+
+  it.each([
+    { firstCost: 0, tokens: { input: 150_000, output: 100 } },
+    { firstCost: 0.125, tokens: { input: 150_000, output: 100 } },
+    { firstCost: 0, tokens: {} },
+    { firstCost: 0.125, tokens: {} },
+  ])(
+    "preserves carried per-attempt cost $firstCost with tokens $tokens instead of repricing",
+    async ({ firstCost, tokens }) => {
+      const prepared = await prepareStats({
+        config: COST_CONFIG,
+        attempts: [
+          { ...tokens, cost: { total: firstCost } },
+          { ...tokens, cost: { total: 0 } },
+        ],
+      });
+      expect(prepared.agentMeta.costUsd).toBe(firstCost);
+    },
+  );
+
+  it("omits tiered aggregate cost when an observed call has no price", async () => {
+    const prepared = await prepareStats({
+      config: {
+        models: {
+          providers: {
+            "cost-test-provider": {
+              models: [
+                {
+                  id: "cost-model",
+                  cost: {
+                    input: 1,
+                    output: 2,
+                    cacheRead: 0.5,
+                    cacheWrite: 4,
+                    tieredPricing: [
+                      { range: [200_000], input: 2, output: 4, cacheRead: 1, cacheWrite: 8 },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      attempts: [
+        { input: 150_000, output: 100, cost: { total: 0.125 } },
+        { input: 150_000, output: 100 },
+      ],
+    });
+    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
   });
 
   it("omits costUsd when the model has no cost data", async () => {
@@ -560,6 +807,16 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(prepared.agentMeta.terminalReceipt).not.toHaveProperty("terminalDisposition");
     expect(prepared.agentMeta.model).toBe("cost-model");
     expect(prepared.reportedModelRef.model).toBe("cost-model");
+  });
+
+  it("records producer source delivery without an extracted messaging target", async () => {
+    const prepared = await prepareStats({
+      attempt: {
+        sourceReplyDelivered: true,
+        messagingToolSentTargets: [],
+      },
+    });
+    expect(prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(true);
   });
 
   it("marks a provider-only response route as rerouted", async () => {

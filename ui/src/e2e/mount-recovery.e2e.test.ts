@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -12,7 +13,7 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("reloads a fresh document after the initial app module is unavailable", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/mount-recovery");
+    const artifactDir = createControlUiE2eArtifactDir("mount-recovery");
     await suite.withPage(
       {
         locale: "en-US",

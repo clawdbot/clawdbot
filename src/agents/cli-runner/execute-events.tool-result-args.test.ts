@@ -33,6 +33,7 @@ function buildContext(runId: string): PreparedCliRunContext {
     workspaceDir: "/tmp",
     backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
     preparedBackend: { backend, env: {} },
+    executionTarget: { kind: "process" },
     reusableCliSession: { mode: "none" },
     hadSessionFile: false,
     contextEngineConfig: {},
@@ -40,7 +41,6 @@ function buildContext(runId: string): PreparedCliRunContext {
     normalizedModel: "claude-haiku-4-5",
     systemPrompt: "system",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    bootstrapPromptWarningLines: [],
     claudeSkillsPluginArgs: [],
     authEpochVersion: 2,
   } as PreparedCliRunContext;
@@ -69,6 +69,61 @@ function collectToolEvents(runId: string): {
 }
 
 describe("cli tool result events", () => {
+  it("emits complete CLI commentary as a completed preamble", () => {
+    const runId = "run-commentary-complete";
+    const handlers = createCliEventHandlers({
+      context: buildContext(runId),
+      toolTracking: buildToolTracking(),
+      getRunState: () => ({ failed: false, error: undefined }),
+    });
+    const events: AgentEventRuntimePayload[] = [];
+    const dispose = onAgentEvent((event) => {
+      if (event.runId === runId && event.stream === "item") {
+        events.push(event);
+      }
+    });
+    try {
+      // The JSONL parser has already accumulated this whole pre-tool segment.
+      // An update-only event would leave first-notification buffering waiting forever.
+      handlers.emitCliCommentaryText("Let me check that for you.");
+      expect(events).toMatchObject([
+        {
+          stream: "item",
+          data: { kind: "preamble", phase: "end", progressText: "Let me check that for you." },
+        },
+      ]);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("emits canonical CLI compaction lifecycle events", () => {
+    const runId = "run-compaction-events";
+    const handlers = createCliEventHandlers({
+      context: buildContext(runId),
+      toolTracking: buildToolTracking(),
+      getRunState: () => ({ failed: false, error: undefined }),
+    });
+    const events: AgentEventRuntimePayload[] = [];
+    const dispose = onAgentEvent((event) => {
+      if (event.runId === runId && event.stream === "compaction") {
+        events.push(event);
+      }
+    });
+
+    try {
+      handlers.emitCliCompaction({ phase: "start" });
+      handlers.emitCliCompaction({ phase: "end", completed: true });
+
+      expect(events.map((event) => event.data)).toEqual([
+        { phase: "start", backend: "claude-cli" },
+        { phase: "end", backend: "claude-cli", completed: true },
+      ]);
+    } finally {
+      dispose();
+    }
+  });
+
   it("keeps correlated result args without adding them to display results", () => {
     const runId = "run-tool-result-args";
     const handlers = createCliEventHandlers({

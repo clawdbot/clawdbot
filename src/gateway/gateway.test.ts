@@ -589,82 +589,92 @@ describe("gateway e2e", () => {
     "accepts a gateway agent request over ws and returns a run id",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
-      const { baseUrl: openaiBaseUrl, restore } = installOpenAiResponsesMock();
       const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
         prefix: "openclaw-gw-mock-home-",
-        minimalGateway: true,
       });
+      const { baseUrl: openaiBaseUrl, restore } = installOpenAiResponsesMock();
 
-      const token = nextGatewayId("test-token");
-      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+      try {
+        const token = nextGatewayId("test-token");
+        setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
 
-      const configPath = await createGatewayConfigPath(tempHome);
-      const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
+        const configPath = await createGatewayConfigPath(tempHome);
+        const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
 
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-            model: { primary: mockProvider.modelRef },
-            models: {
-              [mockProvider.modelRef]: {
-                params: {
-                  transport: "sse",
-                  openaiWsWarmup: false,
+        const cfg = {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+              model: { primary: mockProvider.modelRef },
+              models: {
+                [mockProvider.modelRef]: {
+                  params: {
+                    transport: "sse",
+                    openaiWsWarmup: false,
+                  },
                 },
               },
             },
+            // The request below runs sessionKey "agent:dev:mock-openai"; the
+            // gateway rejects session keys whose agent id is not declared.
+            entries: { dev: { default: true } },
           },
-          // The request below runs sessionKey "agent:dev:mock-openai"; the
-          // gateway rejects session keys whose agent id is not declared.
-          entries: { dev: { default: true } },
-        },
-        models: {
-          mode: "replace",
-          providers: {
-            [mockProvider.providerId]: mockProvider.config,
+          models: {
+            mode: "replace",
+            providers: {
+              [mockProvider.providerId]: mockProvider.config,
+            },
           },
-        },
-        gateway: { auth: { token } },
-      };
+          gateway: { auth: { token } },
+        };
 
-      const { server, client } = await startGatewayWithClient({
-        cfg,
-        configPath,
-        token,
-        clientDisplayName: "vitest-mock-openai",
-      });
+        const { server, client } = await startGatewayWithClient({
+          cfg,
+          configPath,
+          token,
+          clientDisplayName: "vitest-mock-openai",
+        });
 
-      try {
-        const sessionKey = "agent:dev:mock-openai";
+        try {
+          // Agent admission needs the reply runtime published by normal sidecar startup.
+          await server.startupSettled;
+          const sessionKey = "agent:dev:mock-openai";
 
-        const runId = nextGatewayId("run");
-        const payload = await client.request(
-          "agent",
-          {
-            sessionKey,
-            idempotencyKey: `idem-${runId}`,
-            message: "Reply with ok.",
-            deliver: false,
-          },
-          { expectFinal: false },
-        );
+          const runId = nextGatewayId("run");
+          const payload = await client.request(
+            "agent",
+            {
+              sessionKey,
+              idempotencyKey: `idem-${runId}`,
+              message: "Reply with ok.",
+              deliver: false,
+            },
+            { expectFinal: false },
+          );
 
-        expect(payload?.status).toBe("accepted");
-        expect(typeof payload?.runId).toBe("string");
+          expect(payload?.status).toBe("accepted");
+          expect(typeof payload?.runId).toBe("string");
 
-        const abortPayload = await client.request(
-          "sessions.abort",
-          { runId: payload.runId },
-          { timeoutMs: 5_000 },
-        );
-        expect(["aborted", "no-active-run"]).toContain(abortPayload?.status);
+          const abortPayload = await client.request(
+            "sessions.abort",
+            { runId: payload.runId },
+            { timeoutMs: 5_000 },
+          );
+          expect(["aborted", "no-active-run"]).toContain(abortPayload?.status);
+        } finally {
+          try {
+            await disconnectGatewayClient(client);
+          } finally {
+            await server.close({ reason: "mock openai test complete" });
+          }
+        }
       } finally {
-        await disconnectGatewayClient(client);
-        await server.close({ reason: "mock openai test complete" });
-        await removeGatewayTempHome(tempHome);
-        restore();
-        envSnapshot.restore();
+        try {
+          await removeGatewayTempHome(tempHome);
+        } finally {
+          restore();
+          envSnapshot.restore();
+        }
       }
     },
   );
@@ -915,11 +925,7 @@ module.exports = {
     "ignores env-driven plugin auto-enable in minimal gateway mode",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
-      const envSnapshot = captureEnv([
-        ...GATEWAY_TEST_ENV_KEYS,
-        "OPENCLAW_TEST_MINIMAL_GATEWAY",
-        "DISCORD_BOT_TOKEN",
-      ]);
+      const envSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS, "DISCORD_BOT_TOKEN"]);
 
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimal-gateway-home-"));
       const configPath = await createGatewayConfigPath(tempHome);

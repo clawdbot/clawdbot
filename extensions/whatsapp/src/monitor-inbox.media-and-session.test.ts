@@ -1,14 +1,12 @@
 // WhatsApp monitor inbox media and session behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  DEFAULT_ACCOUNT_ID,
-  getAuthDir,
-  getMonitorWebInbox,
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
+  startInboxMonitor,
+  waitForInboundWorkDrained,
 } from "./monitor-inbox.test-harness.js";
-let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 const inboundLoggerInfoMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/logging-core", async () => {
@@ -31,48 +29,19 @@ describe("web monitor inbox", () => {
 
   beforeEach(() => {
     inboundLoggerInfoMock.mockReset();
-    monitorWebInbox = getMonitorWebInbox();
   });
 
-  async function openMonitor(
-    onMessage = vi.fn(),
-    extraOptions: Partial<Parameters<typeof monitorWebInbox>[0]> = {},
-  ) {
-    return await monitorWebInbox({
-      cfg: mockLoadConfig() as never,
-      verbose: false,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-      onMessage,
-      ...extraOptions,
-    });
+  async function openMonitor(onMessage = vi.fn()) {
+    const { listener } = await startInboxMonitor(onMessage);
+    return listener;
   }
 
   async function runSingleUpsertAndCapture(upsert: unknown) {
     const onMessage = vi.fn();
-    let armed = false;
-    let observedPendingWork = false;
-    let resolvePendingWorkDrained!: () => void;
-    const pendingWorkDrained = new Promise<void>((resolve) => {
-      resolvePendingWorkDrained = resolve;
-    });
-    const listener = await openMonitor(onMessage, {
-      onPendingWorkChanged: (pendingWorkCount) => {
-        if (!armed) {
-          return;
-        }
-        if (pendingWorkCount > 0) {
-          observedPendingWork = true;
-        } else if (observedPendingWork) {
-          resolvePendingWorkDrained();
-        }
-      },
-    });
-    const sock = getSock();
-    // The monitor owns async media and delivery work; wait for its drain signal instead of polling.
-    armed = true;
+    const { listener, sock } = await startInboxMonitor(onMessage);
     sock.ev.emit("messages.upsert", upsert);
-    await pendingWorkDrained;
+    // The monitor owns async media and delivery work; wait for its drain instead of polling.
+    await waitForInboundWorkDrained();
     return { onMessage, listener, sock };
   }
 

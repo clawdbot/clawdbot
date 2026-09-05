@@ -1,6 +1,7 @@
 // Shared command-queue runtime state, split out of command-queue.ts so the
 // capacity-group policy can read lane state without importing the queue itself.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 
 export type CommandLaneTaskMarker = Readonly<{
@@ -12,6 +13,7 @@ export type CommandLaneTaskMarker = Readonly<{
 export type QueuePriority = -1 | 0 | 1;
 
 export type QueueEntry = {
+  queued?: true;
   task: (marker: CommandLaneTaskMarker) => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
@@ -23,10 +25,12 @@ export type QueueEntry = {
   activeAheadAtEnqueue: number;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
+  taskTimeoutSubscribe?: CommandQueueEnqueueOptions["taskTimeoutSubscribe"];
   taskTimeoutAbortSignal?: AbortSignal;
   taskTimeoutAbortGraceMs?: number;
   taskTimeoutReleaseSignal?: AbortSignal;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  releaseQueuedAbort?: () => void;
 };
 
 type QueueRing = {
@@ -81,7 +85,8 @@ function getPriorityRing(queue: LaneQueue, priority: QueuePriority): QueueRing {
 function appendQueueRing(ring: QueueRing, entry: QueueEntry): void {
   if (ring.length === ring.entries.length) {
     const nextCapacity = Math.max(INITIAL_QUEUE_RING_CAPACITY, ring.length * 2);
-    const nextEntries: Array<QueueEntry | undefined> = Array.from({ length: nextCapacity });
+    // oxlint-disable-next-line unicorn/no-new-array -- Reserve sparse capacity; head and length delimit occupied slots.
+    const nextEntries = new Array<QueueEntry | undefined>(nextCapacity);
     for (let index = 0; index < ring.length; index += 1) {
       nextEntries[index] = ring.entries[(ring.head + index) % ring.entries.length];
     }
@@ -121,6 +126,7 @@ export function enqueueLaneQueue(queue: LaneQueue, entry: QueueEntry): number {
     ring.length +
     (entry.priority <= 0 ? queue.foreground.length : 0) +
     (entry.priority < 0 ? queue.normal.length : 0);
+  entry.queued = true;
   appendQueueRing(ring, entry);
   queue.length += 1;
   return queuedAhead;
@@ -140,9 +146,30 @@ export function dequeueLaneQueue(queue: LaneQueue): QueueEntry | undefined {
     dequeueQueueRing(queue.normal) ??
     dequeueQueueRing(queue.background);
   if (entry) {
+    delete entry.queued;
     queue.length -= 1;
+    entry.releaseQueuedAbort?.();
   }
   return entry;
+}
+
+/** Cancellation is infrequent; compact only its priority ring while keeping FIFO order. */
+export function removeLaneQueueEntry(queue: LaneQueue, entry: QueueEntry): boolean {
+  if (!entry.queued) {
+    return false;
+  }
+  const ring = getPriorityRing(queue, entry.priority);
+  const count = ring.length;
+  for (let index = 0; index < count; index += 1) {
+    const candidate = dequeueQueueRing(ring)!;
+    if (candidate !== entry) {
+      appendQueueRing(ring, candidate);
+    }
+  }
+  delete entry.queued;
+  queue.length -= 1;
+  entry.releaseQueuedAbort?.();
+  return true;
 }
 
 /**

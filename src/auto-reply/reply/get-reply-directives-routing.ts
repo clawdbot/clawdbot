@@ -7,9 +7,7 @@ import { HISTORY_CONTEXT_MARKER } from "./history.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { stripInlineStatus } from "./reply-inline.js";
 
-type NativeDirectiveCommand = NonNullable<
-  Parameters<typeof parseInlineSessionDirectives>[1]
->["nativeCommand"];
+type DirectiveCommand = NonNullable<Parameters<typeof parseInlineSessionDirectives>[1]>["command"];
 
 function hasInlineDirective(directives: InlineDirectives): boolean {
   return (
@@ -36,7 +34,8 @@ function preserveMixedModelDirective(
     rawModelProfile: directives.rawModelProfile,
     rawModelRuntime: directives.rawModelRuntime,
     modelDirectiveSource: directives.modelDirectiveSource,
-    modelSessionOnly: directives.modelSessionOnly,
+    modelScope: directives.modelScope,
+    modelScopeConflict: directives.modelScopeConflict,
   };
 }
 
@@ -54,7 +53,7 @@ export function resolveReplyDirectiveRouting(params: {
   commandText: string;
   agentText: string;
   modelAliases: string[];
-  nativeCommand?: NativeDirectiveCommand;
+  command?: DirectiveCommand;
   canInterpretTextDirectives: boolean;
   isAuthorizedSender: boolean;
   isGroup: boolean;
@@ -73,7 +72,7 @@ export function resolveReplyDirectiveRouting(params: {
   let parsed = parseInlineSessionDirectives(params.commandText, {
     modelAliases: params.modelAliases,
     allowStatusDirective,
-    nativeCommand: params.nativeCommand,
+    command: params.command,
   });
   const hasInlineStatus = parsed.hasStatusDirective && parsed.cleaned.trim().length > 0;
   if (hasInlineStatus) {
@@ -101,7 +100,7 @@ export function resolveReplyDirectiveRouting(params: {
     parsed = clearExecInlineDirectives(parsed);
   }
 
-  if (params.canInterpretTextDirectives && hasInlineDirective(parsed) && !parsed.nativeCommand) {
+  if (params.canInterpretTextDirectives && hasInlineDirective(parsed) && !parsed.command) {
     const stripped = stripStructuralPrefixes(parsed.cleaned);
     const noMentions = params.isGroup
       ? stripMentions(stripped, params.ctx, params.cfg, params.agentId)
@@ -110,16 +109,28 @@ export function resolveReplyDirectiveRouting(params: {
       noMentions.trim() &&
       parseInlineSessionDirectives(noMentions, { modelAliases: params.modelAliases }).cleaned.trim()
     ) {
-      parsed = isModelSelectionDirective(parsed)
+      const mixed = isModelSelectionDirective(parsed)
         ? preserveMixedModelDirective(parsed, parsed.cleaned)
         : clearInlineDirectives(parsed.cleaned);
+      // Exec policy belongs to this message; placement keeps its directive-only persistence path.
+      const hasExecPolicy = parsed.rawExecSecurity !== undefined || parsed.rawExecAsk !== undefined;
+      parsed = {
+        ...mixed,
+        hasExecDirective: hasExecPolicy,
+        hasExecOptions: hasExecPolicy,
+        execSecurity: parsed.execSecurity,
+        execAsk: parsed.execAsk,
+        rawExecSecurity: parsed.rawExecSecurity,
+        rawExecAsk: parsed.rawExecAsk,
+        invalidExecSecurity: parsed.invalidExecSecurity,
+        invalidExecAsk: parsed.invalidExecAsk,
+      };
     }
   }
 
   const unauthorizedReasoningDirectiveAttempt =
     !params.isAuthorizedSender && parsed.hasReasoningDirective;
-  const canInterpretDirectives =
-    params.canInterpretTextDirectives || parsed.nativeCommand !== undefined;
+  const canInterpretDirectives = params.canInterpretTextDirectives || parsed.command !== undefined;
   if (!canInterpretDirectives) {
     return {
       directives: clearInlineDirectives(params.commandText),

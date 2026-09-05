@@ -23,20 +23,23 @@ const PROCESS_TOOL_ACTIONS = [
 
 /** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
-  command: Type.String({ description: "Shell command to execute" }),
+  command: Type.String({ description: "Shell command." }),
   workdir: Type.Optional(
     Type.String({
-      description:
-        "Working directory; omit for default. An empty string means omitted; whitespace-only is invalid.",
+      description: "Omit/empty string: default; whitespace-only invalid.",
     }),
   ),
-  env: Type.Optional(Type.Record(Type.String(), Type.String())),
+  env: Type.Optional(
+    Type.Record(Type.String(), Type.String(), {
+      description: "Env overrides. Literal values; no expansion. Omit to inherit.",
+    }),
+  ),
   yieldMs: Type.Optional(
     Type.Number({
       description: "Milliseconds before backgrounding; default 10000.",
     }),
   ),
-  background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
+  background: Type.Optional(Type.Boolean({ description: "Background now." })),
   timeoutSeconds: Type.Optional(
     Type.Number({
       description: "Timeout in seconds.",
@@ -53,17 +56,12 @@ export const execSchema = Type.Object({
     }),
   ),
   host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
-    description: "Exec host/target (auto|sandbox|gateway|node).",
+    description: "Omit/auto: inherit configured host.",
   }),
-  security: Type.Optional(
-    Type.String({
-      description: "Ignored per call; tools.exec.security and host approvals decide.",
-    }),
-  ),
   ask: Type.Optional(
     Type.String({
       description:
-        "Uses tools.exec.ask and host approvals; channel-origin calls cannot override host ask=off.",
+        "Requests stricter approvals under tools.exec.mode and host policy; channel-origin calls cannot override host ask=off.",
     }),
   ),
   node: Type.Optional(
@@ -94,7 +92,7 @@ export const processSchema = Type.Object({
     enum: [...PROCESS_TOOL_ACTIONS],
     description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",
   }),
-  sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
+  sessionId: Type.Optional(Type.String({ description: "Required for every action except list." })),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
   keys: Type.Optional(
     Type.Array(Type.String(), { description: "Key tokens to send for send-keys" }),

@@ -74,6 +74,39 @@ afterEach(async () => {
   await disposeActiveTuiFixtures();
 });
 
+it("submits provider-specific thinking labels with one Enter", async () => {
+  const fixture = await startTuiFixture({
+    env: {
+      OPENCLAW_TUI_PTY_THINKING_LABEL: "on",
+      OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL: "always on",
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+
+    for (const [index, { label, id }] of [
+      { label: "on", id: "fixture-thinking" },
+      { label: "always on", id: "fixture-thinking-safe" },
+    ].entries()) {
+      await fixture.run.write(`/think ${label}`, { delay: false });
+      await fixture.run.waitForOutput(`→ ${label}`, STARTUP_TIMEOUT_MS);
+      await fixture.run.write("\r", { delay: false });
+      const entries = await waitForLogCount({
+        logPath: fixture.logPath,
+        predicate: (entry) => entry.method === "patchSession",
+        count: index + 1,
+      });
+      expect(entries.findLast((entry) => entry.method === "patchSession")?.payload).toMatchObject({
+        thinkingLevel: id,
+      });
+      await fixture.run.waitForOutput(`thinking set to ${label}`, STARTUP_TIMEOUT_MS);
+    }
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
 it("clears the previous display name when the selected session is unnamed", async () => {
   const fixture = await startTuiFixture();
   try {

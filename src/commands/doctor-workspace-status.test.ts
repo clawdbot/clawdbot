@@ -83,7 +83,9 @@ async function runNoteWorkspaceStatusForTest(
 
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
   noteWorkspaceStatus(cfg, {
-    pluginVersionDrift: opts?.pluginVersionDrift,
+    pluginVersionReadiness: opts?.pluginVersionDrift
+      ? { status: "resolved", report: opts.pluginVersionDrift }
+      : undefined,
   });
   return noteSpy;
 }
@@ -200,16 +202,19 @@ describe("noteWorkspaceStatus", () => {
         plugins: { entries: { codex: { enabled: true } } },
       },
       {
-        pluginVersionDrift: {
-          gatewayVersion: "2026.6.1",
-          drifts: [
-            {
-              pluginId: "codex",
-              installedVersion: "2026.5.30-beta.1",
-              gatewayVersion: "2026.6.1",
-              source: "npm",
-            },
-          ],
+        pluginVersionReadiness: {
+          status: "resolved",
+          report: {
+            gatewayVersion: "2026.6.1",
+            drifts: [
+              {
+                pluginId: "codex",
+                installedVersion: "2026.5.30-beta.1",
+                gatewayVersion: "2026.6.1",
+                source: "npm",
+              },
+            ],
+          },
         },
       },
     );
@@ -225,6 +230,55 @@ describe("noteWorkspaceStatus", () => {
         fixHint: expect.stringContaining("openclaw plugins update codex"),
       }),
     ]);
+  });
+
+  it("reports npm target lookup failure without an uninstallable fix hint", () => {
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
+    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      ...createPluginLoadResult({ plugins: [] }),
+    });
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
+    mocks.listTaskFlowRecords.mockReturnValue([]);
+
+    const findings = collectWorkspaceStatusHealthFindings(
+      { plugins: { entries: { brave: { enabled: true } } } },
+      {
+        pluginVersionReadiness: {
+          status: "resolved",
+          report: {
+            gatewayVersion: "2026.7.1-2",
+            drifts: [
+              {
+                pluginId: "brave",
+                installedVersion: "2026.7.1-beta.2",
+                gatewayVersion: "2026.7.1-2",
+                source: "npm",
+                packageName: "@openclaw/brave-plugin",
+                spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
+                targetResolution: {
+                  status: "unresolved",
+                  packageName: "@openclaw/brave-plugin",
+                  requestedTarget: "2026.7.1",
+                  error: "npm registry did not resolve @openclaw/brave-plugin@2026.7.1: HTTP 404",
+                },
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        message: expect.stringContaining("Repair target resolution failed"),
+        fixHint: expect.stringContaining("No install command generated"),
+      }),
+    ]);
+    expect(findings[0]?.fixHint).not.toContain("openclaw plugins update");
+    expect(findings[0]?.fixHint).not.toContain("openclaw gateway restart");
   });
 
   it("collects compatibility warnings, plugin diagnostics, and TaskFlow recovery findings", async () => {
@@ -329,10 +383,12 @@ describe("noteWorkspaceStatus", () => {
       },
     );
     try {
-      const driftCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugin version drift");
+      const driftCalls = noteSpy.mock.calls.filter(
+        ([, title]) => title === "Plugin restart readiness",
+      );
       expect(driftCalls).toHaveLength(1);
       const [body] = expectDefined(driftCalls[0], "(driftCalls)[0] test invariant");
-      expect(body).toContain("1 active official plugin not on OpenClaw 2026.6.1");
+      expect(body).toContain("1 active official plugin not on post-restart OpenClaw 2026.6.1");
       expect(body).toContain("codex: 2026.5.30-beta.1 (npm) -> expected 2026.6.1");
       expect(body).toContain("openclaw plugins update codex");
       expect(body).toContain("openclaw gateway restart");
@@ -372,13 +428,21 @@ describe("noteWorkspaceStatus", () => {
               source: "npm",
               packageName: "@openclaw/brave-plugin",
               spec: "@openclaw/brave-plugin@2026.6.9",
+              targetResolution: {
+                status: "resolved",
+                packageName: "@openclaw/brave-plugin",
+                requestedTarget: "2026.6.10-beta.1",
+                version: "2026.6.10-beta.1",
+              },
             },
           ],
         },
       },
     );
     try {
-      const driftCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugin version drift");
+      const driftCalls = noteSpy.mock.calls.filter(
+        ([, title]) => title === "Plugin restart readiness",
+      );
       expect(driftCalls).toHaveLength(1);
       const [body] = expectDefined(driftCalls[0], "(driftCalls)[0] test invariant");
       expect(body).toContain("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
@@ -416,7 +480,9 @@ describe("noteWorkspaceStatus", () => {
       },
     );
     try {
-      expect(noteSpy.mock.calls.map(([, title]) => title)).not.toContain("Plugin version drift");
+      expect(noteSpy.mock.calls.map(([, title]) => title)).not.toContain(
+        "Plugin restart readiness",
+      );
     } finally {
       noteSpy.mockRestore();
     }

@@ -239,7 +239,7 @@ def install_ready_for_review_edit_state_lookup!
       return version if version
 
       # First public releases can leave the only version in READY_FOR_REVIEW.
-      # Fastlane 2.236.1 excludes that state and then tries to create an illegal
+      # Fastlane 2.238.0 excludes that state and then tries to create an illegal
       # second version; use the existing review-ready version as the edit target.
       client ||= Spaceship::ConnectAPI
       platform ||= Spaceship::ConnectAPI::Platform::IOS
@@ -1302,7 +1302,7 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
     explicit_gateway = read_ios_version_metadata(release_version: release_version)[:version]
     if explicit_gateway != gateway_metadata[:version]
       UI.user_error!(
-        "Explicit iOS gateway version #{explicit_gateway} does not match canonical root version #{gateway_metadata[:version]}."
+        "Explicit iOS gateway version #{explicit_gateway} does not match canonical mobile version #{gateway_metadata[:version]}."
       )
     end
   end
@@ -1359,6 +1359,23 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
   JSON.parse(stdout)
 rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from iOS release planner: #{e.message}")
+end
+
+def check_mobile_release_versioning!(app_store_revision:)
+  sh(
+    shell_join([
+      "node",
+      "--import",
+      "tsx",
+      File.join(repo_root, "scripts", "android-sync-versioning.ts"),
+      "--check",
+      "--require-mobile-release",
+      "--revision",
+      app_store_revision.to_s,
+      "--root",
+      repo_root
+    ])
+  )
 end
 
 def sync_ios_versioning!(release_version: nil, app_store_revision: nil)
@@ -1571,6 +1588,162 @@ def record_mobile_release_ref!(platform:, version:, build: nil, version_code: ni
     version_code: version_code,
     sha: sha
   )
+end
+
+def mobile_release_intent_context!(gateway_version:)
+  mode = ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip
+  return nil if mode.empty?
+
+  UI.user_error!("OPENCLAW_MOBILE_RELEASE_REF_MODE must be empty or intent.") unless mode == "intent"
+  intent_path = ENV.fetch("OPENCLAW_MOBILE_RELEASE_INTENT_PATH", "").strip
+  receipt_digest = ENV.fetch("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST", "").strip
+  target_ref = ENV.fetch("OPENCLAW_MOBILE_RELEASE_TARGET_REF", "").strip
+  UI.user_error!("OPENCLAW_MOBILE_RELEASE_INTENT_PATH is required in intent mode.") if intent_path.empty?
+  unless receipt_digest.match?(/\Asha256:[0-9a-f]{64}\z/)
+    UI.user_error!("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST must be a canonical SHA-256 digest.")
+  end
+  unless target_ref == "release/#{gateway_version}-mobile"
+    UI.user_error!("OPENCLAW_MOBILE_RELEASE_TARGET_REF must exactly match the mobile gateway version.")
+  end
+  {
+    intent_path: intent_path,
+    receipt_digest: receipt_digest,
+    target_ref: target_ref
+  }
+end
+
+def configured_ci_testflight_internal_group_id!
+  group_id = ENV.fetch("TESTFLIGHT_INTERNAL_GROUP", "").strip
+  UI.user_error!(
+    "TESTFLIGHT_INTERNAL_GROUP must be a nonblank App Store Connect beta-group ID."
+  ) if group_id.empty?
+  group_id
+end
+
+def select_ci_testflight_internal_group_by_id!(groups:, group_id:)
+  matches = groups.select { |group| group.id == group_id }
+  unless matches.length == 1
+    UI.user_error!("TESTFLIGHT_INTERNAL_GROUP must match exactly one App Store Connect beta-group ID.")
+  end
+  name_collision = groups.any? { |group| group.id != group_id && group.name == group_id }
+  if name_collision
+    UI.user_error!("TESTFLIGHT_INTERNAL_GROUP collides with another TestFlight group name.")
+  end
+
+  group = matches.first
+  UI.user_error!("The configured TestFlight beta group must be internal.") unless group.is_internal_group == true
+  unsafe_internal_group = groups.any? do |candidate|
+    candidate.id != group_id &&
+      candidate.is_internal_group == true &&
+      candidate.has_access_to_all_builds != false
+  end
+  if unsafe_internal_group
+    UI.user_error!(
+      "Every non-target internal TestFlight group must explicitly disable automatic all-build access."
+    )
+  end
+  group
+end
+
+def resolve_ci_testflight_internal_group_id!
+  group_id = configured_ci_testflight_internal_group_id!
+  app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
+  app_id = ENV["APP_STORE_CONNECT_APP_ID"]
+  app_identifier = nil unless env_present?(app_identifier)
+  app_id = nil unless env_present?(app_id)
+  app = resolve_app_store_connect_app(
+    app_identifier: app_identifier,
+    app_id: app_id
+  )
+  group = select_ci_testflight_internal_group_by_id!(groups: app.get_beta_groups, group_id: group_id)
+  group.id
+end
+
+def assign_and_verify_ci_testflight_internal_group!(group_id:, app_store_version:, build_number:)
+  app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
+  app_id = ENV["APP_STORE_CONNECT_APP_ID"]
+  app_identifier = nil unless env_present?(app_identifier)
+  app_id = nil unless env_present?(app_id)
+  app = resolve_app_store_connect_app(
+    app_identifier: app_identifier,
+    app_id: app_id
+  )
+  group = select_ci_testflight_internal_group_by_id!(
+    groups: app.get_beta_groups,
+    group_id: group_id
+  )
+  builds = app.get_builds(
+    filter: {
+      "preReleaseVersion.version" => app_store_version,
+      version: build_number.to_s
+    },
+    includes: "preReleaseVersion"
+  ).select do |candidate|
+    candidate.app_version == app_store_version &&
+      candidate.version == build_number.to_s &&
+      candidate.platform == Spaceship::ConnectAPI::Platform::IOS
+  end
+  unless builds.length == 1
+    UI.user_error!("Uploaded TestFlight build could not be resolved after processing.")
+  end
+  build = builds.first
+
+  # Fastlane's groups option matches both names and IDs. Assign the freshly
+  # resolved group directly so a concurrent display-name collision cannot widen access.
+  build.add_beta_groups(beta_groups: [group])
+  verified_groups = app.get_beta_groups
+  verified_group = select_ci_testflight_internal_group_by_id!(
+    groups: verified_groups,
+    group_id: group_id
+  )
+  assigned_group_ids = verified_groups.select do |candidate_group|
+    candidate_group.fetch_builds.any? { |candidate| candidate.id == build.id }
+  end.map(&:id)
+  unless assigned_group_ids.include?(group_id)
+    UI.user_error!("Uploaded TestFlight build is not assigned to the configured internal group.")
+  end
+  unless assigned_group_ids == [group_id]
+    UI.user_error!("Uploaded TestFlight build is assigned outside the configured internal group.")
+  end
+  { group: verified_group }
+end
+
+def finalize_mobile_release_ref!(platform:, gateway_version:, app_store_version:, build_number:, internal_group:, intent_context:, sha:)
+  unless intent_context
+    record_mobile_release_ref!(
+      platform: platform,
+      version: app_store_version,
+      build: build_number,
+      sha: sha
+    )
+    return
+  end
+  UI.user_error!("An exact internal TestFlight group is required in intent mode.") unless internal_group
+  sh(shell_join([
+    "node",
+    File.join(repo_root, "scripts", "mobile-release-intent.mjs"),
+    "write",
+    "--output",
+    intent_context.fetch(:intent_path),
+    "--platform",
+    platform,
+    "--authority-receipt-digest",
+    intent_context.fetch(:receipt_digest),
+    "--gateway-version",
+    gateway_version,
+    "--app-store-version",
+    app_store_version,
+    "--build-number",
+    build_number.to_s,
+    "--internal-group-id",
+    internal_group.fetch(:group).id,
+    "--internal-group-name",
+    internal_group.fetch(:group).name,
+    "--target-ref",
+    intent_context.fetch(:target_ref),
+    "--target-sha",
+    sha
+  ]))
 end
 
 def validate_app_store_ipa!(ipa_path, expected_commit:, expected_build_timestamp:)
@@ -1885,9 +2058,11 @@ platform :ios do
       if release_plan.fetch("changelogStatus") != "ready"
         UI.user_error!(
           "iOS release notes are not cut for #{release_plan.fetch("appStoreVersion")}. " \
-          "Run `pnpm ios:release:cut`, commit apps/ios/CHANGELOG.md, then rerun the upload."
+          "Run the shared mobile cutter prepare/plan/finalize flow, commit its five outputs, " \
+          "then rerun the upload."
         )
       end
+      check_mobile_release_versioning!(app_store_revision: app_store_revision)
     else
       if release_version.empty?
         UI.user_error!("Missing iOS gateway version. Use explicit --version and --revision for local archive validation.")
@@ -2013,6 +2188,8 @@ platform :ios do
       build_number: options[:build_number]
     )
     release_sha = context[:git_commit]
+    intent_context = mobile_release_intent_context!(gateway_version: context[:version])
+    internal_group_id = intent_context ? resolve_ci_testflight_internal_group_id! : nil
     preflight_app_store_version!(short_version: context[:short_version])
     ensure_mobile_release_ref_available!(
       platform: "ios",
@@ -2047,18 +2224,38 @@ platform :ios do
       app_store_revision: context[:app_store_revision]
     )
 
-    upload_to_testflight(
+    upload_options = {
       api_key: context[:api_key],
       ipa: build[:ipa_path],
-      skip_submission: true,
       skip_waiting_for_build_processing: false,
       wait_processing_timeout_duration: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS,
       uses_non_exempt_encryption: false
-    )
-    record_mobile_release_ref!(
+    }
+    if internal_group_id
+      upload_options.merge!(
+        distribute_external: false,
+        skip_submission: false,
+        submit_beta_review: false
+      )
+    else
+      upload_options[:skip_submission] = true
+    end
+    upload_to_testflight(**upload_options)
+    internal_group = nil
+    if internal_group_id
+      internal_group = assign_and_verify_ci_testflight_internal_group!(
+        group_id: internal_group_id,
+        app_store_version: build[:short_version],
+        build_number: build[:build_number]
+      )
+    end
+    finalize_mobile_release_ref!(
       platform: "ios",
-      version: build[:short_version],
-      build: build[:build_number],
+      gateway_version: build[:version],
+      app_store_version: build[:short_version],
+      build_number: build[:build_number],
+      internal_group: internal_group,
+      intent_context: intent_context,
       sha: release_sha
     )
 
@@ -2074,10 +2271,10 @@ platform :ios do
     release_version = options[:release_version].to_s.strip
     app_store_revision = options[:app_store_revision].to_s.strip
     if release_version.empty?
-      UI.user_error!("Missing iOS gateway version. Use `pnpm ios:release:upload -- --version YYYY.M.D --revision N`.")
+      UI.user_error!("Missing iOS gateway version. Use `pnpm ios:release:upload -- --version YYYY.M.PATCH --revision N`.")
     end
     if app_store_revision.empty?
-      UI.user_error!("Missing iOS App Store revision. Use `pnpm ios:release:upload -- --version YYYY.M.D --revision N`.")
+      UI.user_error!("Missing iOS App Store revision. Use `pnpm ios:release:upload -- --version YYYY.M.PATCH --revision N`.")
     end
     sync_ios_versioning!(
       release_version: release_version,

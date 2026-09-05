@@ -164,9 +164,9 @@ final class OnboardingConfiguredGatewayProbe {
             self.reconnectPending = false
         }
         let stream = await gateway.subscribe(bufferingNewest: 1)
-        for await push in stream {
+        for await delivery in stream {
             guard !Task.isCancelled else { return }
-            guard case .snapshot = push else { continue }
+            guard delivery.isCurrent, case .snapshot = delivery.push else { continue }
             // captureRoute can create the socket whose hello produced this
             // snapshot. Coalesce it until that route-bound check finishes so a
             // real reconnect is never lost behind the in-flight request.

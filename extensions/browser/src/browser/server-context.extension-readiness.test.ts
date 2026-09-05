@@ -33,6 +33,7 @@ function createExtensionProfile() {
   });
   const bridge = new ExtensionRelayBridge();
   const relay = {
+    ownership: "owned",
     port: 18799,
     token: "relay-test-key",
     allowLegacyAuth: true,

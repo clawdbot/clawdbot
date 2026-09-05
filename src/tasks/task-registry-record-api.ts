@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { hasAuthoritativeTaskBacking } from "./task-backing-authority.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import {
   appendTaskEvent,
@@ -33,6 +34,7 @@ import {
   addParentFlowIdIndex,
   addRelatedSessionKeyIndex,
   addRunIdIndex,
+  bumpTaskRegistryRevision,
   emitTaskRegistryObserverEvent,
   ensureTaskRegistryReady,
   getTasksByRunScope,
@@ -136,6 +138,9 @@ function updateTasksByRunId(params: {
   }
   const updated: TaskRecord[] = [];
   for (const match of matches) {
+    if (!hasAuthoritativeTaskBacking(match)) {
+      continue;
+    }
     const task = updateTask(match.taskId, params.patch);
     if (task) {
       updated.push(task);
@@ -276,6 +281,7 @@ export function createTaskRecord(params: {
     return null;
   }
   tasks.set(taskId, record);
+  bumpTaskRegistryRevision();
   if (requesterOrigin) {
     taskDeliveryStates.set(taskId, deliveryState!);
   }
@@ -320,6 +326,9 @@ export function updateTaskStateByRunId(params: {
   }
   const updated: TaskRecord[] = [];
   for (const current of matches) {
+    if (!hasAuthoritativeTaskBacking(current)) {
+      continue;
+    }
     const patch: Partial<TaskRecord> = {};
     const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
     if (

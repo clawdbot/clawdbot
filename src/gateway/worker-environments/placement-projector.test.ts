@@ -71,6 +71,7 @@ describe("worker placement projection", () => {
         get: () => ({
           environmentId: active.environmentId,
           providerId: "device",
+          profileId: "device-profile",
           leaseId: "lease-device",
           nodeDeviceId: "device-1",
           sharedHost: true,
@@ -116,6 +117,7 @@ describe("worker placement projection", () => {
     > = {
       environmentId: active.environmentId,
       providerId: "crabbox",
+      profileId: "development",
       leaseId: "lease-cloud",
       nodeDeviceId: null,
       sharedHost: false,

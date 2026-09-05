@@ -33,6 +33,28 @@ function requireFirstCallArg(mock: {
 }
 
 describe("createChannelMessageAdapterFromOutbound", () => {
+  it("preserves explicit no-send facts in progress and final results", async () => {
+    const notSent = { outcome: "not_sent" as const, messageId: "" };
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        sendText: async ({ onDeliveryResult }) => {
+          await onDeliveryResult?.(notSent);
+          return notSent;
+        },
+      },
+    });
+    const onDeliveryResult = vi.fn();
+    const result = await adapter.send?.text?.({ cfg, to: "room-1", text: "---", onDeliveryResult });
+
+    for (const delivery of [result, onDeliveryResult.mock.calls[0]?.[0]]) {
+      expect(delivery).toMatchObject({
+        outcome: "not_sent",
+        receipt: { platformMessageIds: [], parts: [] },
+      });
+      expect(delivery).not.toHaveProperty("messageId");
+    }
+  });
+
   it("wraps outbound text sends with a message receipt", async () => {
     const sendText = vi.fn(async (_request: ChannelMessageSendTextContext) => ({
       channel: "demo",

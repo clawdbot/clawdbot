@@ -1,8 +1,42 @@
 import { describe, expect, it, vi } from "vitest";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createProviderApiKeyAuthMethod } from "./provider-api-key-auth.js";
 
 describe("createProviderApiKeyAuthMethod", () => {
+  it("persists non-interactive credentials through the runtime auth owner", async () => {
+    await withOpenClawTestState({ label: "provider-api-key-auth" }, async (state) => {
+      const method = createProviderApiKeyAuthMethod({
+        providerId: "example",
+        methodId: "api-key",
+        label: "Example",
+        optionKey: "exampleApiKey",
+        flagName: "--example-api-key",
+        envVar: "EXAMPLE_API_KEY",
+        promptMessage: "Example API key",
+      });
+      const credential = { type: "api_key" as const, provider: "example", key: "test-token" };
+      const config = await method.runNonInteractive?.({
+        authChoice: "example-api-key",
+        config: {},
+        baseConfig: {},
+        agentDir: state.agentDir(),
+        opts: { exampleApiKey: "test-token" },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+        resolveApiKey: vi.fn(async () => ({ key: "test-token", source: "flag" as const })),
+        toApiKeyCredential: () => credential,
+      });
+      expect(config?.auth?.profiles?.["example:default"]).toEqual({
+        provider: "example",
+        mode: "api_key",
+      });
+      expect(
+        loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles["example:default"],
+      ).toEqual(credential);
+    });
+  });
+
   it("exposes side-effect-free non-interactive credential validation", async () => {
     const method = createProviderApiKeyAuthMethod({
       providerId: "example",

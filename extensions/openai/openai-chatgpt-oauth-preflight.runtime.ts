@@ -49,18 +49,26 @@ function extractFailure(error: unknown): {
 export async function runOpenAIOAuthTlsPreflight(options?: {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<OpenAIOAuthTlsPreflightResult> {
   const timeoutMs = resolveTimerTimeoutMs(options?.timeoutMs, 5000);
   const fetchImpl = options?.fetchImpl ?? fetch;
+  options?.signal?.throwIfAborted();
+  options?.assertCurrent?.();
   let response: Response | undefined;
   try {
     response = await fetchImpl(OPENAI_AUTH_PROBE_URL, {
       method: "GET",
       redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: options?.signal
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
     });
     return { ok: true };
   } catch (error) {
+    options?.signal?.throwIfAborted();
+    options?.assertCurrent?.();
     const failure = extractFailure(error);
     return {
       ok: false,

@@ -83,6 +83,7 @@ describe("sendGatewayHello setup completion ordering", () => {
         const broadcast = vi.fn();
         const context = {
           handler: {
+            getClient: () => null,
             connId: "conn-setup-order",
             gatewayMethods: [],
             events: [],
@@ -193,6 +194,7 @@ describe("sendGatewayHello setup completion ordering", () => {
         const close = vi.fn();
         const context = {
           handler: {
+            getClient: () => null,
             connId: "conn-setup-send-failure",
             gatewayMethods: [],
             events: [],
@@ -300,6 +302,7 @@ describe("sendGatewayHello setup completion ordering", () => {
         const close = vi.fn();
         const context = {
           handler: {
+            getClient: () => null,
             connId: "conn-setup-replaced",
             gatewayMethods: [],
             events: [],
@@ -389,6 +392,7 @@ describe("sendGatewayHello setup completion ordering", () => {
         const close = vi.fn();
         const context = {
           handler: {
+            getClient: () => null,
             connId: "conn-generic-send-failure",
             gatewayMethods: [],
             events: [],

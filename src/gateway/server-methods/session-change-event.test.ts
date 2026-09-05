@@ -62,6 +62,7 @@ function createContext(
     chatAbortControllers,
     getRuntimeConfig: () => config,
     getSessionEventSubscriberConnIds: () => receivers,
+    mentionInbox: { invalidate: vi.fn() },
   } as unknown as GatewayRequestContext;
 }
 
@@ -122,6 +123,26 @@ describe("sessions.changed coalescing", () => {
       label: "state-5",
       reason: "update-5",
     });
+  });
+
+  it.each([false, true])("never samples a replacement for a delete (trailing: %s)", (trailing) => {
+    const context = createContext();
+    const sessionKey = "agent:main:chat";
+    if (trailing) {
+      emitSessionsChanged(context, { reason: "update", sessionKey });
+    }
+    mocks.loadRow.mockClear();
+    const deletion = { reason: "delete", sessionKey, sessionId: "generation-a", agentId: "main" };
+    emitSessionsChanged(context, deletion);
+    mocks.rowLabel = "replacement-b";
+    vi.advanceTimersByTime(100);
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1];
+    expect(payload).toEqual({
+      ...deletion,
+      agentId: "main",
+      ts: expect.any(Number),
+    });
+    expect(mocks.loadRow).not.toHaveBeenCalled();
   });
 
   it("keeps different session keys independent", () => {
@@ -208,8 +229,53 @@ describe("sessions.changed coalescing", () => {
         hasActiveRun: true,
       }),
       expect.anything(),
-      expect.anything(),
+      expect.objectContaining({
+        agentId: "ops",
+        sessionKeys: ["global"],
+      }),
     );
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    expect(payload).not.toHaveProperty("agentId");
+    expect(payload).not.toHaveProperty("goal");
+  });
+
+  it("keeps a retired fixed-store owner private after the mutation commits", () => {
+    const config = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { research: {} },
+      },
+    } satisfies OpenClawConfig;
+    const context = createContext(new Set(["conn-1"]), config);
+
+    emitSessionsChanged(context, { reason: "update", sessionKey: "global" });
+
+    expect(mocks.loadRow).not.toHaveBeenCalled();
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "global", reason: "update" }),
+      new Set(["conn-1"]),
+      {
+        agentId: "ops",
+        dropIfSlow: true,
+        sessionKeys: ["agent:ops:global"],
+      },
+    );
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    for (const field of [
+      "agentId",
+      "key",
+      "label",
+      "session",
+      "goal",
+      "status",
+      "hasActiveRun",
+      "activeRunIds",
+    ]) {
+      expect(payload, field).not.toHaveProperty(field);
+    }
   });
 
   it("tombstones exact run ids when lifecycle projection takes ownership", () => {
@@ -262,6 +328,10 @@ describe("sessions.changed coalescing", () => {
 
     expect(readSessionsMutationVersion(context)).toBe(initialVersion + 1);
     expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+    expect(mocks.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(context.mentionInbox!.invalidate).mock.invocationCallOrder[0]!,
+    );
     expect(mocks.loadRow).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
   });

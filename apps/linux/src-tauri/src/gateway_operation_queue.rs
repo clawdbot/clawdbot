@@ -1,11 +1,13 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
 use crate::installer::InstallChannel;
 use crate::operation_executor::OperationExecutor;
+use crate::remote_gateway::RemoteGatewayRequest;
 use tokio::sync::oneshot;
 
 pub(crate) enum GatewayOperation {
     Connect,
     ConnectExplicitLocal,
+    ConnectRemote(RemoteGatewayRequest),
     Install(InstallChannel),
     Action(GatewayAction),
 }

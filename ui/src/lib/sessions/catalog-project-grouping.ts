@@ -1,9 +1,43 @@
-import type { SessionCatalogSession } from "../../../../packages/gateway-protocol/src/index.ts";
+import type {
+  SessionCatalogSession,
+  SessionCreatedActor,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 
 export type CatalogProjectGrouping = "project" | "person" | "none";
 
 export function normalizeCatalogProjectGrouping(raw: unknown): CatalogProjectGrouping {
   return raw === "none" || raw === "person" ? raw : "project";
+}
+
+// Sidebar, table, and catalog groups share keys from projected identities;
+// raw actor ids can alias profiles or collide across identity namespaces.
+export function sessionActorGroupId(owner: SessionCreatedActor | undefined): string {
+  const identity = owner?.identity;
+  if (!identity) {
+    return "";
+  }
+  return identity.type === "profile" || identity.type === "agent"
+    ? `${identity.type}:${identity.id}`
+    : JSON.stringify(identity, Object.keys(identity).toSorted());
+}
+
+// Canonicalize a checkout path for grouping: strip trailing separators so
+// `/repo` and `/repo/` key one section, then mirror Claude Code desktop by
+// folding any cwd at or under `.claude/worktrees/<name>` into the origin repo
+// (the lazy prefix picks the outermost repo root). Returns null for separator-only
+// paths or worktrees with no origin repo.
+export function foldWorktreeCheckoutPath(path: string): string | null {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
+  return match ? match[1] || null : trimmed;
+}
+
+/** Basename shown for a checkout path in project sections. */
+export function checkoutDisplayName(path: string): string {
+  return path.split(/[\\/]/).findLast(Boolean) ?? path;
 }
 
 type CatalogProjectGroup = {
@@ -50,17 +84,10 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       group.sessions.push(session);
       continue;
     }
-    // Accepted tradeoff: filesystem-root cwds ("/", "C:\") are not real harness
-    // session roots; after trimming they fall to the ungrouped flat tail by design.
-    let projectPath = session.cwd?.trim().replace(/[\\/]+$/, "");
-    if (!projectPath) {
-      ungrouped.push(session);
-      continue;
-    }
-    // Mirror Claude Code desktop: any cwd at or under `.claude/worktrees/<name>`
-    // folds into the origin repo; the lazy prefix picks the outermost repo root.
-    const worktreeMatch = projectPath.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
-    projectPath = worktreeMatch?.[1] ?? projectPath;
+    // Paths without a project identity fall to the ungrouped flat tail;
+    // do not invent a project name when canonicalization returns no origin.
+    const trimmedPath = session.cwd?.trim();
+    const projectPath = trimmedPath ? foldWorktreeCheckoutPath(trimmedPath) : null;
     if (!projectPath) {
       ungrouped.push(session);
       continue;
@@ -71,7 +98,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
         kind: "project",
         key: `project:${projectPath}`,
         legacySectionKey: projectPath,
-        label: projectPath.split(/[\\/]/).at(-1) || projectPath,
+        label: checkoutDisplayName(projectPath),
         title: projectPath,
         sessions: [],
       };
@@ -96,18 +123,19 @@ export function groupCatalogSessionsByPerson(sessions: readonly SessionCatalogSe
 
   for (const session of sessions) {
     const actor = session.createdActor;
-    if (!actor?.id) {
+    const actorGroupId = sessionActorGroupId(actor);
+    if (!actor?.identity || !actorGroupId) {
       ungrouped.push(session);
       continue;
     }
-    const key = `person:${actor.id}`;
+    const key = `person:${actorGroupId}`;
     let group = groupsById.get(key);
     if (!group) {
-      const label = actor.label?.trim() || actor.id;
+      const label = actor.label?.trim() || actor.identity.id;
       group = {
         kind: "person",
         key,
-        legacySectionKey: key,
+        legacySectionKey: `person:${actor.id}`,
         label,
         title: `Created by ${label}`,
         sessions: [],

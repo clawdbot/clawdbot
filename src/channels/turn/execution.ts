@@ -3,7 +3,6 @@ import {
   type DispatchProcessedNote,
 } from "../../auto-reply/reply/dispatch-processed-outcome.js";
 import { clearChannelHistoryIfEnabled } from "../../auto-reply/reply/history.js";
-import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import {
   createDiagnosticTraceContextFromActiveScope,
   runWithDiagnosticTraceContext,
@@ -63,12 +62,6 @@ function resolveObserveOnlyDispatchResult<TDispatchResult>(
   }) as TDispatchResult;
 }
 
-function isSystemChannelTurn(ctx: FinalizedMsgContext): boolean {
-  return (
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event"
-  );
-}
-
 function resolveRecordSessionKey<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ): string {
@@ -96,7 +89,10 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
     log?: (event: ChannelTurnLogEvent) => void;
   },
 ): void {
-  if (params.admission?.kind === "observeOnly" || isSystemChannelTurn(params.ctxPayload)) {
+  if (
+    params.admission?.kind === "observeOnly" ||
+    params.ctxPayload.InternalTurnSource !== undefined
+  ) {
     return;
   }
   const dispatchResult = params.dispatchResult as ChannelTurnDispatchResultLike;

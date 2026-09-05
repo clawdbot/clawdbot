@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createWorkerDeployBuildPlugin,
@@ -21,18 +22,55 @@ describe("worker deploy build plugin", () => {
     );
   });
 
-  it("composes the bundled Browser runtime only in the deploy build", () => {
+  it("initializes the composed Browser runtime only when its factory is called", async () => {
     const bridgePath = path.resolve("src/worker/worker-deploy-browser-runtime.ts");
     const source = fs.readFileSync(bridgePath, "utf8");
     const plugin = createWorkerDeployBuildPlugin();
 
     const transformed = plugin.transform.call({ error: fail }, source, bridgePath);
 
-    expect(transformed).toContain(
-      'import { createAttachedBrowserToolRuntime } from "../../extensions/browser/runtime-api.js";',
+    const root = tempDirs.make("openclaw-worker-browser-composition-");
+    const outputPath = path.join(root, "src/worker/browser.mjs");
+    const runtimePath = path.join(root, "extensions/browser/runtime-api.js");
+    const eventsPath = path.join(root, "events.txt");
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+    fs.writeFileSync(outputPath, transformed!);
+    fs.writeFileSync(
+      runtimePath,
+      `import { appendFileSync } from "node:fs";
+const record = event => appendFileSync(${JSON.stringify(eventsPath)}, event + "\\n");
+record("initialized");
+export async function createAttachedBrowserToolRuntime(params) {
+  await params.ensureAttachTarget();
+  return { tool: params, dispose: async () => record("disposed") };
+}`,
     );
-    expect(transformed).toContain("export default { createAttachedBrowserToolRuntime };");
-    expect(transformed).not.toContain("was not composed by the build");
+
+    const { default: browser } = await import(pathToFileURL(outputPath).href);
+    expect(fs.existsSync(eventsPath)).toBe(false);
+    let attached = 0;
+    const params = {
+      cdpUrl: "http://127.0.0.1:9222",
+      ensureAttachTarget: async () => {
+        attached += 1;
+      },
+      agentSessionKey: "worker:session-1",
+      agentDir: path.join(root, "agent"),
+      workspaceDir: path.join(root, "workspace"),
+    };
+    const [first, second] = await Promise.all([
+      browser.createAttachedBrowserToolRuntime(params),
+      browser.createAttachedBrowserToolRuntime(params),
+    ]);
+    expect(attached).toBe(2);
+    expect(first.tool).toBe(params);
+    expect(second.tool).toBe(params);
+    expect(fs.readFileSync(eventsPath, "utf8")).toBe("initialized\n");
+    await first.dispose();
+    await second.dispose();
+    expect(fs.readFileSync(eventsPath, "utf8")).toBe("initialized\ndisposed\ndisposed\n");
   });
 
   it("binds the lazy Playwright accessor to bundled modules", () => {
@@ -62,6 +100,16 @@ describe("worker deploy build plugin", () => {
     expect(transformed).not.toContain('import { createRequire } from "node:module";');
     expect(transformed).not.toContain("const requireUndici = createRequire(import.meta.url);");
     expect(transformed).not.toContain('requireUndici("undici")');
+  });
+
+  it("leaves fs-safe native package resolution to the dependency", () => {
+    const nativePath = path.resolve("node_modules/@openclaw/fs-safe/dist/native.js");
+    const source = fs.readFileSync(nativePath, "utf8");
+    const plugin = createWorkerDeployBuildPlugin();
+
+    const transformed = plugin.transform.call({ error: fail }, source, nativePath);
+
+    expect(transformed).toBeNull();
   });
 
   it("fails closed when the undici dispatcher bootstrap shape changes", () => {

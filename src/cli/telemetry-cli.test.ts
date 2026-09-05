@@ -100,59 +100,50 @@ describe("telemetry cli", () => {
     expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
   });
 
-  it("reports a null JSON request when update checks are disabled", async () => {
+  it.each([
+    { reason: "never-asked", label: "consent has not been requested", method: "GET" },
+    { reason: "config-disabled", label: "disabled in configuration", method: "GET" },
+    { reason: "do-not-track", label: "disabled by DO_NOT_TRACK", method: "GET" },
+    { reason: "update-disabled", label: "update checks are disabled", method: null },
+    {
+      reason: "automated-environment",
+      label: "disabled in an automated environment (CI is set)",
+      method: null,
+    },
+  ])("reports the same request in JSON and text for $reason", async ({ reason, label, method }) => {
+    const endpoint = "https://telemetry.openclaw.ai/api/latest-version";
+    const userAgent = "openclaw/2026.8.2 (darwin; node/26.0.1; arm64; gateway)";
     mocks.resolveTelemetryStatus.mockReturnValue({
       enabled: false,
-      reason: "update-disabled",
-      endpoint: "https://telemetry.openclaw.ai/api/latest-version",
+      reason,
+      endpoint,
     });
 
     await runTelemetryCli(["show", "--json"]);
 
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
+      {
         featureStatsEnabled: false,
-        reason: "update-disabled",
+        reason,
+        endpoint,
         lastPingAt: null,
-        request: null,
-      }),
+        request: method ? { method, userAgent } : null,
+      },
       0,
     );
     expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
-  });
-
-  it("shows only the update request headers when feature statistics are disabled", async () => {
-    mocks.resolveTelemetryStatus.mockReturnValue({
-      enabled: false,
-      reason: "do-not-track",
-      endpoint: "https://telemetry.openclaw.ai/api/latest-version",
-    });
-
     await runTelemetryCli(["show"]);
 
     expect(mocks.buildTelemetryPayload).not.toHaveBeenCalled();
-    expect(mocks.runtimeLogs).toContain("Feature stats: disabled");
-    expect(mocks.runtimeLogs).toContain("Reason: disabled by DO_NOT_TRACK");
-    expect(mocks.runtimeLogs).toContain("Last ping: never");
-    expect(mocks.runtimeLogs).toContain(
-      "Request: GET https://telemetry.openclaw.ai/api/latest-version",
-    );
-    expect(mocks.runtimeLogs).toContain(
-      "User-Agent: openclaw/2026.8.2 (darwin; node/26.0.1; arm64; gateway)",
-    );
-  });
-
-  it("reports that no request is sent when update checks are disabled", async () => {
-    mocks.resolveTelemetryStatus.mockReturnValue({
-      enabled: false,
-      reason: "update-disabled",
-      endpoint: "https://telemetry.openclaw.ai/api/latest-version",
-    });
-
-    await runTelemetryCli(["show"]);
-
-    expect(mocks.buildTelemetryPayload).not.toHaveBeenCalled();
-    expect(mocks.runtimeLogs).toContain("Request: none (update checks are disabled)");
+    expect(mocks.runtimeLogs).toEqual([
+      "Feature stats: disabled",
+      `Reason: ${label}`,
+      `Endpoint: ${endpoint}`,
+      "Last ping: never",
+      ...(method
+        ? [`Request: ${method} ${endpoint}`, `User-Agent: ${userAgent}`]
+        : [`Request: none (${label})`]),
+    ]);
   });
 
   it.each([

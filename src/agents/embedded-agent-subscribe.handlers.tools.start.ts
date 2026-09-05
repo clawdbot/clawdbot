@@ -6,6 +6,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { extractMessagingToolSend } from "./embedded-agent-messaging-extraction.js";
@@ -25,7 +26,6 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { collectMessagingMediaUrlsFromRecord } from "./embedded-agent-tool-media.js";
 import { sanitizeToolArgs } from "./embedded-agent-tool-results.js";
-import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "./tool-display.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
@@ -38,6 +38,8 @@ import {
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./tools/ask-user-tool.js";
+import { sendQuestionToolPrompt } from "./tools/question-prompt-send.js";
+import { normalizeSecretsRequestParams } from "./tools/secrets-tool.js";
 
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
@@ -45,7 +47,8 @@ const TRACE_REQUIRED_PARAM_GROUPS = {
   edit: REQUIRED_PARAM_GROUPS.edit,
 } satisfies Record<string, readonly RequiredParamGroup[]>;
 
-function buildAskUserPromptPayload(
+function reserveQuestionPromptDelivery(
+  toolName: "ask_user" | "secrets",
   toolCallId: string,
   sessionKey: string | undefined,
   runId: string,
@@ -53,7 +56,8 @@ function buildAskUserPromptPayload(
   args: unknown,
 ) {
   try {
-    const { questions, timeoutSeconds } = normalizeAskUserParams(args);
+    const { questions, timeoutSeconds } =
+      toolName === "secrets" ? normalizeSecretsRequestParams(args) : normalizeAskUserParams(args);
     const reservation = reserveAskUserPromptDelivery({
       toolCallId,
       sessionKey,
@@ -324,9 +328,20 @@ export function handleToolExecutionStart(
 ): void | Promise<void> {
   const startToolName = normalizeToolPolicyName(evt.toolName);
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
-  const askUserPromptReservation =
-    startToolName === "ask_user" && ctx.params.onToolResult
-      ? buildAskUserPromptPayload(
+  const isQuestionTool =
+    startToolName === "ask_user" ||
+    (startToolName === "secrets" &&
+      evt.args !== null &&
+      typeof evt.args === "object" &&
+      "action" in evt.args &&
+      evt.args.action === "request");
+  const questionPromptReservation =
+    isQuestionTool &&
+    ctx.params.onToolResult &&
+    // Native credential cards arrive through question.requested, not a public link.
+    (startToolName === "ask_user" || isDeliverableMessageChannel(ctx.params.messageChannel ?? ""))
+      ? reserveQuestionPromptDelivery(
+          startToolName === "ask_user" ? "ask_user" : "secrets",
           evt.toolCallId,
           ctx.params.sessionKey,
           ctx.params.runId,
@@ -334,8 +349,8 @@ export function handleToolExecutionStart(
           evt.args,
         )
       : undefined;
-  const cancelAskUserPromptReservation = () => {
-    if (askUserPromptReservation) {
+  const cancelQuestionPromptReservation = () => {
+    if (questionPromptReservation) {
       cancelAskUserPromptDelivery(
         evt.toolCallId,
         ctx.params.sessionKey,
@@ -352,14 +367,14 @@ export function handleToolExecutionStart(
         assistantMessageIndex: ctx.state.assistantMessageIndex,
       });
     } catch (error) {
-      cancelAskUserPromptReservation();
+      cancelQuestionPromptReservation();
       throw error;
     }
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(
         () => continueToolExecutionStart(),
         (error: unknown) => {
-          cancelAskUserPromptReservation();
+          cancelQuestionPromptReservation();
           throw error;
         },
       );
@@ -583,34 +598,29 @@ export function handleToolExecutionStart(
       }
     }
 
-    if (toolName === "ask_user" && ctx.params.onToolResult) {
-      const payload = askUserPromptReservation;
-      if (payload) {
-        const questionId = payload.questionId;
-        void waitForAskUserPromptReady(questionId)
-          .then((questions) => {
-            if (!questions) {
-              return;
-            }
-            return ctx.params.onToolResult?.(
-              buildAgentHarnessQuestionPromptPayload({
-                questionId,
-                questions: questions.map(({ questionId: id, ...question }) => ({
-                  ...question,
-                  id,
-                })),
-                options: { intro: "Question for you:" },
-              }),
-            );
-          })
-          .then(
-            () => settleAskUserPromptDelivery(questionId),
-            (error: unknown) => {
-              settleAskUserPromptDelivery(questionId, error);
-              ctx.log.warn(`failed to deliver ask_user prompt: ${String(error)}`);
-            },
-          );
-      }
+    const publishPrompt = ctx.params.onToolResult;
+    if (questionPromptReservation && publishPrompt) {
+      const questionId = questionPromptReservation.questionId;
+      void waitForAskUserPromptReady(questionId)
+        .then(async (questions) => {
+          if (!questions) {
+            return;
+          }
+          await sendQuestionToolPrompt({
+            toolName: toolName === "secrets" ? "secrets" : "ask_user",
+            questionId,
+            questions,
+            config: ctx.params.config,
+            send: publishPrompt,
+          });
+        })
+        .then(
+          () => settleAskUserPromptDelivery(questionId),
+          (error: unknown) => {
+            settleAskUserPromptDelivery(questionId, error);
+            ctx.log.warn(`failed to deliver ${toolName} prompt: ${String(error)}`);
+          },
+        );
     }
   };
 
@@ -622,14 +632,14 @@ export function handleToolExecutionStart(
   try {
     flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
   } catch (error) {
-    cancelAskUserPromptReservation();
+    cancelQuestionPromptReservation();
     throw error;
   }
   if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
     return flushBlockReplyBufferResult.then(
       () => continueAfterBlockReplyFlush(),
       (error: unknown) => {
-        cancelAskUserPromptReservation();
+        cancelQuestionPromptReservation();
         throw error;
       },
     );

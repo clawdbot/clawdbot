@@ -1,10 +1,11 @@
-// @vitest-environment node
 import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   GatewayProtocolClient,
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
@@ -13,76 +14,18 @@ import {
 } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSessionCapability } from "./index.ts";
-
-function emptySessionsResult(): SessionsListResult {
-  return {
-    ts: 1,
-    path: "(multiple)",
-    count: 0,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [],
-  };
-}
-
-function runningSessionsResult(): SessionsListResult {
-  return {
-    ...emptySessionsResult(),
-    count: 1,
-    sessions: [
-      {
-        key: "agent:main:main",
-        kind: "direct",
-        updatedAt: 1,
-        hasActiveRun: true,
-        activeRunIds: ["run-1"],
-        status: "running",
-        startedAt: 1,
-      },
-    ],
-  };
-}
-
-function createSubscriptionHydrationHarness(request: GatewayBrowserClient["request"]) {
-  const client = { request } as GatewayBrowserClient;
-  let snapshot = {
-    client: null as GatewayBrowserClient | null,
-    phase: "reconnecting" as "connected" | "reconnecting",
-    sessionKey: "agent:main:main",
-    assistantAgentId: "main" as string | null,
-    hello: null as GatewayHelloOk | null,
-  };
-  let gatewayListener: ((next: typeof snapshot) => void) | undefined;
-  const sessions = createSessionCapability({
-    get snapshot() {
-      return snapshot;
-    },
-    subscribe(listener) {
-      gatewayListener = listener;
-      return () => {
-        gatewayListener = undefined;
-      };
-    },
-    subscribeEvents: () => () => undefined,
-  });
-  return {
-    client,
-    sessions,
-    connect: () => {
-      snapshot = { ...snapshot, client, phase: "connected" };
-      gatewayListener?.(snapshot);
-    },
-    disconnect: () => {
-      snapshot = { ...snapshot, phase: "reconnecting" };
-      gatewayListener?.(snapshot);
-    },
-  };
-}
+import type { SessionCapability } from "./index.ts";
+import {
+  createSubscriptionHydrationHarness,
+  createTestSessionCapability,
+  runningSessionsResult,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 const targetedSessionReconciliationCases = [
   {
     description: "targeted session changes",
-    reconcile: (sessions: ReturnType<typeof createSessionCapability>) => {
+    reconcile: (sessions: SessionCapability) => {
       expect(
         sessions.reconcileChanged(
           {
@@ -100,7 +43,7 @@ const targetedSessionReconciliationCases = [
   },
   {
     description: "targeted run-terminal reconciliation",
-    reconcile: (sessions: ReturnType<typeof createSessionCapability>) => {
+    reconcile: (sessions: SessionCapability) => {
       expect(
         sessions.reconcileRunTerminal({
           sessionKeys: ["agent:main:main"],
@@ -114,10 +57,10 @@ const targetedSessionReconciliationCases = [
 ];
 
 describe("session connection hydration", () => {
-  it("publishes the signed-in owner's roster before loading the shared roster", async () => {
-    const ownerResult: SessionsListResult = {
-      ...emptySessionsResult(),
-      count: 2,
+  it("lets a queued foreground refresh supersede an owner-first bootstrap roster", async () => {
+    const roster: SessionsListResult = {
+      ...sessionsResult([], 1),
+      count: 3,
       sessions: [
         {
           key: "agent:main:mine-new",
@@ -131,13 +74,6 @@ describe("session connection hydration", () => {
           updatedAt: 1,
           createdActor: { type: "human", id: "operator" },
         },
-      ],
-    };
-    const sharedResult: SessionsListResult = {
-      ...emptySessionsResult(),
-      count: 2,
-      sessions: [
-        ownerResult.sessions[0]!,
         {
           key: "agent:main:theirs",
           kind: "direct",
@@ -146,18 +82,19 @@ describe("session connection hydration", () => {
         },
       ],
     };
-    const ownerList = createDeferred<SessionsListResult>();
-    const sharedList = createDeferred<SessionsListResult>();
+    const bootstrap = createDeferred<{ subscribed: true; list: SessionsListResult }>();
+    const queuedResult: SessionsListResult = {
+      ...sessionsResult([], 1),
+      count: 1,
+      sessions: [{ key: "agent:other:queued", kind: "direct", updatedAt: 4 }],
+    };
     const queuedList = createDeferred<SessionsListResult>();
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.subscribe") {
-        return { subscribed: true };
+        return await bootstrap.promise;
       }
       if (method === "sessions.list") {
-        if (params?.ownerId === "operator") {
-          return await ownerList.promise;
-        }
-        return params?.search === "queued" ? await queuedList.promise : await sharedList.promise;
+        return params?.search === "queued" ? await queuedList.promise : sessionsResult([], 1);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -171,7 +108,7 @@ describe("session connection hydration", () => {
       selfUser: { id: "operator", name: "Operator" },
     };
     let gatewayListener: ((next: typeof snapshot) => void) | undefined;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       get snapshot() {
         return snapshot;
       },
@@ -187,40 +124,33 @@ describe("session connection hydration", () => {
 
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
-        "sessions.list",
-        expect.objectContaining({ ownerId: "operator", limit: 60 }),
+        "sessions.subscribe",
+        expect.objectContaining({
+          agentId: "main",
+          ownerFirst: true,
+          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+        }),
+        { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
       ),
     );
+    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(0);
+    expect(sessions.state.result).toBeNull();
+    const queuedRefresh = sessions.refresh({ agentId: "other", search: "queued", force: true });
+    snapshot = { ...snapshot, selfUser: { id: "collaborator", name: "Collaborator" } };
+    gatewayListener?.(snapshot);
+
+    bootstrap.resolve({ subscribed: true, list: roster });
     await waitForFast(() =>
-      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2),
+      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(1),
     );
     expect(sessions.state.result).toBeNull();
     expect(request.mock.calls.at(-1)?.[1]).toEqual(
-      expect.objectContaining({ agentId: "main", limit: 60 }),
-    );
-    expect(request.mock.calls.at(-1)?.[1]).not.toHaveProperty("ownerId");
-    const queuedRefresh = sessions.refresh({ agentId: "other", search: "queued", force: true });
-
-    ownerList.resolve(ownerResult);
-    await waitForFast(() => expect(sessions.state.result).toBe(ownerResult));
-    expect(sessions.state.loading).toBe(false);
-
-    sharedList.resolve(sharedResult);
-    await waitForFast(() =>
-      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([
-        "agent:main:mine-new",
-        "agent:main:mine-old",
-        "agent:main:theirs",
-      ]),
-    );
-    await waitForFast(() =>
-      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(3),
-    );
-    expect(request.mock.calls.at(-1)?.[1]).toEqual(
       expect.objectContaining({ agentId: "other", search: "queued" }),
     );
-    queuedList.resolve(emptySessionsResult());
+    queuedList.resolve(queuedResult);
     await queuedRefresh;
+    expect(sessions.state.agentId).toBe("other");
+    expect(sessions.state.result).toBe(queuedResult);
     sessions.dispose();
   });
 
@@ -250,16 +180,19 @@ describe("session connection hydration", () => {
       hello: null as GatewayHelloOk | null,
     };
     let gatewayListener: ((next: typeof snapshot) => void) | undefined;
-    const sessions = createSessionCapability({
-      get snapshot() {
-        return snapshot;
+    const sessions = createTestSessionCapability(
+      {
+        get snapshot() {
+          return snapshot;
+        },
+        subscribe(listener) {
+          gatewayListener = listener;
+          return () => undefined;
+        },
+        subscribeEvents: () => () => undefined,
       },
-      subscribe(listener) {
-        gatewayListener = listener;
-        return () => undefined;
-      },
-      subscribeEvents: () => () => undefined,
-    });
+      "roboclaw",
+    );
 
     snapshot = { ...snapshot, client, phase: "connected" };
     gatewayListener?.(snapshot);
@@ -275,78 +208,100 @@ describe("session connection hydration", () => {
     sessions.dispose();
   });
 
-  it("rehydrates owner sessions when identity arrives on the same connection", async () => {
-    let resolveList: (result: SessionsListResult) => void = () => undefined;
-    const pendingList = new Promise<SessionsListResult>((resolve) => {
-      resolveList = resolve;
-    });
-    let listCalls = 0;
-    const result: SessionsListResult = {
-      ts: 1,
-      path: "(multiple)",
-      count: 0,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [],
-    };
-    const request = vi.fn(async (method: string, _params?: Record<string, unknown>) => {
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
+  it.each(["main", "work"])(
+    "rehydrates the current %s roster when identity arrives on the same connection",
+    async (agentId) => {
+      let resolveList: (result: SessionsListResult) => void = () => undefined;
+      const pendingList = new Promise<SessionsListResult>((resolve) => {
+        resolveList = resolve;
+      });
+      let listCalls = 0;
+      const result: SessionsListResult = {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+      const request = vi.fn(async (method: string, _params?: Record<string, unknown>) => {
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method === "sessions.list") {
+          listCalls += 1;
+          return listCalls === 1 ? await pendingList : result;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      let snapshot = {
+        client: null as GatewayBrowserClient | null,
+        phase: "reconnecting" as "connected" | "reconnecting",
+        sessionKey: "agent:main:main",
+        assistantAgentId: "main" as string | null,
+        hello: null as GatewayHelloOk | null,
+        canvasPluginSurfaceUrl: null as string | null,
+        selfUser: null as { id: string; name?: string } | null,
+      };
+      let gatewayListener: ((next: typeof snapshot) => void) | undefined;
+      const sessions = createTestSessionCapability({
+        get snapshot() {
+          return snapshot;
+        },
+        subscribe(listener) {
+          gatewayListener = listener;
+          return () => undefined;
+        },
+        subscribeEvents: () => () => undefined,
+      });
+
+      snapshot = { ...snapshot, client, phase: "connected" };
+      gatewayListener?.(snapshot);
+      await waitForFast(() => expect(listCalls).toBe(1));
+
+      snapshot = { ...snapshot, canvasPluginSurfaceUrl: "https://gateway.example.test/canvas" };
+      gatewayListener?.(snapshot);
+      await Promise.resolve();
+      expect(listCalls).toBe(1);
+
+      if (agentId === "work") {
+        resolveList(result);
+        await waitForFast(() => expect(sessions.state.result).toBe(result));
+        // A foreground query can select a roster independently of the current route.
+        snapshot = { ...snapshot, sessionKey: "global" };
+        await sessions.refresh({ agentId, search: "selected", force: true });
+        expect(sessions.state.agentId).toBe(agentId);
       }
-      if (method === "sessions.list") {
-        listCalls += 1;
-        return listCalls === 1 ? await pendingList : result;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    let snapshot = {
-      client: null as GatewayBrowserClient | null,
-      phase: "reconnecting" as "connected" | "reconnecting",
-      sessionKey: "agent:main:main",
-      assistantAgentId: "main" as string | null,
-      hello: null as GatewayHelloOk | null,
-      canvasPluginSurfaceUrl: null as string | null,
-      selfUser: null as { id: string; name?: string } | null,
-    };
-    let gatewayListener: ((next: typeof snapshot) => void) | undefined;
-    const sessions = createSessionCapability({
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe(listener) {
-        gatewayListener = listener;
-        return () => undefined;
-      },
-      subscribeEvents: () => () => undefined,
-    });
+      snapshot = { ...snapshot, selfUser: { id: "operator", name: "Operator" } };
+      gatewayListener?.(snapshot);
+      resolveList(result);
+      await waitForFast(() => expect(listCalls).toBe(agentId === "work" ? 3 : 2));
 
-    snapshot = { ...snapshot, client, phase: "connected" };
-    gatewayListener?.(snapshot);
-    await waitForFast(() => expect(listCalls).toBe(1));
+      expect(
+        request.mock.calls
+          .filter(([method]) => method === "sessions.list")
+          .map(([, params]) => params),
+      ).toEqual([
+        expect.not.objectContaining({ ownerFirst: expect.anything() }),
+        ...(agentId === "work" ? [expect.objectContaining({ agentId, search: "selected" })] : []),
+        expect.objectContaining({
+          agentId,
+          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+          ...(agentId === "work" ? { search: "selected" } : { ownerFirst: true }),
+        }),
+      ]);
+      await waitForFast(() => expect(sessions.state.agentId).toBe(agentId));
+      expect(sessions.state.result?.sessions).toEqual([]);
 
-    snapshot = { ...snapshot, canvasPluginSurfaceUrl: "https://gateway.example.test/canvas" };
-    gatewayListener?.(snapshot);
-    await Promise.resolve();
-    expect(listCalls).toBe(1);
-
-    snapshot = { ...snapshot, selfUser: { id: "operator", name: "Operator" } };
-    gatewayListener?.(snapshot);
-    resolveList(result);
-    await waitForFast(() => expect(listCalls).toBe(3));
-
-    expect(
-      request.mock.calls
-        .filter(([method]) => method === "sessions.list")
-        .map(([, params]) => params),
-    ).toEqual([
-      expect.not.objectContaining({ ownerId: expect.anything() }),
-      expect.objectContaining({ ownerId: "operator", limit: 60 }),
-      expect.not.objectContaining({ ownerId: expect.anything() }),
-    ]);
-    expect(sessions.state.result?.sessions).toEqual([]);
-    expect(sessions.state.agentId).toBe("main");
-    sessions.dispose();
-  });
+      // A new connection returns to the application's selected agent.
+      snapshot = { ...snapshot, phase: "reconnecting" };
+      gatewayListener?.(snapshot);
+      snapshot = { ...snapshot, phase: "connected", sessionKey: "agent:main:main" };
+      gatewayListener?.(snapshot);
+      await waitForFast(() => expect(sessions.state.agentId).toBe("main"));
+      sessions.dispose();
+    },
+  );
 
   it("hydrates again after the current client reconnects", async () => {
     let listCalls = 0;
@@ -378,7 +333,7 @@ describe("session connection hydration", () => {
       selfUser: null as { id: string; name?: string } | null,
     };
     let gatewayListener: ((next: typeof snapshot) => void) | undefined;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       get snapshot() {
         return snapshot;
       },
@@ -405,9 +360,9 @@ describe("session connection hydration", () => {
     sessions.dispose();
   });
 
-  it("preserves a failed session observer through hydration and retries the current connection", async () => {
+  it("recovers primary and managed lists after retrying the current session observer", async () => {
     vi.useFakeTimers();
-    const result = emptySessionsResult();
+    const result = sessionsResult([], 1);
     const recoveredResult: SessionsListResult = {
       ...result,
       count: 1,
@@ -415,7 +370,7 @@ describe("session connection hydration", () => {
     };
     let subscriptionCalls = 0;
     let listCalls = 0;
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
       if (method === "sessions.subscribe") {
         subscriptionCalls += 1;
         if (subscriptionCalls === 1) {
@@ -429,6 +384,22 @@ describe("session connection hydration", () => {
         return { subscribed: true };
       }
       if (method === "sessions.list") {
+        if (params?.agentId === "writer") {
+          const done = subscriptionCalls > 1;
+          return {
+            ...result,
+            count: 1,
+            sessions: [
+              {
+                key: "agent:writer:linked",
+                kind: "direct",
+                updatedAt: done ? 2 : 1,
+                hasActiveRun: !done,
+                status: done ? "done" : "running",
+              },
+            ],
+          } satisfies SessionsListResult;
+        }
         listCalls += 1;
         return listCalls === 1 ? result : recoveredResult;
       }
@@ -437,6 +408,8 @@ describe("session connection hydration", () => {
     const { sessions, connect } = createSubscriptionHydrationHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
+    const writerQuery = { agentId: "writer", archivedFilter: "all" as const, limit: 2 };
+    const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
 
     try {
       connect();
@@ -445,6 +418,11 @@ describe("session connection hydration", () => {
       expect(sessions.state.result).toBe(result);
       expect(sessions.state.error).toBe("session observer temporarily unavailable");
       expect(subscriptionCalls).toBe(1);
+      expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+        key: "agent:writer:linked",
+        hasActiveRun: true,
+        status: "running",
+      });
 
       await vi.advanceTimersByTimeAsync(99);
       expect(subscriptionCalls).toBe(1);
@@ -453,9 +431,16 @@ describe("session connection hydration", () => {
       expect(subscriptionCalls).toBe(2);
       expect(sessions.state.error).toBeNull();
       expect(sessions.state.result).toBe(recoveredResult);
-      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
+      expect(listCalls).toBe(2);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+        key: "agent:writer:linked",
+        hasActiveRun: false,
+        status: "done",
+      });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
+      stopWriter();
       sessions.dispose();
       vi.useRealTimers();
     }
@@ -463,7 +448,7 @@ describe("session connection hydration", () => {
 
   it("recovers the roster after a subscription deadline without admitting late replies", async () => {
     vi.useFakeTimers();
-    const initialResult = emptySessionsResult();
+    const initialResult = sessionsResult([], 1);
     const recoveredResult: SessionsListResult = {
       ...initialResult,
       count: 1,
@@ -561,7 +546,7 @@ describe("session connection hydration", () => {
           return subscriptionCalls === 1 ? response : { subscribed: true };
         }
         if (method === "sessions.list") {
-          return emptySessionsResult();
+          return sessionsResult([], 1);
         }
         throw new Error(`Unexpected request: ${method}`);
       });
@@ -607,7 +592,7 @@ describe("session connection hydration", () => {
         return { subscribed: true };
       }
       if (method === "sessions.list") {
-        return emptySessionsResult();
+        return sessionsResult([], 1);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -797,7 +782,7 @@ describe("session connection hydration", () => {
         if (listCalls > 1) {
           throw new Error("newer session list failure");
         }
-        return emptySessionsResult();
+        return sessionsResult([], 1);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -848,7 +833,7 @@ describe("session connection hydration", () => {
         if (listCalls === 2) {
           throw sharedError;
         }
-        return listCalls === 3 ? await pendingCatchUpList : emptySessionsResult();
+        return listCalls === 3 ? await pendingCatchUpList : sessionsResult([], 1);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -867,11 +852,11 @@ describe("session connection hydration", () => {
       expect(subscriptionCalls).toBe(2);
       expect(listCalls).toBe(3);
       expect(sessions.state.error).toBe("same failure message");
-      completeCatchUpList(emptySessionsResult());
+      completeCatchUpList(sessionsResult([], 1));
       await vi.advanceTimersByTimeAsync(0);
       expect(sessions.state.error).toBeNull();
     } finally {
-      completeCatchUpList(emptySessionsResult());
+      completeCatchUpList(sessionsResult([], 1));
       sessions.dispose();
       vi.useRealTimers();
     }
@@ -890,7 +875,7 @@ describe("session connection hydration", () => {
         return subscriptionCalls === 1 ? await retiredSubscription : { subscribed: true };
       }
       if (method === "sessions.list") {
-        return emptySessionsResult();
+        return sessionsResult([], 1);
       }
       throw new Error(`Unexpected request: ${method}`);
     });

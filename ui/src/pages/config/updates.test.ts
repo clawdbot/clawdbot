@@ -2,7 +2,10 @@
 
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import { projectUpdateStatusResponse } from "../../app/update-overlay-helpers.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { renderUpdates } from "./updates.ts";
 
 type UpdatesViewProps = Parameters<typeof renderUpdates>[0];
@@ -38,6 +41,7 @@ function createProps(overrides: Partial<UpdatesViewProps> = {}): UpdatesViewProp
     updateBusy: false,
     nowMs: 1_000,
     onChannelChange: vi.fn(),
+    onUpdateChecksChange: vi.fn(),
     onAutomaticUpdatesChange: vi.fn(),
     onUpdateNow: vi.fn(),
     onHoldUpdate: vi.fn(async () => true),
@@ -58,10 +62,10 @@ function row(title: string): HTMLElement {
 
 function automaticUpdatesControl(): {
   row: HTMLElement;
-  toggle: HTMLElement;
+  toggle: HTMLElement & { checked: boolean };
 } {
   const automaticRow = row("Automatic updates");
-  const toggle = automaticRow.querySelector<HTMLElement>("wa-switch");
+  const toggle = automaticRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
   if (!toggle) {
     throw new Error("Missing automatic updates control");
   }
@@ -74,6 +78,40 @@ beforeEach(async () => {
 });
 
 describe("renderUpdates", () => {
+  it("keeps Mac updater controls native and available independently of Gateway admin access", () => {
+    const nativeDeviceSettings = {
+      snapshot: createNativeDeviceSettingsSnapshot(),
+      subscribe: () => () => undefined,
+      set: vi.fn(),
+      requestPermission: vi.fn(),
+      openSystemSettings: vi.fn(),
+      openPanel: vi.fn(),
+      checkForUpdates: vi.fn(),
+      refresh: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies NativeDeviceSettingsCapability;
+    const props = createProps({ nativeDeviceSettings, canAdmin: false, configBusy: true });
+    render(renderUpdates(props), container);
+    expect(container.textContent).toContain("This Mac");
+    expect(row("App version").textContent).toContain("2026.9.3 (build 42)");
+    const automatic = row("Check for updates automatically").querySelector<
+      HTMLElement & { checked: boolean }
+    >("wa-switch")!;
+    expect(automatic.hasAttribute("disabled")).toBe(false);
+    automatic.checked = false;
+    automatic.dispatchEvent(new Event("change"));
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("updates.automatic", false);
+    row("Check for Updates…").querySelector("button")?.click();
+    expect(nativeDeviceSettings.checkForUpdates).toHaveBeenCalledOnce();
+    nativeDeviceSettings.snapshot!.updates.available = false;
+    nativeDeviceSettings.snapshot!.updates.unavailableReason = "Updater is not bundled";
+    render(renderUpdates(props), container);
+    expect(row("App updates unavailable").textContent).toContain("Updater is not bundled");
+    expect(container.textContent).not.toContain("Check for updates automatically");
+    render(renderUpdates(createProps()), container);
+    expect(container.textContent).not.toContain("This Mac");
+  });
+
   it("renders build facts, policy controls, status, and the shared update action", () => {
     const onChannelChange = vi.fn();
     const onAutomaticUpdatesChange = vi.fn();
@@ -141,6 +179,38 @@ describe("renderUpdates", () => {
     const automaticRow = row("Automatic updates");
     expect(automaticRow.textContent).toContain("never installs them automatically");
     expect(automaticRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("lets an admin resume disabled checks while preserving the automatic-update preference", () => {
+    const onUpdateChecksChange = vi.fn();
+    render(
+      renderUpdates(
+        createProps({
+          configObject: {
+            update: { channel: "stable", checkOnStart: false, auto: { enabled: true } },
+          },
+          schedule: { channel: "stable", autoEnabled: false },
+          onUpdateChecksChange,
+        }),
+      ),
+      container,
+    );
+
+    const checks = row("Check for updates").querySelector<HTMLElement & { checked: boolean }>(
+      "wa-switch",
+    );
+    if (!checks) {
+      throw new Error("Missing update checks control");
+    }
+    expect(checks.checked).toBe(false);
+    expect(checks.hasAttribute("disabled")).toBe(false);
+    const automatic = automaticUpdatesControl().toggle;
+    expect(automatic.checked).toBe(true);
+    expect(automatic.hasAttribute("disabled")).toBe(true);
+    expect(row("Automatic updates").textContent).toContain("Check for updates");
+    checks.checked = true;
+    checks.dispatchEvent(new Event("change"));
+    expect(onUpdateChecksChange).toHaveBeenCalledWith(true);
   });
 
   it.each([
@@ -456,45 +526,74 @@ describe("renderUpdates", () => {
     expect(row("Status").querySelector(".settings-status--danger")).not.toBeNull();
   });
 
-  it("renders the recorded failure details and typed recovery actions", () => {
-    const onUpdateNow = vi.fn();
-    const onCheckStatus = vi.fn(async () => undefined);
-    render(
-      renderUpdates(
-        createProps({
-          recordedAttempt: {
-            timestampMs: 500,
-            status: "error",
-            reason: "build-failed",
-            installKind: "git",
-            installedVersion: null,
-            installedSha: "0123456789abcdef",
-            targetVersion: null,
-            targetSha: null,
-            failure: { step: "build", detail: "Type check failed" },
-          },
-          onUpdateNow,
-          onCheckStatus,
-        }),
-      ),
-      container,
-    );
+  it.each([
+    {
+      label: "a failed build with no recorded after identity",
+      status: "error",
+      stats: {
+        mode: "git",
+        reason: "build-failed",
+        before: { sha: "0123456789abcdef" },
+        steps: [{ name: "build", log: { exitCode: 1, stderrTail: "Type check failed" } }],
+      },
+      before: "0123456789ab",
+      after: "Unknown",
+    },
+    {
+      label: "a skipped update that leaves the installed version unchanged",
+      status: "skipped",
+      stats: {
+        mode: "npm",
+        reason: "managed-service-handoff-unavailable",
+        before: { version: "2026.8.1" },
+        after: { version: "2026.8.1" },
+      },
+      before: "v2026.8.1",
+      after: "v2026.8.1",
+    },
+  ])(
+    "renders recorded identities and recovery actions for $label",
+    ({ status, stats, before, after }) => {
+      const onUpdateNow = vi.fn();
+      const onCheckStatus = vi.fn(async () => undefined);
+      const projected = projectUpdateStatusResponse(
+        { sentinel: { kind: "update", status, ts: 500, stats } },
+        { updateStatusBanner: null, recordedUpdateAttempt: null, heldUpdateCampaignId: null },
+      );
+      render(
+        renderUpdates(
+          createProps({
+            recordedAttempt: projected.recordedUpdateAttempt,
+            statusBanner: projected.updateStatusBanner,
+            onUpdateNow,
+            onCheckStatus,
+          }),
+        ),
+        container,
+      );
 
-    expect(row("Reason code").textContent).toContain("build-failed");
-    expect(row("Target").textContent).toContain("v2026.8.2");
-    expect(row("Installed").textContent).toContain("0123456789ab");
-    expect(row("Attempt install type").textContent).toContain("git");
-    expect(row("Failure details").textContent).toContain("Type check failed");
-    const recovery = row("Recovery");
-    recovery.querySelector<HTMLButtonElement>("button")?.click();
-    recovery.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
-    expect(onCheckStatus).toHaveBeenCalledOnce();
-    expect(onUpdateNow).toHaveBeenCalledOnce();
-    expect(
-      container.querySelector<HTMLAnchorElement>("a[href*='update-troubleshooting']"),
-    ).not.toBeNull();
-    expect(row("CLI fallback").textContent).toContain("openclaw update status --json");
-  });
+      expect(row("Reason code").textContent).toContain(stats.reason);
+      expect(row("Before update").textContent).toContain(before);
+      expect(row("After attempt").textContent).toContain(after);
+      expect(row("After attempt").textContent).not.toContain("v2026.8.2");
+      expect(row("Attempt install type").textContent).toContain(stats.mode);
+      if (status === "error") {
+        expect(row("Failure details").textContent).toContain("Type check failed");
+      }
+      const recovery = row("Recovery");
+      recovery.querySelector<HTMLButtonElement>("button")?.click();
+      recovery.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
+      expect(onCheckStatus).toHaveBeenCalledOnce();
+      expect(onUpdateNow).toHaveBeenCalledOnce();
+      expect(
+        container.querySelector<HTMLAnchorElement>("a[href*='update-troubleshooting']"),
+      ).not.toBeNull();
+      const cliFallback = row("CLI fallback");
+      expect(cliFallback.textContent).toContain("on the Gateway host");
+      expect(cliFallback.textContent).toContain("local coding agent");
+      expect(cliFallback.querySelector("code")?.textContent?.trim()).toBe("openclaw triage");
+    },
+  );
 
   it("keeps read-only facts visible while locking controls for non-admins", () => {
     render(
@@ -509,6 +608,9 @@ describe("renderUpdates", () => {
       true,
     );
     expect(row("Automatic updates").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(row("Check for updates").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(
       true,
     );
     expect(row("Update now").querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);

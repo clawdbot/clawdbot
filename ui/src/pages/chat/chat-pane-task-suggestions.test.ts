@@ -45,6 +45,10 @@ describe("chat pane task suggestion lifecycle", () => {
     try {
       await pane.copyTaskSuggestionPrompt(suggestion);
     } finally {
+      // The fallback restores focus on the next turn; drain it before jsdom teardown.
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 0);
+      });
       if (originalClipboard) {
         Object.defineProperty(navigator, "clipboard", originalClipboard);
       } else {

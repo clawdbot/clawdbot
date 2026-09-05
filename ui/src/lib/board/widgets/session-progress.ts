@@ -28,6 +28,7 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
   private store?: SessionProgressCardStore;
   private targetSessionKey = "";
   private unsubscribe?: () => void;
+  private unsubscribeSessions?: () => void;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -58,11 +59,13 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
               : "sessionProgressCard.widgetUnavailable",
           )}</span
         >
-        ${loadError === "unavailable"
-          ? html`<button class="btn btn--sm" type="button" @click=${this.retryLoad}>
-              ${t("common.retry")}
-            </button>`
-          : null}
+        ${
+          loadError === "unavailable"
+            ? html`<button class="btn btn--sm" type="button" @click=${this.retryLoad}>
+                ${t("common.retry")}
+              </button>`
+            : null
+        }
       </div>`;
     }
     const card = this.store?.get(this.targetSessionKey);
@@ -76,7 +79,17 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
         ${t("sessionProgressCard.widgetEmpty")}
       </p>`;
     }
-    return renderSessionProgressCard(card, "board");
+    const row = this.context?.sessions?.state.result?.sessions.find(
+      (entry) => entry.key === this.targetSessionKey,
+    );
+    return renderSessionProgressCard(
+      card,
+      "board",
+      undefined,
+      row?.status,
+      row?.startedAt,
+      row?.endedAt,
+    );
   }
 
   private syncStore(): void {
@@ -94,6 +107,7 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
     if (store && targetSessionKey) {
       store.watch(this, [targetSessionKey]);
       this.unsubscribe = store.subscribe(() => this.requestUpdate());
+      this.unsubscribeSessions = this.context?.sessions?.subscribe(() => this.requestUpdate());
     }
   }
 
@@ -107,8 +121,10 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
   private releaseStore(): void {
     this.store?.unwatch(this);
     this.unsubscribe?.();
+    this.unsubscribeSessions?.();
     this.store = undefined;
     this.unsubscribe = undefined;
+    this.unsubscribeSessions = undefined;
   }
 }
 

@@ -1,4 +1,8 @@
-import { GATEWAY_SERVER_CAPS, type BoardSnapshot } from "@openclaw/gateway-protocol";
+import {
+  GATEWAY_SERVER_CAPS,
+  type BoardGetParams,
+  type BoardSnapshot,
+} from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -39,7 +43,9 @@ type ProviderBinding = {
 export class OpenClawBoardDocument extends OpenClawLightDomElement {
   @property({ attribute: false }) gatewaySnapshot?: ApplicationGatewaySnapshot;
   @property({ attribute: false }) sessionKey: string | null = null;
+  @property({ attribute: false }) preparedSession: BoardGetParams | null = null;
   @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
+  @property({ type: Boolean }) passive = false;
 
   @state() private documentState: DashboardDocumentState = "loading";
   @state() private snapshot?: BoardSnapshot;
@@ -48,11 +54,17 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
 
   private provider: BoardProvider | null = null;
   private providerLease: BoardProviderLease | null = null;
-  private binding: ProviderBinding | null = null;
+  private binding: (ProviderBinding & { session: BoardGetParams }) | null = null;
   private unsubscribeSnapshot: (() => void) | null = null;
   private unsubscribeLoadError: (() => void) | null = null;
   private unsubscribeEvents: (() => void) | null = null;
   private bindingGeneration = 0;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    // Reattaching unchanged properties must reacquire the released binding.
+    this.requestUpdate("gatewaySnapshot");
+  }
 
   override disconnectedCallback(): void {
     this.releaseProvider();
@@ -60,7 +72,11 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
   }
 
   override updated(changed: PropertyValues<this>): void {
-    if (changed.has("sessionKey") || changed.has("gatewaySnapshot")) {
+    if (
+      changed.has("sessionKey") ||
+      changed.has("preparedSession") ||
+      changed.has("gatewaySnapshot")
+    ) {
       this.synchronizeProvider();
     }
   }
@@ -87,7 +103,10 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
   }
 
   private synchronizeProvider(): void {
-    const sessionKey = this.sessionKey?.trim() ?? "";
+    if (!this.isConnected) {
+      return;
+    }
+    const sessionKey = (this.preparedSession?.sessionKey ?? this.sessionKey)?.trim() ?? "";
     if (!sessionKey) {
       this.releaseProvider();
       this.documentState = "missing-session";
@@ -110,6 +129,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     if (
       this.binding?.client === client &&
       this.binding.sessionKey === sessionKey &&
+      (!this.preparedSession || this.binding.session.agentId === this.preparedSession.agentId) &&
       this.binding.capabilityKey === capabilityKey
     ) {
       this.providerLease?.update(client, snapshot.phase === "connected", capabilities);
@@ -118,23 +138,31 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     this.releaseProvider();
     this.documentState = "loading";
     const generation = this.bindingGeneration;
-    void this.bindProvider({ client, sessionKey, capabilityKey }, capabilities, generation);
+    void this.bindProvider(
+      { client, sessionKey, capabilityKey },
+      capabilities,
+      generation,
+      this.preparedSession,
+    );
   }
 
   private async bindProvider(
     binding: ProviderBinding,
     capabilities: ReturnType<OpenClawBoardDocument["providerCapabilities"]>,
     generation: number,
+    preparedSession: BoardGetParams | null,
   ): Promise<void> {
     try {
-      const described = await binding.client.request<{ session?: GatewaySessionRow | null }>(
-        "sessions.describe",
-        { key: binding.sessionKey },
-      );
+      const described = preparedSession
+        ? null
+        : await binding.client.request<{ session?: GatewaySessionRow | null }>(
+            "sessions.describe",
+            { key: binding.sessionKey },
+          );
       if (generation !== this.bindingGeneration) {
         return;
       }
-      if (!described.session) {
+      if (!preparedSession && !described?.session) {
         this.documentState = "not-found";
         return;
       }
@@ -142,8 +170,12 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       if (!current || current.client !== binding.client) {
         return;
       }
+      const session = preparedSession ?? {
+        sessionKey: described!.session!.key,
+        agentId: described!.session!.agentId,
+      };
       const lease = acquireBoardProviderForSession(
-        binding.sessionKey,
+        session,
         binding.client,
         current.phase === "connected",
         capabilities.canPinWidgets,
@@ -154,7 +186,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       const provider = lease.provider;
       this.provider = provider;
       this.providerLease = lease;
-      this.binding = binding;
+      this.binding = { ...binding, session };
       this.unsubscribeSnapshot = provider.snapshot$.subscribe(() =>
         this.reconcileProvider(provider),
       );
@@ -255,42 +287,60 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     }
     const provider = this.provider;
     const snapshot = this.snapshot;
-    if (!provider || !snapshot) {
+    const session = this.binding?.session;
+    if (!provider || !snapshot || !session) {
       return nothing;
     }
     const callbacks = {
+      appViewGeneration: provider.appViewGeneration,
       applyOps: (ops) => provider.applyOps(ops),
       grant: (name, decision) => provider.grant(name, decision),
       selectTab: (tabId) => {
         this.activeTabId = tabId;
       },
       frameLoadFailed: (name) => provider.refreshWidgetFrame(name),
-      widgetAppView: (name, revision) => provider.widgetAppView(name, revision),
-      refreshWidgetAppView: (name, revision) => provider.refreshWidgetAppView(name, revision),
+      ...(!this.passive
+        ? {
+            widgetAppView: (name, revision) => provider.widgetAppView(name, revision),
+            refreshWidgetAppView: (name, revision) => provider.refreshWidgetAppView(name, revision),
+          }
+        : {}),
     } satisfies BoardViewCallbacks;
+    // A gallery thumbnail may render saved HTML, but it must not bootstrap
+    // executable plugin surfaces or MCP App leases merely by entering view.
+    const renderSnapshot = this.passive
+      ? { ...snapshot, widgets: snapshot.widgets.filter((widget) => widget.contentKind === "html") }
+      : snapshot;
     return html`<openclaw-board-view
       .active=${true}
-      .snapshot=${snapshot}
+      .bridgeEnabled=${!this.passive}
+      .fitAutoContent=${true}
+      .session=${session}
+      .snapshot=${renderSnapshot}
       .activeTabId=${this.activeTabId}
       .widgetFrameUrl=${(name: string, revision: number) => provider.widgetFrameUrl(name, revision)}
       .callbacks=${callbacks}
-      .canMutate=${provider.canMutate}
-      .canGrant=${provider.canGrant}
+      .canMutate=${!this.passive && provider.canMutate}
+      .canGrant=${!this.passive && provider.canGrant}
     ></openclaw-board-view>`;
   }
 
   override render() {
     return html`
       <main class="board-document" aria-label=${t("board.label")}>
-        <button
-          class="btn btn--ghost btn--icon board-document__close"
-          type="button"
-          aria-label=${t("dashboardDocument.close")}
-          title=${t("dashboardDocument.close")}
-          @click=${() => this.onDocumentClose?.()}
-        >
-          ${icons.x}
-        </button>
+        ${
+          this.onDocumentClose
+            ? html`<button
+                class="btn btn--ghost btn--icon board-document__close"
+                type="button"
+                aria-label=${t("dashboardDocument.close")}
+                title=${t("dashboardDocument.close")}
+                @click=${this.onDocumentClose}
+              >
+                ${icons.x}
+              </button>`
+            : nothing
+        }
         <div class="board-document__content">${this.renderState()}</div>
       </main>
     `;

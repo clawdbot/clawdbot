@@ -1,5 +1,6 @@
 import {
   bootstrapHarnessContextEngine,
+  buildAgentHookContextChannelFields,
   buildHarnessContextEngineRuntimeContext,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   embeddedAgentLog,
@@ -53,7 +54,6 @@ export async function prepareCodexAttemptContext(
     contextSessionKey,
     activeContextEngine,
     initialStartupBindingHadInactiveThreadBootstrap,
-    sandboxSessionKey,
     effectiveWorkspace,
     effectiveCwd,
     agentDir,
@@ -72,10 +72,14 @@ export async function prepareCodexAttemptContext(
   };
   const readFencedHistory = async () => {
     const transcriptReadFence = params.userTurnTranscriptRecorder?.getAdmissionReceipt();
-    return await readMirroredSessionHistoryMessages({
+    const messages = await readMirroredSessionHistoryMessages({
       ...activeTranscriptTarget,
+      signal: connection.runAbortController.signal,
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
+    connection.runAbortController.signal.throwIfAborted();
+    connection.assertCurrent();
+    return messages;
   };
   const historyState = {
     messages:
@@ -100,12 +104,20 @@ export async function prepareCodexAttemptContext(
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
-    sessionKey: sandboxSessionKey,
+    sessionKey: contextSessionKey,
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
-    messageProvider: params.messageProvider ?? undefined,
     trigger: params.trigger,
-    channelId: hookChannelId,
+    ...buildAgentHookContextChannelFields({
+      sessionKey: contextSessionKey,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      currentChannelId: hookChannelId,
+      messageTo: params.messageTo,
+      senderId: params.senderId,
+      agentAccountId: params.agentAccountId,
+    }),
+    channelContext: params.channelContext,
     ...hookContextWindowFields,
   };
   const hookRunner = getAgentHarnessHookRunner();

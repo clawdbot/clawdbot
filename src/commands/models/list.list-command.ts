@@ -1,7 +1,12 @@
 /** Implementation of `openclaw models list`. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
+import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveLegacyInheritedAuthDir } from "../../agents/legacy-inherited-auth-dir.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { parseModelRef } from "../../agents/model-selection-normalize.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { ExpectedCliError } from "../../cli/failure-output.js";
@@ -12,7 +17,6 @@ import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-el
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
-import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import { ensureFlagCompatibility } from "./list.options.js";
 import { printModelTable } from "./list.table.js";
@@ -24,26 +28,18 @@ import { resolveModelsTargetAgent } from "./shared.js";
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
 type PromotionsModule = typeof import("./list.promotions.js");
-type RegistryLoadModule = typeof import("./list.registry-load.js");
+type RegistryModule = typeof import("./list.registry.js");
 type RowSourcesModule = typeof import("./list.row-sources.js");
 
 const promotionsModuleLoader = createLazyImportLoader<PromotionsModule>(
   () => import("./list.promotions.js"),
 );
-const registryLoadModuleLoader = createLazyImportLoader<RegistryLoadModule>(
-  () => import("./list.registry-load.js"),
+const registryModuleLoader = createLazyImportLoader<RegistryModule>(
+  () => import("./list.registry.js"),
 );
 const rowSourcesModuleLoader = createLazyImportLoader<RowSourcesModule>(
   () => import("./list.row-sources.js"),
 );
-
-function loadRegistryLoadModule(): Promise<RegistryLoadModule> {
-  return registryLoadModuleLoader.load();
-}
-
-function loadRowSourcesModule(): Promise<RowSourcesModule> {
-  return rowSourcesModuleLoader.load();
-}
 
 /** Lists configured, catalog, and runtime-discovered models as text, plain, or JSON. */
 export async function modelsListCommand(
@@ -104,7 +100,12 @@ export async function modelsListCommand(
   const providerFilter = parsedProviderFilter
     ? providerAliasCanonicalizer.provider(parsedProviderFilter)
     : undefined;
-  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot, agentId);
+  const { entries } = resolveConfiguredModelEntries({
+    cfg,
+    agentId,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
+    canonicalizeRef: providerAliasCanonicalizer.ref,
+  });
   if (providerFilter) {
     const knownProviderIds = new Set(
       [
@@ -119,27 +120,112 @@ export async function modelsListCommand(
       throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
     }
   }
-  const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
-  const authIndex = createModelListAuthIndex({
-    cfg,
-    authStore,
-    agentDir,
-    workspaceDir,
-    metadataSnapshot,
-    // Default output can append authenticated catalog rows beyond the configured
-    // default, so keep the nonprompting OpenAI CLI overlay available in every view.
-    externalCliProviderIds: ["openai"],
-  });
-
+  const inheritedAuthDir = resolveLegacyInheritedAuthDir(cfg);
+  const authStore = inheritedAuthDir
+    ? loadAuthProfileStoreWithoutExternalProfiles(agentDir, { inheritedAuthDir })
+    : loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const includePreparedCatalog = Boolean(opts.all || providerFilter);
+  let preparedRuntimeAuthModes: PreparedAgentCredentialModes | undefined;
   let modelRegistry: ModelRegistry | undefined;
   let registryModels: Model[] = [];
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
-  // The default configured view remains lazy; full and filtered views share
-  // the registry and the same committed model generation as the Gateway.
-  const includePreparedCatalog = Boolean(opts.all || providerFilter);
+  const cliRuntimeProviderIds = [
+    ...new Set(
+      (opts.local ? [] : entries)
+        .filter(
+          (entry) =>
+            !providerFilter ||
+            providerAliasCanonicalizer.provider(entry.ref.provider) === providerFilter,
+        )
+        .map((entry) =>
+          resolveCliRuntimeExecutionProvider({
+            provider: entry.ref.provider,
+            modelId: entry.ref.model,
+            cfg,
+            agentId,
+            metadataSnapshot,
+          }),
+        )
+        .map((provider) => normalizeProviderId(provider ?? ""))
+        .filter((provider) => provider && provider !== "openai"),
+    ),
+  ];
+  try {
+    if (includePreparedCatalog) {
+      const { loadModelRegistry } = await registryModuleLoader.load();
+      const loaded = await loadModelRegistry(cfg, {
+        agentId,
+        agentDir,
+        providerFilter,
+        normalizeModels: Boolean(providerFilter),
+        workspaceDir,
+      });
+      modelRegistry = loaded.registry;
+      registryModels = loaded.models;
+      discoveredKeys = loaded.discoveredKeys;
+      availableKeys = loaded.availableKeys;
+      availabilityErrorMessage = loaded.availabilityErrorMessage;
+      preparedRuntimeAuthModes = Object.fromEntries(
+        cliRuntimeProviderIds.flatMap((provider) => {
+          const mode = loaded.authModes[provider];
+          return mode ? [[provider, mode] as const] : [];
+        }),
+      );
+    } else if (!opts.all && opts.local) {
+      const { loadConfiguredListModelRegistry } = await registryModuleLoader.load();
+      const loaded = await loadConfiguredListModelRegistry(cfg, entries, {
+        agentId,
+        agentDir,
+        providerFilter,
+        workspaceDir,
+      });
+      modelRegistry = loaded.registry;
+      discoveredKeys = loaded.discoveredKeys;
+      availableKeys = loaded.availableKeys;
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    const message = `Model registry unavailable: ${detail}`;
+    throw new ExpectedCliError({
+      message,
+      humanOutput: `Model registry unavailable:\n${formatErrorWithStack(err)}`,
+      machineOutput: message,
+    });
+  }
+  const unpreparedCliRuntimeProviderIds = includePreparedCatalog
+    ? cliRuntimeProviderIds.filter((provider) => !preparedRuntimeAuthModes?.[provider])
+    : [];
+  if (unpreparedCliRuntimeProviderIds.length) {
+    try {
+      const scopedAuthModes = await (
+        await import("../../agents/prepared-model-runtime.scoped-catalog.js")
+      ).prepareScopedReadOnlyModelAuthModes(
+        { config: cfg, env: process.env, workspaceDir },
+        unpreparedCliRuntimeProviderIds,
+        metadataSnapshot,
+      );
+      preparedRuntimeAuthModes = { ...preparedRuntimeAuthModes, ...scopedAuthModes };
+    } catch (err) {
+      runtime.error(
+        `CLI runtime auth lookup failed; leaving availability unknown:\n${formatErrorWithStack(err)}`,
+      );
+    }
+  }
+  const authIndex = createModelListAuthIndex({
+    cfg,
+    authStore,
+    agentId,
+    agentDir,
+    workspaceDir,
+    metadataSnapshot,
+    preparedRuntimeAuthModes,
+    // Default output can append authenticated catalog rows beyond the configured
+    // default, so keep the nonprompting OpenAI CLI overlay available in every view.
+    externalCliProviderIds: ["openai"],
+  });
   const providerDiscoveryProviderIds = (() => {
     if (opts.all && !providerFilter) {
       return undefined;
@@ -164,59 +250,17 @@ export async function modelsListCommand(
   // account discovery remains explicit because it imports full provider runtimes.
   const providerManifestFallbackProviderIds =
     !providerFilter && !opts.all ? authIndex.providerDiscoveryProviderIds : undefined;
-  const loadRegistryState = async (optsLocal?: {
-    normalizeModels?: boolean;
-    loadAvailability?: boolean;
-  }) => {
-    const { loadListModelRegistry } = await loadRegistryLoadModule();
-    const loaded = await loadListModelRegistry(cfg, {
-      agentId,
-      agentDir,
-      providerFilter,
-      normalizeModels: optsLocal?.normalizeModels ?? Boolean(providerFilter),
-      loadAvailability: optsLocal?.loadAvailability,
-      workspaceDir,
-    });
-    modelRegistry = loaded.registry;
-    registryModels = loaded.models;
-    discoveredKeys = loaded.discoveredKeys;
-    availableKeys = loaded.availableKeys;
-    availabilityErrorMessage = loaded.availabilityErrorMessage;
-  };
-  try {
-    if (includePreparedCatalog) {
-      await loadRegistryState();
-    } else if (!opts.all && opts.local) {
-      const { loadConfiguredListModelRegistry } = await loadRegistryLoadModule();
-      const loaded = await loadConfiguredListModelRegistry(cfg, entries, {
-        agentId,
-        agentDir,
-        providerFilter,
-        workspaceDir,
-      });
-      modelRegistry = loaded.registry;
-      discoveredKeys = loaded.discoveredKeys;
-      availableKeys = loaded.availableKeys;
-    }
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    const message = `Model registry unavailable: ${detail}`;
-    throw new ExpectedCliError({
-      message,
-      humanOutput: `Model registry unavailable:\n${formatErrorWithStack(err)}`,
-      machineOutput: message,
-    });
-  }
   const promotionsModulePromise = humanReadable ? promotionsModuleLoader.load() : undefined;
   const promotionsRefreshPromise = promotionsModulePromise
     ?.then((promotionsModule) => promotionsModule.startPromotionsFeedRefresh())
     .catch(() => undefined);
-  const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
+  const rowContext = {
     cfg,
     agentId,
     agentDir,
-    inheritedAuthDir: agentDir,
+    ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
     authIndex,
+    canonicalizeProvider: providerAliasCanonicalizer.provider,
     providerDiscoveryProviderIds,
     providerRuntimeDiscoveryProviderIds,
     providerManifestFallbackProviderIds,
@@ -227,28 +271,27 @@ export async function modelsListCommand(
       provider: providerFilter,
       local: opts.local,
     },
-    skipRuntimeModelSuppression,
     metadataSnapshot,
     workspaceDir,
-  });
+  };
   const rows: ModelRow[] = [];
 
   if (includePreparedCatalog) {
-    const { appendAllModelRowSources } = await loadRowSourcesModule();
+    const { appendAllModelRowSources } = await rowSourcesModuleLoader.load();
     await appendAllModelRowSources({
       rows,
       entries,
-      context: buildRowContext(false),
+      context: rowContext,
       modelRegistry,
       registryModels,
     });
   } else {
-    const { appendConfiguredModelRowSources } = await loadRowSourcesModule();
+    const { appendConfiguredModelRowSources } = await rowSourcesModuleLoader.load();
     await appendConfiguredModelRowSources({
       rows,
       entries,
       modelRegistry,
-      context: buildRowContext(!modelRegistry),
+      context: rowContext,
     });
   }
 

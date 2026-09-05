@@ -1,14 +1,15 @@
 import type {
   BoardCommand,
   BoardCommandEvent,
+  BoardGetParams,
   BoardOp,
   BoardSnapshot,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  buildAgentMainSessionKey,
-  normalizeSessionKeyForUiComparison,
+  normalizeDefaultMainSessionAliasForUi,
+  resolveUiConversationIdentity,
 } from "../sessions/session-key.ts";
 import { GatewayBoardProvider } from "./gateway-provider.ts";
 import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./mock-ops.ts";
@@ -85,10 +86,12 @@ export function boardExists(snapshot: BoardSnapshot): boolean {
 }
 
 class NullProvider implements BoardProvider {
+  readonly appViewGeneration = 0;
   readonly canMutate = false;
   readonly canGrant = false;
   readonly canPinWidgets = false;
   readonly canPinMcpApps = false;
+  readonly hasLoadedSnapshot = true;
   readonly loadError$ = new ValueSignal<string | null>(null);
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent> = new EventStream<BoardCommandEvent>();
@@ -125,10 +128,12 @@ class NullProvider implements BoardProvider {
 }
 
 class MockBoardProvider implements BoardProvider {
+  readonly appViewGeneration = 0;
   readonly canMutate = true;
   readonly canGrant = true;
   readonly canPinWidgets = true;
   readonly canPinMcpApps = true;
+  readonly hasLoadedSnapshot = true;
   readonly loadError$ = new ValueSignal<string | null>(null);
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent>;
@@ -262,6 +267,10 @@ class ScopedGatewayBoardProvider implements BoardProvider {
     return this.transport.sessionKey;
   }
 
+  get appViewGeneration(): number {
+    return this.transport.appViewGeneration;
+  }
+
   get canPinWidgets(): boolean {
     return this.active && this.capabilities.canPinWidgets;
   }
@@ -340,7 +349,6 @@ class ScopedGatewayBoardProvider implements BoardProvider {
 const nullProviders = new Map<string, NullProvider>();
 const mockProviders = new Map<string, MockBoardProvider>();
 const gatewayProviders = new Map<string, { provider: GatewayBoardProvider; consumers: number }>();
-const boardAvailability = new Map<string, boolean>();
 let mockProviderScope: object | null = null;
 
 function resolveMockBoardScope(): object | null {
@@ -359,24 +367,29 @@ function isMockBoardSession(sessionKey: string): boolean {
   return /^agent:[^:]+:[^:]+$/u.test(sessionKey);
 }
 
-export function boardProviderCacheKey(sessionKey: string): string {
-  const normalized = normalizeSessionKeyForUiComparison(sessionKey);
-  return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
+export function boardProviderCacheKey(session: BoardGetParams): string {
+  const identity = resolveUiConversationIdentity(
+    {},
+    normalizeDefaultMainSessionAliasForUi(session.sessionKey),
+    session.agentId,
+  );
+  return JSON.stringify([session.agentId ?? identity.agentId, identity.sessionKey]);
 }
 
 // Session lookups are read-only: only a lifecycle-owned lease may create and
 // subscribe a gateway transport, so hidden panes cannot orphan subscriptions.
-export function boardProviderForSession(sessionKey: string, available = true): BoardProvider {
-  const key = boardProviderCacheKey(sessionKey);
+export function boardProviderForSession(session: BoardGetParams, available = true): BoardProvider {
+  const key = boardProviderCacheKey(session);
+  const sessionKey = normalizeDefaultMainSessionAliasForUi(session.sessionKey);
   const mockScope = resolveMockBoardScope();
-  if (mockScope && isMockBoardSession(key)) {
+  if (mockScope && isMockBoardSession(sessionKey)) {
     if (mockScope !== mockProviderScope) {
       mockProviders.clear();
       mockProviderScope = mockScope;
     }
     let provider = mockProviders.get(key);
     if (!provider) {
-      provider = new MockBoardProvider(key);
+      provider = new MockBoardProvider(sessionKey);
       mockProviders.set(key, provider);
     }
     return provider;
@@ -387,7 +400,7 @@ export function boardProviderForSession(sessionKey: string, available = true): B
   }
   let provider = nullProviders.get(key);
   if (!provider) {
-    provider = new NullProvider(key);
+    provider = new NullProvider(sessionKey);
     nullProviders.set(key, provider);
   }
   return provider;
@@ -404,7 +417,7 @@ export type BoardProviderLease = {
 };
 
 export function acquireBoardProviderForSession(
-  sessionKey: string,
+  session: BoardGetParams,
   client: BoardGatewayClient,
   connected = true,
   canPinWidgets = true,
@@ -412,14 +425,18 @@ export function acquireBoardProviderForSession(
   canMutate = true,
   canGrant = true,
 ): BoardProviderLease {
-  const key = boardProviderCacheKey(sessionKey);
-  const provider = boardProviderForSession(key);
+  const key = boardProviderCacheKey(session);
+  const provider = boardProviderForSession(session);
   if (provider instanceof MockBoardProvider) {
     return { provider, update: () => undefined, release: () => undefined };
   }
   let entry = gatewayProviders.get(key);
   if (!entry) {
-    entry = { provider: new GatewayBoardProvider(key, client, connected), consumers: 0 };
+    const target = {
+      ...session,
+      sessionKey: normalizeDefaultMainSessionAliasForUi(session.sessionKey),
+    };
+    entry = { provider: new GatewayBoardProvider(target, client, connected), consumers: 0 };
     gatewayProviders.set(key, entry);
   } else {
     entry.provider.attachClient(client, connected);
@@ -455,9 +472,6 @@ export function acquireBoardProviderForSession(
       if (current.consumers > 0) {
         return;
       }
-      if (current.provider.hasLoadedSnapshot) {
-        boardAvailability.set(key, boardExists(current.provider.snapshot$.value));
-      }
       gatewayProviders.delete(key);
       current.provider.dispose();
     },
@@ -469,27 +483,4 @@ export function hasLoadedBoardSnapshot(provider: BoardProvider): boolean {
     return provider.hasLoadedSnapshot;
   }
   return true;
-}
-
-export function recordSessionBoardAvailability(sessionKey: string, available: boolean): boolean {
-  const key = boardProviderCacheKey(sessionKey);
-  const previous = boardAvailability.get(key);
-  boardAvailability.set(key, available);
-  return previous !== available;
-}
-
-export function clearSessionBoardAvailability(): boolean {
-  const changed = boardAvailability.size > 0;
-  boardAvailability.clear();
-  return changed;
-}
-
-export function sessionHasBoard(sessionKey: string): boolean {
-  const key = boardProviderCacheKey(sessionKey);
-  const provider = gatewayProviders.get(key)?.provider ?? mockProviders.get(key);
-  // An unloaded gateway provider holds a placeholder, not an authoritative empty board.
-  if (provider instanceof GatewayBoardProvider && !provider.hasLoadedSnapshot) {
-    return boardAvailability.get(key) ?? false;
-  }
-  return provider ? boardExists(provider.snapshot$.value) : (boardAvailability.get(key) ?? false);
 }

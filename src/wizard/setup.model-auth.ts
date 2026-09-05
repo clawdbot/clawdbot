@@ -7,6 +7,8 @@ import {
   resolveOnboardingSetupTarget,
 } from "../commands/onboard-agent-target.js";
 import type { AuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -151,8 +153,8 @@ export async function runSetupModelAuthStep(params: {
     | (typeof import("../commands/auth-choice-prompt.js"))["isKeepCurrentAuthChoice"]
     | undefined;
   let detectedProviderIds: ReadonlySet<string> | undefined;
-  const resolveTarget = (config: OpenClawConfig) =>
-    resolveOnboardingSetupTarget(config, params.pendingAgent);
+  // Auth/model proposals copy config; they do not change the admitted setup owner.
+  const target = resolveOnboardingSetupTarget(params.config, params.pendingAgent);
   if (authChoiceFromPrompt) {
     const [
       { ensureAuthProfileStore },
@@ -165,7 +167,6 @@ export async function runSetupModelAuthStep(params: {
     ]);
     promptAuthChoiceGrouped = promptAuthChoice;
     isKeepCurrentAuthChoice = isKeepCurrentChoice;
-    const target = resolveTarget(nextConfig);
     authStore = ensureAuthProfileStore(params.agentDir ?? target.agentDir, {
       allowKeychainPrompt: false,
       readOnly: true,
@@ -178,7 +179,6 @@ export async function runSetupModelAuthStep(params: {
   }
   while (true) {
     if (authChoiceFromPrompt) {
-      const target = resolveTarget(nextConfig);
       authChoice = await promptAuthChoiceGrouped!({
         prompter,
         store: authStore!,
@@ -207,7 +207,7 @@ export async function runSetupModelAuthStep(params: {
         prompter,
         runtime,
         config: nextConfig,
-        target: resolveTarget(nextConfig),
+        target,
         secretInputMode: opts.secretInputMode,
         setAsPrimary: !params.preserveExistingModelSelection,
       });
@@ -220,7 +220,6 @@ export async function runSetupModelAuthStep(params: {
       // or run model/auth checks when the caller already chose to skip setup.
       if (authChoiceFromPrompt) {
         const { promptDefaultModel } = await loadModelPickerModule();
-        const target = resolveTarget(nextConfig);
         const modelSelection = await promptDefaultModel({
           config: nextConfig,
           prompter,
@@ -241,10 +240,9 @@ export async function runSetupModelAuthStep(params: {
         }
 
         const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
-        const validationTarget = resolveTarget(nextConfig);
         await warnIfModelConfigLooksOff(nextConfig, prompter, {
-          agentId: validationTarget.agentId,
-          agentDir: validationTarget.agentDir,
+          agentId: target.agentId,
+          agentDir: target.agentDir,
           validateCatalog: false,
         });
       }
@@ -256,7 +254,6 @@ export async function runSetupModelAuthStep(params: {
       { promptDefaultModel },
     ] = await Promise.all([loadAuthChoiceModule(), loadModelPickerModule()]);
     prompter.disableBackNavigation?.();
-    const target = resolveTarget(nextConfig);
     const agentScopedModels = nextConfig.agents?.ownership === "explicit";
     let authResult: PreparedAuthChoiceResult;
     try {
@@ -302,19 +299,13 @@ export async function runSetupModelAuthStep(params: {
       break;
     }
     if (authResult.agentModelOverride) {
-      const overrideTarget = resolveTarget(nextConfig);
-      nextConfig = applyOnboardingPrimaryModel(
-        nextConfig,
-        overrideTarget,
-        authResult.agentModelOverride,
-      );
+      nextConfig = applyOnboardingPrimaryModel(nextConfig, target, authResult.agentModelOverride);
     }
 
-    const updatedTarget = resolveTarget(nextConfig);
     const authChoiceModelSelectionPolicy = await resolveAuthChoiceModelSelectionPolicy({
       authChoice,
       config: nextConfig,
-      workspaceDir: updatedTarget.workspaceDir,
+      workspaceDir: target.workspaceDir,
       resolvePreferredProviderForAuthChoice,
     });
     const shouldPromptModelSelection =
@@ -331,27 +322,40 @@ export async function runSetupModelAuthStep(params: {
         includeProviderPluginSetups: true,
         preferredProvider: authChoiceModelSelectionPolicy?.preferredProvider,
         browseCatalogOnDemand: true,
-        agentId: updatedTarget.agentId,
-        agentDir: updatedTarget.agentDir,
-        workspaceDir: updatedTarget.workspaceDir,
+        agentId: target.agentId,
+        agentDir: target.agentDir,
+        workspaceDir: target.workspaceDir,
         runtime,
       });
       if (modelSelection.config) {
         nextConfig = modelSelection.config;
       }
       if (modelSelection.model) {
-        nextConfig = applyOnboardingPrimaryModel(nextConfig, updatedTarget, modelSelection.model);
+        nextConfig = applyOnboardingPrimaryModel(nextConfig, target, modelSelection.model);
       }
     }
 
-    const validationTarget = resolveTarget(nextConfig);
     await warnIfModelConfigLooksOff(nextConfig, prompter, {
-      agentId: validationTarget.agentId,
-      agentDir: validationTarget.agentDir,
+      agentId: target.agentId,
+      agentDir: target.agentDir,
       pendingAuthProfiles: authProfiles,
       validateCatalog: false,
     });
     break;
+  }
+  if (authChoice !== "skip" && !isKeepCurrentAuthChoice?.(authChoice)) {
+    const { resolveDefaultModelForAgent } = await import("../agents/model-selection-config.js");
+    const selected = resolveDefaultModelForAgent({ cfg: nextConfig, agentId: target.agentId });
+    // The picker can replace the auth provider's model. Stage its final tool surface
+    // before verification, preserving ownership from the unreplaced source config.
+    nextConfig = applyAutoLocalModelLean({
+      config: nextConfig,
+      providerId: selected.provider,
+      modelRef: `${selected.provider}/${selected.model}`,
+      previousModelRef: resolveAgentModelPrimaryValue(
+        prepareAgentModelDefaults(params.config, target).agents?.defaults?.model,
+      ),
+    }).config;
   }
   return { config: nextConfig, authProfiles, persistAuthProfiles };
 }

@@ -99,6 +99,32 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.didStreamTerminalReply?.()).toBe(true);
   });
 
+  it.each([
+    { lane: "reasoning", payload: { text: "Same answer", isReasoning: true } },
+    { lane: "commentary", payload: { text: "Same answer", isCommentary: true } },
+  ])("keeps $lane separate from a matching visible answer", async ({ payload }) => {
+    for (const coalescing of [
+      undefined,
+      { minChars: 100, maxChars: 200, idleMs: 0, joiner: " " },
+    ]) {
+      const sent: ReplyPayload[] = [];
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply: async (reply) => {
+          sent.push(reply);
+        },
+        timeoutMs: 5000,
+        ...(coalescing ? { coalescing } : {}),
+      });
+
+      pipeline.enqueue(payload);
+      pipeline.enqueue({ text: "Same answer" });
+      await pipeline.flush({ force: true });
+
+      expect(sent).toEqual([payload, { text: "Same answer" }]);
+      expect(pipeline.didStreamTerminalReply?.()).toBe(true);
+    }
+  });
+
   it("keeps separate deliveries for same text with different replyToId", async () => {
     const sent: Array<{ text?: string; replyToId?: string }> = [];
     const pipeline = createBlockReplyPipeline({
@@ -541,6 +567,24 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
 
     expect(pipeline.didStream()).toBe(false);
     expect(pipeline.hasSentPayload({ text: "1. Inspect\n2. Patch" })).toBe(false);
+  });
+
+  it.each([
+    { lane: "reasoning", payload: { text: "Same answer", isReasoning: true } },
+    { lane: "commentary", payload: { text: "Same answer", isCommentary: true } },
+  ])("keeps $lane out of visible final-content accounting", async ({ payload }) => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue(payload);
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.didStreamTerminalReply?.()).toBe(false);
+    expect(pipeline.hasSentPayload({ text: "Same answer" })).toBe(false);
+    expect(pipeline.hasSentExactPayload?.({ text: "Same answer" })).toBe(false);
   });
 
   it("does not let a status notice de-dupe later matching assistant content", async () => {

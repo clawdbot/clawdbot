@@ -15,6 +15,42 @@ function findRowValue(rows: Array<{ Item: string; Value: string }>, item: string
 }
 
 describe("status-overview-rows", () => {
+  it.each(["default", "all"])("preserves service inspection failures in %s output", (mode) => {
+    const params = createStatusCommandOverviewRowsParams();
+    const service = {
+      label: "LaunchAgent",
+      installed: false,
+      loadedText: "unknown",
+      loadState: { status: "unknown" as const, detail: "permission denied token=fixture" },
+    };
+    const surface = {
+      ...params.surface,
+      gatewayService: service,
+      nodeService: {
+        ...service,
+        loadedText: "not loaded",
+        loadState: { status: "not-loaded" as const },
+        runtime: { status: "unknown", detail: "system domain permission denied token=fixture" },
+      },
+    };
+    const rows =
+      mode === "default"
+        ? buildStatusCommandOverviewRows({ ...params, surface })
+        : buildStatusAllOverviewRows({
+            ...params,
+            surface,
+            configPath: "/tmp/openclaw.json",
+            secretDiagnosticsCount: 0,
+          });
+
+    expect(findRowValue(rows, "Gateway service")).toBe(
+      "LaunchAgent unknown (inspection failed: permission denied token=***)",
+    );
+    expect(findRowValue(rows, "Node service")).toBe(
+      "LaunchAgent not loaded (inspection failed: system domain permission denied token=***) · unknown",
+    );
+  });
+
   it("builds command overview rows from the shared surface", () => {
     const rows = buildStatusCommandOverviewRows(createStatusCommandOverviewRowsParams());
 
@@ -182,6 +218,22 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Degraded plugins")).toBe("warn(1 configured-unavailable · discord)");
   });
 
+  it.each(["default", "all"])("surfaces startup migration warnings in %s output", (mode) => {
+    const params = createStatusCommandOverviewRowsParams();
+    params.summary.startupMigrationWarning = "Retained legacy state. Run openclaw doctor --fix.";
+    const rows =
+      mode === "default"
+        ? buildStatusCommandOverviewRows(params)
+        : buildStatusAllOverviewRows({
+            ...params,
+            configPath: "/tmp/openclaw.json",
+            secretDiagnosticsCount: 0,
+          });
+    expect(findRowValue(rows, "Startup migrations")).toContain(
+      params.summary.startupMigrationWarning,
+    );
+  });
+
   it("builds status-all overview rows from the shared surface", () => {
     const summary = createStatusCommandOverviewRowsParams().summary;
     const rows = buildStatusAllOverviewRows({
@@ -217,6 +269,7 @@ describe("status-overview-rows", () => {
       osLabel: "macOS",
       configPath: "/tmp/openclaw.json",
       secretDiagnosticsCount: 2,
+      updateValue: "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).",
       updateRestartValue: "restart pending health verification",
       agentStatus: {
         bootstrapPendingCount: 1,
@@ -229,6 +282,7 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Version")).toBe(VERSION);
     expect(findRowValue(rows, "OS")).toBe("macOS");
     expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
+    expect(findRowValue(rows, "Update")).toBe("✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).");
     expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
     expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
     expect(findRowValue(rows, "Degraded secrets")).toBe("1 degraded · capability:tts");

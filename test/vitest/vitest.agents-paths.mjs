@@ -5,6 +5,7 @@ const embeddedRoot = `${agentsRoot}/embedded-agent-runner`;
 // These suites mock shared runtime, network, or plugin modules and cannot
 // share the non-isolated core worker without leaking module state.
 const coreIsolatedFiles = [
+  "src/agents/cli-runner/bundle-mcp.user-config.test.ts",
   "src/agents/failover/classify.legacy-provider-predicates.test.ts",
   "src/agents/failover/failover-classification.corpus.test.ts",
   "src/agents/failover/provider-structured-signals.test.ts",
@@ -18,6 +19,7 @@ const coreIsolatedFiles = [
   "src/agents/models-config.runtime-source-snapshot.test.ts",
   "src/agents/openai-transport-stream.streaming.test.ts",
   "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
+  "src/agents/subagents/registry/subagent-registry-restart-recovery-notice.test.ts",
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
 const incompleteTurnFiles = [

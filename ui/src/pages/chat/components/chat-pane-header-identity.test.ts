@@ -24,10 +24,17 @@ describe("chat pane header identity links", () => {
       showOwnerChip: true,
       personActivity: { basePath: "", navigate },
       session: row({
-        owner: { actor: { type: "human", id: "ada", label: "Ada King" } },
+        owner: {
+          actor: {
+            type: "human",
+            id: "ada",
+            identity: { type: "profile", id: "ada" },
+            label: "Ada King",
+          },
+        },
         participants: [
-          { type: "human", id: "mira", label: "Mira" },
-          { type: "human", id: "riley", label: "Riley" },
+          { identity: { type: "profile", id: "mira" }, label: "Mira" },
+          { identity: { type: "profile", id: "riley" }, label: "Riley" },
         ],
         participantCount: 2,
       }),
@@ -40,27 +47,34 @@ describe("chat pane header identity links", () => {
     const ownerLink = container.querySelector<HTMLAnchorElement>(
       "a.person-activity-avatar-link:has(openclaw-session-owner-chip)",
     );
-    expect(ownerLink?.getAttribute("href")).toBe("/activity?person=ada");
+    expect(ownerLink?.getAttribute("href")).toBe("/activity/ada");
     const participantLinks = [
       ...container.querySelectorAll<HTMLAnchorElement>(
         ".chat-pane__participants a.person-activity-avatar-link",
       ),
     ];
     expect(participantLinks.map((link) => link.getAttribute("href"))).toEqual([
-      "/activity?person=mira",
-      "/activity?person=riley",
+      "/activity/mira",
+      "/activity/riley",
     ]);
 
     ownerLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(navigate).toHaveBeenCalledWith("ada");
+    expect(navigate).toHaveBeenCalledWith("ada", "Ada King");
   });
 
   it("leaves identities unlinked when the header has no activity routing", () => {
     const { container } = mountHeader({
       showOwnerChip: true,
       session: row({
-        owner: { actor: { type: "human", id: "ada", label: "Ada King" } },
-        participants: [{ type: "human", id: "mira", label: "Mira" }],
+        owner: {
+          actor: {
+            type: "human",
+            id: "ada",
+            identity: { type: "profile", id: "ada" },
+            label: "Ada King",
+          },
+        },
+        participants: [{ identity: { type: "profile", id: "mira" }, label: "Mira" }],
         participantCount: 1,
       }),
     });

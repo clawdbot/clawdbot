@@ -43,10 +43,11 @@ describe("skill_workshop collection restore", () => {
       collectionReconcile: { approvedSkillNames: new Set(["duplicate"]) },
     });
     await reviewTool.execute("read", { action: "read", skill_name: "duplicate" });
-    await reviewTool.execute("reconcile", {
+    const reconciled = await reviewTool.execute("reconcile", {
       action: "reconcile",
       collection: [{ action: "drop", name: "duplicate", reason: "redundant" }],
     });
+    const backupId = (reconciled.details as { backupId: string }).backupId;
     const aliasParent = await tempDirs.make("openclaw-skill-collection-restore-alias-");
     const workspaceAlias = path.join(aliasParent, "workspace-alias");
     await fs.symlink(
@@ -59,7 +60,16 @@ describe("skill_workshop collection restore", () => {
       workspaceDir: workspaceAlias,
       env: testState.env,
     });
-    await foregroundTool.execute("restore", { action: "restore_collection" });
+    const restored = await foregroundTool.execute("restore", { action: "restore_collection" });
+    expect(restored).toMatchObject({
+      content: [
+        {
+          type: "text",
+          text: `Restored skill collection backup ${backupId}: restored 1, removed 0.`,
+        },
+      ],
+      details: { backupId, restored: ["duplicate"], removed: [] },
+    });
 
     await expect(
       fs.readFile(path.join(workspaceAlias, "skills", "duplicate", "SKILL.md"), "utf8"),

@@ -32,9 +32,9 @@ export function renderNewSessionDraftVisibility(options: NewSessionComposerCapab
   return html`
     <button
       type="button"
-      class="new-session-page__visibility new-session-page__visibility--draft ${active
-        ? "new-session-page__visibility--active"
-        : ""}"
+      class="new-session-page__visibility new-session-page__visibility--draft ${
+        active ? "new-session-page__visibility--active" : ""
+      }"
       role="switch"
       aria-label=${label}
       aria-checked=${String(active)}
@@ -53,8 +53,6 @@ export function renderNewSessionPlusMenu(
   attachments: Parameters<typeof renderChatComposerPlusMenu>[0]["attachments"],
 ) {
   const draftEnabled = options.visibility === "draft";
-  const overrideCount = countSessionToolOverrides(options.toolOverrides);
-  const selectedCount = overrideCount + (draftEnabled ? 1 : 0);
   const disabled = options.submitting || options.messageLocked === true;
   const controller = options.textareaController;
   return renderChatComposerPlusMenu({
@@ -77,10 +75,6 @@ export function renderNewSessionPlusMenu(
           },
         ]
       : undefined,
-    selectedLabel:
-      selectedCount > 0
-        ? t("newSession.composerOptionsSelected", { count: String(selectedCount) })
-        : undefined,
     onOpenChange: (open) => {
       controller.capabilityMenuOpen = open;
       if (!open) {

@@ -3,6 +3,7 @@
 // gateway boot tests do) hides startup work that materializes plugin runtime,
 // which is exactly how a startup stall shipped green while hanging every
 // ui-e2e suite that boots a minimal test gateway.
+import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
 import { readLoggingConfig } from "../logging/config.js";
@@ -97,6 +98,9 @@ describe("gateway minimal boot smoke", () => {
       },
     });
     const token = "gateway-minimal-boot-smoke-token";
+    const timelinePath = state.path("gateway-startup.jsonl");
+    state.envVars.OPENCLAW_DIAGNOSTICS = "1";
+    state.envVars.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
     await state.writeConfig({
       gateway: {
         auth: { mode: "token", token },
@@ -114,6 +118,19 @@ describe("gateway minimal boot smoke", () => {
         sidecarStartup: "defer",
       });
       expect(server).toBeTruthy();
+      const startupMeasures = (await fs.readFile(timelinePath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.type === "span.start" && event.phase === "startup")
+        .map((event) => {
+          const attributes = event.attributes as { traceName?: string } | undefined;
+          return attributes?.traceName ?? event.name;
+        });
+      expect(startupMeasures.indexOf("http.listen")).toBeGreaterThan(-1);
+      expect(startupMeasures.indexOf("runtime.early")).toBeGreaterThan(
+        startupMeasures.indexOf("http.listen"),
+      );
       await server.close({ reason: "minimal boot smoke complete" });
     } finally {
       await state.cleanup();

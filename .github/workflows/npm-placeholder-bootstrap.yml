@@ -40,6 +40,9 @@ jobs:
       producer_run_attempt: ${{ github.run_attempt }}
       target_sha: ${{ steps.target.outputs.sha }}
     steps:
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,25 +60,56 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          [[ "$WORKFLOW_REF" == "refs/heads/main" && "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "NPM placeholder publication must run from the trusted main workflow." >&2
-            exit 1
-          }
-          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ && "$SOURCE_REF" == "$EVENT_SHA" && "$SOURCE_REF" == "$WORKFLOW_SHA" && "$(git rev-parse HEAD)" == "$SOURCE_REF" ]] || {
-            echo "NPM placeholder publication requires ref to equal the exact main workflow SHA." >&2
-            exit 1
-          }
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
-            +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
-            echo "NPM placeholder workflow revision is not reachable from current main." >&2
-            exit 1
-          }
-          git merge-base --is-ancestor "$SOURCE_REF" origin/main || {
-            echo "NPM placeholder target must be reachable from current main." >&2
-            exit 1
-          }
-          echo "sha=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+          import re
+          import sys
+
+          from ci_git_owner import GitFailure, git_output, run_git
+
+          def fail(message):
+              print(message, file=sys.stderr)
+              raise SystemExit(1)
+
+          source_ref = os.environ["SOURCE_REF"]
+          event_sha = os.environ["EVENT_SHA"]
+          workflow_ref = os.environ["WORKFLOW_REF"]
+          workflow_sha = os.environ["WORKFLOW_SHA"]
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          if workflow_ref != "refs/heads/main" or not re.fullmatch(r"[0-9a-f]{40}", workflow_sha):
+              fail("NPM placeholder publication must run from the trusted main workflow.")
+          if (
+              not re.fullmatch(r"[0-9a-f]{40}", source_ref)
+              or source_ref != event_sha
+              or source_ref != workflow_sha
+          ):
+              fail("NPM placeholder publication requires ref to equal the exact main workflow SHA.")
+          try:
+              checked_out_sha = git_output(workspace, "rev-parse", "HEAD").rstrip("\n")
+          except GitFailure:
+              fail("NPM placeholder publication requires ref to equal the exact main workflow SHA.")
+          if checked_out_sha != source_ref:
+              fail("NPM placeholder publication requires ref to equal the exact main workflow SHA.")
+          run_git(
+              workspace,
+              "fetch",
+              "--no-tags",
+              "origin",
+              "+refs/heads/main:refs/remotes/origin/main",
+              timeout=120,
+              reclaim_locks=True,
+          )
+          try:
+              run_git(workspace, "merge-base", "--is-ancestor", workflow_sha, "origin/main")
+          except GitFailure:
+              fail("NPM placeholder workflow revision is not reachable from current main.")
+          try:
+              run_git(workspace, "merge-base", "--is-ancestor", source_ref, "origin/main")
+          except GitFailure:
+              fail("NPM placeholder target must be reachable from current main.")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"sha={source_ref}\n")
+          PYTHON
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

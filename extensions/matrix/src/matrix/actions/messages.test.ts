@@ -23,7 +23,7 @@ function installMatrixActionTestRuntime(): void {
         convertMarkdownTables: (text: string) => text,
       },
     },
-  } as unknown as import("../../runtime-api.js").PluginRuntime);
+  } as unknown as import("openclaw/plugin-sdk/plugin-runtime").PluginRuntime);
 }
 
 function createPollResponseEvent(): Record<string, unknown> {

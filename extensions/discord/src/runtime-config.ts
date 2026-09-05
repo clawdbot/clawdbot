@@ -1,10 +1,10 @@
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Discord helper module supports runtime config behavior.
 import {
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
   selectApplicableRuntimeConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import type { DiscordAccountConfig, OpenClawConfig } from "./runtime-api.js";
 
 export function selectDiscordRuntimeConfig(inputConfig: OpenClawConfig): OpenClawConfig {
   return (

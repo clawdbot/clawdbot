@@ -4,6 +4,7 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { listRegistryWorktreesForMigration } from "../../agents/worktrees/registry.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { resolveProjectRegistry } from "../../projects/project-registry.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { patchSessionEntryCore } from "./session-accessor.js";
@@ -61,7 +62,7 @@ function listLegacyWorktreeSessionEntries(params: {
   agentId: string;
   env: NodeJS.ProcessEnv;
   storePath: string;
-}): Array<{ entry: SessionEntry; sessionKey: string }> {
+}): Array<{ databasePath: string; entry: SessionEntry; sessionKey: string }> {
   const resolved = resolveSqliteScope({ ...params, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
     const db = getSessionKysely(database.db);
@@ -85,7 +86,7 @@ function listLegacyWorktreeSessionEntries(params: {
     ).rows;
     return rows.flatMap((row) => {
       const entry = parseReadableSqliteSessionEntryRow(database, row);
-      return entry ? [{ entry, sessionKey: row.session_key }] : [];
+      return entry ? [{ databasePath: database.path, entry, sessionKey: row.session_key }] : [];
     });
   }, toDatabaseOptions(resolved));
   return result.found ? result.value : [];
@@ -100,13 +101,16 @@ export async function migrateManagedWorktreeCanonicalWorkspaces(params: {
   const env = params.env ?? process.env;
   const worktrees = listRegistryWorktreesForMigration(env);
   let migrated = 0;
-  for (const { entry, sessionKey } of listLegacyWorktreeSessionEntries({
+  for (const { databasePath, entry, sessionKey } of listLegacyWorktreeSessionEntries({
     agentId: params.agentId,
     env,
     storePath: params.storePath,
   })) {
+    // Select the workspace by logical owner, but keep writes in the source database:
+    // resolving a custom store selector for another agent can choose a sibling partition.
+    const agentId = resolveAgentIdFromSessionKey(sessionKey, params.agentId);
     const canonicalWorkspaceDir = resolveLegacyCanonicalWorkspace({
-      agentId: params.agentId,
+      agentId,
       cfg: params.cfg,
       entry,
       env,
@@ -117,7 +121,7 @@ export async function migrateManagedWorktreeCanonicalWorkspaces(params: {
       continue;
     }
     const updated = await patchSessionEntryCore(
-      { agentId: params.agentId, env, sessionKey, storePath: params.storePath },
+      { agentId, env, sessionKey, storePath: databasePath },
       (current) => {
         if (
           !current.worktree ||

@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadSettings } from "../../app/settings.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession, subscribeChatOutboxProjection } from "./chat-queue.ts";
@@ -22,18 +24,31 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function queueHost(items: readonly Partial<ChatQueueItem>[]) {
-  const host = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
+function queueHost(items: readonly Partial<ChatQueueItem>[], sessionKey = SESSION_KEY) {
+  const host = makeChatHost({
+    sessionKey,
+    connected: false,
+    agentsList: {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }],
+    },
+  });
   const unsubscribe = subscribeChatOutboxProjection(host as never);
   items.forEach((item, index) => {
-    const admitted = admitQueuedMessageForSession(host as never, SESSION_KEY, {
-      id: `queued-${index + 1}`,
-      text: `message ${index + 1}`,
-      createdAt: 1_000 + index,
-      sendState: "waiting-reconnect",
-      sessionKey: SESSION_KEY,
-      ...item,
-    });
+    const admitted = admitQueuedMessageForSession(
+      host as never,
+      captureChatOutboxAdmission(host, sessionKey, item.agentId),
+      {
+        id: `queued-${index + 1}`,
+        text: `message ${index + 1}`,
+        createdAt: 1_000 + index,
+        sendState: "waiting-reconnect",
+        sessionKey,
+        ...item,
+      },
+    );
     expect(admitted).toBe(true);
   });
   return { host, unsubscribe };
@@ -45,6 +60,36 @@ function storedOrder(host: unknown): string[] {
 }
 
 describe("queued message reorder", () => {
+  it("reorders the captured inactive outbox after current main defaults change", () => {
+    const { host: fixture, unsubscribe } = queueHost([{}, {}], "agent:main:main");
+    const host = Object.assign(fixture, {
+      settings: {
+        ...loadSettings(),
+        ...fixture.settings,
+        gatewayUrl: fixture.settings.gatewayUrl ?? "",
+      },
+    });
+    try {
+      host.sessionKey = "agent:main:other";
+      host.agentsList = {
+        defaultId: "main",
+        mainKey: "workspace",
+        scope: "per-sender",
+        agents: [{ id: "main" }],
+      };
+      expect(moveQueuedChatMessage(host, "queued-2", 0)).toBe("moved");
+      expect(listStoredChatOutboxes(host)).toMatchObject([
+        {
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          queue: [{ id: "queued-2" }, { id: "queued-1" }],
+        },
+      ]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("moves a row to the head of both the visible queue and the stored outbox", () => {
     const { host, unsubscribe } = queueHost([{}, {}, {}]);
 

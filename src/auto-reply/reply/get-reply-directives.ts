@@ -17,8 +17,13 @@ import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  expandExplicitSkillReferences,
+  hasSkillReferenceCandidate,
+} from "../../skills/discovery/chat-command-invocation.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
-import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { isExplicitCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type {
@@ -36,10 +41,7 @@ import {
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
-import {
-  type InlineDirectives,
-  resolveNativeReplyDirectiveCommand,
-} from "./directive-handling.parse.js";
+import { type InlineDirectives, resolveReplyDirectiveCommand } from "./directive-handling.parse.js";
 import {
   reserveSkillCommandNames,
   resolveConfiguredDirectiveAliases,
@@ -237,6 +239,8 @@ export async function resolveReplyDirectives(params: {
     Object.values(cfg.agents?.defaults?.models ?? {}).some((entry) =>
       Boolean(normalizeOptionalString(entry.alias)),
     );
+  const hasSkillReferences =
+    canInterpretTextDirectives && hasSkillReferenceCandidate(command.commandBodyNormalized);
   const reservedCommands = new Set<string>();
   if (hasConfiguredModelAliases) {
     const { listChatCommands } = await loadCommandsRegistry();
@@ -254,44 +258,80 @@ export async function resolveReplyDirectives(params: {
         reservedCommands,
       })
     : [];
+  const skillCommandContext = {
+    workspaceDir,
+    cfg,
+    agentId,
+    sessionEntry: targetSessionEntry,
+    sessionKey,
+  };
 
-  // Only load workspace skill commands when we actually need them to filter aliases.
-  // This avoids scanning skills for messages that only use plain text with no slash syntax.
+  // Only load workspace skill commands when aliases or explicit skill references need them.
+  // This avoids scanning skills for ordinary text, paths, and built-in slash directives.
   const skillCommands =
-    canInterpretTextDirectives && commandTextHasSlash && rawAliases.length > 0
+    canInterpretTextDirectives && (rawAliases.length > 0 || hasSkillReferences)
       ? (await loadSkillCommands()).listSkillCommandsForWorkspace({
-          workspaceDir,
-          cfg,
-          agentId,
+          ...skillCommandContext,
           skillFilter,
-          sessionEntry: targetSessionEntry,
-          sessionKey,
         })
       : [];
   reserveSkillCommandNames({ reservedCommands, skillCommands });
+
+  const allSkillCommands =
+    hasSkillReferences && skillFilter !== undefined
+      ? (await loadSkillCommands()).listSkillCommandsForWorkspace({
+          ...skillCommandContext,
+          includeAllowlistHidden: true,
+        })
+      : skillCommands;
+  const explicitSkillReferences = hasSkillReferences
+    ? expandExplicitSkillReferences({
+        text: command.commandBodyNormalized,
+        skillCommands,
+        allSkillCommands,
+      })
+    : undefined;
+  if (explicitSkillReferences?.error) {
+    typing.cleanup();
+    return {
+      kind: "reply",
+      reply: markCommandReplyForDelivery({ text: explicitSkillReferences.error }),
+    };
+  }
+  const hasExplicitSkillInvocation = Boolean(explicitSkillReferences?.skills.length);
+  const canInterpretMessageDirectives = canInterpretTextDirectives && !hasExplicitSkillInvocation;
 
   const configuredAliases = rawAliases.filter(
     (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
   );
   const commandTurn = resolveCommandTurnContext(ctx);
-  const nativeDirectiveCommand =
-    command.isAuthorizedSender && isNativeCommandTurn(commandTurn) && commandTurn.commandName
-      ? resolveNativeReplyDirectiveCommand(
-          (await loadCommandsRegistry()).findCommandByNativeName(
-            commandTurn.commandName,
-            command.channel,
-            {
-              includeBundledChannelFallback: false,
-            },
-          )?.key,
-        )
+  const commandRegistry =
+    command.isAuthorizedSender &&
+    isExplicitCommandTurn(commandTurn) &&
+    (commandTurn.kind === "native" ? Boolean(commandTurn.commandName) : canInterpretTextDirectives)
+      ? await loadCommandsRegistry()
       : undefined;
+  const explicitDirectiveCommand = resolveReplyDirectiveCommand(
+    commandRegistry
+      ? commandTurn.kind === "native"
+        ? commandRegistry.findCommandByNativeName(commandTurn.commandName ?? "", command.channel, {
+            includeBundledChannelFallback: false,
+          })?.key
+        : commandRegistry.resolveTextCommand(command.commandBodyNormalized, cfg)?.command.key
+      : undefined,
+  );
+  const directiveCommandText =
+    explicitDirectiveCommand && commandTurn.kind === "text-slash"
+      ? normalizeCommandBody(commandText, { botUsername: ctx.BotUsername, preserveArguments: true })
+      : commandText;
   const routedDirectives = resolveReplyDirectiveRouting({
-    commandText,
-    agentText: sessionCtx.agentText,
+    commandText: directiveCommandText,
+    agentText: sessionCtx.agentText === commandText ? directiveCommandText : sessionCtx.agentText,
     modelAliases: configuredAliases,
-    nativeCommand: nativeDirectiveCommand,
-    canInterpretTextDirectives,
+    command: explicitDirectiveCommand
+      ? { kind: commandTurn.kind === "native" ? "native" : "text", name: explicitDirectiveCommand }
+      : undefined,
+    canInterpretTextDirectives: canInterpretMessageDirectives,
     isAuthorizedSender: command.isAuthorizedSender,
     isGroup,
     wasMentioned: ctx.WasMentioned === true,
@@ -326,11 +366,13 @@ export async function resolveReplyDirectives(params: {
     typing.cleanup();
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg,
-      sessionKey: resolveRuntimePolicySessionKey({
+      agentId,
+      sessionKey,
+      classificationSessionKey: resolveRuntimePolicySessionKey({
         agentId,
         cfg,
         ctx,
-        sessionKey: ctx.SessionKey,
+        sessionKey,
       }),
     }).sandboxed;
     return {
@@ -395,18 +437,14 @@ export async function resolveReplyDirectives(params: {
       (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
       "on")
     : "off";
-  const resolvedBlockStreaming =
-    opts?.disableBlockStreaming === true
-      ? "off"
-      : opts?.disableBlockStreaming === false
-        ? "on"
-        : agentCfg?.blockStreamingDefault === "on"
-          ? "on"
-          : "off";
-  const resolvedBlockStreamingBreak: "text_end" | "message_end" =
-    agentCfg?.blockStreamingBreak === "message_end" ? "message_end" : "text_end";
   const blockStreamingEnabled =
-    resolvedBlockStreaming === "on" && opts?.disableBlockStreaming !== true;
+    opts?.disableBlockStreaming === false ||
+    (opts?.disableBlockStreaming !== true && agentCfg?.blockStreamingDefault === "on");
+  // Off-mode text blocks are suppressed by delivery; keep captions until media is parsed.
+  const resolvedBlockStreamingBreak: "text_end" | "message_end" =
+    !blockStreamingEnabled || agentCfg?.blockStreamingBreak === "message_end"
+      ? "message_end"
+      : "text_end";
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(cfg, sessionCtx.Provider, sessionCtx.AccountId)
     : undefined;
@@ -496,7 +534,7 @@ export async function resolveReplyDirectives(params: {
     );
   const effectiveModelDirective = isModelInfoDirective ? undefined : directives.rawModelDirective;
 
-  const inlineStatusRequested = hasInlineStatus && canInterpretTextDirectives;
+  const inlineStatusRequested = hasInlineStatus && canInterpretMessageDirectives;
 
   const applyResult = await applyInlineDirectiveOverrides({
     ctx,
@@ -583,7 +621,7 @@ export async function resolveReplyDirectives(params: {
     !thinkingActive &&
     !thinkingExplicitlySet
   ) {
-    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
+    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel({ provider, model });
   }
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
   const resolvedFastModeState = resolveFastModeState({

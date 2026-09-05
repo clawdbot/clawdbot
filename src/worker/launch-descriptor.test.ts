@@ -6,7 +6,9 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import type { WorkerGitHubLaunchBinding, WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-descriptor.js";
 
 function launchDescriptor(): WorkerLaunchDescriptor {
@@ -53,6 +55,46 @@ function launchDescriptor(): WorkerLaunchDescriptor {
 }
 
 describe("worker launch descriptor", () => {
+  it("admits bounded image-only input and replay without raising the text budget", () => {
+    const descriptor = launchDescriptor();
+    const image = {
+      type: "image" as const,
+      data: createNoisyPngBuffer(256, 256).toString("base64"),
+      mimeType: "image/png",
+    };
+    expect(image.data.length).toBeGreaterThan(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES);
+    descriptor.assignment.prompt = [image];
+    descriptor.assignment.initialMessages = [{ role: "user", content: [image], timestamp: 1 }];
+    for (const suppressPromptTranscript of [false, true]) {
+      descriptor.assignment.suppressPromptTranscript = suppressPromptTranscript;
+      expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+    }
+    for (const invalidImage of [
+      { ...image, data: "" },
+      { ...image, type: "text" },
+      { ...image, extra: true },
+    ]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, prompt: [invalidImage] },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+    descriptor.assignment.prompt = [
+      { type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
+      image,
+    ];
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+    descriptor.assignment.prompt = [
+      { ...image, data: "x".repeat(WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES) },
+    ];
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+  });
   it("accepts the exact admitted single-session launch shape", () => {
     const descriptor = launchDescriptor();
 
@@ -62,6 +104,100 @@ describe("worker launch descriptor", () => {
       client: { id: "openclaw-worker", mode: "worker", version: "2026.7.12" },
       admission: { ...descriptor.admission, runId: descriptor.assignment.runId },
     });
+  });
+
+  it("round-trips turn-bound GitHub identity without adding it to worker admission", () => {
+    const descriptor = launchDescriptor();
+    const identity = {
+      token: "worker-github-token",
+      login: "worker-bot",
+      branch: "session/worker-1",
+    };
+    for (const github of [
+      identity,
+      {
+        ...identity,
+        remoteUrl: "https://github.com/openclaw/openclaw.git",
+        gitAuthor: { name: "Worker Bot", email: "worker@example.test" },
+      },
+    ]) {
+      descriptor.assignment.github = github;
+      const parsed = parseWorkerLaunchDescriptor(structuredClone(descriptor));
+      expect(parsed.assignment.github).toEqual(github);
+      expect(buildWorkerConnectParams(parsed)).not.toHaveProperty("github");
+      expect(JSON.stringify(buildWorkerConnectParams(parsed))).not.toContain(github.token);
+    }
+  });
+
+  it("rejects malformed or open GitHub launch bindings", () => {
+    const descriptor = launchDescriptor();
+    const github: WorkerGitHubLaunchBinding = {
+      token: "worker-github-token",
+      login: "worker-bot",
+      branch: "session/worker-1",
+    };
+    const withBinding = (overrides: Record<string, unknown>) =>
+      Object.assign({}, github, overrides);
+    const invalidBindings: unknown[] = [
+      null,
+      withBinding({ unexpected: true }),
+      { login: github.login, branch: github.branch },
+      { token: github.token, branch: github.branch },
+      { token: github.token, login: github.login },
+      ...["", "token with space", "token\n", "token\u0001", "x".repeat(2049)].map((token) =>
+        withBinding({ token }),
+      ),
+      ...["", "worker_bot", "worker.bot", "worker\n", "x".repeat(40)].map((login) =>
+        withBinding({ login }),
+      ),
+      ...[
+        "",
+        "-branch",
+        "branch with space",
+        "branch\u0000",
+        "x".repeat(257),
+        ...["..", "~", "^", ":", "?", "*", "[", "\\", "@{"].map((part) => `branch${part}name`),
+      ].map((branch) => withBinding({ branch })),
+      ...[
+        "http://github.com/openclaw/openclaw.git",
+        "https://example.com/openclaw/openclaw.git",
+        "git@github.com:openclaw/openclaw.git",
+        "https://github.com/openclaw/openclaw.git?token=x",
+        "https://github.com/openclaw/openclaw.git\n",
+      ].map((remoteUrl) => withBinding({ remoteUrl })),
+      withBinding({ gitAuthor: { unexpected: true } }),
+      ...["name", "email"].flatMap((key) =>
+        ["", " ", "author\nvalue", "author\rvalue", "author\u0000value", "x".repeat(257)].map(
+          (value) => withBinding({ gitAuthor: { [key]: value } }),
+        ),
+      ),
+      Object.assign(Object.create({ token: github.token }), {
+        login: github.login,
+        branch: github.branch,
+      }),
+      { ...github, gitAuthor: Object.create({ email: "inherited@example.test" }) },
+    ];
+    for (const binding of invalidBindings) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, github: binding },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+  });
+
+  it("rejects a launch version inherited from the prototype", () => {
+    const descriptor = launchDescriptor();
+    const { version, ...ownFields } = descriptor;
+    const candidate = Object.assign(
+      Object.create({ version }) as Record<string, unknown>,
+      ownFields,
+    );
+
+    expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
+      "invalid worker launch descriptor",
+    );
   });
 
   it("accepts the permission context pair only when both fields are present", () => {
@@ -238,10 +374,8 @@ describe("worker launch descriptor", () => {
     descriptor.assignment.toolAuthority.allowedToolNames = [];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
 
-    descriptor.assignment.toolAuthority.allowedToolNames = ["browser", "github_publish"];
+    descriptor.assignment.toolAuthority.allowedToolNames = ["browser"];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
-    expect(JSON.stringify(descriptor.assignment)).not.toContain("GH_CONFIG_DIR");
-    expect(JSON.stringify(descriptor.assignment)).not.toContain("GITHUB_TOKEN");
   });
 
   it("accepts only a closed absolute loopback browser attachment descriptor", () => {
@@ -266,6 +400,54 @@ describe("worker launch descriptor", () => {
         parseWorkerLaunchDescriptor({
           ...descriptor,
           assignment: { ...descriptor.assignment, browser: invalidBrowser },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+  });
+
+  it("requires a computer descriptor and grant together and rejects target substitution fields", () => {
+    const descriptor = launchDescriptor();
+    descriptor.assignment.computer = {
+      nodeId: "worker-desktop",
+      computerUse: {
+        contractVersion: 2,
+        provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+        actions: ["screenshot"],
+        targets: ["screen"],
+        deliveryModes: ["foreground"],
+        observations: ["image"],
+        features: { recording: false, agentCursor: false, multiDisplay: false },
+      },
+    };
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+    descriptor.assignment.toolAuthority.allowedToolNames = ["computer"];
+    descriptor.assignment.prompt = [{ type: "image", data: "AA==", mimeType: "image/png" }];
+    expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+    const { computer, ...assignmentFields } = descriptor.assignment;
+    const inheritedComputerAssignment = Object.assign(
+      Object.create({ computer }),
+      assignmentFields,
+    );
+    expect(() =>
+      parseWorkerLaunchDescriptor({
+        ...descriptor,
+        assignment: inheritedComputerAssignment,
+      }),
+    ).toThrow("invalid worker launch descriptor");
+    const { nodeId, ...computerFields } = descriptor.assignment.computer;
+    const inheritedNodeIdComputer = Object.assign(Object.create({ nodeId }), computerFields);
+    for (const candidateComputer of [
+      undefined,
+      { ...descriptor.assignment.computer, gatewayUrl: "ws://other" },
+      { ...descriptor.assignment.computer, nodeId: "" },
+      inheritedNodeIdComputer,
+    ]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, computer: candidateComputer },
         }),
       ).toThrow("invalid worker launch descriptor");
     }

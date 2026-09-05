@@ -18,6 +18,7 @@ let parseDiscordComponentCustomIdForInteraction: typeof import("./components.js"
 let parseDiscordModalCustomId: typeof import("./components.js").parseDiscordModalCustomId;
 let parseDiscordModalCustomIdForInteraction: typeof import("./components.js").parseDiscordModalCustomIdForInteraction;
 let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
+let coerceDiscordComponentParam: typeof import("./components.js").coerceDiscordComponentParam;
 let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 type DiscordRuntime = Parameters<typeof import("./runtime.js").setDiscordRuntime>[0];
 
@@ -42,6 +43,7 @@ beforeAll(async () => {
     parseDiscordModalCustomId,
     parseDiscordModalCustomIdForInteraction,
     readDiscordComponentSpec,
+    coerceDiscordComponentParam,
   } = await import("./components.js"));
   ({ setDiscordRuntime } = await import("./runtime.js"));
 });
@@ -300,6 +302,15 @@ describe("discord components", () => {
         },
       }),
     ).toThrow("components.modal.fields[0].minValues/maxValues");
+  });
+
+  it("parses stringified component specs from MCP object transports", () => {
+    const raw = JSON.stringify({ blocks: [{ type: "text", text: "Choose" }] });
+
+    expect(readDiscordComponentSpec(coerceDiscordComponentParam(raw))).toMatchObject({
+      blocks: [{ type: "text", text: "Choose" }],
+    });
+    expect(coerceDiscordComponentParam("not json")).toBe("not json");
   });
 
   it("requires attachment references for file blocks", () => {

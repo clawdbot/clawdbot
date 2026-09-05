@@ -6,18 +6,25 @@ import {
   type Question,
   type QuestionRecord,
   type QuestionRequestParams,
-  type QuestionResolveParams,
   validateQuestionGetParams,
   validateQuestionListParams,
   validateQuestionRequestParams,
   validateQuestionResolveParams,
   validateQuestionWaitAnswerParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { registerActiveEmbeddedRunHumanInputWait } from "../../agents/embedded-agent-runner/run-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
 import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
 } from "../../infra/question-channel-runtime.js";
+import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import {
+  listSecretStoreEntries,
+  SECRET_STORE_ALLOWED_HOSTS_MAX,
+  SecretStoreValidationError,
+} from "../../secrets/store/secret-store.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import {
   QuestionManager,
@@ -33,6 +40,7 @@ import {
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import type { SecretStoreWriteService } from "./secrets.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 15 * 60 * 1_000;
@@ -117,10 +125,57 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
         `question '${question.questionId}' must have either no options or 2 to 4 options`,
       );
     }
-    if (question.isSecret) {
+    const binding = question.secretStore;
+    if (question.isSecret && !binding) {
       throw new QuestionRequestValidationError(
         `question '${question.questionId}': secret questions are not supported yet`,
       );
+    }
+    if (binding) {
+      if (!question.isSecret) {
+        throw new QuestionRequestValidationError(
+          `question '${question.questionId}': secret store binding requires a secret question`,
+        );
+      }
+      if (params.questions.length !== 1 || question.options.length !== 0 || question.multiSelect) {
+        throw new QuestionRequestValidationError(
+          `question '${question.questionId}': secret store requests require one free-text, single-select question`,
+        );
+      }
+      if (!ENV_SECRET_REF_ID_RE.test(binding.name)) {
+        throw new QuestionRequestValidationError(
+          `question '${question.questionId}': invalid secret store entry name`,
+        );
+      }
+      if (binding.kind !== "secret") {
+        throw new QuestionRequestValidationError(
+          `question '${question.questionId}': masked requests require kind "secret"; set environment values in Settings or the CLI`,
+        );
+      }
+      if ((binding.allowedHosts?.length ?? 0) > SECRET_STORE_ALLOWED_HOSTS_MAX) {
+        throw new QuestionRequestValidationError(
+          `question '${question.questionId}': secret store allowed hosts exceed the limit`,
+        );
+      }
+      const existing = listSecretStoreEntries({ scope: { kind: "team" } }).find(
+        (entry) => entry.name === binding.name,
+      );
+      return {
+        ...question,
+        // Save the policy shown for consent, never inherit unseen hosts at submission.
+        secretStore: {
+          ...binding,
+          allowedHosts: binding.allowedHosts ?? existing?.allowedHosts ?? [],
+        },
+        ...(existing
+          ? {
+              secretStoreExisting: {
+                updatedAtMs: existing.updatedAtMs,
+                ...(existing.updatedBy ? { updatedBy: existing.updatedBy } : {}),
+              },
+            }
+          : {}),
+      };
     }
     const optionLabels = new Set<string>();
     for (const option of question.options) {
@@ -137,14 +192,66 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
 }
 
 /** Creates the lazily loaded question RPC surface for one Gateway lifetime. */
-export function createQuestionHandlers(manager: QuestionManager): GatewayRequestHandlers {
+export function createQuestionHandlers(
+  manager: QuestionManager,
+  storeWriteService: SecretStoreWriteService,
+): GatewayRequestHandlers {
   return {
     "question.request": ({ params, respond, context, client }) => {
       if (!validateQuestionRequestParams(params)) {
         validationError("question.request", validateQuestionRequestParams.errors, respond);
         return;
       }
-      const request = params as QuestionRequestParams;
+      let request = params as QuestionRequestParams;
+      const storeBound = request.questions.some((question) => question.secretStore);
+      // Store-bound questions end in a secret-store write on resolve. Without
+      // this gate any operator.questions client could mint and self-answer one,
+      // bypassing the operator.admin requirement on secrets.store.set.
+      if (storeBound && !isGatewayAdmin(client)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "secret store questions require an operator.admin client",
+          ),
+        );
+        return;
+      }
+      const identity = client?.internal?.agentRuntimeIdentity;
+      const validateAuthority = context.validateAgentRuntimeApprovalAuthority;
+      if (storeBound && (!identity || !validateAuthority)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "secret store questions require trusted agent runtime authority",
+          ),
+        );
+        return;
+      }
+      // Capture the admitted identity privately, not the caller's correlation fields.
+      // Revalidate this exact claim even if another execution reuses its runId.
+      const requester = identity ? structuredClone(identity) : undefined;
+      const isRequesterActive =
+        requester && validateAuthority
+          ? () => {
+              try {
+                return validateAuthority(requester);
+              } catch {
+                return false;
+              }
+            }
+          : undefined;
+      if (requester) {
+        request = {
+          ...request,
+          agentId: requester.agentId,
+          sessionKey: requester.sessionKey,
+          runId: requester.operationalRunInstance.runId,
+        };
+      }
       try {
         const requestedSession = request.sessionKey
           ? resolveRequestedSessionAgentId(
@@ -188,6 +295,12 @@ export function createQuestionHandlers(manager: QuestionManager): GatewayRequest
           ...(sessionKey ? { sessionKey } : {}),
           ...(request.runId ? { runId: request.runId } : {}),
           timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
+          isRequesterActive,
+          registerHumanInputWait:
+            requester && isRequesterActive
+              ? (isPending) =>
+                  registerActiveEmbeddedRunHumanInputWait(requester.delegatedAuthority, isPending)
+              : undefined,
           onResolved: (event) => {
             handleQuestionChannelResolved(event);
             if (sessionKey && context.getRuntimeConfig().gateway?.roles) {
@@ -216,6 +329,14 @@ export function createQuestionHandlers(manager: QuestionManager): GatewayRequest
           return;
         }
         if (!managerError(error, respond)) {
+          if (storeBound) {
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.UNAVAILABLE, "Secret store entry metadata is unavailable."),
+            );
+            return;
+          }
           throw error;
         }
       }
@@ -225,7 +346,7 @@ export function createQuestionHandlers(manager: QuestionManager): GatewayRequest
         validationError("question.waitAnswer", validateQuestionWaitAnswerParams.errors, respond);
         return;
       }
-      const request = params as { id: string; timeoutMs?: number };
+      const request = params;
       try {
         const question = manager.get(request.id);
         if (question) {
@@ -240,13 +361,18 @@ export function createQuestionHandlers(manager: QuestionManager): GatewayRequest
             return;
           }
         }
-        const answer = await manager.waitAnswer(request.id, request.timeoutMs);
-        const resolvedQuestion = manager.get(request.id);
-        if (resolvedQuestion) {
+        const answer = await manager.waitAnswer(
+          request.id,
+          request.timeoutMs,
+          request.includeResolutionId,
+        );
+        // Reauthorize the original question's immutable routing, not a getter
+        // that could expire/cancel it merely because this observer stopped.
+        if (question) {
           const authorizationError = authorizeQuestionRecord({
             cfg: context.getRuntimeConfig(),
             client,
-            question: resolvedQuestion,
+            question,
             access: "read",
           });
           if (authorizationError) {
@@ -261,12 +387,12 @@ export function createQuestionHandlers(manager: QuestionManager): GatewayRequest
         }
       }
     },
-    "question.resolve": ({ params, respond, client, context }) => {
+    "question.resolve": async ({ params, respond, client, context }) => {
       if (!validateQuestionResolveParams(params)) {
         validationError("question.resolve", validateQuestionResolveParams.errors, respond);
         return;
       }
-      const request = params as QuestionResolveParams;
+      const request = params;
       try {
         const question = manager.get(request.id);
         if (question) {
@@ -281,11 +407,98 @@ export function createQuestionHandlers(manager: QuestionManager): GatewayRequest
             return;
           }
         }
-        const result =
-          "cancel" in request
-            ? manager.cancel(request.id, request.resolvedBy)
-            : manager.resolve(request.id, request.answers, request.resolvedBy);
-        respond(true, result, undefined);
+        if ("cancel" in request) {
+          respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
+          return;
+        }
+        const secretQuestion = question?.questions[0];
+        const binding = secretQuestion?.secretStore;
+        if (!binding || !question) {
+          if (request.secretStoreAllowedHosts !== undefined) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "Secret store allowed hosts require a store-bound question.",
+              ),
+            );
+            return;
+          }
+          respond(
+            true,
+            manager.resolve(request.id, request.answers, request.resolvedBy, {
+              resolutionId: request.resolutionId,
+            }),
+            undefined,
+          );
+          return;
+        }
+        const submittedAnswers = request.answers.answers;
+        const values = Object.hasOwn(submittedAnswers, secretQuestion.questionId)
+          ? submittedAnswers[secretQuestion.questionId]
+          : undefined;
+        const value = values?.[0];
+        if (
+          Object.keys(submittedAnswers).length !== 1 ||
+          values?.length !== 1 ||
+          value === undefined
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `question '${secretQuestion.questionId}' requires exactly one secret value`,
+            ),
+          );
+          return;
+        }
+        registerSecretValueForRedaction(value);
+        const allowedHosts = request.secretStoreAllowedHosts ?? binding.allowedHosts;
+        let saved = false;
+        try {
+          // Only the synthetic marker enters state, fanout, and waiting agents.
+          // The manager validates liveness and settles before refresh can yield.
+          const result = manager.resolve(
+            request.id,
+            { answers: { [secretQuestion.questionId]: ["stored"] } },
+            request.resolvedBy,
+            {
+              resolutionId: request.resolutionId,
+              commit: () => {
+                storeWriteService.write({
+                  name: binding.name,
+                  value,
+                  kind: "secret",
+                  ...(allowedHosts !== undefined ? { allowedHosts } : {}),
+                  updatedBy: storeWriteService.resolveUpdatedBy(client),
+                });
+                saved = true;
+              },
+            },
+          );
+          await storeWriteService.reloadReference(binding.name);
+          respond(true, result, undefined);
+        } catch (error) {
+          if (managerError(error, respond)) {
+            return;
+          }
+          respond(
+            false,
+            undefined,
+            errorShape(
+              !saved && error instanceof SecretStoreValidationError
+                ? ErrorCodes.INVALID_REQUEST
+                : ErrorCodes.UNAVAILABLE,
+              saved
+                ? "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer."
+                : error instanceof SecretStoreValidationError
+                  ? error.message
+                  : "Secret store entry could not be saved.",
+            ),
+          );
+        }
       } catch (error) {
         if (!managerError(error, respond)) {
           throw error;

@@ -10,6 +10,7 @@ import type {
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
+import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -23,16 +24,19 @@ import type {
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
+import type { ModelRef } from "../../model-selection.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
-import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
+import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
+import type { ToolEffectReceipt } from "../../tool-effect-receipt.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
+import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -67,6 +71,8 @@ type EmbeddedRunAttemptToolTerminalObservation = {
   arguments?: unknown;
   meta?: string;
   executionStarted?: boolean;
+  /** Exact-instance replay classification resolved by the host tool catalog. */
+  replaySafe?: boolean;
   outcome: "success" | "failure";
   failure?: Omit<ToolErrorSummary, "toolName" | "meta" | "mutatingAction">;
   /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
@@ -85,6 +91,7 @@ type EmbeddedRunAttemptToolTerminalResolution = {
   executionStarted: boolean;
   executedArguments?: Record<string, unknown>;
   sideEffectEvidence: boolean;
+  effectReceipt: ToolEffectReceipt;
 };
 
 type EmbeddedRunAttemptToolTerminalObserver = (
@@ -99,6 +106,12 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /**
+   * Run-owned start timestamp captured by the embedded-run orchestrator before
+   * admission. Flows onto the queue handle so recovery can project the active
+   * run's authoritative start time instead of the session's subagent first-run.
+   */
+  startedAtMs?: number;
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
   /** Host-resolved sandbox snapshot for plugin harness tool construction. */
@@ -141,8 +154,15 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   delegationCapability?: DelegationCapability;
   /** Concrete degraded-runtime reason for this attempt, when known. */
   degradedReason?: string | null;
-  /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
+  /** Final prepared harness for this attempt; not evidence of native session/model ownership. */
   agentHarnessId?: string;
+  /** Non-authorizing expectation; the harness must verify its current private binding. */
+  expectedSessionRuntimeOwnership?: {
+    model: "native";
+    auth: "native" | "host";
+    /** Host-prepared credentials must still target this exact native tuple at inference. */
+    modelRef?: ModelRef;
+  };
   /** Capture a local harness implementation only for setup/verified continuations. */
   captureRuntimeArtifact?: boolean;
   /** Exact implementation that must own the attempt before it creates a native thread. */
@@ -159,12 +179,28 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onToolOutcome?: ToolOutcomeObserver;
   /** Reads the sticky untrusted-content flag for the current user turn. */
   isTurnTainted?: () => boolean;
-  /** Signals that the attempt's own run-timeout watchdog is active. */
+  /** Shipped harness notification; core uses onAttemptDeadlineChanged for queue ownership. */
   onAttemptTimeoutArmed?: () => void;
+  /** Hands the lane an authoritative deadline, never a progress-idle estimate. */
+  onAttemptDeadlineChanged?: (deadline: CommandQueueTaskDeadline) => void;
   /** Signals that this attempt's timeout has fired and must unwind promptly. */
   onAttemptTimeout?: (reason: Error) => void;
   /** Signals an explicit cancellation through the active native run handle. */
   onAttemptAbort?: () => void;
+  onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
+  onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  /** Run-owned permission changes survive native attempt replacement, never user cancellation. */
+  permissionChange?: {
+    readonly owner: object;
+    readonly baseExecOverrides: Readonly<NonNullable<RunEmbeddedAgentParams["execOverrides"]>>;
+    readonly notice?: string;
+    request: (
+      mode: NonNullable<RunEmbeddedAgentParams["permissionMode"]> | null,
+    ) => Promise<boolean>;
+    /** False means a newer permission request superseded this prepared attempt. */
+    applied: () => boolean;
+    recordApplied: (mode: NonNullable<RunEmbeddedAgentParams["permissionMode"]> | null) => void;
+  };
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;
@@ -215,6 +251,10 @@ export type EmbeddedRunAttemptResult = {
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
+  /** Current physical model attempt; replaced from the prepared runtime plan at the boundary. */
+  modelAttempt?: AgentRuntimeModelAttempt;
+  /** Native owner's selected tuple, distinct from response/billing model attribution. */
+  runtimeModelSelection?: ModelRef;
   /** Exact credential material fingerprint reported by a harness-owned auth boundary. */
   authBindingFingerprint?: string;
   /** Exact local implementation used by a plugin-owned harness attempt. */
@@ -228,7 +268,11 @@ export type EmbeddedRunAttemptResult = {
     providerStarted?: boolean;
   };
   codexAppServerFailure?: {
-    kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
+    kind:
+      | "client_closed_before_turn_completed"
+      | "turn_settlement_timeout"
+      // Published harness result contract: older plugins may still report idle-watch failures.
+      | "turn_completion_idle_timeout";
     turnWatchTimeoutKind?: "progress" | "completion" | "terminal";
     transport: "stdio" | "unix" | "websocket";
     threadId?: string;
@@ -263,15 +307,14 @@ export type EmbeddedRunAttemptResult = {
   finalPromptText?: string;
   /** Exact provider-response count when the harness can observe model iterations directly. */
   modelIterations?: number;
+  /** Saved provider retry setting resolved by the prepared session owner. */
+  providerRetryMaxRetries?: number;
   messagesSnapshot: AgentMessage[];
-  /**
-   * Complete application transcript frozen through a settled tool boundary.
-   * Projection-backed finalizers must fail closed when their harness does not provide it.
-   */
-  settledTurnFinalizationContext?: {
-    readonly source: "openclaw-transcript";
-    readonly messages: readonly AgentMessage[];
-  };
+  /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */
+  settledTurnFinalizationContext?:
+    | { readonly source: "openclaw-transcript"; readonly messages: readonly AgentMessage[] }
+    | { readonly source: "harness"; readonly data: unknown }
+    | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
   latestMcpAppChannelView?: McpAppChannelView;
@@ -287,6 +330,8 @@ export type EmbeddedRunAttemptResult = {
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+    /** Producer-recorded: this exec result parked a Code Mode run (status "waiting"). */
+    codeModeSuspended?: boolean;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   /** This attempt accepted work whose future output has a runtime-owned delivery path. */
@@ -302,6 +347,7 @@ export type EmbeddedRunAttemptResult = {
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
+  sourceReplyDelivered?: true;
   didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
@@ -346,8 +392,6 @@ export type EmbeddedRunAttemptResult = {
    * how config-enabled code mode stays visible as a no-op on harness routes.
    */
   codeModeEngaged?: boolean;
-  /** Host-authenticated request for one bounded post-mutation inspection attempt. */
-  codeModeReconciliationCandidate?: boolean;
   /** Completed assistant round trips observed during this attempt. */
   assistantTurns?: number;
   /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */

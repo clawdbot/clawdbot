@@ -101,7 +101,7 @@ function readMessageIdFromActionResult(result: MessageActionResult): string | un
   return undefined;
 }
 
-function resultFromExistingOperation(
+export function resultFromExistingOperation(
   operation: ConversationDeliveryRecord,
 ): ConversationMessageDeliveryResult | undefined {
   switch (operation.status) {

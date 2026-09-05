@@ -96,6 +96,12 @@ export const zh_CN = {
       tokenPromptGenerate: "Gateway 令牌（留空则生成）",
       tokenStoreProvisioned:
         "已生成 Gateway 令牌并以 {name} 存入 OpenClaw 密钥存储。配置中只保留引用；可用 `openclaw secrets store list` 查看。",
+      trustedProxyAllowLoopback: "允许回环可信代理身份验证？",
+      trustedProxyLoopbackTitle: "回环代理安全警告",
+      trustedProxyLoopbackWarning:
+        "任何本地进程都可以向 Gateway 发送身份标头，冒充回环反向代理。\n仅当反向代理是接收用户流量的唯一本地监听服务、Gateway 的直接访问已受限且你信任本地进程时，才启用此选项。\n代理必须验证用户身份，并移除或覆盖客户端提供的身份标头。",
+      trustedProxyLoopbackRefused:
+        "回环代理请求在运行时将被拒绝（trusted_proxy_loopback_source）。\n请使用非回环代理地址，或重新运行 Gateway 配置，在阅读安全警告后明确允许回环。\n文档：https://docs.openclaw.ai/gateway/trusted-proxy-auth",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -115,7 +121,7 @@ export const zh_CN = {
       enable: "为 {cli} 启用 {shell} shell completion？",
       installed: "Shell completion 已安装。{reloadHint}",
       profileNotWritable:
-        "Shell completion 未更改：{profile} 不可写。请对可写的 profile 文件运行 `{command}`。",
+        "Shell completion 自动安装失败（权限或只读错误位置：{profile}）。仅在当前 {shell} 会话中启用补全，请运行：\n{command}",
       reloadPowerShell: "重启 shell 或运行：{command}",
       reloadShell: "重启 shell 或运行：source {profile}",
       title: "Shell completion",
@@ -250,7 +256,7 @@ export const zh_CN = {
       directAccessTitle: "直接远程访问",
       enterUrlManually: "手动输入 URL",
       foundGateways: "找到 {count} 个 Gateway",
-      fingerprintMissing: "未公布（连接不会固定指纹）",
+      fingerprintMissing: "未公布",
       gatewayPasswordStoredMessage: "这个 Gateway 密码存在哪里？",
       gatewayTokenStoredMessage: "这个 Gateway 令牌存在哪里？",
       insecureRemoteUrl:
@@ -273,6 +279,24 @@ export const zh_CN = {
       websocketUrl: "Gateway WebSocket URL",
     },
     guided: {
+      quickstartSilentFailures: "{count} 个检测到的选项未响应；将继续使用已验证的访问方式。",
+      laneQuestion: "你想如何开始？",
+      laneSecurityLine:
+        "OpenClaw 运行的 AI 智能体拥有这台机器的实际访问权限。安全指南：https://docs.openclaw.ai/gateway/security",
+      laneQuickLabel: "快速开始（推荐）",
+      laneQuickHint: "查找此机器上的 AI 访问方式，验证后打开网页仪表板。",
+      laneCustomLabel: "自定义设置",
+      laneCustomHint: "逐项选择所有设置选项。",
+      quickstartRoute: "正在使用 {label}。你可以稍后在仪表板或设置向导中更改。",
+      quickstartManual:
+        '快速开始未找到可用的 AI 访问方式。将继续手动设置提供商；保留快速开始的默认设置（智能体 "main"、完全访问）。',
+      quickstartDashboard: "仪表板：{url}",
+      quickstartForeground: "网关正在前台运行。按 Ctrl+C 停止。",
+      quickstartBackground: "如需以后让网关在后台持续运行，请运行：openclaw gateway install",
+      quickstartReopen: "运行 openclaw 打开 TUI，或运行 openclaw dashboard 重新打开网页仪表板。",
+      quickstartBrowserUnavailable: "浏览器交接未完成。网关仍在运行；准备好后请打开仪表板。",
+      quickstartGatewayPending:
+        "网关尚不可达。请保持此终端打开，并运行 openclaw gateway status 检查启动状态。",
       accessFullHint: "推荐。我会查找这台机器上已有的 AI 应用和密钥并逐一测试。",
       accessFullLabel: "完全访问 — 自动发现一切",
       accessGuardedHint: "查找前我会先征求你的同意，你也可以手动配置。",
@@ -1083,7 +1107,9 @@ export const zh_CN = {
       dashboardWhenReady: "准备好后运行：{command}",
       daemonRuntime: "Gateway 服务运行时",
       daemonRuntimeNode: "Node（推荐）",
-      daemonRuntimeNodeHint: "OpenClaw 状态使用 node:sqlite，因此必须使用 Node；Bun 无法运行网关。",
+      daemonRuntimeNodeHint: "托管服务的首选和推荐运行时。",
+      daemonRuntimeBun: "Bun 1.4+",
+      daemonRuntimeBunHint: "需要 Bun 1.4 或更高版本，并使用符合 WAL 重置安全要求的 node:sqlite。",
       editBootstrap: "之后可编辑 BOOTSTRAP.md 来修改 agent 的自我介绍方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次终端聊天会发送："醒醒，我的朋友！"',
@@ -1101,8 +1127,6 @@ export const zh_CN = {
       gatewayServiceRestarted: "Gateway 服务已重启。",
       gatewayServiceRestarting: "正在重启 Gateway 服务...",
       gatewayServiceRestartScheduled: "Gateway 服务重启已排队。",
-      gatewayServiceUninstalled: "Gateway 服务已卸载。",
-      gatewayServiceUninstalling: "正在卸载 Gateway 服务...",
       gatewayTokenGenerate: "生成令牌：{command}",
       gatewayTokenShared: "Gateway 令牌：Gateway 和 Control UI 的共享认证。",
       gatewayTokenStored:

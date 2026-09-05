@@ -14,6 +14,7 @@ export function renderReadOnlyTranscript(params: {
     {
       paneId: params.paneId,
       sessionKey: params.sessionKey,
+      selectedSession: chat.selectedSession,
       announceTranscript: false,
       loading: false,
       messages: params.messages,

@@ -1,9 +1,15 @@
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { root as fsRoot } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import {
+  createStagedInputPathMatcher,
+  stagedInputPathDirectory,
+  STAGED_INPUT_GIT_PATHSPEC,
+} from "../../media/staged-inputs.js";
 import { killProcessTree } from "../../process/kill-tree.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import { isPortableRootContainedSymlink } from "./workspace-actual-manifest.js";
@@ -19,6 +25,28 @@ import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 const STDERR_LIMIT = 4_096;
 const COMMAND_KILL_GRACE_MS = 300;
+
+/** Exact rsync exemptions, prepared once without walking input file contents. */
+export async function readWorkspaceStagedInputDirectories(rootDir: string): Promise<string[]> {
+  const root = await fsRoot(rootDir);
+  const inbound = await root.stat("media/inbound").catch(() => undefined);
+  if (!inbound?.isDirectory || inbound.isSymbolicLink) {
+    return [];
+  }
+  const isStagedInput = createStagedInputPathMatcher(root);
+  const directories: string[] = [];
+  let candidates = 0;
+  for await (const entry of await fs.opendir(path.join(rootDir, "media/inbound"))) {
+    if (++candidates > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+      throw workspaceInventoryError("Cloud workspace has too many entries");
+    }
+    const directory = stagedInputPathDirectory(`media/inbound/${entry.name}`);
+    if (entry.isDirectory() && directory && (await isStagedInput(directory))) {
+      directories.push(directory);
+    }
+  }
+  return directories.toSorted();
+}
 
 class WorkerWorkspacePreflightError extends Error {
   readonly code = "invalid_state";
@@ -226,18 +254,18 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     throw new Error("Worker workspace command requires an executable");
   }
   const output = await fs.open(params.outputPath, "wx", 0o600);
-  const input = params.inputPath ? await fs.open(params.inputPath, "r") : undefined;
+  let input: FileHandle | undefined;
   let stderr = "";
   let timer: ReturnType<typeof setTimeout> | undefined;
   let terminationTimer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
+  let abortedCommand = false;
   let outputError: Error | undefined;
   let outputBytes = 0;
   let outputWrite = Promise.resolve();
   try {
-    if (params.signal.aborted) {
-      throw new Error("Worker workspace file enumeration was aborted");
-    }
+    input = params.inputPath ? await fs.open(params.inputPath, "r") : undefined;
+    params.signal.throwIfAborted();
     const boundedOutput = params.maxOutputBytes !== undefined;
     const child = spawn(command, args, {
       env: workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv,
@@ -286,7 +314,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
             child.kill("SIGKILL");
           }
           childStderr.destroy();
-          finish({ code: null });
+          finish({ code: child.exitCode });
         }, COMMAND_KILL_GRACE_MS + 1_000);
         terminationTimer.unref?.();
       };
@@ -324,12 +352,17 @@ export async function runWorkspaceInventoryCommandToFile(params: {
       }
       child.once("error", (error) => finish({ code: null, error }));
       child.once("close", (code) => finish({ code }));
-      abort = terminate;
+      abort = () => {
+        // Record interruption before pipes drain; a late abort must not hide a failed exit.
+        abortedCommand =
+          !terminationStarted && child.exitCode === null && child.signalCode === null;
+        terminate();
+      };
       params.signal.addEventListener("abort", abort, { once: true });
       timer = setTimeout(terminate, params.timeoutMs);
       timer.unref?.();
       if (params.signal.aborted) {
-        terminate();
+        abort();
       }
     });
     await outputWrite;
@@ -339,8 +372,8 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     if (result.error) {
       throw result.error;
     }
-    if (params.signal.aborted) {
-      throw new Error("Worker workspace file enumeration was aborted");
+    if (abortedCommand) {
+      params.signal.throwIfAborted();
     }
     if (result.code !== 0) {
       throw new Error(
@@ -349,6 +382,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
           : "Worker workspace file enumeration failed",
       );
     }
+    params.signal.throwIfAborted();
   } finally {
     clearTimeout(timer);
     clearTimeout(terminationTimer);
@@ -369,6 +403,7 @@ async function writeEligibleGitFiles(params: {
 }): Promise<void> {
   const output = await fs.open(params.outputPath, "wx", 0o600);
   const canonicalRoot = await fs.realpath(params.gitRoot);
+  const isStagedInput = createStagedInputPathMatcher(await fsRoot(canonicalRoot));
   const budget = new WorkerWorkspaceInventoryBudget();
   const transferredPaths = new Set<string>();
   let buffered: string[] = [];
@@ -382,7 +417,7 @@ async function writeEligibleGitFiles(params: {
     bufferedBytes = 0;
   };
   const appendIfTransferable = async (file: string) => {
-    if (isDerivedWorkspacePath(file) || transferredPaths.has(file)) {
+    if (isDerivedWorkspacePath(file, await isStagedInput(file)) || transferredPaths.has(file)) {
       return;
     }
     const absolute = path.join(canonicalRoot, file);
@@ -430,24 +465,18 @@ async function writeEligibleGitFiles(params: {
     for await (const file of readBoundedGitPathCandidates(params.eligiblePath)) {
       await appendIfTransferable(file);
     }
-    const ignored = readBoundedGitPathCandidates(params.ignoredPath)[Symbol.asyncIterator]();
     const selected = readBoundedGitPathCandidates(params.selectedPath)[Symbol.asyncIterator]();
-    let ignoredItem = await ignored.next();
     let selectedItem = await selected.next();
-    while (!ignoredItem.done && !selectedItem.done) {
-      const order = Buffer.compare(Buffer.from(ignoredItem.value), Buffer.from(selectedItem.value));
-      if (order === 0) {
-        await appendIfTransferable(ignoredItem.value);
-        ignoredItem = await ignored.next();
-        selectedItem = await selected.next();
-      } else if (order < 0) {
-        ignoredItem = await ignored.next();
-      } else {
+    for await (const file of readBoundedGitPathCandidates(params.ignoredPath)) {
+      while (
+        !selectedItem.done &&
+        Buffer.compare(Buffer.from(selectedItem.value), Buffer.from(file)) < 0
+      ) {
         selectedItem = await selected.next();
       }
-    }
-    while (!ignoredItem.done) {
-      ignoredItem = await ignored.next();
+      if ((await isStagedInput(file)) || (!selectedItem.done && selectedItem.value === file)) {
+        await appendIfTransferable(file);
+      }
     }
     while (!selectedItem.done) {
       selectedItem = await selected.next();
@@ -456,6 +485,20 @@ async function writeEligibleGitFiles(params: {
   } finally {
     await output.close();
   }
+}
+
+export async function settleWorkspaceInventoryCommands(
+  commands: Promise<void>[],
+  signal: AbortSignal,
+): Promise<void> {
+  // Join every scratch-file writer before cleanup, preserving independent failures
+  // ahead of cancellation so Move cannot mistake failed preflight for a clean Stop.
+  for (const result of await Promise.allSettled(commands)) {
+    if (result.status === "rejected" && (!signal.aborted || result.reason !== signal.reason)) {
+      throw result.reason;
+    }
+  }
+  signal.throwIfAborted();
 }
 
 export async function createWorkspaceGitTransferList(params: {
@@ -492,8 +535,9 @@ export async function createWorkspaceGitTransferList(params: {
     }
     throw error;
   });
-  if (worktreeInclude?.isFile()) {
-    const [ignoredResult, selectedResult] = await Promise.allSettled([
+  const hasWorktreeInclude = worktreeInclude?.isFile() === true;
+  await settleWorkspaceInventoryCommands(
+    [
       runWorkspaceInventoryCommandToFile({
         argv: [
           "git",
@@ -505,40 +549,33 @@ export async function createWorkspaceGitTransferList(params: {
           "--ignored",
           "--exclude-standard",
           "-z",
+          ...(hasWorktreeInclude ? [] : ["--", STAGED_INPUT_GIT_PATHSPEC]),
         ],
         outputPath: ignoredPath,
         signal: params.signal,
         timeoutMs: params.timeoutMs,
       }),
-      runWorkspaceInventoryCommandToFile({
-        argv: [
-          "git",
-          "-C",
-          params.gitRoot,
-          "ls-files",
-          "--full-name",
-          "--others",
-          "--ignored",
-          `--exclude-from=${worktreeIncludePath}`,
-          "-z",
-        ],
-        outputPath: selectedPath,
-        signal: params.signal,
-        timeoutMs: params.timeoutMs,
-      }),
-    ]);
-    if (ignoredResult.status === "rejected") {
-      throw ignoredResult.reason;
-    }
-    if (selectedResult.status === "rejected") {
-      throw selectedResult.reason;
-    }
-  } else {
-    await Promise.all([
-      fs.writeFile(ignoredPath, "", { mode: 0o600 }),
-      fs.writeFile(selectedPath, "", { mode: 0o600 }),
-    ]);
-  }
+      hasWorktreeInclude
+        ? runWorkspaceInventoryCommandToFile({
+            argv: [
+              "git",
+              "-C",
+              params.gitRoot,
+              "ls-files",
+              "--full-name",
+              "--others",
+              "--ignored",
+              `--exclude-from=${worktreeIncludePath}`,
+              "-z",
+            ],
+            outputPath: selectedPath,
+            signal: params.signal,
+            timeoutMs: params.timeoutMs,
+          })
+        : fs.writeFile(selectedPath, "", { mode: 0o600 }),
+    ],
+    params.signal,
+  );
   await writeEligibleGitFiles({
     gitRoot: params.gitRoot,
     eligiblePath,

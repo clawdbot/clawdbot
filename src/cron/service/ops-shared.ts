@@ -6,7 +6,7 @@ import type { CronJob } from "../types.js";
 import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState } from "./runtime-store.js";
 import type { CronServiceState } from "./state.js";
-import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
+import { ensureLoadedForOperation, runPostPersistCronNotifications } from "./store.js";
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import { type IsolatedAgentSetupTimeoutSignal, runsDetachedFromMainSession } from "./timer.js";
 
@@ -25,6 +25,7 @@ export function markManualCronJobActive(
   const jobId = job.id;
   state.activeManualRunJobIds.add(jobId);
   return markCronJobActive(jobId, {
+    payloadKind: job.payload.kind,
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
   });
 }
@@ -58,8 +59,8 @@ export function maybeNotifyManualIsolatedSetupTimeout(
 }
 
 export async function ensureLoadedForRead(state: CronServiceState) {
-  await ensureLoaded(state, { skipRecompute: true });
-  if (!state.store) {
+  await ensureLoadedForOperation(state);
+  if (!state.store || state.schedulerStarted) {
     return;
   }
   // Read repair is row-owned and never advances a past-due slot (#16156).

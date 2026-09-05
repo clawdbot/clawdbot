@@ -1,5 +1,3 @@
-import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
   DeletedAgentSessionEntryPurgeParams,
   DeleteSessionEntryLifecycleParams,
@@ -12,62 +10,14 @@ import type {
   SessionLifecycleArchivedTranscript,
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
-  SessionLifecycleStoreTarget,
 } from "./session-accessor.lifecycle-types.js";
-import type { TranscriptEvent } from "./session-accessor.types.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
-import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-
-export type SessionAccessScope = {
-  agentId?: string;
-  clone?: boolean;
-  /** Fixed-store ownership is explicit; omitted values use the storage resolver's legacy-main contract. */
-  defaultAgentId?: string;
-  env?: NodeJS.ProcessEnv;
-  hydrateSkillPromptRefs?: boolean;
-  readConsistency?: "latest";
-  sessionKey: string;
-  storePath?: string;
-};
-
-export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"> & {
-  sessionFile?: string;
-  sessionId: string;
-  sessionKey?: string;
-  threadId?: string | number;
-};
-
-type SessionTranscriptRuntimeScope = SessionAccessScope & {
-  sessionFile?: string;
-  sessionId: string;
-  threadId?: string | number;
-};
-
-export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "sessionKey"> & {
-  sessionKey?: string;
-  sessionEntry?: Partial<Pick<SessionEntry, "sessionId">>;
-};
-
-export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
-  sessionId?: string;
-  expectedLifecycleRevision?: string;
-  expectedWriterRunId?: string;
-};
-
-export type ExactSessionEntry = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
-
-export type SessionEntrySummary = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
 export type SessionTranscriptInstance = SessionEntrySummary & {
+  agentId: string;
   /** Stable transcript identity, including rotated history for one logical session key. */
   sessionId: string;
   /** True when this transcript instance was owned by an ACP runtime. */
@@ -76,6 +26,20 @@ export type SessionTranscriptInstance = SessionEntrySummary & {
   provenanceKnown: boolean;
   /** Activity timestamp for this transcript instance, not the current logical session row. */
   updatedAtMs: number;
+  /** Recorded source facts; coarse historical trust classes cannot identify an exact hook source. */
+  sourceMetadata: {
+    createdAt: number;
+    channel: string | null;
+    accountId: string | null;
+    chatType: NonNullable<SessionEntry["chatType"]> | null;
+    hookExternalContentSource: NonNullable<SessionEntry["hookExternalContentSource"]> | null;
+  };
+};
+
+export type SessionTranscriptInstanceListOptions = {
+  /** Include empty and internal windows when inspecting recorded source metadata. */
+  includeAllWindows?: boolean;
+  sessionId?: string;
 };
 
 export type TranscriptEventAppendOptions = {
@@ -84,31 +48,20 @@ export type TranscriptEventAppendOptions = {
   beforeCommitInTransaction?: () => void;
 };
 
-export type TranscriptEventAppendError =
+export type TranscriptAppendRefusal =
   | {
-      actualSessionId: string;
+      actualSessionIdHash: string;
+      agentIdHash: string;
       code: "session-rebound";
-      expectedSessionId: string;
-      sessionKey: string;
+      expectedSessionIdHash: string;
+      sessionKeyHash: string;
     }
   | {
+      agentIdHash: string;
       code: "session-entry-missing";
-      expectedSessionId: string;
-      sessionKey: string;
+      expectedSessionIdHash: string;
+      sessionKeyHash: string;
     };
-
-export type SessionTranscriptStats = {
-  eventCount: number;
-  lastMutationAtMs?: number;
-  lastObservedMutationAtMs?: number;
-  maxSeq: number;
-  sizeBytes: number;
-};
-
-export type SessionTranscriptEventRow = {
-  event: TranscriptEvent;
-  seq: number;
-};
 
 export type {
   ForkSessionEntryFromParentTargetParams,
@@ -123,85 +76,9 @@ export type {
   TranscriptEvent,
 } from "./session-accessor.types.js";
 
-export type TranscriptMessageAppendOptions<TMessage> = {
-  appendIntent?: "active-branch";
-  config?: OpenClawConfig;
-  cwd?: string;
-  idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
-  message: TMessage;
-  now?: number;
-  eventId?: string;
-  parentId?: string | null;
-  prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
-  useRawWhenLinear?: boolean;
-};
-
-export type TranscriptMessageAppendResult<TMessage> = {
-  appended: boolean;
-  anchor?: TranscriptEntryAnchor;
-  effectiveParentId?: string | null;
-  message: TMessage;
-  messageId: string;
-};
-
-export type TranscriptUpdatePayload = Partial<SessionTranscriptUpdate>;
-
-export type LatestTranscriptAssistantText = {
-  id?: string;
-  text: string;
-  timestamp?: number;
-};
-
 export type LatestTranscriptAssistantMessage = {
   id?: string;
   message: unknown;
-};
-
-export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
-  shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
-};
-
-export type SessionTranscriptTurnWriteContext = {
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
-};
-
-export type SessionEntryPatchOptions = {
-  assertCommitAllowed?: () => void;
-  fallbackEntry?: SessionEntry;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  preserveActivity?: boolean;
-  requireWriteSuccess?: boolean;
-  replaceEntry?: boolean;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-};
-
-export type SessionEntryPatchContext = {
-  existingEntry?: SessionEntry;
-};
-
-export type SessionEntryTargetPatchScope = {
-  agentId?: string;
-  storePath: string;
-  target: SessionLifecycleStoreTarget;
-};
-
-export type SessionEntryReplacementSnapshot = {
-  entry: SessionEntry;
-  sessionKey: string;
-};
-
-type SessionEntryReplacement = {
-  entry: SessionEntry;
-  sessionKey: string;
-};
-
-export type SessionEntryReplacementUpdate<T> = {
-  replacements?: Iterable<SessionEntryReplacement>;
-  result: T;
 };
 
 type SessionEntryBatchProjectionMutation = {
@@ -228,3 +105,25 @@ export type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
 };
+
+export type {
+  ExactSessionEntry,
+  LatestTranscriptAssistantText,
+  SessionAccessScope,
+  SessionEntryPatchContext,
+  SessionEntryPatchOptions,
+  SessionEntryReplacementSnapshot,
+  SessionEntryReplacementUpdate,
+  SessionEntrySummary,
+  SessionEntryTargetPatchScope,
+  SessionTranscriptAccessScope,
+  SessionTranscriptEventRow,
+  SessionTranscriptReadScope,
+  SessionTranscriptStats,
+  SessionTranscriptTurnMessageAppend,
+  SessionTranscriptTurnWriteContext,
+  SessionTranscriptWriteScope,
+  TranscriptMessageAppendOptions,
+  TranscriptMessageAppendResult,
+  TranscriptUpdatePayload,
+} from "./session-accessor.types.js";

@@ -24,6 +24,7 @@ import {
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import type { AgentMessage, StreamFn, ThinkingLevel } from "./runtime/index.js";
+import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { generateSummary } from "./sessions/index.js";
 
@@ -79,6 +80,7 @@ type CompactionSummaryParams = {
   previousSummary?: string;
   thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
+  usageSink?: SessionModelUsageSink;
 };
 
 function resolveIdentifierPreservationInstructions(
@@ -137,6 +139,7 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
             summary,
             params.thinkingLevel,
             params.streamFn,
+            params.usageSink,
           ),
         {
           attempts: 3,

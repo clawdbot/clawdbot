@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -62,14 +62,14 @@ describe("execCommand process-tree cleanup", () => {
     const resultPromise = execCommand(process.execPath, ["-e", parentScript], process.cwd(), {
       timeout: 1_000,
     });
-    await vi.waitFor(() => expect(existsSync(readyPath)).toBe(true), {
-      timeout: 3_000,
-      interval: 25,
-    });
-    const { parentPid, childPid } = JSON.parse(readFileSync(readyPath, "utf8")) as {
-      parentPid: number;
-      childPid: number;
-    };
+    const { parentPid, childPid } = await vi.waitFor(
+      () =>
+        JSON.parse(readFileSync(readyPath, "utf8")) as {
+          parentPid: number;
+          childPid: number;
+        },
+      { timeout: 3_000, interval: 25 },
+    );
     cleanupPids.add(parentPid);
     cleanupPids.add(childPid);
 

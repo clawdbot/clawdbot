@@ -67,6 +67,7 @@ type CommandPositionalsParseOptions = {
   booleanFlags?: ReadonlyArray<string>;
   valueFlags?: ReadonlyArray<string>;
   maxPositionals?: number;
+  mode?: "route" | "command-path";
 };
 
 function consumeKnownOptionToken(
@@ -74,6 +75,7 @@ function consumeKnownOptionToken(
   index: number,
   booleanFlags: ReadonlySet<string>,
   valueFlags: ReadonlySet<string>,
+  mode: CommandPositionalsParseOptions["mode"],
 ): number {
   const arg = args[index];
   if (!arg || arg === FLAG_TERMINATOR || !arg.startsWith("-")) {
@@ -89,7 +91,12 @@ function consumeKnownOptionToken(
     return 0;
   }
   if (equalsIndex !== -1) {
-    return arg.slice(equalsIndex + 1).trim() ? 1 : 0;
+    return mode === "command-path" || arg.slice(equalsIndex + 1).trim() ? 1 : 0;
+  }
+  // Required Commander values include empty strings, flag-looking tokens, and `--`.
+  // Discovery must consume them before choosing startup policy; routes still validate values.
+  if (mode === "command-path") {
+    return args[index + 1] !== undefined ? 2 : 0;
   }
   return isValueToken(args[index + 1]) ? 2 : 0;
 }
@@ -99,24 +106,54 @@ export function getCommandPositionalsWithRootOptions(
   argv: readonly string[],
   options: CommandPositionalsParseOptions,
 ): string[] | null {
+  return parseCommandArgsWithRootOptions(argv, options, false);
+}
+
+/** Preserve the leaf's raw arguments after consuming its root and parent options. */
+export function getCommandArgsWithRootOptions(
+  argv: readonly string[],
+  options: Omit<CommandPositionalsParseOptions, "maxPositionals">,
+): string[] | null {
+  return parseCommandArgsWithRootOptions(argv, options, true);
+}
+
+function parseCommandArgsWithRootOptions(
+  argv: readonly string[],
+  options: CommandPositionalsParseOptions,
+  returnTail: boolean,
+): string[] | null {
   const args = argv.slice(2);
   const booleanFlags = new Set(options.booleanFlags ?? []);
   const valueFlags = new Set(options.valueFlags ?? []);
   const positionals: string[] = [];
   let commandIndex = 0;
+  let literal = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (!arg || arg === FLAG_TERMINATOR) {
+    if (arg === undefined || (!arg && options.mode !== "command-path")) {
       break;
     }
-    const rootConsumed = consumeRootOptionToken(args, index);
+    if (!literal && arg === FLAG_TERMINATOR) {
+      if (options.mode !== "command-path") {
+        break;
+      }
+      literal = true;
+      continue;
+    }
+    const rootConsumed = literal ? 0 : consumeRootOptionToken(args, index);
     if (rootConsumed > 0) {
       index += rootConsumed - 1;
       continue;
     }
-    if (arg.startsWith("-")) {
-      const optionConsumed = consumeKnownOptionToken(args, index, booleanFlags, valueFlags);
+    if (!literal && arg.startsWith("-")) {
+      const optionConsumed = consumeKnownOptionToken(
+        args,
+        index,
+        booleanFlags,
+        valueFlags,
+        options.mode,
+      );
       if (optionConsumed === 0) {
         return null;
       }
@@ -128,6 +165,9 @@ export function getCommandPositionalsWithRootOptions(
         return null;
       }
       commandIndex += 1;
+      if (returnTail && commandIndex === options.commandPath.length) {
+        return args.slice(index + 1);
+      }
       continue;
     }
     positionals.push(arg);

@@ -173,12 +173,11 @@ unrelated files elsewhere in an adopted repository are never staged.
 `src/state/secret-state-tables.ts` is the source of truth for redaction. At this revision, `--exclude-secrets` omits these shared-state tables:
 
 - `audit_identity_keys`
-- `auth_profile_state`
-- `auth_profile_stores`
 - `apns_registrations`
 - `channel_ingress_events`
 - `channel_pairing_requests`
 - `clawhub_promotion_claims`
+- `config_revision_keys`
 - `device_auth_tokens`
 - `device_bootstrap_tokens`
 - `device_identities`
@@ -188,11 +187,12 @@ unrelated files elsewhere in an adopted repository are never staged.
 - `mcp_oauth_pending_authorizations`
 - `mcp_oauth_stores`
 - `native_hook_relay_bridges`
-- `node_host_config`
 - `secret_store_entries`
 - `web_push_subscriptions`
-- `web_push_vapid_keys`
 - `worker_environment_credentials`
+
+It also omits `config_machine_state` rows whose keys begin with `authProfiles.`,
+`nodeHost.`, or `webPush.vapidKeys`, while retaining other machine-state rows.
 
 It omits these per-agent tables:
 
@@ -200,8 +200,10 @@ It omits these per-agent tables:
 - `auth_profile_store`
 - `session_suggestions`
 
-Restore reports the omitted tables so a redacted snapshot cannot be mistaken
-for a complete credential backup.
+The backup manifest records omitted tables in `excludedTables` and omitted
+machine-state prefixes in `excludedConfigStateKeyPrefixes`. Restore reports
+omitted tables and machine-state prefixes so a redacted snapshot cannot be
+mistaken for a complete credential backup.
 </Warning>
 
 Inspect or verify history without changing the live databases:
@@ -228,7 +230,11 @@ Provision one Gateway-owned automation with a fixed name:
 openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 ```
 
-The default scope is every database. Use `--global-only` or `--agent <id>` to narrow it, and add `--exclude-secrets` for a redacted history. Pushed schedules (`--push`) redact credential-bearing tables by default because an unattended recurring push retains them durably in remote history; pass `--include-secrets` for explicit full-fidelity remote backups (restores from redacted history need device re-pairing and provider re-authentication). `--push` also requires the repository to already have an `origin` remote. Re-running `backup enable` updates the existing automation instead of creating a duplicate. `openclaw backup disable` removes it; disabling an already-missing job is a successful no-op. Backup scheduling currently requires a local Gateway because the command job runs on the Gateway host; for a remote Gateway, create the cron job manually with `openclaw cron add`.
+The interval defaults to `24h` when `--every` is omitted. An explicitly empty or whitespace-only interval is rejected before a schedule is created or updated.
+
+The default scope is every database. Use `--global-only` or `--agent <id>` to narrow it, and add `--exclude-secrets` for a redacted history. Pushed schedules (`--push`) redact credential-bearing tables and secret-prefixed machine-state rows by default because an unattended recurring push retains them durably in remote history; pass `--include-secrets` for explicit full-fidelity remote backups (restores from redacted history need device re-pairing and provider re-authentication). `--push` also requires the repository to already have an `origin` remote. Re-running `backup enable` updates the existing automation instead of creating a duplicate. `openclaw backup disable` removes it; disabling an already-missing job is a successful no-op. Backup scheduling currently requires a local Gateway because the command job runs on the Gateway host; for a remote Gateway, create the cron job manually with `openclaw cron add`.
+
+Disabling a schedule finds the managed automation across all list pages, even after renaming it. Unrelated automations with the same name are left in place.
 
 ## Recorded runs and freshness
 
@@ -279,6 +285,8 @@ During archive creation, OpenClaw excludes known live-mutation paths before `tar
 | `sandbox/skills-workspaces/**`               | All entries                                           |
 | Any path under the backed-up state directory | `.sock`, `.pid`, `.tmp`                               |
 
+The active config file remains included even when its name or location matches a rule above. This exception keeps only the selected config file; neighboring files under excluded directories stay out of the archive.
+
 These rules do not filter workspace files outside the state directory. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports intentionally omitted volatile entries; regenerable agent temporary roots are listed separately in `skipped` and are not included in that count.
 
 Chromium singleton entries coordinate one running browser on one host and are recreated when that profile starts; the rest of the profile's `user-data/` remains in the archive. Sandbox skills workspaces are generated copies of current skill sources and are materialized again when OpenClaw prepares the next sandbox context after restore; adjacent sandbox registry and other durable state remain included.
@@ -300,7 +308,7 @@ The state directory's `plugin-skills/` root is a generated, OpenClaw-owned symli
 
 Agent-scoped temporary trees under `agents/<agentId>/agent/**/{tmp,.tmp}/` are also omitted and reported as regenerable. This includes temporary files directly below an agent directory and temporary trees inside agent runtime homes; durable sibling directories remain included. An explicitly configured config file, credentials directory, or workspace nested below an omitted temporary root remains included.
 
-Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. Absolute links, links containing backslashes, and links escaping the archive root or every declared asset are rejected during both creation and verification.
+Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. An absolute link whose real target is contained by a declared asset, such as a Nix-managed config or credentials link, is rewritten to a portable relative archive link. Other absolute links, links containing backslashes, and links escaping the archive root or every declared asset are rejected during both creation and verification.
 
 Installer-managed and rebuildable runtime roots under the state directory are
 also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and

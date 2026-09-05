@@ -20,11 +20,16 @@ final class CLIInstallPrompter {
     private func checkAndPromptIfNeededAsync(reason: String) async {
         guard AppStateStore.shared.onboardingSeen else { return }
         let connectionMode = AppStateStore.shared.connectionMode
-        guard Self.shouldManageCLI(connectionMode: connectionMode) else { return }
+        guard connectionMode == .local else { return }
+        await GatewayProcessManager.shared.waitForStartupAttempt()
+        guard GatewayProcessManager.shared.installation == .managed else { return }
         guard let version = Self.appVersion() else { return }
         let status = await CLIInstaller.status()
         let managedStatus = await CLIInstaller.managedStatus()
-        guard AppStateStore.shared.onboardingSeen else { return }
+        guard AppStateStore.shared.onboardingSeen,
+              AppStateStore.shared.connectionMode == .local,
+              GatewayProcessManager.shared.installation == .managed
+        else { return }
         let shouldRepairManaged = Self.shouldAutomaticallyRepair(
             status: managedStatus,
             launchAgentUsesManagedCLI: Self.launchAgentUsesManagedCLI(
@@ -45,9 +50,7 @@ final class CLIInstallPrompter {
             if await self.installCLI(
                 target: .exact(version),
                 showCompletionAlert: false,
-                restartManagedGateway: Self.shouldRestartManagedGateway(
-                    requested: !AppStateStore.shared.isPaused,
-                    connectionMode: connectionMode))
+                restartManagedGateway: !AppStateStore.shared.isPaused)
             {
                 return
             }
@@ -79,7 +82,7 @@ final class CLIInstallPrompter {
             guard confirmStable else { return target }
             let alert = NSAlert()
             alert.messageText = "Install OpenClaw CLI?"
-            alert.informativeText = "The Mac node needs the matching CLI runtime."
+            alert.informativeText = "The app-managed local Gateway needs an external CLI runtime."
             alert.addButton(withTitle: "Install CLI")
             alert.addButton(withTitle: "Not Now")
             alert.addButton(withTitle: "Open Settings")
@@ -135,11 +138,11 @@ final class CLIInstallPrompter {
         showCompletionAlert: Bool = true,
         restartManagedGateway: Bool = false) async -> Bool
     {
+        guard AppStateStore.shared.connectionMode == .local,
+              GatewayProcessManager.shared.installation == .managed
+        else { return false }
         let status = StatusBox()
-        let usesLocalGateway = AppStateStore.shared.connectionMode == .local
-        let shouldRestartManagedGateway = Self.shouldRestartManagedGateway(
-            requested: restartManagedGateway,
-            connectionMode: AppStateStore.shared.connectionMode)
+        let shouldRestartManagedGateway = restartManagedGateway
         let previousPID = shouldRestartManagedGateway
             ? await GatewayLaunchAgentManager.runningGatewayPID()
             : nil
@@ -164,16 +167,11 @@ final class CLIInstallPrompter {
                     return false
                 }
             }
-            let activation: CLIInstaller.LocalGatewayActivation?
-            if usesLocalGateway {
-                await status.set("Starting OpenClaw Gateway…")
-                if !showCompletionAlert {
-                    self.logger.info("managed CLI repair: Starting OpenClaw Gateway…")
-                }
-                activation = await CLIInstaller.activateLocalGateway()
-            } else {
-                activation = nil
+            await status.set("Starting OpenClaw Gateway…")
+            if !showCompletionAlert {
+                self.logger.info("managed CLI repair: Starting OpenClaw Gateway…")
             }
+            let activation = await CLIInstaller.activateLocalGateway()
             if case .failed = activation { activated = false } else { activated = true }
             if shouldRestartManagedGateway {
                 // Only proven gateway health closes the recovery loop; the
@@ -192,8 +190,6 @@ final class CLIInstallPrompter {
                 "OpenClaw is installed. The Gateway will start when This Mac is active and resumed."
             case .failed:
                 "OpenClaw was installed, but the Gateway did not start. Open Settings to retry."
-            case nil:
-                "OpenClaw CLI is ready for the Mac node."
             }
             await status.set(message)
             if !showCompletionAlert {
@@ -246,17 +242,6 @@ final class CLIInstallPrompter {
 
     static func clearPendingManagedRestart() {
         AppDefaults.standard.removeObject(forKey: cliManagedRestartPendingKey)
-    }
-
-    static func shouldManageCLI(connectionMode: AppState.ConnectionMode) -> Bool {
-        connectionMode == .local || connectionMode == .remote
-    }
-
-    static func shouldRestartManagedGateway(
-        requested: Bool,
-        connectionMode: AppState.ConnectionMode) -> Bool
-    {
-        requested && connectionMode == .local
     }
 
     private func ensureManagedGatewayRestarted(previousPID: Int32?, status: StatusBox) async -> Bool {
@@ -388,13 +373,20 @@ final class CLIInstallPrompter {
             .deletingLastPathComponent()
             .standardizedFileURL.path + "/"
         guard let executable = command.first else { return false }
-        let executablePath = URL(fileURLWithPath: executable).standardizedFileURL.path
+        let executableURL = URL(fileURLWithPath: executable).standardizedFileURL
         let managedRuntimeRoot = managedRoot + "tools/node/"
-        if executablePath.hasPrefix(managedRoot), !executablePath.hasPrefix(managedRuntimeRoot) {
+        if executableURL.path.hasPrefix(managedRoot), !executableURL.path.hasPrefix(managedRuntimeRoot) {
             return true
         }
-        guard command.count >= 2 else { return false }
-        let entrypoint = command[command.index(after: command.startIndex)]
+        guard ["node", "bun"].contains(executableURL.lastPathComponent) else { return false }
+        // Skip only the joined heap controls emitted by the service installer.
+        // Other native options may consume paths; those values never prove CLI ownership.
+        let entrypoint = command.dropFirst().drop(while: {
+            $0.hasPrefix("--max-old-space-size=") ||
+                $0.hasPrefix("--max-old-space-size-percentage=") ||
+                $0.hasPrefix("--max-heap-size=")
+        }).first
+        guard let entrypoint, !entrypoint.hasPrefix("-") else { return false }
         return URL(fileURLWithPath: entrypoint).standardizedFileURL.path.hasPrefix(managedRoot)
     }
 

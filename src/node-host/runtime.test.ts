@@ -130,6 +130,15 @@ function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
 }
 
 describe("node-host invocation cancellation", () => {
+  it("does not admit a queued invocation after its connection is retired", async () => {
+    const runtime = await startRuntime();
+    const pending = runtime.invoke({ ...frame, command: "system.run" });
+    runtime.cancelAll();
+    await pending;
+    expect(mocks.handleInvoke).not.toHaveBeenCalled();
+    await runtime.close();
+  });
+
   it("cancels ordinary node invocations", async () => {
     const held = holdInvoke();
     const runtime = await startRuntime();

@@ -360,6 +360,42 @@ describe("createPatchedAccountSetupAdapter", () => {
 });
 
 describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
+  it.each([undefined, {}])(
+    "seeds an empty default for ordinary single-account promotion: %j",
+    (accounts) => {
+      const cfg = asConfig({
+        channels: { demo: { enabled: true, ...(accounts ? { accounts } : {}) } },
+      });
+      const next = moveSingleAccountChannelSectionToDefaultAccount({ cfg, channelKey: "demo" });
+      expect(next.channels?.demo).toEqual({ enabled: true, accounts: { default: {} } });
+      expect(cfg.channels?.demo).toEqual({ enabled: true, ...(accounts ? { accounts } : {}) });
+    },
+  );
+
+  it.each([undefined, {}, { ada: { enabled: true } }])(
+    "does not create an empty default for explicit preserve-root: %j",
+    (accounts) => {
+      const cfg = asConfig({
+        channels: { demo: { enabled: true, ...(accounts ? { accounts } : {}) } },
+      });
+      expect(
+        moveSingleAccountChannelSectionToDefaultAccount({
+          cfg,
+          channelKey: "demo",
+          setupSurface: {
+            configPromotion: "preserve-root",
+            applyAccountConfig: ({ cfg: currentConfig }) => currentConfig,
+          },
+        }),
+      ).toBe(cfg);
+    },
+  );
+
+  it("does not add a default when an ordinary named account already exists and no keys move", () => {
+    const cfg = asConfig({ channels: { demo: { enabled: true, accounts: { ada: {} } } } });
+    expect(moveSingleAccountChannelSectionToDefaultAccount({ cfg, channelKey: "demo" })).toBe(cfg);
+  });
+
   it("moves Matrix allowBots into the promoted default account", () => {
     const next = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: asConfig({

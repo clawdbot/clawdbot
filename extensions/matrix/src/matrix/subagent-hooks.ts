@@ -53,7 +53,11 @@ export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent)
     const reason = normalizeOptionalString(event.reason) || "subagent-ended";
     for (const binding of matching) {
       const bindingId = resolveBindingKey(binding);
-      const removed = await bindingService.unbind({ bindingId, reason });
+      const removed = await bindingService.unbind({
+        bindingId,
+        reason,
+        scope: { channel: "matrix", accountId: binding.accountId },
+      });
       if (removed.some((entry) => entry.bindingId === bindingId)) {
         removedBindingKeys.add(bindingId);
       }

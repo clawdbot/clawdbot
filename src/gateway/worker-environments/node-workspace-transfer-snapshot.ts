@@ -1,7 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
@@ -11,7 +10,6 @@ import { probeWorkspaceGitMode } from "./workspace-sync-helpers.js";
 import {
   createWorkspaceGitTransferList,
   readWorkspaceTransferPaths,
-  runWorkspaceInventoryCommandToFile,
 } from "./workspace-sync-inventory.js";
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
@@ -21,7 +19,6 @@ export type NodeWorkspaceTransferSnapshot = {
   manifestRef: string;
   rawManifest: string;
   root: string;
-  packPath?: string;
 };
 
 export async function prepareNodeWorkspaceTransferSnapshot(params: {
@@ -69,39 +66,9 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
     includePaths = manifestPaths;
   }
   const actual = await readActualWorkspaceManifest({ root, baseCommit, includePaths });
-  let packPath: string | undefined;
-  if (baseCommit) {
-    const signal = params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS);
-    const objectListPath = path.join(params.temporaryRoot, "base-objects");
-    packPath = path.join(params.temporaryRoot, "base.pack");
-    await runWorkspaceInventoryCommandToFile({
-      argv: [
-        "git",
-        "-C",
-        root,
-        "rev-list",
-        "--objects",
-        "--no-object-names",
-        `${baseCommit}^{tree}`,
-      ],
-      outputPath: objectListPath,
-      signal,
-      timeoutMs: TRANSFER_TIMEOUT_MS,
-    });
-    await fsp.appendFile(objectListPath, `${baseCommit}\n`);
-    await runWorkspaceInventoryCommandToFile({
-      argv: ["git", "-C", root, "pack-objects", "--stdout"],
-      inputPath: objectListPath,
-      outputPath: packPath,
-      signal,
-      timeoutMs: TRANSFER_TIMEOUT_MS,
-      maxOutputBytes: MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
-    });
-  }
   return {
     ...actual,
     rawManifest: serializeWorkerWorkspaceManifest(actual.manifest),
     root,
-    ...(packPath ? { packPath } : {}),
   };
 }

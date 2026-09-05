@@ -73,6 +73,8 @@ export function isChatAbortMarkerCurrent(
 export type BufferedAgentEvent = {
   sessionKey?: string;
   agentId?: string;
+  controlUiVisible?: boolean;
+  isCurrent?: () => boolean;
   payload: AgentEventPayload & { spawnedBy?: string };
 };
 
@@ -101,25 +103,24 @@ type ChatRunRecord = {
   registrations?: ChatRunEntry[];
   rawBuffer?: string;
   buffer?: string;
-  /** Projection stays valid only while source matches rawBuffer; readers refresh it lazily. */
+  bufferIsCurrent?: () => boolean;
+  /** Retire queued connection snapshots when this buffering generation is cleared. */
+  liveTextGroup?: AbortController;
+  /** Projection stays valid only while source and managed-media facts match the run state. */
   bufferProjection?: { source: string; suppress: boolean };
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
-  /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
-  deltaLastBroadcastLen?: number;
+  assistantScope?: { itemId: string; prefix: string };
+  managedMediaUrls?: Set<string>;
   deltaLastBroadcastText?: string;
-  agentText?: {
-    assistant?: ChatRunAgentTextState;
-    thinking?: ChatRunAgentTextState;
-  };
+  agentText?: Partial<
+    Record<"assistant" | "thinking" | "preamble" | "answer_candidate", ChatRunAgentTextState>
+  >;
   abortMarker?: ChatAbortMarker;
   toolRecipient?: ChatRunToolRecipientState;
-};
-
-type InternalChatRunRecord = ChatRunRecord & {
   /** Fixed-deadline trailing wake-up owned by this run's buffered state. */
   pendingTextFlushes?: Partial<Record<"chat" | "agent", PendingLiveTextFlush>>;
 };
@@ -151,16 +152,11 @@ function createChatRunRecordStore(): ChatRunRecordStore {
   return { runs, getOrCreate, releaseIfEmpty };
 }
 
-function internalChatRunRecord(record: ChatRunRecord): InternalChatRunRecord {
-  return record;
-}
-
 function clearPendingLiveTextFlushes(record: ChatRunRecord): void {
-  const internal = internalChatRunRecord(record);
-  for (const pending of Object.values(internal.pendingTextFlushes ?? {})) {
+  for (const pending of Object.values(record.pendingTextFlushes ?? {})) {
     clearTimeout(pending.timer);
   }
-  delete internal.pendingTextFlushes;
+  delete record.pendingTextFlushes;
 }
 
 export type ChatRunRegistry = {
@@ -233,10 +229,13 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   toolEventRecipients: ToolEventRecipientRegistry;
   getOrCreate: (runId: string) => ChatRunRecord;
-  resolveBuffer: (runId: string) => { text: string; suppress: boolean };
+  resolveBuffer: (
+    runId: string,
+    options?: { final?: boolean },
+  ) => { text: string; suppress: boolean };
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
-  recordProgressEvent: (runId: string, event: AgentEventPayload) => void;
+  recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
   clearRun: (runId: string) => void;
   clear: () => void;
 };
@@ -247,10 +246,15 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistryForStore(store);
   const toolEventRecipients = createToolEventRecipientRegistryForStore(store);
 
-  const recordProgressEvent = (runId: string, event: AgentEventPayload) => {
+  const recordProgressEvent = (
+    runId: string,
+    event: AgentEventPayload,
+    mode?: "full" | "summary",
+  ) => {
     const progressSnapshot = updateChatRunProgressSnapshot(
       store.runs.get(runId)?.progressSnapshot,
       event,
+      mode,
     );
     if (progressSnapshot) {
       store.getOrCreate(runId).progressSnapshot = progressSnapshot;
@@ -264,12 +268,16 @@ export function createChatRunState(): ChatRunState {
     }
     delete record.rawBuffer;
     delete record.buffer;
+    delete record.bufferIsCurrent;
+    record.liveTextGroup?.abort();
+    delete record.liveTextGroup;
     delete record.bufferProjection;
     delete record.planSnapshot;
     delete record.progressSnapshot;
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
-    delete record.deltaLastBroadcastLen;
+    delete record.assistantScope;
+    delete record.managedMediaUrls;
     delete record.deltaLastBroadcastText;
     clearPendingLiveTextFlushes(record);
     delete record.agentText;
@@ -279,20 +287,25 @@ export function createChatRunState(): ChatRunState {
   const clear = () => {
     for (const record of store.runs.values()) {
       clearPendingLiveTextFlushes(record);
+      record.liveTextGroup?.abort();
     }
     store.runs.clear();
   };
 
-  const resolveBuffer = (runId: string) => {
+  const resolveBuffer = (runId: string, options?: { final?: boolean }) => {
     const record = store.runs.get(runId);
-    if (!record) {
+    if (!record || record.bufferIsCurrent?.() === false) {
       return projectLiveAssistantBufferedText("");
     }
     const rawText = record.rawBuffer;
     if (rawText === undefined) {
       return projectLiveAssistantBufferedText(record.buffer ?? "");
     }
-    if (record.bufferProjection?.source === rawText && record.buffer !== undefined) {
+    if (
+      !options?.final &&
+      record.bufferProjection?.source === rawText &&
+      record.buffer !== undefined
+    ) {
       return {
         text: record.buffer,
         suppress: record.bufferProjection.suppress,
@@ -300,10 +313,17 @@ export function createChatRunState(): ChatRunState {
     }
     // Protected blocks and directive tags can span delta frames, so the
     // projection cache belongs to the complete merged raw buffer.
-    const normalizedText = normalizeLiveAssistantBufferedText(rawText);
+    const normalizedText = normalizeLiveAssistantBufferedText(rawText, {
+      ...options,
+      managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
+    });
     const projected = projectLiveAssistantBufferedText(normalizedText);
-    record.buffer = projected.text;
-    record.bufferProjection = { source: rawText, suppress: projected.suppress };
+    // A terminal read releases ambiguous directive prefixes as ordinary text;
+    // caching it would expose that prefix again if a late live reader races cleanup.
+    if (!options?.final) {
+      record.buffer = projected.text;
+      record.bufferProjection = { source: rawText, suppress: projected.suppress };
+    }
     return projected;
   };
 
@@ -356,12 +376,9 @@ export type SessionMessageSubscriberRegistry = {
 type SessionMessageSubscription = (() => void) & { commit: () => void };
 
 type ProvisionalSubscriptionState = {
-  active: boolean;
-  base: number | undefined;
-  baseApprovals: boolean;
+  base?: boolean;
   inflight: number;
-  lastSuccess: number | undefined;
-  lastSuccessApprovals: boolean | undefined;
+  lastSuccess?: { sequence: number; includeApprovals: boolean };
 };
 
 const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
@@ -398,13 +415,10 @@ export function createSessionMessageSubscriberRegistry(
   isConnectionActive?: (connId: string) => boolean,
 ): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
-  // The final state after overlapping replays settles to their latest success
-  // or the original committed base; failed provisionals cannot leave ghosts.
-  // Its keys double as the per-connection reverse index for unsubscribeAll.
-  const connToSessionRecency = new Map<string, Map<string, number>>();
-  const provisionalSubscriptions = new Map<string, Map<string, ProvisionalSubscriptionState>>();
+  // Booleans retain committed approval mode; records own unsettled replays.
+  // Replacing a record fences late settlements, including connection/session reuse.
+  const connections = new Map<string, Map<string, boolean | ProvisionalSubscriptionState>>();
   const approvalSessionToConnIds = new Map<string, Set<string>>();
-  const connToApprovalSessionKeys = new Map<string, Set<string>>();
   const changeListeners = new Set<(sessionKey: string) => void>();
   const empty = new Set<string>();
   let subscriptionSequence = 0;
@@ -436,23 +450,15 @@ export function createSessionMessageSubscriberRegistry(
   };
   const setApprovalSubscription = (connId: string, sessionKey: string, subscribed: boolean) => {
     const connIds = approvalSessionToConnIds.get(sessionKey);
-    const sessionKeys = connToApprovalSessionKeys.get(connId);
     if (subscribed) {
       const nextConnIds = connIds ?? new Set<string>();
       nextConnIds.add(connId);
       approvalSessionToConnIds.set(sessionKey, nextConnIds);
-      const nextSessionKeys = sessionKeys ?? new Set<string>();
-      nextSessionKeys.add(sessionKey);
-      connToApprovalSessionKeys.set(connId, nextSessionKeys);
       return;
     }
     connIds?.delete(connId);
     if (connIds?.size === 0) {
       approvalSessionToConnIds.delete(sessionKey);
-    }
-    sessionKeys?.delete(sessionKey);
-    if (sessionKeys?.size === 0) {
-      connToApprovalSessionKeys.delete(connId);
     }
   };
 
@@ -467,27 +473,18 @@ export function createSessionMessageSubscriberRegistry(
       ) {
         return undefined;
       }
-      const hadApprovals =
-        approvalSessionToConnIds.get(normalizedSessionKey)?.has(normalizedConnId) ?? false;
-      const recency = connToSessionRecency.get(normalizedConnId) ?? new Map<string, number>();
-      const previousRecency = recency.get(normalizedSessionKey);
-      const states = provisionalSubscriptions.get(normalizedConnId) ?? new Map();
-      const state = states.get(normalizedSessionKey) ?? {
-        base: previousRecency,
-        baseApprovals: hadApprovals,
-        active: true,
-        inflight: 0,
-        lastSuccess: undefined,
-        lastSuccessApprovals: undefined,
-      };
+      const states =
+        connections.get(normalizedConnId) ??
+        new Map<string, boolean | ProvisionalSubscriptionState>();
+      const previous = states.get(normalizedSessionKey);
+      const state: ProvisionalSubscriptionState =
+        typeof previous === "object" ? previous : { base: previous, inflight: 0 };
       state.inflight += 1;
       states.set(normalizedSessionKey, state);
-      provisionalSubscriptions.set(normalizedConnId, states);
+      connections.set(normalizedConnId, states);
       subscriptionSequence += 1;
       const provisionalRecency = subscriptionSequence;
       setMessageSubscription(normalizedConnId, normalizedSessionKey, true);
-      recency.set(normalizedSessionKey, provisionalRecency);
-      connToSessionRecency.set(normalizedConnId, recency);
 
       setApprovalSubscription(
         normalizedConnId,
@@ -496,40 +493,34 @@ export function createSessionMessageSubscriberRegistry(
       );
       let settled = false;
       const settle = (succeeded: boolean) => {
-        if (settled || !state.active) {
+        if (settled || connections.get(normalizedConnId)?.get(normalizedSessionKey) !== state) {
           return;
         }
         settled = true;
         if (succeeded) {
-          if (provisionalRecency >= (state.lastSuccess ?? -Infinity)) {
-            state.lastSuccess = provisionalRecency;
-            state.lastSuccessApprovals = opts?.includeApprovals === true;
+          if (provisionalRecency >= (state.lastSuccess?.sequence ?? -Infinity)) {
+            state.lastSuccess = {
+              sequence: provisionalRecency,
+              includeApprovals: opts?.includeApprovals === true,
+            };
           }
         }
         state.inflight -= 1;
         if (state.inflight > 0) {
           return;
         }
-        const committedRecency = state.lastSuccess ?? state.base;
-        if (committedRecency === undefined) {
-          recency.delete(normalizedSessionKey);
+        const committed = state.lastSuccess?.includeApprovals ?? state.base;
+        if (committed === undefined) {
+          states.delete(normalizedSessionKey);
           setMessageSubscription(normalizedConnId, normalizedSessionKey, false);
           setApprovalSubscription(normalizedConnId, normalizedSessionKey, false);
         } else {
-          recency.set(normalizedSessionKey, committedRecency);
+          states.set(normalizedSessionKey, committed);
           setMessageSubscription(normalizedConnId, normalizedSessionKey, true);
-          setApprovalSubscription(
-            normalizedConnId,
-            normalizedSessionKey,
-            state.lastSuccessApprovals ?? state.baseApprovals,
-          );
+          setApprovalSubscription(normalizedConnId, normalizedSessionKey, committed);
         }
-        if (recency.size === 0) {
-          connToSessionRecency.delete(normalizedConnId);
-        }
-        states.delete(normalizedSessionKey);
         if (states.size === 0) {
-          provisionalSubscriptions.delete(normalizedConnId);
+          connections.delete(normalizedConnId);
         }
       };
       const rollback = (() => settle(false)) as SessionMessageSubscription;
@@ -546,66 +537,30 @@ export function createSessionMessageSubscriberRegistry(
       if (!normalizedConnId || !normalizedSessionKey) {
         return;
       }
-      const states = provisionalSubscriptions.get(normalizedConnId);
-      const state = states?.get(normalizedSessionKey);
-      if (state) {
-        state.active = false;
-        states?.delete(normalizedSessionKey);
-        if (states?.size === 0) {
-          provisionalSubscriptions.delete(normalizedConnId);
-        }
+      const states = connections.get(normalizedConnId);
+      states?.delete(normalizedSessionKey);
+      if (states?.size === 0) {
+        connections.delete(normalizedConnId);
       }
       setMessageSubscription(normalizedConnId, normalizedSessionKey, false);
-      const recency = connToSessionRecency.get(normalizedConnId);
-      if (recency) {
-        recency.delete(normalizedSessionKey);
-        if (recency.size === 0) {
-          connToSessionRecency.delete(normalizedConnId);
-        }
-      }
-      const approvalConnIds = approvalSessionToConnIds.get(normalizedSessionKey);
-      if (approvalConnIds) {
-        approvalConnIds.delete(normalizedConnId);
-        if (approvalConnIds.size === 0) {
-          approvalSessionToConnIds.delete(normalizedSessionKey);
-        }
-      }
-      const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
-      if (approvalSessionKeys) {
-        approvalSessionKeys.delete(normalizedSessionKey);
-        if (approvalSessionKeys.size === 0) {
-          connToApprovalSessionKeys.delete(normalizedConnId);
-        }
-      }
+      setApprovalSubscription(normalizedConnId, normalizedSessionKey, false);
     },
     unsubscribeAll: (connId: string) => {
       const normalizedConnId = normalize(connId);
       if (!normalizedConnId) {
         return;
       }
-      const states = provisionalSubscriptions.get(normalizedConnId);
-      for (const state of states?.values() ?? []) {
-        state.active = false;
-      }
-      provisionalSubscriptions.delete(normalizedConnId);
-      const sessionKeys = connToSessionRecency.get(normalizedConnId);
-      if (!sessionKeys) {
+      const states = connections.get(normalizedConnId);
+      if (!states) {
         return;
       }
-      for (const sessionKey of sessionKeys.keys()) {
+      connections.delete(normalizedConnId);
+      for (const sessionKey of states.keys()) {
         setMessageSubscription(normalizedConnId, sessionKey, false);
       }
-      connToSessionRecency.delete(normalizedConnId);
-
-      const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
-      for (const sessionKey of approvalSessionKeys ?? []) {
-        const connIds = approvalSessionToConnIds.get(sessionKey);
-        connIds?.delete(normalizedConnId);
-        if (connIds?.size === 0) {
-          approvalSessionToConnIds.delete(sessionKey);
-        }
+      for (const sessionKey of states.keys()) {
+        setApprovalSubscription(normalizedConnId, sessionKey, false);
       }
-      connToApprovalSessionKeys.delete(normalizedConnId);
     },
     get: (sessionKey: string) => {
       const normalizedSessionKey = normalize(sessionKey);
@@ -673,12 +628,12 @@ function createToolEventRecipientRegistryForStore(
 
   const get = (runId: string) => {
     const entry = store.runs.get(runId)?.toolRecipient;
-    if (!entry) {
-      return undefined;
+    if (entry) {
+      entry.updatedAt = Date.now();
+      prune();
     }
-    entry.updatedAt = Date.now();
-    prune();
-    return entry.connIds;
+    // Pruning may retire this finalized run; never return its former audience.
+    return store.runs.get(runId)?.toolRecipient?.connIds;
   };
 
   const markFinal = (runId: string) => {

@@ -9,7 +9,6 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
-  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
@@ -32,7 +31,6 @@ import {
   buildWindowsFreshShellVersionCheckScript,
   buildInstalledBrowserOverrideImportProbeScript,
   buildNpmGlobalInstallArgs,
-  appendLatestNpmDebugLogTail,
   assertManagedGatewayInstallerHostAvailable,
   buildGatewayStopArgsFromHelpText,
   buildGatewayStatusArgsFromHelpText,
@@ -66,6 +64,7 @@ import {
   normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
   maybeBuildOptionalAgentTurnSkipResult,
+  parsePackagedUpgradeUpdateTimings,
   parsePositiveIntegerEnv,
   parseCrossOsSuiteFilter,
   parseArgs,
@@ -110,6 +109,7 @@ import {
   verifyWindowsPackagedUpgradeFallbackInstall,
   waitForGatewayWithStartupMigrationRestart,
   writePackageDistInventoryForCandidate,
+  writeSummary,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 
@@ -793,6 +793,90 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(freshLaneSource).toContain('runTimedLanePhase(lane, "install-candidate"');
     expect(freshLaneSource).toContain('runTimedLanePhase(lane, "agent-turn"');
     expect(freshLaneSource).toContain("phaseTimings: lane.phaseTimings");
+  });
+
+  it("retains only bounded allowlisted packaged-upgrade timings", () => {
+    expect(
+      parsePackagedUpgradeUpdateTimings(
+        JSON.stringify({
+          durationMs: 622_000,
+          root: String.raw`C:\private\openclaw`,
+          steps: [
+            {
+              name: "global update",
+              command: "npm install --global secret-package",
+              cwd: String.raw`C:\private\prefix`,
+              durationMs: 461_000,
+            },
+            { name: "global install swap", durationMs: 39_000 },
+            { name: "openclaw doctor", durationMs: 66_000 },
+            { name: "unknown internal step", durationMs: 123_000 },
+          ],
+        }),
+      ),
+    ).toEqual([
+      { name: "total", durationMs: 622_000 },
+      { name: "package-install", durationMs: 461_000 },
+      { name: "staged-swap", durationMs: 39_000 },
+      { name: "doctor", durationMs: 66_000 },
+    ]);
+  });
+
+  it("drops malformed, unsafe, and out-of-bounds packaged-upgrade timings", () => {
+    expect(parsePackagedUpgradeUpdateTimings("not json")).toEqual([]);
+    expect(parsePackagedUpgradeUpdateTimings("[]")).toEqual([]);
+    expect(
+      parsePackagedUpgradeUpdateTimings(
+        JSON.stringify({
+          durationMs: 3_600_001,
+          steps: [
+            { name: "global update", durationMs: -1 },
+            { name: "global install swap", durationMs: 1.5 },
+            { name: "openclaw doctor", durationMs: "66000" },
+          ],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("renders runner, runtime, and sanitized updater timing evidence", () => {
+    withTempDir("openclaw-cross-os-summary-", (dir) => {
+      writeSummary(dir, {
+        platform: "win32",
+        runnerOs: "Windows",
+        runnerLabel: "blacksmith-32vcpu-windows-2025",
+        nodeVersion: "v24.15.0",
+        npmVersion: "11.8.0",
+        provider: "openai",
+        suite: "packaged-upgrade",
+        mode: "upgrade",
+        sourceSha: "abc123",
+        candidateVersion: "2026.8.28-beta.1",
+        baselineSpec: "openclaw@2026.8.27",
+        result: {
+          status: "pass",
+          updateFallback: {
+            reason: "timeout",
+            action: "direct-candidate-install",
+          },
+          updateTimings: [
+            { name: "total", durationMs: 622_000 },
+            { name: "package-install", durationMs: 461_000 },
+          ],
+        },
+      });
+
+      const json = readFileSync(join(dir, "summary.json"), "utf8");
+      const markdown = readFileSync(join(dir, "summary.md"), "utf8");
+      expect(json).toContain('"runnerLabel": "blacksmith-32vcpu-windows-2025"');
+      expect(markdown).toContain("- Runner: `blacksmith-32vcpu-windows-2025`");
+      expect(markdown).toContain("- Node: `v24.15.0`");
+      expect(markdown).toContain("- npm: `11.8.0`");
+      expect(markdown).toContain("- Updater fallback: `timeout/direct-candidate-install`");
+      expect(markdown).toContain("- `package-install`: 461s");
+      expect(markdown).not.toContain("private");
+      expect(markdown).not.toContain("npm install");
+    });
   });
 
   it("accepts OK agent output from the captured log when stdout is empty", () => {
@@ -1966,66 +2050,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("reads npm debug logs from the Windows cache root", () => {
-    withTempDir("openclaw-cross-os-npm-debug-", (dir) => {
-      const homeDir = join(dir, "home");
-      const localAppData = join(homeDir, "AppData", "Local");
-      const logsDir = join(localAppData, "npm-cache", "_logs");
-      const logPath = join(dir, "install.log");
-      mkdirSync(logsDir, { recursive: true });
-      writeFileSync(join(logsDir, "2026-07-05T00_00_00_000Z-debug-0.log"), "windows log\n");
-      writeFileSync(logPath, "install failed\n");
-
-      expect(resolveNpmDebugLogDirs(homeDir, { LOCALAPPDATA: localAppData }, "win32")).toContain(
-        logsDir,
-      );
-      expect(
-        appendLatestNpmDebugLogTail(homeDir, logPath, { LOCALAPPDATA: localAppData }, "win32"),
-      ).toContain("windows log");
-      expect(readFileSync(logPath, "utf8")).toContain("windows log");
-    });
-  });
-
-  it("prefers npm configured log directories over cache defaults", () => {
-    withTempDir("openclaw-cross-os-npm-logs-dir-", (dir) => {
-      const homeDir = join(dir, "home");
-      const logsDir = join(dir, "custom-logs");
-      const logPath = join(dir, "install.log");
-      mkdirSync(logsDir, { recursive: true });
-      mkdirSync(join(homeDir, ".npm", "_logs"), { recursive: true });
-      writeFileSync(
-        join(homeDir, ".npm", "_logs", "2026-07-05T00_00_00_000Z-debug-0.log"),
-        "old fallback log\n",
-      );
-      utimesSync(
-        join(homeDir, ".npm", "_logs", "2026-07-05T00_00_00_000Z-debug-0.log"),
-        new Date("2020-01-01T00:00:00Z"),
-        new Date("2020-01-01T00:00:00Z"),
-      );
-      writeFileSync(join(logsDir, "2026-07-05T00_00_00_000Z-debug-0.log"), "custom log\n");
-      writeFileSync(logPath, "install failed\n");
-
-      expect(resolveNpmDebugLogDirs(homeDir, { npm_config_logs_dir: logsDir })).toContain(logsDir);
-      expect(
-        appendLatestNpmDebugLogTail(homeDir, logPath, { npm_config_logs_dir: logsDir }),
-      ).toContain("custom log");
-      expect(readFileSync(logPath, "utf8")).toContain("custom log");
-    });
-  });
-
-  it("keeps npm debug log collection best-effort", () => {
-    withTempDir("openclaw-cross-os-npm-debug-best-effort-", (dir) => {
-      const homeDir = join(dir, "home");
-      const logPath = join(dir, "install.log");
-      const logsDir = join(dir, "not-a-directory");
-      writeFileSync(logPath, "install failed\n");
-      writeFileSync(logsDir, "not a directory\n");
-
-      expect(appendLatestNpmDebugLogTail(homeDir, logPath, { npm_config_logs_dir: logsDir })).toBe(
-        "",
-      );
-      expect(readFileSync(logPath, "utf8")).toBe("install failed\n");
-    });
+  it("resolves Windows and configured npm diagnostic directories", () => {
+    const homeDir = join(tmpdir(), "openclaw-npm-diagnostics-home");
+    const localAppData = join(homeDir, "AppData", "Local");
+    const logsDir = join(homeDir, "custom-logs");
+    expect(resolveNpmDebugLogDirs(homeDir, { LOCALAPPDATA: localAppData }, "win32")).toContain(
+      join(localAppData, "npm-cache", "_logs"),
+    );
+    expect(resolveNpmDebugLogDirs(homeDir, { npm_config_logs_dir: logsDir })).toContain(logsDir);
   });
 
   it("resolves relative npm log config from the install working directory", () => {

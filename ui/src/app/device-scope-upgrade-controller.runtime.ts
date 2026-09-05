@@ -1,4 +1,4 @@
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   readScopeUpgradeAvailability,
@@ -97,7 +97,12 @@ export class ScopeUpgradeController {
         if (!this.isCurrent(operation) || (error instanceof Error && error.name === "AbortError")) {
           return;
         }
-        this.setState({ phase: "error", message: formatUiError(error) });
+        this.setState({
+          phase: "error",
+          message: formatUiError(error),
+          // Keep authoritative denials distinct from local transport failures.
+          retryable: !(error instanceof GatewayRequestError) || error.retryable,
+        });
       })
       .finally(() => {
         if (this.isCurrent(operation)) {

@@ -88,6 +88,7 @@ export function createReadinessChecker(
   deps: GatewayStartupStateDeps & {
     channelManager: ChannelManager;
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+    getStateDatabaseFailure?: () => Error | undefined;
     shouldSkipChannelReadiness?: () => boolean;
     cacheTtlMs?: number;
   },
@@ -114,15 +115,21 @@ export function createReadinessChecker(
         deps.getEventLoopHealth,
       );
     }
-    if (deps.shouldSkipChannelReadiness?.()) {
-      return withEventLoopHealth({ ready: true, failing: [], uptimeMs }, deps.getEventLoopHealth);
-    }
     if (
       cachedState &&
       !isFutureDateTimestampMs(cachedAt, { nowMs: now }) &&
       now - cachedAt < cacheTtlMs
     ) {
       return withEventLoopHealth({ ...cachedState, uptimeMs }, deps.getEventLoopHealth);
+    }
+    if (deps.getStateDatabaseFailure?.()) {
+      return withEventLoopHealth(
+        { ready: false, failing: ["state-database"], uptimeMs },
+        deps.getEventLoopHealth,
+      );
+    }
+    if (deps.shouldSkipChannelReadiness?.()) {
+      return withEventLoopHealth({ ready: true, failing: [], uptimeMs }, deps.getEventLoopHealth);
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();

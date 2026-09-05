@@ -25,43 +25,24 @@ import {
   validateExplicitMessageAccountSelection,
 } from "../infra/outbound/message-account-selection.js";
 import {
-  isMessageActionSuccessful,
-  resolveMessageSendOutcome,
+  resolveMessageActionMessageId,
+  resolveMessageActionOutcome,
 } from "../infra/outbound/message-action-contracts.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-function extractMessageId(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const record = payload as Record<string, unknown>;
-  const direct = normalizeOptionalString(record.messageId);
-  if (direct) {
-    return direct;
-  }
-  const result = record.result;
-  if (result && typeof result === "object") {
-    const nested = normalizeOptionalString((result as Record<string, unknown>).messageId);
-    if (nested) {
-      return nested;
-    }
-  }
-  return undefined;
-}
-
 function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
-  const messageId = extractMessageId(result.payload);
+  const messageId = resolveMessageActionMessageId(result.payload);
   const sendResult = result.kind === "send" ? result.sendResult : undefined;
-  const sendOutcome = result.kind === "send" ? resolveMessageSendOutcome(sendResult) : undefined;
+  const outcome = resolveMessageActionOutcome(result);
   return {
     ...(result.kind === "broadcast"
-      ? { ok: isMessageActionSuccessful(result) }
-      : sendOutcome && !sendOutcome.ok && !result.dryRun
+      ? { ok: outcome.ok }
+      : !outcome.ok
         ? {
-            ...formatCliJsonFailure(sendOutcome.error),
-            deliveryStatus: sendResult?.deliveryStatus,
-            ...(sendOutcome.sentBeforeError ? { sentBeforeError: true } : {}),
+            ...formatCliJsonFailure(outcome.error),
+            ...(sendResult ? { deliveryStatus: sendResult.deliveryStatus } : {}),
+            ...(outcome.sentBeforeError ? { sentBeforeError: true } : {}),
           }
         : {}),
     action: result.action,

@@ -11,10 +11,7 @@ const normalizeProviderModelIdWithPluginMock = vi.fn();
 const loadPluginManifestRegistryCoreMock = vi.hoisted(() =>
   vi.fn(() => ({ plugins: [], diagnostics: [] })),
 );
-const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
-  configFingerprint: "gateway-session-utils-plugin-runtime-test-empty-plugin-metadata",
-  plugins: [],
-}));
+const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: (params: unknown) =>
@@ -23,7 +20,7 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
 }));
 
 vi.mock("../plugins/manifest-registry.js", async (importOriginal) => ({
@@ -36,6 +33,9 @@ let sessionUtils: typeof import("./session-utils.js");
 describe("gateway session list plugin runtime normalization", () => {
   beforeAll(async () => {
     vi.resetModules();
+    const { createPluginMetadataSnapshotFixture } =
+      await import("../plugins/plugin-metadata.test-support.js");
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(createPluginMetadataSnapshotFixture());
     sessionUtils = await import("./session-utils.js");
   });
 

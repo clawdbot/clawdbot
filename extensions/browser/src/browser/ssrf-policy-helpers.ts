@@ -42,6 +42,22 @@ export function isCdpHostnameTrustedByPolicy(
   return matchesHostnameAllowlist(normalizedHostname, allowedHostnames);
 }
 
+/** Return true when the policy blocklist denies this exact CDP hostname. */
+export function isCdpHostnameBlockedByPolicy(
+  ssrfPolicy: SsrFPolicy | undefined,
+  hostname: string,
+): boolean {
+  const normalizedHostname = normalizeHostname(hostname);
+  const blockedHostnames = (ssrfPolicy?.blockedHostnames ?? [])
+    .map((pattern) => normalizeHostname(pattern))
+    .filter(Boolean);
+  // An empty allowlist matches everything; an empty blocklist must block nothing.
+  if (!normalizedHostname || blockedHostnames.length === 0) {
+    return false;
+  }
+  return matchesHostnameAllowlist(normalizedHostname, blockedHostnames);
+}
+
 /** Returns an SSRF policy restricted to one exact control-plane hostname. */
 export function withExactHostnamePolicy(
   ssrfPolicy: SsrFPolicy | undefined,
