@@ -148,8 +148,10 @@ function expectUpdateFailure(promise: Promise<unknown>, reason: string, details:
 
 function taskRecovery(record: (phase: string) => void = () => {}) {
   return {
+    suspended: Promise.resolve(true),
     beginMutation: vi.fn(() => record("mutation")),
     restore: vi.fn(async () => record("restore")),
+    handoff: vi.fn(),
     complete: vi.fn(async () => record("complete")),
     interrupted: () => false,
   };
@@ -821,7 +823,7 @@ describe("successful update finalization ordering", () => {
         expect(mocks.stopService).toHaveBeenCalledTimes(changed ? 1 : 0);
         if (changed) {
           expect(oldRecovery.complete).toHaveBeenCalledOnce();
-          expect(nextRecovery.restore).toHaveBeenCalledWith(true);
+          expect(nextRecovery.restore).toHaveBeenCalledWith(true, expect.any(Function), undefined);
           expect(nextRecovery.complete).toHaveBeenLastCalledWith(outcome !== "unverified");
           expect(windowsEvents.at(-1)).toBe("next-complete");
         }

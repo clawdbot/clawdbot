@@ -8178,7 +8178,7 @@ describe("update-cli", () => {
         {
           phase: "finished",
           status: "failed",
-          reason: "post-install verification",
+          reason: "runtime-verification-failed",
           steps: expect.arrayContaining([
             expect.objectContaining({
               step: "post-install verification",

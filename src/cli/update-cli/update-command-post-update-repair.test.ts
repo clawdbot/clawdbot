@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -48,7 +49,12 @@ vi.mock("./shared.js", async (importOriginal) => ({
 }));
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
-  readConfigFileSnapshot: async () => ({ valid: true, config: {} }),
+  readConfigFileSnapshot: async () => ({
+    valid: true,
+    exists: false,
+    config: asRuntimeConfig({}),
+    sourceConfig: asResolvedSourceConfig({}),
+  }),
 }));
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
@@ -250,6 +256,34 @@ describe("post-activation repair after rollback refusal or failure", () => {
     const run = params.opts.run!;
     const completeRecovery = vi.fn(async () => {});
     if (rollback === "restored") {
+      const candidateRoot = await fs.realpath(dirs.make("repair-candidate-runtime-"));
+      const previousRoot = await fs.realpath(dirs.make("repair-previous-runtime-"));
+      for (const [root, version] of [
+        [candidateRoot, "2026.9.3"],
+        [previousRoot, "2026.9.1"],
+      ] as const) {
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ type: "module", version }),
+        );
+      }
+      const worker = "dist/infra/update-candidate-state.worker.js";
+      await fs.mkdir(path.dirname(path.join(candidateRoot, worker)), { recursive: true });
+      await fs.writeFile(
+        path.join(candidateRoot, worker),
+        `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
+      );
+      params.result.root = candidateRoot;
+      params.root = previousRoot;
+      params.preManagedServiceStop = {
+        ...params.preManagedServiceStop!,
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: candidateRoot,
+          fingerprint: "fixture",
+          refreshDefinition: false,
+        },
+      };
       const actual = await vi.importActual<typeof import("./update-command-rollback.js")>(
         "./update-command-rollback.js",
       );
@@ -265,7 +299,6 @@ describe("post-activation repair after rollback refusal or failure", () => {
           interrupted: () => false,
         },
       });
-      params.root = "/previous";
       params.rollbackBlockedReason = undefined;
       params.previousVerified = true;
       params.schemaVersions = await readUpdateStateSchemaVersions({
@@ -280,15 +313,16 @@ describe("post-activation repair after rollback refusal or failure", () => {
           mocks.version = "2026.9.1";
           return {
             name: "package rollback",
+            activePackageRoot: previousRoot,
             command: "restore",
-            cwd: "/previous",
+            cwd: previousRoot,
             exitCode: 0,
             durationMs: 1,
           };
         },
       };
     }
-    const activeRoot = rollback === "restored" ? "/previous" : "/candidate";
+    const activeRoot = rollback === "restored" ? params.root : params.result.root;
     mocks.repair.mockImplementation(async (repair: UpdateRepairParams) => {
       expect(repair.context.phase).toBe("verifying");
       expect(repair.target).toMatchObject({
@@ -332,17 +366,23 @@ describe("post-activation repair after rollback refusal or failure", () => {
     if (repaired && rollback !== "restored") {
       await expect(finishUpdate(params)).resolves.toMatchObject({ status: "ok" });
     } else {
+      const reason =
+        rollback === "blocked"
+          ? "state-migrated-no-rollback"
+          : rollback === "failed"
+            ? "source-rollback-failed"
+            : "readyz-unhealthy";
       await expect(finishUpdate(params)).rejects.toMatchObject({
         exitCode: 1,
         result: {
           status: "error",
-          reason: "readyz-unhealthy",
+          reason,
           root: activeRoot,
           after: { version: rollback === "restored" ? "2026.9.1" : "2026.9.3" },
         },
       });
     }
-    expect(mocks.converge).toHaveBeenCalledOnce();
+    expect(mocks.converge).toHaveBeenCalledTimes(repaired && rollback !== "restored" ? 1 : 0);
     expect(mocks.repair).toHaveBeenCalledOnce();
     if (rollback === "restored") {
       expect(completeRecovery).toHaveBeenCalled();
@@ -413,7 +453,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
         return { status: "aborted", attempts: [], finalValidation: initial, reason: fence };
       });
       await expect(finishUpdate(params)).rejects.toMatchObject({
-        result: { status: "error", reason: "readyz-unhealthy" },
+        result: { status: "error", reason: "state-migrated-no-rollback" },
       });
       expect(mocks.restartCommand).not.toHaveBeenCalled();
       expect(mocks.restart).toHaveBeenCalledOnce();

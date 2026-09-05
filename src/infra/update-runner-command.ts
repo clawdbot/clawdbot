@@ -76,6 +76,8 @@ export function normalizeFallbackFailureReason(
       return "global-install-failed";
     case "openclaw doctor":
       return "doctor-failed";
+    case "post-install verification":
+      return "runtime-verification-failed";
     case "ui:build (post-doctor repair)":
       return "ui-build-failed";
     default:

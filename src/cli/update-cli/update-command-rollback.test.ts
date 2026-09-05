@@ -256,7 +256,7 @@ describe("verified package rollback", () => {
           result: {
             status: "error",
             mode: "npm",
-            root: previousRoot,
+            root: candidateRoot,
             reason: "doctor-failed",
             before: { version: "2026.9.1" },
             after: { version: "2026.9.3" },
