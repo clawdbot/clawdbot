@@ -471,7 +471,11 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       const description = (
         row.body?.trim() || "Published by the Gateway after authoritative workspace reconciliation."
       )
-        .replace(/(?:\s*---\s*\n\[View the OpenClaw team session\]\([^\r\n)]*\)\s*)+$/u, "")
+        // The trailing `\s*` used to sit inside the repeated group, so whitespace
+        // between two footers had two owners and the group's split backtracked
+        // exponentially: a 1 KB body took 23 s. Hoisting it out of the group
+        // leaves one owner and accepts the same language.
+        .replace(/(?:\s*---\s*\n\[View the OpenClaw team session\]\([^\r\n)]*\))+\s*$/u, "")
         .replace(
           /(?:^|\n\n)## Worked on by\n\n(?:- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\n)*- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?=\n\n|$)/gu,
           "",
