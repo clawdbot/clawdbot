@@ -1,9 +1,6 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  collectActiveSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -21,11 +18,16 @@ import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-s
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
-  collectSessionStateIdsForEntry,
   planSessionStateDeleteIfUnreferenced,
   readReferencedSessionIds,
 } from "./session-accessor.sqlite-lifecycle-state.js";
-import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import {
+  collectAdmissionProtectedSessionIds,
+  finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
+  planOldestCapacityEligibleSqliteLiveEntryRemoval,
+  reclaimSqliteLiveSessionEntriesToHighWater,
+  refreshSqliteSessionPlannerStatisticsBestEffort,
+} from "./session-accessor.sqlite-maintenance.js";
 import {
   createHistoryEvictionReclamationPlan,
   runExclusiveSqliteSessionReclamation,
@@ -45,7 +47,6 @@ import {
   reclaimSqliteFreePages,
 } from "./session-history-archive-pruning.js";
 import { deleteDiskBudgetArchivedSessionEntry } from "./session-history-entry-eviction.runtime.js";
-import { normalizeStoreSessionKey } from "./store-entry.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   isSessionEntryDiskBudgetEvictable,
@@ -53,6 +54,8 @@ import {
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
+
+export { collectAdmissionProtectedSessionIds } from "./session-accessor.sqlite-maintenance.js";
 
 type SessionHistoryDiskBudgetParams = {
   agentId?: string;
@@ -125,10 +128,23 @@ export async function inspectSqliteSessionHistoryDiskBudget(
     limit: 1,
     preserveRecentMs: params.maintenance.preserveRecentMs,
   });
-  return {
-    diskBudget,
-    wouldMutate: candidates.length > 0 || archivedCandidates.candidates.length > 0,
-  };
+  if (candidates.length > 0 || archivedCandidates.candidates.length > 0) {
+    return { diskBudget, wouldMutate: true };
+  }
+  if (highWaterBytes <= 0 || maxDiskBytes <= 0) {
+    return { diskBudget, wouldMutate: false };
+  }
+  if (usage.totalBytes - usage.databaseWalBytes <= highWaterBytes) {
+    return { diskBudget, wouldMutate: false };
+  }
+  const database = openOpenClawAgentDatabase(databaseOptions);
+  const livePlan = planOldestCapacityEligibleSqliteLiveEntryRemoval({
+    archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+    database,
+    storePath: params.storePath,
+    preserveRecentMs: params.maintenance.preserveRecentMs,
+  });
+  return { diskBudget, wouldMutate: livePlan.entryRemovals.length > 0 };
 }
 
 function collectProtectedHistoricalSessionIds(params: {
@@ -223,58 +239,6 @@ function collectCandidateProtectedHistoricalSessionIds(params: {
   const protectedSessionIds = collectProtectedHistoricalSessionIds(params);
   if (isRecentHistoricalSessionId(params)) {
     protectedSessionIds.add(params.sessionId);
-  }
-  return protectedSessionIds;
-}
-
-/** Session ids owned by in-flight work admissions, without live-reference protection. */
-export function collectAdmissionProtectedSessionIds(params: {
-  database: OpenClawAgentDatabase;
-  storePath: string;
-}): Set<string> {
-  const protectedSessionIds = new Set<string>();
-  const admissionIdentities =
-    collectActiveSessionWorkAdmissions().get(params.storePath) ?? new Set<string>();
-  if (admissionIdentities.size === 0) {
-    return protectedSessionIds;
-  }
-
-  // Admissions may carry either the backing session id or its live session key. Protect both,
-  // then resolve admitted keys through their entries so cleanup cannot reclaim active work.
-  for (const identity of admissionIdentities) {
-    protectedSessionIds.add(identity);
-  }
-  const normalizedAdmissionKeys = new Set(
-    [...admissionIdentities].map((identity) => normalizeStoreSessionKey(identity)),
-  );
-  const db = getSessionKysely(params.database.db);
-  const rows = executeSqliteQuerySync(
-    params.database.db,
-    db.selectFrom("session_nodes").select(["entry_json", "current_session_id", "session_key"]),
-  ).rows;
-  for (const row of rows) {
-    if (!normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
-      continue;
-    }
-    protectedSessionIds.add(row.current_session_id);
-    const entry = parseSessionEntryJson(row);
-    if (entry) {
-      for (const sessionId of collectSessionStateIdsForEntry(entry)) {
-        protectedSessionIds.add(sessionId);
-      }
-    }
-  }
-  // Key-scoped admissions must survive rollover: an in-flight run admitted by
-  // key may still write to a generation the entry no longer references, so
-  // every generation of an admitted key stays off-limits.
-  const generationRows = executeSqliteQuerySync(
-    params.database.db,
-    db.selectFrom("session_windows").select(["session_id", "session_key"]),
-  ).rows;
-  for (const row of generationRows) {
-    if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
-      protectedSessionIds.add(row.session_id);
-    }
   }
   return protectedSessionIds;
 }
@@ -630,6 +594,36 @@ async function enforceSessionHistoryMaintenanceSerialized(
       removedFiles += repruned.removedFiles;
       usage = repruned.usage;
     }
+  }
+
+  // Historical generations first. Idle durable live nodes are last-resort
+  // capacity victims so maxDiskBytes still bounds the store. Skip when the
+  // high-water mark is not a usable stop condition (#119422 / #119909).
+  if (highWaterBytes > 0 && maxDiskBytes > 0) {
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const live = await reclaimSqliteLiveSessionEntriesToHighWater({
+      archiveDirectory,
+      database,
+      finalizePlans: finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
+      highWaterBytes,
+      pruneArchivesToHighWater: async () =>
+        await runExclusiveSqliteSessionWrite(resolved, async () =>
+          pruneAllSessionTranscriptArchivesToHighWater({
+            archiveDirectory,
+            databaseOptions,
+            highWaterBytes,
+            storePath: params.storePath,
+          }),
+        ),
+      reclaimFreePages: () => reclaimSqliteFreePages(databaseOptions),
+      resolved,
+      storePath: params.storePath,
+      usage,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
+    });
+    removedEntries += live.removedEntries;
+    removedFiles += live.removedFiles;
+    usage = live.usage;
   }
 
   if (usage.totalBytes > highWaterBytes) {

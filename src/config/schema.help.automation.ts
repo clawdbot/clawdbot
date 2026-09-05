@@ -81,9 +81,9 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.maintenance.archiveDashboardAfter":
     "Archives inactive dashboard sessions after this duration (for example `7d`) so they remain available without crowding the active session list. Set `false` or `0` to disable automatic dashboard archiving.",
   "session.maintenance.maxEntries":
-    "Caps total session entry count retained in the store to prevent unbounded growth over time. Protected entries count toward the limit but are never automatically removed, so the store can remain above the cap when protection alone exceeds it. Use lower limits for constrained environments, or higher limits when longer history is required.",
+    "Caps total live session entry count (default 500). Always-protected entries (primary main/global, archived, pinned, model-locked, and active/admitted work) count toward the cap but are never automatically removed, so the store can remain above the cap when those rows alone exceed it. Durable conversations are evictable oldest-first under this cap. Use lower limits for constrained environments, or higher limits when longer history is required.",
   "session.maintenance.preserveRecent":
-    "Protects interactive sessions active within this duration (for example `7d`) from automatic age, count, and disk-budget history eviction. Unset or `false` keeps the normal oldest-first policy. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent rows remain eligible for bounded cleanup.",
+    "Protects interactive sessions active within this duration (for example `7d`) from automatic age pruning, `maxEntries` caps, live-node `maxDiskBytes` eviction, and SQLite historical-generation disk cleanup. Unset or `false` keeps the normal oldest-first policy. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent rows remain eligible for bounded cleanup.",
   "session.maintenance.resetArchiveRetention":
     "Age-based retention for archived transcripts (`*.reset.<timestamp>` and `*.deleted.<timestamp>`). Defaults to keeping archives until the disk budget evicts them oldest-first; set a duration (for example `30d`) to opt into wall-clock deletion, or `false` to disable it explicitly.",
   "session.maintenance.maxDiskBytes":

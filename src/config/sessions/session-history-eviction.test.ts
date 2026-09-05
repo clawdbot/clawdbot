@@ -41,6 +41,7 @@ import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
+  patchSessionEntryCore,
   replaceSessionEntry,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
@@ -51,6 +52,7 @@ import {
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 describe("SQLite historical session disk budget", () => {
   let testState: OpenClawTestState;
@@ -560,6 +562,95 @@ describe("SQLite historical session disk budget", () => {
     }
   });
 
+  it("does not live-evict a node when the admission identity is a prior generation", async () => {
+    const sessionKey = "agent:main:history-protection";
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId: "admitted-history", updatedAt: 1 },
+    );
+    await appendTranscriptMessage(
+      { sessionId: "admitted-history", sessionKey, storePath },
+      { message: { role: "user", content: "admitted " + "a".repeat(64 * 1024) } },
+    );
+    await resetSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      buildNextEntry: () => ({ sessionId: "live-history", updatedAt: 2 }),
+    });
+    await appendTranscriptMessage(
+      { sessionId: "live-history", sessionKey, storePath },
+      { message: { role: "user", content: "live keep" } },
+    );
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["admitted-history"],
+      assertAllowed: () => {},
+    });
+    try {
+      settlePhysicalUsage();
+      expect(countHistoricalSessionIds()).toBe(1);
+      const before = await measureSessionPhysicalDiskUsage(storePath);
+      const highWaterBytes = Math.max(1, before.totalBytes - 32 * 1024);
+      const result = await enforceSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "enforce",
+        maintenance: {
+          maxDiskBytes: before.totalBytes - 1,
+          highWaterBytes,
+        },
+      });
+
+      expect(highWaterBytes).toBeGreaterThan(0);
+      expect(result?.removedEntries ?? 0).toBe(0);
+      expect(sessionExists("admitted-history")).toBe(true);
+      expect(sessionExists("live-history")).toBe(true);
+      expect(sessionNodeExists(sessionKey)).toBe(true);
+    } finally {
+      admission.release();
+    }
+  });
+
+  it("does not cap a live node when the admission identity is a prior generation", async () => {
+    const sessionKey = "agent:main:history-protection";
+    const fillerKey = "agent:main:history-filler";
+    await replaceSessionEntry(
+      { sessionKey: fillerKey, storePath },
+      { sessionId: "filler-live", updatedAt: 1 },
+    );
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId: "admitted-history", updatedAt: 2 },
+    );
+    await appendTranscriptMessage(
+      { sessionId: "admitted-history", sessionKey, storePath },
+      { message: { role: "user", content: "admitted" } },
+    );
+    await resetSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      buildNextEntry: () => ({ sessionId: "live-history", updatedAt: 3 }),
+    });
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["admitted-history"],
+      assertAllowed: () => {},
+    });
+    try {
+      await patchSessionEntryCore({ sessionKey: fillerKey, storePath }, () => ({ updatedAt: 4 }), {
+        maintenanceConfig: resolveMaintenanceConfigFromInput({
+          maxEntries: 1,
+          mode: "enforce",
+          pruneAfter: "365d",
+        }),
+      });
+      expect(sessionExists("admitted-history")).toBe(true);
+      expect(sessionExists("live-history")).toBe(true);
+      expect(sessionNodeExists(sessionKey)).toBe(true);
+    } finally {
+      admission.release();
+    }
+  });
+
   it("preserves every generation of a recently active session under physical pressure", async () => {
     const now = Date.now();
     const dayMs = 24 * 60 * 60 * 1000;
@@ -767,6 +858,32 @@ describe("SQLite historical session disk budget", () => {
         db.selectFrom("session_windows").select("session_id").where("session_id", "=", sessionId),
       ).rows.length === 1
     );
+  }
+
+  function sessionNodeExists(sessionKey: string): boolean {
+    const owner = database();
+    const db = getSessionKysely(owner.db);
+    return (
+      executeSqliteQuerySync(
+        owner.db,
+        db.selectFrom("session_nodes").select("session_key").where("session_key", "=", sessionKey),
+      ).rows.length === 1
+    );
+  }
+
+  function countHistoricalSessionIds(): number {
+    const owner = database();
+    const db = getSessionKysely(owner.db);
+    const liveIds = new Set(
+      executeSqliteQuerySync(
+        owner.db,
+        db.selectFrom("session_nodes").select("current_session_id"),
+      ).rows.map((row) => row.current_session_id),
+    );
+    return executeSqliteQuerySync(
+      owner.db,
+      db.selectFrom("session_windows").select("session_id"),
+    ).rows.filter((row) => !liveIds.has(row.session_id)).length;
   }
 
   function readArchiveNames(sessionId: string): string[] {
