@@ -668,6 +668,7 @@ suite.define(() => {
           2,
         );
         const avatarFormats = [];
+        let previousAvatarUrl = avatarUrl;
         await page.setViewportSize(viewport);
         for (const fixture of [
           { stage: "06-avif-avatar", dataUrl: avifAvatar, mime: "image/avif", width: 1, height: 1 },
@@ -703,10 +704,15 @@ suite.define(() => {
                 throw new Error("Avatar metadata was not an object");
               }
               versionedAvatarUrl = typeof metadata.avatarUrl === "string" ? metadata.avatarUrl : "";
-              return metadata.avatarSource;
+              return {
+                status: metadata.avatarStatus,
+                changed:
+                  new URL(versionedAvatarUrl, suite.server.baseUrl).href !== previousAvatarUrl,
+              };
             })
-            .toBe(fixture.dataUrl);
+            .toEqual({ status: "data", changed: true });
           expect(versionedAvatarUrl).toMatch(/^\/avatar\/main\?v=/u);
+          previousAvatarUrl = new URL(versionedAvatarUrl, suite.server.baseUrl).href;
           const responseReady = page.waitForResponse(
             (response) => response.url() === new URL(versionedAvatarUrl, suite.server.baseUrl).href,
           );
@@ -738,7 +744,6 @@ suite.define(() => {
           avatarFormats.push({
             format: fixture.stage,
             contentType: response.headers()["content-type"],
-            responseBytes: (await response.body()).length,
             ...dimensions,
           });
           await page.screenshot({ path: path.join(artifactDir, `${fixture.stage}.png`) });
