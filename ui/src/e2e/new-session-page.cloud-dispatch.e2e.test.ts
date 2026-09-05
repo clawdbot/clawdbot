@@ -112,6 +112,7 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    await page.clock.install();
     const runtimeLoad = createDeferred();
     let runtimeRequested = false;
     await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
@@ -380,10 +381,11 @@ suite.define(() => {
         await page.keyboard.press("Escape");
       }
 
-      await page.clock.install();
-      await gateway.setMethodResponse("environments.list", {
-        __mockError: { code: "UNAVAILABLE", message: "profile catalog remains unavailable" },
-      });
+      const profileCatalogError = {
+        code: "UNAVAILABLE",
+        message: "profile catalog remains unavailable",
+      };
+      await gateway.setMethodResponse("environments.list", { __mockError: profileCatalogError });
       await gateway.deferNext("environments.list");
       const requestsBeforePersistentFailure = (await gateway.getRequests("environments.list"))
         .length;
@@ -398,15 +400,19 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startButton]),
         );
       }
-      await gateway.rejectDeferred("environments.list", {
-        code: "UNAVAILABLE",
-        message: "profile catalog remains unavailable",
-      });
+      await gateway.rejectDeferred("environments.list", profileCatalogError);
 
+      // A recorded request is not a processed failure. Let the page settle and
+      // schedule its next retry before advancing the clock.
+      await expect.poll(() => startButton.isDisabled()).toBe(false);
       for (const delayMs of CLOUD_PROFILE_RETRY_DELAYS_MS) {
+        await gateway.deferNext("environments.list");
         const requestsBeforeRetry = (await gateway.getRequests("environments.list")).length;
         await page.clock.fastForward(delayMs + 1);
         await gateway.waitForRequest("environments.list", { after: requestsBeforeRetry });
+        await expect.poll(() => startButton.isDisabled()).toBe(true);
+        await gateway.rejectDeferred("environments.list", profileCatalogError);
+        await expect.poll(() => startButton.isDisabled()).toBe(false);
       }
       await page.clock.resume();
       expect(await gateway.getRequests("environments.list")).toHaveLength(
