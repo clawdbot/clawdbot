@@ -87,6 +87,7 @@ import {
 } from "./pending-final-delivery.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -151,7 +152,7 @@ function loadCommandsCoreRuntime() {
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {
-  const message = ctx.commandText;
+  const message = ctx.agentText;
   if (!message) {
     return false;
   }
@@ -570,6 +571,7 @@ export async function getReplyFromConfig(
         agentId,
         sessionKey: agentSessionKey,
         workspaceDir,
+        abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
   }
@@ -917,6 +919,15 @@ export async function getReplyFromConfig(
     model = resolvedChannelModelOverride.ref.model;
   }
 
+  const conversation =
+    internalResolvedOpts?.replyConversation ??
+    prepareReplyConversation({
+      ctx: sessionCtx,
+      sessionEntry: sessionStore[sessionKey] ?? sessionEntry,
+      groupResolution,
+      isHeartbeat: opts?.isHeartbeat,
+    });
+
   if (
     shouldUseReplyFastDirectiveExecution({
       isFastTestBootstrap: useFastTestRuntime,
@@ -959,6 +970,7 @@ export async function getReplyFromConfig(
       runPreparedReply({
         ctx,
         sessionCtx,
+        conversation,
         cfg,
         agentId,
         agentDir,
@@ -1030,7 +1042,7 @@ export async function getReplyFromConfig(
       sessionKey,
       storePath,
       sessionScope,
-      groupResolution,
+      conversation,
       isGroup,
       triggerBodyNormalized,
       resetTriggered,
@@ -1279,6 +1291,7 @@ export async function getReplyFromConfig(
         agentId,
         sessionKey,
         workspaceDir,
+        abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
     stagedAttachmentPaths = stageResult.staged;
@@ -1312,6 +1325,7 @@ export async function getReplyFromConfig(
     runPreparedReply({
       ctx,
       sessionCtx,
+      conversation,
       cfg,
       agentId,
       agentDir,

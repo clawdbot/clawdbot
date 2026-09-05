@@ -16,6 +16,7 @@ import {
 } from "../../state/openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { sessionEntryMetadataJson } from "./session-accessor.sqlite-status.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
@@ -147,13 +148,14 @@ export function scanCanonicalSqliteSessionEntries(
       .select([
         "session_nodes.session_key",
         "session_nodes.current_session_id",
-        "session_nodes.entry_json",
         "session_nodes.entry_valid",
         "session_nodes.fork_source_session_key",
         "session_nodes.parent_session_key",
         "session_nodes.spawned_by",
         "retained_window.session_id as retained_window_id",
       ])
+      // Key validation needs metadata; Doctor visitors still own complete saved entries.
+      .select(visit ? "session_nodes.entry_json" : sessionEntryMetadataJson)
       .orderBy("session_nodes.session_key"),
   )) {
     if (
@@ -163,12 +165,7 @@ export function scanCanonicalSqliteSessionEntries(
     ) {
       continue;
     }
-    if (row.entry_valid !== 1) {
-      throw canonicalSessionKeyMigrationRequiredError(
-        `invalid persisted session row requires repair for ${row.session_key}`,
-      );
-    }
-    const record = parseSqliteSessionEntryRecord(row);
+    const record = row.entry_valid === 1 ? parseSqliteSessionEntryRecord(row) : null;
     if (!record) {
       throw canonicalSessionKeyMigrationRequiredError(
         `invalid persisted session row requires repair for ${row.session_key}`,

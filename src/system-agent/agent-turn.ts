@@ -9,7 +9,7 @@ import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { CliSessionBinding } from "../config/sessions.js";
-import { buildAgentMainSessionKey } from "../routing/session-key.js";
+import { buildAgentMainSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
@@ -312,9 +312,15 @@ async function runSystemAgentTurnWithDeps(
     SYSTEM_AGENT_ID,
     "system-agent.turn",
   );
+  // Conversation identity owns runner continuity; the main key remains policy-only.
+  // Sharing the runner key lets another conversation replace its generation.
+  const policySessionKey = buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID });
   const shared = {
     sessionId: params.session.sessionId,
-    sessionKey: buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID }),
+    sessionKey: toAgentStoreSessionKey({
+      agentId: SYSTEM_AGENT_ID,
+      requestKey: params.session.sessionId,
+    }),
     agentId: SYSTEM_AGENT_ID,
     trigger: "manual" as const,
     sessionFile: `in-memory:${params.session.sessionId}`,
@@ -372,6 +378,7 @@ async function runSystemAgentTurnWithDeps(
           systemAgentTool,
           ...(cliToolAvailability ? { cliToolAvailability } : {}),
           ...(previousBinding ? { cliSessionBinding: previousBinding } : {}),
+          runtimePolicySessionKey: policySessionKey,
           disableCliLiveSession: true,
           cleanupCliLiveSessionOnRunEnd: true,
         })) as EmbeddedRunResult;
@@ -406,6 +413,7 @@ async function runSystemAgentTurnWithDeps(
         model: plan.model,
         agentDir: plan.agentDir,
         agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride,
+        sandboxSessionKey: policySessionKey,
         ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
         ...(plan.authProfileId
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }

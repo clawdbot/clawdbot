@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import {
   connectOk,
   connectReq,
@@ -382,6 +383,46 @@ describe("authenticated operator request starts", () => {
       }
     },
   );
+
+  it("compresses large frames for peers that offer permessage-deflate and accepts compressed post-auth frames above the preauth cap", async () => {
+    // Regression: the deflate extension keeps its own copy of the preauth maxPayload,
+    // so without the extension-aware handoff an authenticated compressed request above
+    // 64 KiB closed the socket with 1009 even though the receiver limit was raised.
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["test.echo"] = async ({ req, respond }) => {
+      respond(true, { echoed: (req.params as { text: string }).text });
+    };
+    setTestPluginRegistry(registry);
+    const token = "gateway-compression-test-token";
+    const port = await getGatewayTestPort();
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
+    let ws: WebSocket | undefined;
+    try {
+      server = await startTestGatewayServer(port, {
+        auth: { mode: "token", token },
+        bind: "loopback",
+        controlUiEnabled: false,
+      });
+      ws = await openOperatorSocket(port, token);
+      expect(ws.extensions).toContain("permessage-deflate");
+      const text = "x".repeat(MAX_PREAUTH_PAYLOAD_BYTES * 2);
+      const response = onceMessage<{
+        type: "res";
+        id: string;
+        ok: boolean;
+        payload: { echoed: string };
+      }>(ws, (value) => value.type === "res" && value.id === "big");
+      ws.send(JSON.stringify({ type: "req", id: "big", method: "test.echo", params: { text } }));
+      await expect(response).resolves.toMatchObject({ ok: true, payload: { echoed: text } });
+    } finally {
+      ws?.terminate();
+      try {
+        await server?.close();
+      } finally {
+        resetTestPluginRegistry();
+      }
+    }
+  });
 
   it("rejects an operator handshake visibly when the receiver handoff field is not writable", async () => {
     const token = "gateway-receiver-contract-test-token";

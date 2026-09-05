@@ -311,7 +311,7 @@ export function activateCodexAttemptTurn(
     }
   };
   const assertSteeringActive = () => {
-    params.hostCapabilities.assertActive();
+    connection.assertCurrent();
     runAbortController.signal.throwIfAborted();
     if (state.completed || state.terminalTurnNotificationQueued) {
       throw new Error("codex app-server turn is no longer accepting steering");

@@ -44,6 +44,7 @@ export type NodePairingRequestInput = NodeDeclaredSurface & {
 /** Pending node pairing request awaiting operator approval. */
 export type NodePairingPendingRequest = NodePairingRequestInput & {
   requestId: string;
+  requiredApproveScopes: NodeApprovalScope[];
   silent?: boolean;
   ts: number;
 };
@@ -71,10 +72,6 @@ export type RequestNodePairingResult = {
   superseded?: NodePairingSupersededRequest[];
 };
 
-type NodePairingPendingEntry = NodePairingPendingRequest & {
-  requiredApproveScopes: NodeApprovalScope[];
-};
-
 /** Approved node record projected from the device's node surface (no auth material). */
 export type PairedDeviceNode = NodeDeclaredSurface & {
   bins?: string[];
@@ -89,7 +86,7 @@ export type PairedDeviceNode = NodeDeclaredSurface & {
 };
 
 type NodePairingList = {
-  pending: NodePairingPendingEntry[];
+  pending: NodePairingPendingRequest[];
   paired: PairedDeviceNode[];
 };
 
@@ -131,6 +128,7 @@ function toPublicPendingRequest(
     modelIdentifier: pending.modelIdentifier,
     caps: pending.caps,
     commands: pending.commands,
+    requiredApproveScopes: resolveNodePairApprovalScopes(pending.commands ?? []),
     permissions: pending.permissions,
     remoteIp: pending.remoteIp ?? device.remoteIp,
     silent: pending.silent,
@@ -146,16 +144,6 @@ function toPendingSnapshot(
     requestId: pending.requestId,
     nodeId: device.deviceId,
     ...(pending.revision ? { revision: pending.revision } : {}),
-  };
-}
-
-function toPendingEntry(
-  device: PairedDevice,
-  pending: PairedDevicePendingNodeSurface,
-): NodePairingPendingEntry {
-  return {
-    ...toPublicPendingRequest(device, pending),
-    requiredApproveScopes: resolveNodePairApprovalScopes(pending.commands ?? []),
   };
 }
 
@@ -364,11 +352,11 @@ export function projectNodePairing(
   pairedDevices: readonly PairedDevice[],
   options?: { includePairingGeneration?: boolean },
 ): NodePairingListWithGeneration {
-  const pending: NodePairingPendingEntry[] = [];
+  const pending: NodePairingPendingRequest[] = [];
   const paired: PairedDeviceNode[] = [];
   for (const device of pairedDevices) {
     if (device.pendingNodeSurface) {
-      pending.push(toPendingEntry(device, device.pendingNodeSurface));
+      pending.push(toPublicPendingRequest(device, device.pendingNodeSurface));
     }
     const node = toPairedNode(device, options);
     if (node) {

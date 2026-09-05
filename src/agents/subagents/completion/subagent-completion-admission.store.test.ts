@@ -6,8 +6,10 @@ import { recoverPendingSessionDeliveries } from "../../../infra/session-delivery
 import {
   moveSessionDeliveryToFailed,
   prepareClaimedSessionDelivery,
+  releaseSessionDeliveryClaim,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
+  type QueuedSessionDelivery,
 } from "../../../infra/session-delivery-queue-storage.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import {
@@ -502,7 +504,7 @@ describe("atomic subagent completion admission store", () => {
     );
   });
 
-  it("keeps canonical owner payload through failure and clears it after redrive success", async () => {
+  it("recovers canonical completion guidance after restart and clears payload after redrive success", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
       closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase();
@@ -523,6 +525,13 @@ describe("atomic subagent completion admission store", () => {
         message: "placeholder",
         messageId: "completion-owner-state",
         idempotencyKey: "completion-owner-state",
+        route: {
+          channel: "discord",
+          to: "channel:requester",
+          accountId: "primary",
+          chatType: "channel" as const,
+        },
+        expectedMediaUrls: ["https://example.com/result.png"],
       };
 
       const first = admitCorrelatedSubagentSessionDelivery({
@@ -573,7 +582,52 @@ describe("atomic subagent completion admission store", () => {
         retainOnFailure: true,
       });
 
-      await settleCorrelatedSubagentDelivery(secondEntry, "recovered");
+      await releaseSessionDeliveryClaim(second.id);
+      resetTaskRegistryForTests({ persist: false });
+      subagentRuns.clear();
+      closeOpenClawStateDatabaseForTest();
+      database = openOpenClawStateDatabase();
+      for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
+        subagentRuns.set(runId, entry);
+      }
+      ensureTaskRegistryReady();
+
+      const delivered: QueuedSessionDelivery[] = [];
+      const deliver = vi.fn(async (entry: QueuedSessionDelivery) => {
+        delivered.push(resolveCorrelatedSubagentDelivery(entry));
+      });
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const onSettled = vi.fn(settleCorrelatedSubagentDelivery);
+      await expect(
+        recoverPendingSessionDeliveries({ deliver, log, onSettled }),
+      ).resolves.toMatchObject({ recovered: 2, failed: 0 });
+      const recovered = delivered.find((entry) => entry.id === second.id);
+      expect(recovered).toMatchObject({
+        kind: "agentTurn",
+        sessionKey: payload.sessionKey,
+        route: payload.route,
+        expectedMediaUrls: payload.expectedMediaUrls,
+        message: expect.stringContaining("canonical result"),
+      });
+      if (recovered?.kind !== "agentTurn" || secondEntry.kind !== "agentTurn") {
+        throw new Error("correlated completion changed queue entry kind");
+      }
+      for (const message of [recovered.message, secondEntry.message]) {
+        expect(message).toContain("This completion ends one child run");
+        expect(message).toContain("Compare the result with the requested outcome");
+        expect(message).toContain("in-scope fixable blockers require continued work");
+        expect(message).toContain("new user authority or an unavailable external decision");
+      }
+      await expect(
+        recoverPendingSessionDeliveries({ deliver, log, onSettled }),
+      ).resolves.toMatchObject({ recovered: 0 });
+      expect(delivered.filter((entry) => entry.id === second.id)).toHaveLength(1);
+      expect(onSettled.mock.calls.filter(([entry]) => entry.id === second.id)).toHaveLength(1);
+      expect(
+        database.db
+          .prepare("SELECT status FROM delivery_queue_entries WHERE id = ?")
+          .get(second.id),
+      ).toEqual({ status: "completed" });
       expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
         status: "delivered",
         queueId: undefined,

@@ -130,7 +130,7 @@ afterEach(async () => {
   getPluginRuntimeGatewayRequestScopeMock.mockReset();
 });
 
-describe.sequential("local Gateway extension relay wakeup", () => {
+describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
   it.each([
     { name: "disabled Browser", enabled: false, driver: "extension" as const },
     { name: "no extension profiles", enabled: true, driver: "openclaw" as const },

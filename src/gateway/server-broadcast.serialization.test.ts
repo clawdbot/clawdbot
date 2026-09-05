@@ -22,6 +22,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 const warnSpy = vi.hoisted(() => vi.fn());
@@ -81,7 +82,9 @@ describe("broadcast serialization failures", () => {
   it("delivers public suspension state to connected operators without read scope", () => {
     const peer = makeClient("suspension-viewer");
     peer.client.connect.scopes = [];
-    const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+    });
     broadcast("gateway.suspension", { phase: "prepared" });
     expect(peer.socket.send).toHaveBeenCalledOnce();
     expect(JSON.parse(peer.socket.send.mock.calls[0]![0])).toMatchObject({
@@ -94,7 +97,9 @@ describe("broadcast serialization failures", () => {
 
   it("never sends raw presence when its owner projection is missing", () => {
     const peer = makeClient("unprepared");
-    const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+    });
     warnSpy.mockClear();
     broadcast("presence", {
       presence: [{ text: "watcher", ts: 1, watchedSessions: ["agent:main:hidden"] }],
@@ -112,7 +117,7 @@ describe("broadcast serialization failures", () => {
   ])("skips $state sockets without disrupting healthy broadcast sequences", ({ readyState }) => {
     const retired = makeClient("retired");
     const healthy = makeClient("healthy");
-    const clients = new Set([retired.client, healthy.client]);
+    const clients = new GatewayClientRegistry([retired.client, healthy.client]);
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     retired.socket.readyState = readyState;
@@ -154,7 +159,7 @@ describe("broadcast serialization failures", () => {
     const retiredClient = makeRealClient("real-retired", retired.socket);
     const brokenClient = makeRealClient("real-broken", broken.socket);
     const healthyClient = makeRealClient("real-healthy", healthy.socket);
-    const clients = new Set([retiredClient, brokenClient, healthyClient]);
+    const clients = new GatewayClientRegistry([retiredClient, brokenClient, healthyClient]);
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     try {
@@ -210,7 +215,7 @@ describe("broadcast serialization failures", () => {
     warnSpy.mockClear();
     const first = makeClient("first");
     const second = makeClient("second");
-    const clients = new Set([first.client, second.client]);
+    const clients = new GatewayClientRegistry([first.client, second.client]);
     const { broadcast } = createGatewayBroadcaster({ clients });
 
     const circular: Record<string, unknown> = {};
@@ -235,7 +240,9 @@ describe("broadcast serialization failures", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "info" });
     const filtered = makeClient("filtered");
     filtered.client.connect.scopes = [];
-    const { broadcast } = createGatewayBroadcaster({ clients: new Set([filtered.client]) });
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([filtered.client]),
+    });
     let dataReads = 0;
     const payload = {
       runId: "run-1",
@@ -265,7 +272,7 @@ describe("presence recipient projection", () => {
       denied[1]!.client.connect.role = "node";
       denied[2]!.client.connect.scopes = ["operator.pairing"];
       const { broadcast } = createGatewayBroadcaster({
-        clients: new Set([...readers, ...denied].map(({ client }) => client)),
+        clients: new GatewayClientRegistry([...readers, ...denied].map(({ client }) => client)),
       });
       broadcast(event, {});
       for (const peer of readers) {
@@ -288,7 +295,7 @@ describe("presence recipient projection", () => {
     denied[0]!.client.connect.scopes = [];
     denied[1]!.client.connect.role = "node";
     const { broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new Set([...readers, ...denied].map(({ client }) => client)),
+      clients: new GatewayClientRegistry([...readers, ...denied].map(({ client }) => client)),
     });
     const payload = { gatewayInstanceId: "mention-gateway", revision: 1 };
 

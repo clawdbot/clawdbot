@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import type { ReplyPayload } from "../types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -141,6 +145,59 @@ beforeEach(() => {
 });
 
 describe("createFollowupRunner", () => {
+  it("retains its Gateway and drops caller authority through the delivery retry handoff", async () => {
+    const turn = createTurn();
+    const resolveGatewayContext = () => undefined;
+    const otherGatewayContext = () => undefined;
+    const staleAuthority = vi.fn();
+    const observed: unknown[] = [];
+    let retry: ((queued: FollowupRun) => Promise<void>) | undefined;
+    state.admit.mockImplementation(async () => {
+      const scope = getPluginRuntimeGatewayRequestScope();
+      observed.push({
+        resolver: scope?.resolveGatewayContext,
+        authority: scope?.assertNodeExecutionCurrent,
+      });
+      return { kind: "admitted", turn };
+    });
+    state.execute.mockResolvedValue(createRejectedExecution());
+    state.account.mockResolvedValue(undefined);
+    state.deliver
+      .mockResolvedValue(undefined)
+      .mockImplementationOnce(
+        async (
+          params: Parameters<typeof import("./followup-delivery.js").deliverFollowupDecision>[0],
+        ) => {
+          retry = params.runFollowup;
+        },
+      );
+    const run = createFollowupRunner({
+      resolveGatewayContext,
+      typing: createTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        resolveGatewayContext: otherGatewayContext,
+        assertNodeExecutionCurrent: staleAuthority,
+        isWebchatConnect: () => false,
+      },
+      async () => {
+        await run(turn.queued);
+        if (!retry) {
+          throw new Error("expected delivery retry callback");
+        }
+        await retry(turn.queued);
+      },
+    );
+    expect(observed).toEqual([
+      { resolver: resolveGatewayContext, authority: undefined },
+      { resolver: resolveGatewayContext, authority: undefined },
+    ]);
+    expect(state.execute).toHaveBeenCalledTimes(2);
+  });
+
   it("completes lifecycle and both typing signals for an already-aborted item", async () => {
     const typing = createTypingController();
     const controller = new AbortController();

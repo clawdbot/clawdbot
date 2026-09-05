@@ -10,6 +10,9 @@ import type { UpdateRunResult } from "./update-runner.js";
 // restart so the next gateway can report completion or failure.
 /** Metadata needed to route update restart continuation messages. */
 export type UpdateRestartSentinelMeta = {
+  runId?: string;
+  /** Internal helper fact: when the owning service stop was issued. */
+  serviceStoppedAtMs?: number;
   root?: string;
   sessionKey?: string;
   deliveryContext?: {
@@ -71,6 +74,7 @@ export function buildUpdateRestartSentinelPayload(params: {
     ...(continuation ? { continuation } : {}),
     doctorHint: formatDoctorNonInteractiveHint(),
     stats: {
+      ...(meta.runId || result.runId ? { runId: meta.runId ?? result.runId } : {}),
       mode: result.mode,
       ...(meta.root || result.root ? { root: meta.root ?? result.root } : {}),
       ...(meta.handoffId ? { handoffId: meta.handoffId } : {}),

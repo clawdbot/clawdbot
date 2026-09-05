@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -10,6 +10,7 @@ import {
 import {
   activateChatHeaderPanelAction,
   failNextDeviceIdentityMint,
+  focusChatSidePanel,
 } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -114,10 +115,6 @@ async function seedSettings(page: Page, themeMode: "light" | "dark") {
   );
 }
 
-function sidePanel(page: Page): Locator {
-  return page.locator(".sidebar-region__right-runtime .side-panel");
-}
-
 async function openExpandedFilesPanel(page: Page, beforeExpandProof?: string): Promise<void> {
   await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
   await page.locator(".chat-group").first().waitFor();
@@ -125,8 +122,7 @@ async function openExpandedFilesPanel(page: Page, beforeExpandProof?: string): P
   if (beforeExpandProof) {
     await capturePanel(page, beforeExpandProof);
   }
-  await sidePanel(page).getByRole("button", { name: "Expand side panel" }).click();
-  await sidePanel(page).getByRole("button", { name: "Collapse" }).waitFor();
+  await focusChatSidePanel(page);
 }
 
 async function waitForShellLayout(page: Page): Promise<void> {
@@ -142,9 +138,7 @@ async function expectPanelHeaderControlsClearShellChrome(
   page: Page,
   shellChromeExpected: boolean,
 ): Promise<void> {
-  const panelControls = sidePanel(page).locator(
-    ":scope > .side-panel__header :is(button, wa-tab):visible",
-  );
+  const panelControls = page.locator(".chat-pane__actions button:visible");
   const panelCount = await panelControls.count();
   expect(panelCount).toBeGreaterThan(0);
 
@@ -153,47 +147,44 @@ async function expectPanelHeaderControlsClearShellChrome(
       const box = element.getBoundingClientRect();
       return { bottom: box.bottom, left: box.left, right: box.right, top: box.top };
     };
-    const header = document.querySelector(
-      ".sidebar-region__right-runtime .side-panel > .side-panel__header",
-    );
+    const header = document.querySelector(".chat-pane__header");
     if (!header) {
-      throw new Error("Expanded side panel has no header");
+      throw new Error("Focused main panel has no task toolbar");
     }
     const headerRect = rect(header);
     const headerStyle = getComputedStyle(header);
-    const panels = [
-      ...document.querySelectorAll(
-        ".sidebar-region__right-runtime .side-panel > .side-panel__header :is(button, wa-tab):not([hidden])",
-      ),
-    ].map(rect);
+    const panels = [...document.querySelectorAll(".chat-pane__actions button:not([hidden])")]
+      .map(rect)
+      .filter((button) => button.bottom > button.top && button.right > button.left);
     const shells = [
       ...document.querySelectorAll(
         ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-attention--floating) button:not([hidden])",
       ),
     ]
       .map(rect)
-      .filter((shell) => shell.bottom > headerRect.top && shell.top < headerRect.bottom);
+      .filter((shell) => shell.bottom > shell.top && shell.right > shell.left);
     return {
       contentLeft: headerRect.left + Number.parseFloat(headerStyle.paddingLeft),
       contentRight: headerRect.right - Number.parseFloat(headerStyle.paddingRight),
-      direction: headerStyle.direction,
       panels,
       shells,
     };
   });
 
-  const panelLeft = Math.min(...geometry.panels.map((box) => box.left));
   if (shellChromeExpected) {
     expect(geometry.shells.length).toBeGreaterThan(0);
-    const shellRight = Math.max(...geometry.shells.map((box) => box.right));
-    expect(geometry.contentLeft - shellRight).toBeGreaterThanOrEqual(4);
-    expect(geometry.contentLeft - shellRight).toBeLessThanOrEqual(16);
-    expect(panelLeft - shellRight).toBeGreaterThanOrEqual(8);
-    if (geometry.direction !== "rtl") {
-      expect(panelLeft - shellRight).toBeLessThanOrEqual(16);
-    }
   } else {
     expect(geometry.shells).toEqual([]);
+  }
+  for (const panel of geometry.panels) {
+    for (const shell of geometry.shells) {
+      expect(
+        panel.left >= shell.right + 4 ||
+          panel.right <= shell.left - 4 ||
+          panel.top >= shell.bottom + 4 ||
+          panel.bottom <= shell.top - 4,
+      ).toBe(true);
+    }
   }
   expect(
     geometry.panels.every(
@@ -289,7 +280,7 @@ suite.define(() => {
       proof: "collapsed-rtl-limited-attention",
       themeMode: "dark" as const,
     },
-  ])("keeps expanded panel controls in a compact safe gap for $name", async (testCase) => {
+  ])("keeps focused main controls clear of shell chrome for $name", async (testCase) => {
     await suite.withPage(
       {
         colorScheme: testCase.themeMode,

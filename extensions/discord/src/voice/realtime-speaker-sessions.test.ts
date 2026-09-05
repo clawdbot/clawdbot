@@ -17,6 +17,18 @@ defineDiscordVoiceTests(
     lastRealtimeBridge,
     sentUserMessages,
   }) => {
+    it("preserves immediate acknowledgments for installed providers with unscoped marks", async () => {
+      const { entry, manager } = await createJoinedAgentProxyFixture();
+      try {
+        beginSpeakerTurn(entry).close();
+        const source = lastRealtimeBridge();
+        source.bridgeParams.audioSink.sendMark?.("legacy-mark");
+        expect(source.session.acknowledgeMark).toHaveBeenCalledExactlyOnceWith("legacy-mark");
+      } finally {
+        await manager.destroy();
+      }
+    });
+
     it.each(["guest-first", "owner-first"] as const)(
       "keeps speaker authority and transcript labels with their input connections: %s",
       async (order) => {

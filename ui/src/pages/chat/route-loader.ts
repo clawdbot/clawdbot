@@ -10,6 +10,7 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../../lib/sessions/catalog-key.ts";
+import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
   SESSION_DASHBOARD_EXPANDED_PARAM,
@@ -205,6 +206,7 @@ function resolvedSessionRouteData(params: {
   face: BoardFace;
   row: SessionRoutePresentation;
   preferenceDerived: boolean;
+  isResolutionSourceCurrent: () => boolean;
   shortId?: string;
 }): Extract<ChatRouteData, { kind: "session" }> | null {
   // The loader owns face resolution: a preference-derived open adopts the row's stored
@@ -220,6 +222,14 @@ function resolvedSessionRouteData(params: {
   });
   if (canonicalLocation === undefined) {
     return null;
+  }
+  if (canonicalLocation && params.isResolutionSourceCurrent()) {
+    // A delayed response cannot transfer its key into a replacement connection.
+    prepareSessionNavigationHandoff(
+      params.context.gateway,
+      canonicalLocation.pathname,
+      params.row.key,
+    );
   }
   return {
     kind: "session",
@@ -238,6 +248,7 @@ function resolvedMainSessionRouteData(params: {
   row: SessionRoutePresentation;
   target: Extract<SessionPathTarget, { kind: "main" }>;
   preferenceDerived: boolean;
+  isResolutionSourceCurrent: () => boolean;
 }): Extract<ChatRouteData, { kind: "session" }> | null {
   if (!isUiGlobalSessionKey(params.row.key)) {
     return resolvedSessionRouteData(params);
@@ -274,6 +285,11 @@ export async function loadChatRoute(
   face: BoardFace,
   signal: AbortSignal,
 ): Promise<ChatRouteData | ReturnType<typeof notFound>> {
+  const { client, hello } = context.gateway.snapshot;
+  const isResolutionSourceCurrent = () =>
+    context.gateway.snapshot.phase === "connected" &&
+    context.gateway.snapshot.client === client &&
+    context.gateway.snapshot.hello === hello;
   const catalogShareRoute =
     face === "chat" && (await loadCatalogShareRouteFromLocation(context, location, signal));
   if (catalogShareRoute) {
@@ -296,7 +312,7 @@ export async function loadChatRoute(
     if (preferenceDerived) {
       const resolution = await querySessionReference(
         context,
-        { kind: "exact", value: sessionKey, agentId: target.agentId },
+        { key: sessionKey, agentId: target.agentId },
         signal,
       );
       if (resolution?.kind === "unique") {
@@ -330,12 +346,13 @@ export async function loadChatRoute(
     if (preferenceDerived) {
       const resolution = await querySessionReference(
         context,
-        { kind: "exact", value: sessionKey, agentId: target.agentId },
+        { key: sessionKey, agentId: target.agentId },
         signal,
       );
       if (resolution?.kind === "unique") {
         const resolved = resolvedMainSessionRouteData({
           context,
+          isResolutionSourceCurrent,
           location: routeLocation,
           face,
           row: resolution.session,
@@ -370,66 +387,52 @@ export async function loadChatRoute(
     }
     if (needsGatewayResolution) {
       // Any single non-short-id segment is a slug candidate, so a plain literal route
-      // would otherwise pay a sessions.list round-trip on every open. A cached row is
+      // would otherwise pay a resolution round-trip on every open. A cached row is
       // already proof the segment is a real key, which settles the exact lookup for
       // free; only genuinely unknown references reach the gateway.
       const cachedRow = defaultsKnown
         ? findUiSessionRow(context, target.sessionKey, target.agentId)
         : undefined;
-      const exactResolution = cachedRow
+      const resolution = cachedRow
         ? ({ kind: "unique", session: cachedRow } as const)
         : await querySessionReference(
             context,
-            { kind: "exact", value: target.sessionKey, agentId: target.agentId },
+            {
+              key: target.sessionKey,
+              agentId: target.agentId,
+              ...(target.slugCandidate ? { slug: target.slugCandidate } : {}),
+            },
             signal,
           );
-      if (exactResolution?.kind === "unique") {
+      if (resolution?.kind === "unique") {
         const resolved = resolvedSessionRouteData({
           context,
+          isResolutionSourceCurrent,
           location: routeLocation,
           face,
-          row: exactResolution.session,
+          row: resolution.session,
           preferenceDerived,
         });
         return resolved ?? notFound({ routeId: face });
       }
-      if (target.slugCandidate && exactResolution?.kind === "not-found") {
-        const slugResolution = await querySessionReference(
-          context,
-          { kind: "slug", value: target.slugCandidate, agentId: target.agentId },
-          signal,
-        );
-        if (slugResolution?.kind === "not-found") {
+      if (target.slugCandidate) {
+        if (resolution?.kind === "not-found") {
           return missingSessionRouteData(context, face, target.agentId);
         }
-        if (slugResolution?.kind === "ambiguous") {
+        if (resolution?.kind === "ambiguous") {
           return {
             kind: "ambiguous",
             shortId: target.slugCandidate,
             candidates: candidatesForResolution(
               context,
               face,
-              slugResolution,
+              resolution,
               routeLocation,
               preferenceDerived,
             ),
-            truncated: slugResolution.truncated,
+            truncated: resolution.truncated,
             face,
           };
-        }
-        if (slugResolution?.kind === "unique") {
-          // No shortId: a resolved slug canonicalizes to the same short reference every
-          // other surface links to, so `/chat/main/deploy-monitor` settles on
-          // `/chat/main/deploy-monitor-6db92d48` rather than a full uuid. A later
-          // first-block collision lands in the disambiguation view like any short link.
-          const resolved = resolvedSessionRouteData({
-            context,
-            location: routeLocation,
-            face,
-            row: slugResolution.session,
-            preferenceDerived,
-          });
-          return resolved ?? notFound({ routeId: face });
         }
       }
     }
@@ -478,18 +481,24 @@ export async function loadChatRoute(
   }
   const resolution = cached?.row
     ? ({ kind: "unique", session: cached.row } as const)
-    : await resolveShortSessionReference(context, target, signal);
+    : await resolveShortSessionReference(
+        context,
+        target,
+        signal,
+        face === "chat" && !preferenceDerived,
+      );
   if (resolution.kind === "not-found") {
     // A mechanically composed literal, notably a full UUID, can match the short grammar.
     // Only after the authoritative short lookup misses may its exact decoded key win.
     const literalResolution = await querySessionReference(
       context,
-      { kind: "exact", value: target.literalSessionKey, agentId: target.agentId },
+      { key: target.literalSessionKey, agentId: target.agentId },
       signal,
     );
     if (literalResolution?.kind === "unique") {
       const literal = resolvedSessionRouteData({
         context,
+        isResolutionSourceCurrent,
         location: routeLocation,
         face,
         row: literalResolution.session,
@@ -518,6 +527,7 @@ export async function loadChatRoute(
   }
   const resolved = resolvedSessionRouteData({
     context,
+    isResolutionSourceCurrent,
     location: routeLocation,
     face,
     row: resolution.session,

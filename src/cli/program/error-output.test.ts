@@ -89,12 +89,12 @@ describe("formatCliParseErrorOutput", () => {
     },
     {
       name: "profiled automation alias",
-      args: ["--profile", "work", "automations", "runs"],
+      args: ["--profile", "work", "automations", "get"],
       root: "cron",
       alias: "automations",
-      children: ["runs"],
-      requiredOption: "--id <id>",
-      message: 'Missing required option "--id <id>".',
+      children: ["get"],
+      argument: "<id>",
+      message: 'Missing required argument "id".',
       machineOutput: isCronMachineOutput,
     },
     {

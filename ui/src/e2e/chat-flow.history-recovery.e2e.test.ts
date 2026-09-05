@@ -1,8 +1,10 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -242,10 +244,12 @@ suite.define(() => {
       await sessionLink(sessionB).click();
       await expectTrace();
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "trace-after-first-navigation.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "trace-after-first-navigation.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText(visibleAnswer, { exact: true }),
+          ]),
+        );
       }
 
       await sessionLink(sessionA).click();
@@ -255,10 +259,12 @@ suite.define(() => {
       await expectTrace();
       expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "trace-after-return.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "trace-after-return.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText(visibleAnswer, { exact: true }),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -442,10 +448,12 @@ suite.define(() => {
       if (!artifactDir) {
         return;
       }
-      await page.screenshot({
-        path: path.join(artifactDir, `${name}.png`),
-        fullPage: true,
-      });
+      await writeFile(
+        path.join(artifactDir, `${name}.png`),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-thread'),
+        ]),
+      );
       // Keep post-assertion route states legible in the optional proof recording.
       await page.waitForTimeout(300);
     };
@@ -687,10 +695,12 @@ suite.define(() => {
       expect(returnedSamples.every((sample) => !sample.loading)).toBe(true);
       await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn);
       if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/retained-history-return.png`,
-          fullPage: true,
-        });
+        await writeFile(
+          `${artifactDir}/retained-history-return.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText(/^older retained message 1\n/),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -804,7 +814,10 @@ suite.define(() => {
       const storedProof = await readStoredProof();
       const storedRunId = requireString(storedProof.runId, "stored offline send idempotency key");
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/01-offline-queued.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/01-offline-queued.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [queue]),
+        );
       }
 
       await page.reload();
@@ -837,7 +850,12 @@ suite.define(() => {
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/02-reconnected-active.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/02-reconnected-active.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-thread").getByText(prompt),
+          ]),
+        );
       }
       await expectRequestCountStable(gateway, "chat.send", 1);
       const requestsAfterReconnect = await gateway.getRequests("chat.send");
@@ -863,7 +881,12 @@ suite.define(() => {
         .waitFor({ state: "detached" });
       await expectRequestCountStable(gateway, "chat.send", 1);
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/03-online-delivered.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/03-online-delivered.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-thread").getByText(prompt),
+          ]),
+        );
       }
       if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
         process.stdout.write(

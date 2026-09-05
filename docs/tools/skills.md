@@ -54,6 +54,9 @@ Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 <workspace>/skills/personal/research/SKILL.md ✓ also found as "research"
 ```
 
+During grouped discovery, finding `SKILL.md` ends traversal below that directory.
+Invalid skill files are reported and skipped; valid siblings can still load.
+
 The folder path is for organization only. The skill's name and slash command
 come from the `name` frontmatter field (or the directory name when `name` is
 missing). Agent allowlists (below) also match on this `name`.
@@ -76,7 +79,8 @@ apply). They appear in the normal agent skill list while the node is connected
 and disappear when it disconnects. A local or Gateway skill keeps its name on
 collision; the node skill receives a deterministic node-prefixed name.
 Node-hosted v1 requires the directory name to match the skill's `name`
-frontmatter field.
+frontmatter field. The published name, description, and instructions come from
+the same captured file content.
 
 The skill entry includes the node locator. Its files, relative references, and
 binaries live on the node, so load and execute it with
@@ -744,7 +748,7 @@ prompt. The cost is deterministic and scales linearly per skill:
 
 If the rendered block would exceed the configured prompt budget
 (`skills.limits.maxSkillsPromptChars`), OpenClaw first preserves as many skill
-identities (name, location, and version) as the description-free compact format
+identities (name and location) as the description-free compact format
 can fit. It then uses any remaining budget for shortened descriptions. If no
 description budget remains, descriptions are omitted. The prompt includes a
 note pointing at `openclaw skills check` whenever compact formatting or list

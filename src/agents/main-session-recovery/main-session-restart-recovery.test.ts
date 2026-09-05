@@ -189,6 +189,7 @@ vi.mock("../../config/sessions/transcript.js", async (importOriginal) => {
 });
 
 let tmpDir: string;
+const resolveGatewayContext = () => undefined;
 
 function loadSessionEntry(
   scope: Parameters<typeof loadSessionEntryRaw>[0],
@@ -237,6 +238,7 @@ async function writeStore(
 function mainSessionEntry(overrides: SessionEntryFixture = {}): SessionEntry {
   return createSessionEntry({
     sessionId: "main-session",
+    permissionMode: "guarded",
     updatedAt: Date.now() - 10_000,
     status: "running",
     abortedLastRun: true,
@@ -531,6 +533,7 @@ describe("main-session-restart-recovery", () => {
       ownerActive = live;
     });
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns,
       isActiveRun: () => ownerActive,
@@ -585,6 +588,7 @@ describe("main-session-restart-recovery", () => {
       sessionId: "stale-session",
     });
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         activeRestartRun(),
@@ -644,6 +648,7 @@ describe("main-session-restart-recovery", () => {
     const admissions = await Promise.all(
       identities.map((group) =>
         beginSessionWorkAdmission({
+          resolveGatewayContext,
           scope: storePath,
           identities: group.map((identity) =>
             identity === "main" || identity === "sibling" ? key(identity) : identity,
@@ -658,6 +663,7 @@ describe("main-session-restart-recovery", () => {
     try {
       await expect(
         markRestartAbortedMainSessions({
+          resolveGatewayContext,
           cfg: { session: { store: otherStorePath } },
           stateDir: tmpDir,
           activeRuns: [],
@@ -720,6 +726,7 @@ describe("main-session-restart-recovery", () => {
           [sessionKey]: runningSessionEntry("custom-session"),
         });
         admission = await beginSessionWorkAdmission({
+          resolveGatewayContext,
           scope: storePath,
           identities: [sessionKey, "custom-session"],
           assertAllowed: () => undefined,
@@ -727,6 +734,7 @@ describe("main-session-restart-recovery", () => {
 
         await expect(
           markRestartAbortedMainSessions({
+            resolveGatewayContext,
             cfg: { agents: { list: [{ id: "main", default: true }] } },
             stateDir: tmpDir,
             activeRuns: [],
@@ -774,6 +782,7 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       cfg: { session: { store: storePath } },
       stateDir: tmpDir,
       activeRuns: [activeRestartRun("agent:main:issue-82433", "custom-session")],
@@ -845,6 +854,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         {
@@ -880,6 +890,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         {
@@ -954,6 +965,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         {
@@ -989,6 +1001,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         {
@@ -1026,6 +1039,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         {
@@ -1064,6 +1078,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       cfg: { session: { store: storePath } },
       stateDir: tmpDir,
       activeRuns: [activeRestartRun("agent:main:issue-82433", "active-custom-session")],
@@ -1103,6 +1118,7 @@ describe("main-session-restart-recovery", () => {
 
     await expect(
       markRestartAbortedMainSessions({
+        resolveGatewayContext,
         stateDir: tmpDir,
         activeRuns: [activeRestartRun(sessionKey)],
         reason: "gateway restart drain",
@@ -1174,6 +1190,7 @@ describe("main-session-restart-recovery", () => {
     await rootAdmission?.run(async () => {
       await expect(
         markRestartAbortedMainSessions({
+          resolveGatewayContext,
           stateDir: tmpDir,
           activeRuns: [{ runId, lifecycleGeneration, sessionKey, sessionId: "main-session" }],
           reason: "gateway restart drain",
@@ -5416,22 +5433,31 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
   });
 
-  it("keeps restart safety after the recovery prompt leaves the recent transcript window", async () => {
-    await writeMainSessionTranscript(
-      [
-        { role: "user", content: "do the thing" },
-        ...Array.from({ length: 24 }, (_, index) => ({
-          role: "toolResult",
-          toolName: "read",
-          content: [{ type: "text", text: `read result ${index}` }],
-        })),
-      ],
-      { restartRecoveryForceSafeTools: true },
-    );
+  it.each(["guarded", "full"] as const)(
+    "keeps replay safety outside the recent transcript window with %s access",
+    async (permissionMode) => {
+      await writeMainSessionTranscript(
+        [
+          { role: "user", content: "do the thing" },
+          codeModeCheckpointMessage(),
+          {
+            role: "user",
+            content: "Continue after restart",
+            provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+          },
+          ...Array.from({ length: 24 }, (_, index) => ({
+            role: "toolResult",
+            toolName: "read",
+            content: [{ type: "text", text: `read result ${index}` }],
+          })),
+        ],
+        { permissionMode, restartRecoveryForceSafeTools: true },
+      );
 
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-  });
+      await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+      expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    },
+  );
 
   it("resumes an in-flight safe tool call across a repeated restart", async () => {
     await writeMainSessionTranscript(
@@ -5449,31 +5475,45 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
   });
 
-  it("resumes completed assistant output under the retained restart-safe guard", async () => {
+  it.each(["guarded", "full"] as const)(
+    "retains explicit replay safety after a provider error with %s access",
+    async (permissionMode) => {
+      await writeMainSessionTranscript(
+        [
+          { role: "user", content: "do the thing" },
+          codeModeCheckpointMessage(),
+          {
+            role: "assistant",
+            stopReason: "error",
+            content: [{ type: "text", text: "Provider failed." }],
+          },
+        ],
+        { permissionMode, restartRecoveryForceSafeTools: true },
+      );
+
+      await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    },
+  );
+
+  it("ends prior replay restrictions at a new full-access user turn", async () => {
     await writeMainSessionTranscript(
       [
-        { role: "user", content: "do the thing" },
-        { role: "assistant", content: [{ type: "text", text: "Done already." }] },
+        { role: "user", content: "the earlier request" },
+        codeModeCheckpointMessage(),
+        {
+          role: "user",
+          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+          content:
+            "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. Continue from the existing transcript and finish the interrupted response.",
+        },
+        { role: "assistant", content: [{ type: "text", text: "Finished that recovery." }] },
+        { role: "user", content: "a later request" },
+        { role: "assistant", content: [{ type: "text", text: "Finished the later request." }] },
       ],
-      { restartRecoveryForceSafeTools: true },
+      { permissionMode: "full", restartRecoveryForceSafeTools: true },
     );
-
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-  });
-
-  it("resumes after a completed historical recovery prompt", async () => {
-    await writeMainSessionTranscript([
-      {
-        role: "user",
-        content:
-          "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. Continue from the existing transcript and finish the interrupted response.",
-      },
-      { role: "assistant", content: [{ type: "text", text: "Finished that recovery." }] },
-      { role: "user", content: "a later request" },
-      { role: "assistant", content: [{ type: "text", text: "Finished the later request." }] },
-    ]);
 
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
@@ -5565,19 +5605,46 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
-  it("resumes a side-effecting tool call restricted to restart-safe tools", async () => {
-    await writeMainSessionTranscript([
-      { role: "user", content: "do the thing" },
-      createAssistantToolCallMessage([
-        { type: "text", text: "Running the check now." },
-        { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
-      ]),
-    ]);
+  it.each([
+    { label: "inherited full access", mode: "full", permissionMode: undefined, restricted: false },
+    { label: "explicit full access", mode: "ask", permissionMode: "full", restricted: false },
+    { label: "inherited approvals", mode: "ask", permissionMode: undefined, restricted: true },
+    { label: "explicit guarded access", mode: "full", permissionMode: "guarded", restricted: true },
+  ] as const)(
+    "continues interrupted work with $label",
+    async ({ mode, permissionMode, restricted }) => {
+      const sessionsDir = await writeMainSessionTranscript(
+        [
+          { role: "user", content: "do the thing" },
+          createAssistantToolCallMessage([
+            { type: "text", text: "Running the check now." },
+            {
+              type: "toolCall",
+              id: "call-exec-1",
+              name: "exec",
+              arguments: { code: "await shell({command: 'true'})" },
+            },
+          ]),
+        ],
+        { permissionMode, restartRecoveryForceSafeTools: true },
+      );
 
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-  });
+      await expectRecovery(
+        { started: 1, settled: 0, failed: 0, skipped: 0 },
+        { tools: { exec: { mode } } },
+      );
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(gatewayParams().forceRestartSafeTools === true).toBe(restricted);
+      expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+      expect(gatewayParams().message).toContain("unknown outcome");
+      expect(
+        loadSessionEntry({
+          storePath: path.join(sessionsDir, "sessions.json"),
+          sessionKey: "agent:main:main",
+        })?.restartRecoveryForceSafeTools === true,
+      ).toBe(restricted);
+    },
+  );
 
   it("reports an interrupted native tool outcome as unknown", async () => {
     await writeMainSessionTranscript([

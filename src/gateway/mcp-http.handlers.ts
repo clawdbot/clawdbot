@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { ContentBlockSchema, type ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
+import { copyInternalToolResultState } from "../agents/runtime/internal-hooks.js";
 import {
   formatToolExecutionErrorMessage,
   protectNetworkToolExecutionError,
@@ -213,10 +214,13 @@ export async function handleMcpJsonRpc(params: {
             ? { outcome: "blocked", deniedReason: "tool_result_blocked" }
             : { outcome: failureKind ?? "completed", result },
         );
-        return jsonRpcResult(id, {
-          content: normalizeToolCallContent(result),
-          isError: failureKind !== undefined,
-        });
+        return copyInternalToolResultState(
+          result,
+          jsonRpcResult(id, {
+            content: normalizeToolCallContent(result),
+            isError: failureKind !== undefined,
+          }),
+        );
       } catch (error) {
         // A disconnected request does not identify the enclosing run outcome,
         // but its payload may prove partial delivery and prevent a duplicate send.

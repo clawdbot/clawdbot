@@ -14,11 +14,7 @@ import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
 import { readSessionChangedEvent } from "./sessions/reconcile.ts";
-import {
-  normalizeAgentId,
-  parseAgentSessionKey,
-  uiSessionEventMatches,
-} from "./sessions/session-key.ts";
+import { uiSessionEventMatches } from "./sessions/session-key.ts";
 
 export function summarizeSessionPullRequests(
   pullRequests: readonly ControlUiSessionPullRequest[],
@@ -68,14 +64,6 @@ export type SessionPullRequestSnapshotStore = {
 };
 
 const stores = new WeakMap<ApplicationGateway, SessionPullRequestSnapshotStore>();
-
-export function scopedSessionPullRequestKey(sessionKey: string, agentId?: string): string {
-  const key = sessionKey.trim();
-  if (!key || parseAgentSessionKey(key) || !agentId?.trim()) {
-    return key;
-  }
-  return `agent:${normalizeAgentId(agentId)}:${key}`;
-}
 
 function readChangedSessions(
   payload: unknown,

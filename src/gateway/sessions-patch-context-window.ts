@@ -3,13 +3,17 @@ import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/in
 import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 
-export async function applySessionContextWindowPatch(params: {
+export function* applySessionContextWindowPatch(params: {
   defaultModel: string;
   defaultProvider: string;
-  loadModelCatalog: () => Promise<ModelCatalogEntry[] | undefined>;
+  loadModelCatalog: () => Generator<
+    void,
+    ModelCatalogEntry[] | undefined,
+    ModelCatalogEntry[] | undefined
+  >;
   next: SessionEntry;
   patch: SessionsPatchParams;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Generator<void, { ok: true } | { ok: false; error: string }, ModelCatalogEntry[] | undefined> {
   if ("contextWindow" in params.patch) {
     const previous = params.next.contextWindow;
     const raw = params.patch.contextWindow;
@@ -32,7 +36,7 @@ export async function applySessionContextWindowPatch(params: {
   }
   const provider = params.next.providerOverride ?? params.defaultProvider;
   const model = params.next.modelOverride ?? params.defaultModel;
-  const catalog = await params.loadModelCatalog();
+  const catalog = yield* params.loadModelCatalog();
   const catalogEntry = catalog
     ? findModelCatalogEntry(catalog, { provider, modelId: model })
     : undefined;

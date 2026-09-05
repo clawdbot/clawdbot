@@ -73,7 +73,7 @@ console.log(JSON.stringify({ value: first.value, evaluations: globalThis.pluginE
 }
 
 export async function withShimFixture<T>(
-  wrapper: (typeof TSX_SHIM_WRAPPERS)[number],
+  wrapper: (typeof TSX_SHIM_WRAPPERS)[number] | "scripts/run-node.mjs",
   run: (paths: {
     checkoutRoot: string;
     fixtureRoot: string;

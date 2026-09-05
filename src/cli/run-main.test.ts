@@ -1,5 +1,5 @@
 // Run main tests cover CLI main entrypoint behavior and process error handling.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import {
   resolveGatewayCatalogCommandPath,
@@ -14,7 +14,55 @@ import {
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-import { isGatewayRunFastPathArgv } from "./run-main.js";
+import { isGatewayRunFastPathArgv, runCli } from "./run-main.js";
+
+const runGatewayCommand = vi.hoisted(() => vi.fn());
+
+vi.mock("./gateway-cli/run.js", () => ({ runGatewayCommand }));
+vi.mock("./gateway-cli/pre-bootstrap.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-cli/pre-bootstrap.js")>()),
+  selectGatewayRunEnvironment: async () => true,
+  prepareGatewayRunBootstrap: async () => false,
+}));
+vi.mock("../logging.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging.js")>()),
+  enableConsoleCapture: vi.fn(),
+}));
+
+describe("Gateway fast-path Commander parsing", () => {
+  const previousExitCode = process.exitCode;
+
+  beforeEach(() => {
+    process.exitCode = undefined;
+    runGatewayCommand.mockClear();
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    process.exitCode = previousExitCode;
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { flag: "--ambient-channels", key: "ambientChannels" },
+    { flag: "--dev-ambient-channels", key: "devAmbientChannels" },
+    { flag: "--verbose", key: "verbose" },
+  ])("accepts root no-color after $flag on parent and child", async ({ flag, key }) => {
+    for (const args of [
+      [flag, "--no-color", "run"],
+      ["run", flag, "--no-color"],
+    ]) {
+      runGatewayCommand.mockClear();
+      await runCli(["node", "openclaw", "gateway", ...args, "--token=--no-color"]);
+
+      expect(process.exitCode).toBeUndefined();
+      expect(runGatewayCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ [key]: true, token: "--no-color" }),
+        expect.any(Object),
+      );
+    }
+  });
+});
 
 const memoryWikiCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   plugins: [
@@ -75,10 +123,10 @@ describe("isGatewayRunFastPathArgv", () => {
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run"])).toBe(true);
     expect(
       isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--log-level", "debug", "run"]),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--log-level=debug", "run"]),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run", "--raw-stream-path", "x"]),
     ).toBe(true);

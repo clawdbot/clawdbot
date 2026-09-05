@@ -4,8 +4,11 @@ import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
+import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
+import "../lib/toast.ts";
+import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import {
   redactLoginFailureError,
   resolveAuthHintKind,
@@ -16,6 +19,8 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
+
+registerLoginEnglish();
 
 type LoginFailureKind =
   | "auth-required"
@@ -328,8 +333,10 @@ function resolveLoginFailureFeedback(
 }
 
 function refreshLoginGatePage() {
-  // The login gate blocks before the composer mounts, so there is no draft to preserve.
-  window.location.reload();
+  // A terminal reconnect failure can show this gate while startup still owns unsaved input.
+  if (canReloadControlUiDocument(true)) {
+    window.location.reload();
+  }
 }
 
 function renderLoginFailureStep({ text, commands }: LoginFailureStep) {
@@ -407,6 +414,7 @@ function renderLoginGate(props: LoginGateProps) {
 
   return html`
     <div class="login-gate">
+      <openclaw-toast-host></openclaw-toast-host>
       <div class="login-gate__card">
         <div class="login-gate__header">
           <img class="login-gate__logo" src=${faviconSrc} alt="OpenClaw" />

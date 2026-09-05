@@ -144,11 +144,16 @@ describe("UI session identity", () => {
     ["main", { defaultId: "work", mainKey: "home" }, "agent:work:home", "work"],
     ["main", { defaultId: "ops", mainKey: "next" }, "agent:ops:next", "ops"],
     ["main", { defaultId: "ops", mainKey: "home", scope: "global" }, "global", "ops"],
+    ["main", undefined, "agent:work:home", "work", "work"],
+    ["home", undefined, "agent:work:home", "work", "work"],
+    ["main", { defaultId: "ops", mainKey: "home", scope: "global" }, "global", "work", "work"],
+    ["agent:ops:main", undefined, "agent:ops:current", "ops", "work"],
   ] as const)(
     "uses advertised main identity for %s without overriding current roster %j",
-    (key, agentsList, sessionKey, agentId) => {
+    (key, agentsList, sessionKey, agentId, agentIdOverride?: string) => {
       const host = {
         agentsList,
+        assistantAgentId: agentId,
         hello: {
           snapshot: {
             sessionDefaults: {
@@ -159,7 +164,10 @@ describe("UI session identity", () => {
           },
         },
       };
-      expect(resolveUiConversationIdentity(host, key)).toEqual({ sessionKey, agentId });
+      expect(resolveUiConversationIdentity(host, key, agentIdOverride)).toEqual({
+        sessionKey,
+        agentId,
+      });
       expect(uiSessionEventMatches({ ...host, sessionKey }, key, agentId)).toBe(true);
       expect(uiSessionEventMatches({ ...host, sessionKey }, key, "unrelated")).toBe(false);
     },

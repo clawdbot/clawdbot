@@ -1,5 +1,7 @@
+import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import {
   createChatFlowE2eSuite,
@@ -295,7 +297,10 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
         await page.waitForTimeout(100);
-        await page.screenshot({ path: `${artifactDir}/01-remove-rejected.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/01-remove-rejected.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
+        );
       }
 
       await page.evaluate(() => {
@@ -394,7 +399,12 @@ suite.define(() => {
       await page.getByRole("alert").waitFor({ state: "detached", timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/02-duplicate-noop.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/02-duplicate-noop.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-queue"),
+          ]),
+        );
       }
 
       const terminalSession = {
@@ -453,7 +463,10 @@ suite.define(() => {
       await expectRequestCountStable(gateway, "chat.send", 4);
       await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/03-exact-drain.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/03-exact-drain.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
+        );
       }
     } catch (error) {
       await captureControlUiE2eFailureDiagnostics(page, {

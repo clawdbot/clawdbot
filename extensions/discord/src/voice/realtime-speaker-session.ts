@@ -350,7 +350,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       instructions,
       autoRespondToAudio,
       interruptResponseOnInputAudio,
-      markStrategy: "ack-immediately",
+      markStrategy: "transport",
       tools: usesRealtimeAgentHandoff
         ? resolveRealtimeVoiceAgentConsultTools(
             toolPolicy,
@@ -359,7 +359,17 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
         : [],
       audioSink: {
         isOpen: () => !this.isStopped(),
-        sendAudio: (audio) => this.playback.sendOutputAudio(audio),
+        sendAudio: (audio, metadata) => this.playback.sendOutputAudio(audio, metadata),
+        sendMark: (markName, acknowledge) => {
+          if (acknowledge) {
+            this.playback.sendOutputMark(acknowledge);
+          } else {
+            // Installed providers with unscoped marks retain immediate acknowledgments;
+            // delaying them could acknowledge a replacement provider connection.
+            this.bridge?.acknowledgeMark(markName);
+          }
+        },
+        getPlaybackState: () => this.playback.getPlaybackState(),
         clearAudio: () => {
           this.markProviderGenerationObserved();
           this.harness.flushOutput(() => this.playback.clearOutputAudio("provider-clear-audio"));

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import type { SelectQueryBuilder } from "kysely";
 import type { SkillLibraryEntry } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { authorizeOperatorScopesForRequiredScope } from "../../gateway/method-scopes.js";
@@ -18,7 +19,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
-import { selectResolvedUserProfileById } from "../../state/user-profiles-internal.js";
+import {
+  selectResolvedUserProfile,
+  selectResolvedUserProfileById,
+  userProfilesDb,
+} from "../../state/user-profiles-internal.js";
 import { managedSkillCommandName } from "./command-name.js";
 import { SkillLibraryError } from "./errors.js";
 
@@ -125,23 +130,20 @@ export function requireSkillLibraryProfile(
   return actor.profileId;
 }
 
-export function requireSkillLibraryUpload(
+function requireSelectedSkillLibraryUpload<
+  T extends Pick<SkillLibraryDatabase["skill_library_uploads"], "owner_profile_id" | "expires_at">,
+>(
   db: DatabaseSync,
   uploadId: string,
   authority: SkillLibraryAuthority,
+  query: SelectQueryBuilder<SkillLibraryDatabase, "skill_library_uploads", T>,
 ) {
   const actor = requireSkillLibraryProfile(db, authority);
-  const upload = executeSqliteQueryTakeFirstSync(
-    db,
-    skillLibraryDb(db)
-      .selectFrom("skill_library_uploads")
-      .selectAll()
-      .where("upload_id", "=", uploadId),
-  );
+  const upload = executeSqliteQueryTakeFirstSync(db, query.where("upload_id", "=", uploadId));
   if (
     !upload ||
     upload.expires_at <= Date.now() ||
-    selectResolvedUserProfileById(db, upload.owner_profile_id)?.id !== actor
+    selectSkillLibraryOwner(db, upload.owner_profile_id)?.id !== actor
   ) {
     throw new SkillLibraryError(
       "NOT_FOUND",
@@ -149,6 +151,34 @@ export function requireSkillLibraryUpload(
     );
   }
   return upload;
+}
+
+export function requireSkillLibraryUpload(
+  db: DatabaseSync,
+  uploadId: string,
+  authority: SkillLibraryAuthority,
+) {
+  return requireSelectedSkillLibraryUpload(
+    db,
+    uploadId,
+    authority,
+    skillLibraryDb(db).selectFrom("skill_library_uploads").selectAll(),
+  );
+}
+
+export function requireSkillLibraryUploadMetadata(
+  db: DatabaseSync,
+  uploadId: string,
+  authority: SkillLibraryAuthority,
+) {
+  return requireSelectedSkillLibraryUpload(
+    db,
+    uploadId,
+    authority,
+    skillLibraryDb(db)
+      .selectFrom("skill_library_uploads")
+      .select(["owner_profile_id", "expires_at", "slug", "published_skill_id"]),
+  );
 }
 
 export function selectSkillLibraryRow(
@@ -163,6 +193,13 @@ export function selectSkillLibraryRow(
       .where("skill_id", "=", skillId),
   );
 }
+function skillLibraryRevisionQuery(db: DatabaseSync, skillId: string, revision: string) {
+  return skillLibraryDb(db)
+    .selectFrom("skill_library_revisions")
+    .where("skill_id", "=", skillId)
+    .where("revision", "=", revision);
+}
+
 export function selectSkillLibraryRevision(
   db: DatabaseSync,
   skillId: string,
@@ -170,17 +207,33 @@ export function selectSkillLibraryRevision(
 ): SkillLibraryRevisionRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
-    skillLibraryDb(db)
-      .selectFrom("skill_library_revisions")
-      .selectAll()
-      .where("skill_id", "=", skillId)
-      .where("revision", "=", revision),
+    skillLibraryRevisionQuery(db, skillId, revision).selectAll(),
+  );
+}
+
+export function selectSkillLibraryRevisionMetadata(
+  db: DatabaseSync,
+  skillId: string,
+  revision: string,
+) {
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    skillLibraryRevisionQuery(db, skillId, revision).select("description"),
+  );
+}
+
+export function selectSkillLibraryOwner(db: DatabaseSync, profileId: string) {
+  // Actor resolution stays separate because existing profile tables may omit its optional role.
+  return selectResolvedUserProfile(
+    db,
+    profileId,
+    userProfilesDb(db).selectFrom("user_profiles").select(["id", "display_name", "merged_into"]),
   );
 }
 
 function canonicalOwner(db: DatabaseSync, owner: string | null): string | null {
   return owner && tableExists(db, "user_profiles")
-    ? (selectResolvedUserProfileById(db, owner)?.id ?? owner)
+    ? (selectSkillLibraryOwner(db, owner)?.id ?? owner)
     : owner;
 }
 
@@ -203,7 +256,7 @@ export function projectSkillLibraryEntry(
   ) {
     return undefined;
   }
-  const metadata = selectSkillLibraryRevision(db, row.skill_id, revision);
+  const metadata = selectSkillLibraryRevisionMetadata(db, row.skill_id, revision);
   if (!metadata) {
     return undefined;
   }
@@ -212,7 +265,7 @@ export function projectSkillLibraryEntry(
     slug: row.slug,
     name: managedSkillCommandName(row.slug, row.skill_id),
     ownerLabel:
-      owner === null ? "Team" : (selectResolvedUserProfileById(db, owner)?.display_name ?? owner),
+      owner === null ? "Team" : (selectSkillLibraryOwner(db, owner)?.display_name ?? owner),
     description: metadata.description,
     ownerProfileId: owner,
     authorProfileId: row.author_profile_id,

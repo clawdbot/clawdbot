@@ -366,8 +366,20 @@ describe("Control UI E2E resource ownership", () => {
   );
 
   it("owns the complete inventory once and shards the project union without losing QA Lab or real-Gateway siblings", async () => {
-    const { uiE2ePrivateServerTestFiles, uiE2eSerialTestFiles } =
+    const { createUiE2eVitestConfig, uiE2ePrivateServerTestFiles, uiE2eSerialTestFiles } =
       await import("./vitest/vitest.ui-e2e.config.ts");
+    const config = createUiE2eVitestConfig();
+    const projects = config.test?.projects as
+      | Array<{ extends?: boolean; test?: { clearMocks?: boolean } }>
+      | undefined;
+    expect(config.test?.clearMocks).toBe(false);
+    expect(projects?.map((project) => project.extends)).toEqual([false, false, false, false]);
+    expect(projects?.map((project) => project.test?.clearMocks)).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
     const result = probeOwnership();
     const inventory = fs
       .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
@@ -395,6 +407,9 @@ describe("Control UI E2E resource ownership", () => {
     }
     const realGateway = [
       "agent-file-lifecycle.real-gateway",
+      "chat-loading-performance.real-gateway",
+      "chat-project-media.real-gateway",
+      "chat-widget-sandbox.real-gateway",
       "control-ui-auth-transports",
       "cron-duration-save.real-gateway",
       "logs-lifecycle",
@@ -427,12 +442,24 @@ describe("Control UI E2E resource ownership", () => {
 });
 
 describe("Control UI E2E Vitest sharding", () => {
-  it("uses the duration weighted sequencer", async () => {
+  it("shares isolated cleanup policy with the duration weighted sequencer", async () => {
     const [{ default: config }, { UiE2eSequencer }] = await Promise.all([
       import("./vitest/vitest.ui-e2e.config.ts"),
       import("./vitest/vitest.ui-e2e.sequencer.ts"),
     ]);
     expect(config.test?.sequence?.sequencer).toBe(UiE2eSequencer);
+    expect(Number.isFinite(config.test?.hookTimeout)).toBe(true);
+    expect(config.test?.hookTimeout).toBeGreaterThan(0);
+    for (const project of config.test?.projects ?? []) {
+      expect(project).toMatchObject({
+        test: {
+          pool: "forks",
+          isolate: true,
+          runner: undefined,
+          hookTimeout: config.test?.hookTimeout,
+        },
+      });
+    }
   });
 
   it("balances unmeasured files by source bytes", async () => {

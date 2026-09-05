@@ -20,6 +20,7 @@
     "openclaw.approval.resolved": "OpenClaw system-agent config approvals are a web/desktop operator surface; iOS has no operator-approval prompt.",
     "plugin.approval.requested": "Plugin approval prompts are not implemented on iOS.",
     "plugin.approval.resolved": "Plugin approval prompts are not implemented on iOS.",
+    "plugins.controlUi.changed": "Plugin browser-module catalog changes are consumed by the web Control UI; iOS does not load those modules.",
     "portal.changed": "Control-UI-only surface; native apps have no portal viewer yet.",
     "presence": "Presence roster is a control-UI (web/desktop) surface; iOS does not render it.",
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
@@ -36,6 +37,7 @@
     "terminal.exit": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
     "ui.command": "Web Control UI-only layout commands; iOS does not consume them.",
     "update.available": "Gateway self-update notices do not apply to iOS; app updates ship via the App Store.",
+    "update.run.changed": "Gateway update-run progress is an operator surface; iOS has no update-run history view.",
     "voicewake.routing.changed": "iOS only consumes voicewake.changed trigger updates; routing changes are not surfaced."
   },
   "android": {
@@ -60,6 +62,7 @@
     "openclaw.approval.resolved": "OpenClaw system-agent config approvals are a web/desktop operator surface; Android has no operator-approval prompt.",
     "plugin.approval.requested": "Plugin approval prompts are not implemented on Android.",
     "plugin.approval.resolved": "Plugin approval prompts are not implemented on Android.",
+    "plugins.controlUi.changed": "Plugin browser-module catalog changes are consumed by the web Control UI; Android does not load those modules.",
     "portal.changed": "Control-UI-only surface; native apps have no portal viewer yet.",
     "presence": "Presence roster is a control-UI (web/desktop) surface; Android does not render it.",
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
@@ -76,6 +79,7 @@
     "terminal.data": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "ui.command": "Web Control UI-only layout commands; Android does not consume them.",
+    "update.run.changed": "Gateway update-run progress is an operator surface; Android has no update-run history view.",
     "voicewake.routing.changed": "Android reads voicewake state on demand via voicewake.get; no push consumer yet."
   }
 }

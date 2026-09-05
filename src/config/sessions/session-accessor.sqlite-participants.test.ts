@@ -26,7 +26,7 @@ const remote = (id: string, domain = "workspace"): SessionParticipantIdentity =>
   id,
 });
 
-afterEach(closeOpenClawAgentDatabasesForTest);
+afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("SQLite session participants", () => {
   it("does not create a missing agent database during participant reads", async () => {

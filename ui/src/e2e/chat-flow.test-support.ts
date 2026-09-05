@@ -84,10 +84,11 @@ export async function waitForRequests(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
   method: string,
   count: number,
+  match?: Record<string, unknown>,
 ): Promise<MockGatewayRequest[]> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    const requests = await gateway.getRequests(method);
+    const requests = await gateway.getRequests(method, match);
     if (requests.length >= count) {
       return requests;
     }
@@ -103,10 +104,11 @@ export async function expectRequestCountStable(
   method: string,
   count: number,
   durationMs = 500,
+  match?: Record<string, unknown>,
 ): Promise<void> {
   const deadline = Date.now() + durationMs;
   do {
-    expect(await gateway.getRequests(method)).toHaveLength(count);
+    expect(await gateway.getRequests(method, match)).toHaveLength(count);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
     });

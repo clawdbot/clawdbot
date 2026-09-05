@@ -594,6 +594,31 @@ describe("human mention directory", () => {
     },
   );
 
+  it("allows a mention draft for a non-owner of the fixed global store", async () => {
+    await withInbox(
+      async (f) => {
+        const draft = { agentId: "ops", query: "Bob" };
+        expect(f.inbox.mentionable(f.aliceClient, draft)).toMatchObject({
+          ok: true,
+          value: { users: [{ profileId: f.bob.id, displayName: "Bob" }] },
+        });
+        expect(f.inbox.validateRecipients(f.aliceClient, draft, [f.bob.id])).toEqual({
+          ok: true,
+          value: [f.bob.id],
+        });
+        expect(read(f.inbox, f.bobClient).items).toEqual([]);
+      },
+      {
+        session: { scope: "global", store: "/synthetic/fixed-global.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {}, ops: {} },
+        },
+      },
+    );
+  });
+
   it("applies creation and current visibility policy without accepting unavailable recipients", async () => {
     await withInbox(async (f) => {
       expect(f.inbox.mentionable(f.aliceClient, { agentId: "main" })).toMatchObject({

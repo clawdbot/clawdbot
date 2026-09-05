@@ -165,7 +165,11 @@ export function resolveUserTranscriptMessages(
         userMessageMatchesTranscriptContext(
           message,
           candidate,
-          index === activeUserMessageIndex ? override : undefined,
+          index === activeUserMessageIndex ||
+            (typeof override?.runtimeTimestamp === "number" &&
+              override.runtimeTimestamp === timestamp)
+            ? override
+            : undefined,
         ),
     );
     if (!context) {

@@ -1,5 +1,7 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledGatewayUrl } from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiSessionUrl,
@@ -12,16 +14,16 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const artifacts = ".artifacts/mock-session-owner/outbox-recovery";
+const artifactRoot = ".artifacts/mock-session-owner/outbox-recovery";
 
 suite.define(() => {
   it.each(["retry", "discard", "exact authoritative history proof"] as const)(
     "parks an ACK-lost send for review until %s",
     async (action) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-      }
+      const proofRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = proofRoot
+        ? createControlUiE2eArtifactDir("chat-outbox-recovery", proofRoot)
+        : undefined;
       await suite.withPage(
         {
           locale: "en-US",
@@ -34,7 +36,12 @@ suite.define(() => {
         async ({ page }) => {
           const captureProof = async (name: string) => {
             if (artifactDir) {
-              await page.screenshot({ path: `${artifactDir}/${name}.png`, fullPage: true });
+              await writeFile(
+                `${artifactDir}/${name}.png`,
+                await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+                  page.locator(".agent-chat__composer-combobox textarea"),
+                ]),
+              );
             }
           };
           const gateway = await installMockGateway(page, {
@@ -158,7 +165,7 @@ suite.define(() => {
   );
 
   it("keeps a legacy uncertain send unsent until destination confirmation and explicit Retry", async () => {
-    await mkdir(artifacts, { recursive: true });
+    const artifacts = createControlUiE2eArtifactDir("legacy-send", artifactRoot);
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -318,6 +325,7 @@ suite.define(() => {
   );
 
   it("recovers an ambiguous IndexedDB attachment draft through rendered controls without sending", async () => {
+    const artifacts = createControlUiE2eArtifactDir("attachment-draft", artifactRoot);
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -327,8 +335,12 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
     const gatewayAddress = controlUiBundledGatewayUrl(suite.server.baseUrl);
     try {
-      await page.goto(`${suite.server.baseUrl}settings`);
-      await page.evaluate(async (gatewayOwner) => {
+      // Seed the legacy database before app boot can open the current version.
+      await page.route("**/outbox-recovery-seed", (route) =>
+        route.fulfill({ contentType: "text/html", body: "Mock recovery seed" }),
+      );
+      await page.goto(`${suite.server.baseUrl}outbox-recovery-seed`);
+      const seededDatabaseVersion = await page.evaluate(async (gatewayOwner) => {
         const request = indexedDB.open("openclaw-control-ui", 1);
         request.addEventListener(
           "upgradeneeded",
@@ -377,7 +389,9 @@ suite.define(() => {
           );
         });
         db.close();
+        return db.version;
       }, gatewayAddress);
+      expect(seededDatabaseVersion).toBe(1);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const notice = page.locator(".chat-outbox-recovery");
       await notice.locator("summary").click();

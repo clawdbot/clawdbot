@@ -21,6 +21,7 @@ import {
   type CompactionPreparation,
   type CompactionResult,
   type CompactionSettings,
+  type CompactionSummaryPrompt,
   type ContextUsageEstimate,
   type Result,
   type AgentMessage,
@@ -76,6 +77,7 @@ export async function generateSummary(
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
   usageSink?: SessionModelUsageSink,
+  summaryPrompt?: CompactionSummaryPrompt,
 ): Promise<string> {
   return unwrapCompactionResult(
     await generateSummaryCore(
@@ -90,6 +92,7 @@ export async function generateSummary(
       thinkingLevel,
       streamFn,
       createCompactionRuntime(usageSink),
+      summaryPrompt,
     ),
   );
 }

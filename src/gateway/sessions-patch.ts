@@ -122,8 +122,7 @@ export function resolveSessionPatchModelSelection(params: {
   };
 }
 
-/** Project a validated gateway session patch for one session entry. */
-export async function projectSessionsPatchEntry(params: {
+type SessionPatchProjectionParams = {
   cfg: OpenClawConfig;
   creation?: { via: SessionCreatedVia; actor?: SessionEntry["createdActor"] };
   existingEntry?: SessionEntry;
@@ -136,12 +135,64 @@ export async function projectSessionsPatchEntry(params: {
   /** Trusted catalog runtime must own selection checks before the new row is persisted. */
   preparedAgentRuntime?: string;
   archivedBy?: SessionEntry["archivedBy"];
-  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
-}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
+};
+
+type SessionPatchProjectionResult =
+  | { ok: true; entry: SessionEntry }
+  | { ok: false; error: ErrorShape };
+
+type SessionPatchPreparation =
+  | { kind: "complete"; result: SessionPatchProjectionResult }
+  | {
+      kind: "model-catalog";
+      finish: (catalog: ModelCatalogEntry[] | undefined) => SessionPatchProjectionResult;
+    };
+
+/** Stop at the first actual catalog use without committing or acquiring runtime effects. */
+export function prepareSessionsPatchEntry(
+  params: SessionPatchProjectionParams,
+): SessionPatchPreparation {
+  const projection = projectSessionPatchSteps(params);
+  const first = projection.next();
+  if (first.done) {
+    return { kind: "complete", result: first.value };
+  }
+  return {
+    kind: "model-catalog",
+    finish: (catalog) => {
+      const completed = projection.next(catalog);
+      if (!completed.done) {
+        throw new Error("Session patch preparation requested the catalog more than once");
+      }
+      return completed.value;
+    },
+  };
+}
+
+/** Project a validated gateway session patch for one session entry. */
+export async function projectSessionsPatchEntry(
+  params: SessionPatchProjectionParams & {
+    loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  },
+): Promise<SessionPatchProjectionResult> {
+  const preparation = prepareSessionsPatchEntry(params);
+  if (preparation.kind === "complete") {
+    return preparation.result;
+  }
+  if (!params.loadGatewayModelCatalog) {
+    return preparation.finish(undefined);
+  }
+  const catalog = await params.loadGatewayModelCatalog();
+  return preparation.finish(Array.isArray(catalog) ? catalog : []);
+}
+
+function* projectSessionPatchSteps(
+  params: SessionPatchProjectionParams,
+): Generator<void, SessionPatchProjectionResult, ModelCatalogEntry[] | undefined> {
   const { cfg, storeKey, patch, creation } = params;
   if ("execSecurity" in patch || "execAsk" in patch) {
     return invalid(
@@ -203,13 +254,18 @@ export async function projectSessionsPatchEntry(params: {
     );
   };
   let loadedModelCatalog: ModelCatalogEntry[] | undefined;
-  const loadPreparedModelCatalogForPatch = async () => {
-    if (!loadedModelCatalog && params.loadGatewayModelCatalog) {
-      const catalog = await params.loadGatewayModelCatalog();
-      loadedModelCatalog = Array.isArray(catalog) ? catalog : [];
+  let catalogPrepared = false;
+  function* loadPreparedModelCatalogForPatch(): Generator<
+    void,
+    ModelCatalogEntry[] | undefined,
+    ModelCatalogEntry[] | undefined
+  > {
+    if (!catalogPrepared) {
+      loadedModelCatalog = yield;
+      catalogPrepared = true;
     }
     return loadedModelCatalog;
-  };
+  }
 
   const existing =
     params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
@@ -341,7 +397,7 @@ export async function projectSessionsPatchEntry(params: {
         const hintProvider =
           normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
         const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
-        const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+        const thinkingCatalog = yield* loadPreparedModelCatalogForPatch();
         const thinkingRuntime = resolveThinkingRuntime(hintProvider, hintModel, existing);
         return invalid(
           `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog, thinkingRuntime)})`,
@@ -496,7 +552,7 @@ export async function projectSessionsPatchEntry(params: {
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
-      const catalog = await loadPreparedModelCatalogForPatch();
+      const catalog = yield* loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
           ok: false,
@@ -587,7 +643,7 @@ export async function projectSessionsPatchEntry(params: {
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else {
-      const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+      const thinkingCatalog = yield* loadPreparedModelCatalogForPatch();
       thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
       if (
         !isThinkingLevelSupported({
@@ -614,7 +670,7 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
-  const contextWindowPatch = await applySessionContextWindowPatch({
+  const contextWindowPatch = yield* applySessionContextWindowPatch({
     defaultModel: resolvedDefault.model,
     defaultProvider: resolvedDefault.provider,
     loadModelCatalog: loadPreparedModelCatalogForPatch,

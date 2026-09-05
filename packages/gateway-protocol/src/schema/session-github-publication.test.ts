@@ -2,13 +2,40 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   SessionGitHubConfirmParamsSchema,
+  SessionGitHubOptionsParamsSchema,
   SessionGitHubOptionsResultSchema,
   SessionGitHubPublicationResultSchema,
   SessionGitHubPublishParamsSchema,
+  SessionGitHubStatusParamsSchema,
 } from "./session-github-publication.js";
 import { UsersGitHubAuthorizeStartParamsSchema, UsersGitHubStatusParamsSchema } from "./users.js";
 
 describe("session GitHub publication protocol", () => {
+  it.each([
+    ["options", SessionGitHubOptionsParamsSchema, {}],
+    ["publish", SessionGitHubPublishParamsSchema, { idempotencyKey: "global-publication" }],
+    [
+      "status",
+      SessionGitHubStatusParamsSchema,
+      { requestId: "a1111111-1111-4111-8111-111111111111" },
+    ],
+    [
+      "confirm",
+      SessionGitHubConfirmParamsSchema,
+      {
+        requestId: "a1111111-1111-4111-8111-111111111111",
+        generation: "a1111111-1111-4111-8111-111111111111",
+        account: { accountId: 101, login: "alice" },
+        requestDigest: "a".repeat(64),
+      },
+    ],
+  ] as const)("preserves an optional selected owner for %s", (_name, schema, fields) => {
+    const request = { sessionKey: "global", ...fields };
+    expect(Value.Check(schema, request)).toBe(true);
+    expect(Value.Check(schema, { ...request, agentId: "research" })).toBe(true);
+    expect(Value.Check(schema, { ...request, agentId: "" })).toBe(false);
+  });
+
   it("allows shared-only options and one closed personal recovery descriptor", () => {
     const sharedOnly = {
       personal: null,

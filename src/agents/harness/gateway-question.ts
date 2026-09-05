@@ -276,19 +276,19 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
   });
 }
 
-/** Claims the next queued plain-text message for the session's gateway question. */
+/** Claims eligible question input; unmatched input remains owned by ordinary admission. */
 export async function claimPendingAgentQuestionAnswer(params: {
   sessionKey?: string;
   text: string;
   persist?: () => Promise<void>;
   authority?: QuestionInputAuthority;
 }): Promise<boolean> {
-  params.authority?.assertCurrent();
   const sessionKey = params.sessionKey?.trim();
   const state = sessionKey ? pendingAgentQuestions.get(sessionKey) : undefined;
   if (!state || state.resolving || (state.kind === "gateway" && state.cancelRequested)) {
     return false;
   }
+  params.authority?.assertCurrent();
   if (state.kind === "secret") {
     state.answerAuthority?.assertActive();
     state.resolving = true;

@@ -825,7 +825,19 @@ catalog, API-key auth, and dynamic model resolution.
       - `normalizeConfig` resolves one owning plugin per provider id (bundled providers first, then the matched runtime plugin) and calls only that hook - there is no scan across other providers. Google's own `normalizeConfig` hook is what normalizes `google` / `google-vertex` / `google-antigravity` config entries; it is not a separate core fallback.
       - `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
       - `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
+      - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
       - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
+
+      Bundled and trusted official plugins can also export
+      `resolveToolSearchMode(ctx)` from their lightweight `provider-policy-api`
+      artifact. The context contains the final `provider`, `modelId`, `api`, and
+      optional `baseUrl`; its type is exported from
+      `openclaw/plugin-sdk/provider-model-types`. Return `"tools"` to prefer
+      structured Tool Search, `false` to veto the managed-local-service default,
+      or `undefined` to leave that decision to the host. The host records the
+      result on the resolved runtime model rather than writing configuration.
+      Explicit `tools.toolSearch` settings take precedence. This hook changes
+      schema exposure, not tool permissions or availability.
 
     </Accordion>
 
@@ -995,6 +1007,31 @@ catalog, API-key auth, and dynamic model resolution.
         clients. Implement `handleBargeIn` when a transport can detect that a
         human is interrupting assistant playback and the provider supports
         truncating or clearing the active audio response.
+        When native audio events identify an item, pass that identity alongside
+        PCM as `req.onAudio(audio, { itemId })`; omit
+        metadata for transports without native item IDs. If supplied,
+        `req.getPlaybackState()` returns retained items in playback order with
+        cumulative, item-relative `audioEndMs`; queued items have zero duration.
+        Snapshot these offsets before clearing output and synchronize discarded
+        output using the provider's native cancellation and truncation semantics.
+        An empty snapshot means no retained audio, even if a new response is
+        generating. Hosts without playback measurements omit the callback and
+        keep the existing media-timestamp and playback-mark contract.
+
+        After emitting PCM, providers can call `req.onMark?.(name, acknowledge)`
+        with an acknowledgment callback bound to that exact provider connection.
+        The callback must reject replaced connections and retired marks, while
+        remaining valid if a newer response starts before older playback drains.
+        Transports invoke scoped callbacks in order after consuming the associated
+        PCM, not when receiving or encoding it. Cancellation and failure retire
+        provider mark ownership separately; discarded PCM is never reported as played.
+        The existing `onMark(name)` and `bridge.acknowledgeMark(name)` contract
+        remains available to remote transports and installed providers. Discord
+        retains immediate acknowledgments for those legacy unscoped marks.
+        `onEvent` observes diagnostic events. OpenAI and xAI report outbound
+        frames after submitting them to the local socket; the callback neither
+        acknowledges remote receipt nor vetoes the frame. Control requested
+        inside an observer runs after that frame.
         `submitToolResult` may return `void` for synchronous submission, or a
         `Promise<void>` for an asynchronous completion boundary the provider
         bridge can expose. Gateway relay sessions wait for that promise before

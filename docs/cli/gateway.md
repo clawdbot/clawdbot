@@ -228,11 +228,18 @@ External supervisor implementations should also apply these acceptance rules:
 ### Gateway profiling
 
 - `OPENCLAW_GATEWAY_STARTUP_TRACE=1` logs phase timings during startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings (installed-index, manifest registry, startup planning, owner-map work).
-- `OPENCLAW_GATEWAY_RESTART_TRACE=1` logs restart-scoped `restart trace:` lines: signal handling, active-work drain, shutdown phases, next start, ready timing, and memory metrics.
+- `OPENCLAW_GATEWAY_RESTART_TRACE=1` logs `restart trace:` lines for restart signal handling, active-work drain, shutdown phases, next start, ready timing, and memory metrics. Ordinary stops also start a fresh trace with `stop.signal.received` and `stop.drain` timing. Named shutdown steps and coarse close phases emit `.begin` before waiting, then a duration when they settle; an unmatched begin identifies an entered phase that has not settled. These phases do not time every nested cleanup operation individually.
 - `OPENCLAW_DIAGNOSTICS=timeline` with `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=<path>` writes a best-effort JSONL startup diagnostics timeline for external QA harnesses (equivalent to config `diagnostics.flags: ["timeline"]`; the path is still env-only). Add `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` to include event-loop samples.
 - `pnpm build` then `pnpm test:startup:gateway -- --runs 5 --warmup 1` benchmarks Gateway startup against the built CLI entry: first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing.
 - `pnpm build` then `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5` benchmarks in-process restart on macOS or Linux (not supported on Windows; restart requires `SIGUSR1`). Uses `SIGUSR1`, enables both traces in the child process, and records next `/healthz`, next `/readyz`, downtime, ready timing, CPU, RSS, and restart trace metrics.
 - `/healthz` is liveness; `/readyz` is usable readiness. Treat trace lines and benchmark output as owner-attribution signal, not a complete performance conclusion from one span or sample.
+
+Without tracing, stops and restarts report nonzero active-work category counts at
+the first drain snapshot and at most once every 30 seconds while still pending.
+These reports omit task identities and request origins; categories can overlap.
+An ordinary stop logs `active-work drain settled; beginning server close` before
+teardown, including after a drain timeout or failure. Diagnostics do not change
+drain budgets or the service manager's stop deadline.
 
 ## Query a running Gateway
 
@@ -606,6 +613,31 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
+### Recover an unreadable native service definition
+
+If installation or a managed update reports `SERVICE_DEFINITION_UNKNOWN`, first
+restore access to the service files and native service manager. `--force` does not
+bypass unknown service facts. Inspect the selected service with
+`openclaw gateway status --deep` from the account and profile that own it.
+
+For a malformed definition or unsupported environment syntax, privately back up
+the service files and any values stored only in its environment. Correct unresolved
+or unsupported values before reinstalling; OpenClaw cannot infer their intended
+values. Then, from an external shell using the same account and profile:
+
+```bash
+openclaw gateway uninstall
+openclaw gateway install
+openclaw gateway health
+```
+
+Uninstall removes the native registration and launcher, preserving configuration,
+plugin installations, session state, and workspaces. Reinstallation rebuilds the
+service environment from the current configuration and installation inputs;
+service-only values must be supplied again. If native service status is itself
+unavailable, uninstall also refuses: restore native manager access first instead
+of deleting state or bypassing inspection.
+
 ### Lifecycle requests from Gateway chat
 
 Gateway-hosted OpenClaw chat controls the exact Gateway serving that session.
@@ -621,6 +653,12 @@ then drains work and finishes teardown before asking the native manager to stop
 the service. The requesting operation can finish its audit, history, and response
 submission during that drain;
 this does not guarantee that the client receives the response before disconnecting.
+
+After the normal grace period, stop cancels the remaining runs owned by that
+Gateway and waits for their commands and cleanup to settle. Ordinary stop does
+not schedule restart recovery. A required cleanup failure produces a nonzero exit and
+prevents an in-process replacement, including when startup failed before the
+Gateway became ready.
 
 Ownership or preparation failures leave the Gateway serving and return an error.
 Linux uses an independent transient control scope, in the owning systemd manager,

@@ -1,22 +1,11 @@
 // Openai provider module implements model/runtime integration.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
-import {
-  resolveOpenAICodexAuthIdentity,
-  resolveProviderAuthProfileApiKey,
-} from "openclaw/plugin-sdk/provider-auth";
-import {
-  createProviderHttpError,
-  readProviderJsonResponse,
-  resolveProviderRequestHeaders,
-} from "openclaw/plugin-sdk/provider-http";
-import { captureWsEvent } from "openclaw/plugin-sdk/proxy-capture";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenAIQuicksilverAuth } from "./realtime-quicksilver-wire.js";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 
 const OPENAI_REALTIME_API_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_REALTIME_SSRF_POLICY = {
@@ -27,27 +16,6 @@ const OPENAI_REALTIME_SSRF_POLICY = {
 // Secret minting blocks interactive Talk setup; keep this absolute budget aligned
 // with the maintained realtime Talk live smoke.
 const OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS = 30_000;
-
-export async function resolveOpenAIChatGptSubscriptionAuth(params: {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-}): Promise<Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined> {
-  const token = await resolveProviderAuthProfileApiKey({
-    provider: "openai",
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    profileTypes: ["oauth"],
-    includeExternalCliAuth: false,
-  });
-  if (!token) {
-    return undefined;
-  }
-  const accountId = resolveOpenAICodexAuthIdentity({ access: token }).accountId;
-  if (!accountId) {
-    throw new Error("The selected ChatGPT OAuth profile is missing its account id");
-  }
-  return { type: "oauth", token, accountId };
-}
 
 export function readRealtimeErrorDetail(error: unknown): string {
   if (typeof error === "string" && error) {
@@ -71,13 +39,16 @@ export function resolveOpenAIProviderConfigRecord(
   );
 }
 
-export function captureOpenAIRealtimeWsClose(params: {
-  url: string;
-  flowId: string;
-  capability: "realtime-transcription" | "realtime-voice";
-  code: unknown;
-  reasonBuffer: unknown;
-}): void {
+export function captureOpenAIRealtimeWsClose(
+  params: {
+    url: string;
+    flowId: string;
+    capability: "realtime-transcription" | "realtime-voice";
+    code: unknown;
+    reasonBuffer: unknown;
+  },
+  captureWsEvent: OpenAIRealtimeHost["captureWsEvent"],
+): void {
   captureWsEvent({
     url: params.url,
     direction: "local",
@@ -112,6 +83,12 @@ type OpenAIRealtimeSecretRequest = {
 
 async function createOpenAIRealtimeSecret(
   params: OpenAIRealtimeSecretRequest,
+  {
+    createProviderHttpError,
+    readProviderJsonResponse,
+    resolveProviderRequestHeaders,
+    fetchWithSsrFGuard,
+  }: OpenAIRealtimeHost,
 ): Promise<OpenAIRealtimeClientSecretResult> {
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
@@ -174,35 +151,47 @@ async function createOpenAIRealtimeSecret(
   };
 }
 
-export async function createOpenAIRealtimeClientSecret(params: {
-  authToken: string;
-  auditContext: string;
-  session: Record<string, unknown>;
-  authRejectedMessage?: string;
-}): Promise<OpenAIRealtimeClientSecretResult> {
+export async function createOpenAIRealtimeClientSecret(
+  params: {
+    authToken: string;
+    auditContext: string;
+    session: Record<string, unknown>;
+    authRejectedMessage?: string;
+  },
+  runtime: OpenAIRealtimeHost,
+): Promise<OpenAIRealtimeClientSecretResult> {
   const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;
-  return createOpenAIRealtimeSecret({
-    ...params,
-    url,
-    body: { session: params.session },
-    errorMessage: "OpenAI Realtime client secret failed",
-    missingValueMessage: "OpenAI Realtime client secret response did not include a value",
-  });
+  return createOpenAIRealtimeSecret(
+    {
+      ...params,
+      url,
+      body: { session: params.session },
+      errorMessage: "OpenAI Realtime client secret failed",
+      missingValueMessage: "OpenAI Realtime client secret response did not include a value",
+    },
+    runtime,
+  );
 }
 
-export async function createOpenAIRealtimeTranscriptionClientSecret(params: {
-  authToken: string;
-  auditContext: string;
-  session: Record<string, unknown>;
-  authRejectedMessage?: string;
-}): Promise<OpenAIRealtimeClientSecretResult> {
+export async function createOpenAIRealtimeTranscriptionClientSecret(
+  params: {
+    authToken: string;
+    auditContext: string;
+    session: Record<string, unknown>;
+    authRejectedMessage?: string;
+  },
+  runtime: OpenAIRealtimeHost,
+): Promise<OpenAIRealtimeClientSecretResult> {
   const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;
-  return createOpenAIRealtimeSecret({
-    ...params,
-    url,
-    body: { session: params.session },
-    errorMessage: "OpenAI Realtime transcription client secret failed",
-    missingValueMessage:
-      "OpenAI Realtime transcription client secret response did not include a value",
-  });
+  return createOpenAIRealtimeSecret(
+    {
+      ...params,
+      url,
+      body: { session: params.session },
+      errorMessage: "OpenAI Realtime transcription client secret failed",
+      missingValueMessage:
+        "OpenAI Realtime transcription client secret response did not include a value",
+    },
+    runtime,
+  );
 }

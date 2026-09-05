@@ -64,34 +64,10 @@ private final class SkillsStatusFixture: Sendable {
     }
 
     @MainActor
-    func invalidate(sequenceGap: Bool = false) async throws {
+    func invalidate(sequenceGap: Bool = false) {
         guard let socket = self.session.latestTask() else { return }
         if sequenceGap {
-            let pushes = await self.gateway.subscribe()
-            var firstReceived = false
-            let observation = Task {
-                for await delivery in pushes {
-                    guard let push = delivery.push else { continue }
-                    if case let .event(event) = push, event.event == "tick", event.seq == 1 {
-                        firstReceived = true
-                    }
-                }
-            }
-            // The callback mock launches independent Tasks; establish wire order before creating the gap.
             socket.emitReceiveSuccess(.data(Data(#"{"type":"event","event":"tick","seq":1}"#.utf8)))
-            do {
-                let deadline = ContinuousClock.now + .seconds(2)
-                while !firstReceived, ContinuousClock.now < deadline {
-                    try await Task.sleep(for: .milliseconds(5))
-                }
-                try #require(firstReceived)
-            } catch {
-                observation.cancel()
-                await observation.value
-                throw error
-            }
-            observation.cancel()
-            await observation.value
             socket.emitReceiveSuccess(.data(Data(#"{"type":"event","event":"tick","seq":3}"#.utf8)))
         } else {
             socket.emitReceiveSuccess(.data(Data(#"{"type":"event","event":"skills.changed"}"#.utf8)))
@@ -140,7 +116,7 @@ struct SkillsSettingsSmokeTests {
         try await fixture.withModel { model in
             try #require(await self.waitUntil { model.skills.first?.eligible == false && !model.isLoading })
             #expect(loads == 1)
-            try await fixture.invalidate(sequenceGap: sequenceGap)
+            fixture.invalidate(sequenceGap: sequenceGap)
             try #require(await self.waitUntil { model.skills.first?.eligible == true && !model.isLoading })
             #expect(loads == 2)
             #expect(model.skills.first?.missing.bins == [])
@@ -156,7 +132,7 @@ struct SkillsSettingsSmokeTests {
         }
         try await fixture.withModel { model in
             try #require(await self.waitUntil { model.error != nil && !model.isLoading })
-            try await fixture.invalidate()
+            fixture.invalidate()
             try #require(await self.waitUntil { model.skills.first?.eligible == true && !model.isLoading })
             #expect(loads == 2)
             #expect(model.error == nil)
@@ -181,7 +157,7 @@ struct SkillsSettingsSmokeTests {
                 release = nil
             }
             try #require(await self.waitUntil { release != nil })
-            try await fixture.invalidate()
+            fixture.invalidate()
             release?.resume()
             release = nil
             try #require(await self.waitUntil { model.skills.first?.eligible == true && !model.isLoading })

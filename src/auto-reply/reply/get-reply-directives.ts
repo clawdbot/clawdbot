@@ -22,7 +22,8 @@ import {
   hasSkillReferenceCandidate,
 } from "../../skills/discovery/chat-command-invocation.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
-import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { isExplicitCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type {
@@ -40,10 +41,7 @@ import {
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
-import {
-  type InlineDirectives,
-  resolveNativeReplyDirectiveCommand,
-} from "./directive-handling.parse.js";
+import { type InlineDirectives, resolveReplyDirectiveCommand } from "./directive-handling.parse.js";
 import {
   reserveSkillCommandNames,
   resolveConfiguredDirectiveAliases,
@@ -58,6 +56,7 @@ import {
   createModelSelectionState,
   resolveContextTokens,
 } from "./model-selection.js";
+import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { TypingController } from "./typing.js";
@@ -160,7 +159,7 @@ export async function resolveReplyDirectives(params: {
   sessionKey: string;
   storePath?: string;
   sessionScope: Parameters<typeof applyInlineDirectiveOverrides>[0]["sessionScope"];
-  groupResolution: Parameters<typeof resolveGroupRequireMention>[0]["groupResolution"];
+  conversation: PreparedReplyConversation;
   isGroup: boolean;
   triggerBodyNormalized: string;
   resetTriggered: boolean;
@@ -193,7 +192,7 @@ export async function resolveReplyDirectives(params: {
     sessionKey,
     storePath,
     sessionScope,
-    groupResolution,
+    conversation,
     isGroup,
     triggerBodyNormalized,
     resetTriggered,
@@ -307,23 +306,32 @@ export async function resolveReplyDirectives(params: {
     (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
   );
   const commandTurn = resolveCommandTurnContext(ctx);
-  const nativeDirectiveCommand =
-    command.isAuthorizedSender && isNativeCommandTurn(commandTurn) && commandTurn.commandName
-      ? resolveNativeReplyDirectiveCommand(
-          (await loadCommandsRegistry()).findCommandByNativeName(
-            commandTurn.commandName,
-            command.channel,
-            {
-              includeBundledChannelFallback: false,
-            },
-          )?.key,
-        )
+  const commandRegistry =
+    command.isAuthorizedSender &&
+    isExplicitCommandTurn(commandTurn) &&
+    (commandTurn.kind === "native" ? Boolean(commandTurn.commandName) : canInterpretTextDirectives)
+      ? await loadCommandsRegistry()
       : undefined;
+  const explicitDirectiveCommand = resolveReplyDirectiveCommand(
+    commandRegistry
+      ? commandTurn.kind === "native"
+        ? commandRegistry.findCommandByNativeName(commandTurn.commandName ?? "", command.channel, {
+            includeBundledChannelFallback: false,
+          })?.key
+        : commandRegistry.resolveTextCommand(command.commandBodyNormalized, cfg)?.command.key
+      : undefined,
+  );
+  const directiveCommandText =
+    explicitDirectiveCommand && commandTurn.kind === "text-slash"
+      ? normalizeCommandBody(commandText, { botUsername: ctx.BotUsername, preserveArguments: true })
+      : commandText;
   const routedDirectives = resolveReplyDirectiveRouting({
-    commandText,
-    agentText: sessionCtx.agentText,
+    commandText: directiveCommandText,
+    agentText: sessionCtx.agentText === commandText ? directiveCommandText : sessionCtx.agentText,
     modelAliases: configuredAliases,
-    nativeCommand: nativeDirectiveCommand,
+    command: explicitDirectiveCommand
+      ? { kind: commandTurn.kind === "native" ? "native" : "text", name: explicitDirectiveCommand }
+      : undefined,
     canInterpretTextDirectives: canInterpretMessageDirectives,
     isAuthorizedSender: command.isAuthorizedSender,
     isGroup,
@@ -382,8 +390,7 @@ export async function resolveReplyDirectives(params: {
 
   const requireMention = await resolveGroupRequireMention({
     cfg,
-    ctx: sessionCtx,
-    groupResolution,
+    group: conversation.group,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
   const sessionThinkLevel = directives.clearThinkLevel

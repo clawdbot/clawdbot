@@ -8,6 +8,67 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct SettingsViewSmokeTests {
+    @Test func `first Reconnect prefills the Gateway and Add starts a fresh empty editor`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let profile = try MacGatewayProfile(
+                id: "editor-fixture",
+                name: "Project Gateway",
+                url: #require(URL(string: "wss://gateway.example.test:8443/control/")))
+            try await withHostedSettings(GatewaySettings(profiles: [profile])) { hosting, window in
+                for (action, reconnecting) in [("Reconnect", true), ("Add Gateway", false)] {
+                    let buttons = try await settingsAccessibilityElements(hosting)
+                    let button = try #require(buttons.first {
+                        $0.accessibilityRole?() == .button &&
+                            [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains(action)
+                    })
+                    #expect(button.accessibilityPerformPress?() == true)
+                    let deadline = ContinuousClock.now + .seconds(3)
+                    while window.attachedSheet == nil, ContinuousClock.now < deadline {
+                        try await Task.sleep(for: .milliseconds(20))
+                    }
+                    let sheet = try #require(window.attachedSheet?.contentView)
+                    var values: [String] = []
+                    var connectEnabled: Bool?
+                    repeat {
+                        sheet.layoutSubtreeIfNeeded()
+                        let elements = try await settingsAccessibilityElements(sheet)
+                        values = elements.filter { $0.accessibilityRole?() == .textField }.map {
+                            let value: Any? = $0.accessibilityValue?()
+                            return value as? String ?? ""
+                        }
+                        connectEnabled = elements.first {
+                            $0.accessibilityRole?() == .button &&
+                                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Connect")
+                        }?.isAccessibilityEnabled?()
+                        let populated = values.contains(profile.name) && values.contains(profile.url.absoluteString)
+                        if values.count >= 2, connectEnabled == reconnecting,
+                           reconnecting ? populated : values.allSatisfy(\.isEmpty) { break }
+                        try await Task.sleep(for: .milliseconds(20))
+                    } while ContinuousClock.now < deadline
+                    #expect(values.count >= 2)
+                    #expect(connectEnabled == reconnecting)
+                    if reconnecting {
+                        #expect(values.contains(profile.name))
+                        #expect(values.contains(profile.url.absoluteString))
+                    } else {
+                        let hasOnlyEmptyFields = values.allSatisfy(\.isEmpty)
+                        #expect(hasOnlyEmptyFields)
+                    }
+                    let cancel = try #require(try await settingsAccessibilityElements(sheet).first {
+                        $0.accessibilityRole?() == .button &&
+                            [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Cancel")
+                    })
+                    #expect(cancel.accessibilityPerformPress?() == true)
+                    let dismissedDeadline = ContinuousClock.now + .seconds(3)
+                    while window.attachedSheet != nil, ContinuousClock.now < dismissedDeadline {
+                        try await Task.sleep(for: .milliseconds(20))
+                    }
+                    try #require(window.attachedSheet == nil)
+                }
+            }
+        }
+    }
+
     @Test func `first Edit presents the selected cron job fields`() async throws {
         try await TestIsolation.withIsolatedState {
             let store = CronJobsStore(isPreview: true)
@@ -62,7 +123,7 @@ struct SettingsViewSmokeTests {
             ]
 
             try await withHostedCronSettings(store: store) { hosting, window in
-                let elements = try await cronEditorAccessibilityElements(hosting)
+                let elements = try await settingsAccessibilityElements(hosting)
                 let edit = try #require(elements.first { element in
                     element.accessibilityRole?() == .button &&
                         [element.accessibilityLabel?(), element.accessibilityTitle?()].contains("Edit")
@@ -76,7 +137,7 @@ struct SettingsViewSmokeTests {
                 var values: [String] = []
                 repeat {
                     sheet.layoutSubtreeIfNeeded()
-                    values = try await cronEditorAccessibilityElements(sheet).compactMap { element -> String? in
+                    values = try await settingsAccessibilityElements(sheet).compactMap { element -> String? in
                         let value: Any? = element.accessibilityValue?()
                         return value as? String
                     }
@@ -311,8 +372,16 @@ private func withHostedCronSettings(
     isActive: Bool = false,
     _ body: (NSHostingView<CronSettings>, NSWindow) async throws -> Void) async throws
 {
-    _ = AppKitTestSupport.application
     let view = CronSettings(store: store, channelsStore: ChannelsStore(isPreview: true), isActive: isActive)
+    try await withHostedSettings(view, body)
+}
+
+@MainActor
+private func withHostedSettings<Content: View>(
+    _ view: Content,
+    _ body: (NSHostingView<Content>, NSWindow) async throws -> Void) async throws
+{
+    _ = AppKitTestSupport.application
     let hosting = NSHostingView(rootView: view)
     hosting.frame = NSRect(x: 0, y: 0, width: 1000, height: 800)
     let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -331,7 +400,7 @@ private func withHostedCronSettings(
 
 @MainActor
 private func cronSettingsRefreshButton(_ hosting: NSView) async throws -> AnyObject {
-    let elements = try await cronEditorAccessibilityElements(hosting)
+    let elements = try await settingsAccessibilityElements(hosting)
     return try #require(elements.first { element in
         element.accessibilityRole?() == .button &&
             [element.accessibilityLabel?(), element.accessibilityTitle?()].contains("Refresh")
@@ -356,14 +425,14 @@ private func waitForCronSettingsStrings(
 @MainActor
 private func cronSettingsVisibleStrings(_ hosting: NSView) async throws -> [String] {
     hosting.layoutSubtreeIfNeeded()
-    return try await cronEditorAccessibilityElements(hosting).flatMap { element -> [String] in
+    return try await settingsAccessibilityElements(hosting).flatMap { element -> [String] in
         let value: Any? = element.accessibilityValue?()
         return [element.accessibilityLabel?(), element.accessibilityTitle?(), value as? String].compactMap(\.self)
     }
 }
 
 @MainActor
-private func cronEditorAccessibilityElements(_ root: NSView) async throws -> [AnyObject] {
+private func settingsAccessibilityElements(_ root: NSView) async throws -> [AnyObject] {
     // SwiftUI materializes its virtual accessibility children after a real client request.
     let result = await Task.detached {
         let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)

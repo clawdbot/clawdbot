@@ -1,8 +1,10 @@
 // Control UI tests cover the responsive disconnected login gate.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   controlUiSessionUrl,
@@ -165,6 +167,8 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const header = page.locator(".chat-pane__header");
       await header.waitFor({ state: "visible" });
+      await header.locator(".chat-side-panel-toggle").click();
+      await header.getByRole("button", { name: "Focus", exact: true }).click();
       await gateway.setOnline(false);
 
       await expect
@@ -189,7 +193,7 @@ suite.define(() => {
       expect(await outlet.getAttribute("aria-disabled")).toBeNull();
       expect(await header.isVisible()).toBe(true);
 
-      const headerActions = header.locator(".chat-pane__actions");
+      const headerActions = header.locator("fieldset.chat-pane__actions");
       expect(
         await headerActions.evaluate((element) => (element as HTMLFieldSetElement).disabled),
       ).toBe(true);
@@ -198,6 +202,11 @@ suite.define(() => {
       for (const button of await actionButtons.all()) {
         expect(await button.isDisabled()).toBe(true);
       }
+      const restore = header.getByRole("button", { name: "Restore split", exact: true });
+      expect(await restore.isEnabled()).toBe(true);
+      await restore.click();
+      await page.locator(".side-panel-empty--selector").waitFor();
+      expect(await header.locator(".chat-side-panel-toggle").isEnabled()).toBe(true);
     } finally {
       await closeContext(context);
     }
@@ -333,11 +342,12 @@ suite.define(() => {
       if (fixture.error.code === "UNAVAILABLE") {
         await gateway.waitForRequest("connect", { after: 1 });
       }
-      await page.screenshot({
-        path: path.join(RECOVERY_ARTIFACT_DIR, "login-failure.png"),
-        fullPage: true,
-        animations: "disabled",
-      });
+      await writeFile(
+        path.join(RECOVERY_ARTIFACT_DIR, "login-failure.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".login-gate__card"), [
+          page.locator(".login-gate__failure"),
+        ]),
+      );
       const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
       await failure.waitFor({ timeout: 10_000 });
       expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(

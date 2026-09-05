@@ -12,6 +12,7 @@ import {
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import {
   failNextDeviceIdentityMint,
+  focusChatSidePanel,
   openChatSidePanelType,
 } from "./chat-side-panel.test-support.ts";
 import {
@@ -581,7 +582,7 @@ suite.define(() => {
       operatorScopes: limitedScopes,
       width: 1280,
     },
-  ])("keeps expanded side-panel tabs clear of $label web titlebar chrome", async (testCase) => {
+  ])("keeps focused main controls clear of $label web titlebar chrome", async (testCase) => {
     const page = await openPage({
       deviceLess: testCase.deviceLess,
       scenario: testCase.operatorScopes
@@ -605,14 +606,12 @@ suite.define(() => {
       await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
     }
     await openChatSidePanelType(page, "Side chat");
-    const panel = page.getByRole("region", { name: "Side panel" });
-    await panel.getByRole("button", { name: "Expand side panel" }).click();
-    await panel.getByRole("button", { name: "Collapse" }).waitFor();
+    await focusChatSidePanel(page);
 
     const shellControls = page.locator(
       ".macos-titlebar-controls button:visible, .sidebar-attention--floating button:visible",
     );
-    const panelControls = panel.locator(":scope > .side-panel__header :is(button, wa-tab):visible");
+    const panelControls = page.locator(".chat-pane__actions button:visible");
     const shellBoxes = await Promise.all(
       Array.from({ length: await shellControls.count() }, (_, index) =>
         shellControls.nth(index).boundingBox(),
@@ -623,10 +622,20 @@ suite.define(() => {
         panelControls.nth(index).boundingBox(),
       ),
     );
-    const shellRight = Math.max(...shellBoxes.flatMap((box) => (box ? [box.x + box.width] : [])));
-    const panelLeft = Math.min(...panelBoxes.flatMap((box) => (box ? [box.x] : [])));
-    expect(panelLeft - shellRight).toBeGreaterThanOrEqual(4);
-    expect(panelLeft - shellRight).toBeLessThanOrEqual(16);
+    expect(shellBoxes.length).toBeGreaterThan(0);
+    expect(panelBoxes.length).toBeGreaterThan(0);
+    for (const panelBox of panelBoxes) {
+      expect(panelBox).not.toBeNull();
+      for (const shellBox of shellBoxes) {
+        expect(shellBox).not.toBeNull();
+        expect(
+          panelBox!.x >= shellBox!.x + shellBox!.width + 4 ||
+            panelBox!.x + panelBox!.width <= shellBox!.x - 4 ||
+            panelBox!.y >= shellBox!.y + shellBox!.height + 4 ||
+            panelBox!.y + panelBox!.height <= shellBox!.y - 4,
+        ).toBe(true);
+      }
+    }
     if (testCase.deviceLess) {
       await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").waitFor();
       expect(await page.locator(".scope-upgrade-shell-status").count()).toBe(0);

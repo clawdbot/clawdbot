@@ -32,7 +32,10 @@ import type {
 import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
-import { resolveThinkingProfile as resolveOllamaThinkingProfile } from "./provider-policy-api.js";
+import {
+  normalizeResolvedModel,
+  resolveThinkingProfile as resolveOllamaThinkingProfile,
+} from "./provider-policy-api.js";
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   OLLAMA_CLOUD_BASE_URL,
@@ -290,12 +293,14 @@ async function discoverAppGuidedOllamaModel(
     ) {
       continue;
     }
-    model = capLocalOllamaModelContext({
-      ...candidate,
-      contextWindow,
-      contextTokens: contextWindow,
-      compat: { ...candidate.compat, supportsTools: true },
-    });
+    model = capLocalOllamaModelContext(
+      {
+        ...candidate,
+        contextWindow,
+        compat: { ...candidate.compat, supportsTools: true },
+      },
+      provider.baseUrl,
+    );
     break;
   }
   if (!model) {
@@ -617,7 +622,9 @@ async function resolveRequestedDynamicOllamaModel(params: {
     showInfo.contextWindow,
     showInfo.capabilities,
   );
-  const model = params.capContextTokens ? capLocalOllamaModelContext(definition) : definition;
+  const model = params.capContextTokens
+    ? capLocalOllamaModelContext(definition, showBaseUrl)
+    : definition;
   return toDynamicOllamaModel({
     provider: params.provider,
     providerConfig: params.providerConfig,
@@ -726,6 +733,7 @@ const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
         : buildOpenAICompatibleReplayPolicy(modelApi),
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: resolveOllamaThinkingProfile,
+    normalizeResolvedModel,
     wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
     matchesContextOverflowError: ({ errorMessage }) =>
       matchesOllamaContextOverflowError(errorMessage),
@@ -738,6 +746,7 @@ const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
     | "buildReplayPolicy"
     | "resolveReasoningOutputMode"
     | "resolveThinkingProfile"
+    | "normalizeResolvedModel"
     | "wrapStreamFn"
     | "matchesContextOverflowError"
     | "classifyFailoverReason"

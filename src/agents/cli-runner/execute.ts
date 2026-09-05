@@ -662,6 +662,7 @@ export async function executePreparedCliRun(
       failure = new AggregateError(
         [error, persistenceError],
         "CLI turn failed and its fork successor could not be persisted",
+        { cause: error },
       );
     }
     if (forkResumeClaimed && !forkSuccessorObserved) {
