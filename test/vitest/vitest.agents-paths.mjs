@@ -19,6 +19,8 @@ const coreIsolatedFiles = [
   "src/agents/openai-transport-stream.streaming.test.ts",
   "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
+  "src/agents/subagents/spawn/subagent-spawn.authority.test.ts",
+  "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
 ];
 const incompleteTurnFiles = [
   `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
