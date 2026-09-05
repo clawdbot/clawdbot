@@ -16,7 +16,6 @@ const sessionRow = vi.hoisted(() => ({
 }));
 const resolveEmbeddedAgentRunProgressStateMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionRowMock = vi.hoisted(() => vi.fn());
-const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
 const listAccessorSessionEntriesReadOnlyMock = vi.hoisted(() => vi.fn());
 const loadAccessorSessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
@@ -34,10 +33,6 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
     loadSessionEntryReadOnly: loadAccessorSessionEntryReadOnlyMock,
     resolveTranscriptSessionKeyBySessionId: resolveTranscriptSessionKeyBySessionIdMock,
   };
-});
-vi.mock("./chat-display-projection.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./chat-display-projection.js")>();
-  return { ...actual, projectChatDisplayMessage: projectChatDisplayMessageMock };
 });
 vi.mock("./session-utils.js", () => ({
   attachOpenClawTranscriptMeta: (message: unknown) => message,
@@ -175,7 +170,6 @@ export {
   loadGatewaySessionEntryReadOnlyMock,
   loadGatewaySessionRowMock,
   ownerGoal,
-  projectChatDisplayMessageMock,
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
   resolveEmbeddedAgentRunProgressStateMock,

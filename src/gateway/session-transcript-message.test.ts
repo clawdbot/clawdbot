@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import {
-  projectSessionMessagePayload,
+  projectSessionMessagePayloads,
   projectTranscriptEntryMessage,
 } from "./session-transcript-message.js";
 
@@ -41,13 +41,13 @@ describe("trusted transcript display metadata", () => {
         position,
       ),
     );
-    const live = projectSessionMessagePayload({
+    const live = projectSessionMessagePayloads({
       message: activity,
       messageId: "entry",
       messageSeq: 2,
       transcriptPosition: position,
       sessionKey: "agent:main:dashboard:nested",
-    }).payload?.message;
+    }).payloads[0]?.message;
     for (const projected of [history, live]) {
       expect(readSessionMessageIdentity(projected)).toMatchObject({
         id: "entry",
@@ -71,13 +71,13 @@ describe("trusted transcript display metadata", () => {
         2,
         transcriptPosition,
       );
-      const live = projectSessionMessagePayload({
+      const live = projectSessionMessagePayloads({
         message,
         messageId: "entry",
         messageSeq: 2,
         transcriptPosition,
         sessionKey: "agent:main:main",
-      }).payload?.message;
+      }).payloads[0]?.message;
       for (const projected of [history, live]) {
         const metadata = asOptionalRecord(asOptionalRecord(projected)?.["__openclaw"]);
         expect(metadata?.transcriptPosition).toEqual(transcriptPosition);

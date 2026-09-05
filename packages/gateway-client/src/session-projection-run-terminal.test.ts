@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   createSessionProjection,
   hasSessionProjectionAcceptedFinal,
+  projectLiveSessionMessage,
+  reconcileSessionProjectionSnapshot,
   reduceSessionProjection,
   type SessionProjectionScope,
 } from "./session-projection.js";
@@ -28,6 +30,53 @@ function createMessage(
 
 /** Run-scoped terminal state: final acceptance, late diagnostics, and retention. */
 describe("session run terminal bookkeeping", () => {
+  it.each(["live", "snapshot"])(
+    "keeps display parts distinct and adopts one final after %s history",
+    (arrival) => {
+      const runId = "tool-run";
+      const history = [
+        createMessage("user", "First check", { id: "previous-user", seq: 1 }),
+        createMessage("assistant", "17", { id: "previous-final", seq: 2, runId: "previous-run" }),
+        createMessage("user", "Check twice", { id: "current-user", seq: 3, runId }),
+      ];
+      const parts = ["first", "second"].flatMap((itemId, index) => {
+        const metadata = { id: `row-${itemId}`, seq: index + 4, runId };
+        return [
+          {
+            ...createMessage("assistant", "Checking inventory.", metadata),
+            openclawStreamFallback: { source: "segment", itemId },
+          },
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: `call-${itemId}`, name: "read", arguments: {} }],
+            stopReason: "toolUse",
+            __openclaw: metadata,
+          },
+        ];
+      });
+      const final = createMessage("assistant", "17", { id: "final-row", seq: 6, runId });
+      const expected = [...history, ...parts, final];
+      let state =
+        arrival === "snapshot"
+          ? createSessionProjection(primaryScope, [...history, ...parts])
+          : parts.reduce(
+              (projection, message) => projectLiveSessionMessage(projection, message),
+              createSessionProjection(primaryScope, history),
+            );
+      state = projectLiveSessionMessage(state, final);
+      state = projectLiveSessionMessage(state, createMessage("assistant", "17"), { runId });
+      expect(state.messages).toEqual(expected);
+
+      state = reduceSessionProjection(state, { type: "transportGap" });
+      state = reduceSessionProjection(state, { type: "reconnected" });
+      state = reconcileSessionProjectionSnapshot(state, structuredClone(expected));
+      for (const message of parts) {
+        state = projectLiveSessionMessage(state, message);
+      }
+      expect(state.messages).toEqual(expected);
+    },
+  );
+
   it("does not reopen a completed run when a stale stream delta arrives", () => {
     const completed = reduceSessionProjection(createSessionProjection(primaryScope), {
       type: "runTerminal",

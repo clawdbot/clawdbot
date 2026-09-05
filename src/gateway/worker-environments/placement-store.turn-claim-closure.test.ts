@@ -21,7 +21,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { projectSessionMessagePayload } from "../session-transcript-message.js";
+import { projectSessionMessagePayloads } from "../session-transcript-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
@@ -365,11 +365,11 @@ it.each([
     const unsubscribe = onSessionTranscriptUpdate((update) => {
       if (update.sessionId === SESSION.sessionId) {
         published.push(
-          projectSessionMessagePayload({
+          ...projectSessionMessagePayloads({
             ...update,
             message: update.message,
             sessionKey: SESSION.sessionKey,
-          }).payload,
+          }).payloads,
         );
       }
     });

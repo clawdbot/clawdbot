@@ -12,7 +12,6 @@ import {
   loadGatewaySessionEntryReadOnlyMock,
   loadGatewaySessionRowMock,
   ownerGoal,
-  projectChatDisplayMessageMock,
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
   resolveEmbeddedAgentRunProgressStateMock,
@@ -666,13 +665,11 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       sessionMessageSubscribers: { get: () => new Set() },
       chatAbortControllers: new Map(),
     });
-    projectChatDisplayMessageMock.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined);
-
     try {
       await handler({
         sessionFile: "/tmp/sess-main.jsonl",
         sessionKey: "agent:main:main",
-        message: { role: "toolResult", content: [] },
+        message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
         messageId: "message-1",
         messageSeq: 1,
       });

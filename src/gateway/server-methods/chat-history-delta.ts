@@ -9,7 +9,7 @@ import { jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { createCurrentUserProfileMessageProjector } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
-  projectSessionMessagePayload,
+  projectSessionMessagePayloads,
   type SessionMessageProjectionState,
 } from "../session-transcript-message.js";
 
@@ -85,7 +85,7 @@ export function readChatHistoryDelta(params: {
     if (!event || row.messageSeq === undefined) {
       continue;
     }
-    const projected = projectSessionMessagePayload({
+    const projected = projectSessionMessagePayloads({
       agentId: params.agentId,
       message: event.message,
       ...(event.messageId ? { messageId: event.messageId } : {}),
@@ -97,12 +97,12 @@ export function readChatHistoryDelta(params: {
       sessionSnapshot: params.sessionSnapshot,
     });
     projectionState = projected.projectionState;
-    if (projected.payload) {
-      messagesBytes += jsonUtf8BytesOrInfinity(projected.payload) + (messages.length > 0 ? 1 : 0);
+    for (const payload of projected.payloads) {
+      messagesBytes += jsonUtf8BytesOrInfinity(payload) + (messages.length > 0 ? 1 : 0);
       if (messagesBytes > maxBytes) {
         return { kind: "reset" };
       }
-      messages.push(projected.payload);
+      messages.push(payload);
     }
   }
   return {

@@ -638,6 +638,37 @@ describe("chat.history cursor catch-up", () => {
       },
     },
     {
+      name: "commentary display parts",
+      append: async (storePath: string) => {
+        const call = await appendTranscriptMessage(currentScope(storePath), {
+          eventId: "phased-tool",
+          parentId: "cached",
+          message: {
+            role: "assistant",
+            content: [
+              ...["first", "second"].map((id) => ({
+                type: "text",
+                text: "Checking inventory.",
+                textSignature: JSON.stringify({ v: 1, id, phase: "commentary" }),
+              })),
+              { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+            ],
+            stopReason: "toolUse",
+            __openclaw: { runId: "phased-run" },
+          },
+        });
+        await appendTranscriptMessage(currentScope(storePath), {
+          eventId: "phased-final",
+          parentId: call?.messageId,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "17" }],
+            __openclaw: { runId: "phased-run" },
+          },
+        });
+      },
+    },
+    {
       name: "heartbeat boundary",
       append: async (storePath: string) => {
         const heartbeat = await appendTranscriptMessage(currentScope(storePath), {
@@ -692,6 +723,14 @@ describe("chat.history cursor catch-up", () => {
     }>(context, "chat.history", { cursor: cached.payload?.deltaCursor });
     expect(delta.ok).toBe(true);
     expect(delta.payload?.kind).toBe("delta");
+    if (name === "commentary display parts") {
+      expect(delta.payload?.messages).toMatchObject([
+        { message: { openclawStreamFallback: { itemId: "first" } } },
+        { message: { openclawStreamFallback: { itemId: "second" } } },
+        { message: { content: [{ type: "toolCall", id: "call-1" }] } },
+        { message: { content: [{ type: "text", text: "17" }] } },
+      ]);
+    }
     if (name === "tool result pairing") {
       expect(delta.payload?.messages?.at(-1)?.message).toMatchObject({
         role: "toolResult",

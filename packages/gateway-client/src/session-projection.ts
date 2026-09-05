@@ -236,12 +236,20 @@ function entryMatches(
   right: SessionProjectionEntry,
   allowSnapshotPromotion = false,
 ): boolean {
+  const leftSegment = readAssistantStreamSegmentIdentity(left.message);
+  const rightSegment = readAssistantStreamSegmentIdentity(right.message);
+  // A transcript row can project commentary and a separate body/tool part.
+  // Row identity never joins different display parts, even when their text agrees.
+  if (leftSegment?.itemId !== rightSegment?.itemId) {
+    return false;
+  }
   if (sameTranscriptIdentity(left.identity, right.identity)) {
     return true;
   }
   const durableEntry = left.identity?.id ? left : right.identity?.id ? right : null;
   const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
-  const durableMetadata = readRecord(readRecord(durableEntry?.message)?.["__openclaw"]);
+  const durableMessage = readRecord(durableEntry?.message);
+  const durableMetadata = readRecord(durableMessage?.["__openclaw"]);
   if (
     durableEntry?.identity?.role === "assistant" &&
     provisionalEntry?.identity?.role === "assistant" &&
@@ -249,8 +257,8 @@ function entryMatches(
     !provisionalEntry.identity.isImported &&
     !provisionalEntry.identity.id
   ) {
-    const durableSegment = readAssistantStreamSegmentIdentity(durableEntry.message);
-    const provisionalSegment = readAssistantStreamSegmentIdentity(provisionalEntry.message);
+    const durableSegment = durableEntry === left ? leftSegment : rightSegment;
+    const provisionalSegment = durableEntry === left ? rightSegment : leftSegment;
     // Terminal cleanup can materialize commentary before cursor history catches up.
     // Adopt its exact item/run without joining distinct durable rows or equal prose.
     if (
@@ -261,10 +269,12 @@ function entryMatches(
     ) {
       return true;
     }
-    // History changes retention, not identity: a hydrated row still owns its
-    // unsequenced run projection. Item-keyed commentary remains separate.
+    // Only a reply can own an unkeyed run terminal. Hydrated commentary and
+    // tool-use continuations otherwise make the real final look ambiguous.
     if (
       provisionalEntry.live &&
+      !durableSegment &&
+      durableMessage?.stopReason !== "toolUse" &&
       provisionalEntry.identity.sequence === null &&
       (provisionalEntry.afterSequence === undefined ||
         (provisionalEntry.afterSequence !== null &&

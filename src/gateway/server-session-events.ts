@@ -38,7 +38,7 @@ import {
   resolveSessionSubscriptionKey,
   resolveSessionSubscriptionKeys,
 } from "./session-subscription-keys.js";
-import { projectSessionMessagePayload } from "./session-transcript-message.js";
+import { projectSessionMessagePayloads } from "./session-transcript-message.js";
 import {
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
@@ -371,7 +371,7 @@ async function handleTranscriptUpdateBroadcast(
     );
     return;
   }
-  const projected = projectSessionMessagePayload({
+  const projected = projectSessionMessagePayloads({
     sessionKey,
     ...(eventAgentId ? { agentId: eventAgentId } : {}),
     message,
@@ -381,8 +381,10 @@ async function handleTranscriptUpdateBroadcast(
     ...(update.runId ? { runId: update.runId } : {}),
     sessionSnapshot,
   });
-  if (projected.payload) {
-    params.broadcastToConnIds("session.message", projected.payload, connIds);
+  if (projected.payloads.length > 0) {
+    for (const payload of projected.payloads) {
+      params.broadcastToConnIds("session.message", payload, connIds);
+    }
     return;
   }
 

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
-import { projectSessionMessagePayload } from "./session-transcript-message.js";
+import { projectSessionMessagePayloads } from "./session-transcript-message.js";
 
 describe("assistant media directive display projection", () => {
   it("withholds relative MEDIA directives until managed attachment blocks replace them", () => {
-    const { payload } = projectSessionMessagePayload({
+    const {
+      payloads: [payload],
+    } = projectSessionMessagePayloads({
       sessionKey: "agent:main:main",
       message: {
         role: "assistant",
@@ -31,7 +33,9 @@ describe("assistant media directive display projection", () => {
   });
 
   it("keeps a media-only assistant row pending for its structured rewrite", () => {
-    const { payload } = projectSessionMessagePayload({
+    const {
+      payloads: [payload],
+    } = projectSessionMessagePayloads({
       sessionKey: "agent:main:main",
       message: {
         role: "assistant",
@@ -48,7 +52,9 @@ describe("assistant media directive display projection", () => {
 
   it("preserves fenced MEDIA examples as ordinary assistant text", () => {
     const text = ["```text", "MEDIA:./example.jpg", "```", ""].join("\n");
-    const { payload } = projectSessionMessagePayload({
+    const {
+      payloads: [payload],
+    } = projectSessionMessagePayloads({
       sessionKey: "agent:main:main",
       message: { role: "assistant", content: [{ type: "text", text }] },
     });
@@ -60,7 +66,9 @@ describe("assistant media directive display projection", () => {
 
   it("preserves legacy remote MEDIA references for client-side attachment projection", () => {
     const text = "MEDIA:https://cdn.example.test/legacy.jpg";
-    const { payload } = projectSessionMessagePayload({
+    const {
+      payloads: [payload],
+    } = projectSessionMessagePayloads({
       sessionKey: "agent:main:main",
       message: { role: "assistant", content: [{ type: "text", text }] },
     });
@@ -77,7 +85,9 @@ describe("assistant media directive display projection", () => {
         role: "assistant",
         content: [{ type: "text", text }],
       });
-      const { payload } = projectSessionMessagePayload({
+      const {
+        payloads: [payload],
+      } = projectSessionMessagePayloads({
         sessionKey: "agent:main:main",
         message: persisted,
       });
@@ -87,7 +97,9 @@ describe("assistant media directive display projection", () => {
   );
 
   it("withholds only relative directives from a mixed legacy batch", () => {
-    const { payload } = projectSessionMessagePayload({
+    const {
+      payloads: [payload],
+    } = projectSessionMessagePayloads({
       sessionKey: "agent:main:main",
       message: {
         role: "assistant",
