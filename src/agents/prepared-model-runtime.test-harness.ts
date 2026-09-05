@@ -123,9 +123,13 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
           getPreparedModelFullCatalogAuth(catalog) ?? {
             authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
             authModes: {},
+            credentials: preparedModelRuntimeMocks.authStorage.getAll(),
           },
         );
-        return catalog;
+        return {
+          modelCatalog: catalog,
+          configuredRuntimeModels: factoryArgs[0].agentFacts.configuredRuntimeModels,
+        };
       },
       loadAuth: () =>
         Promise.resolve({
@@ -212,7 +216,6 @@ const agentScopeMocks = vi.hoisted(() => ({
   resolveDefaultAgentId: () => "default",
   resolveAgentConfig: (config: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
     config.agents?.list?.find((entry) => entry.id === agentId),
-  resolveAgentEffectiveModelPrimary: () => undefined,
   resolveAgentModelFallbacksOverride: () => undefined,
   resolveEffectiveModelFallbacks: () => undefined,
   resolveModelFallbackAvailability: () => ({

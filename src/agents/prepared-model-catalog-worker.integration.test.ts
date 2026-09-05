@@ -445,6 +445,12 @@ describe("prepared model catalog worker boundary", () => {
       const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
       const fullAuth = getPreparedModelFullCatalogAuth(catalog!);
 
+      expect(fullAuth?.credentials?.[DISCOVERED_HARNESS_ID]).toEqual({
+        type: "api_key",
+        key: "discovered-native-login-not-real",
+      });
+      expect(catalog).not.toHaveProperty("credentials");
+
       if (asyncSyntheticAuth) {
         expect(
           fs
@@ -981,7 +987,7 @@ describe("prepared model catalog worker boundary", () => {
       pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
       isCurrent: fixture.isCurrent,
     });
-    const catalog = await worker.loadCatalog();
+    const { modelCatalog: catalog } = await worker.loadCatalog();
 
     expect(catalog.entries).toContainEqual(
       expect.objectContaining({
