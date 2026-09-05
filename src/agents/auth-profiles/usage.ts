@@ -769,9 +769,8 @@ const DISABLED_FAILURE_BACKOFF_POLICIES = {
   },
 } as const satisfies Record<DisabledFailureReason, DisabledFailureBackoffPolicy>;
 
-// While a disabled window is active the profile is never selected, so the base
-// backoff is the whole post-recharge recovery time; billing stays minutes like
-// auth_permanent, and maxMs keeps misclassified incident noise from spinning hot.
+// Keep the initial billing disable short so inline API keys can retry soon
+// after recharge, even though they cannot probe during an active window.
 const DEFAULT_BILLING_BACKOFF_MINUTES = 10;
 const DEFAULT_BILLING_MAX_HOURS = 24;
 const DEFAULT_AUTH_PERMANENT_BACKOFF_MINUTES = 10;
