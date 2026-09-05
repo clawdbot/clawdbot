@@ -47,6 +47,10 @@ export type PluginCommandDispatchContext = Readonly<{
   originatingTo?: string;
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
+  replyToId?: PluginCommandContext["replyToId"];
+  replyToBody?: PluginCommandContext["replyToBody"];
+  replyToSender?: PluginCommandContext["replyToSender"];
+  replyToIsQuote?: PluginCommandContext["replyToIsQuote"];
   threadParentId?: PluginCommandContext["threadParentId"];
   diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
   diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];

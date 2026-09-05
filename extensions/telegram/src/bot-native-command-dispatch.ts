@@ -357,6 +357,7 @@ async function resolveTelegramCommandAuth(params: {
     threadSpec,
     commandAuthorized,
     senderIsOwner: ownerAccess.senderIsOwner,
+    effectiveGroupAllow,
   };
 }
 
