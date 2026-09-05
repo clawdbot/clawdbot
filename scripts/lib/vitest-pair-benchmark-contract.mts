@@ -18,7 +18,7 @@ const SHA_RE = /^[0-9a-f]{40}$/u;
 const SAFE_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._@/+-]+$/u;
 
 export type BenchmarkSide = "baseline" | "candidate";
-export type BenchmarkPhase = "correctness" | "warmup" | "measured" | "cold";
+type BenchmarkPhase = "correctness" | "warmup" | "measured" | "cold";
 
 export type BenchmarkLane = {
   id: string;
@@ -27,7 +27,7 @@ export type BenchmarkLane = {
   files: string[];
 };
 
-export type BenchmarkThresholds = {
+type BenchmarkThresholds = {
   overallWallRatio: number;
   criticalLaneWallRatio: number;
   coldWallRatio: number;
@@ -58,7 +58,7 @@ export type PackageManagerIdentity = {
   version: string;
 };
 
-export type BenchmarkExecutionCounts = {
+type BenchmarkExecutionCounts = {
   numTotalTestSuites: number;
   numPassedTestSuites: number;
   numFailedTestSuites: number;
@@ -421,7 +421,7 @@ export function assertExecutionDigest(
   }
 }
 
-export function benchmarkInventoryDigest(manifest: BenchmarkManifest): string {
+function benchmarkInventoryDigest(manifest: BenchmarkManifest): string {
   return sha256(JSON.stringify(stableManifestValue(manifest)));
 }
 

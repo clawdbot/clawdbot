@@ -683,9 +683,16 @@ describe("Vitest pair benchmark lifecycle", () => {
   it.runIf(process.platform === "linux")(
     "uses GNU time labels understood by the hosted Linux runner",
     () => {
-      const result = spawnSync("/usr/bin/time", ["--version"], { encoding: "utf8" });
+      const root = tempDirs.make("vitest-pair-gnu-time-");
+      const output = path.join(root, "time.txt");
+      const result = spawnSync("/usr/bin/time", ["-v", "-o", output, process.execPath, "-e", ""], {
+        encoding: "utf8",
+      });
+
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain("GNU time");
+      const measurements = readFileSync(output, "utf8");
+      expect(measurements).toMatch(/^\s*User time \(seconds\):\s+\d+(?:\.\d+)?\s*$/mu);
+      expect(measurements).toMatch(/^\s*System time \(seconds\):\s+\d+(?:\.\d+)?\s*$/mu);
     },
   );
 });
