@@ -229,7 +229,7 @@ export function extractScriptTargetFromCommand(
   const shouldUseWindowsPathTokenizer =
     process.platform === "win32" &&
     /(?:^|[\s"'`])(?:[A-Za-z]:\\|\\\\|[^\s"'`|&;()<>]+\\[^\s"'`|&;()<>]+)/.test(raw);
-  const argv = shouldUseWindowsPathTokenizer ? splitCommandArgs(raw, "win32") : splitShellArgs(raw);
+  const argv = shouldUseWindowsPathTokenizer ? splitCommandArgs(raw) : splitShellArgs(raw);
   for (const attempt of [argv, argv ? stripPreflightEnvPrefix(argv) : null]) {
     const target = extractInterpreterScriptTargetFromArgv(attempt);
     if (target) {

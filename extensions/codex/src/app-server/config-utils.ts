@@ -96,13 +96,11 @@ export function resolveArgs(configArgs: unknown, envArgs: string | undefined): s
       .map((entry) => readNonEmptyString(entry))
       .filter((entry): entry is string => entry !== undefined);
   }
-  const args = splitCommandArgs(typeof configArgs === "string" ? configArgs : (envArgs ?? ""));
-  if (!args) {
-    throw new Error(
-      "Codex app-server arguments contain an unterminated quote or escape; use appServer.args as an array for literal arguments.",
-    );
-  }
-  return args;
+  // v2026.9.1 string overrides preserve backslashes and accept unfinished quotes;
+  // applying shell escaping or strict quote validation would change existing argv.
+  return splitCommandArgs(typeof configArgs === "string" ? configArgs : (envArgs ?? ""), {
+    allowUnclosedQuotes: true,
+  });
 }
 
 export function hashSecretForKey(value: string | undefined, label: string): string | null {

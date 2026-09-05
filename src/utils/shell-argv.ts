@@ -58,19 +58,25 @@ export function splitShellArgs(raw: string): string[] | null {
   return splitQuotedArgs(raw, "shell");
 }
 
-/** Splits process arguments without shell comments; Windows paths retain literal backslashes. */
+/** Groups quoted process arguments, preserving literal backslashes and hash characters. */
+export function splitCommandArgs(raw: string, options: { allowUnclosedQuotes: true }): string[];
 export function splitCommandArgs(
   raw: string,
-  platform: NodeJS.Platform = process.platform,
+  options?: { allowUnclosedQuotes?: boolean },
+): string[] | null;
+export function splitCommandArgs(
+  raw: string,
+  options?: { allowUnclosedQuotes?: boolean },
 ): string[] | null {
-  return splitQuotedArgs(raw, platform === "win32" ? "windows-command" : "posix-command");
+  return splitQuotedArgs(raw, "command", options?.allowUnclosedQuotes);
 }
 
 function splitQuotedArgs(
   raw: string,
-  syntax: "shell" | "posix-command" | "windows-command",
+  syntax: "shell" | "command",
+  allowUnclosedQuotes = false,
 ): string[] | null {
-  const backslashEscapes = syntax !== "windows-command";
+  const backslashEscapes = syntax === "shell";
   const tokens: string[] = [];
   let buf = "";
   let inSingle = false;
@@ -138,7 +144,7 @@ function splitQuotedArgs(
     buf += ch;
   }
 
-  if (escaped || inSingle || inDouble) {
+  if (escaped || (!allowUnclosedQuotes && (inSingle || inDouble))) {
     return null;
   }
   pushToken();

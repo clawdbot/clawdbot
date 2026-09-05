@@ -79,21 +79,29 @@ describe("splitShellArgs", () => {
 describe("splitCommandArgs", () => {
   it.each([
     {
-      platform: "linux",
-      input: String.raw`program "a\"b" some\ path #literal`,
-      expected: ["program", 'a"b', "some path", "#literal"],
+      input: String.raw`program some\path 'a"b' #literal`,
+      expected: ["program", String.raw`some\path`, 'a"b', "#literal"],
     },
     {
-      platform: "win32",
       input: String.raw`program "C:\some path\file.py" \\server\share\ #literal`,
       expected: ["program", String.raw`C:\some path\file.py`, "\\\\server\\share\\", "#literal"],
     },
-    { platform: "linux", input: 'program "unfinished', expected: null },
-    { platform: "win32", input: "program 'unfinished", expected: null },
-    { platform: "linux", input: "program unfinished\\", expected: null },
-  ] as const)("parses $platform process arguments: $input", ({ platform, input, expected }) => {
-    expect(splitCommandArgs(input, platform)).toEqual(expected);
+    { input: 'program "unfinished', expected: null },
+    { input: "program 'unfinished", expected: null },
+    { input: "program unfinished\\", expected: ["program", "unfinished\\"] },
+  ])("parses quote-only process arguments: $input", ({ input, expected }) => {
+    expect(splitCommandArgs(input)).toEqual(expected);
   });
+
+  it.each(['program "unfinished', "program 'unfinished"])(
+    "allows unfinished quotes when requested: %s",
+    (raw) => {
+      expect(splitCommandArgs(raw, { allowUnclosedQuotes: true })).toEqual([
+        "program",
+        "unfinished",
+      ]);
+    },
+  );
 });
 
 describe("zod parse helpers", () => {
