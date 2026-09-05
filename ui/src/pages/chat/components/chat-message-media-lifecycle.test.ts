@@ -41,17 +41,18 @@ function managedImageResourceKey(source: string): string {
   return `${source.replace(/\/full$/u, "/thumbnail")}::::`;
 }
 
-function installManagedImageUrls(prefix = `managed-image-${crypto.randomUUID()}`): string {
+function installManagedImageUrls(prefix = `managed-image-${crypto.randomUUID()}`) {
   const NativeUrl = URL;
   let blobIndex = 0;
+  const revokeObjectURL = vi.fn<(url: string) => void>();
   vi.stubGlobal(
     "URL",
     class extends NativeUrl {
       static override createObjectURL = vi.fn(() => `blob:${prefix}-${blobIndex++}`);
-      static override revokeObjectURL = vi.fn();
+      static override revokeObjectURL = revokeObjectURL;
     },
   );
-  return `blob:${prefix}-0`;
+  return { blobUrl: `blob:${prefix}-0`, revokeObjectURL };
 }
 
 function imageResponse() {
@@ -250,7 +251,7 @@ describe("chat media resource lifecycle", () => {
 
   it("wakes a managed image after one transient failure without an external render", async () => {
     const source = managedImageSource();
-    const blobUrl = installManagedImageUrls();
+    const { blobUrl } = installManagedImageUrls();
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: false })
@@ -330,7 +331,7 @@ describe("chat media resource lifecycle", () => {
 
   it("preserves the bounded retry window when an image has no pane subscriber", async () => {
     const source = managedImageSource();
-    const blobUrl = installManagedImageUrls();
+    const { blobUrl } = installManagedImageUrls();
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: false })
@@ -354,7 +355,7 @@ describe("chat media resource lifecycle", () => {
   });
 
   it("releases replaced managed images while keeping one pane callback stable", async () => {
-    installManagedImageUrls("replaced-managed-image");
+    const { revokeObjectURL } = installManagedImageUrls("replaced-managed-image");
     const fetchMock = vi.fn(async () => imageResponse());
     vi.stubGlobal("fetch", fetchMock);
 
@@ -379,7 +380,7 @@ describe("chat media resource lifecycle", () => {
     expect(fetchMock).toHaveBeenCalledTimes(65);
     expect(resources.filter((resource) => isChatMediaResourceCurrent(resource))).toHaveLength(1);
     expect(resources.at(-1)).toSatisfy(isChatMediaResourceCurrent);
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:replaced-managed-image-0");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:replaced-managed-image-0");
   });
 
   it("keeps simultaneous managed images until their individual render parts disappear", async () => {
@@ -425,7 +426,7 @@ describe("chat media resource lifecycle", () => {
   });
 
   it("resubscribes a guarded managed image when its Lit root reconnects", async () => {
-    const blobUrl = installManagedImageUrls();
+    const { blobUrl } = installManagedImageUrls();
     const fetchMock = vi.fn(async () => imageResponse());
     vi.stubGlobal("fetch", fetchMock);
 
@@ -496,7 +497,7 @@ describe("chat media resource lifecycle", () => {
   });
 
   it("evicts settled subscriber-free resources with their managed image blobs", async () => {
-    installManagedImageUrls("bounded-managed-image");
+    const { revokeObjectURL } = installManagedImageUrls("bounded-managed-image");
     const fetchMock = vi.fn(async () => imageResponse());
     vi.stubGlobal("fetch", fetchMock);
 
@@ -524,7 +525,7 @@ describe("chat media resource lifecycle", () => {
     expect(readManagedImageBlobUrl(managedImageResourceKey(latestSource))).toBe(
       "blob:bounded-managed-image-64",
     );
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:bounded-managed-image-0");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:bounded-managed-image-0");
 
     renderManagedImage(document.createElement("div"), latestSource);
     await vi.advanceTimersByTimeAsync(0);
@@ -540,7 +541,7 @@ describe("chat media resource lifecycle", () => {
 
   it("shares a managed image retry and wakes both subscribed split panes", async () => {
     const source = managedImageSource();
-    const blobUrl = installManagedImageUrls();
+    const { blobUrl } = installManagedImageUrls();
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: false })
@@ -776,7 +777,7 @@ describe("chat media resource lifecycle", () => {
 
   it("replaces an old auth scope without accepting its late image", async () => {
     const source = managedImageSource();
-    const blobUrl = installManagedImageUrls();
+    const { blobUrl } = installManagedImageUrls();
     let previousSignal: AbortSignal | undefined;
     const fetchMock = vi.fn((_source: string, init?: RequestInit) => {
       if (new Headers(init?.headers).get("Authorization") === "Bearer old-token") {
@@ -813,7 +814,7 @@ describe("chat media resource lifecycle", () => {
     const source = managedImageSource();
     const artifactId = `artifact-${crypto.randomUUID()}`;
     const ticketedUrl = `${source}?mediaTicket=signed`;
-    const blobUrl = installManagedImageUrls();
+    const { blobUrl } = installManagedImageUrls();
     const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
     const fetchMock = vi
       .fn()
