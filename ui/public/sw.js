@@ -251,8 +251,10 @@ self.addEventListener("notificationclick", (event) => {
         if (!isInScope(clientUrl)) {
           continue;
         }
+        // Implicit focus and explicit navigation can reject on old or uncontrolled workers;
+        // both preserve the validated open-window fallback.
         if (!hasExplicitTarget) {
-          return client.focus();
+          return client.focus().catch(() => self.clients.openWindow(targetUrl.href));
         }
 
         // Prefer the existing target tab before repurposing another app tab.
@@ -278,8 +280,6 @@ self.addEventListener("notificationclick", (event) => {
         return self.clients.openWindow(targetUrl.href);
       }
 
-      // Always navigate explicit targets; old or uncontrolled workers can
-      // reject navigation, so preserve the validated open-window fallback.
       return targetClient
         .navigate(targetUrl.href)
         .then((navigatedClient) => (navigatedClient ?? targetClient).focus())
