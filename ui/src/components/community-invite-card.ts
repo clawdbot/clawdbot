@@ -1,10 +1,8 @@
-import { css, html } from "lit";
-import { property } from "lit/decorators.js";
+import { html } from "lit";
 import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { COMMUNITY_DISCORD_URL } from "../lib/product-links.ts";
-import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import "../styles/community-invite-card.css";
 import { icons } from "./icons.ts";
 
@@ -17,233 +15,9 @@ const discordMark = html`
   </svg>
 `;
 
-class OpenClawCommunityInviteCard extends OpenClawLitElement {
-  @property({ attribute: false }) onDismiss?: () => void;
-  static override styles = css`
-    :host {
-      display: block;
-      flex: none;
-      margin: 0;
-      border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-      animation: invite-enter var(--duration-normal, 180ms) var(--ease-out, ease-out) both;
-    }
-
-    @keyframes invite-enter {
-      from {
-        opacity: 0;
-        transform: translateY(10px);
-      }
-    }
-
-    .invite {
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      border: 0;
-      border-radius: 0;
-      background: var(--community-invite-surface-current, var(--sidebar-bg, var(--bg)));
-      color: var(--text);
-      box-shadow: none;
-    }
-
-    .invite__header {
-      position: relative;
-      height: 100px;
-      flex: none;
-      overflow: hidden;
-    }
-
-    .invite__header::before,
-    .invite__header::after {
-      content: "";
-      position: absolute;
-      z-index: 1;
-      pointer-events: none;
-    }
-
-    .invite__header::before {
-      inset: 0;
-      background: linear-gradient(
-        to bottom,
-        transparent 45%,
-        var(--community-invite-photo-base-shade-current, transparent) 100%
-      );
-    }
-
-    .invite__header::after {
-      inset: auto 0 0;
-      height: var(--community-invite-fade-height-current, 48px);
-      background: var(
-        --community-invite-fade-gradient-current,
-        linear-gradient(
-          to bottom,
-          transparent 0%,
-          color-mix(
-              in srgb,
-              var(--community-invite-surface-current, var(--sidebar-bg, var(--bg)))
-                var(--community-invite-fade-opacity-20-current, 6%),
-              transparent
-            )
-            20%,
-          color-mix(
-              in srgb,
-              var(--community-invite-surface-current, var(--sidebar-bg, var(--bg)))
-                var(--community-invite-fade-opacity-45-current, 22%),
-              transparent
-            )
-            45%,
-          color-mix(
-              in srgb,
-              var(--community-invite-surface-current, var(--sidebar-bg, var(--bg)))
-                var(--community-invite-fade-opacity-70-current, 60%),
-              transparent
-            )
-            70%,
-          color-mix(
-              in srgb,
-              var(--community-invite-surface-current, var(--sidebar-bg, var(--bg)))
-                var(--community-invite-fade-opacity-88-current, 86%),
-              transparent
-            )
-            88%,
-          var(--community-invite-surface-current, var(--sidebar-bg, var(--bg))) 100%
-        )
-      );
-    }
-
-    .invite__art {
-      display: block;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      object-position: center 87%;
-    }
-
-    .invite__close {
-      position: absolute;
-      z-index: 2;
-      inset-block-start: var(--space-2, 8px);
-      inset-inline-end: var(--space-2, 8px);
-      display: grid;
-      width: 28px;
-      height: 28px;
-      place-items: center;
-      padding: 0;
-      border: 0;
-      border-radius: 50%;
-      /* These fixed translucent colors belong to photo chrome, not the theme surface. */
-      background: rgb(0 0 0 / 42%);
-      color: rgb(255 255 255 / 76%);
-      cursor: var(--cursor-action, default);
-      transition:
-        background 120ms ease,
-        color 120ms ease;
-    }
-
-    .invite__close:hover {
-      background: rgb(255 255 255 / 14%);
-      color: rgb(255 255 255);
-    }
-
-    .invite__close:focus-visible {
-      outline: 2px solid rgb(255 255 255 / 70%);
-      outline-offset: 1px;
-    }
-
-    .invite__close svg {
-      display: block;
-      width: 15px;
-      height: 15px;
-      fill: none;
-      stroke: currentcolor;
-      stroke-width: 1.8;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-    }
-
-    .invite__body {
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-      padding: 11px 18px 20px;
-    }
-
-    .invite__title {
-      margin: 0;
-      color: var(--text-strong);
-      font-size: var(--control-ui-text-lg, 16px);
-      font-weight: 700;
-      line-height: 1.2;
-      letter-spacing: -0.01em;
-    }
-
-    .invite__text {
-      margin: 0;
-      color: var(--muted);
-      font-size: var(--control-ui-text-sm, 12px);
-      line-height: 1.45;
-    }
-
-    a.invite__cta {
-      box-sizing: border-box;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      min-height: 38px;
-      margin-top: var(--space-3, 12px);
-      padding: 6px var(--space-2, 8px);
-      border-radius: var(--radius-md, 10px);
-      background: var(--text-strong);
-      color: var(--bg);
-      cursor: pointer;
-      font-size: var(--control-ui-text-sm, 12px);
-      font-weight: 600;
-      text-decoration: none;
-      transition:
-        background 120ms ease,
-        transform 120ms ease;
-    }
-
-    .invite__cta:hover {
-      background: color-mix(in srgb, var(--text) 92%, var(--bg-hover) 8%);
-      color: var(--bg);
-    }
-
-    .invite__cta:active {
-      transform: scale(0.96);
-    }
-
-    .invite__cta:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-
-    .invite__cta svg {
-      width: 17px;
-      height: 17px;
-      flex: none;
-    }
-
-    @supports (corner-shape: superellipse(1.5)) {
-      .invite__cta {
-        border-radius: calc(10px * var(--openclaw-corner-radius-scale, 1.25));
-        corner-shape: superellipse(1.5);
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      :host,
-      .invite__close,
-      .invite__cta {
-        animation: none;
-        transition: none;
-      }
-    }
-  `;
-
-  override render() {
-    return html`
+export function renderCommunityInviteCard(onDismiss: () => void) {
+  return html`
+    <div class="community-invite-card">
       <aside class="invite" role="complementary" aria-label=${t("communityInvite.cardLabel")}>
         <div class="invite__header">
           <img
@@ -252,12 +26,13 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
             alt=${t("communityInvite.artAlt")}
             width="1024"
             height="538"
+            loading="lazy"
           />
           <button
             class="invite__close"
             type="button"
             aria-label=${t("communityInvite.dismissForever")}
-            @click=${() => this.onDismiss?.()}
+            @click=${onDismiss}
           >
             ${icons.x}
           </button>
@@ -278,16 +53,6 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
           </a>
         </div>
       </aside>
-    `;
-  }
-}
-
-if (!customElements.get("openclaw-community-invite-card")) {
-  customElements.define("openclaw-community-invite-card", OpenClawCommunityInviteCard);
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-community-invite-card": OpenClawCommunityInviteCard;
-  }
+    </div>
+  `;
 }

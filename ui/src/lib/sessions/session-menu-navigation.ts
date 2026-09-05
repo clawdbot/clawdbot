@@ -181,14 +181,26 @@ export async function runSessionNavigationAction<TRouteId extends string>(
       params.session.key,
       params.agentId,
     );
+    const gateway = params.context.gateway;
+    // Shared links belong to the Gateway; the UI document may be a local SSH
+    // tunnel or a dev server with a different mount path. New windows stay local.
+    const linkBase =
+      kind === "copy-session-link"
+        ? (gateway.snapshot.hello?.controlUiUrl ??
+          gateway.snapshot.client?.gatewayUrl ??
+          gateway.connection.gatewayUrl)
+        : undefined;
+    const url = new URL(linkBase || window.location.href);
+    url.protocol = url.protocol.replace(/^ws/u, "http");
     const navigation = sessionNavigationTarget({
       context: params.context,
+      basePath: linkBase ? url.pathname : undefined,
       face,
       sessionKey: params.session.key,
       agentId: params.agentId,
       exactKey: true,
     });
-    const href = new URL(navigation.href, window.location.href).href;
+    const href = new URL(navigation.href, url.origin).href;
     if (kind === "copy-session-link") {
       const copied = await copyToClipboard(href);
       showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });

@@ -91,6 +91,7 @@ describe("SystemAgentChatEngine operations", () => {
       ["configure gateway", { kind: "gateway-config-setup" }],
       ["import memory", { kind: "memory-import" }],
       ["model setup", { kind: "model-setup" }],
+      ["model accounts", { kind: "model-accounts" }],
       ["open channel wizard", { kind: "open-setup", target: "channels" }],
       ["talk to agent", { kind: "open-tui" }],
     ] satisfies Array<[string, SystemAgentOperation]>)(

@@ -177,7 +177,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.153.0`):
+with the official plugin (currently `@openai/codex` `0.153.4`):
 
 ```bash
 codex app-server --listen stdio://
@@ -323,7 +323,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin manages stable Codex app-server `0.153.0`. Explicit custom
+The plugin manages stable Codex app-server `0.153.4`. Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
 parseable semantic version of `0.149.0` or newer. Older, malformed, and
 unversioned handshakes are rejected. Newer versions log a compatibility warning
@@ -358,12 +358,13 @@ allowed app can be installed and authenticated before it becomes callable.
 OpenClaw provisionally admits only ownership-proven, policy-approved apps,
 creates the thread with `_default.enabled = false` and explicit app overrides,
 then calls `app/installed` once with that thread's ID and `forceRefresh: false`.
-It exposes an app only when Codex confirms the app is enabled and callable for
-the actual thread. Managed restrictions, workspace policy, missing metadata,
-revoked auth, and unavailable tools still fail closed.
+If that snapshot reports missing, disabled, or non-callable apps, OpenClaw logs
+one warning and continues with the remaining tools. Codex still enforces
+managed restrictions, workspace policy, and app/tool permissions; unavailable
+apps gain no access.
 
-Attestation completes before OpenClaw injects history, starts a turn, or
-persists the native thread binding. On failure, OpenClaw deletes a persistent
+The check completes before OpenClaw injects history, starts a turn, or
+persists the native thread binding. If the snapshot request fails, OpenClaw deletes a persistent
 provisional thread with `thread/delete` or unsubscribes an ephemeral thread
 with `thread/unsubscribe`. If safe cleanup cannot be confirmed, it retires the
 owning app-server connection. Supervised branches also clean up their temporary
@@ -452,7 +453,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.153.0` app-server.
+This preview path uses the pinned Codex `0.153.4` app-server.
 
 ```json5
 {
@@ -868,8 +869,8 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.153.0`. A live `model/list`
-probe against the official `0.153.0` app-server, using an isolated,
+The current bundled harness is `@openai/codex` `0.153.4`. A live `model/list`
+probe against the official `0.153.4` app-server, using an isolated,
 unauthenticated Codex home and `includeHidden: true`, returned this public
 subset of catalog metadata:
 

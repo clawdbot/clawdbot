@@ -34,10 +34,12 @@ type OtlpScopeSpans = {
 };
 
 type OtlpResourceSpans = {
+  serviceName?: string;
   scopeSpans?: OtlpScopeSpans[];
 };
 
 export type CapturedRequest = {
+  headerValues?: Record<string, string | undefined>;
   bytes: number;
   contentEncoding?: string;
   logCount: number;
@@ -50,6 +52,7 @@ export type CapturedRequest = {
 };
 
 export type CapturedSpan = {
+  serviceName?: string;
   attributes: Record<string, string | number | boolean | string[]>;
   endTimeMs?: number;
   name: string;
@@ -104,7 +107,7 @@ export function createRecentTraceSummary() {
         }
       }
     },
-    read(): CapturedTraceSummary[] {
+    read: (): CapturedTraceSummary[] => {
       return [...traces].map(([traceId, names]) => ({
         traceId,
         names: Object.fromEntries(names),
@@ -498,15 +501,20 @@ function decodeScopeSpans(message: Uint8Array): OtlpScopeSpans {
 function decodeResourceSpans(message: Uint8Array): OtlpResourceSpans {
   const reader = new ProtoReader(message);
   const scopeSpans: OtlpScopeSpans[] = [];
+  let serviceName: string | undefined;
   while (!reader.done()) {
     const { field, wire } = reader.tag();
-    if (field === 2 && wire === 2) {
+    if (field === 1 && wire === 2) {
+      serviceName = decodeKeyValueList(reader.bytes()).values?.find(
+        (attribute) => attribute.key === "service.name",
+      )?.value?.stringValue;
+    } else if (field === 2 && wire === 2) {
       scopeSpans.push(decodeScopeSpans(reader.bytes()));
     } else {
       reader.skip(wire);
     }
   }
-  return { scopeSpans };
+  return { scopeSpans, serviceName };
 }
 
 function decodeTraceRequest(body: Buffer): CapturedSpan[] {
@@ -530,6 +538,7 @@ function decodeTraceRequest(body: Buffer): CapturedSpan[] {
         }
         spans.push({
           attributes: spanAttributes(span),
+          ...(resource.serviceName ? { serviceName: resource.serviceName } : {}),
           endTimeMs: span.endTimeMs,
           name,
           parent: (span.parentSpanId?.length ?? 0) > 0,
@@ -676,7 +685,10 @@ function closeLocalOtlpReceiverConnections(
   server.closeAllConnections();
 }
 
-export function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
+export function startLocalOtlpReceiver(
+  disallowedBodyNeedles: string[] = [],
+  captureHeaderNames: string[] = [],
+) {
   const capturedRequests: CapturedRequest[] = [];
   const capturedSpans: CapturedSpan[] = [];
   const capturedMetrics: CapturedMetric[] = [];
@@ -753,6 +765,13 @@ export function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
       capturedRequests.push({
         path: requestPath,
         signal,
+        ...(captureHeaderNames.length > 0
+          ? {
+              headerValues: Object.fromEntries(
+                captureHeaderNames.map((name) => [name, headerValue(req.headers[name])]),
+              ),
+            }
+          : {}),
         bytes: body.length,
         contentEncoding,
         receivedAtMs: Date.now(),

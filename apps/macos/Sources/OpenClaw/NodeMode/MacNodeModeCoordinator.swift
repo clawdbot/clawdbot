@@ -316,10 +316,6 @@ final class MacNodeModeCoordinator: NSObject {
             computerControlProvider: ComputerControlProvider.current())
     }
 
-    func currentCanvasPluginSurfaceRoute() async -> GatewayCanvasHostRoute? {
-        await self.session.currentCanvasHostRoute()
-    }
-
     func setPresenceActivityReportingEnabled(_ enabled: Bool) async {
         await self.presenceReporter.setReportingEnabled(enabled)
     }
@@ -343,10 +339,6 @@ final class MacNodeModeCoordinator: NSObject {
                 "mac node presence clear failed: \(error.localizedDescription, privacy: .public)")
             return .retry
         }
-    }
-
-    func refreshCanvasPluginSurfaceRoute(replacing observedURL: String?) async -> GatewayCanvasHostRoute? {
-        await self.session.refreshCanvasHostRoute(replacing: observedURL)
     }
 
     private func refresh(

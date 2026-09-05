@@ -64,12 +64,13 @@ export function registerCopilotActiveRun(params: {
       acceptanceReported = true;
       options?.onQueueAccepted?.(accepted);
     };
+    // The host owns question uncertainty; SDK-send rejection must not reopen it.
+    if (await claimPendingUserInputAnswer(text, options)) {
+      reportAcceptance(true);
+      return undefined;
+    }
     let messageId: string;
     try {
-      if (await claimPendingUserInputAnswer(text, options)) {
-        reportAcceptance(true);
-        return undefined;
-      }
       // Keep reply context model-only; SDK user.message echoes displayPrompt.
       // Source preparation may await, so it must precede the live-run checks.
       const recorder = options?.userTurnTranscriptRecorder;
@@ -121,6 +122,8 @@ export function registerCopilotActiveRun(params: {
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
     queueMessage,
+    // SDK 1.0.11 awaits after send entry with no final-dispatch assertion. Keep
+    // shipped unscoped V1 only until upstream supports a guarded final dispatch.
     messageInjection: {
       isAvailable: () => params.canAcceptSteering() && !params.isSettled() && !params.isAborted(),
       queueMessage,

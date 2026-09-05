@@ -355,7 +355,12 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
         ? { forwardedAuthProfileId: params.sessionAuthProfileId }
         : {}),
       ...(params.sessionAuthProfileId && params.sessionAuthProfileSource
-        ? { forwardedAuthProfileSource: params.sessionAuthProfileSource }
+        ? {
+            // Person-linked pins forward at user-pin strength, matching
+            // buildAgentRuntimeAuthPlan.
+            forwardedAuthProfileSource:
+              params.sessionAuthProfileSource === "auto" ? ("auto" as const) : ("user" as const),
+          }
         : {}),
       ...(params.sessionAuthProfileCandidateIds?.length
         ? { forwardedAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds }

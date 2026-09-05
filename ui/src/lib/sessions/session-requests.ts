@@ -137,6 +137,17 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   return params;
 }
 
+export function normalizeManagedSessionListQuery(
+  options: SessionListOptions,
+): Readonly<Record<string, unknown>> & { readonly limit: number } {
+  const { offset: _offset, append: _append, ...queryOptions } = options;
+  const limit =
+    typeof options.limit === "number" && options.limit > 0
+      ? Math.floor(options.limit)
+      : DEFAULT_SESSION_LIST_QUERY.limit;
+  return Object.freeze({ ...buildSessionListParams({ ...queryOptions, limit }), limit });
+}
+
 export async function requestSessionList(
   client: SessionRequestClient,
   options: SessionListOptions = {},

@@ -3,10 +3,12 @@
  */
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeTriageUpdateFailure } from "../commands/triage-update.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -35,6 +37,7 @@ import {
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
   registerManagedSystemdHandoffConvergenceTests,
+  registerManagedHandoffOwnerTests,
   type ManagedServiceCommandTiming,
   type ManagedServiceManagerBoundaryOptions,
   type ManagedServiceManagerBoundaryResult,
@@ -45,6 +48,7 @@ import {
 } from "./update-managed-service-handoff-result.test-support.js";
 import { registerManagedUpdateHandoffTriageTests } from "./update-managed-service-handoff-triage.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
+import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
 const { forceKillChildProcessTreeMock, spawnMock } = vi.hoisted(() => ({
   forceKillChildProcessTreeMock: vi.fn(),
@@ -217,15 +221,53 @@ async function runManagedServiceManagerBoundary(
   const env = {
     ...process.env,
     OPENCLAW_STATE_DIR: root,
+    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
     PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
   };
+  const run = options?.ledger ? createUpdateRun({ trigger: "api" }, { env }) : undefined;
+  if (run) {
+    await fs.appendFile(
+      recoveryModulePath,
+      `
+      const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
+      register();
+      const ledger = await import(${JSON.stringify(new URL("./update-run-ledger.ts", import.meta.url).href)});
+      export const { finishUpdateRun, recordUpdateRunPhase, recordUpdateRunVerification } = ledger;
+    `,
+    );
+  }
+  if (options?.requester) {
+    await fs.writeFile(
+      env.OPENCLAW_CONFIG_PATH,
+      JSON.stringify({
+        commands: { ownerAllowFrom: ["slack:owner"] },
+        channels: { slack: { enabled: true } },
+      }),
+    );
+    await fs.appendFile(
+      recoveryModulePath,
+      `
+      export async function isManagedUpdateRequesterOwner(requester) {
+        const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
+        state.ownerChecked = true;
+        fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
+        const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
+        register();
+        const runtime = await import(${JSON.stringify(new URL("../cli/daemon-cli/lifecycle-context.ts", import.meta.url).href)});
+        return runtime.isManagedUpdateRequesterOwner(requester);
+      }
+    `,
+    );
+  }
   let helper: import("node:child_process").ChildProcess | undefined;
   try {
     await startManagedServiceUpdateHandoff({
+      runId: run?.runId,
       root,
       restartDrainTimeoutMs: 300_000,
       parentPid,
       invocationCwd,
+      requester: options?.requester,
       execPath: process.execPath,
       argv1: process.argv[1],
       handoffId: `${kind}-boundary`,
@@ -451,7 +493,9 @@ async function runManagedServiceManagerBoundary(
             options?.helperExitCode ??
               (options?.systemdHandoffFailure ? 1 : (options?.updaterExitCode ?? 7)),
           );
-        await expect(pathExists(updaterPath)).resolves.toBe(!options?.systemdHandoffFailure);
+        await expect(pathExists(updaterPath)).resolves.toBe(
+          !options?.systemdHandoffFailure && !options?.revokeOwner,
+        );
       }
     }
     expect(readLease()).toBeNull();
@@ -471,6 +515,7 @@ async function runManagedServiceManagerBoundary(
         }
       : null;
     return {
+      ...(run ? { run: getUpdateRun(run.runId, { env }) } : {}),
       commands: (await fs.readFile(commandsPath, "utf8").catch(() => ""))
         .trim()
         .split("\n")
@@ -502,6 +547,8 @@ async function runManagedServiceManagerBoundary(
 
 describe("managed service update handoff", () => {
   const itUnix = it.runIf(process.platform !== "win32");
+
+  registerManagedHandoffOwnerTests(runManagedServiceManagerBoundary, itUnix, expect);
 
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>

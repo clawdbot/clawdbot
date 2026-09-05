@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/cua-computer",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
   "type": "module",
   "dependencies": {

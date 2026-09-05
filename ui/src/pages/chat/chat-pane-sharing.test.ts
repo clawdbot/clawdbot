@@ -235,7 +235,7 @@ describe("chat pane sharing authorization", () => {
         return {};
       });
       const sessions = createSessionCapabilityFixture({
-        refreshReplacement: vi.fn(async () => undefined),
+        refreshReplacement: vi.fn(async () => null),
       });
       const { pane: testPane } = createSharingTestChatPane({
         client: createGatewayBrowserClientFixture({ request }),
@@ -596,7 +596,7 @@ describe("chat pane sharing mutation phase ownership", () => {
   it.each(["resolve", "reject"] as const)(
     "drops a stale visibility session refresh when it later %s",
     async (completion) => {
-      const refreshed = createDeferred();
+      const refreshed = createDeferred<SessionsListResult | null>();
       const request = vi.fn(async (method: string) => {
         if (method === "session.visibility.set") {
           return {};
@@ -619,7 +619,7 @@ describe("chat pane sharing mutation phase ownership", () => {
 
       const replacement = installReplacementConnection(pane, state, row);
       if (completion === "resolve") {
-        refreshed.resolve();
+        refreshed.resolve(null);
       } else {
         refreshed.reject(new Error("old session refresh failed"));
       }
@@ -646,7 +646,7 @@ describe("chat pane sharing mutation phase ownership", () => {
           throw new Error(`unexpected old-connection request: ${requestMethod}`);
         });
         const oldSessions = createSessionCapabilityFixture({
-          refreshReplacement: vi.fn(async () => undefined),
+          refreshReplacement: vi.fn(async () => null),
         });
         const { pane: testPane, state } = createSharingTestChatPane({
           client: createGatewayBrowserClientFixture({ request }),
@@ -679,7 +679,7 @@ describe("chat pane sharing mutation phase ownership", () => {
   });
 
   it("drops a stale member session refresh failure", async () => {
-    const refreshed = createDeferred();
+    const refreshed = createDeferred<SessionsListResult | null>();
     const row = sessionRow();
     const request = vi.fn(async (method: string) => {
       if (method === "session.members.listEvidence") {
@@ -727,6 +727,7 @@ describe("chat pane current sharing mutation refresh order", () => {
     const sessions = createSessionCapabilityFixture({
       refreshReplacement: vi.fn(async () => {
         calls.push("sessions.refreshReplacement");
+        return null;
       }),
     });
     const { pane: testPane } = createSharingTestChatPane({
@@ -760,6 +761,7 @@ describe("chat pane current sharing mutation refresh order", () => {
     const sessions = createSessionCapabilityFixture({
       refreshReplacement: vi.fn(async () => {
         calls.push("sessions.refreshReplacement");
+        return null;
       }),
     });
     const { pane: testPane } = createSharingTestChatPane({

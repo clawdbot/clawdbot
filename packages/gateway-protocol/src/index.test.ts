@@ -401,12 +401,13 @@ describe("lazy protocol validators", () => {
     expectAccepted(protocol.validateSessionsCompactParams, [{ key: "global", agentId: "work" }]);
   });
 
-  it("accepts selected-agent scope on chat metadata params", () => {
+  it("accepts distinct session and draft-account scopes on chat metadata params", () => {
     expectAccepted(validateChatMetadataParams, [
       {},
       { agentId: "work" },
       { sessionKey: "agent:work:main" },
       { agentId: "work", sessionKey: "global" },
+      { agentId: "work", authProfileId: "test:locked" },
     ]);
     expectRejected(validateChatMetadataParams, [
       { agentId: "" },

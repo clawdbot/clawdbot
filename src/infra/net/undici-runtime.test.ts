@@ -16,7 +16,6 @@ const logDebug = vi.hoisted(() => vi.fn());
 
 vi.mock("../../logger.js", () => ({ logDebug }));
 
-const envHttpProxyAgentCtor = vi.fn();
 const poolCtor = vi.fn();
 const proxyAgentCtor = vi.fn();
 const proxyConnect = vi.fn();
@@ -25,7 +24,7 @@ const DESTINATION_AGENT = Symbol("destination agent");
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-  envHttpProxyAgentCtor.mockReset();
+  MockProxyAgent.latest = undefined;
   poolCtor.mockReset();
   proxyAgentCtor.mockReset();
   proxyConnect.mockReset();
@@ -92,11 +91,11 @@ class MockEnvHttpProxyAgent extends EventEmitter {
     this[DESTINATION_AGENT] = new MockAgent(
       expectOptionsRecord(options, "expected EnvHttpProxyAgent options"),
     );
-    envHttpProxyAgentCtor(options);
   }
 }
 
 class MockProxyAgent extends EventEmitter {
+  static latest: MockProxyAgent | undefined;
   readonly __testStub = true;
   readonly [DESTINATION_AGENT]: MockAgent;
 
@@ -106,6 +105,7 @@ class MockProxyAgent extends EventEmitter {
       expectOptionsRecord(options, "expected ProxyAgent options"),
     );
     proxyAgentCtor(options);
+    MockProxyAgent.latest = this;
   }
 }
 
@@ -116,6 +116,7 @@ function installUndiciRuntimeDeps(): void {
     EnvHttpProxyAgent: MockEnvHttpProxyAgent,
     Pool: MockPool,
     ProxyAgent: MockProxyAgent,
+    buildConnector: () => proxyConnect,
     fetch: vi.fn(),
   };
 }
@@ -133,14 +134,6 @@ function requireProxyAgentOptions(): Record<string, unknown> {
     throw new Error("expected ProxyAgent constructor call");
   }
   return expectOptionsRecord(call[0], "expected ProxyAgent options object");
-}
-
-function requireEnvHttpProxyAgentOptions(): Record<string, unknown> {
-  const call = envHttpProxyAgentCtor.mock.calls[0];
-  if (!call) {
-    throw new Error("expected EnvHttpProxyAgent constructor call");
-  }
-  return expectOptionsRecord(call[0], "expected EnvHttpProxyAgent options object");
 }
 
 function requireClientOptions(): Record<string, unknown> {
@@ -180,9 +173,13 @@ describe("undici dispatcher errors", () => {
     {
       name: "environment proxy client",
       createClient: () => {
-        const agent = createHttp1EnvHttpProxyAgent({
+        createHttp1EnvHttpProxyAgent({
           httpsProxy: "http://proxy.test:8080",
-        }) as unknown as MockEnvHttpProxyAgent;
+        });
+        const agent = MockProxyAgent.latest;
+        if (!agent) {
+          throw new Error("expected environment proxy transport");
+        }
         return agent[DESTINATION_AGENT].createOriginDispatcher({ connections: 1 }, false);
       },
     },
@@ -205,6 +202,30 @@ function invokeClientConnect(options: Record<string, unknown>, servername: strin
 }
 
 describe("createHttp1ProxyAgent", () => {
+  it.each(["own", "inherited", "non-enumerable"])(
+    "uses the caller's %s proxy client factory",
+    (placement) => {
+      installUndiciRuntimeDeps();
+      const clientFactory = vi.fn(() => createHttp1Agent());
+      const options = { uri: "http://proxy.test:8080" };
+      if (placement === "inherited") {
+        Object.setPrototypeOf(options, { clientFactory });
+      } else {
+        Object.defineProperty(options, "clientFactory", {
+          value: clientFactory,
+          enumerable: placement === "own",
+        });
+      }
+
+      createHttp1ProxyAgent(options);
+      invokeProxyClientFactory(requireProxyAgentOptions());
+
+      expect(clientFactory).toHaveBeenCalledExactlyOnceWith(new URL("https://127.0.0.1:8443"), {
+        connect: proxyConnect,
+      });
+    },
+  );
+
   it("adds active managed proxy CA trust to explicit ProxyAgent options", () => {
     installUndiciRuntimeDeps();
     const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
@@ -268,7 +289,7 @@ describe("createHttp1EnvHttpProxyAgent", () => {
     installUndiciRuntimeDeps();
 
     createHttp1EnvHttpProxyAgent({ httpsProxy: "https://127.0.0.1:8443" });
-    invokeProxyClientFactory(requireEnvHttpProxyAgentOptions());
+    invokeProxyClientFactory(requireProxyAgentOptions());
     invokeClientConnect(requireClientOptions(), "127.0.0.1");
 
     expect(proxyConnect).toHaveBeenCalledWith(

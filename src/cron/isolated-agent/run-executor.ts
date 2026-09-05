@@ -7,6 +7,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
+import { settleCliSessionResult } from "../../agents/cli-session-store.js";
 import {
   applyCliSessionBindingResult,
   assertCliSessionBindingResultCommitAllowed,
@@ -21,6 +22,7 @@ import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelFallbackClassifiedResult } from "../../agents/model-fallback-attempt.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
@@ -469,16 +471,17 @@ function createCronPromptExecutor(
       // Non-canonicalizable job config: no grant registration for this run.
     }
     let candidateClassification:
-      | { value: ReturnType<typeof classifyEmbeddedAgentRunResultForModelFallback> }
+      | {
+          result: CronPromptRunResult;
+          value: ReturnType<typeof classifyEmbeddedAgentRunResultForModelFallback>;
+        }
       | undefined;
-    const classifyResult = (
-      candidate: Parameters<typeof classifyEmbeddedAgentRunResultForModelFallback>[0],
-    ) => {
-      if (!candidateClassification) {
+    const classifyResult = (candidate: ModelFallbackClassifiedResult<CronPromptRunResult>) => {
+      if (!candidateClassification || candidateClassification.result !== candidate.result) {
         const classification = classifyEmbeddedAgentRunResultForModelFallback(candidate);
-        // Native continuity and outer fallback must consume the same acceptance
-        // fact, recorded before the CLI session lane releases.
+        // Preserve the pre-release decision unless finalization replaces the result.
         candidateClassification = {
+          result: candidate.result,
           value: classification && currentAttemptCommittedMedia() ? undefined : classification,
         };
       }
@@ -753,8 +756,10 @@ function createCronPromptExecutor(
                     assertSettlementCurrent,
                     params.abortSignal,
                   );
-                await params.persistSessionEntry(assertCommitAllowed, settledEntry);
-                await params.persistRunContinuationSession?.(assertCommitAllowed);
+                return await settleCliSessionResult(candidateResult, async () => {
+                  await params.persistSessionEntry(assertCommitAllowed, settledEntry);
+                  await params.persistRunContinuationSession?.(assertCommitAllowed);
+                });
               }
               return candidateResult;
             },

@@ -24,12 +24,9 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import {
-  parseControlUiUserAvatarPath,
-  parseControlUiResourcePath,
-  type ControlUiResourceRoute,
-} from "./control-ui-contract.js";
+import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
+import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
 import {
   isControlUiApprovalDocumentPath,
   isControlUiFocusDocumentPath,
@@ -98,6 +95,9 @@ type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) =
 type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js"));
+const getControlUiPluginAssetsModule = createLazyRuntimeModule(
+  () => import("./control-ui-plugin-assets.js"),
+);
 const getCanvasServeModule = createLazyRuntimeModule(() => import("../canvas/serve.runtime.js"));
 const getBoardHttpModule = createLazyRuntimeModule(() => import("./board-http.js"));
 const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
@@ -151,7 +151,7 @@ type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 /** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
 export function createGatewayHttpServer(opts: {
   clients: Set<GatewayWsClient>;
-  controlUiEnabled: boolean;
+  controlUiEnabled?: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
   openAiChatCompletionsEnabled?: boolean;
@@ -186,7 +186,6 @@ export function createGatewayHttpServer(opts: {
 }): HttpServer {
   const {
     clients,
-    controlUiEnabled,
     controlUiBasePath,
     controlUiRoot,
     handleHooksRequest,
@@ -203,6 +202,7 @@ export function createGatewayHttpServer(opts: {
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
+  const pluginAssetRoot = controlUiPluginAssetRoot(controlUiRouteBasePath);
   const handleServerRequest = (
     req: IncomingMessage,
     res: ServerResponse,
@@ -292,6 +292,8 @@ export function createGatewayHttpServer(opts: {
       }
 
       const configSnapshot = loadGatewayConfig();
+      const controlUiEnabled =
+        opts.controlUiEnabled ?? configSnapshot.gateway?.controlUi?.enabled ?? true;
       // Pin endpoint admission and input limits to the same request snapshot.
       // Only explicit server overrides survive config reloads.
       const openAiChatCompletionsConfig = configSnapshot.gateway?.http?.endpoints?.chatCompletions;
@@ -490,6 +492,15 @@ export function createGatewayHttpServer(opts: {
           resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
         }),
       );
+      addAdmittedStage(scopedRequestPath.startsWith(pluginAssetRoot), async () => {
+        if (!controlUiEnabled) {
+          respondNotFound(res);
+          return true;
+        }
+        return await (
+          await getControlUiPluginAssetsModule()
+        ).handleControlUiPluginAssetRequest(req, res, controlUiRouteOptions);
+      });
       const userProfileAvatarRoute = parseControlUiUserAvatarPath(
         scopedRequestPath,
         controlUiRouteBasePath,
@@ -639,47 +650,30 @@ export function createGatewayHttpServer(opts: {
             { ...routeAuth, basePath: controlUiRouteBasePath },
           ),
       );
-      addRequestStage(
-        controlUiEnabled &&
-          (
-            [
-              "pluginIcon",
-              "catalogIcon",
-              "linkFavicon",
-            ] as const satisfies readonly ControlUiResourceRoute[]
-          ).some(
-            (route) =>
-              parseControlUiResourcePath(route, scopedRequestPath, controlUiRouteBasePath).matched,
-          ),
-        async () =>
-          (await getPluginIconHttpModule()).handlePluginIconHttpRequest(
-            req,
-            res,
-            controlUiRouteOptions,
-          ),
-      );
-      addRequestStage(
-        controlUiEnabled &&
-          parseControlUiResourcePath("workspaceIcon", scopedRequestPath, controlUiRouteBasePath)
-            .matched,
-        async () =>
-          (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest(
-            req,
-            res,
-            controlUiRouteOptions,
-          ),
-      );
-      addRequestStage(
-        controlUiEnabled &&
-          parseControlUiResourcePath("channelAvatar", scopedRequestPath, controlUiRouteBasePath)
-            .matched,
-        async () =>
-          (await getChannelAvatarHttpModule()).handleChannelAvatarHttpRequest(
-            req,
-            res,
-            controlUiRouteOptions,
-          ),
-      );
+      for (const [routes, loadHandler] of [
+        [
+          ["pluginIcon", "catalogIcon", "linkFavicon"],
+          async () => (await getPluginIconHttpModule()).handlePluginIconHttpRequest,
+        ],
+        [
+          ["workspaceIcon"],
+          async () => (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest,
+        ],
+        [
+          ["channelAvatar"],
+          async () => (await getChannelAvatarHttpModule()).handleChannelAvatarHttpRequest,
+        ],
+      ] as const) {
+        addRequestStage(
+          controlUiEnabled &&
+            routes.some(
+              (route) =>
+                parseControlUiResourcePath(route, scopedRequestPath, controlUiRouteBasePath)
+                  .matched,
+            ),
+          async () => (await loadHandler())(req, res, controlUiRouteOptions),
+        );
+      }
       addRequestStage(controlUiEnabled, async () =>
         (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
           ...controlUiRouteOptions,

@@ -169,4 +169,30 @@ describe("runtime parity Control UI ownership", () => {
       mutateConfig,
     ]);
   });
+
+  it("forwards the same candidate command object to both runtime cells", async () => {
+    const lab = createControlUiTestLab();
+    const sutOpenClawCommand = {
+      executablePath: "/qa-repo/dist/index.mjs",
+      argsPrefix: ["--qa"],
+      cwd: "/qa-repo",
+      usePackagedPlugins: true,
+    };
+
+    await runQaFlowSuiteFromRuntime({
+      repoRoot: "/qa-repo",
+      outputDir: "/qa-output",
+      providerMode: "mock-openai",
+      scenarioIds: ["runtime-channel"],
+      runtimePair: ["openclaw", "codex"],
+      sutOpenClawCommand,
+      lab,
+      startLab: async () => lab,
+    });
+
+    expect(mocks.runQaFlowSuiteStandard).toHaveBeenCalledTimes(2);
+    for (const [params] of mocks.runQaFlowSuiteStandard.mock.calls) {
+      expect(params.sutOpenClawCommand).toBe(sutOpenClawCommand);
+    }
+  });
 });

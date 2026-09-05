@@ -466,11 +466,10 @@ describe("codex conversation binding", () => {
     await writeTestConversationBinding(sessionFile, { threadId: "bound-thread", cwd: tempDir });
     const notificationHandlers = new Set<(notification: unknown) => unknown>();
     const requestHandlers = new Set<(request: unknown) => unknown>();
-    const siblingRequestOwner = vi.fn(
-      (request: { method: string }): JsonValue =>
-        request.method === "item/tool/call"
-          ? { contentItems: [], success: true }
-          : { decision: "accept" },
+    const siblingRequestOwner = vi.fn((request: { method: string }): JsonValue =>
+      request.method === "item/tool/call"
+        ? { contentItems: [], success: true }
+        : { decision: "accept" },
     );
     const siblingResponses: unknown[] = [];
     let releaseSiblingRoute: (() => void) | undefined;
@@ -1952,9 +1951,9 @@ describe("codex conversation binding", () => {
     const request = vi.fn(async () => {
       throw new Error("native unsubscribe failed");
     });
-    const close = vi.fn();
+    const closeAndWait = vi.fn(async () => true);
     sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockReturnValue({
-      client: { request, close },
+      client: { request, closeAndWait },
       release: vi.fn(),
     });
     await testCodexAppServerBindingStore.mutate(identity, {
@@ -2002,6 +2001,7 @@ describe("codex conversation binding", () => {
     expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: "thread-failed-denial",
     });
+    expect(closeAndWait).toHaveBeenCalledOnce();
   });
 
   it("preserves the live conversation generation when a replacement bind is denied", async () => {

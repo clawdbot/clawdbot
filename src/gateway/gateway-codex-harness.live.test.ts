@@ -1,9 +1,11 @@
 // Codex harness live gateway tests exercise real CLI backend sessions, cron probes, media probes, and command surfaces.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { bundledPluginFileAt } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type {
@@ -571,7 +573,7 @@ async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
   compactionMode: CodexCompactionStressMode;
-  nativeSupervision?: true;
+  nativeSupervision?: { command: string };
   loopDetectionPreToolUseRelay?: boolean;
   configPath: string;
   modelKey: string;
@@ -597,7 +599,9 @@ async function writeLiveGatewayConfig(params: {
           config: {
             ...(params.nativeSupervision ? { supervision: { enabled: true } } : {}),
             appServer: {
-              ...(params.nativeSupervision ? { command: "codex", homeScope: "user" as const } : {}),
+              ...(params.nativeSupervision
+                ? { command: params.nativeSupervision.command, homeScope: "user" as const }
+                : {}),
               mode: params.codexAppServerMode ?? "yolo",
               ...(params.codexApprovalPolicy ? { approvalPolicy: params.codexApprovalPolicy } : {}),
               ...(params.codexApprovalsReviewer
@@ -2157,18 +2161,21 @@ describeLive("gateway live (Codex harness)", () => {
     async () => {
       const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
       const { modelId } = parseModelKey(modelKey);
+      const codexPackagePath = bundledPluginFileAt(
+        path.resolve(import.meta.dirname, "../.."),
+        "codex",
+        "package.json",
+      );
       const codexPackage = asOptionalRecord(
-        JSON.parse(
-          await fs.readFile(
-            new URL("../../extensions/codex/package.json", import.meta.url),
-            "utf8",
-          ),
-        ),
+        JSON.parse(await fs.readFile(codexPackagePath, "utf8")),
       );
       const nativeVersion = asOptionalRecord(codexPackage?.dependencies)?.["@openai/codex"];
       if (typeof nativeVersion !== "string") {
         throw new Error("Codex plugin dependency pin is missing");
       }
+      // Native seeding and supervised turns must use the same pinned plugin dependency.
+      const codexCommand = createRequire(codexPackagePath).resolve("@openai/codex/bin/codex.js");
+      const nativeCommand = [process.execPath, codexCommand];
       const token = `test-${randomUUID()}`;
       const instance = await createCodexHarnessLiveInstance(token, "api-key");
       const codexHome = instance.state.path("canonical-codex-home");
@@ -2198,7 +2205,7 @@ describeLive("gateway live (Codex harness)", () => {
           maxOutputBytes: 1024 * 1024,
           killProcessTree: true,
         };
-        const version = await runCommandWithTimeout(["codex", "--version"], nativeOptions);
+        const version = await runCommandWithTimeout([...nativeCommand, "--version"], nativeOptions);
         expect(version.code).toBe(0);
         expect(version.stdout.trim()).toBe(`codex-cli ${nativeVersion}`);
         await fs.writeFile(
@@ -2214,13 +2221,19 @@ describeLive("gateway live (Codex harness)", () => {
         const apiKey = process.env.OPENAI_API_KEY?.trim();
         expect(apiKey, "canonical native proof requires the live API-key owner").toBeTruthy();
         // Login owns the isolated native credential file; cleanup removes the entire test home.
-        const login = await runCommandWithTimeout(["codex", "login", "--with-api-key"], {
+        const login = await runCommandWithTimeout([...nativeCommand, "login", "--with-api-key"], {
           ...nativeOptions,
           input: apiKey + "\n",
         });
         expect(login.code).toBe(0);
         const seeded = await runCommandWithTimeout(
-          ["codex", "debug", "app-server", "send-message-v2", "Reply exactly CODEX-NATIVE-ROOT."],
+          [
+            ...nativeCommand,
+            "debug",
+            "app-server",
+            "send-message-v2",
+            "Reply exactly CODEX-NATIVE-ROOT.",
+          ],
           nativeOptions,
         );
         expect(seeded.code).toBe(0);
@@ -2234,7 +2247,7 @@ describeLive("gateway live (Codex harness)", () => {
           token,
           workspace,
           compactionMode: { kind: "off" },
-          nativeSupervision: true,
+          nativeSupervision: { command: codexCommand },
         });
         const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
           displayName: "vitest-codex-canonical-live",

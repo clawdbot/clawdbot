@@ -547,9 +547,9 @@ export function renderChatAttachmentMenuTrigger(
     <button
       slot="trigger"
       type="button"
-      class="agent-chat__input-btn agent-chat__input-btn--attach ${hasOverrides
-        ? "agent-chat__input-btn--has-overrides"
-        : ""}"
+      class="agent-chat__input-btn agent-chat__input-btn--attach ${
+        hasOverrides ? "agent-chat__input-btn--has-overrides" : ""
+      }"
       aria-label=${t("chat.composer.addAttachment")}
       ?disabled=${disabled}
       title=${t("chat.composer.addAttachment")}
@@ -701,35 +701,37 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                   .filter(Boolean)
                   .join(" ")}
               >
-                ${att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
-                  ? renderAttachmentImage(
-                      att,
-                      att.fileName?.trim() || t("chat.composer.attachmentPreview"),
-                      att.fileName?.trim() || t("chat.imageLightbox.untitled"),
-                      props,
-                    )
-                  : isLargePastedTextAttachment(att)
-                    ? html`
-                        <div class="chat-attachment-file chat-attachment-file--pasted-text">
-                          <span class="chat-attachment-file__icon">${icons.fileText}</span>
-                          <span class="chat-attachment-file__body">
-                            <span class="chat-attachment-file__name"
-                              >${pastedTextPreview(att)}</span
-                            >
-                            <button
-                              class="chat-attachment-text-action"
-                              type="button"
-                              aria-label=${t("chat.attachments.showInTextField")}
-                              ?disabled=${props.disabled}
-                              @click=${() => showPastedTextInComposer(att, props)}
-                            >
-                              ${t("chat.attachments.showInTextField")}
-                              <span aria-hidden="true">${icons.chevronRight}</span>
-                            </button>
-                          </span>
-                        </div>
-                      `
-                    : renderCompactAttachmentFile(att)}
+                ${
+                  att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
+                    ? renderAttachmentImage(
+                        att,
+                        att.fileName?.trim() || t("chat.composer.attachmentPreview"),
+                        att.fileName?.trim() || t("chat.imageLightbox.untitled"),
+                        props,
+                      )
+                    : isLargePastedTextAttachment(att)
+                      ? html`
+                          <div class="chat-attachment-file chat-attachment-file--pasted-text">
+                            <span class="chat-attachment-file__icon">${icons.fileText}</span>
+                            <span class="chat-attachment-file__body">
+                              <span class="chat-attachment-file__name"
+                                >${pastedTextPreview(att)}</span
+                              >
+                              <button
+                                class="chat-attachment-text-action"
+                                type="button"
+                                aria-label=${t("chat.attachments.showInTextField")}
+                                ?disabled=${props.disabled}
+                                @click=${() => showPastedTextInComposer(att, props)}
+                              >
+                                ${t("chat.attachments.showInTextField")}
+                                <span aria-hidden="true">${icons.chevronRight}</span>
+                              </button>
+                            </span>
+                          </div>
+                        `
+                      : renderCompactAttachmentFile(att)
+                }
                 <openclaw-tooltip .content=${t("chat.composer.removeAttachment")}>
                   <button
                     class="chat-attachment-remove"

@@ -126,6 +126,7 @@ function executionPlanArtifact({
     upgradeSurvivorScenarios: "",
     allowFrozenTargetScenarioOmissions: false,
     allowUnreleasedChangelog: false,
+    packagePublished: false,
     sharedImagePolicy: "no-push-artifact",
   });
   const selectedKeys = new Set(children.map((entry) => entry.key));

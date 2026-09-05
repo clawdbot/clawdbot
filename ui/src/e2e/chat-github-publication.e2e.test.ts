@@ -1,6 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
@@ -8,6 +11,7 @@ import {
   personalGeneration,
   publicationMethods,
   publicationOptions,
+  sharedPublisher,
   showPublicationBranch,
 } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -162,11 +166,10 @@ suite.define(() => {
       const publish = page.getByRole("button", { name: "Publish PR" });
       await publish.waitFor();
       if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(suite.artifactDir, `${name}-workspace.png`),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, `${name}-workspace.png`),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [publish]),
+        );
       }
       await expect.poll(() => publish.isEnabled()).toBe(ready);
       if (conflict) {
@@ -175,6 +178,121 @@ suite.define(() => {
         await notice.waitFor({ state: "hidden" });
         await page.getByRole("button", { name: "Publication account" }).click();
         await page.getByRole("combobox", { name: "Publication account" }).waitFor();
+      }
+    },
+  );
+
+  it.each(["shared", "personal"] as const)(
+    "refreshes a rejected first %s selection without replaying or publishing automatically",
+    async (source) => {
+      const context = await newPublicationContext();
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        assistantName: "Publication QA",
+        workspace: "/synthetic/publication-qa",
+        communityInvite: false,
+        operatorScopes: ["operator.read", "operator.write"],
+        featureMethods: publicationMethods,
+        presenceUsers: [
+          {
+            self: true,
+            id: "synthetic",
+            identity: { type: "profile", id: "synthetic" },
+            name: "Synthetic reviewer",
+          },
+        ],
+        methodResponses: {
+          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+          "sessions.github.options": publicationOptions,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await showPublicationBranch(gateway, "fix/publisher-recovery");
+      await page.getByRole("button", { name: "Publication account", exact: true }).click();
+      await page.getByRole("combobox", { name: "Publication account" }).selectOption(source);
+      await page.keyboard.press("Escape");
+      await gateway.deferNext("sessions.github.publish");
+      await page.getByRole("button", { name: "Publish PR", exact: true }).click();
+      const first = await gateway.waitForRequest("sessions.github.publish");
+      if (!isRecord(first.params)) {
+        throw new Error("Publication parameters were not an object");
+      }
+      expect(first.params).toEqual({
+        sessionKey: "agent:main:main",
+        idempotencyKey: expect.any(String),
+        selection:
+          source === "shared"
+            ? { source, expected: sharedPublisher }
+            : { source, generation: personalGeneration, account: personalAccount },
+      });
+      await gateway.rejectDeferred("sessions.github.publish", {
+        code: "UNAVAILABLE",
+        message: "The selected publisher changed. Refresh and review the current account.",
+        details: {
+          code: "GITHUB_PUBLICATION_SELECTION_REJECTED",
+          idempotencyKey: first.params.idempotencyKey,
+        },
+      });
+      const publish = page.getByRole("button", { name: "Publish PR", exact: true });
+      await expect.poll(() => publish.isDisabled()).toBe(true);
+      const nextAccount = { accountId: 4, login: "publisher-current" };
+      const next = {
+        ...publicationOptions,
+        shared: { ...sharedPublisher, ...nextAccount },
+        personal: {
+          ...publicationOptions.personal,
+          account: nextAccount,
+          generation: "e08f9472-c435-4d8d-b970-fb97da80a642",
+        },
+      };
+      await gateway.setMethodResponse("sessions.github.options", next);
+      await page.getByRole("button", { name: "Refresh publication", exact: true }).click();
+      await expect.poll(() => publish.isEnabled()).toBe(true);
+      await page.getByRole("button", { name: "Publication account", exact: true }).click();
+      await page.getByRole("combobox", { name: "Publication account" }).selectOption(source);
+      await expect
+        .poll(() => page.locator("[data-publication-account]").textContent())
+        .toContain("publisher-current");
+      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(1);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(suite.artifactDir, `${source}-refreshed-selection.png`),
+        });
+      }
+      await page.keyboard.press("Escape");
+      await gateway.deferNext("sessions.github.publish");
+      await publish.click();
+      const second = await gateway.waitForRequest("sessions.github.publish", { after: 1 });
+      expect(second.params).toMatchObject({
+        sessionKey: "agent:main:main",
+        selection:
+          source === "shared"
+            ? { source, expected: next.shared }
+            : { source, generation: next.personal.generation, account: nextAccount },
+      });
+      expect(second.params).not.toHaveProperty("idempotencyKey", first.params.idempotencyKey);
+      await gateway.resolveDeferred("sessions.github.publish", {
+        requestId: "8c698e8a-bdc7-4927-a0f2-73a842c2d7b4",
+        status: "published",
+        publisher: {
+          source: source === "shared" ? sharedPublisher.source : "personal",
+          ...nextAccount,
+        },
+        url: "https://github.com/synthetic/publication-demo/pull/42",
+        repository: "synthetic/publication-demo",
+        branch: "fix/publisher-recovery",
+        headCommit: "a".repeat(40),
+      });
+      await page.getByRole("link", { name: "Open PR", exact: true }).waitFor();
+      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(2);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(suite.artifactDir, `${source}-explicit-publication.png`),
+        });
       }
     },
   );
@@ -261,11 +379,12 @@ suite.define(() => {
       .toContain("My GitHub");
     expect(await gateway.getRequests("secrets.set")).toHaveLength(0);
     if (captureUiProof) {
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(suite.artifactDir, "05-personal-identity-changed.png"),
-      });
+      await writeFile(
+        path.join(suite.artifactDir, "05-personal-identity-changed.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          page.getByRole("button", { name: "Choose a new publication" }),
+        ]),
+      );
     }
   });
 
@@ -351,11 +470,10 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
       if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(suite.artifactDir, "06-original-confirmation.png"),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "06-original-confirmation.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [details]),
+        );
       }
       await page.getByRole("button", { name: "Confirm original publication" }).click();
       const confirmed = await gateway.waitForRequest("sessions.github.confirm");

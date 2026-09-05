@@ -19,7 +19,6 @@ import {
   hasPendingPollDelivery,
   listFinishedSessions,
   listRunningSessions,
-  markTerminalPollObserved,
   prepareSessionPoll,
   setJobTtlMs,
 } from "./bash-process-registry.js";
@@ -202,7 +201,6 @@ function finishedPollResult(
   pollScope: object | undefined,
 ): AgentToolResult<unknown> {
   resetPollRetrySuggestion(sessionId);
-  acknowledgeNotifyOnExit(finished);
   const delivery = prepareSessionPoll(finished, pollScope);
   const { output: unreadOutput, outputDropped } = delivery;
   const output = unreadOutput.trim();
@@ -225,7 +223,10 @@ function finishedPollResult(
       ...finishedSessionDetails(sessionId, finished),
       aggregated: finished.aggregated,
     }),
-    () => delivery.acknowledge(),
+    () => {
+      delivery.acknowledge();
+      acknowledgeNotifyOnExit(finished);
+    },
   );
 }
 
@@ -451,7 +452,6 @@ export function createProcessTool(
             }
           }
           if (scopedSession.exited) {
-            markTerminalPollObserved(scopedSession);
             // Retention admission survives clear/eviction on this exact object.
             // A process removed before exit was never retained; never read a successor.
             if (scopedSession.endedAt !== undefined && isInScope(scopedSession)) {

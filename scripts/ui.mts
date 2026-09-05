@@ -9,11 +9,13 @@ import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
+import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
+const requireFromUi = createRequire(path.join(uiDir, "package.json"));
 
 const WINDOWS_CMD_EXE_EXTENSIONS = new Set([".cmd", ".bat"]);
 const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
@@ -350,10 +352,6 @@ function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals, pids: nu
   }
 }
 
-function runPnpm(args: string[], envOverride?: NodeJS.ProcessEnv): void {
-  runSpawnCall(resolvePnpmSpawnCall(args, envOverride), "pnpm");
-}
-
 function runSpawnCallSync(spawnCall: UiSpawnCall, label: string): void {
   const { command, args: spawnArgs, options } = spawnCall;
   let result;
@@ -373,19 +371,14 @@ function runSpawnCallSync(spawnCall: UiSpawnCall, label: string): void {
   }
 }
 
-function runPnpmSync(args: string[], envOverride?: NodeJS.ProcessEnv): void {
-  runSpawnCallSync(resolvePnpmSpawnCall(args, envOverride), "pnpm");
-}
-
 function depsInstalled(kind: "build" | "test"): boolean {
   try {
-    const require = createRequire(path.join(uiDir, "package.json"));
-    require.resolve("vite");
-    require.resolve("dompurify");
+    requireFromUi.resolve("vite");
+    requireFromUi.resolve("dompurify");
     if (kind === "test") {
-      require.resolve("vitest");
-      require.resolve("@vitest/browser-playwright");
-      require.resolve("playwright");
+      requireFromUi.resolve("vitest");
+      requireFromUi.resolve("@vitest/browser-playwright");
+      requireFromUi.resolve("playwright");
     }
     return true;
   } catch {
@@ -393,18 +386,15 @@ function depsInstalled(kind: "build" | "test"): boolean {
   }
 }
 
-function resolveScriptAction(action: string): "dev" | "build" | "test" | null {
-  if (action === "install") {
-    return null;
-  }
+function resolveScriptAction(action: string): [tool: "vite" | "vitest", ...args: string[]] | null {
   if (action === "dev") {
-    return "dev";
+    return ["vite"];
   }
   if (action === "build") {
-    return "build";
+    return ["vite", "build"];
   }
   if (action === "test") {
-    return "test";
+    return ["vitest", "run", "--config", "vitest.config.ts"];
   }
   return null;
 }
@@ -427,7 +417,7 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
   }
 
   if (action === "install") {
-    runPnpm(["install", ...rest]);
+    runSpawnCall(resolvePnpmSpawnCall(["install", ...rest]), "pnpm");
     return;
   }
   if (!script) {
@@ -436,21 +426,18 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
 
   const noPnpmBuild = action === "build" && process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1";
   if (!noPnpmBuild && !depsInstalled(action === "test" ? "test" : "build")) {
-    const installEnv = process.env;
-    const installArgs = ["install"];
-    runPnpmSync(installArgs, installEnv);
+    runSpawnCallSync(resolvePnpmSpawnCall(["install"]), "pnpm");
   }
 
+  const [tool, ...args] = script;
+  const env = action === "build" ? resolveUiBuildEnvironment() : process.env;
+  const toolCall = resolveSpawnCall(
+    process.execPath,
+    [resolveNodePackageBin(tool, requireFromUi), ...args, ...rest],
+    env,
+  );
   if (action === "build") {
-    const buildEnv = resolveUiBuildEnvironment();
-    const buildCall = noPnpmBuild
-      ? resolveSpawnCall(
-          process.execPath,
-          [path.join(repoRoot, "node_modules/vite/bin/vite.js"), "build", ...rest],
-          buildEnv,
-        )
-      : resolvePnpmSpawnCall(["run", "build", ...rest], buildEnv);
-    runSpawnCallSync(buildCall, "Control UI build");
+    runSpawnCallSync(toolCall, "Control UI build");
     if (rest.some((arg) => arg === "--help" || arg === "-h")) {
       return;
     }
@@ -467,7 +454,7 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
             path.join(here, validator),
             ...validatorArgs,
           ],
-          buildEnv,
+          env,
           { cwd: repoRoot },
         ),
         validator,
@@ -476,7 +463,7 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
     return;
   }
 
-  runPnpm(["run", script, ...rest]);
+  runSpawnCall(toolCall, tool);
 }
 
 function resolveDirectExecutionPath(

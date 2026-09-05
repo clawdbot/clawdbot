@@ -11,6 +11,7 @@ import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs
 import { isExplicitExtraMarkdownFilePath } from "./explicit-extra-markdown.js";
 import {
   isFileMissingError,
+  isPathInside,
   readRegularFile,
   statRegularFile,
   walkDirectory,
@@ -147,14 +148,12 @@ export function matchesExtraMemoryPathEntry(
     return true;
   }
   const relativePath = path.relative(entry.path, candidatePath);
-  if (!relativePath) {
-    return true;
-  }
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
-    return false;
-  }
   try {
-    return path.posix.matchesGlob(relativePath.replaceAll(path.sep, "/"), entry.pattern);
+    return (
+      !relativePath ||
+      (isPathInside(entry.path, candidatePath) &&
+        path.posix.matchesGlob(relativePath.replaceAll(path.sep, "/"), entry.pattern))
+    );
   } catch {
     return false;
   }

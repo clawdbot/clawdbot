@@ -7,7 +7,23 @@ import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-sup
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("allows tilde local media previews when the preview root home contains a literal $ pattern", async () => {
+  it.each([
+    {
+      name: "tilde local media when the preview root home contains a literal $ pattern",
+      source: "~/media/report-voice.mp3",
+      roots: ["/home/us$&r/media"],
+    },
+    {
+      name: "POSIX dot-segment local media",
+      source: "/workspace/project/../media/report-voice.mp3",
+      roots: ["/workspace/media"],
+    },
+    {
+      name: "Windows dot-segment local media",
+      source: "C:\\workspace\\project\\..\\media\\report-voice.mp3",
+      roots: ["C:\\workspace\\media"],
+    },
+  ])("allows $name", async ({ source, roots }) => {
     const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactDirParent
       ? createControlUiE2eArtifactDir("chat-flow.local-media-dollar-home", artifactDirParent)
@@ -18,7 +34,6 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const source = "~/media/report-voice.mp3";
     const requestedMediaUrls: URL[] = [];
 
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
@@ -43,7 +58,7 @@ suite.define(() => {
     });
 
     await installMockGateway(page, {
-      localMediaPreviewRoots: ["/home/us$&r/media"],
+      localMediaPreviewRoots: roots,
       historyMessages: [
         {
           id: "assistant-dollar-home-audio",

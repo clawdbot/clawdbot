@@ -82,9 +82,8 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
           `#!/usr/bin/env node
 const fs = require("node:fs");
 const file = process.env.FIXTURE_NPM_CALLS;
-const first = !fs.existsSync(file);
 fs.appendFileSync(file, JSON.stringify(process.argv.slice(2)) + "\\n");
-console.log(first ? "2026.7.1-2" : "2026.8.1");
+console.log(JSON.stringify(["2026.7.1-2", "2026.8.1"]));
 `,
           { mode: 0o755 },
         );
@@ -93,11 +92,15 @@ console.log(first ? "2026.7.1-2" : "2026.8.1");
           encoding: "utf8",
           env: {
             ...process.env,
+            CANDIDATE_PUBLISHED: "true",
+            CANDIDATE_VERSION: "2026.8.1",
             PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
             FALLBACK_BASELINE: inputs.published_upgrade_survivor_baseline.default,
             REQUESTED_BASELINES: requested,
             GITHUB_OUTPUT: output,
             FIXTURE_NPM_CALLS: calls,
+            RUNNER_TEMP: root,
+            TARGET_CONTEXT_REF: "",
           },
         });
         expect(readFileSync(output, "utf8")).toBe(
@@ -108,7 +111,7 @@ console.log(first ? "2026.7.1-2" : "2026.8.1");
             .trim()
             .split("\n")
             .map((line) => JSON.parse(line)),
-        ).toEqual([["view", "openclaw@latest", "version", "--prefer-online"]]);
+        ).toEqual([["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"]]);
       });
     },
   );

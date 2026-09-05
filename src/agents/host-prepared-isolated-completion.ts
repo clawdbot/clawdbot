@@ -11,6 +11,7 @@ export async function runHostPreparedIsolatedCompletion(
   if (params.authorization.owner !== "host") {
     throw new Error("Isolated completion requires host-prepared authorization.");
   }
+  params.assertCurrent?.();
   const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
   const signal = params.abortSignal
     ? AbortSignal.any([params.abortSignal, timeoutSignal])
@@ -34,5 +35,6 @@ export async function runHostPreparedIsolatedCompletion(
       signal,
     },
   });
+  params.assertCurrent?.();
   return { assistant };
 }

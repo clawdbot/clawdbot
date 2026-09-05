@@ -794,14 +794,6 @@ private enum AISetupAccessibilityError: Error {
     case missingGetter(String)
 }
 
-/// SwiftPM starts background-only, which AppKit does not permit to own windows.
-/// Initialize a window-capable test process once; never toggle policy across AX awaits.
-@MainActor
-private let aiSetupAccessibilityApplication: Void = {
-    #expect(NSApplication.shared.setActivationPolicy(.accessory))
-    NSApplication.shared.finishLaunching()
-}()
-
 @MainActor
 private func inspectAISetupAccessibility(_ root: NSView) async throws
 -> (labels: [String], actions: [String: Bool]) {
@@ -854,36 +846,39 @@ private func inspectAISetupSheet(
     _ model: OnboardingAISetupModel,
     colorScheme: ColorScheme = .light) async -> (labels: [String], actions: [String: Bool], size: NSSize)
 {
-    _ = aiSetupAccessibilityApplication
-    var appeared = false
-    let hosting = NSHostingView(rootView: OnboardingAISetupSheet(model: model)
-        .environment(\.colorScheme, colorScheme)
-        .onAppear { appeared = true })
-    hosting.frame = NSRect(x: 0, y: 0, width: 500, height: 500)
-    // Keep the sheet mounted through the AX request and detach it before closing.
-    let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
-    window.isReleasedWhenClosed = false
-    window.contentView = hosting
-    defer {
-        window.orderOut(nil)
-        window.contentView = nil
-        window.close()
+    // Self-process AX enumerates all windows; keep this fixture isolated through teardown.
+    await TestIsolation.withIsolatedState {
+        _ = AppKitTestSupport.application
+        var appeared = false
+        let hosting = NSHostingView(rootView: OnboardingAISetupSheet(model: model)
+            .environment(\.colorScheme, colorScheme)
+            .onAppear { appeared = true })
+        hosting.frame = NSRect(x: 0, y: 0, width: 500, height: 500)
+        // Keep the sheet mounted through the AX request and detach it before closing.
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+        }
+        window.orderFront(nil)
+        hosting.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        hosting.layoutSubtreeIfNeeded()
+        #expect(appeared)
+        let snapshot: (labels: [String], actions: [String: Bool])
+        do {
+            snapshot = try await inspectAISetupAccessibility(hosting)
+        } catch {
+            // Record the failure without skipping callers' gated wizard-task cleanup.
+            Issue.record(error)
+            snapshot = ([], [:])
+        }
+        #expect(snapshot.actions["Cancel"] != nil)
+        return (snapshot.labels, snapshot.actions, hosting.fittingSize)
     }
-    window.orderFront(nil)
-    hosting.layoutSubtreeIfNeeded()
-    window.displayIfNeeded()
-    hosting.layoutSubtreeIfNeeded()
-    #expect(appeared)
-    let snapshot: (labels: [String], actions: [String: Bool])
-    do {
-        snapshot = try await inspectAISetupAccessibility(hosting)
-    } catch {
-        // Record the failure without skipping callers' gated wizard-task cleanup.
-        Issue.record(error)
-        snapshot = ([], [:])
-    }
-    #expect(snapshot.actions["Cancel"] != nil)
-    return (snapshot.labels, snapshot.actions, hosting.fittingSize)
 }
 
 @Suite(.serialized)
@@ -2728,9 +2723,14 @@ struct OnboardingAISetupTests {
     @Test func `failed pending verification keeps activation lease before deadline`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingPendingVerificationFailureTests"))
         markPending(defaults)
+        let retryGate = AISetupRequestGate()
         let url = try #require(URL(string: "ws://example.invalid"))
-        let harness = AISetupHarness(url: url) { _, request, _ in
-            request.method == "openclaw.setup.verify" ? rejectedSetupVerificationResponse(id: request.id) : nil
+        let harness = AISetupHarness(url: url) { _, request, recorder in
+            guard request.method == "openclaw.setup.verify" else { return nil }
+            if await recorder.snapshot().methods.count == 2 {
+                await retryGate.wait()
+            }
+            return rejectedSetupVerificationResponse(id: request.id)
         }
         let model = harness.model(defaults: defaults)
 
@@ -2752,7 +2752,9 @@ struct OnboardingAISetupTests {
         #expect(model.detectError == nil)
         #expect(OnboardingController.shared.busyReason == "OpenClaw is testing your AI connection.")
 
-        await settleQueuedAISetupTasks()
+        await retryGate.waitUntilStarted()
+        await retryGate.release()
+        await waitForAISetupState { model.phase != .detecting }
 
         #expect(model.phase == .ready)
         #expect(model.detectError?.detail == "expired login")
@@ -2763,9 +2765,11 @@ struct OnboardingAISetupTests {
     @Test func `completed activation receipt survives verification transport failure`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingCompletedVerificationRetryTests"))
         let recorder = AISetupRequestRecorder()
+        let retryGate = AISetupRequestGate()
         let session = makeAISetupRequestSession(recorder: recorder) { task, request in
             guard request.method == "openclaw.setup.verify" else { return }
             let verifyCount = await recorder.snapshot().methods.count
+            if verifyCount == 2 { await retryGate.wait() }
             let response = verifyCount == 1
                 ? unavailableGatewayResponse(id: request.id)
                 : verifiedSetupResponse(id: request.id)
@@ -2797,8 +2801,10 @@ struct OnboardingAISetupTests {
         #expect(model.detectError == nil)
         #expect(OnboardingController.shared.busyReason == "OpenClaw is testing your AI connection.")
 
-        let requests = await waitForAISetupRequests(recorder, count: 2)
-        await settleQueuedAISetupTasks()
+        await retryGate.waitUntilStarted()
+        await retryGate.release()
+        await waitForAISetupState { model.phase != .detecting }
+        let requests = await recorder.snapshot()
 
         #expect(model.connected)
         #expect(OnboardingController.shared.busyReason == nil)

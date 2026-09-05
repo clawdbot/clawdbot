@@ -513,11 +513,9 @@ export async function deliverSlackSlashReplies(params: {
         if (text) {
           hookParts.push(text);
           messages.push(
-            ...chunkSlackTextAtHardLimit(text).map(
-              (chunk): PlannedSlashReplyMessage => ({
-                message: { text: chunk, mrkdwn: false },
-              }),
-            ),
+            ...chunkSlackTextAtHardLimit(text).map((chunk): PlannedSlashReplyMessage => ({
+              message: { text: chunk, mrkdwn: false },
+            })),
           );
         }
         continue;
@@ -552,9 +550,9 @@ export async function deliverSlackSlashReplies(params: {
       const trailingText = [outsideText, ...reply.mediaUrls].filter(Boolean).join("\n");
       if (trailingText) {
         messages.push(
-          ...chunkSlackTextAtHardLimit(trailingText).map(
-            (text): PlannedSlashReplyMessage => ({ message: { text, mrkdwn: false } }),
-          ),
+          ...chunkSlackTextAtHardLimit(trailingText).map((text): PlannedSlashReplyMessage => ({
+            message: { text, mrkdwn: false },
+          })),
         );
       }
       if (messages.length > 0) {

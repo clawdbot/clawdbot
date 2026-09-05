@@ -69,7 +69,7 @@ async function runPluginUninstallCommandUnlocked(
   const { loadInstalledPluginIndex } = await import("../plugins/installed-plugin-index.js");
   const { createInstalledPluginIndexScopeLookup } =
     await import("../plugins/installed-plugin-index-scope-lookup.js");
-  const { resolveInstalledPluginLifecycleOwnership } =
+  const { createInstalledPluginOwnershipResolver } =
     await import("../plugins/installed-plugin-package-ownership.js");
   const {
     loadInstalledPluginIndexInstallRecords,
@@ -135,7 +135,8 @@ async function runPluginUninstallCommandUnlocked(
   }
   const { plugin } = selection.value;
   const requestedPluginId = selection.value.pluginId;
-  const ownership = resolveInstalledPluginLifecycleOwnership(installedIndex, requestedPluginId);
+  const ownership =
+    createInstalledPluginOwnershipResolver(installedIndex).resolveLifecycle(requestedPluginId);
   if (!ownership.ok) {
     runtime.error(ownership.error);
     runtime.exit(1);

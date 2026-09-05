@@ -5,8 +5,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager.test-support.js";
 import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
-import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -3794,9 +3794,10 @@ describe("initSessionState reset authorization", () => {
         }
         expect.soft(acknowledgement?.shouldContinue).toBe(false);
         if (allowed) {
-          expect
-            .soft(acknowledgement?.reply?.text)
-            .toBe(body === "/new" ? "✅ New session started." : "✅ Session reset.");
+          expect.soft(acknowledgement?.reply).toEqual({
+            text: body === "/new" ? "✅ New session started." : "✅ Session reset.",
+            isStatusNotice: true,
+          });
         } else if (scopes) {
           expect.soft(acknowledgement?.reply?.text).toMatch(/not authorized/i);
           expect.soft(acknowledgement?.reply?.text).toContain("operator.admin");

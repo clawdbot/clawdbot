@@ -47,8 +47,8 @@ const persistedExecAllowlistEntrySchema = z
       lastResolvedPath: z.string().optional(),
     }),
   ])
-  .transform(
-    (value): ExecAllowlistEntry => (typeof value === "string" ? { pattern: value } : value),
+  .transform((value): ExecAllowlistEntry =>
+    typeof value === "string" ? { pattern: value } : value,
   );
 const persistedExecApprovalsAgentSchema = persistedExecApprovalPolicySchema.extend({
   allowlist: z.array(persistedExecAllowlistEntrySchema).optional(),

@@ -36,7 +36,6 @@ import type { JsonObject, JsonValue } from "./protocol-json.js";
 import type * as CodexMcpProtocol from "./protocol-mcp.js";
 
 export type {
-  CodexConfigEdit,
   CodexConfigReadResponse,
   CodexConfigRequirementsReadResponse,
   CodexPluginDetail,
@@ -295,6 +294,18 @@ export type CodexThreadTurnsListResponse = {
   data: CodexTurn[];
   nextCursor?: string | null;
   backwardsCursor?: string | null;
+};
+
+export type CodexThreadItemsListParams = JsonObject & {
+  threadId: string;
+  cursor?: string;
+  limit: number;
+  sortDirection: "desc";
+};
+
+export type CodexThreadItemsListResponse = {
+  data: Array<{ turnId: string; item: CodexThreadItem }>;
+  nextCursor?: string | null;
 };
 
 type CodexInitialTurnsPage = Omit<CodexThreadTurnsListResponse, "data"> & {
@@ -685,6 +696,7 @@ type CodexAppServerRequestParamsOverride = {
   "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/list": CodexThreadListParams;
   "thread/turns/list": CodexThreadTurnsListParams;
+  "thread/items/list": CodexThreadItemsListParams;
   "thread/name/set": CodexThreadSetNameParams;
   "thread/read": CodexThreadReadParams;
   "thread/resume": CodexThreadResumeParams;
@@ -739,6 +751,7 @@ type CodexAppServerRequestResultMap = {
   "thread/inject_items": JsonValue;
   "thread/list": CodexThreadListResponse;
   "thread/turns/list": CodexThreadTurnsListResponse;
+  "thread/items/list": CodexThreadItemsListResponse;
   "thread/name/set": JsonValue;
   "thread/read": CodexThreadReadResponse;
   "thread/resume": CodexThreadResumeResponse;

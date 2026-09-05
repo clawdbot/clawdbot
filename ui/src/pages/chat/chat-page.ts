@@ -585,10 +585,11 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
           (column) => column.id,
           (column, columnIndex) => html`
             <div
-              class="chat-split-view__column ${this.narrow &&
-              !column.panes.some((pane) => pane.id === layout.activePaneId)
-                ? "chat-split-view__column--narrow-hidden"
-                : ""}"
+              class="chat-split-view__column ${
+                this.narrow && !column.panes.some((pane) => pane.id === layout.activePaneId)
+                  ? "chat-split-view__column--narrow-hidden"
+                  : ""
+              }"
               style="flex: ${splitWeight(
                 layout.columnWeights,
                 columnIndex,
@@ -630,55 +631,59 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
                       "rendered split pane weight",
                     ),
                   })}
-                  ${!this.narrow && paneIndex < column.panes.length - 1
-                    ? html`
-                        <resizable-divider
-                          orientation="horizontal"
-                          .splitRatio=${splitRatio(
-                            column.paneWeights,
-                            paneIndex,
-                            "split pane weight",
-                          )}
-                          .minRatio=${0.15}
-                          .maxRatio=${0.85}
-                          .label=${t("nav.resize")}
-                          @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                            this.layout = this.layout
-                              ? resizePanes(
-                                  this.layout,
-                                  column.id,
-                                  paneIndex,
-                                  event.detail.splitRatio,
-                                )
-                              : undefined;
-                          }}
-                          @resize-end=${() => this.persistLayout(this.layout)}
-                        ></resizable-divider>
-                      `
-                    : nothing}
+                  ${
+                    !this.narrow && paneIndex < column.panes.length - 1
+                      ? html`
+                          <resizable-divider
+                            orientation="horizontal"
+                            .splitRatio=${splitRatio(
+                              column.paneWeights,
+                              paneIndex,
+                              "split pane weight",
+                            )}
+                            .minRatio=${0.15}
+                            .maxRatio=${0.85}
+                            .label=${t("nav.resize")}
+                            @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
+                              this.layout = this.layout
+                                ? resizePanes(
+                                    this.layout,
+                                    column.id,
+                                    paneIndex,
+                                    event.detail.splitRatio,
+                                  )
+                                : undefined;
+                            }}
+                            @resize-end=${() => this.persistLayout(this.layout)}
+                          ></resizable-divider>
+                        `
+                      : nothing
+                  }
                 `,
               )}
             </div>
-            ${!this.narrow && columnIndex < layout.columns.length - 1
-              ? html`
-                  <resizable-divider
-                    .splitRatio=${splitRatio(
-                      layout.columnWeights,
-                      columnIndex,
-                      "split column weight",
-                    )}
-                    .minRatio=${0.15}
-                    .maxRatio=${0.85}
-                    .label=${t("nav.resize")}
-                    @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                      this.layout = this.layout
-                        ? resizeColumns(this.layout, columnIndex, event.detail.splitRatio)
-                        : undefined;
-                    }}
-                    @resize-end=${() => this.persistLayout(this.layout)}
-                  ></resizable-divider>
-                `
-              : nothing}
+            ${
+              !this.narrow && columnIndex < layout.columns.length - 1
+                ? html`
+                    <resizable-divider
+                      .splitRatio=${splitRatio(
+                        layout.columnWeights,
+                        columnIndex,
+                        "split column weight",
+                      )}
+                      .minRatio=${0.15}
+                      .maxRatio=${0.85}
+                      .label=${t("nav.resize")}
+                      @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
+                        this.layout = this.layout
+                          ? resizeColumns(this.layout, columnIndex, event.detail.splitRatio)
+                          : undefined;
+                      }}
+                      @resize-end=${() => this.persistLayout(this.layout)}
+                    ></resizable-divider>
+                  `
+                : nothing
+            }
           `,
         )}
       </div>
@@ -701,20 +706,24 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     const renderValue = () => html`
       <div class="chat-split-view__drop-container">
         ${this.renderSplitLayout(layout, Boolean(this.layout), retainedSessions)}
-        ${indicator
-          ? html`<div
-              class="chat-split-view__drop-indicator ${indicator.zone.kind === "center"
-                ? "chat-split-view__drop-indicator--center"
-                : ""}"
-              style=${`left: ${indicator.rect.left}px; top: ${indicator.rect.top}px; width: ${indicator.rect.width}px; height: ${indicator.rect.height}px;`}
-            >
-              <span class="chat-split-view__drop-indicator-label"
-                >${indicator.zone.kind === "center"
-                  ? t("chat.splitView.dropOpenHere")
-                  : t("chat.splitView.dropSplit")}</span
+        ${
+          indicator
+            ? html`<div
+                class="chat-split-view__drop-indicator ${
+                  indicator.zone.kind === "center" ? "chat-split-view__drop-indicator--center" : ""
+                }"
+                style=${`left: ${indicator.rect.left}px; top: ${indicator.rect.top}px; width: ${indicator.rect.width}px; height: ${indicator.rect.height}px;`}
               >
-            </div>`
-          : nothing}
+                <span class="chat-split-view__drop-indicator-label"
+                  >${
+                    indicator.zone.kind === "center"
+                      ? t("chat.splitView.dropOpenHere")
+                      : t("chat.splitView.dropSplit")
+                  }</span
+                >
+              </div>`
+            : nothing
+        }
       </div>
     `;
     return this.mcpAppUnmountGate.render(JSON.stringify([...nextPaneKeys]), renderValue, () =>

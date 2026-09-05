@@ -305,6 +305,8 @@ export type ReplyPayloadMetadata = {
   replyDispatcherNormalizationOwner?: object;
   /** The command owner produced this terminal reply without starting an agent run. */
   commandReply?: true;
+  /** Host-owned acknowledgement after this final payload is confirmed delivered. */
+  onFinalDeliverySuccess?: () => void;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
   /** Original session-writer claim that must still hold at final delivery. */
@@ -356,6 +358,8 @@ export type ReplyPayloadMetadata = {
     idempotencyKey?: string;
   };
   beforeAgentRunBlocked?: boolean;
+  /** Payload preparation generated this provider error; it is not an authored answer. */
+  terminalProviderError?: true;
   /** The warning owner observed this tool failure; presentation text is not evidence. */
   toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */

@@ -28,12 +28,12 @@ async function withRuntime(
 ): Promise<void> {
   await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
-      let stop: (() => void) | undefined;
+      let stop: ReturnType<typeof startSessionDeliveryRuntime> | undefined;
       try {
         await run((params) => (stop = startSessionDeliveryRuntime(params)));
       } finally {
-        // Retire the current owner before restoring its environment or removing its queue.
-        stop?.();
+        // Retire and join the owner before restoring its environment or removing its queue.
+        await stop?.();
       }
     });
   });
@@ -66,7 +66,7 @@ describe("session delivery queue runtime", () => {
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ id }), "recovered");
       expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
-      stop();
+      await stop();
     });
   });
 
@@ -223,7 +223,7 @@ describe("session delivery queue runtime", () => {
     }
   });
 
-  it("coalesces duplicate schedules while the same entry is draining", async () => {
+  it("coalesces duplicate schedules and joins the active drain on stop", async () => {
     vi.useFakeTimers();
     await withRuntime(async (startRuntime) => {
       const id = await enqueueSessionDelivery({
@@ -234,12 +234,8 @@ describe("session delivery queue runtime", () => {
       });
       const delivery = createDeferredCore();
       const deliver = vi.fn(() => delivery.promise);
-      let pendingDrain: ReturnType<typeof drainPendingSessionDelivery> | undefined;
-      const stop = startRuntime({
-        deliver,
-        log: logger,
-        drain: (params) => (pendingDrain = drainPendingSessionDelivery(params)),
-      });
+      let stopping: Promise<void> | undefined;
+      const stop = startRuntime({ deliver, log: logger });
 
       try {
         await scheduleSessionDelivery(id);
@@ -250,16 +246,23 @@ describe("session delivery queue runtime", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(deliver).toHaveBeenCalledTimes(1);
 
-        delivery.resolve();
-        await vi.waitFor(async () => {
-          expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+        let stopped = false;
+        stopping = Promise.resolve(stop()).then(() => {
+          stopped = true;
         });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stopped).toBe(false);
+        await expect(scheduleSessionDelivery(id)).resolves.toBe(false);
+
+        delivery.resolve();
+        await stopping;
+        expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
         expect(deliver).toHaveBeenCalledTimes(1);
       } finally {
-        // Stop scheduling, then join the drain before the fixture removes its queue.
-        stop();
+        const cleanup = stop();
         delivery.resolve();
-        await pendingDrain;
+        await cleanup;
+        await stopping;
       }
     });
   });
@@ -399,14 +402,14 @@ describe("session delivery queue runtime", () => {
       const oldDeliver = vi.fn(async () => {});
       const stopOldRuntime = startRuntime({ deliver: oldDeliver, log: logger });
       await scheduleSessionDelivery(id);
-      stopOldRuntime();
+      await stopOldRuntime();
       await expect(scheduleSessionDelivery(id)).resolves.toBe(false);
       await vi.advanceTimersByTimeAsync(0);
       expect(oldDeliver).not.toHaveBeenCalled();
       expect(await loadPendingSessionDeliveries()).toEqual([expect.objectContaining({ id })]);
       const resumedDeliver = vi.fn(async () => {});
       startRuntime({ deliver: resumedDeliver, log: logger });
-      stopOldRuntime();
+      await stopOldRuntime();
 
       await schedulePendingSessionDeliveries();
       await vi.advanceTimersByTimeAsync(0);
@@ -414,6 +417,55 @@ describe("session delivery queue runtime", () => {
       expect(oldDeliver).not.toHaveBeenCalled();
       expect(resumedDeliver).toHaveBeenCalledTimes(1);
       expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+    });
+  });
+
+  it("joins only the retired owner's drains after a runtime replacement", async () => {
+    vi.useFakeTimers();
+    await withRuntime(async (startRuntime) => {
+      const oldDelivery = createDeferredCore();
+      const newDelivery = createDeferredCore();
+      const oldDeliver = vi.fn(() => oldDelivery.promise);
+      const newDeliver = vi.fn(() => newDelivery.promise);
+      const oldId = await enqueueSessionDelivery({
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "old owner delivery",
+        messageId: "old-owner-delivery",
+      });
+      const newId = await enqueueSessionDelivery({
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "new owner delivery",
+        messageId: "new-owner-delivery",
+      });
+      const stopOld = startRuntime({ deliver: oldDeliver, log: logger });
+      let stopNew: ReturnType<typeof startSessionDeliveryRuntime> | undefined;
+      try {
+        await scheduleSessionDelivery(oldId);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(oldDeliver).toHaveBeenCalledOnce();
+        stopNew = startRuntime({ deliver: newDeliver, log: logger });
+        await scheduleSessionDelivery(newId);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(newDeliver).toHaveBeenCalledOnce();
+
+        let stopped = false;
+        const stopping = Promise.resolve(stopOld()).then(() => {
+          stopped = true;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stopped).toBe(false);
+        oldDelivery.resolve();
+        await stopping;
+        expect(await loadPendingSessionDelivery(oldId)).toBeNull();
+        expect(await loadPendingSessionDelivery(newId)).not.toBeNull();
+        await expect(scheduleSessionDelivery(newId)).resolves.toBe(true);
+      } finally {
+        oldDelivery.resolve();
+        newDelivery.resolve();
+        await Promise.all([stopOld(), stopNew?.()]);
+      }
     });
   });
 

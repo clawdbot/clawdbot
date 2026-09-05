@@ -83,7 +83,14 @@ describe("Anthropic tool-clearing policy", () => {
     },
   );
 
-  it("expands deny globs over historical tools while the allow complement covers exposed tools", () => {
+  it.each([
+    { tools: { allow: ["look*"] }, excluded: ["exec_retired", "other_retired", "search"] },
+    {
+      tools: { allow: ["look*"], deny: ["exec*"] },
+      excluded: ["exec_retired", "other_retired", "search"],
+    },
+    { tools: { deny: ["exec*"] }, excluded: ["exec_retired"] },
+  ])("applies pruning filters to exposed and historical tools: $tools", ({ tools, excluded }) => {
     const payload: Record<string, unknown> = {
       tools: [{ name: "lookup" }, { name: "search" }],
       messages: [
@@ -92,20 +99,21 @@ describe("Anthropic tool-clearing policy", () => {
           content: [
             { type: "tool_use", id: "old_exec", name: "exec_retired", input: {} },
             { type: "tool_use", id: "old_other", name: "other_retired", input: {} },
+            { type: "tool_use", id: "old_lookup", name: "lookup_retired", input: {} },
           ],
         },
       ],
     };
     const policy = resolveAnthropicPayloadPolicy({
       ...model,
-      cacheTtlPruning: { tools: { allow: ["lookup"], deny: ["exec*"] } },
+      cacheTtlPruning: { tools },
     });
     applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
     expect(payload.context_management).toEqual({
       edits: [
         expect.objectContaining({
           type: "clear_tool_uses_20250919",
-          exclude_tools: ["exec_retired", "search"],
+          exclude_tools: excluded,
         }),
       ],
     });

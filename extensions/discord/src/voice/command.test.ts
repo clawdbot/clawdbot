@@ -153,15 +153,23 @@ describe("createDiscordVoiceCommand", () => {
     });
   });
 
-  it("authorizes vc commands through commands.ownerAllowFrom", async () => {
+  it.each([
+    { owner: "100000000000000001", authorized: true },
+    { owner: "discord:100000000000000001", authorized: true },
+    { owner: "discord:user:100000000000000001", authorized: false },
+    { owner: "user:100000000000000001", authorized: true },
+    { owner: "pk:100000000000000001", authorized: true },
+    { owner: "user:*", authorized: false },
+    { owner: "pk:*", authorized: false },
+  ])("preserves owner target authority for vc commands: $owner", async ({ owner, authorized }) => {
     const ownerId = "100000000000000001";
     const statusSpy = vi.fn(() => []);
     const manager = {
       status: statusSpy,
     } as unknown as DiscordVoiceManager;
     const { status } = createVoiceCommandHarness(manager, {
-      cfg: { commands: { ownerAllowFrom: [`discord:${ownerId}`] } },
-      discordConfig: { dmPolicy: "disabled" },
+      cfg: { commands: { ownerAllowFrom: [owner] } },
+      discordConfig: { dmPolicy: "disabled", allowFrom: ["*"] },
       useAccessGroups: true,
     });
     const { interaction, reply } = createInteraction({
@@ -173,7 +181,9 @@ describe("createDiscordVoiceCommand", () => {
 
     expect(statusSpy).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith({
-      content: "No active voice sessions.",
+      content: authorized
+        ? "No active voice sessions."
+        : "You are not authorized to use this command.",
       ephemeral: true,
     });
   });

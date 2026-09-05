@@ -41,6 +41,7 @@ import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
+import { createSkillCommandLoaders } from "./skill-command-loaders.js";
 import type { createTypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
@@ -72,6 +73,9 @@ function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
     commandName &&
     commandName !== "new" &&
     commandName !== "reset" &&
+    // Dashboard creates an agent prompt with exact skill selections. The full
+    // reply pipeline must consume that command once, without re-resolving its text.
+    commandName !== "dashboard" &&
     (isNativeCommandTurn(commandTurn) ||
       shouldRunInternalTextSlashCommandFastPath(ctx, commandTurn, commandName)),
   );
@@ -381,7 +385,15 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           model: params.model,
         }),
         isGroup: sessionState.isGroup,
-        loadSkillCommands: loadNativeSkillCommands,
+        ...createSkillCommandLoaders(() => skillCommandsRuntimeLoader.load(), {
+          workspaceDir: params.workspaceDir,
+          cfg: params.cfg,
+          agentId: params.agentId,
+          skillFilter: params.skillFilter,
+          sessionEntry: sessionState.sessionEntry,
+          sessionKey: sessionState.sessionKey,
+          loadSkillCommands: loadNativeSkillCommands,
+        }),
         typing: params.typing,
       });
   const commandSessionMetadataChanges = takeCommandSessionMetadataChangesFromTargets([

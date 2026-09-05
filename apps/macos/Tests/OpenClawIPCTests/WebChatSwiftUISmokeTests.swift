@@ -168,21 +168,64 @@ struct WebChatSwiftUISmokeTests {
     }
 
     @Test func `one Gateway profile can own multiple independent windows`() async throws {
-        let manager = WebChatManager()
-        let profile = try MacGatewayProfile(
-            id: "same-gateway",
-            name: "Same Gateway",
-            url: #require(URL(string: "wss://same.example")))
+        try await withIsolatedWebChatManager { manager in
+            let profile = try MacGatewayProfile(
+                id: "same-gateway",
+                name: "Same Gateway",
+                url: #require(URL(string: "wss://same.example")))
 
-        try await manager.show(profile: profile)
-        try await manager.show(profile: profile)
-        let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
+            try await manager.show(profile: profile)
+            try await manager.show(profile: profile)
+            let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
 
-        #expect(manager._testProfileWindowCount(profileID: profile.id) == 2)
-        #expect(manager._testSessionObserverVisible(connection: connection))
-        await manager.closeGatewayWindows(profileID: profile.id)
-        #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
-        #expect(!manager._testSessionObserverVisible(connection: connection))
+            #expect(manager._testProfileWindowCount(profileID: profile.id) == 2)
+            #expect(manager._testSessionObserverVisible(connection: connection))
+            manager.resetPrimaryConnections()
+            #expect(manager._testProfileWindowCount(profileID: profile.id) == 2)
+            #expect(manager._testSessionObserverVisible(connection: connection))
+            await manager.closeGatewayWindows(profileID: profile.id)
+            #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
+            #expect(!manager._testSessionObserverVisible(connection: connection))
+        }
+    }
+
+    @Test func `closing chat retires a profile window still waiting for its connection`() async throws {
+        try await withIsolatedWebChatManager { manager in
+            let profile = try MacGatewayProfile(
+                id: "pending-window-\(UUID().uuidString)",
+                name: "Pending Gateway",
+                url: #require(URL(string: "wss://pending.example")))
+            let fleet = MacGatewayConnectionFleet.shared
+            let release = DispatchSemaphore(value: 0)
+            let gateEntered = AsyncStream.makeStream(of: Void.self)
+            let blockedFleet = Task.detached {
+                await fleet.holdForPendingWindowRegression(
+                    entered: gateEntered.continuation,
+                    release: release)
+            }
+            defer { release.signal() }
+            var gateIterator = gateEntered.stream.makeAsyncIterator()
+            await gateIterator.next()
+
+            let openStarted = AsyncStream.makeStream(of: Void.self)
+            let pendingOpen = Task { @MainActor in
+                openStarted.continuation.yield()
+                openStarted.continuation.finish()
+                try await manager.show(profile: profile)
+            }
+            var openIterator = openStarted.stream.makeAsyncIterator()
+            await openIterator.next()
+            #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
+            manager.close()
+            release.signal()
+            #expect(await blockedFleet.value)
+
+            if case let .failure(error) = await pendingOpen.result, !(error is CancellationError) {
+                Issue.record("Pending window failed unexpectedly: \(error)")
+            }
+            #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
+            await manager.closeGatewayWindows(profileID: profile.id)
+        }
     }
 
     @Test func `initial draft populates an empty composer without replacing user text`() {
@@ -238,5 +281,18 @@ struct WebChatSwiftUISmokeTests {
 
         #expect(WebChatSwiftUIWindowController.persistedVerboseLevel(defaults: defaults) == nil)
         #expect(defaults.object(forKey: "openclaw.webchat.verboseLevel") == nil)
+    }
+}
+
+extension MacGatewayConnectionFleet {
+    fileprivate func holdForPendingWindowRegression(
+        entered: AsyncStream<Void>.Continuation,
+        release: DispatchSemaphore) -> Bool
+    {
+        // Hold the actual fleet admission boundary so close runs after show
+        // starts but before it can acquire its connection.
+        entered.yield()
+        entered.finish()
+        return release.wait(timeout: .now() + 5) == .success
     }
 }

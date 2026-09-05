@@ -51,7 +51,7 @@ func TestTranslationPromptUsesSharedContractAndLocaleOverlayForEverySupportedLoc
 				"Never repeat a placeholder when expanding a comparison or clarifying a reference",
 				"Express precedence chains as an inline priority order from highest to lowest, naming each item once",
 				"Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”",
-				"When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Inferrs, Meta, Runway, Synthetic, Upstash Box, Lobster, Mantis, Tokenjuice",
+				"When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Meta, Runway, Synthetic, Upstash Box, Lobster, Mantis, Tokenjuice",
 				"Translate the same words normally when the source clearly uses them as ordinary prose instead of a name",
 				"Locale rules:",
 			} {

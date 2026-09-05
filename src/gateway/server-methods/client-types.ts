@@ -32,6 +32,8 @@ export type GatewayClient = {
   connect: ConnectParams;
   /** Transport-owned revocation marker; retained callers have no authority after invalidation. */
   invalidated?: boolean;
+  /** Host-owned transport retirement notification; does not cancel ordinary admitted RPCs. */
+  connectionSignal?: AbortSignal;
   connId?: string;
   presenceKey?: string;
   clientIp?: string;
@@ -55,6 +57,8 @@ export type GatewayClient = {
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Authenticated Control UI admin admission; never accepted from wire params. */
+    controlUiAdmin?: true;
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
     /** Host-owned role authority retained separately from an autonomous run principal. */

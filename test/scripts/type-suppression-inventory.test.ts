@@ -71,11 +71,15 @@ describe("type suppression inventory", () => {
         .filter((finding) => finding.kind === "expect-error")
         .map((finding) => `${finding.file}:${finding.line}:${finding.excerpt}`),
     ).toEqual([
+      "extensions/openai/realtime-quicksilver-session-lifecycle.test.ts:30:@ts-expect-error JavaScript callers must still fail before reserving a native session.",
       "src/infra/kysely-sync.types.test.ts:49:@ts-expect-error Kysely checks selected column string literals.",
       "src/infra/kysely-sync.types.test.ts:52:@ts-expect-error Kysely checks table string literals.",
       "src/infra/kysely-sync.types.test.ts:55:@ts-expect-error Kysely checks where-reference string literals.",
       "src/infra/kysely-sync.types.test.ts:58:@ts-expect-error Kysely checks grouped column string literals.",
       "src/infra/kysely-sync.types.test.ts:61:@ts-expect-error Kysely checks order references and selected aliases.",
+      "src/infra/net/fetch-guard.socks.test.ts:363:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
+      "src/infra/net/fetch-guard.socks.test.ts:368:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
+      "src/infra/net/fetch-guard.socks.test.ts:371:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
       "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:8:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",
       "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:10:@ts-expect-error An empty trigger list cannot prove that a hook is inactive.",
       "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:28:@ts-expect-error Tool authority is only supported for before_prompt_build.",

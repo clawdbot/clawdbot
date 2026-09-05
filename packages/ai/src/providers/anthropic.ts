@@ -299,6 +299,7 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 async function* iterateAnthropicEvents(
   response: Response,
   requireMessageStop = false,
+  signal?: AbortSignal,
 ): AsyncGenerator<RawMessageStreamEvent> {
   if (!response.body) {
     throw new Error("Attempted to iterate over an Anthropic response with no body");
@@ -311,6 +312,7 @@ async function* iterateAnthropicEvents(
       throw new Error(sse.data);
     }
 
+    notifyLlmRequestActivity(signal);
     if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) {
       continue;
     }
@@ -366,9 +368,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
     // Classifier refusals can invalidate partial output, so no event is safe
     // to expose until the terminal stop reason is known.
     const refusalBuffer = usesClaudeStreamingRefusalContract(model)
-      ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
-          notifyLlmRequestActivity(requestOptions?.signal),
-        )
+      ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
       : undefined;
     const eventSink = refusalBuffer ?? stream;
     // Fallback-served turns bill at the serving model's rates; a boundary
@@ -475,7 +475,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       const compactionCapture = createCompactionCapture(output, model, requestOptions);
       const requireMessageStop = refusalBuffer !== undefined || isDirectAnthropicModel(model);
 
-      for await (const event of iterateAnthropicEvents(response, requireMessageStop)) {
+      for await (const event of iterateAnthropicEvents(
+        response,
+        requireMessageStop,
+        requestOptions?.signal,
+      )) {
         // A serving-model fallback replaces the initial snapshot; report only once at completion.
         inputTransformations = readAnthropicInputTransformations(event) ?? inputTransformations;
         if (event.type === "message_start") {

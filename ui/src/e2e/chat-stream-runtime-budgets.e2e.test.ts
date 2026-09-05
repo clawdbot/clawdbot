@@ -26,17 +26,14 @@ const suite = createChatFlowE2eSuite();
 type ChatFlowSuite = ReturnType<typeof createChatFlowE2eSuite>;
 type ChatFlowPage = Parameters<Parameters<ChatFlowSuite["withPage"]>[1]>[0]["page"];
 
-// Burst size for the render-scheduling gate. Each delta lands in its own
-// macrotask, so every event forces an invalidation; the animation-frame queue
-// is what keeps those invalidations executing inside frame callbacks instead
-// of on message/timer tasks.
+// Each delta lands in its own message task. The animation-frame queue must
+// coalesce those invalidations and keep them off message tasks.
 const BURST_DELTA_COUNT = 240;
 // Sanity floor: the burst must invalidate the chat page host at least twice,
 // proving the probe observed the streaming path at all.
 const MIN_BURST_HOST_UPDATES = 2;
-// Valid frame-queued runs commit 115-144 host updates for this burst. A direct
-// update per delta produces 241, so this ceiling catches lost coalescing while
-// retaining headroom for runner cadence.
+// A direct update per delta produces at least 240 host invalidations. Keep the
+// burst below that count so frame scheduling alone cannot hide lost coalescing.
 const MAX_BURST_HOST_UPDATES = 180;
 // Minimum share of host invalidations that must execute inside an animation
 // frame callback. The queue guarantees this for every stream-driven update;
@@ -117,7 +114,7 @@ async function recordBudgetMetrics(
 // plain-text projection of the burst chunk emitted in-page
 // (`delta N with **boldN** and \`codeN\` tail`).
 function renderedChunkText(index: number): string {
-  return `delta ${index} with bold${index}`;
+  return `delta ${index} with bold${index} and code${index} tail`;
 }
 
 async function installRenderProbe(page: ChatFlowPage) {
@@ -194,9 +191,9 @@ async function readRenderProbe(page: ChatFlowPage): Promise<StreamPerfProbe> {
   return page.evaluate(() => (window as ScopedWindow).ocStreamPerf!);
 }
 
-// Emits each delta from its own macrotask so render work cannot hide inside
-// one task's microtask batching: the queue under test schedules commits per
-// animation frame, not per task.
+// Socket-like message tasks avoid nested timers' 4ms clamp, which can spread a
+// burst across enough frames to falsely exhaust the budget. Split at a real
+// frame so the sanity floor observes two streaming batches.
 async function emitDeltaBurstInPage(
   page: ChatFlowPage,
   runId: string,
@@ -211,6 +208,8 @@ async function emitDeltaBurstInPage(
       const scope = window as ScopedWindow;
       scope.ocBurstDone = false;
       let emitted = 0;
+      const channel = new MessageChannel();
+      const postNext = () => channel.port2.postMessage(null);
       const emitNext = () => {
         emitted += 1;
         const chunk = ` delta ${emitted} with **bold${emitted}** and \`code${emitted}\` tail`;
@@ -225,13 +224,19 @@ async function emitDeltaBurstInPage(
           sessionKey: "main",
           state: "delta",
         });
-        if (emitted < targetCount) {
-          setTimeout(emitNext, 0);
-        } else {
+        if (emitted === targetCount) {
+          channel.port1.close();
+          channel.port2.close();
           scope.ocBurstDone = true;
+        } else if (emitted === Math.floor(targetCount / 2)) {
+          requestAnimationFrame(postNext);
+        } else {
+          postNext();
         }
       };
-      setTimeout(emitNext, 0);
+      channel.port1.addEventListener("message", emitNext);
+      channel.port1.start();
+      postNext();
     },
     { runId, count },
   );

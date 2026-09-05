@@ -41,18 +41,22 @@ const mocks = vi.hoisted(() => {
     setResolveImpl(impl?: typeof resolveImpl) {
       resolveImpl = impl;
     },
-    getOrCreateRequesterScopedMcpRuntime: vi.fn(
+    acquireRequesterScopedMcpRuntime: vi.fn(
       async (params: { sessionId: string; requesterSenderId?: string | null }) => {
         if (resolveImpl) {
           const runtime = await resolveImpl(params);
           return runtime
-            ? { runtime, advertisedCatalogConfigFingerprint: runtime.configFingerprint }
+            ? {
+                runtime,
+                releaseLease: runtime.acquireLease?.() ?? (() => {}),
+                advertisedCatalogConfigFingerprint: runtime.configFingerprint,
+              }
             : undefined;
         }
         return undefined;
       },
     ),
-    getOrCreateSessionMcpRuntime: vi.fn(),
+    acquireSessionMcpRuntime: vi.fn(),
     rememberAdvertisedScopedMcpCatalog: vi.fn(
       (
         handle: { runtime: Runtime },
@@ -74,8 +78,8 @@ vi.mock("./agent-bundle-mcp-manager-api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./agent-bundle-mcp-manager-api.js")>();
   return {
     ...actual,
-    getOrCreateRequesterScopedMcpRuntime: mocks.getOrCreateRequesterScopedMcpRuntime,
-    getOrCreateSessionMcpRuntime: mocks.getOrCreateSessionMcpRuntime,
+    acquireRequesterScopedMcpRuntime: mocks.acquireRequesterScopedMcpRuntime,
+    acquireSessionMcpRuntime: mocks.acquireSessionMcpRuntime,
     rememberAdvertisedScopedMcpCatalog: mocks.rememberAdvertisedScopedMcpCatalog,
     getAdvertisedScopedMcpCatalog: mocks.getAdvertisedScopedMcpCatalog,
   };
@@ -194,8 +198,8 @@ async function makeConnectRuntime(params: {
 
 beforeEach(() => {
   mocks.reset();
-  mocks.getOrCreateRequesterScopedMcpRuntime.mockClear();
-  mocks.getOrCreateSessionMcpRuntime.mockReset();
+  mocks.acquireRequesterScopedMcpRuntime.mockClear();
+  mocks.acquireSessionMcpRuntime.mockReset();
   mocks.rememberAdvertisedScopedMcpCatalog.mockClear();
   mocks.getAdvertisedScopedMcpCatalog.mockClear();
   readCredentialsStatus.mockReset().mockResolvedValue({ state: "unauthenticated" });
@@ -207,7 +211,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     const runtime = makeRuntime({ sessionId: "scheduled", requesterSenderId: "unused" });
     delete runtime.requesterScope;
     runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = "approve";
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled",
@@ -215,7 +222,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
       toolsAllow: ["user-mail__inbox"],
     });
 
-    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledWith(
+    expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledWith(
       expect.not.objectContaining({
         requesterSenderId: expect.anything(),
         agentAccountId: expect.anything(),
@@ -229,7 +236,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
   it("never widens a finite scheduled cap", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled-denied", requesterSenderId: "unused" });
     delete runtime.requesterScope;
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-denied",
@@ -245,7 +255,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     const runtime = makeRuntime({ sessionId: "interactive", requesterSenderId: "unused" });
     delete runtime.requesterScope;
     const callTool = vi.spyOn(runtime, "callTool");
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
     let active: (() => boolean) | undefined;
     const requestInteractiveCodexApproval = vi.fn(async (request) => {
       active = request.isActive;
@@ -289,7 +302,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     const runtime = makeRuntime({ sessionId: "interactive-policy", requesterSenderId: "unused" });
     delete runtime.requesterScope;
     runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = mode;
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
     const requestInteractiveCodexApproval = vi.fn(async () => undefined);
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({
@@ -343,7 +359,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
       ],
     });
     const callTool = vi.spyOn(runtime, "callTool");
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-app",
@@ -417,7 +436,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
       ],
     });
     const callTool = vi.spyOn(runtime, "callTool");
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
     const requestInteractiveCodexApproval = vi.fn(async () => undefined);
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({
@@ -486,7 +508,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
         },
       ],
     });
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-app-yolo",
@@ -511,7 +536,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     const emptyCatalog = { version: 1, generatedAt: 0, servers: {}, tools: [] };
     runtime.peekCatalog = () => emptyCatalog;
     runtime.getCatalog = async () => emptyCatalog;
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-empty",
@@ -542,7 +570,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     };
     runtime.peekCatalog = () => failedCatalog;
     runtime.getCatalog = async () => failedCatalog;
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-diagnostic",
@@ -560,7 +591,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     delete runtime.requesterScope;
     const catalog = runtime.peekCatalog()!;
     catalog.servers["user-mail"]!.codexApprovalMode = "prompt";
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
     const callTool = vi.spyOn(runtime, "callTool");
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({
@@ -587,7 +621,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     const runtime = makeRuntime({ sessionId: "scheduled-yolo", requesterSenderId: "unused" });
     delete runtime.requesterScope;
     runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = mode;
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
     const callTool = vi.spyOn(runtime, "callTool");
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({
@@ -619,7 +656,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     if (annotations) {
       catalog.tools[0]!.codexAnnotations = annotations;
     }
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
     const callTool = vi.spyOn(runtime, "callTool");
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({
@@ -636,7 +676,10 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
   it("omits MCP tools when scheduled approval metadata is absent", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled-unknown", requesterSenderId: "unused" });
     delete runtime.requesterScope;
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
     const callTool = vi.spyOn(runtime, "callTool");
 
     const result = await materializeStaticMcpToolsForHarnessRunCore({

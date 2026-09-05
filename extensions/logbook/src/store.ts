@@ -1,13 +1,15 @@
 // Logbook SQLite store: frames on disk, everything else in one plugin-owned DB.
-// Uses node:sqlite prepared statements directly (extension-local store, same
-// pattern as memory-core/imessage); the shared Kysely helpers are core-only.
 import { chmodSync, mkdirSync, rmdirSync, rmSync } from "node:fs";
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   configureSqliteConnectionPragmas,
   migrateSqliteSchemaToStrict,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -16,6 +18,7 @@ import type {
   LogbookBatchStatus,
   LogbookCard,
   LogbookCardDraft,
+  LogbookDatabase,
   LogbookDayStats,
   LogbookDistraction,
   LogbookFrame,
@@ -91,43 +94,8 @@ CREATE TABLE IF NOT EXISTS standups (
 ) STRICT;
 `;
 
-type FrameRow = {
-  id: number;
-  captured_at_ms: number;
-  day: string;
-  path: string;
-  screen_index: number;
-  width: number | null;
-  height: number | null;
-  byte_size: number;
-  idle: number;
-};
-
-type BatchRow = {
-  id: number;
-  day: string;
-  start_ms: number;
-  end_ms: number;
-  status: LogbookBatchStatus;
-  error: string | null;
-  frame_count: number;
-  model: string | null;
-};
-
-type CardRow = {
-  id: number;
-  day: string;
-  start_ms: number;
-  end_ms: number;
-  title: string;
-  summary: string;
-  detail: string;
-  category: string;
-  app_primary: string | null;
-  app_secondary: string | null;
-  distractions: string;
-  keyframe_id: number | null;
-};
+type FrameRow = Omit<LogbookDatabase["frames"], "content_hash" | "batch_id">;
+type BatchRow = Omit<LogbookDatabase["batches"], "created_ms" | "updated_ms">;
 
 function toFrame(row: FrameRow): LogbookFrame {
   return {
@@ -175,7 +143,7 @@ function parseDistractions(raw: string): LogbookDistraction[] {
   }
 }
 
-function toCard(row: CardRow): LogbookCard {
+function toCard(row: LogbookDatabase["cards"]): LogbookCard {
   return {
     id: row.id,
     day: row.day,
@@ -202,6 +170,10 @@ export function dayKeyFor(ms: number): string {
 
 export class LogbookStore {
   private readonly db: Database;
+  private readonly query;
+  private readonly framesQuery;
+  private readonly batchesQuery;
+  private readonly cardsQuery;
   private readonly walMaintenance: ReturnType<typeof configureSqliteConnectionPragmas>;
   readonly framesDir: string;
 
@@ -251,6 +223,27 @@ export class LogbookStore {
     }
     this.db = db;
     this.walMaintenance = walMaintenance;
+    this.query = getNodeSqliteKysely<LogbookDatabase>(db);
+    // Timestamp ties follow insertion ids, matching existing SQLite reads.
+    this.framesQuery = this.query
+      .selectFrom("frames")
+      .select([
+        "id",
+        "captured_at_ms",
+        "day",
+        "path",
+        "screen_index",
+        "width",
+        "height",
+        "byte_size",
+        "idle",
+      ])
+      .orderBy("captured_at_ms", "asc")
+      .orderBy("id", "asc");
+    this.batchesQuery = this.query
+      .selectFrom("batches")
+      .select(["id", "day", "start_ms", "end_ms", "status", "error", "frame_count", "model"]);
+    this.cardsQuery = this.query.selectFrom("cards");
   }
 
   close(): void {
@@ -293,51 +286,47 @@ export class LogbookStore {
   }
 
   lastFrame(): { capturedAtMs: number; contentHash: string } | null {
-    const row = this.db
-      .prepare(
-        `SELECT captured_at_ms, content_hash FROM frames ORDER BY captured_at_ms DESC LIMIT 1`,
-      )
-      .get() as { captured_at_ms: number; content_hash: string } | undefined;
+    const row = executeSqliteQueryTakeFirstSync(
+      this.db,
+      this.query
+        .selectFrom("frames")
+        .select(["captured_at_ms", "content_hash"])
+        .orderBy("captured_at_ms", "desc")
+        .orderBy("id", "desc")
+        .limit(1),
+    );
     return row ? { capturedAtMs: row.captured_at_ms, contentHash: row.content_hash } : null;
   }
 
   unbatchedActiveFrames(limit: number): LogbookFrame[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, captured_at_ms, day, path, screen_index, width, height, byte_size, idle
-         FROM frames WHERE batch_id IS NULL AND idle = 0
-         ORDER BY captured_at_ms ASC LIMIT ?`,
-      )
-      .all(limit) as FrameRow[];
-    return rows.map(toFrame);
+    return executeSqliteQuerySync(
+      this.db,
+      this.framesQuery.where("batch_id", "is", null).where("idle", "=", 0).limit(limit),
+    ).rows.map(toFrame);
   }
 
   countUnbatchedActiveFrames(): number {
-    const row = this.db
-      .prepare(`SELECT COUNT(*) AS n FROM frames WHERE batch_id IS NULL AND idle = 0`)
-      .get() as { n: number };
-    return row.n;
+    const row = executeSqliteQueryTakeFirstSync(
+      this.db,
+      this.query
+        .selectFrom("frames")
+        .select((eb) => eb.fn.countAll<number>().as("n"))
+        .where("batch_id", "is", null)
+        .where("idle", "=", 0),
+    );
+    return expectDefined(row, "Logbook unbatched frame count").n;
   }
 
   frameById(id: number): LogbookFrame | null {
-    const row = this.db
-      .prepare(
-        `SELECT id, captured_at_ms, day, path, screen_index, width, height, byte_size, idle
-         FROM frames WHERE id = ?`,
-      )
-      .get(id) as FrameRow | undefined;
+    const row = executeSqliteQueryTakeFirstSync(this.db, this.framesQuery.where("id", "=", id));
     return row ? toFrame(row) : null;
   }
 
   framesInRange(startMs: number, endMs: number): LogbookFrame[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, captured_at_ms, day, path, screen_index, width, height, byte_size, idle
-         FROM frames WHERE captured_at_ms >= ? AND captured_at_ms < ?
-         ORDER BY captured_at_ms ASC`,
-      )
-      .all(startMs, endMs) as FrameRow[];
-    return rows.map(toFrame);
+    return executeSqliteQuerySync(
+      this.db,
+      this.framesQuery.where("captured_at_ms", ">=", startMs).where("captured_at_ms", "<", endMs),
+    ).rows.map(toFrame);
   }
 
   createBatch(params: { day: string; startMs: number; endMs: number; frameIds: number[] }): number {
@@ -394,12 +383,10 @@ export class LogbookStore {
   }
 
   latestBatch(): LogbookBatch | null {
-    const row = this.db
-      .prepare(
-        `SELECT id, day, start_ms, end_ms, status, error, frame_count, model
-         FROM batches ORDER BY id DESC LIMIT 1`,
-      )
-      .get() as BatchRow | undefined;
+    const row = executeSqliteQueryTakeFirstSync(
+      this.db,
+      this.batchesQuery.orderBy("id", "desc").limit(1),
+    );
     return row ? toBatch(row) : null;
   }
 
@@ -421,23 +408,22 @@ export class LogbookStore {
   }
 
   nextPendingBatch(): LogbookBatch | null {
-    const row = this.db
-      .prepare(
-        `SELECT id, day, start_ms, end_ms, status, error, frame_count, model
-         FROM batches WHERE status = 'pending' ORDER BY start_ms ASC LIMIT 1`,
-      )
-      .get() as BatchRow | undefined;
+    const row = executeSqliteQueryTakeFirstSync(
+      this.db,
+      this.batchesQuery
+        .where("status", "=", "pending")
+        .orderBy("start_ms", "asc")
+        .orderBy("id", "asc")
+        .limit(1),
+    );
     return row ? toBatch(row) : null;
   }
 
   batchFrames(batchId: number): LogbookFrame[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, captured_at_ms, day, path, screen_index, width, height, byte_size, idle
-         FROM frames WHERE batch_id = ? ORDER BY captured_at_ms ASC`,
-      )
-      .all(batchId) as FrameRow[];
-    return rows.map(toFrame);
+    return executeSqliteQuerySync(
+      this.db,
+      this.framesQuery.where("batch_id", "=", batchId),
+    ).rows.map(toFrame);
   }
 
   /**
@@ -470,20 +456,29 @@ export class LogbookStore {
     );
   }
 
-  observationsInRange(day: string, startMs: number, endMs: number): LogbookObservation[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, batch_id, day, start_ms, end_ms, text FROM observations
-         WHERE day = ? AND end_ms > ? AND start_ms < ? ORDER BY start_ms ASC`,
-      )
-      .all(day, startMs, endMs) as Array<{
-      id: number;
-      batch_id: number;
-      day: string;
-      start_ms: number;
-      end_ms: number;
-      text: string;
-    }>;
+  observationsInRange(
+    day: string,
+    startMs: number,
+    endMs: number,
+    tailLimit?: number,
+  ): LogbookObservation[] {
+    const direction = tailLimit === undefined ? "asc" : "desc";
+    let query = this.query
+      .selectFrom("observations")
+      .selectAll()
+      .where("day", "=", day)
+      .where("end_ms", ">", startMs)
+      .where("start_ms", "<", endMs)
+      .orderBy("start_ms", direction)
+      .orderBy("id", direction);
+    if (tailLimit !== undefined) {
+      query = query.limit(tailLimit);
+    }
+    const rows = executeSqliteQuerySync(this.db, query).rows;
+    // Reverse the stable timestamp/id tail so prompts keep their original chronology.
+    if (tailLimit !== undefined) {
+      rows.reverse();
+    }
     return rows.map((row) => ({
       id: row.id,
       batchId: row.batch_id,
@@ -494,24 +489,24 @@ export class LogbookStore {
     }));
   }
 
-  cardsForDay(day: string): LogbookCard[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, day, start_ms, end_ms, title, summary, detail, category, app_primary, app_secondary, distractions, keyframe_id
-         FROM cards WHERE day = ? ORDER BY start_ms ASC`,
-      )
-      .all(day) as CardRow[];
-    return rows.map(toCard);
+  cardsForDay(day: string, window?: { startMs: number; endMs: number }): LogbookCard[] {
+    let query = this.cardsQuery
+      .selectAll()
+      .where("day", "=", day)
+      .orderBy("start_ms", "asc")
+      .orderBy("id", "asc");
+    if (window) {
+      query = query.where("end_ms", ">", window.startMs).where("start_ms", "<", window.endMs);
+    }
+    return executeSqliteQuerySync(this.db, query).rows.map(toCard);
   }
 
-  cardById(id: number): LogbookCard | null {
-    const row = this.db
-      .prepare(
-        `SELECT id, day, start_ms, end_ms, title, summary, detail, category, app_primary, app_secondary, distractions, keyframe_id
-         FROM cards WHERE id = ?`,
-      )
-      .get(id) as CardRow | undefined;
-    return row ? toCard(row) : null;
+  countCardsForDay(day: string): number {
+    const row = executeSqliteQueryTakeFirstSync(
+      this.db,
+      this.cardsQuery.select((eb) => eb.fn.countAll<number>().as("count")).where("day", "=", day),
+    );
+    return expectDefined(row, "Logbook card count").count;
   }
 
   /**
@@ -563,13 +558,18 @@ export class LogbookStore {
   }
 
   listDays(): Array<{ day: string; cards: number; firstMs: number; lastMs: number }> {
-    const rows = this.db
-      .prepare(
-        `SELECT day, COUNT(*) AS cards, MIN(start_ms) AS first_ms, MAX(end_ms) AS last_ms
-         FROM cards GROUP BY day ORDER BY day DESC`,
-      )
-      .all() as Array<{ day: string; cards: number; first_ms: number; last_ms: number }>;
-    return rows.map((row) => ({
+    return executeSqliteQuerySync(
+      this.db,
+      this.cardsQuery
+        .select((eb) => [
+          "day",
+          eb.fn.countAll<number>().as("cards"),
+          eb.fn.min<number>("start_ms").as("first_ms"),
+          eb.fn.max<number>("end_ms").as("last_ms"),
+        ])
+        .groupBy("day")
+        .orderBy("day", "desc"),
+    ).rows.map((row) => ({
       day: row.day,
       cards: row.cards,
       firstMs: row.first_ms,
@@ -577,7 +577,7 @@ export class LogbookStore {
     }));
   }
 
-  dayStats(day: string): LogbookDayStats {
+  timelineForDay(day: string): { day: string; cards: LogbookCard[]; stats: LogbookDayStats } {
     const cards = this.cardsForDay(day);
     const categories = new Map<string, number>();
     const apps = new Map<string, number>();
@@ -596,19 +596,24 @@ export class LogbookStore {
     }
     const byMsDesc = (a: { ms: number }, b: { ms: number }) => b.ms - a.ms;
     return {
-      trackedMs,
-      distractionMs,
-      categories: [...categories.entries()]
-        .map(([category, ms]) => ({ category, ms }))
-        .toSorted(byMsDesc),
-      apps: [...apps.entries()].map(([domain, ms]) => ({ domain, ms })).toSorted(byMsDesc),
+      day,
+      cards,
+      stats: {
+        trackedMs,
+        distractionMs,
+        categories: [...categories.entries()]
+          .map(([category, ms]) => ({ category, ms }))
+          .toSorted(byMsDesc),
+        apps: [...apps.entries()].map(([domain, ms]) => ({ domain, ms })).toSorted(byMsDesc),
+      },
     };
   }
 
   getStandup(day: string): { day: string; text: string; updatedMs: number } | null {
-    const row = this.db
-      .prepare(`SELECT day, text, updated_ms FROM standups WHERE day = ?`)
-      .get(day) as { day: string; text: string; updated_ms: number } | undefined;
+    const row = executeSqliteQueryTakeFirstSync(
+      this.db,
+      this.query.selectFrom("standups").selectAll().where("day", "=", day),
+    );
     return row ? { day: row.day, text: row.text, updatedMs: row.updated_ms } : null;
   }
 

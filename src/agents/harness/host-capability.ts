@@ -56,6 +56,8 @@ import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import {
   registerAgentHarnessScheduledToolProjectionCapability,
   registerAgentHarnessTtsProvenanceTransferCapability,
+  resolveAgentQuestionAnswerAuthority,
+  withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
@@ -518,8 +520,10 @@ export function createAgentHarnessHostCapabilities(params: {
       // Only host-created core tools can seed TTS provenance. Plugin-bound tools
       // must not replay a retained core result into this attempt's authority set.
       const tools = bindTools(
-        withInstallationTarget(installationTarget, () =>
-          createOpenClawCodingTools({ ...options, operationalRunInstance }),
+        withAgentQuestionAnswerAuthority(resolveAgentQuestionAnswerAuthority(capabilities), () =>
+          withInstallationTarget(installationTarget, () =>
+            createOpenClawCodingTools({ ...options, operationalRunInstance }),
+          ),
         ),
         bindingOptions,
         observeCoreTtsToolResult,

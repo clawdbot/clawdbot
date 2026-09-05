@@ -10,7 +10,9 @@ import {
   auditNativeToolName,
   auditNativeToolTerminalStatus,
   auditNativeToolUnfinishedStatus,
+  itemName,
   itemStatus,
+  shouldClearTerminalPresentationForNativeItem,
   type CodexNativeToolAuditStatus,
   type CodexNativeToolUnfinishedStatus,
 } from "./event-projector-items.js";
@@ -31,7 +33,7 @@ import {
 
 type CodexNativeToolLifecycleContext = Pick<
   EmbeddedRunAttemptParams,
-  "agentId" | "runId" | "sessionId" | "sessionKey"
+  "agentId" | "runId" | "sessionId" | "sessionKey" | "allocateToolOutcomeOrdinal" | "onToolOutcome"
 >;
 
 type CodexNativeToolLifecycleProjectorOptions = {
@@ -58,8 +60,10 @@ function isMcpToolCallItemNotification(method: string, params: JsonObject): bool
   );
 }
 
-/** Owns native item lifetimes for diagnostics and MCP approval correlation. */
+/** Owns native item lifetimes, outcome order, presentation, and approval correlation. */
 export class CodexNativeToolLifecycleProjector {
+  private readonly terminalPresentationClearedItemIds = new Set<string>();
+  private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
   private readonly startedAtByItem = new Map<string, number>();
   private readonly activeItems = new Map<
     string,
@@ -89,6 +93,40 @@ export class CodexNativeToolLifecycleProjector {
     private readonly turnId: string,
     private readonly options: CodexNativeToolLifecycleProjectorOptions = {},
   ) {}
+
+  recordNativeToolOutcome(item: CodexThreadItem | undefined): void {
+    if (
+      !item ||
+      this.nativeToolOutcomeOrdinals.has(item.id) ||
+      !shouldClearTerminalPresentationForNativeItem(item)
+    ) {
+      return;
+    }
+    const ordinal = this.context.allocateToolOutcomeOrdinal?.(item.id);
+    if (ordinal !== undefined) {
+      this.nativeToolOutcomeOrdinals.set(item.id, ordinal);
+    }
+  }
+
+  clearTerminalPresentationForNativeItem(item: CodexThreadItem | undefined): void {
+    if (
+      !item ||
+      this.terminalPresentationClearedItemIds.has(item.id) ||
+      !shouldClearTerminalPresentationForNativeItem(item)
+    ) {
+      return;
+    }
+    const toolCallOrdinal = this.nativeToolOutcomeOrdinals.get(item.id);
+    this.terminalPresentationClearedItemIds.add(item.id);
+    this.context.onToolOutcome?.({
+      toolName: itemName(item) ?? item.type,
+      argsHash: "",
+      resultHash: "",
+      ...(toolCallOrdinal !== undefined ? { toolCallOrdinal } : {}),
+      terminalPresentation: undefined,
+      presentationOnly: true,
+    });
+  }
 
   getActiveMcpToolCall(serverName: string): CodexActiveMcpToolCall | undefined {
     if (

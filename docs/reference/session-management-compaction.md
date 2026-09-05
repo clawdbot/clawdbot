@@ -206,7 +206,7 @@ Notable entry types:
 
 History readers keep the latest reset window across later compactions: explicitly retained reset messages and messages after that reset remain visible, but older messages and compaction summaries do not reappear. Model context follows the latest reset or compaction instead, so compaction can summarize the current conversation without reopening its earlier history.
 
-Model-only callers can use `SessionManager.openModelContext()` to create a detached, non-persisting view. The reader selects payloads in SQLite and retains lightweight navigation outside the model window, without introducing a history size cutoff. Storage-only native prompt text and tool-result details stay out of that view; mirror identity, sender and media facts, tool content, and valid provider replay state remain available. Native fork verification, replay, exports, and doctor operations continue to use full-fidelity evidence readers.
+Model-only callers should await `SessionManager.openModelContextAsync(target, { admission?, signal? })` to create a detached, non-persisting view without blocking the Gateway event loop on durable history scans. `openModelContext()` provides the same view for synchronous consumers. The reader selects payloads in SQLite and retains lightweight navigation outside the model window, without introducing a history size cutoff. Storage-only native prompt text and tool-result details stay out of that view; mirror identity, sender and media facts, tool content, and valid provider replay state remain available. Native fork verification, replay, exports, and doctor operations continue to use full-fidelity evidence readers.
 
 `SessionManager.readSessionContext(target, read, { admission? })` lets a synchronous
 consumer process full-fidelity context messages inside one read-only snapshot.
@@ -219,6 +219,8 @@ This lets replay consumers enforce their existing limits during acquisition
 without silently dropping earlier history. Navigation still scales with the
 transcript, and individual selected rows are decoded whole; this is not a fixed
 process-memory ceiling.
+
+Durable model-context reads run in a worker. Codex native replay and settled-turn verification keep that lazy read and its consumer together in a worker. Worker reads are serialized per reader and reuse an idle worker. Admission receipts are validated inside the read snapshot and again before the result is accepted; reads without an admission instead check the session’s rewrite generation and last event sequence. Admitted reads retain their turn boundary, so later appends alone do not invalidate them. An invalidated read or canceled signal rejects the result. Callers carry their original cancellation signal through context acquisition and check that their owner remains active before invoking hooks, starting a model run, or applying a proposal. Incognito sessions use the same operation in the Gateway process because their SQLite database is held in memory.
 
 OpenClaw intentionally does not "fix up" transcripts; the Gateway uses `SessionManager` to read/write them.
 

@@ -5,7 +5,6 @@ import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
-import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { prepareGitHubPublicationAvailability } from "../../gateway/github-publication-availability.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
@@ -29,6 +28,7 @@ import { emitModelFallbackStepLifecycle } from "./agent-runner-model-fallback-li
 import {
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
+  resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
@@ -223,11 +223,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         if (candidateSourceReplyDeliveryMode && applySourceReplyDeliveryModeBeforeInvocation) {
           sourceReplyDeliveryRuntime.applyMode(candidateRun, candidateSourceReplyDeliveryMode);
         }
-        const candidateThinkLevel = resolveCandidateThinkingLevel({
+        const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
           cfg: params.runtimeConfig,
           provider,
           modelId: model,
-          level: turn.followupRun.run.thinkLevel,
+          run: turn.followupRun.run,
           catalog: turn.followupRun.run.thinkingCatalog,
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,

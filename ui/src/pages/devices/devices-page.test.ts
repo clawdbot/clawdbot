@@ -18,7 +18,7 @@ import {
   deviceDesktopEnvironments,
 } from "../../test-helpers/devices-fixtures.ts";
 import {
-  installDialogPolyfill,
+  createModalDialogTestFixture,
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import "./devices-page.ts";
@@ -61,6 +61,7 @@ type TestDevicesPage = HTMLElement & {
 };
 
 const ROTATED_TOKEN = "rotated-operator-token";
+let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 /** Keep the identity fingerprint off jsdom's absent SubtleCrypto. */
 function stubLocalDeviceIdentity() {
   localStorage.setItem(
@@ -76,7 +77,7 @@ function rotatingClient(token: string | null): GatewayBrowserClient {
   // Answer for the grant that was actually requested, the way the Gateway does: the page now
   // refuses a result naming a different device or role, so a hardcoded id would report a
   // rotation of some other device as this one's.
-  const request = vi.fn(async (method: string, params?: unknown) => {
+  const request = dialogs.mockRequest(async (method: string, params?: unknown) => {
     if (method !== "device.token.rotate") {
       return { paired: [], pending: [] };
     }
@@ -168,10 +169,10 @@ function gateway(
   } as unknown as ApplicationContext["gateway"];
 }
 
-function mountInventoryPage(snapshot: ApplicationGatewaySnapshot) {
+function mountInventoryPage(currentGateway: ApplicationContext["gateway"]) {
   const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
   page.context = {
-    gateway: gateway(snapshot.client, snapshot),
+    gateway: currentGateway,
     runtimeConfig: {
       state: { configSnapshot: {}, configLoading: false },
       subscribe: vi.fn(() => () => undefined),
@@ -198,18 +199,22 @@ function inventorySnapshot(
 }
 
 describe("DevicesPage gateway lifecycle", () => {
-  let restoreDialogPolyfill: () => void;
-
   beforeEach(() => {
-    restoreDialogPolyfill = installDialogPolyfill();
+    dialogs = createModalDialogTestFixture((modal) => {
+      // Devices defaults cancel destructive prompts or acknowledge a synthetic
+      // rotation outcome. A shown token deliberately refuses modal-cancel.
+      modal.querySelector<HTMLButtonElement>(".exec-approval-actions button[autofocus]")?.click();
+    });
   });
 
-  afterEach(() => {
-    document.body.replaceChildren();
-    restoreDialogPolyfill();
-    localStorage.clear();
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
+  afterEach(async () => {
+    try {
+      await dialogs.cleanup();
+    } finally {
+      localStorage.clear();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("preserves matching initial route data, then resets it on provider replacement", () => {
@@ -281,15 +286,7 @@ describe("DevicesPage gateway lifecycle", () => {
         onEvent = listener as typeof onEvent;
         return () => undefined;
       });
-      const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
-      page.context = {
-        gateway: currentGateway,
-        runtimeConfig: {
-          state: { configSnapshot: {}, configLoading: false },
-          subscribe: vi.fn(() => () => undefined),
-        },
-      } as unknown as ApplicationContext;
-      document.body.append(page);
+      const page = mountInventoryPage(currentGateway);
       await vi.waitFor(() => expect(onEvent).toBeDefined());
       const previousNodes = [{ nodeId: "node-1", displayName: "Office Mac", connected: false }];
       page.pageState.nodes = previousNodes;
@@ -329,7 +326,9 @@ describe("DevicesPage gateway lifecycle", () => {
       method === "system.info" ? deviceSystemInfo : { environments: deviceDesktopEnvironments },
     );
     const client = { request } as unknown as GatewayBrowserClient;
-    const page = mountInventoryPage(inventorySnapshot(client, scenario.methods, scenario.scopes));
+    const page = mountInventoryPage(
+      gateway(client, inventorySnapshot(client, scenario.methods, scenario.scopes)),
+    );
     await page.updateComplete;
     await vi.waitFor(() => {
       expect(page.gatewaySystemInfo).toEqual(scenario.systemInfo ? deviceSystemInfo : null);
@@ -355,7 +354,9 @@ describe("DevicesPage gateway lifecycle", () => {
       return { nodes: [], paired: [], pending: [] };
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const page = mountInventoryPage(inventorySnapshot(client, ["system.info", "desktop.observe"]));
+    const page = mountInventoryPage(
+      gateway(client, inventorySnapshot(client, ["system.info", "desktop.observe"])),
+    );
     await page.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
     request.mockClear();
@@ -389,7 +390,7 @@ describe("DevicesPage gateway lifecycle", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const snapshot = inventorySnapshot(client, ["system.info"]);
-    const page = mountInventoryPage(snapshot);
+    const page = mountInventoryPage(gateway(client, snapshot));
     await page.updateComplete;
     await vi.advanceTimersByTimeAsync(120_000);
     expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1);
@@ -411,7 +412,7 @@ describe("DevicesPage gateway lifecycle", () => {
       );
       const client = { request } as unknown as GatewayBrowserClient;
       const snapshot = inventorySnapshot(client, ["system.info", "desktop.observe"]);
-      const page = mountInventoryPage(snapshot);
+      const page = mountInventoryPage(gateway(client, snapshot));
       await page.updateComplete;
       expect(request).toHaveBeenCalledTimes(2);
       if (transition === "detach") {
@@ -583,15 +584,7 @@ describe("DevicesPage gateway lifecycle", () => {
       onEvent = listener as typeof onEvent;
       return () => undefined;
     });
-    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
-    page.context = {
-      gateway: currentGateway,
-      runtimeConfig: {
-        state: { configSnapshot: {}, configLoading: false },
-        subscribe: vi.fn(() => () => undefined),
-      },
-    } as unknown as ApplicationContext;
-    document.body.append(page);
+    const page = mountInventoryPage(currentGateway);
     await vi.waitFor(() => expect(onEvent).toBeDefined());
     const nodeListCallsBefore = request.mock.calls.filter(([method]) => method === "node.list");
 
@@ -684,15 +677,7 @@ describe("DevicesPage gateway lifecycle", () => {
       onEvent = listener as typeof onEvent;
       return () => undefined;
     });
-    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
-    page.context = {
-      gateway: currentGateway,
-      runtimeConfig: {
-        state: { configSnapshot: {}, configLoading: false },
-        subscribe: vi.fn(() => () => undefined),
-      },
-    } as unknown as ApplicationContext;
-    document.body.append(page);
+    const page = mountInventoryPage(currentGateway);
     await vi.waitFor(() => expect(onEvent).toBeDefined());
 
     const nodePresence: PresenceEntry = {
@@ -742,15 +727,7 @@ describe("DevicesPage gateway lifecycle", () => {
       onEvent = listener as typeof onEvent;
       return () => undefined;
     });
-    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
-    page.context = {
-      gateway: currentGateway,
-      runtimeConfig: {
-        state: { configSnapshot: {}, configLoading: false },
-        subscribe: vi.fn(() => () => undefined),
-      },
-    } as unknown as ApplicationContext;
-    document.body.append(page);
+    const page = mountInventoryPage(currentGateway);
     await vi.waitFor(() => expect(onEvent).toBeDefined());
 
     const presence: PresenceEntry[] = [
@@ -877,10 +854,12 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = page.confirmInventoryRemoval({
-      kind: "entry",
-      entry: { id: "device-1", name: "Browser", removeNode: false, removeDevice: true },
-    });
+    const pending = dialogs.track(
+      page.confirmInventoryRemoval({
+        kind: "entry",
+        entry: { id: "device-1", name: "Browser", removeNode: false, removeDevice: true },
+      }),
+    );
     await waitForRenderedModalDialog(document.body);
 
     applyGatewaySnapshot(page, gatewaySnapshot(client, false));
@@ -895,7 +874,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = page.confirmPairingReject("device", "request-1");
+    const pending = dialogs.track(page.confirmPairingReject("device", "request-1"));
     const { dialog } = await waitForRenderedModalDialog(document.body);
     expect(dialog.getAttribute("aria-label")).toBe(t("devices.inventory.rejectDevicePromptTitle"));
 
@@ -911,7 +890,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = page.confirmPairingReject("node", "request-2");
+    const pending = dialogs.track(page.confirmPairingReject("node", "request-2"));
     await waitForRenderedModalDialog(document.body);
 
     clickDialogButton(t("common.cancel"));
@@ -926,7 +905,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = page.confirmTokenRevoke("device-1", "operator");
+    const pending = dialogs.track(page.confirmTokenRevoke("device-1", "operator"));
     const { dialog } = await waitForRenderedModalDialog(document.body);
     expect(dialog.getAttribute("aria-label")).toBe(
       t("devices.inventory.revokePromptTitle", { role: "operator" }),
@@ -947,7 +926,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = page.confirmTokenRevoke("device-1", "operator");
+    const pending = dialogs.track(page.confirmTokenRevoke("device-1", "operator"));
     await waitForRenderedModalDialog(document.body);
     const generation = page.requestGeneration;
     const downgraded = gatewaySnapshot(client, true);
@@ -976,11 +955,11 @@ describe("DevicesPage gateway lifecycle", () => {
     const page = createConnectedPage(client);
 
     let acknowledged = false;
-    const pending = page
-      .reportRotationOutcome({ id: "device-1", name: "MacBook Pro" }, "operator")
-      .then(() => {
+    const pending = dialogs.track(
+      page.reportRotationOutcome({ id: "device-1", name: "MacBook Pro" }, "operator").then(() => {
         acknowledged = true;
-      });
+      }),
+    );
     const { dialog } = await waitForRenderedModalDialog(document.body);
 
     expect(dialog.getAttribute("aria-label")).toBe(
@@ -1003,11 +982,11 @@ describe("DevicesPage gateway lifecycle", () => {
     const page = createConnectedPage(client);
 
     let acknowledged = false;
-    const pending = page
-      .reportRotationOutcome({ id: "device-1", name: "MacBook Pro" }, "operator")
-      .then(() => {
+    const pending = dialogs.track(
+      page.reportRotationOutcome({ id: "device-1", name: "MacBook Pro" }, "operator").then(() => {
         acknowledged = true;
-      });
+      }),
+    );
     const { modal, webAwesomeDialog } = await waitForRenderedModalDialog(document.body);
 
     // Escape and backdrop clicks both reach the dialog as a cancelable wa-hide, which
@@ -1029,32 +1008,39 @@ describe("DevicesPage gateway lifecycle", () => {
   it("reveals a rotated token that lands after the request generation moved on", async () => {
     stubLocalDeviceIdentity();
     const rotated = createDeferred<Record<string, unknown>>();
-    const request = vi.fn(async (method: string) =>
+    const request = dialogs.mockRequest(async (method: string) =>
       method === "device.token.rotate" ? rotated.promise : { paired: [], pending: [] },
     );
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = page.reportRotationOutcome({ id: "device-1", name: "MacBook Pro" }, "operator");
-    page.pageState.requestGeneration += 1;
-    rotated.resolve({
+    const outcome = {
       deviceId: "device-1",
       role: "operator",
       scopes: [],
       rotatedAtMs: 1_700_000_000_000,
       token: ROTATED_TOKEN,
       tokenDelivery: "in-band",
-    });
-    await waitForRenderedModalDialog(document.body);
+    };
+    try {
+      const pending = dialogs.track(
+        page.reportRotationOutcome({ id: "device-1", name: "MacBook Pro" }, "operator"),
+      );
+      page.pageState.requestGeneration += 1;
+      rotated.resolve(outcome);
+      await waitForRenderedModalDialog(document.body);
 
-    // The rotate already killed the previous credential, so a mid-flight reconnect must
-    // not swallow its replacement; the epoch guard still blocks the follow-up state writes.
-    expect(secretDialogText()).toBe(ROTATED_TOKEN);
-    expect(request).toHaveBeenCalledTimes(1);
+      // The rotate already killed the previous credential, so a mid-flight reconnect must
+      // not swallow its replacement; the epoch guard still blocks the follow-up state writes.
+      expect(secretDialogText()).toBe(ROTATED_TOKEN);
+      expect(request).toHaveBeenCalledTimes(1);
 
-    clickDialogButton(t("devices.inventory.rotateAcknowledge"));
-    await pending;
-    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
+      clickDialogButton(t("devices.inventory.rotateAcknowledge"));
+      await pending;
+      applyGatewaySnapshot(page, gatewaySnapshot(client, false));
+    } finally {
+      rotated.resolve(outcome);
+    }
   });
 
   it("explains a cross-device rotation the Gateway withheld the token for", async () => {
@@ -1062,7 +1048,9 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = rotatingClient(null);
     const page = createConnectedPage(client);
 
-    const pending = page.reportRotationOutcome({ id: "device-2", name: "Mac Studio" }, "operator");
+    const pending = dialogs.track(
+      page.reportRotationOutcome({ id: "device-2", name: "Mac Studio" }, "operator"),
+    );
     const { dialog } = await waitForRenderedModalDialog(document.body);
 
     // The title carries the announcement and names the device the operator clicked.
@@ -1099,7 +1087,9 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = rotatingClient(null);
     const page = createConnectedPage(client);
 
-    const pending = page.reportRotationOutcome({ id: "device-2", name: "Mac Studio" }, "operator");
+    const pending = dialogs.track(
+      page.reportRotationOutcome({ id: "device-2", name: "Mac Studio" }, "operator"),
+    );
     const { webAwesomeDialog } = await waitForRenderedModalDialog(document.body);
 
     // Nothing here is unrecoverable, so Escape and backdrop settle it like any dialog

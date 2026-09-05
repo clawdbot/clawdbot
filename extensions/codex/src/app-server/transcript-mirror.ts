@@ -267,7 +267,10 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
           params.upstreamUserText,
         ),
       });
-      if (params.params.userTurnTranscriptRecorder?.getAdmissionReceipt()) {
+      const recorder = params.params.userTurnTranscriptRecorder;
+      // Hidden admissions intentionally have no annotation authority. Use the host's
+      // persisted row, since hooks can change visibility after prompt preparation.
+      if (recorder?.getAdmissionReceipt() && recorder.getPersistedMessage?.()?.display !== false) {
         const annotate = params.params.hostCapabilities.annotateCurrentUserTurn;
         if (!annotate || userPromptMessage.role !== "user") {
           throw new Error("current host admission is unavailable for native prompt annotation");

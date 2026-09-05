@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as processExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   createGitCommandError,
   executeGitCommand,
@@ -20,6 +21,22 @@ const failure = {
   killed: false,
   termination: "exit",
 } satisfies SpawnResult;
+
+it.each(["maintenance.autoDetach", "gc.autoDetach"])(
+  "overrides %s only for an explicitly owned Git command",
+  async (key) => {
+    await withTestDir({ prefix: "openclaw-git-exec-maintenance-" }, async (root) => {
+      await requireGitCommand(root, ["init"]);
+      await requireGitCommand(root, ["config", key, "true"]);
+      const owned = await executeGitCommand(root, ["config", "--get", key], {
+        killProcessTree: true,
+      });
+      expect(owned.code).toBe(0);
+      expect(owned.stdout.trim()).toBe("false");
+      await expect(requireGitCommand(root, ["config", "--get", key])).resolves.toBe("true");
+    });
+  },
+);
 
 it.each([
   { timeoutMs: undefined, seconds: 120 },

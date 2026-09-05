@@ -381,16 +381,6 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
 }
 
-export function* collectToolTitleCandidates(items: readonly (ChatItem | MessageGroup)[]) {
-  for (const item of items) {
-    if (item.kind === "group") {
-      for (const entry of item.messages) {
-        yield* extractToolCardsCached(entry.message);
-      }
-    }
-  }
-}
-
 export type AssistantMessageExpansionState =
   | { status: "loading"; revision: number }
   | { status: "error"; revision: number }

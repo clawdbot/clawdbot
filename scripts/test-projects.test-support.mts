@@ -76,7 +76,11 @@ import {
   isUiIsolatedTestFile,
   uiIsolatedTestFiles,
 } from "../test/vitest/vitest.ui-isolated-paths.mjs";
-import { isUiBrowserTestFile } from "../test/vitest/vitest.ui-paths.mjs";
+import {
+  isControlUiSourcePath,
+  isPluginControlUiPath,
+  isUiBrowserTestFile,
+} from "../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
@@ -167,13 +171,12 @@ type VitestSpecShape = Pick<VitestRunSpec, "config" | "env">;
 type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode">;
 type ImportGraph = {
   reverseImports: Map<string, string[]>;
-  reverseReexports: Map<string, string[]>;
   testFiles: Set<string>;
 };
 type ImportGraphEdges = {
   file: string;
+  specifiers: string[];
   imports: Set<string>;
-  reexports: Set<string>;
   references: Set<string>;
 };
 type UnmatchedExplicitTestTarget = {
@@ -462,7 +465,7 @@ const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UI_BROWSER_VITEST_CONFIG = "test/vitest/vitest.ui-browser.config.ts";
-const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
+export const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UI_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.ui-isolated.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
@@ -707,6 +710,13 @@ const MERMAID_RENDERER_TEST_TARGETS = [
 ];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  [
+    "extensions/browser/src/browser/chrome-mcp-options.ts",
+    [
+      "extensions/browser/src/browser/chrome-mcp.test.ts",
+      "test/scripts/ci-chrome-mcp-prewarm.test.ts",
+    ],
+  ],
   [
     "scripts/prepare-apple-mermaid.mjs",
     [
@@ -1312,7 +1322,10 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string) {
   const forceFullImportGraph = sourceTargetCount > EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD;
   return targetArgs.flatMap((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
-    if (isPathAtOrUnder(relative, "ui") && isGlobTarget(relative)) {
+    if (
+      (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) &&
+      isGlobTarget(relative)
+    ) {
       // Expand mixed browser globs before assigning files to their disjoint runners.
       const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
         (file) => isTestFileTarget(file) && path.matchesGlob(file, relative),
@@ -1633,7 +1646,7 @@ function readImportGraphEdges(
     .filter(({ parseImports }) => parseImports || terms.length > 0);
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
   return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES).map(
-    ({ file, imports, reexports, matches, references }) => {
+    ({ file, imports, matches, references }) => {
       const resolve = (specifiers: string[]) =>
         new Set(
           specifiers
@@ -1642,8 +1655,8 @@ function readImportGraphEdges(
         );
       const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
         file,
+        specifiers: imports,
         imports: resolve(imports),
-        reexports: resolve(reexports),
         references: new Set<string>(),
       };
       for (const reference of references) {
@@ -1685,49 +1698,30 @@ function listImportGraphGrepMatches(
   const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
     cwd,
     encoding: "utf8",
-    // A frontier can exceed the platform argv limit; both search tools accept stdin patterns.
+    // A frontier can exceed the platform argv limit; Git accepts stdin patterns.
     input: missing.join("\n"),
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["pipe", "pipe", "pipe"],
   };
-  let result = spawnSync(
-    "rg",
-    [
-      "--files-with-matches",
-      "--fixed-strings",
-      "--hidden",
-      "--no-ignore",
-      ...suffixes.flatMap((suffix) => ["--glob", `*${suffix}`]),
-      "--glob",
-      "!**/node_modules/**",
-      "--glob",
-      "!**/dist/**",
-      "--glob",
-      "!**/vendor/**",
-      "-f",
-      "-",
-      "--",
-      ...roots,
-    ],
+  const result = spawnSync(
+    "git",
+    ["grep", "-l", "--fixed-strings", "-f", "-", "--", ...grepPaths],
     spawnOptions,
   );
-  if (result.error || (result.status !== 0 && result.status !== 1)) {
-    result = spawnSync(
-      "git",
-      ["grep", "-l", "--fixed-strings", "-f", "-", "--", ...grepPaths],
-      spawnOptions,
-    );
-  }
   for (const term of missing) {
-    matches.set(term, result.status === 0 || result.status === 1 ? [] : null);
+    matches.set(term, []);
   }
-  if (result.status === 0) {
+  if (result.status !== 1) {
     const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
-    const candidates = result.stdout
-      .split("\n")
-      .map((line) => normalizePathPattern(line.trim()))
-      .filter((file) => trackedFiles.has(file))
-      .toSorted((left, right) => left.localeCompare(right));
+    // Source archives use the same filesystem inventory and native reader as the full graph.
+    const candidates = (
+      result.status === 0
+        ? result.stdout
+            .split("\n")
+            .map((line) => normalizePathPattern(line.trim()))
+            .filter((file) => trackedFiles.has(file))
+        : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
+    ).toSorted((left, right) => left.localeCompare(right));
     // Per-term membership protects the broad cap and helper first-success rule.
     // Cached edges need only term facts; full-graph acquisition reuses their parsing.
     for (const { edges, matches: fileTerms } of readImportGraphEdges(
@@ -1838,7 +1832,6 @@ function getImportGraph(cwd: string) {
   const files = listImportGraphFilesForCwd(cwd);
   const fileSet = new Set(files);
   const reverseImports = new Map<string, string[]>();
-  const reverseReexports = new Map<string, string[]>();
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
@@ -1849,53 +1842,64 @@ function getImportGraph(cwd: string) {
     if (!edges) {
       continue;
     }
-    for (const [imports, reverse] of [
-      [edges.imports, reverseImports],
-      [edges.reexports, reverseReexports],
-    ] as const) {
-      for (const imported of imports) {
-        const importers = reverse.get(imported) ?? [];
-        importers.push(file);
-        reverse.set(imported, importers);
-      }
+    for (const imported of edges.imports) {
+      const importers = reverseImports.get(imported) ?? [];
+      importers.push(file);
+      reverseImports.set(imported, importers);
     }
   }
 
-  cachedImportGraph = { reverseImports, reverseReexports, testFiles };
+  cachedImportGraph = { reverseImports, testFiles };
   cachedImportGraphCwd = cwd;
   return cachedImportGraph;
 }
 
-/** Returns whether any changed path reaches one of the requested import-graph targets. */
+/** Query relative imports/re-exports from targets without scanning unrelated source bodies. */
 export function hasImportGraphImpactOnTargets(
   changedPaths: string[],
-  targetPaths: string[],
+  targetPaths: string[] | ((file: string) => boolean),
   cwd = process.cwd(),
+  options: ImportGraphOptions = {},
 ) {
-  const targets = new Set(targetPaths.map(normalizePathPattern));
-  if (targets.size === 0) {
+  const changed = new Set(changedPaths.map(normalizePathPattern));
+  if (changed.size === 0) {
     return false;
   }
-
-  const { reverseImports, reverseReexports } = getImportGraph(cwd);
-  for (const changedPath of changedPaths) {
-    const queue = [normalizePathPattern(changedPath)];
-    const seen = new Set(queue);
-    for (const current of queue) {
-      if (targets.has(current)) {
-        return true;
-      }
-      const importers = [
-        ...(reverseImports.get(current) ?? []),
-        ...(reverseReexports.get(current) ?? []),
-      ];
-      for (const importer of importers) {
-        if (!seen.has(importer)) {
-          seen.add(importer);
-          queue.push(importer);
+  const files = listImportGraphFilesForCwd(cwd, options);
+  const targets = Array.isArray(targetPaths)
+    ? targetPaths.map(normalizePathPattern)
+    : files.filter(targetPaths);
+  if (targets.some((file) => changed.has(file))) {
+    return true;
+  }
+  // Staged deletions have left the index, but surviving importers still own their edges.
+  const fileSet = new Set([...files, ...changed]);
+  const extensions = options.tooling
+    ? TOOLING_IMPORTABLE_FILE_EXTENSIONS
+    : IMPORTABLE_FILE_EXTENSIONS;
+  const seen = new Set(targets);
+  let frontier = targets;
+  while (frontier.length > 0) {
+    readImportGraphEdges(cwd, frontier, fileSet, options.tooling);
+    const next: string[] = [];
+    for (const file of frontier) {
+      const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
+      // Resolve raw cached facts against this query's deleted-path identities too.
+      for (const specifier of edges?.specifiers ?? []) {
+        const dependency = resolveImportSpecifier(file, specifier, fileSet, extensions);
+        if (!dependency) {
+          continue;
+        }
+        if (changed.has(dependency)) {
+          return true;
+        }
+        if (!seen.has(dependency)) {
+          seen.add(dependency);
+          next.push(dependency);
         }
       }
     }
+    frontier = next;
   }
   return false;
 }
@@ -1957,7 +1961,7 @@ function isControlUiE2eTarget(relative: string) {
     relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
     relative === "ui/src/e2e" ||
     relative.startsWith("ui/src/e2e/") ||
-    (relative.startsWith("ui/src/") && relative.endsWith(".e2e.test.ts"))
+    (isControlUiSourcePath(relative) && relative.endsWith(".e2e.test.ts"))
   );
 }
 
@@ -2286,6 +2290,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],
   ["scripts/openclaw-npm-prepublish-verify.ts", ["test/openclaw-npm-prepublish-verify.test.ts"]],
   ["scripts/lib/docker-e2e-scenarios.mts", [dockerE2e, pluginPrerelease]],
+  ["scripts/lib/upgrade-survivor-policy.mjs", [dockerE2e]],
   ["scripts/e2e/kitchen-sink-rpc-walk.mts", ["kitchen-sink-rpc-walk", pluginPrerelease]],
   [
     "scripts/e2e/agents-delete-shared-workspace-docker.sh",
@@ -2318,13 +2323,27 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       packageAcceptance,
       "upgrade-survivor-probe-gateway",
       "upgrade-survivor-assertions",
+      "upgrade-survivor-mobile-pairing",
       "upgrade-survivor-recovery-cleanup",
       "openclaw-test-state",
     ],
   ],
   [
     "scripts/e2e/lib/upgrade-survivor/run.sh",
-    ["upgrade-survivor-assertions", "upgrade-survivor-recovery-cleanup"],
+    [
+      "upgrade-survivor-assertions",
+      "upgrade-survivor-mobile-pairing",
+      "upgrade-survivor-recovery-cleanup",
+      "upgrade-survivor-watchos-direct-node",
+    ],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs",
+    ["upgrade-survivor-watchos-direct-node"],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts",
+    ["upgrade-survivor-mobile-pairing"],
   ],
   [
     "scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs",
@@ -3124,7 +3143,7 @@ function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
 
 function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
   if (
-    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-(?:checkout-auth|windows-process-census)\.py))$/u.test(
+    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout|windows-process-census)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-checkout-auth\.py|ci-windows-process-census\.(?:mjs|py)))$/u.test(
       changedPath,
     )
   ) {
@@ -3270,7 +3289,7 @@ function shouldCombineSiblingTestWithImportGraph(changedPath: string) {
 }
 
 function shouldRouteChangedTargetWithoutImportGraph(changedPath: string) {
-  return changedPath.endsWith(".live.test.ts") || changedPath.startsWith("ui/src/");
+  return changedPath.endsWith(".live.test.ts") || isControlUiSourcePath(changedPath);
 }
 
 function resolvePromptSnapshotFixtureTargets(changedPath: string) {
@@ -3326,7 +3345,7 @@ function resolvePreciseChangedTestTargets(
     return [siblingTest];
   }
   if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
-    return changedPath.startsWith("ui/src/") ? [changedPath] : null;
+    return isControlUiSourcePath(changedPath) ? [changedPath] : null;
   }
   if (options.skipImportGraph === true) {
     return null;
@@ -3484,7 +3503,7 @@ function classifyTarget(arg: string, cwd: string) {
   if (isUiBrowserTestFile(relative)) {
     return "uiBrowser";
   }
-  if (isPathAtOrUnder(relative, "ui")) {
+  if (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) {
     return "ui";
   }
   if (relative.startsWith("src/tui/tui-pty-") || tuiPtyTestFiles.includes(relative)) {
@@ -3775,7 +3794,10 @@ function shouldUseWholeConfigTarget(kind: string, targetArg: string, cwd: string
   if (isTestFileTarget(relative) || isExistingDirectoryTarget(targetArg, cwd)) {
     return false;
   }
-  return relative.startsWith("ui/src/");
+  if (isPluginControlUiPath(relative) && !isLikelyFileTarget(relative)) {
+    return false;
+  }
+  return isControlUiSourcePath(relative);
 }
 
 function createVitestArgs(
@@ -3859,9 +3881,13 @@ export function buildVitestRunPlans(
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
   if (
     watchMode &&
-    requestedTargetArgs.some(
-      (target) => isPathAtOrUnder(toRepoRelativeTarget(target, cwd), "ui") && isGlobTarget(target),
-    )
+    requestedTargetArgs.some((target) => {
+      const relative = toRepoRelativeTarget(target, cwd);
+      return (
+        (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) &&
+        isGlobTarget(relative)
+      );
+    })
   ) {
     throw new Error(
       "watch mode with UI glob targets is not supported; use a literal test path, directory, or dedicated UI suite",

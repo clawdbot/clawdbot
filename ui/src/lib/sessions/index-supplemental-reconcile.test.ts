@@ -2,8 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { publishActiveSessionLineage } from "../../components/app-sidebar-child-session-data.ts";
-import { createSessionCapability } from "./index.ts";
-import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 const key = "agent:main:device-session";
 
@@ -31,7 +34,7 @@ function capabilityWithList(result: ReturnType<typeof sessionsResult>) {
     return result;
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  return createSessionCapability(createGatewayHarness(client).gateway);
+  return createTestSessionCapability(createGatewayHarness(client).gateway);
 }
 
 describe("supplemental session reconciliation", () => {

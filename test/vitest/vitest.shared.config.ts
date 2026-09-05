@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ViteUserConfig } from "vitest/config";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import normalizationCorePackageJson from "../../packages/normalization-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
@@ -37,6 +38,12 @@ export const jsdomOptimizedDeps = {
     },
   },
 };
+
+// Vitest 4 omits `false` from the type because it is the default; Vitest 5
+// accepts it and requires the explicit value to preserve independent projects.
+export function preserveIndependentVitestProject<T extends ViteUserConfig>(project: T): T {
+  return Object.assign(project, { extends: false });
+}
 
 function detectVitestHostInfo(): Required<VitestHostInfo> {
   return detectVitestHostInfoImpl();
@@ -217,6 +224,10 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/slack/api.js",
         replacement: path.join(repoRoot, "extensions", "slack", "api.ts"),
+      },
+      {
+        find: "@openclaw/slack/test-api.js",
+        replacement: path.join(repoRoot, "extensions", "slack", "test-api.ts"),
       },
       {
         find: "@openclaw/whatsapp/api.js",
@@ -481,6 +492,8 @@ export const sharedVitestConfig = {
     // Emit completed cases even under agent detection so healthy runs feed the output watchdog.
     reporters: ["verbose", ...(process.env.GITHUB_ACTIONS === "true" ? ["github-actions"] : [])],
     testTimeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+    // Preserve calls recorded during shared setup and beforeAll hooks.
+    clearMocks: false,
     // 180s on every platform: GitHub-hosted 4-core fallback runners (Blacksmith
     // outage breaker) push e2e beforeAll hooks past 120s; Windows always needed it.
     hookTimeout: 180_000,

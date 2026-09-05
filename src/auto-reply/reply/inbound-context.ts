@@ -9,7 +9,7 @@ import {
   stripLegacyMediaContextFields,
   type LegacyMediaContextKey,
 } from "../../media/media-facts.js";
-import { resolveCommandTurnContext } from "../command-turn-context.js";
+import { createCommandTurnContext, resolveCommandTurnContext } from "../command-turn-context.js";
 import { normalizeInternalTurnContext } from "../internal-turn-source.js";
 import type {
   CanonicalInboundText,
@@ -66,7 +66,13 @@ function resolveCanonicalInboundText(
       normalizeTextField(ctx.BodyForCommands) ??
       normalizeTextField(ctx.CommandBody) ??
       rawText);
-  return { commandText, agentText, rawText };
+  // Literal input has no executable projection, including before command handlers
+  // run or when media enrichment forces text projection again.
+  return {
+    commandText: ctx.CommandInterpretationSuppressed === true ? "" : commandText,
+    agentText,
+    rawText,
+  };
 }
 
 function foldDeprecatedPromptContextFields(ctx: MsgContext): void {
@@ -164,8 +170,11 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   }
 
   // Always set. Default-deny when upstream forgets to populate it.
-  normalized.CommandAuthorized = normalized.CommandAuthorized === true;
-  normalized.CommandTurn = resolveCommandTurnContext(normalized);
+  const suppressCommands = normalized.CommandInterpretationSuppressed === true;
+  normalized.CommandAuthorized = !suppressCommands && normalized.CommandAuthorized === true;
+  normalized.CommandTurn = suppressCommands
+    ? createCommandTurnContext("message", { authorized: false, body: "" })
+    : resolveCommandTurnContext(normalized);
   if (normalized.CommandTurn.source === "native" || normalized.CommandTurn.source === "text") {
     normalized.CommandSource = normalized.CommandTurn.source;
     normalized.CommandAuthorized = normalized.CommandTurn.authorized;

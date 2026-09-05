@@ -1,6 +1,6 @@
 import { getRuntimeConfig } from "../../config/io.js";
 import { isDiagnosticsEnabled, emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
-import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import { hasBillableUsage, type NormalizedUsage } from "../usage.js";
 import type { AgentCommandIngressOpts } from "./types.js";
 
@@ -49,13 +49,13 @@ export function emitIngressModelUsageDiagnostic(
   const cacheWrite = usage.cacheWrite ?? 0;
   const usagePromptTokens = input + cacheRead + cacheWrite;
   const totalTokens = usage.total ?? usagePromptTokens + output;
-  const costConfig = resolveModelCostConfig({
+  const costUsd = estimateAggregateUsageCost({
+    usage,
     provider: providerUsed,
     model: modelUsed,
     config: cfg,
     agentDir,
   });
-  const costUsd = estimateAggregateUsageCost({ usage, cost: costConfig });
 
   emitTrustedDiagnosticEvent({
     type: "model.usage",

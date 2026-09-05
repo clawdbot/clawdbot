@@ -269,6 +269,34 @@ responsible. Reindexing is not a session-history restore: if history is missing
 after moving or deleting the database, recover from a verified backup using
 the [restore workflow](/install/backups#restore-a-full-archive).
 
+### Reclaim disk space
+
+Start with `openclaw memory status --agent <agent-id> --json`. Compare the
+database and WAL sizes, reusable bytes, retained embedding-cache payload, and
+per-source chunk payloads. Reusable bytes are pages already free inside SQLite;
+they are not additional data. Cache and chunk payloads exclude indexes and
+SQLite overhead, so they do not explain every byte in the shared file.
+
+If the derived index needs to be discarded, create and verify a
+[backup](/cli/backup), then stop the Gateway through its deployment owner and
+stop other writers. Keep them stopped through reset and compaction so background
+indexing cannot refill the cache between commands:
+
+```bash
+openclaw memory reset --agent <agent-id> --yes
+openclaw doctor --session-sqlite compact --session-sqlite-agent <agent-id>
+openclaw memory index --agent <agent-id>
+openclaw memory status --agent <agent-id>
+```
+
+If only unused pages need reclaiming, skip reset and preserve the existing index.
+Doctor compacts the whole agent database, verifies integrity, and reports the
+before/after database and WAL sizes. Compaction needs temporary disk space; on a
+full volume, free space or move a verified backup to a volume with sufficient
+capacity before attempting it. Rebuilding can call the embedding provider and
+incur cost. Restart the Gateway through its deployment owner after verification.
+Neither reset nor compaction removes canonical sessions or changes retention.
+
 ## Configuration
 
 For embedding provider setup, search result limits and thresholds, batch

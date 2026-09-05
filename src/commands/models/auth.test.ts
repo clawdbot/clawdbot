@@ -14,7 +14,6 @@ type AuthRunCall = {
 };
 
 type ResolvePluginProvidersCall = {
-  activate?: boolean;
   config?: unknown;
   includeUntrustedWorkspacePlugins?: boolean;
   providerRefs?: string[];
@@ -848,12 +847,26 @@ describe("modelsAuthLoginCommand", () => {
     expect(runCliAuth).toHaveBeenCalledOnce();
   });
 
-  it("uses the requested agent store for provider auth login", async () => {
+  it("shows local agent scope before provider auth login", async () => {
     const runtime = createRuntime();
     const originalConfig = useCoderAgentConfig();
+    const note = vi.fn(async () => {});
+    mocks.createClackPrompter.mockReturnValue({ note, select: vi.fn() });
 
     await modelsAuthLoginCommand({ provider: "openai", agent: "coder" }, runtime);
 
+    expect(note).toHaveBeenCalledWith(
+      [
+        "Scope: System / agent",
+        "Agent: coder",
+        "Location: the machine running OpenClaw",
+        "For personal model accounts on a Gateway, run openclaw models accounts login --help.",
+      ].join("\n"),
+      "Provider sign-in",
+    );
+    expect(note.mock.invocationCallOrder[0]).toBeLessThan(
+      runProviderAuth.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
     const authRunCall = readMockCallArg(runProviderAuth) as AuthRunCall;
@@ -941,8 +954,8 @@ describe("modelsAuthLoginCommand", () => {
       },
     });
     mocks.resolvePluginProvidersCore.mockImplementation(
-      (params: { activate?: boolean; providerRefs?: string[] } | undefined) =>
-        params?.activate === true && params?.providerRefs?.[0] === "anthropic"
+      (params: ResolvePluginProvidersCall | undefined) =>
+        params?.providerRefs?.[0] === "anthropic"
           ? [
               {
                 id: "anthropic",
@@ -972,7 +985,6 @@ describe("modelsAuthLoginCommand", () => {
     expect(providerResolutionCall.workspaceDir).toBe("/tmp/openclaw/workspace");
     expect(providerResolutionCall.includeUntrustedWorkspacePlugins).toBe(false);
     expect(providerResolutionCall.providerRefs).toEqual(["anthropic"]);
-    expect(providerResolutionCall.activate).toBe(true);
     expect(runClaudeCliMigration).toHaveBeenCalledOnce();
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
     expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
@@ -1375,7 +1387,7 @@ describe("modelsAuthLoginCommand", () => {
     expect(runProviderAuth).toHaveBeenCalledOnce();
     expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ providerRefs: ["claude-cli"], activate: true }),
+      expect.objectContaining({ providerRefs: ["claude-cli"] }),
     );
     expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
       2,

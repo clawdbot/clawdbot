@@ -1,10 +1,11 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   REFRESHED_RESEARCH_WORKSPACE,
   SESSION_LIST_DEFAULTS,
@@ -195,11 +196,14 @@ suite.define(() => {
       await pollLocatorText(cliGroup).toContain("Claude Code");
       expect(await cliGroup.textContent()).not.toContain("History only");
       if (captureCliAgentsProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "picker-group.png"),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "cli-agents-picker", "picker-group.png"),
+          await takeControlUiViewportScreenshot(
+            page,
+            page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+            [cliGroup],
+          ),
+        );
       }
 
       await cliGroup.getByRole("option", { name: "Claude Code" }).click();
@@ -214,11 +218,12 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
       if (captureCliAgentsProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "catalog-target.png"),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "cli-agents-picker", "catalog-target.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".new-session-page__runtime"),
+          ]),
+        );
       }
     } finally {
       await context.close();
@@ -401,14 +406,12 @@ suite.define(() => {
       expect(await page.getByRole("button", { name: "Add attachment" }).count()).toBe(0);
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
       if (captureCliAgentsProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "cli-agents-picker"),
-            "terminal-primary.png",
-          ),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "cli-agents-picker", "terminal-primary.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".new-session-page__message"),
+          ]),
+        );
       }
 
       await page.getByRole("button", { name: "Start in terminal" }).click();
@@ -775,7 +778,9 @@ suite.define(() => {
         .toBe(3);
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
-      await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
+      await pollLocatorText(page.locator(".new-session-page").getByRole("heading")).toContain(
+        "Research",
+      );
 
       await page.getByRole("button", { name: "Start in terminal" }).click();
       const create = await gateway.waitForRequest("sessions.catalog.startTerminal");
@@ -925,7 +930,9 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("agents.list")).length)
         .toBe(agentRequestsBefore + 1);
       await expect.poll(() => message.inputValue()).toBe("keep my selected agent");
-      await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
+      await pollLocatorText(page.locator(".new-session-page").getByRole("heading")).toContain(
+        "Research",
+      );
       await pollLocatorText(
         page.locator("#new-session-project-trigger .new-session-page__trigger-label"),
       ).toBe("research-next");

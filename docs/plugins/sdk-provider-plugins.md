@@ -667,15 +667,23 @@ catalog, API-key auth, and dynamic model resolution.
         wrapStreamFn: (ctx) => {
           if (!ctx.streamFn) return undefined;
           const inner = ctx.streamFn;
-          return async (params) => {
-            params.headers = {
-              ...params.headers,
-              "X-Acme-Version": "2",
-            };
-            return inner(params);
-          };
+          return (model, context, options) =>
+            inner(model, context, {
+              ...options,
+              headers: {
+                ...options?.headers,
+                "X-Acme-Version": "2",
+              },
+            });
         },
         ```
+
+        Existing wrappers may still pass the deprecated `maxRetries` stream option,
+        including `0`. Built-in text transports ignore it: the embedded runner owns
+        retry budgeting, and SDK-internal retries stay disabled. New wrappers should
+        omit the option. This shipped source contract is retained until a future
+        Plugin SDK major release and a published-plugin reader sweep confirm removal
+        is safe; it does not change image-generation or native-runtime retry policy.
       </Tab>
       <Tab title="Native transport identity">
         For providers that need native request/session headers or metadata on
@@ -756,6 +764,14 @@ catalog, API-key auth, and dynamic model resolution.
       `ProviderPlugin.capabilities` and `suppressBuiltInModel`, are not listed
       here.
 
+      Keep `resolveSyntheticAuth` synchronous and bounded. External process/network login
+      checks belong in `prepareSyntheticAuth`, which receives the captured config,
+      environment, and cancellation signal and returns a synthetic auth result or
+      no result. OpenClaw retains completed availability within that preparation
+      generation. Read-only workers receive the final provider-ref outcome (including
+      unavailable), preserving alias precedence without rerunning external checks.
+      Cancelled preparation must reject after cleanup, not report a missing login.
+
       | Hook | When to use |
       | --- | --- |
       | `catalog` | Model catalog or base URL defaults |
@@ -766,6 +782,7 @@ catalog, API-key auth, and dynamic model resolution.
       | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers |
       | `resolveConfigApiKey` | Provider-owned env-marker auth resolution |
       | `resolveSyntheticAuth` | Local/self-hosted or config-backed synthetic auth |
+      | `prepareSyntheticAuth` | Asynchronously verify external auth before synchronous availability reads |
       | `resolveExternalAuthProfiles` | Overlay provider-owned external auth profiles for CLI/app-managed credentials |
       | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
       | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
@@ -978,6 +995,31 @@ catalog, API-key auth, and dynamic model resolution.
         clients. Implement `handleBargeIn` when a transport can detect that a
         human is interrupting assistant playback and the provider supports
         truncating or clearing the active audio response.
+        When native audio events identify an item, pass that identity alongside
+        PCM as `req.onAudio(audio, { itemId })`; omit
+        metadata for transports without native item IDs. If supplied,
+        `req.getPlaybackState()` returns retained items in playback order with
+        cumulative, item-relative `audioEndMs`; queued items have zero duration.
+        Snapshot these offsets before clearing output and synchronize discarded
+        output using the provider's native cancellation and truncation semantics.
+        An empty snapshot means no retained audio, even if a new response is
+        generating. Hosts without playback measurements omit the callback and
+        keep the existing media-timestamp and playback-mark contract.
+
+        After emitting PCM, providers can call `req.onMark?.(name, acknowledge)`
+        with an acknowledgment callback bound to that exact provider connection.
+        The callback must reject replaced connections and retired marks, while
+        remaining valid if a newer response starts before older playback drains.
+        Transports invoke scoped callbacks in order after consuming the associated
+        PCM, not when receiving or encoding it. Cancellation and failure retire
+        provider mark ownership separately; discarded PCM is never reported as played.
+        The existing `onMark(name)` and `bridge.acknowledgeMark(name)` contract
+        remains available to remote transports and installed providers. Discord
+        retains immediate acknowledgments for those legacy unscoped marks.
+        `onEvent` observes diagnostic events. OpenAI and xAI report outbound
+        frames after submitting them to the local socket; the callback neither
+        acknowledges remote receipt nor vetoes the frame. Control requested
+        inside an observer runs after that frame.
         `submitToolResult` may return `void` for synchronous submission, or a
         `Promise<void>` for an asynchronous completion boundary the provider
         bridge can expose. Gateway relay sessions wait for that promise before
@@ -997,13 +1039,75 @@ catalog, API-key auth, and dynamic model resolution.
         interruption by calling `onClearAudio("barge-in")`. Providers that omit
         the flag use OpenClaw's local input-audio fallback detection.
 
-        A browser-session request can include `gatewayControl` when the host has
-        explicitly negotiated server-owned provider control. The provider keeps
-        vendor authentication and signaling private, calls
-        `gatewayControl.bindBridge(bridge)` before connecting the attached
-        control transport, and forwards bridge events through the supplied
-        callbacks. The Gateway remains the owner of tool policy and run
-        lifecycle. Do not infer or enable this mode from a model name alone.
+        A browser-session request's `clientControl: { owner: "gateway" }`
+        records explicitly negotiated server-owned control. The request type
+        requires `gatewayControl.bindControl` with that claim; requests without
+        it retain the legacy callback shape. The presence of
+        `gatewayControl` callbacks alone is not that negotiation: native
+        delegation can also use them for lifecycle handling while the browser
+        retains its data channel and transcript reporting.
+
+        For negotiated control, keep vendor authentication and signaling
+        private, bind supported `submitToolResult` and `sendUserMessage`
+        commands with `gatewayControl.bindControl(...)`, and forward provider
+        readiness, transcripts, and terminal events through the supplied
+        callbacks. Bind instance methods to their receiver. A sideband does not
+        need to invent media methods or create another audio peer.
+        `bindBridge(fullBridge)` remains available for the stable 2026.8.1 SDK
+        contract and is removed only with a versioned SDK break. The Gateway
+        remains the owner of tool policy and run lifecycle; never infer control
+        ownership from a model name or duplicate client-owned transcript writes.
+
+        Bridge requests and negotiated browser `gatewayControl` may provide
+        `handleDelegationInput(rawText, respond): "control" | "consult"`.
+        Invoke this synchronous, side-effectful admission hook on native delegation
+        input before consuming transcript context, replacing pending work, or
+        aborting an active consultation. Only `consult` permits task fallthrough.
+        A `control` result consumes the request, including refusal or failure; do
+        not launch a task or send a task receipt. Status and cancellation are
+        controls even while idle; redirects and follow-ups require call-owned work.
+        Ordinary idle requests still fall through to consultation.
+
+        The host prepares delegation ownership from the resolved
+        `handlesAgentConsult` capability, not `supportsToolCalls: false` or callback
+        presence. In this mode, finalized transcripts only update history and
+        observability. Tool-capable, unspecified, and tool-less nondelegating
+        providers retain their existing transcript behavior. Without the hook,
+        retain the existing delegation and acknowledgment policy.
+
+        The host binds steering authority to the actual admitted backend attempt
+        after harness policy preparation. Backing agent harnesses forward the
+        existing attempt fingerprint when registering their handle. Realtime voice
+        providers do not calculate authority or copy a target fingerprint into
+        incoming user input. Caller
+        policy is projected by the host against the exact live registration, and
+        closed or replaced owners refuse injection. Normal reply-owned attempts
+        retain their original authority snapshot and concrete model route. A
+        maintenance attempt that only borrows a reply operation for lifecycle
+        management receives authority from its own prepared execution instead.
+        Backend queues revalidate ownership after asynchronous input preparation,
+        immediately before inserting a message or answering a pending question.
+
+        Bind `respond(message)` to the incoming control delegation and exact
+        call/transport instance. Submit at most once, consuming the response before
+        the first send attempt; multiple wire chunks are one response. Do not retry
+        it on send failure, target a newer delegation/socket, or deliver after
+        close/detach. Cancellation may abort the backing task without invalidating
+        its control reply. Keep delegation IDs and wire encoding inside the provider;
+        independent host speech and task receipts use session context instead.
+        Submission does not establish completion or audible delivery.
+
+        The session facade admits this hook after bridge adoption, including before
+        readiness, and fences actions and replies after closure. Callback failures
+        are contained without task fallthrough. `onTranscript` retains its `void`
+        callback contract, including assignable async handlers and close-time final
+        transcript flushing.
+
+        A host `runAgentConsult` rejection named `AbortError` represents
+        cancellation, even when the provider's own signal is still live. Do not
+        turn it into a failed-task or retry reply. `TimeoutError` remains a
+        failure. Closing a transport and canceling accepted host work are
+        separate lifecycle operations.
       </Tab>
       <Tab title="Media understanding">
         Audio providers with their own credential and endpoint contracts can

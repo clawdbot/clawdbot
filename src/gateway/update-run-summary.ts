@@ -29,9 +29,11 @@ export function summarizeUpdateRunResponse(response: unknown) {
     })
     .slice(-3);
   const summary = {
+    runId: text(raw.runId, 100),
     ok,
     status,
     reason: text(result.reason, 240),
+    message: readStringField(raw, "message"),
     mode: text(result.mode, 40),
     before: before ? { version: before } : undefined,
     after: after ? { version: after } : undefined,
@@ -53,9 +55,11 @@ export function summarizeUpdateRunResponse(response: unknown) {
           },
     ...(typeof raw.ackDelivered === "boolean" ? { ackDelivered: raw.ackDelivered } : {}),
     failedSteps,
-    next: ok
-      ? "Update handed off. Reply briefly and wait for the automatic completion or failure notice; do not run shell commands or restart anything."
-      : "Tell the user the update did not start and why; relay any exact manual instructions in handoff.",
+    next:
+      readStringField(raw, "message") ??
+      (ok
+        ? "Update handed off. Reply briefly and wait for the automatic completion or failure notice; do not run shell commands or restart anything."
+        : "Tell the user the update did not start and why; relay any exact manual instructions."),
   };
   if (JSON.stringify(summary, null, 2).length >= 4000) {
     for (const step of failedSteps) {

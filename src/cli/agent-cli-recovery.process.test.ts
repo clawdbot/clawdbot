@@ -8,7 +8,9 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -81,9 +83,7 @@ describe("CLI fork recovery process", () => {
 
     const result = await runCliProcessChild({
       nodeArgs: [
-        "--import",
-        "tsx",
-        "src/entry.ts",
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
         "agent",
         "--local",
         "--session-key",
@@ -111,7 +111,6 @@ describe("CLI fork recovery process", () => {
         PR135168_NEWER_CLI_SESSION_ID: newerCliSessionId,
         PR135168_REBIND_SCRIPT: rebindScript,
         PR135168_SESSION_KEY: sessionKey,
-        PR135168_SOURCE_DIR: path.resolve("src"),
         PR135168_SPAWN_LOG: spawnLog,
         PR135168_STORE_PATH: storePath,
         PR135168_SUCCESSOR_CLI_SESSION_ID: successorCliSessionId,
@@ -237,11 +236,8 @@ process.stdout.write(JSON.stringify({ result: "stale recovery ran", session_id: 
     ),
     fs.writeFile(
       params.rebindScript,
-      `import path from "node:path";
-import { pathToFileURL } from "node:url";
-const source = process.env.PR135168_SOURCE_DIR;
-const accessor = await import(pathToFileURL(path.join(source, "config/sessions/session-accessor.ts")).href);
-const cliSession = await import(pathToFileURL(path.join(source, "agents/cli-session.ts")).href);
+      `const accessor = await import(${JSON.stringify(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.sessionAccessor).href)});
+const cliSession = await import(${JSON.stringify(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cliSession).href)});
 const scope = { sessionKey: process.env.PR135168_SESSION_KEY, storePath: process.env.PR135168_STORE_PATH };
 const current = accessor.loadSessionEntry({ ...scope, readConsistency: "latest" });
 if (!current) throw new Error("proof session row missing");

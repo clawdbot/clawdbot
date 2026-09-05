@@ -1,8 +1,18 @@
-import { beforeAll, beforeEach, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+
+let ledgerHome: TempHomeEnv | undefined;
+beforeEach(async () => {
+  ledgerHome = await createTempHomeEnv("openclaw-update-rpc-");
+});
+afterEach(async () => {
+  await ledgerHome?.restore();
+  ledgerHome = undefined;
+});
 
 export const sentinelState: {
   capturedPayload?: RestartSentinelPayload;
@@ -86,8 +96,10 @@ export const runPostCoreFinalizeAfterGatewayUpdateMock = vi.fn<
 >(async () => ({ status: "skipped", reason: "not-git-update" }));
 
 export type UpdateRunPayload = {
+  runId: string;
   ok: boolean;
   ackDelivered: boolean;
+  message?: string;
   result?: { status?: string; reason?: string; mode?: string };
   handoff?: { status?: string; command?: string; message?: string };
   sentinel?: { persisted?: boolean };
@@ -187,6 +199,8 @@ vi.mock("../../infra/update-post-core-finalize.js", async () => {
 });
 
 vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
+  validateUpdateRunsGetParams: () => true,
+  validateUpdateRunsListParams: () => true,
   validateUpdateStatusParams: () => true,
   validateUpdateStatusResult: () => true,
   validateUpdateRunParams: () => true,

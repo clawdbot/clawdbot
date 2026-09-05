@@ -1,5 +1,6 @@
 // Process supervisor tests cover lifecycle, restart, and termination behavior.
 import { performance } from "node:perf_hooks";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -204,6 +205,7 @@ describe("process supervisor", () => {
       startup.resolve(adapter);
       const run = await pendingRun;
       expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
+      await run.waitForExtinction?.();
       expect(adapter.disposeMock).toHaveBeenCalled();
       await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
       expect(supervisor.getRecord(runId)).toMatchObject({
@@ -260,6 +262,9 @@ describe("process supervisor", () => {
     startup.resolve(lateAdapter);
     await Promise.resolve();
     expect(lateAdapter.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(lateAdapter.disposeMock).not.toHaveBeenCalled();
+    lateAdapter.settle(null, "SIGKILL");
+    await run.waitForExtinction?.();
     expect(lateAdapter.disposeMock).toHaveBeenCalled();
   });
 
@@ -389,6 +394,9 @@ describe("process supervisor", () => {
     }
 
     const runs = await Promise.all(pendingRuns);
+    await Promise.all(
+      runs.map((run) => expectDefined(run.waitForExtinction, "cancelled construction cleanup")()),
+    );
     for (const adapter of adapters) {
       expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
       expect(adapter.disposeMock).toHaveBeenCalled();

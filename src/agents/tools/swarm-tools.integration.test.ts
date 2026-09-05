@@ -3,6 +3,7 @@ import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import {
   resetSubagentRegistryForTests,
@@ -157,6 +158,12 @@ describe("swarm tools integration", () => {
         requesterRunId: "parent-run",
         config,
       });
+      const wait = createAgentsWaitTool({
+        agentSessionKey: requesterSessionKey,
+        agentId: "main",
+        config,
+      });
+      finalizeAgentToolAvailability([spawn, wait]);
       const runIds: string[] = [];
       const completionInputs = [
         {},
@@ -193,11 +200,6 @@ describe("swarm tools integration", () => {
       await vi.waitFor(() => expect(completionResolvers.size).toBe(3));
       expect(modelStructuredCalls).toEqual([1, 3]);
 
-      const wait = createAgentsWaitTool({
-        agentSessionKey: requesterSessionKey,
-        agentId: "main",
-        config,
-      });
       const pending = new Set(runIds);
       const completionOrder: string[] = [];
       for (const publicRunId of [runIds[1] ?? "", runIds[2] ?? "", runIds[0] ?? ""]) {

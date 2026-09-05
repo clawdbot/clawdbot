@@ -6,7 +6,6 @@ import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.tes
 import {
   getSubagentRunByChildSessionKey,
   registerSubagentRun,
-  testing as subagentRegistryTesting,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
@@ -21,6 +20,7 @@ import { createAgentTurnIo } from "../agent-turn/io.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import type { GatewaySessionRow } from "../session-utils.js";
 import {
+  applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
   operatorWriteCliClient,
   makeContext,
@@ -1972,7 +1972,7 @@ describe("gateway agent handler chat.abort integration", () => {
     "chat.abort by runId kills only registered children of its non-admin owner: $name",
     async ({ expectsCompletionMessage, collect, releaseOnParent, partialFailure, cascade }) => {
       prime();
-      subagentRegistryTesting.setDepsForTest({
+      applyGatewaySubagentRegistryTestDeps({
         persistSubagentRunsToDisk: () => {},
         persistSubagentRunsToDiskOrThrow: () => {},
         callGateway: async () => await new Promise(() => {}),

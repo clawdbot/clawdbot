@@ -39,11 +39,6 @@ import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
-  MEMORY_BATCH_FAILURE_LIMIT,
-  recordMemoryBatchFailure,
-  resetMemoryBatchFailureState,
-} from "./manager-batch-state.js";
-import {
   collectMemoryCachedEmbeddings,
   loadMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
@@ -121,23 +116,22 @@ type PreparedMemoryIndexEntry = {
 function resolveChunkRecallMetadata(params: {
   curatedRoot: boolean;
   projectScopeEligible: boolean;
-  content?: string;
+  sourceLines: string[];
   chunk: MemoryChunk;
 }): Pick<IndexedMemoryChunk, "importance" | "triggers" | "projectKey"> {
-  if ((!params.curatedRoot && !params.projectScopeEligible) || params.content === undefined) {
+  if (!params.curatedRoot && !params.projectScopeEligible) {
     return { importance: null, triggers: null, projectKey: null };
   }
 
   const phrases = new Set<string>();
   let importance: number | null = null;
-  const lines = params.content.replace(/\r\n/gu, "\n").split("\n");
   const annotationStartLine = params.chunk.entryStartLine ?? params.chunk.startLine;
   const annotationEndLine = params.chunk.entryEndLine ?? params.chunk.endLine;
-  const annotationLines = lines.slice(annotationStartLine - 1, annotationEndLine);
+  const annotationLines = params.sourceLines.slice(annotationStartLine - 1, annotationEndLine);
   const projectAnnotations = params.projectScopeEligible
     ? extractProjectKeysFromCuratedEntry(annotationLines.join("\n"))
     : { annotated: false, valid: true, keys: [] };
-  for (const line of annotationLines) {
+  for (const line of params.curatedRoot ? annotationLines : []) {
     const annotationSuffix = line.match(
       /(?:\s*<!--\s*(?:trigger|importance|project)\s*:[\s\S]*?-->\s*)+$/iu,
     )?.[0];
@@ -150,9 +144,6 @@ function resolveChunkRecallMetadata(params: {
       const kind = match[1]?.toLowerCase();
       const value = match[2]?.trim() ?? "";
       if (kind === "trigger") {
-        if (!params.curatedRoot) {
-          continue;
-        }
         for (const phrase of value.split(/[,;]/u).map((entry) => entry.trim())) {
           if (phrase) {
             phrases.add(phrase);
@@ -160,13 +151,7 @@ function resolveChunkRecallMetadata(params: {
         }
         continue;
       }
-      if (kind === "project") {
-        continue;
-      }
-      if (!params.curatedRoot) {
-        continue;
-      }
-      if (/^\d+$/u.test(value)) {
+      if (kind === "importance" && /^\d+$/u.test(value)) {
         const parsed = Number.parseInt(value, 10);
         if (parsed >= 1 && parsed <= 10) {
           importance = Math.max(importance ?? parsed, parsed);
@@ -312,10 +297,10 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
 }
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
-  protected abstract batchFailureCount: number;
-  protected abstract batchFailureLastError?: string;
-  protected abstract batchFailureLastProvider?: string;
-  protected abstract batchFailureLock: Promise<void>;
+  protected readonly batchFailureLimit = 2;
+  protected batchFailure: { count: number; lastError?: string; lastProvider?: string } = {
+    count: 0,
+  };
   protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
   private activeProviderUses = new Map<EmbeddingProvider, number>();
   private providerIdleWaiters = new Map<EmbeddingProvider, Set<() => void>>();
@@ -455,12 +440,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     for (const batch of batches) {
       const inputs = buildTextEmbeddingInputs(batch);
       const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
-      const batchEmbeddings = hasStructuredInputs
-        ? await this.embedBatchInputsWithRetry(inputs, generation)
-        : await this.embedBatchWithRetry(
-            batch.map((chunk) => chunk.text),
-            generation,
-          );
+      const batchEmbeddings = await this.embedBatchWithRetry(
+        hasStructuredInputs ? inputs : batch.map((chunk) => chunk.text),
+        generation,
+      );
       for (let i = 0; i < batch.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
@@ -564,66 +547,34 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         enabled: this.cache.enabled,
         providerIdentities: generation.identities,
         hashes: chunks.map((chunk) => chunk.hash),
-        tableName: EMBEDDING_CACHE_TABLE,
       }),
     });
   }
 
   protected async embedBatchWithRetry(
-    texts: string[],
-    generation?: MemorySemanticProviderGeneration,
-  ): Promise<number[][]> {
-    return await this.runProviderBatchWithRetry({
-      items: texts,
-      generation,
-      operation: "batch",
-      run: async (provider, batchTexts, signal) =>
-        await provider.embedBatch(batchTexts, { signal, inputType: "document" }),
-    });
-  }
-
-  protected async embedBatchInputsWithRetry(
-    inputs: EmbeddingInput[],
+    inputs: Array<string | EmbeddingInput>,
     generation?: MemorySemanticProviderGeneration,
   ): Promise<number[][]> {
     if (inputs.length === 0) {
       return [];
     }
-    return await this.runProviderBatchWithRetry({
-      items: inputs,
-      generation,
-      operation: "structured-batch",
-      run: async (provider, batchInputs, signal) =>
-        await provider.embedBatch(batchInputs, { signal, inputType: "document" }),
-    });
-  }
-
-  private async runProviderBatchWithRetry<T>(params: {
-    items: T[];
-    generation?: MemorySemanticProviderGeneration;
-    operation: "batch" | "structured-batch";
-    run: (provider: EmbeddingProvider, items: T[], signal: AbortSignal) => Promise<number[][]>;
-  }): Promise<number[][]> {
-    if (params.items.length === 0) {
-      return [];
-    }
-    const provider = params.generation?.provider ?? this.provider;
+    const provider = generation?.provider ?? this.provider;
     if (!provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
     }
-    const structured = params.operation === "structured-batch";
+    const structured = inputs.some((input) => typeof input !== "string");
     const label = structured ? "structured batch" : "batch";
     try {
       return await this.withProviderUse(
         provider,
         async () =>
           await runMemoryEmbeddingBatchRetryWithSplit({
-            items: params.items,
+            items: inputs,
             run: async (batchItems) => {
               const timeoutMs = this.resolveEmbeddingTimeout(
                 "batch",
                 provider,
-                params.generation?.runtime,
+                generation?.runtime,
               );
               log.debug(`memory embeddings: ${label} start`, {
                 provider: provider.id,
@@ -633,7 +584,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               const result = await runEmbeddingOperationWithTimeout({
                 timeoutMs,
                 message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-                run: async (signal) => await params.run(provider, batchItems, signal),
+                run: async (signal) =>
+                  await provider.embedBatch(batchItems, { signal, inputType: "document" }),
               });
               if (!structured) {
                 log.debug("memory embeddings: batch completed", {
@@ -669,7 +621,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       }
       this.markLocalEmbeddingProviderDegraded(err);
       throw createMemoryEmbeddingOperationError({
-        operation: params.operation,
+        operation: structured ? "structured-batch" : "batch",
         providerId: provider.id,
         cause: err,
       });
@@ -761,65 +713,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     return await runEmbeddingOperationWithTimeout({ timeoutMs, message, run: () => promise });
   }
 
-  private async withBatchFailureLock<T>(fn: () => Promise<T>): Promise<T> {
-    let release: () => void;
-    const wait = this.batchFailureLock;
-    this.batchFailureLock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await wait;
-    try {
-      return await fn();
-    } finally {
-      release!();
-    }
-  }
-
-  private async resetBatchFailureCount(): Promise<void> {
-    await this.withBatchFailureLock(async () => {
-      if (this.batchFailureCount > 0) {
-        log.debug("memory embeddings: batch recovered; resetting failure count");
-      }
-      const nextState = resetMemoryBatchFailureState({
-        enabled: this.batch.enabled,
-        count: this.batchFailureCount,
-        lastError: this.batchFailureLastError,
-        lastProvider: this.batchFailureLastProvider,
-      });
-      this.batch.enabled = nextState.enabled;
-      this.batchFailureCount = nextState.count;
-      this.batchFailureLastError = nextState.lastError;
-      this.batchFailureLastProvider = nextState.lastProvider;
-    });
-  }
-
-  private async recordBatchFailure(params: {
-    provider: string;
-    message: string;
-    attempts: 1 | 2;
-    forceDisable?: boolean;
-  }): Promise<{ disabled: boolean; count: number }> {
-    return await this.withBatchFailureLock(async () => {
-      if (!this.batch.enabled) {
-        return { disabled: true, count: this.batchFailureCount };
-      }
-      const nextState = recordMemoryBatchFailure(
-        {
-          enabled: this.batch.enabled,
-          count: this.batchFailureCount,
-          lastError: this.batchFailureLastError,
-          lastProvider: this.batchFailureLastProvider,
-        },
-        params,
-      );
-      this.batch.enabled = nextState.enabled;
-      this.batchFailureCount = nextState.count;
-      this.batchFailureLastError = nextState.lastError;
-      this.batchFailureLastProvider = nextState.lastProvider;
-      return { disabled: !nextState.enabled, count: nextState.count };
-    });
-  }
-
   private async runBatchWithTimeoutRetry<T>(params: {
     provider: string;
     run: () => Promise<T>;
@@ -852,22 +745,27 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       provider: params.provider,
       run: params.run,
     });
+    // Completion accounting is synchronous: concurrent batches cannot interleave updates.
     if (result.kind === "success") {
-      await this.resetBatchFailureCount();
+      if (this.batchFailure.count > 0) {
+        log.debug("memory embeddings: batch recovered; resetting failure count");
+      }
+      // An in-flight success clears failures without re-enabling disabled batching.
+      this.batchFailure = { count: 0 };
       return result.value;
     }
 
     const message = formatErrorMessage(result.error);
     const forceDisable = isEmbeddingBatchUnavailableError(result.error);
-    const failure = await this.recordBatchFailure({
-      provider: params.provider,
-      message,
-      attempts: result.attempts,
-      forceDisable,
-    });
-    const suffix = failure.disabled ? "disabling batch" : "keeping batch enabled";
+    if (this.batch.enabled) {
+      const count =
+        this.batchFailure.count + (forceDisable ? this.batchFailureLimit : result.attempts);
+      this.batchFailure = { count, lastError: message, lastProvider: params.provider };
+      this.batch.enabled = !(forceDisable || count >= this.batchFailureLimit);
+    }
+    const suffix = this.batch.enabled ? "keeping batch enabled" : "disabling batch";
     log.warn(
-      `memory embeddings: ${params.provider} batch failed (${failure.count}/${MEMORY_BATCH_FAILURE_LIMIT}); ${suffix}; falling back to non-batch embeddings: ${message}`,
+      `memory embeddings: ${params.provider} batch failed (${this.batchFailure.count}/${this.batchFailureLimit}); ${suffix}; falling back to non-batch embeddings: ${message}`,
     );
     return await params.fallback();
   }
@@ -1049,7 +947,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             embedding: embeddings[index] ?? [],
           })),
           now,
-          tableName: EMBEDDING_CACHE_TABLE,
         });
         this.upsertFileRecord(entry, source);
         if (needsVectorRebuild) {
@@ -1121,6 +1018,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
       const indexingContent =
         options.source === "memory" ? stripMemoryAnnotationCarriers(content) : content;
+      // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
+      const sourceLines =
+        options.source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
       const chunkOptions = { ...this.settings.chunking, perEntry };
       const baseChunks = filterNonEmptyMemoryChunks(
         options.source === "sessions"
@@ -1151,18 +1051,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               EMBEDDING_BATCH_MAX_TOKENS,
             )
           : baseChunks
-      ).map(
-        (chunk): IndexedMemoryChunk =>
-          Object.assign(
+      ).map((chunk): IndexedMemoryChunk =>
+        Object.assign(
+          chunk,
+          resolveChunkRecallMetadata({
+            curatedRoot: pathClassification.curatedRoot,
+            projectScopeEligible:
+              options.source === "memory" && normalizedEntryPath.toUpperCase() !== "USER.MD",
+            sourceLines,
             chunk,
-            resolveChunkRecallMetadata({
-              curatedRoot: pathClassification.curatedRoot,
-              projectScopeEligible:
-                options.source === "memory" && normalizedEntryPath.toUpperCase() !== "USER.MD",
-              content,
-              chunk,
-            }),
-          ),
+          }),
+        ),
       );
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);

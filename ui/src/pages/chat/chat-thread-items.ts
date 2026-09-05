@@ -7,6 +7,8 @@ import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
+  canvasPreviewsMatch,
+  readCanvasContentPreview,
   stripMessageDisplayMetadataText,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
@@ -28,22 +30,14 @@ export function appendCanvasBlockToAssistantMessage(
       : typeof raw.text === "string"
         ? [{ type: "text", text: raw.text }]
         : [];
-  const alreadyHasArtifact = existingContent.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const typed = block as {
-      type?: unknown;
-      preview?: { kind?: unknown; viewId?: unknown; url?: unknown };
-    };
-    return (
-      typed.type === "canvas" &&
-      typed.preview?.kind === "canvas" &&
-      ((preview.viewId && typed.preview.viewId === preview.viewId) ||
-        (preview.url && typed.preview.url === preview.url))
-    );
-  });
-  if (alreadyHasArtifact) {
+  // A shortcode carries identity, not the tool's sandbox or App descriptor.
+  // Only an existing structured block can replace the canonical projection.
+  if (
+    existingContent.some((block) => {
+      const existing = readCanvasContentPreview(block);
+      return existing && canvasPreviewsMatch(existing, preview);
+    })
+  ) {
     return message;
   }
   return {
@@ -65,28 +59,6 @@ export function messageMatchesSearchQuery(message: unknown, query: string): bool
     !normalizedQuery ||
     normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery)
   );
-}
-
-export function turnHasMatchingAssistant(
-  messages: unknown[],
-  sourceIndex: number,
-  searchQuery: string,
-): boolean {
-  for (let index = sourceIndex + 1; index < messages.length; index += 1) {
-    const message = messages[index];
-    const normalized = safeNormalizeMessage(message);
-    if (!normalized) {
-      continue;
-    }
-    const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-    if (role === "user" || role === "system") {
-      return false;
-    }
-    if (role === "assistant" && messageMatchesSearchQuery(message, searchQuery)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 type ChatMessagePreview = {
@@ -130,7 +102,11 @@ export function canvasPreviewBaseIdentity(
   source: ChatMessagePreview,
 ): string | null {
   const toolCallId = resolveMessageToolUseId(asRecord(message) ?? {});
-  const previewId = source.preview.viewId ?? source.preview.url;
+  const previewId = source.preview.viewId
+    ? `viewId:${source.preview.viewId}`
+    : source.preview.url
+      ? `url:${source.preview.url}`
+      : null;
   return toolCallId && previewId ? JSON.stringify([toolCallId, previewId]) : null;
 }
 

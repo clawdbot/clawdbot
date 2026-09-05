@@ -36,10 +36,6 @@ async function hasDistinctRootMemoryFiles(directory: string): Promise<boolean> {
   return entries.has("MEMORY.md") && entries.has("memory.md");
 }
 
-function firstNoteCall() {
-  return note.mock.calls[0];
-}
-
 describe("root memory repair", () => {
   let tmpDir = "";
 
@@ -206,7 +202,7 @@ describe("root memory repair", () => {
     expect(canonical).toContain("# Legacy");
     await expectPathMissing(path.join(tmpDir, "memory.md"));
     expect(note).toHaveBeenCalledTimes(1);
-    const repairNote = firstNoteCall();
+    const repairNote = note.mock.calls[0];
     const repairMessage = String(repairNote?.[0] ?? "");
     const repairLines = repairMessage.split("\n");
     expect(repairLines[0]).toBe("Workspace memory root merged:");
@@ -308,7 +304,7 @@ describe("root memory repair", () => {
     await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const repairNote = firstNoteCall();
+    const repairNote = note.mock.calls[0];
     const repairMessage = String(repairNote?.[0] ?? "");
     const repairLines = repairMessage.split("\n");
     expect(repairLines[0]).toBe("Workspace memory root repair skipped (a file could not be read):");
@@ -333,7 +329,7 @@ describe("root memory repair", () => {
     await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const repairNote = firstNoteCall();
+    const repairNote = note.mock.calls[0];
     const repairMessage = String(repairNote?.[0] ?? "");
     const repairLines = repairMessage.split("\n");
     expect(repairLines[0]).toBe(
@@ -392,7 +388,7 @@ describe("root memory repair", () => {
       rename.mockRestore();
     }
 
-    const repairNote = firstNoteCall();
+    const repairNote = note.mock.calls[0];
     const repairLines = String(repairNote?.[0] ?? "").split("\n");
     expect(repairLines[0]).toBe(
       "Workspace memory root repair skipped (legacy memory could not be archived atomically):",
@@ -424,7 +420,7 @@ describe("root memory repair", () => {
     });
     await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
 
-    const repairLines = String(firstNoteCall()?.[0] ?? "").split("\n");
+    const repairLines = String(note.mock.calls[0]?.[0] ?? "").split("\n");
     expect(repairLines).toContainEqual(expect.stringContaining("- preserved archive: "));
   });
 });

@@ -1,10 +1,7 @@
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import {
-  createPreparedModelCatalogWorker,
-  createPreparedModelCatalogWorkerInput,
-} from "./prepared-model-catalog-worker.js";
+import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
   PROVIDER_ID,
   REF_ONLY_API_ENV,
@@ -42,7 +39,7 @@ export async function expectRefOnlyAuthProfilesThroughWorker(
       },
     },
   };
-  const input = createPreparedModelCatalogWorkerInput({
+  const worker = createPreparedModelCatalogWorker({
     agentFacts: {
       input: {
         agentId: "main",
@@ -62,12 +59,9 @@ export async function expectRefOnlyAuthProfilesThroughWorker(
       templateAuthStorage: AuthStorage.inMemory({}),
     } satisfies PreparedModelRuntimeAgentFacts,
     pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
-  });
-
-  const catalog = await createPreparedModelCatalogWorker({
-    input,
     isCurrent: fixture.isCurrent,
-  }).loadCatalog();
+  });
+  const catalog = await worker.loadCatalog();
 
   expect(catalog.entries).toContainEqual(
     expect.objectContaining({

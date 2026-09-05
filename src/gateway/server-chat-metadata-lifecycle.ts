@@ -5,6 +5,17 @@ import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
+/** A committed auth change remains successful even if its best-effort UI notification fails. */
+export function broadcastChatMetadataChanged(
+  context: Pick<GatewayRequestContext, "broadcast" | "logGateway">,
+): void {
+  try {
+    context.broadcast("chat.metadata.changed", {}, { dropIfSlow: true });
+  } catch {
+    context.logGateway.warn("chat metadata change notification failed");
+  }
+}
+
 export async function createGatewayChatMetadataLifecycle(params: {
   getConfig: () => OpenClawConfig;
   minimalTestGateway: boolean;
@@ -37,7 +48,11 @@ export async function createGatewayChatMetadataLifecycle(params: {
           refreshOnRead: true,
         }
       : {}),
-    onChanged: () => context?.broadcast("chat.metadata.changed", {}, { dropIfSlow: true }),
+    onChanged: () => {
+      if (context) {
+        broadcastChatMetadataChanged(context);
+      }
+    },
     log: params.log,
   });
   const refreshLogged = () => {

@@ -2733,6 +2733,7 @@ describe("session.message websocket events", () => {
     const ledger: WorkerTranscriptCommitStore = {
       begin: () => ({ kind: "claimed" }),
       complete: ({ outcome }) => outcome,
+      discardUncommitted: () => {},
     };
     const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
     const identity: WorkerConnectionIdentity = {
@@ -2793,6 +2794,7 @@ describe("session.message websocket events", () => {
         ),
       );
       const outcome = await committer.commit({
+        assertCurrent: () => undefined,
         identity,
         request: {
           runEpoch: identity.ownerEpoch,

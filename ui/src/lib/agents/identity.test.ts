@@ -1,8 +1,13 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createAgentIdentityCapability } from "./identity.ts";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -102,3 +107,65 @@ it("publishes each fetched snapshot once under overlapping roster and stream upd
   await capability.ensure(ids);
   expect(publish).toHaveBeenCalledTimes(1);
 });
+
+it("shares identity requests between the sidebar and the selected chat", async () => {
+  const { fetchAssistantIdentity } = await import("../../app/assistant-identity.ts");
+  const result = { agentId: "main", name: "Main", avatar: "/avatar/main?v=1" };
+  const request = vi.fn().mockResolvedValue(result);
+  const client = createTestGatewayClient(request);
+  const capability = createAgentIdentityCapability({
+    snapshot: { client, phase: "connected" },
+    subscribe: () => () => undefined,
+  });
+
+  const [, assistant] = await Promise.all([
+    capability.ensure(["main"]),
+    fetchAssistantIdentity(client, "main"),
+  ]);
+  expect(capability.get("main")?.avatar).toBe(result.avatar);
+  expect(assistant?.avatar).toBe(result.avatar);
+  expect(request).toHaveBeenCalledOnce();
+});
+
+it.each(["sidebar", "chat"])(
+  "revalidates a replaced avatar without events when %s refreshes first",
+  async (first) => {
+    const { fetchAssistantIdentity } = await import("../../app/assistant-identity.ts");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+    const oldIdentity = { agentId: "main", name: "Main", avatar: "/avatar/main?v=old" };
+    const replacement = { ...oldIdentity, avatar: "/avatar/main?v=replaced" };
+    const refresh = deferred<AgentIdentityResult>();
+    const request = vi.fn().mockResolvedValueOnce(oldIdentity).mockReturnValueOnce(refresh.promise);
+    const client = createTestGatewayClient(request);
+    const capability = createAgentIdentityCapability({
+      snapshot: { client, phase: "connected" },
+      subscribe: () => () => undefined,
+    });
+    const publish = vi.fn();
+    capability.subscribe(publish);
+    await capability.ensure(["main"]);
+    clock.mockReturnValue(59_999);
+    await Promise.all([capability.ensure(["main"]), fetchAssistantIdentity(client, "main")]);
+    expect(request).toHaveBeenCalledOnce();
+
+    clock.mockReturnValue(60_000);
+    const firstRefresh =
+      first === "sidebar" ? capability.ensure(["main"]) : fetchAssistantIdentity(client, "main");
+    // A slow refresh stays shared even past another freshness window.
+    clock.mockReturnValue(120_001);
+    const waitingChat = fetchAssistantIdentity(client, "main");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(capability.get("main")?.avatar).toBe(oldIdentity.avatar);
+    refresh.resolve(replacement);
+    await firstRefresh;
+    expect((await waitingChat)?.avatar).toBe(replacement.avatar);
+    // A chat-first completion must update the sidebar's older projection too.
+    await capability.ensure(["main"]);
+    expect(capability.get("main")?.avatar).toBe(replacement.avatar);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(publish).toHaveBeenCalledTimes(2);
+    clock.mockReturnValue(180_000);
+    await Promise.all([capability.ensure(["main"]), fetchAssistantIdentity(client, "main")]);
+    expect(request).toHaveBeenCalledTimes(2);
+  },
+);

@@ -148,12 +148,8 @@ struct DashboardPrimaryGatewayAdapter {
         try await MacGatewayProfileStore.shared.endpoint(profileID: profileID)
     }
 
-    var currentTLSFingerprint: @MainActor () -> String? = {
-        GatewayRemoteConfig.resolveTLSFingerprint(root: OpenClawConfigFile.loadDict())
-    }
-
-    var persist: @MainActor (AppState, String?) -> Bool = {
-        $0.syncGatewayConfigNow(remoteTLSFingerprint: $1)
+    var persist: @MainActor (AppState, AppState.PrimaryGatewayConfiguration) -> Bool = {
+        $0.replacePrimaryGateway($1)
     }
 
     func apply(profileID: String) async throws {
@@ -185,24 +181,8 @@ struct DashboardPrimaryGatewayAdapter {
     }
 
     private func apply(url: URL, token: String?, tlsFingerprint: String?) throws {
-        let previous = (
-            transport: self.state.remoteTransport,
-            url: self.state.remoteUrl,
-            token: self.state.remoteToken,
-            mode: self.state.connectionMode,
-            tlsFingerprint: self.currentTLSFingerprint())
-        self.state.remoteTransport = .direct
-        self.state.remoteUrl = url.absoluteString
-        // Promotion intentionally moves the saved token into gateway.remote.token,
-        // matching the existing Settings connection flow.
-        self.state.remoteToken = token ?? ""
-        self.state.connectionMode = .remote
-        guard self.persist(self.state, tlsFingerprint) else {
-            self.state.remoteTransport = previous.transport
-            self.state.remoteUrl = previous.url
-            self.state.remoteToken = previous.token
-            self.state.connectionMode = previous.mode
-            _ = self.persist(self.state, previous.tlsFingerprint)
+        let configuration = AppState.PrimaryGatewayConfiguration(url: url, token: token, tlsFingerprint: tlsFingerprint)
+        guard self.persist(self.state, configuration) else {
             throw DashboardPrimaryGatewayError.notPromotable
         }
     }

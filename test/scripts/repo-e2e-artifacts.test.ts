@@ -123,7 +123,7 @@ describe("repo E2E artifact transfer", () => {
     },
   );
 
-  describe.sequential("identity validation", () => {
+  describe("identity validation", { concurrent: false }, () => {
     let root: string;
     let artifact: string;
     let manifest: string;

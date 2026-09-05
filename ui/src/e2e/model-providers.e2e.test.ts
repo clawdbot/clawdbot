@@ -1,8 +1,11 @@
 // Control UI tests cover the Models settings page against a mocked Gateway.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { applyMergePatch } from "../../../src/config/merge-patch.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   defaultControlUiFeatureMethods,
@@ -58,6 +61,14 @@ async function selectModelPicker(locator: Locator, value: string) {
     await select.updateComplete;
     select.dispatchEvent(new Event("change", { bubbles: true }));
   }, value);
+}
+
+async function captureProviderProof(fileName: string, content: Locator): Promise<void> {
+  const page = content.page();
+  await writeFile(
+    path.join(artifactDir, fileName),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [content]),
+  );
 }
 
 describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
@@ -370,11 +381,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect.poll(() => page.getByText("Model auth expired: Claude").count()).toBe(0);
 
       if (recordVisuals) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "claude-cli-oauth-alias.png"),
-        });
+        await captureProviderProof("claude-cli-oauth-alias.png", claudeCard);
       }
 
       const openrouterCard = page.locator(".model-providers__row", { hasText: "OpenRouter" });
@@ -497,15 +504,16 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       }
 
       if (recordVisuals) {
-        await page.screenshot({
-          path: path.join(artifactDir, "03-unicode-fallback-icons.png"),
-          fullPage: true,
-        });
+        const firstIcon = page
+          .locator(".model-providers__row .provider-brand-icon--fallback")
+          .first();
+        await firstIcon.scrollIntoViewIfNeeded();
+        await captureProviderProof("03-unicode-fallback-icons.png", firstIcon);
         await page.locator(`[data-provider-id="${bottomProviderId}"]`).scrollIntoViewIfNeeded();
-        await page.screenshot({
-          path: path.join(artifactDir, "04-unicode-fallback-icons-bottom.png"),
-          fullPage: true,
-        });
+        await captureProviderProof(
+          "04-unicode-fallback-icons-bottom.png",
+          page.locator(`[data-provider-id="${bottomProviderId}"]`),
+        );
       }
     } finally {
       await context.close();
@@ -531,22 +539,20 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       },
       models: { providers: { openai: providerConfig(redactedConfigValue) } },
     };
+    const configuredModels = [
+      { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+      { id: "gpt-5.5-mini", name: "GPT-5.5 Mini", provider: "openai", available: true },
+      {
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "anthropic",
+        available: true,
+      },
+    ];
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "config.patch", "models.probe"],
       models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-        {
-          id: "gpt-5.5-mini",
-          name: "GPT-5.5 Mini",
-          provider: "openai",
-          available: true,
-        },
-        {
-          id: "claude-sonnet-4-5",
-          name: "Claude Sonnet 4.5",
-          provider: "anthropic",
-          available: true,
-        },
+        ...configuredModels,
         { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: true },
       ],
       methodResponses: {
@@ -563,28 +569,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           cases: [
             {
               match: { view: "configured" },
-              response: {
-                models: [
-                  {
-                    id: "gpt-5.5",
-                    name: "GPT-5.5",
-                    provider: "openai",
-                    available: true,
-                  },
-                  {
-                    id: "gpt-5.5-mini",
-                    name: "GPT-5.5 Mini",
-                    provider: "openai",
-                    available: true,
-                  },
-                  {
-                    id: "claude-sonnet-4-5",
-                    name: "Claude Sonnet 4.5",
-                    provider: "anthropic",
-                    available: true,
-                  },
-                ],
-              },
+              response: { models: configuredModels },
             },
             {
               match: { view: "all", agentId: "main", refresh: true },
@@ -669,10 +654,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .poll(() => modelPickerValue(page.locator(".model-providers__defaults wa-select").first()))
         .toBe("openai/gpt-5.5");
       if (recordVisuals) {
-        await page.screenshot({
-          path: path.join(artifactDir, "01-configured.png"),
-          fullPage: true,
-        });
+        await captureProviderProof("01-configured.png", openaiCard);
       }
 
       await openaiCard.getByRole("button", { name: "Replace key" }).click();
@@ -792,10 +774,108 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await page.locator('[data-provider-id="google"]').waitFor();
 
       if (recordVisuals) {
-        await page.screenshot({ path: path.join(artifactDir, "02-probed.png"), fullPage: true });
+        await captureProviderProof("02-probed.png", page.locator('[data-provider-id="google"]'));
       }
     } finally {
       await context.close();
+    }
+  });
+
+  it("autosaves utility choices without a primary model and retains them after reload", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1280 },
+      ...(recordVisuals
+        ? { recordVideo: { dir: artifactDir, size: { height: 1000, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    let config: unknown = { agents: { defaults: {} } };
+    let hash = "utility-defaults";
+    const snapshot = () => ({
+      config,
+      sourceConfig: config,
+      hash,
+      raw: JSON.stringify(config),
+      valid: true,
+      issues: [],
+    });
+    const gateway = await installMockGateway(page, {
+      models: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai", available: true }],
+      methodResponses: {
+        "config.get": snapshot(),
+        "models.authStatus": { ts: NOW, providers: [] },
+        "usage.status": { updatedAt: NOW, providers: [] },
+        "sessions.usage": { aggregates: { byProvider: [] } },
+      },
+    });
+    const observations: unknown[] = [];
+    try {
+      await page.goto(`${server.baseUrl}settings/model-providers`);
+      const defaults = page.locator(".model-providers__defaults");
+      const utility = page.locator("#model-providers-utility-model");
+      await expect.poll(() => modelPickerValue(utility)).toBe("__openclaw_automatic_utility__");
+      if (recordVisuals) {
+        await captureProviderProof("utility-before.png", utility);
+      }
+      for (const choice of [
+        { label: "GPT-5 Mini", value: "openai/gpt-5-mini", setting: "openai/gpt-5-mini" },
+        { label: "Disabled", value: "", setting: "" },
+        { label: "Auto", value: "__openclaw_automatic_utility__", setting: null },
+      ]) {
+        const before = (await gateway.getRequests("config.patch")).length;
+        await gateway.deferNext("config.patch");
+        await utility.click();
+        await utility.getByRole("option", { name: choice.label, exact: true }).click();
+        const request = await gateway.waitForRequest("config.patch", { after: before });
+        const patch = requestRaw(request);
+        // The fixture commits the actual wire patch, not the expected selection.
+        const next = applyMergePatch(config, patch);
+        const noop = JSON.stringify(next) === JSON.stringify(config);
+        hash = noop ? hash : `${hash}-updated`;
+        config = next;
+        await gateway.setMethodResponse("config.get", snapshot());
+        await gateway.resolveDeferred("config.patch", { ok: true, config, hash, noop });
+        await expect
+          .poll(async () => (await defaults.getByRole("status").textContent())?.trim())
+          .toBe("Defaults saved.");
+        observations.push({ choice, request, config, selected: await modelPickerValue(utility) });
+        if (recordVisuals) {
+          await captureProviderProof(`utility-${choice.label}-saved.png`, utility);
+        }
+        expect(patch).toEqual({
+          agents: {
+            defaults: {
+              utilityModel: choice.setting,
+              thinkingDefault: null,
+              fastModeDefault: null,
+            },
+          },
+        });
+        await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
+        await page.reload();
+        await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
+        await expect.poll(() => modelPickerValue(defaults.locator("wa-select").first())).toBe("");
+        if (recordVisuals) {
+          await captureProviderProof(`utility-${choice.label}-reloaded.png`, utility);
+        }
+      }
+    } finally {
+      try {
+        if (recordVisuals) {
+          await writeFile(
+            path.join(artifactDir, "utility-observations.json"),
+            JSON.stringify(observations, null, 2),
+          );
+          await captureProviderProof(
+            "utility-final.png",
+            page.locator("#model-providers-utility-model"),
+          );
+        }
+      } finally {
+        await context.close();
+      }
     }
   });
 
@@ -897,11 +977,10 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       });
       await page.getByRole("alert").filter({ hasText: "synthetic model save rejected" }).waitFor();
       if (recordVisuals) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "05-reconnect-save-error.png"),
-        });
+        await captureProviderProof(
+          "05-reconnect-save-error.png",
+          page.getByRole("alert").filter({ hasText: "synthetic model save rejected" }),
+        );
       }
 
       const reconnectedConfig = {
@@ -943,11 +1022,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         expect(request.params).toEqual(expect.objectContaining({ agentId: "writer" }));
       }
       if (recordVisuals) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "06-reconnected-model.png"),
-        });
+        await captureProviderProof("06-reconnected-model.png", primary);
       }
     } finally {
       await context.close();

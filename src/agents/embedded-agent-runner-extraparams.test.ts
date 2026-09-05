@@ -1313,18 +1313,18 @@ describe("applyExtraParamsToAgent", () => {
 
   it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "inferrs",
-      applyModelId: "google/gemma-4-E2B-it",
+      applyProvider: "llmman",
+      applyModelId: "gemma4",
       model: {
         api: "openai-completions",
-        provider: "inferrs",
-        id: "google/gemma-4-E2B-it",
-        name: "Gemma 4 E2B (inferrs)",
-        baseUrl: "http://127.0.0.1:8080/v1",
+        provider: "llmman",
+        id: "gemma4",
+        name: "Gemma 4 (llmman)",
+        baseUrl: "http://127.0.0.1:17434/v1",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 131072,
+        contextWindow: 65536,
         maxTokens: 4096,
         compat: {
           requiresStringContent: true,

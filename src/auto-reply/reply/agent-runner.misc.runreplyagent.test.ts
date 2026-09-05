@@ -41,6 +41,7 @@ import {
 } from "../../plugins/memory-state.test-fixtures.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 import type { VerboseLevel } from "../thinking.shared.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -445,11 +446,8 @@ afterEach(() => {
 });
 
 describe("runReplyAgent pending operator input", () => {
-  it("claims a direct CLI answer before active-run queueing", async () => {
-    const gatewayCall = vi.fn(async (_method, _opts, params) => ({
-      status: "answered",
-      answers: (params as { answers: { answers: Record<string, string[]> } }).answers,
-    }));
+  it("refuses an unbound question without falling through to active-run queueing", async () => {
+    const gatewayCall = vi.fn(async () => ({ status: "answered" }));
     const reservation = registerPendingAgentQuestion({
       questionId: "ask_direct_cli_answer",
       sessionKey: "main",
@@ -480,21 +478,16 @@ describe("runReplyAgent pending operator input", () => {
     });
 
     try {
-      await expect(testRun.run()).resolves.toBeUndefined();
-      expect(gatewayCall).toHaveBeenCalledWith(
-        "question.resolve",
-        {},
-        {
-          id: "ask_direct_cli_answer",
-          answers: { answers: { color: ["Green"] } },
-          resolvedBy: "plain-text",
-        },
-      );
+      await expect(testRun.run()).resolves.toEqual({
+        text: expect.stringContaining("pending question has no prepared creator authority"),
+        isError: true,
+      });
+      expect(gatewayCall).not.toHaveBeenCalled();
       expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(runCliAgentMock).not.toHaveBeenCalled();
       expect(testRun.typing.cleanup).toHaveBeenCalledOnce();
       expect(replyOperationRunState).toEqual({
-        admission: { status: "accepted", mode: "steer" },
+        admission: { status: "skipped", reason: "question-response-refused" },
       });
     } finally {
       reservation.dispose();
@@ -1427,6 +1420,57 @@ describe("runReplyAgent block streaming", () => {
   });
 });
 
+describe("runReplyAgent inline tool verbosity", () => {
+  it.each([
+    { stored: "off", override: "full", expected: ["Tool summary", "Tool output"] },
+    { stored: "full", override: "off", expected: [] },
+    { stored: "full", override: "on", expected: ["Tool summary"] },
+  ] as const)(
+    "delivers tool progress with inline $override over stored $stored",
+    async ({ stored, override, expected }) => {
+      const storePath = path.join(rootDir, "sessions.json");
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        verboseLevel: stored,
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+      const onToolResult = vi.fn(async (_payload: ReplyPayload) => {});
+      const onRunVerbosityResolved = vi.fn();
+      runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          expect(onRunVerbosityResolved).toHaveBeenCalledExactlyOnceWith({
+            verboseLevelOverride: override,
+            resolvedVerboseLevel: override,
+          });
+          if (params.shouldEmitToolResult?.()) {
+            await params.onToolResult?.({ text: "Tool summary" });
+          }
+          if (params.shouldEmitToolOutput?.()) {
+            await params.onToolResult?.({ text: "Tool output" });
+          }
+          return { payloads: [{ text: "Done" }], meta: {} };
+        },
+      );
+      const result = await createBaseRun({
+        run: { sessionKey, verboseLevel: override, verboseLevelOverride: override },
+        reply: {
+          sessionKey,
+          storePath,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          resolvedVerboseLevel: override,
+          opts: { onToolResult, onRunVerbosityResolved },
+        },
+      }).run();
+      expect(onToolResult.mock.calls.map(([payload]) => payload.text)).toEqual(expected);
+      expect(loadSessionEntry({ storePath, sessionKey })?.verboseLevel).toBe(stored);
+      expectReplyText(result, "Done");
+    },
+  );
+});
+
 describe("runReplyAgent Active Memory inline debug", () => {
   // Seeds the plugin-owned debug rows through the canonical session accessor.
   async function writeActiveMemoryDebugEntry(params: {
@@ -1451,16 +1495,35 @@ describe("runReplyAgent Active Memory inline debug", () => {
     );
   }
 
-  async function runActiveMemoryDebugCase(sessionEntry: SessionEntry) {
+  async function runActiveMemoryDebugCase(
+    sessionEntry: SessionEntry,
+    options: {
+      run?: BaseRunOptions["run"];
+      liveTraceLevel?: SessionEntry["traceLevel"];
+      resolvedVerboseLevel?: VerboseLevel;
+    } = {},
+  ) {
     const tmp = tempDirs.make("openclaw-active-memory-inline-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
+    const resolvedVerboseLevel =
+      options.resolvedVerboseLevel ?? normalizeVerboseLevel(sessionEntry.verboseLevel) ?? "off";
     await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      await writeActiveMemoryDebugEntry({ sessionEntry, sessionKey, storePath });
-      return { payloads: [{ text: "Normal reply" }], meta: {} };
+      await writeActiveMemoryDebugEntry({
+        sessionEntry: {
+          ...sessionEntry,
+          traceLevel: options.liveTraceLevel ?? sessionEntry.traceLevel,
+        },
+        sessionKey,
+        storePath,
+      });
+      return {
+        payloads: [{ text: "Normal reply" }],
+        meta: { requestShaping: { trace: sessionEntry.traceLevel } },
+      };
     });
-    return createBaseRun({
+    const result = await createBaseRun({
       context: {
         Provider: "telegram",
         OriginatingTo: "chat:1",
@@ -1473,7 +1536,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
         messageProvider: "telegram",
         traceAuthorized: true,
         thinkLevel: "low",
-        verboseLevel: "on",
+        verboseLevel: resolvedVerboseLevel,
+        ...options.run,
       },
       reply: {
         queueKey: sessionKey,
@@ -1481,10 +1545,78 @@ describe("runReplyAgent Active Memory inline debug", () => {
         sessionStore: { [sessionKey]: sessionEntry },
         sessionKey,
         storePath,
-        resolvedVerboseLevel: "on",
+        resolvedVerboseLevel,
       },
     }).run();
+    expect(loadSessionEntry({ storePath, sessionKey })?.traceLevel).toBe(
+      options.liveTraceLevel ?? sessionEntry.traceLevel,
+    );
+    return result;
   }
+
+  it.each([
+    { stored: "off", override: "on", authorized: true, trace: true, raw: false },
+    { stored: "on", override: "off", authorized: true, trace: false, raw: false },
+    { stored: "off", override: "raw", authorized: true, trace: true, raw: true },
+    { stored: "raw", override: "off", authorized: true, trace: false, raw: false },
+    { stored: "raw", override: "on", authorized: true, trace: true, raw: false },
+    { stored: "off", override: "on", authorized: false, trace: false, raw: false },
+    { stored: "raw", override: "raw", authorized: false, trace: false, raw: false },
+  ] as const)(
+    "honors turn trace $override over stored $stored with authorization=$authorized",
+    async ({ stored, override, authorized, trace, raw }) => {
+      const result = await runActiveMemoryDebugCase(
+        { sessionId: "session", updatedAt: Date.now(), traceLevel: stored },
+        { run: { traceLevelOverride: override, traceAuthorized: authorized } },
+      );
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text)
+        .join("\n");
+      expect(text).toContain("Normal reply");
+      expect(text.includes("Active Memory Debug:")).toBe(trace);
+      expect(text.includes("Model Input (User Role)")).toBe(raw);
+      if (raw) {
+        expect(text).toContain("trace=raw");
+      }
+    },
+  );
+
+  it.each([
+    { stored: "off", live: "on", override: undefined, trace: true },
+    { stored: "on", live: "off", override: undefined, trace: false },
+    { stored: "off", live: "on", override: "off", trace: false },
+    { stored: "on", live: "off", override: "on", trace: true },
+  ] as const)(
+    "uses live session trace $live after $stored unless turn override is $override",
+    async ({ stored, live, override, trace }) => {
+      const result = await runActiveMemoryDebugCase(
+        { sessionId: "session", updatedAt: Date.now(), traceLevel: stored },
+        { run: { traceLevelOverride: override }, liveTraceLevel: live },
+      );
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text)
+        .join("\n");
+      expect(text.includes("Active Memory Debug:")).toBe(trace);
+    },
+  );
+
+  it.each([
+    { stored: "off", selected: "on", traceLevel: "off", status: true },
+    { stored: "on", selected: "off", traceLevel: "raw", status: false },
+  ] as const)(
+    "selects plugin status using turn verbosity $selected over stored $stored",
+    async ({ stored, selected, traceLevel, status }) => {
+      const result = await runActiveMemoryDebugCase(
+        { sessionId: "session", updatedAt: Date.now(), verboseLevel: stored, traceLevel },
+        { resolvedVerboseLevel: selected, run: { verboseLevelOverride: selected } },
+      );
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text)
+        .join("\n");
+      expect(text.includes("🧩 Active Memory: status=ok")).toBe(status);
+      expect(text.includes("Model Input (User Role)")).toBe(traceLevel === "raw");
+    },
+  );
 
   function runRawTraceCase(params: {
     commandBody: string;
@@ -1947,20 +2079,6 @@ describe("runReplyAgent claude-cli routing", () => {
           provider: "claude-cli",
           model: "opus-4.5",
         },
-        executionTrace: {
-          winnerProvider: "claude-cli",
-          winnerModel: "opus-4.5",
-          attempts: [
-            {
-              provider: "claude-cli",
-              model: "opus-4.5",
-              result: "error",
-              reason: "before_agent_run blocked the run",
-            },
-          ],
-          fallbackUsed: false,
-          runner: "cli",
-        },
       },
     });
 
@@ -1988,6 +2106,20 @@ describe("runReplyAgent claude-cli routing", () => {
         agentMeta: {
           provider: "claude-cli",
           model: "opus-4.5",
+        },
+        executionTrace: {
+          winnerProvider: "claude-cli",
+          winnerModel: "opus-4.5",
+          attempts: [
+            {
+              provider: "claude-cli",
+              model: "opus-4.5",
+              result: "error",
+              reason: "before_agent_run blocked the run",
+            },
+          ],
+          fallbackUsed: false,
+          runner: "cli",
         },
       },
     });
@@ -2032,7 +2164,10 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(texts).toContain(
       "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
     );
-    expect(texts).toContain("fallbackUsed=no");
+    expect(texts).toContain("Summary: fallback=no attempts=1");
+    expect(texts).not.toContain("winner=");
+    expect(texts).toContain("Model Input (User Role):\n~~~text\n<empty>\n~~~");
+    expect(texts).toContain("Model Output (Assistant Role):\n~~~text\n<empty>\n~~~");
     expect(texts).not.toContain("secret hitl prompt");
   });
 

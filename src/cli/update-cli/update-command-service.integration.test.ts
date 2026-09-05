@@ -6,12 +6,14 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { buildLaunchAgentPlist } from "../../daemon/launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
 import {
   resolveLaunchAgentPlistPath,
   resolveLaunchAgentEnvFilePath,
   resolveLaunchAgentEnvWrapperPath,
 } from "../../daemon/launchd-service-files.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
@@ -44,7 +46,7 @@ const mocks = vi.hoisted(() => ({
   loaded: true,
   listenerPids: vi.fn(() => [4242]),
   ports: vi.fn<typeof import("../../infra/ports-inspect.js").inspectPortUsage>(),
-  probe: vi.fn<typeof import("../../gateway/probe.js").probeGateway>(),
+  call: vi.fn<(opts: import("../../gateway/call.js").CallGatewayOptions) => Promise<unknown>>(),
   signal: vi.fn(),
   events: [] as string[],
   command: vi.fn<typeof import("../../daemon/systemd.js").readSystemdServiceExecStart>(),
@@ -59,9 +61,7 @@ const mocks = vi.hoisted(() => ({
   child: vi.fn<typeof import("../../process/exec.js").runCommandWithTimeout>(),
   health: vi.fn<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>(),
   doctor: vi.fn(),
-  configSnapshot: vi.fn(async () => {
-    throw new Error("Unexpected config snapshot during preserved activation");
-  }),
+  configSnapshot: vi.fn<() => Promise<void>>(),
   error: vi.fn(),
   log: vi.fn(),
   capability:
@@ -102,7 +102,10 @@ vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: mocks.ports,
 }));
 
-vi.mock("../../gateway/probe.js", () => ({ probeGateway: mocks.probe }));
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/call.js")>()),
+  callGateway: mocks.call,
+}));
 
 vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd.js")>()),
@@ -128,6 +131,10 @@ vi.mock("../../daemon/systemd-definition-mutation.js", () => ({
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandWithTimeout: mocks.child,
+  runExec: vi.fn(
+    async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
+      decodeLaunchAgentPlistFixture(options.input),
+  ),
 }));
 vi.mock("../../infra/gateway-processes.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/gateway-processes.js")>()),
@@ -202,7 +209,7 @@ beforeEach(async () => {
     listeners: [],
     hints: [],
   }));
-  mocks.probe.mockReset();
+  mocks.call.mockReset();
   mocks.running = true;
   mocks.loaded = true;
   mocks.inLaunchd = false;
@@ -232,6 +239,9 @@ beforeEach(async () => {
     return { code: 0, stdout: "", stderr: "", signal: null, killed: false, termination: "exit" };
   });
   mocks.health.mockImplementation(async ({ port }) => readyRecoveryHealth(port, mocks.running));
+  mocks.configSnapshot
+    .mockReset()
+    .mockRejectedValue(new Error("Unexpected config snapshot during preserved activation"));
 });
 afterEach(async () => {
   envSnapshot.restore();
@@ -363,25 +373,17 @@ describe("preserved update activation with real version guards", () => {
         listeners: [{ pid: 4242, command: "openclaw-gateway" }],
         hints: [],
       }));
-      mocks.probe.mockImplementation(async ({ url }) => ({
-        ok: true,
-        url,
-        connectLatencyMs: 1,
-        error: null,
-        close: null,
-        auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
-        server: {
-          version: VERSION,
-          connId: "fixture",
-          ...(outcome === "missing build"
-            ? {}
-            : { buildId: outcome === "stale build" ? "old-build" : "new-build" }),
-        },
-        health: {},
-        status: {},
-        presence: [],
-        configSnapshot: null,
-      }));
+      mocks.call.mockImplementation(
+        gatewayHealthResponse({
+          server: {
+            version: VERSION,
+            connId: "fixture",
+            ...(outcome === "missing build"
+              ? {}
+              : { buildId: outcome === "stale build" ? "old-build" : "new-build" }),
+          },
+        }),
+      );
       const { waitForGatewayHealthyRestart } = await vi.importActual<
         typeof import("../daemon-cli/restart-health.js")
       >("../daemon-cli/restart-health.js");
@@ -453,9 +455,12 @@ describe("preserved update activation with real version guards", () => {
             ([args]) => args.expectedBuildId === (channel === "dev" ? "new-build" : undefined),
           ),
         ).toBe(true);
-        expect(mocks.probe.mock.calls.every(([args]) => args.url === "ws://127.0.0.1:19305")).toBe(
-          true,
-        );
+        expect(mocks.call).toHaveBeenCalled();
+        expect(
+          mocks.call.mock.calls.every(
+            ([args]) => args.localPortOverride === 19305 && args.method === "health",
+          ),
+        ).toBe(true);
       }
       if (buildMismatch) {
         expect(

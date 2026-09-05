@@ -58,24 +58,20 @@ type StatusPluginHealthSnapshot =
   import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
 
 const pluginHealthRuntimeMock = vi.hoisted(() => ({
-  collectInstalledPluginHealthSnapshot: vi.fn(
-    async (): Promise<StatusPluginHealthSnapshot> => ({
-      plugins: [],
-      diagnostics: [],
-      contextEngineQuarantines: [],
-      runtimeToolQuarantines: [],
-      channelPluginFailures: [],
-    }),
-  ),
-  collectRuntimePluginHealthSnapshot: vi.fn(
-    (): StatusPluginHealthSnapshot => ({
-      plugins: [],
-      diagnostics: [],
-      contextEngineQuarantines: [],
-      runtimeToolQuarantines: [],
-      channelPluginFailures: [],
-    }),
-  ),
+  collectInstalledPluginHealthSnapshot: vi.fn(async (): Promise<StatusPluginHealthSnapshot> => ({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
+  })),
+  collectRuntimePluginHealthSnapshot: vi.fn((): StatusPluginHealthSnapshot => ({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
+  })),
 }));
 
 vi.mock("../../infra/provider-usage.js", async (importOriginal) => {

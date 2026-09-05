@@ -5,8 +5,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
+import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { summarizeUpdateRunResponse } from "../update-run-summary.js";
 import {
   sentinelState,
   runGatewayUpdateMock,
@@ -57,6 +59,17 @@ async function captureUpdateRunPayload(
     },
     runtimeConfig,
   );
+  if (
+    payload?.result?.status &&
+    payload.result.status !== "ok" &&
+    payload.handoff?.status !== "started"
+  ) {
+    expect(getUpdateRun(payload.runId)).toMatchObject({
+      status: payload.result.status === "skipped" ? "skipped" : "failed",
+      phase: "finished",
+      reason: payload.result.reason,
+    });
+  }
   return payload;
 }
 
@@ -122,6 +135,37 @@ describe("update.run acknowledgement", () => {
       }
       const response = await running;
       expect(response?.ackDelivered).toBe(true);
+      expect(response?.runId).toEqual(expect.any(String));
+      const run = getUpdateRun(response!.runId);
+      expect(run).toMatchObject({
+        runId: response?.runId,
+        status: "running",
+        origin: { sessionKey },
+      });
+      expect(listUpdateRuns()).toHaveLength(1);
+      expect(readCapturedPayload().stats?.runId).toBe(response?.runId);
+      if (managed) {
+        expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runId: response?.runId,
+            meta: expect.objectContaining({ runId: response?.runId }),
+          }),
+        );
+        expect(run?.steps).toContainEqual(
+          expect.objectContaining({ step: "managed-service update handoff", status: "completed" }),
+        );
+      } else {
+        expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+          expect.objectContaining({ runId: response?.runId }),
+        );
+        expect(
+          run?.steps
+            .filter((step) =>
+              ["requested", "staging", "validating", "restarting"].includes(step.step),
+            )
+            .map((step) => step.step),
+        ).toEqual(["requested", "staging", "validating", "restarting"]);
+      }
       expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionKey,
@@ -154,7 +198,7 @@ describe("update.run acknowledgement", () => {
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         to: "slack:C0456DEF",
-        message: "⚠️ Update did not start: build-failed. ",
+        message: expect.stringContaining("⚠️ OpenClaw update failed: build-failed."),
       }),
     );
   });
@@ -380,20 +424,32 @@ describe("update.run restart scheduling", () => {
     expect(payload?.sentinel?.persisted).toBe(false);
   });
 
-  it("arms the managed restart before optional sentinel persistence", async () => {
-    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-    mockGlobalInstallSurface();
-    sentinelState.restartSentinelWriteError = new Error("state database unavailable");
+  it.each([false, true])(
+    "keeps restart ownership and records failed notice persistence (managed=%s)",
+    async (managed) => {
+      if (managed) {
+        detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+        mockGlobalInstallSurface();
+      }
+      sentinelState.restartSentinelWriteError = new Error("state database unavailable");
+      const payload = await captureUpdateRunPayload();
 
-    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
-      captureUpdateRunPayload(),
-    );
-
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
-    expect(payload?.sentinel?.persisted).toBe(false);
-    expect(payload?.ok).toBe(true);
-  });
+      expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(managed ? 1 : 0);
+      expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledOnce();
+      expect(payload?.sentinel?.persisted).toBe(false);
+      expect(payload?.ok).toBe(true);
+      const run = getUpdateRun(payload!.runId);
+      if (managed) {
+        expect(run?.status).toBe("running");
+      } else {
+        expect(run).toMatchObject({ status: "failed", reason: "unexpected-error" });
+        expect(payload?.message).toBe(run?.origin.nextAction);
+        expect(summarizeUpdateRunResponse(payload).next).toContain(
+          "Run openclaw update status after the gateway restarts.",
+        );
+      }
+    },
+  );
 
   it("does not restart or report success when the handoff helper cannot spawn", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");

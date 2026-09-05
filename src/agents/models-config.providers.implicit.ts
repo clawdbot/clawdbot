@@ -7,7 +7,6 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -24,7 +23,8 @@ import {
   type PreparedProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
 import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
-import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
+import { prepareProviderExternalAuthWithPlugin } from "../plugins/provider-runtime.js";
+import { resolveManifestSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -34,6 +34,10 @@ import {
 } from "./model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
 import { mergeProviderModels, type SourceModelFields } from "./models-config.merge.js";
+import {
+  resolveImplicitProviderDiscoveryScope,
+  type ProviderDiscoveryScope,
+} from "./models-config.providers.discovery-scope.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -63,6 +67,7 @@ type ImplicitProviderParams = {
   authStore?: AuthProfileStore;
   config?: OpenClawConfig;
   discoveryAuthConfig?: OpenClawConfig;
+  discoveryAuthEnv?: NodeJS.ProcessEnv;
   sourceConfigForSecrets?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
@@ -85,8 +90,6 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   resolveProviderAuth: ProviderAuthResolver;
 };
 
-type ProviderDiscoveryScope = ReadonlyMap<string, readonly string[]>;
-
 function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
@@ -99,173 +102,6 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   }
   const parsed = Number(raw);
   return /^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 15_000;
-}
-
-function resolveProviderDiscoveryScope(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  resolveOwners?: (provider: string) => readonly string[] | undefined;
-  providerIds?: readonly string[];
-}): ProviderDiscoveryScope | undefined {
-  const { config, workspaceDir, env } = params;
-  const scopedProviderIds =
-    params.providerIds !== undefined
-      ? normalizeStringEntries([...params.providerIds])
-          .map(normalizeProviderId)
-          .filter(Boolean)
-      : undefined;
-  if (scopedProviderIds) {
-    return buildProviderDiscoveryScope({
-      providerIds: scopedProviderIds,
-      config,
-      workspaceDir,
-      env,
-      resolveOwners: params.resolveOwners,
-    });
-  }
-  const live =
-    env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
-  if (!live) {
-    return undefined;
-  }
-  const rawValues = [
-    env.OPENCLAW_LIVE_PROVIDERS?.trim(),
-    env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim(),
-  ].filter((value): value is string => Boolean(value && value !== "all"));
-  if (rawValues.length === 0) {
-    return undefined;
-  }
-  const ids = normalizeStringEntries(rawValues.flatMap((value) => value.split(",")))
-    .map(normalizeProviderId)
-    .filter(Boolean);
-  if (ids.length === 0) {
-    return undefined;
-  }
-  return buildProviderDiscoveryScope({
-    providerIds: ids,
-    config,
-    workspaceDir,
-    env,
-    resolveOwners: params.resolveOwners,
-  });
-}
-
-function buildProviderDiscoveryScope(params: {
-  providerIds: readonly string[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  resolveOwners?: (provider: string) => readonly string[] | undefined;
-}): ProviderDiscoveryScope {
-  const providerIds = [...new Set(params.providerIds)];
-  const providerIdsByPluginId = new Map<string, string[]>();
-  for (const id of providerIds) {
-    const owners =
-      params.resolveOwners?.(id) ??
-      resolveOwningPluginIdsForProviderRef({
-        provider: id,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }) ??
-      [];
-    for (const pluginId of owners.length > 0 ? owners : [id]) {
-      const ownedProviderIds = providerIdsByPluginId.get(pluginId) ?? [];
-      if (!ownedProviderIds.includes(id)) {
-        ownedProviderIds.push(id);
-        providerIdsByPluginId.set(pluginId, ownedProviderIds);
-      }
-    }
-  }
-  return new Map(
-    [...providerIdsByPluginId.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
-  );
-}
-
-function resolvePluginMetadataProviderOwners(
-  pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
-  provider: string,
-): readonly string[] | undefined {
-  if (!pluginMetadataSnapshot) {
-    return undefined;
-  }
-  const normalizedProvider = normalizeProviderId(provider);
-  if (!normalizedProvider) {
-    return undefined;
-  }
-  const owners = new Set<string>();
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.providers ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.modelCatalogProviders ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.setupProviders ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.cliBackends ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  return owners.size > 0
-    ? [...owners].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
-}
-
-function appendNormalizedPluginMetadataOwners(
-  target: Set<string>,
-  ownerMap: ReadonlyMap<string, readonly string[]>,
-  provider: string,
-  normalizedProvider: string,
-): void {
-  for (const owner of ownerMap.get(provider) ?? []) {
-    target.add(owner);
-  }
-  if (normalizedProvider !== provider) {
-    for (const owner of ownerMap.get(normalizedProvider) ?? []) {
-      target.add(owner);
-    }
-  }
-  for (const [ownedId, owners] of ownerMap.entries()) {
-    if (
-      ownedId !== provider &&
-      ownedId !== normalizedProvider &&
-      normalizeProviderId(ownedId) === normalizedProvider
-    ) {
-      for (const owner of owners) {
-        target.add(owner);
-      }
-    }
-  }
-}
-
-export function resolveImplicitProviderDiscoveryScope(
-  params: Pick<
-    ImplicitProviderParams,
-    "config" | "workspaceDir" | "env" | "pluginMetadataSnapshot" | "providerDiscoveryProviderIds"
-  >,
-): ProviderDiscoveryScope | undefined {
-  return resolveProviderDiscoveryScope({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env ?? process.env,
-    resolveOwners: params.pluginMetadataSnapshot
-      ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
-      : undefined,
-    providerIds: params.providerDiscoveryProviderIds,
-  });
 }
 
 function mergeImplicitProviderSet(
@@ -649,10 +485,18 @@ export async function resolveImplicitProviders(
   // The runtime config has already resolved SecretRefs at its owning boundary.
   // Re-resolving source refs here would execute unrelated file/exec providers on catalog reads.
   const discoveryAuthConfig = params.discoveryAuthConfig ?? params.config;
+  const discoveryAuthEnv = params.discoveryAuthEnv ?? env;
   const sourceConfigForSecrets = params.providerDiscoveryEntriesOnly
     ? undefined
     : (params.sourceConfigForSecrets ?? params.config);
-  const authInputs = [env, getAuthStore, discoveryAuthConfig, sourceConfigForSecrets] as const;
+  const authInputs = [
+    env,
+    getAuthStore,
+    discoveryAuthConfig,
+    sourceConfigForSecrets,
+    params.workspaceDir,
+    discoveryAuthEnv,
+  ] as const;
   const context: ImplicitProviderContext = {
     ...params,
     get authStore() {
@@ -705,6 +549,46 @@ export async function resolveImplicitProviders(
       ]),
     ).values(),
   ];
+  const syntheticRefs = resolveManifestSyntheticAuthProviderRefState({
+    config: discoveryAuthConfig,
+    env,
+    workspaceDir: params.workspaceDir,
+    ...(params.pluginMetadataSnapshot ? { index: params.pluginMetadataSnapshot.index } : {}),
+  }).refs.map(normalizeProviderId);
+  const syntheticProviders = discoveryProviders.filter((provider) =>
+    syntheticRefs.some((ref) => matchesProviderPluginRef(provider, ref)),
+  );
+  const configuredSyntheticRefs = Object.entries(
+    discoveryAuthConfig?.models?.providers ?? {},
+  ).flatMap(([provider, { api }]) =>
+    api &&
+    (syntheticRefs.includes(normalizeProviderId(api)) ||
+      syntheticProviders.some((candidate) => matchesProviderPluginRef(candidate, api)))
+      ? [normalizeProviderId(provider)]
+      : [],
+  );
+  const scopedRefs = discoveryScope ? new Set([...discoveryScope.values()].flat()) : undefined;
+  // Prepare declared native refs and their configured API aliases without reopening
+  // unrelated discovery. Already-resolved descriptors retain hook-alias matching.
+  for (const provider of new Set([...syntheticRefs, ...configuredSyntheticRefs])) {
+    if (scopedRefs && !scopedRefs.has(provider)) {
+      continue;
+    }
+    await prepareProviderExternalAuthWithPlugin({
+      config: discoveryAuthConfig,
+      env: discoveryAuthEnv,
+      workspaceDir: params.workspaceDir,
+      provider,
+      context: {
+        config: discoveryAuthConfig,
+        provider,
+        providerConfig: findNormalizedProviderValue(
+          discoveryAuthConfig?.models?.providers,
+          provider,
+        ),
+      },
+    });
+  }
   if (
     params.providerDiscoveryEntriesOnly !== true &&
     discoveryProviders.some(hasRuntimeProviderCatalog)

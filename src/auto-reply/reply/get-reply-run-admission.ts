@@ -6,7 +6,7 @@ import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
@@ -21,6 +21,7 @@ import {
   getSessionWorkAdmissionOwnerRelease,
   interruptSessionWorkAdmissions,
 } from "../../sessions/session-lifecycle-admission.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
   formatThinkingLevels,
@@ -105,6 +106,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   } = params;
   let { sessionEntry, prefixedBodyBase } = context;
   let { resolvedThinkLevel } = params;
+  let thinkLevelOverride =
+    explicitThinkingLevelOverride ??
+    directives.thinkLevel ??
+    (directives.clearThinkLevel ? ("default" as const) : undefined);
 
   // Extract first-token think hint from the user body BEFORE prepending system events.
   // If done after, the System: prefix becomes the first token and silently shadows any
@@ -128,6 +133,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       })
     ) {
       resolvedThinkLevel = maybeLevel;
+      thinkLevelOverride = maybeLevel;
       prefixedBodyBase = removeDirectiveSpan(prefixedBodyBase, 0, firstToken.length);
     }
   }
@@ -415,7 +421,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (useFastReplyRuntime) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
-        authProfileIdSource: resolveSessionAuthProfileOverrideSource(
+        authProfileIdSource: resolveCollapsedSessionAuthPinSource(
           preparedSessionState.sessionEntry,
         ),
       };
@@ -444,6 +450,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       sessionKey: authSessionKey,
       storePath: shouldUseEphemeralSession ? undefined : storePath,
       isNewSession,
+      // Only an authenticated Gateway profile establishes a person-linked pin;
+      // channel senders read as observations and resolve to undefined here.
+      requesterProfileId: readSessionInputProfileId(ctx),
     });
     return {
       authProfileId: selection?.profileId,
@@ -644,6 +653,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     kind: "ready",
     context,
     resolvedThinkLevel,
+    thinkLevelOverride,
     thinkingCatalog,
     sessionEntry,
     skillsSnapshot,

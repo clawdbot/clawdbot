@@ -506,8 +506,12 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
+          hasSite(
+            entry,
+            (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+          ) &&
           entry.source ===
-          "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
+            "Direct mode supports device info, status, and notifications. Set up standalone voice on iPhone to use Talk on Watch. Chat and approvals still use the iPhone.",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
@@ -630,15 +634,12 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
+          hasSite(
+            entry,
+            (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
+          ) &&
           entry.source ===
-          "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source ===
-          "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.",
+            "The watch receives a one-time pairing code and stores its own device token. Standalone voice also grants read and Talk access, without admin access. A reachable secure Gateway URL is required away from the iPhone.",
       ),
     ).toBe(true);
     expect(
@@ -805,6 +806,31 @@ describe("native app i18n inventory", () => {
         `native translation changed placeholders or line breaks for sv:${entry.id}`,
       );
       expect(translatorReturned).toBe(false);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("retranslates existing native strings only when a full refresh is requested", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const entry = testEntry("native.apple.open", "apple", "Open");
+    try {
+      await syncNativeLocale("sv", [entry], {
+        glossary: [],
+        translationsDir,
+        translate: async () => new Map([[entry.id, "Tidigare"]]),
+      });
+      const refreshed = await syncNativeLocale("sv", [entry], {
+        force: true,
+        glossary: [],
+        translationsDir,
+        translate: async (pending) => new Map(pending.map((item) => [item.id, "Öppna"])),
+      });
+      expect(refreshed.translated).toBe(1);
+      expect(
+        JSON.parse(await readFile(path.join(translationsDir, "sv.json"), "utf8")).translations,
+      ).toEqual({ [entry.id]: "Öppna" });
     } finally {
       cleanupTempDirs(tempDirs);
     }
@@ -1000,6 +1026,12 @@ describe("native app i18n inventory", () => {
     });
     expect(() => parseNativeI18nCommand(["sync", "--write", "--locale"])).toThrow(
       "requires a locale value",
+    );
+    expect(parseNativeI18nCommand(["sync", "--write", "--locale", "sv", "--force"]).force).toBe(
+      true,
+    );
+    expect(() => parseNativeI18nCommand(["sync", "--write", "--force"])).toThrow(
+      "requires `sync --write --locale",
     );
     expect(() => parseNativeI18nCommand(["sync", "--write", "--locale", "--write"])).toThrow(
       "requires a locale value",

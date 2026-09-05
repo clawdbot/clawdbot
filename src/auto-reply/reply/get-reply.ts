@@ -151,7 +151,7 @@ function loadCommandsCoreRuntime() {
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {
-  const message = ctx.commandText;
+  const message = ctx.agentText;
   if (!message) {
     return false;
   }
@@ -570,6 +570,7 @@ export async function getReplyFromConfig(
         agentId,
         sessionKey: agentSessionKey,
         workspaceDir,
+        abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
   }
@@ -1279,6 +1280,7 @@ export async function getReplyFromConfig(
         agentId,
         sessionKey,
         workspaceDir,
+        abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
     stagedAttachmentPaths = stageResult.staged;

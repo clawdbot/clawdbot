@@ -1262,7 +1262,7 @@ describe("runHeartbeatOnce", () => {
           InternalTurnSource: "heartbeat",
           Provider: undefined,
         },
-        { isHeartbeat: true, suppressToolErrorWarnings: false },
+        { isHeartbeat: true },
         cfg,
       );
     } finally {
@@ -1338,7 +1338,7 @@ describe("runHeartbeatOnce", () => {
           InternalTurnSource: "heartbeat",
           Provider: undefined,
         },
-        { isHeartbeat: true, suppressToolErrorWarnings: false },
+        { isHeartbeat: true },
         cfg,
       );
     } finally {
@@ -1438,7 +1438,7 @@ describe("runHeartbeatOnce", () => {
             InternalTurnSource: "heartbeat",
             Provider: undefined,
           },
-          { isHeartbeat: true, suppressToolErrorWarnings: false },
+          { isHeartbeat: true },
           cfg,
         );
       } finally {

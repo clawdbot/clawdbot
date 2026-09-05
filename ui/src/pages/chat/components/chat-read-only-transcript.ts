@@ -41,6 +41,7 @@ export function renderReadOnlyTranscript(params: {
       fullMessageAgentId: chat.fullMessageAgentId,
       loadFullAssistantMessage: chat.loadFullAssistantMessage,
       localMediaPreviewRoots: chat.localMediaPreviewRoots,
+      mediaPolicyEpoch: chat.mediaPolicyEpoch,
       assistantAttachmentAuthToken: chat.assistantAttachmentAuthToken,
       resolveArtifactDownload: chat.resolveArtifactDownload,
       canvasPluginSurfaceUrl: chat.canvasPluginSurfaceUrl,

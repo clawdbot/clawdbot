@@ -21,7 +21,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
@@ -636,7 +636,7 @@ export function runAgentAttempt(params: {
     }
   };
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
-  const sessionAuthProfileSource = resolveSessionAuthProfileOverrideSource(params.sessionEntry);
+  const sessionAuthProfileSource = resolveCollapsedSessionAuthPinSource(params.sessionEntry);
   // An explicit session choice owns the conversation. Otherwise the profile
   // bound to the configured model replaces a stale automatic session choice.
   const selectedAuthProfile =
@@ -1271,7 +1271,7 @@ export function runAgentAttempt(params: {
           !params.preserveCliSessionBinding &&
           (!classification || result.meta.agentMeta?.clearCliSessionBinding === true)
         ) {
-          await persistCliSessionBindingResult({
+          return await persistCliSessionBindingResult({
             provider: cliExecutionProvider,
             result,
             sessionKey: params.sessionKey,
@@ -1334,6 +1334,7 @@ export function runAgentAttempt(params: {
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     permissionMode: params.sessionEntry?.permissionMode,
+    toolOverrides: params.sessionEntry?.toolOverrides,
     sessionRoot: params.sessionEntry?.sessionRoot,
     config: params.cfg,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),

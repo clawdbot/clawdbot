@@ -16,6 +16,7 @@ import {
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { formatPluginTrustRefusal } from "./plugin-trust.js";
 import {
   activatePluginRecordLifecycleEpoch,
   isPluginRecordLifecycleEpochActive,
@@ -179,9 +180,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         pluginRuntimeRecordById.get(pluginId) ??
         registry.plugins.find((entry) => entry.id === pluginId);
       if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
-        // Name the denied plugin and its origin so operators can replace the untrusted install.
         throw new Error(
-          `${methodName} is only available for trusted plugins in this release. Plugin "${pluginId}" loaded with origin "${record?.origin ?? "unknown"}"; reinstall it from its official npm package or ClawHub listing to enable trusted plugin state.`,
+          formatPluginTrustRefusal({
+            methodName,
+            pluginId,
+            origin: record?.origin,
+            trust: record?.trust,
+          }),
         );
       }
     };

@@ -6,7 +6,6 @@ import {
   errorShape,
   type SessionsListParams,
   validateSessionsCleanupParams,
-  validateSessionsDescribeParams,
   validateSessionsListParams,
   validateSessionsPreviewParams,
   validateSessionsResolveParams,
@@ -22,7 +21,6 @@ import {
 } from "../../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
-import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -47,16 +45,13 @@ import {
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
-import {
-  readRecentSessionMessagesWithStatsAsync,
-  readSessionPreviewItemsFromTranscript,
-} from "../session-transcript-readers.js";
+import { readSessionPreviewItemsFromTranscript } from "../session-transcript-readers.js";
+import { projectGatewaySessionActiveRun } from "../session-utils-display.js";
 import {
   createGatewaySessionStoreDiscoveryCache,
   type GatewaySessionStoreCache,
 } from "../session-utils-store-lookup.js";
 import {
-  buildGatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGatewayCore,
   resolveCanonicalSessionEntryFromStoreKeys,
@@ -68,20 +63,14 @@ import {
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
-import {
-  collectTrackedActiveSessionRuns,
-  resolveVisibleActiveSessionRunState,
-} from "./session-active-runs.js";
+import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
-import {
-  createSessionPlacementBatchProjector,
-  readSessionPlacementFields,
-} from "./session-placement-read-projection.js";
+import { createSessionPlacementBatchProjector } from "./session-placement-read-projection.js";
 import { listFilter } from "./sessions-board-inventory.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
+import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import { resolveSessionSearchScope } from "./sessions-search-scope.js";
-import { loadSessionEntriesForTarget, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -284,6 +273,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           }
           const { durableStorePath, durableTargets, modelCatalogByAgent, storePath } = loaded;
           const entryFilter = listFilter({ p, loaded, defaultsAgentId, client, cfg, options });
+          const selectionRuns = p.search?.trim()
+            ? createVisibleActiveSessionRunProjector(context)
+            : undefined;
           const result = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.rows",
             () =>
@@ -295,6 +287,18 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 store: loaded.store,
                 modelCatalog: modelCatalogByAgent,
                 opts: p,
+                ...(selectionRuns
+                  ? {
+                      projectActiveRun: (key, entry, agentId) =>
+                        selectionRuns({
+                          requestedKey: key,
+                          canonicalKey: key,
+                          sessionId: entry.sessionId,
+                          agentId,
+                          defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, key),
+                        }),
+                    }
+                  : {}),
                 ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
                 ...(p.ownerFirst === true && identityId ? { ownerFirstActorId: identityId } : {}),
               }),
@@ -385,8 +389,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           );
           const projectPlacement = createSessionPlacementBatchProjector(context, result.sessions);
-          const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
-          const projectedAgentRunIndex = buildProjectedAgentRunIndex();
+          const projectActiveRun = createVisibleActiveSessionRunProjector(context);
           // These rows are unpublished; decorate them with fresh caller facts after the yields.
           const sharing = prepareSessionSharing({ client, cfg });
           measureDiagnosticsTimelineSpanSync(
@@ -397,15 +400,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 const visibility = sharingTarget
                   ? resolveSessionVisibility(sharingTarget.entry)
                   : "shared";
-                const activeRunState = resolveVisibleActiveSessionRunState({
-                  context,
+                const activeRunState = projectActiveRun({
                   requestedKey: session.key,
                   canonicalKey: session.key,
                   sessionId: session.sessionId,
                   agentId: session.agentId,
                   defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, session.key),
-                  trackedActiveRuns,
-                  projectedAgentRunIndex,
                 });
                 Object.assign(session, {
                   visibility,
@@ -419,10 +419,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                         ),
                       }
                     : {}),
-                  hasActiveRun: activeRunState.active,
-                  ...(activeRunState.active
-                    ? { status: activeRunState.status ?? ("running" as const) }
-                    : {}),
+                  ...projectGatewaySessionActiveRun(activeRunState, session.status),
                   ...projectPlacement(session.sessionId),
                   ...(activeRunState.runIds !== undefined
                     ? { activeRunIds: activeRunState.runIds }
@@ -602,43 +599,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
 
     respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
   },
-  "sessions.describe": ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
-      return;
-    }
-    const key = requireSessionKey(params.key, respond);
-    if (!key) {
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const { target, storePath, store, entry } = loadSessionEntriesForTarget({
-      key,
-      cfg,
-      ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
-    });
-    if (!entry) {
-      respond(true, { session: null }, undefined);
-      return;
-    }
-    const row = buildGatewaySessionRow({
-      cfg,
-      storePath,
-      store,
-      key: target.canonicalKey,
-      entry,
-      agentId: target.agentId,
-      includeDerivedTitles: params.includeDerivedTitles,
-      includeLastMessage: params.includeLastMessage,
-      transcriptUsageMaxBytes: 64 * 1024,
-    });
-    Object.assign(row, readSessionPlacementFields(context, row.sessionId));
-    respond(true, { session: row });
-  },
   "sessions.resolve": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
@@ -662,57 +622,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     }
     respond(true, resolved, undefined);
   },
-  "sessions.get": async ({ params, respond, context }) => {
-    const p = params as {
-      key?: unknown;
-      sessionKey?: unknown;
-      limit?: unknown;
-      agentId?: unknown;
-    };
-    const key = requireSessionKey(p.key ?? p.sessionKey, respond);
-    if (!key) {
-      return;
-    }
-    const limit =
-      typeof p.limit === "number" && Number.isFinite(p.limit)
-        ? Math.max(1, Math.floor(p.limit))
-        : 200;
-
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(
-      cfg,
-      key,
-      normalizeOptionalString(p.agentId),
-    );
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const { storePath, entry } = loadSessionEntriesForTarget({
-      key,
-      cfg,
-      agentId: requestedAgent.agentId,
-    });
-    if (!entry?.sessionId) {
-      respond(true, { messages: [] }, undefined);
-      return;
-    }
-    const { messages } = await readRecentSessionMessagesWithStatsAsync(
-      {
-        agentId: requestedAgent.agentId,
-        sessionEntry: entry,
-        sessionId: entry.sessionId,
-        sessionKey: key,
-        storePath,
-      },
-      {
-        maxMessages: limit,
-        maxLines: limit * 20 + 20,
-        allowResetArchiveFallback: true,
-      },
-    );
-    respond(true, { messages }, undefined);
-  },
+  ...sessionByKeyReadHandlers,
 };
 
 export const sessionsListHandler = sessionReadHandlers["sessions.list"]!;
