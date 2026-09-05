@@ -50,6 +50,24 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Scan complete. No new actionable inbox items.");
   });
 
+  it("preserves a completed literal GLM marker when there is no current assistant snapshot", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Use <tool_call>exec"],
+    });
+
+    expectSinglePayloadText(payloads, "Use <tool_call>exec");
+  });
+
+  it("still strips a completed GLM arg_key shadow block from assistantTexts", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        "Visible\n<tool_call>exec<arg_key>command</arg_key><arg_value>echo redacted</arg_value></tool_call>\nDone.",
+      ],
+    });
+
+    expectSinglePayloadText(payloads, "Visible\n\nDone.");
+  });
+
   it("suppresses streamed text that only contains hidden reasoning", () => {
     const payloads = buildPayloads({
       assistantTexts: ["<mm:think>private reasoning</mm:think>"],

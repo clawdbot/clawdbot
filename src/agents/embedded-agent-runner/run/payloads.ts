@@ -49,7 +49,6 @@ import type { ToolResultFormat } from "../../embedded-agent-subscribe.shared-typ
 import {
   extractAssistantThinking,
   extractAssistantVisibleText,
-  sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
 import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
@@ -197,7 +196,7 @@ export function buildEmbeddedRunPayloads(params: {
     params.didSendDeterministicApprovalPrompt === true ||
     (params.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyViaMessageTool);
   const nonEmptyAssistantTexts = params.assistantTexts
-    .map((text) => sanitizeAssistantVisibleStreamText(text))
+    .map((text) => sanitizeAssistantVisibleText(text))
     .filter((text) => text.trim().length > 0);
   const currentAssistant = params.currentAssistant ?? undefined;
   const assistantForPayload =
