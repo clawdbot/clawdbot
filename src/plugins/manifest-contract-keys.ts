@@ -19,6 +19,7 @@ const MANIFEST_CONTRACT_KEYS = [
   "webFetchProviders",
   "webSearchProviders",
   "workerProviders",
+  "taskLaneProviders",
   "usageProviders",
   "migrationProviders",
   "gatewayMethodDispatch",

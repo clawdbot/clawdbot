@@ -40,6 +40,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "plugins-control-ui": () =>
     import("./plugins-control-ui.js").then((module) => module.pluginsControlUiHandlers),
   cron: () => import("./cron.js").then((module) => module.cronHandlers),
+  "task-lanes": () => import("./task-lanes.js").then((module) => module.taskLanesHandlers),
   devices: () => import("./devices.js").then((module) => module.deviceHandlers),
   "device-pair-setup": () =>
     import("./device-pair-setup.js").then((module) => module.devicePairSetupHandlers),
