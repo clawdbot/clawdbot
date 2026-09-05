@@ -1,7 +1,6 @@
 // Memory Core plugin module owns memory filesystem watch synchronization.
 import fsSync from "node:fs";
 import path from "node:path";
-import chokidar from "chokidar";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
@@ -17,6 +16,11 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { MemoryManagerSyncBase } from "./manager-sync-base.js";
+import {
+  isWatchCapacityError,
+  resolveMemoryNativeWatchFactory,
+  resolveMemoryWatchFactory,
+} from "./watch-factories.js";
 import {
   countChokidarWatchedEntries,
   type MemoryWatchPressureUnit,
@@ -40,8 +44,6 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   "__pycache__",
 ]);
 const log = createSubsystemLogger("memory");
-const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
-const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
 
 type NativeMemoryWatchPair = {
   dir: string;
@@ -50,34 +52,12 @@ type NativeMemoryWatchPair = {
   treeWatchers?: Map<string, LinuxMemoryDirectoryWatcher>;
 };
 
-type NativeMemoryWatchResult = "attached" | "missing" | "failed";
+type NativeMemoryWatchResult = "attached" | "missing" | "failed" | "no-capacity";
 
 type LinuxMemoryDirectoryWatcher = {
   watcher: fsSync.FSWatcher;
   ino: number;
 };
-
-function resolveMemoryWatchFactory(): typeof chokidar.watch {
-  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
-    const override = (globalThis as Record<PropertyKey, unknown>)[TEST_MEMORY_WATCH_FACTORY_KEY];
-    if (typeof override === "function") {
-      return override as typeof chokidar.watch;
-    }
-  }
-  return chokidar.watch.bind(chokidar);
-}
-
-function resolveMemoryNativeWatchFactory(): typeof fsSync.watch {
-  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
-    const override = (globalThis as Record<PropertyKey, unknown>)[
-      TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY
-    ];
-    if (typeof override === "function") {
-      return override as typeof fsSync.watch;
-    }
-  }
-  return fsSync.watch.bind(fsSync);
-}
 
 function shouldIgnoreMemoryWatchPath(
   watchPath: string,
@@ -120,7 +100,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     if (!this.sources.has("memory") || !this.settings.sync.watch) {
       return;
     }
-    if (this.watcher || this.nativeMemoryWatchPairs.length > 0) {
+    if (this.watcher || this.pollingWatchers.length > 0 || this.nativeMemoryWatchPairs.length > 0) {
       // Already initialized — preserve idempotence.
       return;
     }
@@ -195,9 +175,12 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         : process.platform === "linux"
           ? this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty)
           : "failed";
+      if (attached === "no-capacity") {
+        this.attachMemoryChokidarFallback(dir, markDirty, true);
+        continue;
+      }
       if (attached !== "attached") {
-        // Native creation failed (dir missing, unsupported FS, throw) —
-        // fall back to chokidar so directory coverage isn't dropped.
+        // Native creation failed; use chokidar so directory coverage isn't dropped.
         fileWatchPaths.add(dir);
       }
     }
@@ -301,6 +284,9 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       if (isFileMissingError(err)) {
         return "missing";
       }
+      if (isWatchCapacityError(err)) {
+        return "no-capacity";
+      }
       log.warn(
         `failed to start native recursive watcher on ${dir}: ${String(err)}; falling back to chokidar`,
       );
@@ -323,7 +309,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       // still drive watch sync (intervalMinutes defaults to 0; without
       // a watcher the directory would stop being indexed).
       markDirty();
-      this.attachMemoryChokidarFallback(dir, markDirty);
+      this.attachMemoryChokidarFallback(dir, markDirty, isWatchCapacityError(err));
     });
     this.nativeMemoryWatchPairs.push(pair);
     this.attachNativeMemoryParentWatch(pair, recordedInode, markDirty, "native", () =>
@@ -403,8 +389,8 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
           // New coverage must attach before the old parent closes: the root
           // can disappear again between the inode check and native attachment.
           this.closeNativeMemoryWatchPair(pair);
-          if (result === "failed") {
-            this.attachMemoryChokidarFallback(dir, markDirty);
+          if (result === "failed" || result === "no-capacity") {
+            this.attachMemoryChokidarFallback(dir, markDirty, result === "no-capacity");
           }
         },
       );
@@ -460,9 +446,9 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
 
     let pair: NativeMemoryWatchPair | null = null;
     const treeWatchers = new Map<string, LinuxMemoryDirectoryWatcher>();
-    let rootMissing = false;
+    let [rootMissing, capacityExhausted] = [false, false];
 
-    const closeAndFallback = (message: string) => {
+    const closeAndFallback = (message: string, usePolling = false) => {
       log.warn(message);
       if (pair) {
         this.closeNativeMemoryWatchPair(pair);
@@ -471,7 +457,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         return;
       }
       markDirty();
-      this.attachMemoryChokidarFallback(dir, markDirty);
+      this.attachMemoryChokidarFallback(dir, markDirty, usePolling);
     };
 
     const closeDirectorySubtree = (watchDir: string) => {
@@ -525,6 +511,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
               if (!this.attachLinuxMemoryDirectoryTreeSubtree(watchDir, attachDirectory)) {
                 closeAndFallback(
                   `failed to refresh Linux memory directory watchers under ${watchDir}; falling back to chokidar`,
+                  capacityExhausted,
                 );
               }
               return;
@@ -547,6 +534,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
               if (!this.attachLinuxMemoryDirectoryTreeSubtree(full, attachDirectory)) {
                 closeAndFallback(
                   `failed to attach Linux memory directory watcher under ${full}; falling back to chokidar`,
+                  capacityExhausted,
                 );
                 return;
               }
@@ -559,7 +547,8 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         );
       } catch (err) {
         rootMissing ||= watchDir === dir && isFileMissingError(err);
-        if (watchDir === dir && !rootMissing) {
+        capacityExhausted ||= isWatchCapacityError(err);
+        if (watchDir === dir && !rootMissing && !capacityExhausted) {
           log.warn(
             `failed to start Linux memory directory watcher on ${watchDir}: ${String(err)}; falling back to chokidar`,
           );
@@ -572,14 +561,17 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
           return;
         }
         const detail = err instanceof Error ? err.message : String(err);
-        closeAndFallback(`memory Linux directory watcher error on ${watchDir}: ${detail}`);
+        closeAndFallback(
+          `memory Linux directory watcher error on ${watchDir}: ${detail}`,
+          isWatchCapacityError(err),
+        );
       });
       return watcher;
     };
 
     const mainWatcher = attachDirectory(dir);
     if (!mainWatcher) {
-      return rootMissing ? "missing" : "failed";
+      return rootMissing ? "missing" : capacityExhausted ? "no-capacity" : "failed";
     }
     pair = { dir, main: mainWatcher, parent: null, treeWatchers };
     this.nativeMemoryWatchPairs.push(pair);
@@ -596,6 +588,13 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       return isFileMissingError(err) ? "missing" : "failed";
     }
     if (!subtreeAttached) {
+      if (capacityExhausted) {
+        this.closeNativeMemoryWatchPair(pair);
+        if (!this.closed) {
+          markDirty();
+        }
+        return "no-capacity";
+      }
       closeAndFallback(
         `failed to attach Linux memory directory watcher subtree under ${dir}; falling back to chokidar`,
       );
@@ -701,34 +700,49 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   protected attachMemoryChokidarFallback(
     dir: string,
     markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
+    usePolling = false,
   ): void {
     if (this.closed) {
       // Manager teardown started — don't create new watcher resources.
       return;
     }
     try {
-      this.attachMemoryChokidarPaths(dir, markDirty);
+      this.attachMemoryChokidarPaths(dir, markDirty, usePolling);
     } catch (err) {
-      log.warn(`failed to attach chokidar fallback for ${dir}: ${String(err)}`);
+      log.warn(
+        `failed to attach ${usePolling ? "polling" : "chokidar"} fallback for ${dir}: ${String(err)}`,
+      );
     }
   }
 
   private attachMemoryChokidarPaths(
     paths: string | string[],
     markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
+    usePolling = false,
   ): void {
-    // Linux subtree startup can create the fallback before ensureWatcher
-    // attaches file paths. Reuse that watcher rather than replacing it.
-    if (this.watcher) {
+    const normalizedPaths = (typeof paths === "string" ? [paths] : paths).map((watchPath) =>
+      path.resolve(watchPath),
+    );
+    if (!usePolling) {
+      for (const watchPath of normalizedPaths) {
+        this.regularWatchPaths.add(watchPath);
+      }
+    }
+    if (!usePolling && this.watcher) {
       this.watcher.add(paths);
       return;
     }
-    const watcher = resolveMemoryWatchFactory()(typeof paths === "string" ? [paths] : paths, {
+    const watcher = resolveMemoryWatchFactory(usePolling)(normalizedPaths, {
       ignoreInitial: true,
+      usePolling,
       ignored: (watchPath, stats) =>
         shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
     });
-    this.watcher = watcher;
+    if (usePolling) {
+      this.pollingWatchers.push(watcher);
+    } else {
+      this.watcher = watcher;
+    }
     watcher.on("add", markDirty);
     watcher.on("change", markDirty);
     watcher.on("unlink", markDirty);
@@ -737,9 +751,26 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       // File watcher errors must not crash the gateway; manual search still works.
       const message = err instanceof Error ? err.message : String(err);
       log.warn(`memory watcher error: ${message}`);
+      if (usePolling || !isWatchCapacityError(err) || this.watcher !== watcher) {
+        return;
+      }
+      this.watcher = null;
+      const closePromise = watcher.close();
+      this.closingWatcherPromises.add(closePromise);
+      void closePromise.finally(() => this.closingWatcherPromises.delete(closePromise));
+      const recoveryPaths = Array.from(this.regularWatchPaths);
+      this.regularWatchPaths.clear();
+      markDirty();
+      if (!this.closed && recoveryPaths.length > 0) {
+        this.attachMemoryChokidarPaths(recoveryPaths, markDirty, true);
+      }
     });
     watcher.once("ready", () => {
       this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
+      if (usePolling && !this.closed) {
+        // Close the async initial-crawl gap before treating polling coverage as current.
+        markDirty();
+      }
     });
   }
 

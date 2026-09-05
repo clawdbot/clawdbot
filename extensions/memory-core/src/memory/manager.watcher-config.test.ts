@@ -780,34 +780,38 @@ describe("memory watcher config", () => {
     },
   );
 
-  it("creates a chokidar watcher on the fly when no file-path chokidar exists yet", async () => {
+  it("creates a separate polling watcher after runtime native capacity exhaustion", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig({ extraPaths: [] });
 
-    // Root memory files stay watch paths even when missing, and chokidar handles
-    // missing paths fine. To truly test the "no chokidar
-    // yet" branch we instead simulate by clearing the watchMock buffer and
-    // exercising attachMemoryChokidarFallback directly.
     await expectWatcherManager(cfg);
     vi.useFakeTimers();
 
     const memoryDir = path.join(workspaceDir, "memory");
-    const memoryWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir);
+    const memoryWatcher = createdNativeWatchers.find((watcher) => watcher.dir === memoryDir);
+    const regularWatcher = createdChokidarWatchers[0];
     expect(memoryWatcher).toBeDefined();
-
-    // Pretend chokidar was never set up by clearing the manager.watcher slot,
-    // then trigger the native error; the fallback must spin up a new chokidar.
-    (manager as unknown as { watcher: unknown }).watcher = null;
+    expect(regularWatcher).toBeDefined();
     const chokidarCallsBefore = watchMock.mock.calls.length;
 
-    memoryWatcher?.emitError(new Error("watcher error: ENOSPC"));
+    memoryWatcher?.emitError(
+      Object.assign(new Error("watcher capacity exhausted"), { code: "ENOSPC" }),
+    );
     await vi.advanceTimersByTimeAsync(50);
 
     expect(watchMock.mock.calls.length).toBe(chokidarCallsBefore + 1);
-    const newChokidarCall = watchMock.mock.calls[chokidarCallsBefore] as unknown as
+    expect(regularWatcher?.add).not.toHaveBeenCalledWith(memoryDir);
+    const pollingCall = watchMock.mock.calls[chokidarCallsBefore] as unknown as
       | [string[], Record<string, unknown>]
       | undefined;
-    expect(newChokidarCall?.[0]).toStrictEqual([memoryDir]);
+    expect(pollingCall?.[0]).toStrictEqual([memoryDir]);
+    expect(pollingCall?.[1]).toEqual(expect.objectContaining({ usePolling: true }));
+    const pollingWatcher = createdChokidarWatchers[chokidarCallsBefore];
+    expect(pollingWatcher).not.toBe(regularWatcher);
+
+    await manager?.close();
+    expect(regularWatcher?.close).toHaveBeenCalledTimes(1);
+    expect(pollingWatcher?.close).toHaveBeenCalledTimes(1);
   });
 
   it("treats null parent-watcher filename as an unknown event and re-checks the inode", async () => {
@@ -1107,6 +1111,62 @@ describe("memory watcher config", () => {
     // Recorded path should match the resolved absolute path under extraDir.
     const recordedStats = (initialStats as unknown as { isDirectory: () => boolean }).isDirectory();
     expect(typeof recordedStats).toBe("boolean");
+  });
+
+  it("migrates regular chokidar paths to polling after capacity exhaustion", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig({ extraPaths: [] });
+
+    const activeManager = await expectWatcherManager(cfg);
+    vi.useFakeTimers();
+    const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
+    const regularWatcher = createdChokidarWatchers[0];
+    expect(regularWatcher).toBeDefined();
+    const regularPaths = watchMock.mock.calls[0]?.[0];
+
+    regularWatcher?.emit(
+      "error",
+      Object.assign(new Error("watcher capacity exhausted"), { code: "EMFILE" }),
+    );
+
+    const pollingCall = watchMock.mock.calls[1] as unknown as
+      | [string[], Record<string, unknown>]
+      | undefined;
+    expect(regularWatcher?.close).toHaveBeenCalledTimes(1);
+    expect(pollingCall?.[0]).toStrictEqual(regularPaths);
+    expect(pollingCall?.[1]).toEqual(expect.objectContaining({ usePolling: true }));
+
+    createdChokidarWatchers[1]?.emit("ready");
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+  });
+
+  it("awaits a migrated regular watcher close during manager shutdown", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const activeManager = await expectWatcherManager(createWatcherConfig({ extraPaths: [] }));
+    const regularWatcher = createdChokidarWatchers[0];
+    let releaseWatcherClose = () => {};
+    regularWatcher?.close.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseWatcherClose = resolve;
+        }),
+    );
+
+    regularWatcher?.emit(
+      "error",
+      Object.assign(new Error("watcher capacity exhausted"), { code: "ENFILE" }),
+    );
+    let managerClosed = false;
+    const closePromise = activeManager.close().then(() => {
+      managerClosed = true;
+    });
+    await Promise.resolve();
+    expect(managerClosed).toBe(false);
+
+    releaseWatcherClose();
+    await closePromise;
+    expect(managerClosed).toBe(true);
   });
 
   it("attaches a logging non-throwing chokidar error listener", async () => {
