@@ -44,6 +44,7 @@ import {
 } from "./tools/ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 type ToolExecutionStartEvent = Omit<Extract<AgentEvent, { type: "tool_execution_start" }>, "type">;
 type ToolExecutionEndEvent = Omit<Extract<AgentEvent, { type: "tool_execution_end" }>, "type">;
@@ -1397,6 +1398,47 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
       hadPotentialSideEffects: true,
     });
   });
+});
+
+describe("sessions_yield channel progress privacy", () => {
+  it.each(["off", "on", "full"] as const)(
+    "keeps continuation context out of %s verbosity output",
+    async (verboseLevel) => {
+      const { ctx } = createTestContext();
+      const onYield = vi.fn();
+      const args = {
+        message: "SYNTHETIC_PRIVATE_CONTINUATION_MARKER",
+        acknowledgment: "Research started; results will follow.",
+      };
+      ctx.params.onToolResult = vi.fn();
+      ctx.shouldEmitToolResult = () => verboseLevel !== "off";
+      ctx.shouldEmitToolOutput = () => verboseLevel === "full";
+      const tool = createSessionsYieldTool({
+        sessionId: ctx.params.sessionId,
+        claimYield: () => true,
+        onYield,
+      });
+      const toolCallId = "yield-private-context";
+
+      await startTool(ctx, { toolName: tool.name, toolCallId, args });
+      const result = await tool.execute(toolCallId, args);
+      await endTool(ctx, { toolName: tool.name, toolCallId, result, isError: false });
+
+      expect(onYield).toHaveBeenCalledWith(args.message, args.acknowledgment);
+      expect(ctx.emitToolSummary).toHaveBeenCalledTimes(verboseLevel === "off" ? 0 : 1);
+      expect(ctx.emitToolOutput).toHaveBeenCalledTimes(verboseLevel === "full" ? 1 : 0);
+      expect(JSON.stringify(vi.mocked(ctx.emitToolSummary).mock.calls)).not.toContain(args.message);
+      expect(JSON.stringify(vi.mocked(ctx.emitToolOutput).mock.calls)).not.toContain(args.message);
+      if (verboseLevel === "full") {
+        expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+          tool.name,
+          undefined,
+          expect.stringContaining(args.acknowledgment),
+          result,
+        );
+      }
+    },
+  );
 });
 
 describe("handleToolExecutionEnd private result observer", () => {
