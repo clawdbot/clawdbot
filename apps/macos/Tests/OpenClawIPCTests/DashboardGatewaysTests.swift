@@ -6,11 +6,13 @@ import WebKit
 @testable import OpenClaw
 
 struct DashboardGatewayCatalogTests {
-    @Test func `catalog deduplicates active profile and adopts its name`() throws {
+    @Test(arguments: [false, true])
+    func `catalog keeps browser authority separate from the primary route`(usesBrowserIdentity: Bool) throws {
         let primaryURL = try #require(URL(string: "wss://studio.example/control"))
         let duplicate = MacGatewayCatalogProfile(
             profile: MacGatewayProfile(id: "studio", name: "My Studio", url: primaryURL),
-            canPromote: true)
+            canPromote: !usesBrowserIdentity,
+            usesBrowserIdentity: usesBrowserIdentity)
         let other = try MacGatewayCatalogProfile(
             profile: MacGatewayProfile(
                 id: "backup",
@@ -26,8 +28,9 @@ struct DashboardGatewayCatalogTests {
             profiles: [duplicate, other],
             primaryHealth: .ok)
 
-        #expect(entries.map(\.id) == ["primary", "profile:backup"])
-        #expect(entries[0].name == "My Studio")
+        #expect(entries.map(\.id) == (usesBrowserIdentity
+                ? ["primary", "profile:studio", "profile:backup"] : ["primary", "profile:backup"]))
+        #expect(entries[0].name == (usesBrowserIdentity ? "studio.example:443" : "My Studio"))
         #expect(entries[0].kind == "remote")
         #expect(entries[0].health == .ok)
         #expect(!entries[0].canPromote)
@@ -377,9 +380,10 @@ struct DashboardManagerGatewayTargetTests {
             #expect(replacement.window === auxiliaryWindow)
             let profileAutosaveName = try #require(replacement.window?.frameAutosaveName)
             #expect(profileAutosaveName.hasPrefix("\(primaryAutosaveName)-\(studio)-"))
-            #expect(replacement._testDashboardDataStore === dataStore)
+            #expect(replacement._testDashboardDataStore !== dataStore)
+            #expect(!replacement._testDashboardDataStore.isPersistent)
             replacement._testOpenLinkBrowser(server.url("/reader/replacement"))
-            #expect(replacement._testLinkBrowserDataStore === dataStore)
+            #expect(replacement._testLinkBrowserDataStore === replacement._testDashboardDataStore)
         }
     }
 
@@ -529,12 +533,9 @@ struct DashboardManagerGatewayTargetTests {
         }
         #expect(!manager.gatewayEntries.contains { $0.id == "profile:saved-b" })
         #expect(manager._testAuxiliaryWindows().allSatisfy { $0.target == .primary })
-        let replacement = try #require(fixedWindow.windowController as? DashboardWindowController)
-        while replacement.webView.isLoading, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let commands = try await replacement.webView.evaluateJavaScript("window.commandEvents") as? [String]
-        #expect(commands == [])
+        #expect(!fixedWindow.isVisible)
+        #expect(fixed.controller._testPendingNativeCommands.isEmpty)
+        #expect(!fixed.controller.canDeliverNativeCommands)
     }
 
     @Test func `picker selection survives primary document replacement`() async throws {

@@ -115,6 +115,16 @@ extension OnboardingView {
                             self.advancedConnectionSection()
                         }
                     }
+
+                    self.connectionChoiceButton(
+                        title: "Connect to an existing Gateway",
+                        badge: nil,
+                        subtitle: "Enter its address and sign in with your browser.",
+                        systemImage: "globe",
+                        selected: false)
+                    {
+                        self.showBrowserGateway = true
+                    }
                 }
             }
 
@@ -140,6 +150,11 @@ extension OnboardingView {
             }
         }
         .disabled(self.installingCLI)
+        .sheet(isPresented: self.$showBrowserGateway) {
+            GatewayProfileEditor { _ in
+                self.finish(openPrimaryDashboard: false)
+            }
+        }
         .onChange(of: self.state.connectionMode) { _, newValue in
             // The root view's mode observer calls handleConnectionModeChange(), which
             // retires route-owned AI/OpenClaw state. This nested observer owns probe copy only.

@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Security
 
 /// A test owns the listener until `stop()`, after closing its dashboard windows.
 @MainActor
@@ -16,20 +17,26 @@ final class DashboardHTTPFixture {
     private let responseHTML: String
     private let contentSecurityPolicy: String
     private let beforeResponse: (@MainActor () async -> Void)?
+    private let requestHandler: (@MainActor (String) -> String?)?
     private var clients: [UUID: Client] = [:]
     private var stopped = false
     nonisolated let port: UInt16
+    nonisolated let usesTLS: Bool
 
     private init(
         listener: NWListener,
         port: UInt16,
         html: String,
         contentSecurityPolicy: String,
-        beforeResponse: (@MainActor () async -> Void)?)
+        beforeResponse: (@MainActor () async -> Void)?,
+        usesTLS: Bool,
+        requestHandler: (@MainActor (String) -> String?)?)
     {
         self.responseHTML = html
         self.contentSecurityPolicy = contentSecurityPolicy
         self.beforeResponse = beforeResponse
+        self.requestHandler = requestHandler
+        self.usesTLS = usesTLS
         self.listener = listener
         self.port = port
         self.listener.newConnectionHandler = { [weak self] connection in
@@ -46,9 +53,18 @@ final class DashboardHTTPFixture {
     static func start(
         html: String = DashboardHTTPFixture.html,
         contentSecurityPolicy: String = "default-src 'none'",
-        beforeResponse: (@MainActor () async -> Void)? = nil) async throws -> DashboardHTTPFixture
+        beforeResponse: (@MainActor () async -> Void)? = nil,
+        tlsIdentity: sec_identity_t? = nil,
+        requestHandler: (@MainActor (String) -> String?)? = nil) async throws -> DashboardHTTPFixture
     {
-        let parameters = NWParameters.tcp
+        let parameters: NWParameters
+        if let tlsIdentity {
+            let tls = NWProtocolTLS.Options()
+            sec_protocol_options_set_local_identity(tls.securityProtocolOptions, tlsIdentity)
+            parameters = NWParameters(tls: tls)
+        } else {
+            parameters = .tcp
+        }
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters, on: .any)
         listener.newConnectionHandler = { $0.cancel() }
@@ -67,7 +83,9 @@ final class DashboardHTTPFixture {
                         port: port.rawValue,
                         html: html,
                         contentSecurityPolicy: contentSecurityPolicy,
-                        beforeResponse: beforeResponse)
+                        beforeResponse: beforeResponse,
+                        usesTLS: tlsIdentity != nil,
+                        requestHandler: requestHandler)
                 case let .failed(error):
                     throw error
                 case .cancelled:
@@ -86,11 +104,11 @@ final class DashboardHTTPFixture {
     }
 
     nonisolated func url(_ path: String = "/") -> URL {
-        URL(string: "http://127.0.0.1:\(self.port)\(path)")!
+        URL(string: "\(self.usesTLS ? "https" : "http")://127.0.0.1:\(self.port)\(path)")!
     }
 
     nonisolated func websocketURL(_ path: String = "/") -> URL {
-        URL(string: "ws://127.0.0.1:\(self.port)\(path)")!
+        URL(string: "\(self.usesTLS ? "wss" : "ws")://127.0.0.1:\(self.port)\(path)")!
     }
 
     func stop() {
@@ -160,7 +178,9 @@ final class DashboardHTTPFixture {
             "Content-Security-Policy: \(self.contentSecurityPolicy)",
             "Connection: close",
         ].joined(separator: "\r\n") + "\r\n\r\n"
-        client.connection.send(content: Data(headers.utf8) + body, completion: .contentProcessed { [weak self] _ in
+        let response = self.requestHandler?(String(data: client.request, encoding: .utf8) ?? "")
+            .map { Data($0.utf8) } ?? (Data(headers.utf8) + body)
+        client.connection.send(content: response, completion: .contentProcessed { [weak self] _ in
             MainActor.assumeIsolated { self?.close(id) }
         })
     }

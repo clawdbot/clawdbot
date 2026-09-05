@@ -44,14 +44,24 @@ A colored session has a narrow leading stripe in sidebar and menu-bar rows and a
 ## Multiple Gateway windows
 
 Open **Settings → Gateways** to add or remove reusable Gateway profiles. Each
-profile contains a private-network `ws://` or secure `wss://` endpoint and its
-optional token or password; credentials are stored in the macOS Keychain.
-Secure profiles maintain their own system-trust-gated first-use certificate pin
+profile contains a private-network `ws://` or secure `wss://` endpoint with
+browser sign-in or an optional token or password; credentials are stored in the
+macOS Keychain. Entering a hostname in **Add Gateway** defaults to HTTPS.
+For Cloudflare Access, **Connect** opens the default browser to establish your
+personal session. See [browser sign-in and website launch links](/platforms/mac/remote#connect-with-your-browser).
+
+Secure token/password profiles maintain their own system-trust-gated first-use certificate pin
 and do not inherit `gateway.remote.tlsFingerprint` from the primary Gateway.
 Dashboard windows enforce that same saved-profile pinning policy.
-Removing a profile closes its native chat windows and shuts down its secondary
-connection. Dashboard windows showing that profile return to Primary.
+Browser sessions use normal HTTPS trust and remain bound to their authenticated
+Gateway origin, including its port. Each saved profile has its own dashboard
+browser data. Links opened beside a browser-authenticated dashboard use a separate
+temporary browser session.
+Removing a profile closes its native chat and dashboard windows and shuts down
+its secondary connection.
 Updating a saved profile's credentials refreshes its open dashboard windows.
+Use **Reconnect** to renew an expired browser session. Removing the profile
+also removes its saved sign-in and dashboard browser data.
 
 Choose **File → New Gateway Window…** or press Cmd-N, then select one of those
 saved profiles. The picker remembers the most recently used profile. Every
@@ -79,8 +89,8 @@ Gateway after confirmation. The app replaces the primary Gateway's credentials
 and closes its native chat window; independent saved-profile windows stay open.
 Dashboard windows displaying **Primary** follow the new connection, including
 windows opened separately. While connected, the sidebar footer also shows the
-current Gateway and marks it when it is primary. Password-only profiles can be
-viewed but cannot be made primary.
+current Gateway and marks it when it is primary. Password-only and browser
+sign-in profiles can be viewed but cannot be made primary.
 
 Native dashboard commands such as New Session and the command palette act on
 the frontmost Gateway window.

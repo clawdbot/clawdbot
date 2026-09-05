@@ -19,7 +19,7 @@ enum MacGatewayProfileError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidURL:
-            "Enter a ws:// or wss:// Gateway URL."
+            "Enter a Gateway hostname or an HTTPS, ws://, or wss:// URL."
         case .insecureRemoteURL:
             "Public Gateway hosts require wss://. Use ws:// only on loopback, a trusted private network, or Tailnet."
         case .profileNotFound:
@@ -38,6 +38,8 @@ actor MacGatewayProfileStore {
     static let shared = MacGatewayProfileStore()
 
     static let didChangeNotification = Notification.Name("openclaw.gateway-profiles.did-change")
+    static let changedProfileIDKey = "profileID"
+    static let removedProfileKey = "removed"
 
     struct StoredProfile: Codable, Equatable {
         var profile: MacGatewayProfile
@@ -53,6 +55,13 @@ actor MacGatewayProfileStore {
     struct Credentials: Codable, Equatable {
         var token: String?
         var password: String?
+        var browserSession: GatewayBrowserSession?
+    }
+
+    struct BrowserSignInAttempt: Equatable, Sendable {
+        let id: UUID
+        let profileID: String
+        let url: URL
     }
 
     // Dev builds carry a different code signature; creating the release item
@@ -78,6 +87,8 @@ actor MacGatewayProfileStore {
     /// catalog refreshes fire per control-channel state change. Cache the one
     /// registry for the process lifetime; saves keep it coherent.
     private var cachedRegistry: Registry?
+    private var browserSignInAttempts: [String: UUID] = [:]
+    private var committingBrowserSignIns = Set<UUID>()
 
     static func migratingLegacyPrimaryConnection(
         root: [String: Any],
@@ -128,8 +139,73 @@ actor MacGatewayProfileStore {
         // Metadata and secrets share one Keychain value, so the profile becomes
         // reachable only when the complete record commits.
         try self.saveRegistry(registry)
-        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        self.browserSignInAttempts.removeValue(forKey: id)
+        self.postChange(profileID: id)
         return profile
+    }
+
+    func beginBrowserSignIn(url: URL) throws -> BrowserSignInAttempt {
+        let url = try Self.canonicalURL(url)
+        // Finish legacy import before capturing ownership; a late callback may
+        // replace only this attempt, never a subsequently edited or forgotten profile.
+        _ = try self.loadRegistryMigratingLegacyPrimary()
+        let attempt = BrowserSignInAttempt(id: UUID(), profileID: Self.profileID(url: url), url: url)
+        self.browserSignInAttempts[attempt.profileID] = attempt.id
+        return attempt
+    }
+
+    func cancelBrowserSignIn(_ attempt: BrowserSignInAttempt) {
+        guard self.browserSignInAttempts[attempt.profileID] == attempt.id else { return }
+        self.browserSignInAttempts.removeValue(forKey: attempt.profileID)
+    }
+
+    func saveBrowserSession(
+        name: String,
+        session: GatewayBrowserSession,
+        attempt: BrowserSignInAttempt) async throws -> MacGatewayProfile
+    {
+        try Task.checkCancellation()
+        guard self.browserSignInAttempts[attempt.profileID] == attempt.id else {
+            throw GatewayBrowserSessionError.superseded
+        }
+        try session.validate(for: attempt.url)
+        self.committingBrowserSignIns.insert(attempt.id)
+        defer { self.committingBrowserSignIns.remove(attempt.id) }
+        // Retire the old socket before revocation; its pending hello must not
+        // repersist a device token after the browser credential commits.
+        _ = await MacGatewayConnectionFleet.shared.remove(profileID: attempt.profileID)
+        try Task.checkCancellation()
+        guard self.browserSignInAttempts[attempt.profileID] == attempt.id else {
+            throw GatewayBrowserSessionError.superseded
+        }
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(),
+              DeviceAuthStore.clearGatewayTokensPersisted(
+                  deviceId: identity.deviceId, gatewayID: attempt.profileID)
+        else { throw GatewayBrowserSessionError.credentialRetirementFailed }
+        let profile = try Self.makeProfile(name: name, url: attempt.url)
+        var registry = try self.loadRegistry()
+        registry.profiles.removeAll { $0.profile.id == profile.id }
+        registry.profiles.append(StoredProfile(
+            profile: profile,
+            credentials: Credentials(token: nil, password: nil, browserSession: session)))
+        try Task.checkCancellation()
+        try self.saveRegistry(registry)
+        self.browserSignInAttempts.removeValue(forKey: attempt.profileID)
+        self.postChange(profileID: profile.id)
+        return profile
+    }
+
+    func saveConnection(
+        name: String,
+        token: String?,
+        password: String?,
+        attempt: BrowserSignInAttempt) throws -> MacGatewayProfile
+    {
+        try Task.checkCancellation()
+        guard self.browserSignInAttempts[attempt.profileID] == attempt.id else {
+            throw GatewayBrowserSessionError.superseded
+        }
+        return try self.upsert(name: name, url: attempt.url, token: token, password: password)
     }
 
     func profiles() throws -> [MacGatewayProfile] {
@@ -141,7 +217,10 @@ actor MacGatewayProfileStore {
         return Self.sortedProfiles(stored.map(\.profile)).compactMap { profile in
             guard let item = stored.first(where: { $0.profile.id == profile.id }) else { return nil }
             let token = item.credentials.token?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return MacGatewayCatalogProfile(profile: profile, canPromote: token?.isEmpty == false)
+            return MacGatewayCatalogProfile(
+                profile: profile,
+                canPromote: token?.isEmpty == false,
+                usesBrowserIdentity: item.credentials.browserSession != nil)
         }
     }
 
@@ -152,23 +231,41 @@ actor MacGatewayProfileStore {
         }
         registry.profiles.removeAll { $0.profile.id == profileID }
         try self.saveRegistry(registry)
-        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        self.browserSignInAttempts.removeValue(forKey: profileID)
+        self.postChange(profileID: profileID, removed: true)
+    }
+
+    private func postChange(profileID: String, removed: Bool = false) {
+        NotificationCenter.default.post(
+            name: Self.didChangeNotification,
+            object: nil,
+            userInfo: [Self.changedProfileIDKey: profileID, Self.removedProfileKey: removed])
     }
 
     func endpoint(profileID: String) throws -> GatewayConnection.EndpointSnapshot {
+        if let attemptID = self.browserSignInAttempts[profileID],
+           self.committingBrowserSignIns.contains(attemptID)
+        {
+            // A window can request a replacement fleet connection while shutdown
+            // suspends. It must not reacquire the credentials being retired.
+            throw GatewayBrowserSessionError.superseded
+        }
         let registry = try self.loadRegistry()
         guard let stored = registry.profiles.first(where: { $0.profile.id == profileID }) else {
             throw MacGatewayProfileError.profileNotFound
         }
         let url = try Self.canonicalURL(stored.profile.url)
+        let browserSession = stored.credentials.browserSession
+        try browserSession?.validate(for: url)
         return GatewayConnection.EndpointSnapshot(
             config: (
                 url: url,
-                token: stored.credentials.token,
-                password: stored.credentials.password),
-            tls: Self.tlsRoute(for: stored.profile),
+                token: browserSession == nil ? stored.credentials.token : nil,
+                password: browserSession == nil ? stored.credentials.password : nil),
+            tls: browserSession == nil ? Self.tlsRoute(for: stored.profile) : nil,
             routeAuthority: nil,
-            deviceAuthGatewayID: stored.profile.id)
+            deviceAuthGatewayID: browserSession == nil ? stored.profile.id : nil,
+            browserSession: browserSession)
     }
 
     private func loadRegistry() throws -> Registry {

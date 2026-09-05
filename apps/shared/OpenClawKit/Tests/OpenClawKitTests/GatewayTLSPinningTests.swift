@@ -26,6 +26,39 @@ private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
 
 @Suite(.gatewayTLSStoreIsolated)
 struct GatewayTLSPinningTests {
+    @Test(
+        arguments: [true, false],
+        ["https://other.example/", "http://gateway.example/", "https://gateway.example/login"])
+    func `credential routes can refuse every transport redirect`(
+        _ allowsRedirects: Bool,
+        destination: String) async throws
+    {
+        let originalURL = try #require(URL(string: "https://gateway.example/artifact"))
+        let targetURL = try #require(URL(string: destination))
+        let policy = GatewayTLSPinningSession(
+            params: .init(required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
+            allowsRedirects: allowsRedirects)
+        let transport = URLSession(configuration: .ephemeral)
+        let task = transport.dataTask(with: originalURL)
+        defer {
+            task.cancel()
+            transport.invalidateAndCancel()
+        }
+        let response = try #require(HTTPURLResponse(
+            url: originalURL, statusCode: 302, httpVersion: nil, headerFields: ["Location": destination]))
+        var request = URLRequest(url: targetURL)
+        request.setValue("synthetic-session", forHTTPHeaderField: "CF-Access-Token")
+        let redirected = await withCheckedContinuation { continuation in
+            policy.urlSession(
+                transport,
+                task: task,
+                willPerformHTTPRedirection: response,
+                newRequest: request,
+                completionHandler: { continuation.resume(returning: $0) })
+        }
+        #expect(redirected?.url == (allowsRedirects ? targetURL : nil))
+    }
+
     @Test func `keychain namespace configures once and fails closed after use`() {
         var state = GatewayTLSKeychainNamespaceState()
         let configuredWork = state.configure(suffix: ".profile.work")

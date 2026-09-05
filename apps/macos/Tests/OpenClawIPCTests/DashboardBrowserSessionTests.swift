@@ -1,0 +1,324 @@
+import AppKit
+import Foundation
+import OpenClawKit
+import Testing
+import WebKit
+@testable import OpenClaw
+
+@MainActor
+private final class DashboardCookieNavigationObserver: NSObject, WKNavigationDelegate {
+    private(set) var navigationCount = 0
+    private(set) var cookiesAtNavigation: [HTTPCookie]?
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor _: WKNavigationAction,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
+    {
+        self.navigationCount += 1
+        Task { @MainActor in
+            self.cookiesAtNavigation = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
+            // Observe admission without making any network request to the synthetic origin.
+            decisionHandler(.cancel)
+        }
+    }
+}
+
+@Suite(.serialized)
+@MainActor
+struct DashboardBrowserSessionTests {
+    private func session(_ token: String) throws -> GatewayBrowserSession {
+        try GatewayBrowserSession(
+            origin: #require(URL(string: "https://gateway.example/")),
+            issuer: #require(URL(string: "https://identity.cloudflareaccess.com/")),
+            audience: "dashboard-fixture",
+            token: token,
+            expiresAt: Date().addingTimeInterval(300))
+    }
+
+    @Test func `browser sign-in cookie is installed before the first dashboard navigation`() async throws {
+        let session = try self.session("first-session")
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let lease = store.lease(for: session)
+        let url = try #require(URL(string: "https://gateway.example/control/"))
+        let controller = self.controller(url: url, store: store, lease: lease)
+        defer { controller.closeDashboard() }
+        let observer = DashboardCookieNavigationObserver()
+        controller.webView.navigationDelegate = observer
+
+        controller.show(url: url, auth: controller.auth)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while observer.cookiesAtNavigation == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let cookies = try #require(observer.cookiesAtNavigation)
+        let cookie = try #require(cookies.first { $0.name == "CF_Authorization" })
+        #expect(observer.navigationCount == 1)
+        #expect(cookie.value == "first-session")
+        #expect(cookie.isSecure)
+        #expect(cookie.isHTTPOnly)
+        #expect(cookie.domain == "gateway.example")
+        #expect(controller._testUserScripts.allSatisfy { !$0.source.contains("first-session") })
+        #expect(controller._testLinkBrowserDataStore !== store.dataStore)
+        #expect(!controller._testLinkBrowserDataStore.isPersistent)
+        #expect(await controller._testLinkBrowserDataStore.httpCookieStore.allCookies().isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func `closing or replacing a window cancels navigation awaiting its cookie`(_ replacing: Bool) async throws {
+        let session = try self.session("closed-session")
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let lease = store.lease(for: session)
+        let url = try #require(URL(string: "https://gateway.example/control/"))
+        let controller = self.controller(url: url, store: store, lease: lease)
+        let observer = DashboardCookieNavigationObserver()
+        controller.webView.navigationDelegate = observer
+        controller.show(url: url, auth: controller.auth)
+        if replacing {
+            controller.detachWindowForReplacement()?.close()
+        } else {
+            controller.closeDashboard()
+        }
+
+        try await lease.prepare(for: url, in: controller.webView.configuration.userContentController)
+        // Drain the cancelled navigation task after WebKit acknowledges the cookie.
+        await Task.yield()
+        #expect(observer.navigationCount == 0)
+        #expect(controller.webView.url == nil)
+        #expect(!controller.isWindowOpen)
+    }
+
+    @Test func `profile stores isolate accounts and replacement retires an older cookie write`() async throws {
+        let first = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let second = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let oldSession = try session("old-account")
+        let newSession = try session("new-account")
+        let otherSession = try session("other-profile")
+        let stale = first.lease(for: oldSession)
+        let current = first.lease(for: newSession)
+        let other = second.lease(for: otherSession)
+
+        await #expect(throws: GatewayBrowserSessionError.superseded) {
+            try await stale.prepare(for: oldSession.origin, in: WKUserContentController())
+        }
+        try await current.prepare(for: newSession.origin, in: WKUserContentController())
+        try await other.prepare(for: otherSession.origin, in: WKUserContentController())
+        #expect(await first.dataStore.httpCookieStore.allCookies().map(\.value) == ["new-account"])
+        #expect(await second.dataStore.httpCookieStore.allCookies().map(\.value) == ["other-profile"])
+
+        first.invalidate()
+        try await first.lease(for: nil).prepare(for: newSession.origin, in: WKUserContentController())
+        await #expect(throws: GatewayBrowserSessionError.superseded) {
+            try await current.prepare(for: newSession.origin, in: WKUserContentController())
+        }
+        #expect(await first.dataStore.httpCookieStore.allCookies().isEmpty)
+        #expect(await second.dataStore.httpCookieStore.allCookies().map(\.value) == ["other-profile"])
+    }
+
+    @Test func `profile changes fence a first open and each profile owns one isolated browser store`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let server = try await DashboardHTTPFixture.start()
+            defer { server.stop() }
+            let source = GatewayConnectionEndpointSource(url: server.websocketURL(), token: "before")
+            let fixture = try DashboardIdentityFixture(announcement: nil, source: source)
+            let lookup = DashboardWindowOwnershipPresentationGate()
+            let primaryStore = WKWebsiteDataStore.nonPersistent()
+            let target = DashboardGatewayTarget.profile("first-open")
+            let manager = DashboardManager._testMake(
+                websiteDataStore: primaryStore,
+                connectionProvider: { _ in fixture.connection },
+                browserIdentityURLProvider: { _, _ in
+                    await lookup.waitForRelease()
+                    return nil
+                },
+                observeGatewayChanges: true,
+                profileEndpointProvider: { _ in source.snapshot() },
+                gatewayEntriesProvider: { ["first-open", "same-origin"].map {
+                    DashboardGatewayEntry(
+                        id: "profile:\($0)",
+                        name: $0,
+                        kind: "remote",
+                        isPrimary: false,
+                        canPromote: false,
+                        health: .unknown)
+                } })
+            let pending = Task { @MainActor in await manager._testOpenWindow(for: target) }
+            await lookup.waitUntilRequested()
+            source.setEndpoint(.init(
+                config: (url: server.websocketURL(), token: "after", password: nil), routeAuthority: nil))
+            NotificationCenter.default.post(
+                name: MacGatewayProfileStore.didChangeNotification,
+                object: nil,
+                userInfo: [MacGatewayProfileStore.changedProfileIDKey: "first-open"])
+            await lookup.release()
+            await pending.value
+
+            let result: Result<Void, Error>
+            do {
+                let opened = try #require(manager._testAuxiliaryWindows().first?.controller)
+                #expect(opened.auth.token == "after")
+                #expect(opened._testDashboardDataStore !== primaryStore)
+                await manager._testOpenWindow(for: target)
+                await manager._testOpenWindow(for: .profile("same-origin"))
+                let windows = manager._testAuxiliaryWindows()
+                let sameProfile = windows.filter { $0.target == target }
+                #expect(sameProfile.count == 2)
+                #expect(sameProfile.allSatisfy {
+                    $0.controller._testDashboardDataStore === opened._testDashboardDataStore
+                })
+                let other = try #require(windows.first { $0.target != target }?.controller)
+                #expect(other._testDashboardDataStore !== opened._testDashboardDataStore)
+
+                // Saving a name or the same credentials must leave existing windows navigable.
+                let shells = sameProfile.compactMap(\.controller.window)
+                for shell in shells {
+                    let webView = try #require((shell.windowController as? DashboardWindowController)?.webView)
+                    let deadline = ContinuousClock.now + .seconds(5)
+                    while await (try? webView.evaluateJavaScript("document.body.innerText")) as? String != "Ready",
+                          ContinuousClock.now < deadline
+                    {
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                    _ = try await webView.evaluateJavaScript("document.body.innerText = 'Before save'")
+                }
+                NotificationCenter.default.post(
+                    name: MacGatewayProfileStore.didChangeNotification,
+                    object: nil,
+                    userInfo: [MacGatewayProfileStore.changedProfileIDKey: "first-open"])
+                for shell in shells {
+                    var text = ""
+                    let deadline = ContinuousClock.now + .seconds(5)
+                    while text != "Ready", ContinuousClock.now < deadline {
+                        let webView = try #require((shell.windowController as? DashboardWindowController)?.webView)
+                        text = await (try? webView.evaluateJavaScript("document.body.innerText")) as? String ?? ""
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                    #expect(text == "Ready")
+                }
+                result = .success(())
+            } catch {
+                result = .failure(error)
+            }
+            manager.close()
+            await fixture.connection.shutdown()
+            try result.get()
+        }
+    }
+
+    private func controller(
+        url: URL,
+        store: DashboardBrowserSessionStore,
+        lease: DashboardBrowserSessionStore.Lease) -> DashboardWindowController
+    {
+        DashboardWindowController(
+            url: url,
+            auth: .browserIdentity(gatewayUrl: "wss://gateway.example/control/"),
+            websiteDataStore: store.dataStore,
+            browserSessionLease: lease,
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+    }
+
+    @Test func `browser-only setup reopens its Gateway without configuring machine integrations`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let state = AppStateStore.shared
+        let previousMode = state.connectionMode
+        state.connectionMode = .unconfigured
+        defer { state.connectionMode = previousMode }
+        for _ in 0..<2 {
+            let manager = DashboardManager._testMake(
+                primaryEndpointProvider: { _ in throw URLError(.cannotConnectToHost) },
+                profileEndpointProvider: { _ in .init(
+                    config: (url: server.websocketURL(), token: "personal-route", password: nil), routeAuthority: nil)
+                },
+                gatewayEntriesProvider: { [.init(
+                    id: "profile:only",
+                    name: "Saved",
+                    kind: "remote",
+                    isPrimary: false,
+                    canPromote: false,
+                    health: .unknown)] })
+            defer { manager.close() }
+            try await manager.show()
+            let first = try #require(manager._testController())
+            #expect(manager._testMainTarget() == .profile("only"))
+            #expect(first.auth.token == "personal-route")
+            first.closeDashboard()
+            try await manager.show()
+            #expect(manager._testController()?.isWindowOpen == true)
+            #expect(manager._testMainTarget() == .profile("only"))
+            #expect(state.connectionMode == .unconfigured)
+            manager.close()
+        }
+    }
+
+    @Test func `removal closes every profile window and fences a pending open`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let lookup = DashboardWindowOwnershipPresentationGate(released: true)
+        let manager = DashboardManager._testMake(
+            profileEndpointProvider: { _ in
+                await lookup.waitForRelease()
+                return .init(config: (url: server.websocketURL(), token: "saved", password: nil), routeAuthority: nil)
+            },
+            gatewayEntriesProvider: { [.init(
+                id: "profile:removed",
+                name: "Saved",
+                kind: "remote",
+                isPrimary: false,
+                canPromote: false,
+                health: .unknown)] })
+        defer { manager.close() }
+        await manager._testOpenWindow(for: .profile("removed"))
+        await manager._testOpenWindow(for: .profile("removed"))
+        let windows = manager._testAuxiliaryWindows().map(\.controller)
+        #expect(windows.count == 2)
+        await lookup.hold()
+        let pending = Task { @MainActor in await manager._testOpenWindow(for: .profile("removed")) }
+        await lookup.waitUntilRequested()
+        try await manager.closeGatewayWindows(profileID: "removed")
+        await lookup.release()
+        await pending.value
+        #expect(manager._testAuxiliaryWindows().isEmpty)
+        #expect(windows.allSatisfy { !$0.isWindowOpen && !$0.canDeliverNativeCommands })
+    }
+
+    @Test func `removal clears a persisted browser session before any window opens in this process`() async throws {
+        let profileID = "forgotten-\(UUID().uuidString)"
+        let identifier = DashboardBrowserSessionStore.identifier(profileID: profileID)
+        let store = WKWebsiteDataStore(forIdentifier: identifier)
+        let session = try self.session("previous-process")
+        try await store.httpCookieStore.setCookie(session.cookie())
+        let manager = DashboardManager._testMake(websiteDataStore: .default())
+        do {
+            try await manager.closeGatewayWindows(profileID: profileID)
+            #expect(await store.httpCookieStore.allCookies().isEmpty)
+            #expect(manager._testController() == nil)
+            #expect(manager._testAuxiliaryWindows().isEmpty)
+        } catch {
+            manager.close()
+            try? await WKWebsiteDataStore.remove(forIdentifier: identifier)
+            throw error
+        }
+        manager.close()
+        try await WKWebsiteDataStore.remove(forIdentifier: identifier)
+    }
+
+    @Test func `expired browser sign-in is terminal and explains how to reconnect`() async throws {
+        let session = try self.session("expired-page")
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let controller = self.controller(url: session.origin, store: store, lease: store.lease(for: session))
+        defer { controller.closeDashboard() }
+        controller.invalidateBrowserSession(error: .expired)
+        var text = ""
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !text.contains("Settings"), ContinuousClock.now < deadline {
+            text = await (try? controller.webView.evaluateJavaScript("document.body.innerText")) as? String ?? ""
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(text.contains("expired"))
+        #expect(text.contains("Settings"))
+        #expect(!controller.canDeliverNativeCommands)
+    }
+}

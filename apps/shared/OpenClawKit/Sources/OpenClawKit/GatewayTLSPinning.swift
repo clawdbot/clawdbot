@@ -748,11 +748,12 @@ struct GatewayTLSPinningState {
     }
 }
 
-public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate,
+public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionTaskDelegate,
     GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, GatewayTLSRouteMetadataProviding,
     @unchecked Sendable
 {
     private let params: GatewayTLSParams
+    private let allowsRedirects: Bool
     private let failureLock = NSLock()
     private var lastTLSFailure: GatewayTLSValidationFailure?
     private var pinningState: GatewayTLSPinningState
@@ -763,8 +764,9 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
-    public init(params: GatewayTLSParams) {
+    public init(params: GatewayTLSParams, allowsRedirects: Bool = true) {
         self.params = params
+        self.allowsRedirects = allowsRedirects
         self.pinningState = GatewayTLSPinningState(expectedFingerprint: params.expectedFingerprint)
         super.init()
     }
@@ -874,6 +876,18 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
     public func finishTasksAndInvalidate() {
         self.session.finishTasksAndInvalidate()
+    }
+
+    public func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection _: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void)
+    {
+        // Browser-session headers are origin-bound credentials. Their callers
+        // disable redirects so URLSession cannot forward them to a sign-in or HTTP endpoint.
+        completionHandler(self.allowsRedirects ? request : nil)
     }
 
     public func urlSession(

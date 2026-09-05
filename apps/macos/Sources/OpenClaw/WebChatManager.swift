@@ -500,12 +500,12 @@ final class WebChatManager {
         currentRoute == requestedRoute
     }
 
-    private enum GatewayProfileSelection {
+    enum GatewayProfileSelection {
         case profile(MacGatewayProfile)
         case manage
     }
 
-    private static func promptForGatewayProfile(
+    static func promptForGatewayProfile(
         profiles: [MacGatewayProfile],
         preferredID: String?) -> GatewayProfileSelection?
     {

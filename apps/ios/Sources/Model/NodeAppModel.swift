@@ -9863,6 +9863,9 @@ extension NodeAppModel {
             self.stageGatewaySetupLink(link)
         case .dashboard:
             self.dashboardNavigationRequestID &+= 1
+        case .gatewayAdd:
+            self.recordShareEvent(
+                "This browser sign-in link is for the OpenClaw Mac app. Use a device pairing link on iOS.")
         }
     }
 
