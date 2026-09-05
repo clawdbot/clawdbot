@@ -299,12 +299,10 @@ retry still does not validate, the collector completion keeps the child's raw
 text, leaves `structured` unset, and includes `schemaError`. The low-level `agents_wait`
 result exposes those fields for explicit recovery logic.
 
-### Children are leaves
+### Keep collector groups flat
 
-Swarm children are leaves by default. The universal
-`agents.defaults.subagents.maxSpawnDepth` guard prevents a child from spawning
-its own children at the default depth of `1`. The usual orchestration idiom is
-to return work to the parent, not spawn more work from a child:
+Swarm children can delegate recursively, but the usual orchestration idiom is
+to return work to the parent instead of expanding the collector tree:
 
 ```javascript
 const plan = await agents.run("Plan this job as independent tasks.", {
@@ -318,9 +316,10 @@ const plan = await agents.run("Plan this job as independent tasks.", {
 return await Promise.all(plan.tasks.map((task) => agents.run(task)));
 ```
 
-Nested sub-agents are an operator opt-in through
-`agents.defaults.subagents.maxSpawnDepth` and are discouraged for Swarm.
-Group caps, budgets, and observability all assume flat collector groups.
+Nested collectors are discouraged for Swarm. Group caps, budgets, and
+observability all assume flat collector groups. Set
+`agents.defaults.subagents.maxSpawnDepth: 1` when a workflow must enforce that
+shape.
 
 Every child has one admission owner. Announce and interactive children use
 `agents.defaults.subagents.maxChildrenPerAgent` (default `5`) and do not count

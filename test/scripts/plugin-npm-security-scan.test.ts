@@ -218,7 +218,8 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     expect(resolveReviewedSourceLayout(current)?.id).toBe("current");
     expect(resolveReviewedSourceLayout(current, "release/2026.9.1")?.id).toBe("current");
     expect(resolveReviewedSourceLayout(frozenLegacy, "release/2026.9.1")).toBeUndefined();
-    expect(resolveReviewedSourceLayout(current, "release/2026.9.2")).toBeUndefined();
+    expect(resolveReviewedSourceLayout(current, "release/2026.9.2")?.id).toBe("current");
+    expect(resolveReviewedSourceLayout(current, "release/2026.9.3")).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy)).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")?.id).toBe(
       "extended-stable-2026.6.33",
@@ -259,6 +260,54 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       }),
     ).toMatchObject({ layout: null, status: "fail" });
   });
+
+  it.each([1, 2])(
+    "reviews exactly one current hardware probe, preserving frozen policy: %s",
+    async (count) => {
+      const packageName = "@openclaw/llama-cpp-provider";
+      const hardwareKey = `${packageName}:dangerous-exec:src/hardware.ts`;
+      const installerKey = `${packageName}:dangerous-exec:src/llama-server-install.ts`;
+      const probe =
+        'import { execFile } from "node:child_process";\nexecFile("/usr/bin/vm_stat", []);\n';
+      const artifact = writePluginArtifact({
+        extensionId: "llama-cpp",
+        files: {
+          "src/hardware.ts": probe + (count === 2 ? 'execFile("/bin/df", ["-P", "/tmp"]);\n' : ""),
+          "src/llama-server-install.ts": probe,
+        },
+        packageName,
+      });
+      const current = await scanPublishablePluginPackages([artifact.artifact]);
+      expect(current.scanErrors).toEqual([]);
+      expect(current.packageResults[0]?.unexpectedCriticalFindings).toEqual([]);
+      expect(current.packageResults[0]?.reviewedCriticalFindings).toEqual([
+        ...Array.from({ length: count }, () => hardwareKey),
+        installerKey,
+      ]);
+      const currentReport = buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: [
+          ...current.packageResults,
+          syntheticResult("@openclaw/codex", { reviewedCriticalFindings: currentLayoutFindings() }),
+        ],
+        toolingSha: TOOLING_SHA,
+      });
+      const packageErrors = currentReport.errors.filter((error) =>
+        error.startsWith(`${packageName}:`),
+      );
+      expect(packageErrors).toEqual(
+        count === 1 ? [] : [expect.stringContaining("reviewed critical inventory mismatch")],
+      );
+
+      const frozen = await scanPublishablePluginPackages([artifact.artifact], "release/2026.9.1");
+      expect(frozen.scanErrors).toEqual([]);
+      expect(frozen.packageResults[0]?.reviewedCriticalFindings).toEqual([installerKey]);
+      expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toHaveLength(count);
+      expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toEqual(
+        expect.arrayContaining([{ line: 2, path: "src/hardware.ts", ruleId: "dangerous-exec" }]),
+      );
+    },
+  );
 
   it("scans checked-in malicious code without running candidate hooks or helpers", async () => {
     const candidateRoot = tempDirs.make("openclaw-plugin-security-inert-pack-");

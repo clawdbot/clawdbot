@@ -349,6 +349,8 @@ describe("createOllamaStreamFn thinking events", () => {
           messages: [{ role: "user", content: "test" }],
           stream: true,
           options: {},
+          truncate: false,
+          shift: false,
         }),
       },
       policy: {

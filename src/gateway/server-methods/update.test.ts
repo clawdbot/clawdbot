@@ -3,11 +3,14 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { summarizeUpdateRunResponse } from "../update-run-summary.js";
 import {
   sentinelState,
@@ -172,7 +175,7 @@ describe("update.run acknowledgement", () => {
           channel: "slack",
           to: "slack:C0123ABC",
           threadId: "1234567890.123456",
-          message: `⬆️ Updating OpenClaw 1.0.0 → ${managed ? "2.0.0" : "the latest release"}. The gateway restarts in about a minute; you'll get a message here when it's back.`,
+          message: `⬆️ Updating OpenClaw 1.0.0 → ${managed ? "2.0.0" : "the latest release"}. You'll get a message here before the gateway restarts and when verification finishes.`,
           deliveryIntentId: expect.stringMatching(/^update-run-ack:/),
         }),
       );
@@ -203,11 +206,74 @@ describe("update.run acknowledgement", () => {
     );
   });
 
+  it("records activation and awaits its notice before parking the managed gateway", async () => {
+    mockGlobalInstallSurface();
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    getUpdateAvailableMock.mockReturnValue({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    const response = await captureUpdateRunPayload({ sessionKey });
+    const beforePark = startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0].beforePark;
+    if (!response || !beforePark) {
+      throw new Error("expected admitted managed handoff");
+    }
+    expect(getUpdateRun(response.runId)?.phase).toBe("requested");
+    expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledOnce();
+    const delivered = createDeferredCore<boolean>();
+    const started = createDeferredCore();
+    sendGatewayLifecycleNoticeMock.mockImplementationOnce(() => {
+      started.resolve();
+      return delivered.promise;
+    });
+    let parked = false;
+    const park = beforePark().then(() => {
+      parked = true;
+    });
+    try {
+      await Promise.race([started.promise, park]);
+      expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
+      expect(getUpdateRun(response.runId)?.phase).toBe("activating");
+      expect(parked).toBe(false);
+    } finally {
+      delivered.resolve(true);
+    }
+    await park;
+    await beforePark();
+    expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
+    expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        message: "⏳ Restarting the gateway now (v1.0.0 → v2.0.0)…",
+      }),
+    );
+  });
+
   it("continues the update when the bounded acknowledgement fails", async () => {
     sendGatewayLifecycleNoticeMock.mockResolvedValueOnce(false);
     const response = await captureUpdateRunPayload({ sessionKey });
     expect(response?.ackDelivered).toBe(false);
     expect(runGatewayUpdateMock).toHaveBeenCalledOnce();
+  });
+
+  it("records an internal API origin from only its persisted session key", async () => {
+    const internalSessionKey = "agent:main:webchat:lane";
+    await upsertSessionEntryCore(
+      {
+        agentId: "main",
+        sessionKey: internalSessionKey,
+        storePath: resolveDefaultSessionStorePath("main"),
+      },
+      { sessionId: "internal-api-update", updatedAt: 1, delivery: { kind: "internal" } },
+    );
+    const { extractDeliveryInfo } = await import("../../config/sessions/delivery-info.js");
+    const sessions = await import("../../config/sessions.js");
+    vi.mocked(sessions.extractDeliveryInfo).mockImplementationOnce(extractDeliveryInfo);
+    const response = await captureUpdateRunPayload({ sessionKey: internalSessionKey });
+    expect(response).toMatchObject({ ok: true, ackDelivered: true });
+    const run = getUpdateRun(response!.runId);
+    expect(run).toMatchObject({ trigger: "api", origin: { sessionKey: internalSessionKey } });
+    expect(run?.origin.deliveryContext).toEqual({ channel: INTERNAL_MESSAGE_CHANNEL });
   });
 
   it("does not acknowledge a preflight refusal or a missing route", async () => {

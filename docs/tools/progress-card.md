@@ -9,6 +9,8 @@ read_when:
 
 `progress_card` is the single agent status tool for a session. It stores an ordered step plan, a compact Markdown note, or both. Each call replaces the whole card, so the latest write is the source of truth for someone following the work without reading the transcript.
 
+The card belongs to the current session and its agent. The tool binds both from the running session; the model only supplies `markdown` and `plan`.
+
 The card is durable session state. A reconnect or page reload reads the latest card from the Gateway instead of reconstructing it from tool events or transcript history. The transcript keeps only a short update receipt, not another full copy of the card.
 
 ## Adoption
@@ -87,8 +89,19 @@ The current chat keeps exactly one live card in the main conversation:
 
 - The card appears in the collapsible surface inside the composer at every width.
 
-Opening a side panel does not move the card out of the conversation. The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+Opening a side panel does not move the card out of the conversation. The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications. A notification is a refresh hint, including a null revision; clients confirm a removal with a read or clear response for that session and agent.
+
+Transient refresh failures retain the last loaded card. The dashboard widget shows a retry notice until a refresh succeeds. If the Gateway reports that the connection no longer participates in the session, clients hide the card until access is restored and a refresh succeeds.
+
 The composer and dashboard placements show the local time of the last progress update. The hovercard instead shows the current-or-next plan step and its completed/total count, followed by Markdown in a separate Agent Notepad when a note is present.
+
+## Gateway requests
+
+`progressCard.get` and `progressCard.put` accept a required `sessionKey` and optional `agentId`. Pass both when selecting an agent explicitly, for example `{ "sessionKey": "global", "agentId": "research" }`. Omitting `agentId` retains the Gateway's existing session-owner resolution. An unknown agent or an agent that conflicts with the session owner is rejected.
+
+Keep the original session and agent together for subsequent reads and clears. The returned card and change event use an agent-qualified display key; that key alone cannot distinguish a retained `global` session from an ordinary session whose key is `agent:<agentId>:global`. Both methods use the selected session’s normal access checks, in addition to their operator read or write scope.
+
+Gateways advertise `progress-card-agent-scope-v1` in `hello.features.capabilities` when progress-card requests accept `agentId`. Independently upgraded clients must check that capability before sending the field. For an ordinary session key that remains agent-qualified, omit redundant `agentId`. A canonical `global` target with an explicit owner requires this capability; otherwise the client reports that a Gateway update is needed.
 
 ## Pin the card to the dashboard
 

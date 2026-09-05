@@ -590,8 +590,22 @@ impl DesktopState {
     }
 
     pub fn connect_explicit_local(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
-        // The click returns immediately; a later remote selection still wins while connect runs.
-        self.show_local(app, "reconnecting", true, None)?;
+        let mut navigation = self
+            .inner
+            .navigation
+            .lock()
+            .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?;
+        navigation.permit_local(true, None);
+        // First-run setup owns the pending bootstrap reply. Replacing its page
+        // drops the error callback and leaves a reconnect screen with no watchdog.
+        if !self.main_window_has_local_content(&main_window(app)?) {
+            let mut url = self.inner.local_url.clone();
+            url.query_pairs_mut()
+                .clear()
+                .append_pair("mode", "reconnecting");
+            self.navigate_locked(app, url, false)?;
+        }
+        drop(navigation);
         self.connect_selected(app, true)
     }
 

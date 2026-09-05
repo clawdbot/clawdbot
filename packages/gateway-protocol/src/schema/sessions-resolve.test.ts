@@ -59,6 +59,23 @@ describe("sessions.resolve presentation contract", () => {
     ).toBe(true);
   });
 
+  it("accepts a closed named reference selector", () => {
+    for (const reference of [
+      { key: candidate.key },
+      { key: candidate.key, slug: "deploy-monitor" },
+    ]) {
+      expect(Value.Check(SessionsResolveParamsSchema, { reference, agentId: "main" })).toBe(true);
+    }
+    for (const reference of [
+      {},
+      { key: "" },
+      { key: candidate.key, slug: "" },
+      { key: candidate.key, extra: true },
+    ]) {
+      expect(Value.Check(SessionsResolveParamsSchema, { reference })).toBe(false);
+    }
+  });
+
   it("rejects invalid faces, unexpected facts, and more than ten candidates", () => {
     expect(Value.Check(SessionsResolveCandidateSchema, { ...candidate, boardFace: "grid" })).toBe(
       false,

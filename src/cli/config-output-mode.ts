@@ -1,5 +1,4 @@
-import { consumeRootOptionToken } from "../infra/cli-root-options.js";
-import { findMachineOutputRootCommandIndex } from "./machine-output-argv.js";
+import { consumeRootOptionToken, findRootCommandIndex } from "../infra/cli-root-options.js";
 
 function hasFlag(argv: readonly string[], flag: string): boolean {
   for (const arg of argv.slice(2)) {
@@ -14,17 +13,16 @@ function hasFlag(argv: readonly string[], flag: string): boolean {
 }
 
 function resolveConfigSubcommand(argv: readonly string[]): string | null {
-  const rootIndex = findMachineOutputRootCommandIndex(argv);
+  const rootIndex = findRootCommandIndex(argv);
   if (rootIndex === null) {
     return null;
   }
-  const args = argv.slice(2);
-  for (let index = rootIndex - 1; index < args.length; index += 1) {
-    const arg = args[index];
+  for (let index = rootIndex + 1; index < argv.length; index += 1) {
+    const arg = argv[index];
     if (!arg || arg === "--") {
       return null;
     }
-    const rootConsumed = consumeRootOptionToken(args, index);
+    const rootConsumed = consumeRootOptionToken(argv, index);
     if (rootConsumed > 0) {
       index += rootConsumed - 1;
       continue;

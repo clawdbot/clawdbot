@@ -1,7 +1,5 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { matchesNoProxy } from "./proxy-env.js";
-// Undici runtime helpers lazily load dispatcher constructors and enforce
-// OpenClaw HTTP/1, timeout, proxy TLS, and IP-safe proxy policies.
 import {
   buildHttp1AgentOptions,
   buildHttp1ProxyAgentOptions,
@@ -20,10 +18,10 @@ export type UndiciRuntimeDeps = {
 };
 
 /** Minimal undici surface needed by global-dispatcher installation code. */
-export type UndiciGlobalDispatcherDeps = Pick<UndiciRuntimeDeps, "Agent" | "EnvHttpProxyAgent"> & {
-  getGlobalDispatcher: typeof import("undici").getGlobalDispatcher;
-  setGlobalDispatcher: typeof import("undici").setGlobalDispatcher;
-};
+export type UndiciGlobalDispatcherDeps = Pick<
+  typeof import("undici"),
+  "getGlobalDispatcher" | "setGlobalDispatcher"
+>;
 
 type UndiciAgentOptions = ConstructorParameters<UndiciRuntimeDeps["Agent"]>[0];
 type UndiciEnvHttpProxyAgentOptions = ConstructorParameters<
@@ -38,12 +36,7 @@ export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
 
 /** Loads only the undici global-dispatcher API used by startup proxy setup. */
 export function loadUndiciGlobalDispatcherDeps(): UndiciGlobalDispatcherDeps {
-  return loadUndiciModule([
-    "Agent",
-    "EnvHttpProxyAgent",
-    "getGlobalDispatcher",
-    "setGlobalDispatcher",
-  ]);
+  return loadUndiciModule(["getGlobalDispatcher", "setGlobalDispatcher"]);
 }
 
 /** Creates a direct undici Agent with OpenClaw's HTTP/1-only dispatcher policy. */

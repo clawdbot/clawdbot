@@ -2493,17 +2493,6 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   line-height: 1.35;
 }
 
-.sidebar-customize-menu__group-title {
-  margin: 6px 0 2px;
-  padding: 7px 8px 4px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .sidebar-customize-menu__item {
   display: flex;
   align-items: center;
@@ -4494,10 +4483,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     position: static;
     padding: 6px 12px;
     gap: 10px;
-  }
-
-  .list-item {
-    grid-template-columns: 1fr;
   }
 }
 

@@ -769,7 +769,11 @@ Expanded serial large/small jobs admit 210 predicted seconds; eligible hybrid pa
 
 `checks-ui-e2e` emits seven rows for non-frozen targets with the named-project contract on Blacksmith and hybrid first attempts: six combined Control UI shards and one browser-extension row. Both use the same Blacksmith runner class. Freshly planned GitHub-profile and frozen targets with that contract retain twelve Control UI shards plus the browser row. Missing attempt metadata also retains that wider plan. Historical targets without the contract retain four total rows on the Blacksmith planner profile or fourteen on GitHub and hybrid profiles. The 2026-09-02 inventory at `49fb9c5` contains 359 files: 329 parallel bundle consumers, three parallel self-owned files, seven serial bundle consumers, and 20 serial private source/custom-build files. Ordinary CI excludes seven real-Gateway files, leaving 352. Four native projects represent resource ownership without adding jobs or execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` share group 0 with at most two workers total, then `ui-e2e-serial` and `ui-e2e-serial-standalone` share group 1 with one worker. Local throttling and explicit worker limits still apply. The shared weighted sequencer charges each file by its measured duration divided by that project's effective worker count and assigns every discovered specification once across the selected Control UI rows. The root config keeps the complete inventory visible for discovery. Serial scheduling still protects private source servers that share a Vite optimizer cache, real Gateways, and the runtime-budget measurement; test cases, deadlines, and isolation are unchanged.
 
-Every selected project discovers Chromium. The first selected bundle-consuming project builds one private production bundle/preview and publishes its URL through Vitest's invocation-scoped root context; later consumers share it until invocation teardown. Standalone projects have no bundle setup or URL bridge, so standalone-only selections skip that build. The dedicated real-Gateway job still runs its complete canonical inventory in one Vitest invocation, including suites outside the UI source directory. Before that invocation, `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build:ci-artifacts` builds the runtime, private QA modules, and Control UI together. This keeps same-origin build identities aligned and prevents media bootstrap from rebuilding the runtime behind the UI; use the same preparation for a local run of the complete inventory. Its six bundle consumers share the preview; MCP conformance owns a private source server. Both serial resource groups use the same single-worker phase. Enabled manual proof capture uses the shared upload directory, including the MCP and Logs suites.
+Every selected project discovers Chromium. The first selected bundle-consuming project builds one private production bundle/preview and publishes its URL through Vitest's invocation-scoped root context; later consumers share it until invocation teardown. Standalone projects have no bundle setup or URL bridge, so standalone-only selections skip that build. Enabled manual proof capture uses the shared upload directory, including the MCP and Logs suites.
+
+The dedicated real-Gateway job runs all 14 files in one invocation through `test/vitest/vitest.ui-e2e-prebuilt.config.ts`. It requires a clean checkout and completed runtime, private QA, and canonical Control UI artifacts from `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build:ci-artifacts`. Source and built outputs must remain unchanged until all workers and children finish. A readiness failure stops the invocation without rebuilding or falling back to another config. MCP conformance owns a source server and runs serially first; the other 13 files then share the existing two-worker limit. The invocation preview builds its own private output from the same source. This adds no CI jobs or shards. The ordinary local config keeps real-Gateway files serial, and frozen targets lacking the prebuilt config retain their original serial command.
+
+A controlled Linux comparison covering all 14 files and 25 tests reduced invocation elapsed time from 309.374 to 202.027 seconds. This measures the test invocation, not complete CI timing or achievement of the CI latency target.
 
 Eligible `control-ui` rows request `blacksmith-32vcpu-ubuntu-2404`; the browser-extension row keeps the 8-vCPU request and the real-Gateway job keeps 16. Backend, event, contributor-trust and cache-write boundaries are unchanged, including hybrid first attempts and trusted contributor forks. In [run 33692146223](https://github.com/openclaw/openclaw/actions/runs/33692146223), the two slowest UI rows requested the 8-vCPU label but reported two CPUs; their 356/383-second test steps set the 8:20 non-Windows wall. The same run's 32-vCPU jobs reported eight CPUs. The larger request added no workers. In [run 33695337496](https://github.com/openclaw/openclaw/actions/runs/33695337496), all twelve UI rows reported eight CPUs and finished by 4:38 from workflow creation, with 102–145-second test steps. That margin supports consolidating to six rows; reduced-row timings still require native proof. Stale file weights also need the existing refit's independent-run and replacement thresholds, rather than a one-run manual adjustment.
 
@@ -907,6 +911,64 @@ failure or timeout after verified cleanup permits recovery; owner setup, census,
 cleanup failure, and cancellation stop before fallback, retry, replay, or success.
 Full Release Validation continues to disable the publisher entirely and retains
 performance evidence only as workflow artifacts.
+
+### Vitest paired benchmark
+
+The manual-only `vitest-pair` mode compares two exact commits with the workflow
+implementation from the candidate commit:
+
+```bash
+gh workflow run openclaw-performance.yml \
+  --ref <candidate-branch> \
+  -f mode=vitest-pair \
+  -f baseline_ref=<40-character-baseline-sha> \
+  -f target_ref=<40-character-candidate-sha>
+```
+
+Both inputs must be lowercase full SHAs, `target_ref` must equal the workflow
+SHA selected by `--ref`, and reruns are refused. Dispatch a fresh workflow run
+instead of retrying an attempt. Kova, source probes, report publication, and
+their artifact-only guard stay skipped in this mode. The benchmark job has
+read-only repository permission, does not receive secrets, does not restore or
+save Actions caches, and checks out the helper, candidate, and baseline with
+credentials disabled.
+
+The committed lane manifest covers representative core unit, Gateway, Control
+UI jsdom, and worker-lifecycle tests. Both commits must expose identical
+selected test/config paths and bytes and pass correctness before timing state
+is created. Correctness also requires both sides to report the same normalized
+test files, test identities, statuses, and counts. Every later run must match
+that established execution digest. The harness then runs one excluded warmup
+per side and lane, seven paired rounds with alternating side order and rotated
+lane order, plus one separately labeled cold pair with fresh caches. Frozen
+installs are setup and are never timed.
+
+Each child has a fixed deadline and process-group owner. A separate 165-minute
+harness deadline reserves 15 minutes inside the 180-minute job timeout for
+cleanup, terminal-manifest finalization, and artifact upload. It aborts and joins
+the active managed child before refusing further child starts. Every install,
+correctness, warmup, measured, and cold process receives the exact pinned pnpm
+executable through `npm_execpath`, with private Corepack and pnpm state; the
+resolved executable and version are recorded in the environment and run
+records.
+
+The artifact includes raw logs, raw Vitest JSON reports, execution digests and
+counts, GNU time user/system CPU, wall timing, environment and Git identities,
+source/config hashes, per-run records, paired-ratio analysis, and a terminal
+success or failure manifest. The workflow attempts finalization and artifact
+upload after harness failures. Runner loss or external workflow cancellation
+can still prevent those steps from running. Mutable pnpm and runtime caches stay
+in an unuploaded scratch tree. Thresholds are fixed in
+`scripts/vitest-pair-benchmark-lanes.json`. Acceptance uses the median of seven
+per-round aggregate ratios, with each round weighted by total lane duration, and
+fails above 5%. A critical lane fails only when its median measured ratio is
+above 10% and its median paired delta is at least one second. The single cold
+pair remains diagnostic evidence and never fails acceptance. The report claims
+an improvement only when every representative lane's median clears the
+improvement ratio and at least five of its seven pairs individually meet that
+ratio. Otherwise it reports per-lane evidence without a broad improvement
+claim. Artifacts use only the trusted workflow run ID and attempt in their name;
+the exact baseline and candidate commits remain recorded inside the artifact.
 
 ## Full Release Validation
 

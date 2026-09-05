@@ -20,8 +20,10 @@ import {
 } from "./tsdown-declaration-fixture.js";
 
 const compiler = path.resolve("scripts/run-tsgo.mjs");
+// Repeated end-to-end writer runs exceed the default timeout on Windows.
+const WRITER_TEST_TIMEOUT_MS = process.platform === "win32" ? 360_000 : 120_000;
 
-describe("write-plugin-sdk-entry-dts", () => {
+describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () => {
   it("preserves repository input metadata during direct declaration builds", () => {
     const { root, write, declarations, production } = createFixture();
     for (const [name, roots] of Object.entries(declarations)) {

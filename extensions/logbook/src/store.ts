@@ -7,11 +7,13 @@ import {
   migrateSqliteSchemaToStrict,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  compileSqliteQueryBindings,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
+  type Selectable,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import type {
   LogbookBatch,
@@ -94,8 +96,8 @@ CREATE TABLE IF NOT EXISTS standups (
 ) STRICT;
 `;
 
-type FrameRow = Omit<LogbookDatabase["frames"], "content_hash" | "batch_id">;
-type BatchRow = Omit<LogbookDatabase["batches"], "created_ms" | "updated_ms">;
+type FrameRow = Omit<Selectable<LogbookDatabase["frames"]>, "content_hash" | "batch_id">;
+type BatchRow = Omit<Selectable<LogbookDatabase["batches"]>, "created_ms" | "updated_ms">;
 
 function toFrame(row: FrameRow): LogbookFrame {
   return {
@@ -143,7 +145,7 @@ function parseDistractions(raw: string): LogbookDistraction[] {
   }
 }
 
-function toCard(row: LogbookDatabase["cards"]): LogbookCard {
+function toCard(row: Selectable<LogbookDatabase["cards"]>): LogbookCard {
   return {
     id: row.id,
     day: row.day,
@@ -266,22 +268,20 @@ export class LogbookStore {
     contentHash: string;
     idle: boolean;
   }): number {
-    const result = this.db
-      .prepare(
-        `INSERT INTO frames (captured_at_ms, day, path, screen_index, width, height, byte_size, content_hash, idle)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        params.capturedAtMs,
-        params.day,
-        params.path,
-        params.screenIndex,
-        params.width ?? null,
-        params.height ?? null,
-        params.byteSize,
-        params.contentHash,
-        params.idle ? 1 : 0,
-      );
+    const { compiled, bind } = compileSqliteQueryBindings<typeof params>((p) =>
+      this.query.insertInto("frames").values({
+        captured_at_ms: p((row) => row.capturedAtMs),
+        day: p((row) => row.day),
+        path: p((row) => row.path),
+        screen_index: p((row) => row.screenIndex),
+        width: p((row) => row.width ?? null),
+        height: p((row) => row.height ?? null),
+        byte_size: p((row) => row.byteSize),
+        content_hash: p((row) => row.contentHash),
+        idle: p((row) => (row.idle ? 1 : 0)),
+      }),
+    );
+    const result = this.db.prepare(compiled.sql).run(...bind(params));
     return Number(result.lastInsertRowid);
   }
 
@@ -334,28 +334,38 @@ export class LogbookStore {
       throw new Error("Logbook batch requires at least one frame");
     }
     const now = Date.now();
-    const insertBatch = this.db.prepare(
-      `INSERT INTO batches (day, start_ms, end_ms, status, frame_count, created_ms, updated_ms)
-       VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
+    const batch = compileSqliteQueryBindings<typeof params>((p) =>
+      this.query.insertInto("batches").values({
+        day: p((row) => row.day),
+        start_ms: p((row) => row.startMs),
+        end_ms: p((row) => row.endMs),
+        status: "pending",
+        frame_count: p((row) => row.frameIds.length),
+        created_ms: now,
+        updated_ms: now,
+      }),
     );
-    const assignFrame = this.db.prepare(
-      `UPDATE frames SET batch_id = ? WHERE id = ? AND batch_id IS NULL`,
+    const insertBatch = this.db.prepare(batch.compiled.sql);
+    const assignment = compileSqliteQueryBindings<{ batchId: number; frameId: number }>((p) =>
+      this.query
+        .updateTable("frames")
+        .set({ batch_id: p((row) => row.batchId) })
+        .where(
+          "id",
+          "=",
+          p((row) => row.frameId),
+        )
+        .where("batch_id", "is", null),
     );
+    const assignFrame = this.db.prepare(assignment.compiled.sql);
     return runSqliteImmediateTransactionSync(
       this.db,
       () => {
-        const result = insertBatch.run(
-          params.day,
-          params.startMs,
-          params.endMs,
-          params.frameIds.length,
-          now,
-          now,
-        );
+        const result = insertBatch.run(...batch.bind(params));
         const batchId = Number(result.lastInsertRowid);
         for (const frameId of params.frameIds) {
-          const assignment = assignFrame.run(batchId, frameId);
-          if (assignment.changes !== 1) {
+          const assigned = assignFrame.run(...assignment.bind({ batchId, frameId }));
+          if (assigned.changes !== 1) {
             throw new Error(`Logbook frame ${frameId} is missing or already batched`);
           }
         }
@@ -375,11 +385,18 @@ export class LogbookStore {
     error?: string,
     model?: string,
   ): void {
-    this.db
-      .prepare(
-        `UPDATE batches SET status = ?, error = ?, model = COALESCE(?, model), updated_ms = ? WHERE id = ?`,
-      )
-      .run(status, error ?? null, model ?? null, Date.now(), batchId);
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      this.query
+        .updateTable("batches")
+        .set((eb) => ({
+          status,
+          error: error ?? null,
+          model: eb.fn.coalesce(eb.val(model ?? null), "model"),
+          updated_ms: p(() => Date.now()),
+        }))
+        .where("id", "=", batchId),
+    );
+    this.db.prepare(compiled.sql).run(...bind());
   }
 
   latestBatch(): LogbookBatch | null {
@@ -392,18 +409,24 @@ export class LogbookStore {
 
   /** Requeues batches stuck in `running` after a crash so frames are not orphaned. */
   resetRunningBatches(): void {
-    this.db
-      .prepare(`UPDATE batches SET status = 'pending', updated_ms = ? WHERE status = 'running'`)
-      .run(Date.now());
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      this.query
+        .updateTable("batches")
+        .set({ status: "pending", updated_ms: p(() => Date.now()) })
+        .where("status", "=", "running"),
+    );
+    this.db.prepare(compiled.sql).run(...bind());
   }
 
   /** Requeues failed batches for an explicit user-driven retry (analyze now). */
   resetErrorBatches(): number {
-    const result = this.db
-      .prepare(
-        `UPDATE batches SET status = 'pending', error = NULL, updated_ms = ? WHERE status = 'error'`,
-      )
-      .run(Date.now());
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      this.query
+        .updateTable("batches")
+        .set({ status: "pending", error: null, updated_ms: p(() => Date.now()) })
+        .where("status", "=", "error"),
+    );
+    const result = this.db.prepare(compiled.sql).run(...bind());
     return Number(result.changes);
   }
 
@@ -436,16 +459,26 @@ export class LogbookStore {
     day: string,
     segments: Array<{ startMs: number; endMs: number; text: string }>,
   ): void {
-    const deleteBatch = this.db.prepare(`DELETE FROM observations WHERE batch_id = ?`);
-    const insert = this.db.prepare(
-      `INSERT INTO observations (batch_id, day, start_ms, end_ms, text) VALUES (?, ?, ?, ?, ?)`,
+    const deletion = compileSqliteQueryBindings<void>(() =>
+      this.query.deleteFrom("observations").where("batch_id", "=", batchId),
     );
+    const deleteBatch = this.db.prepare(deletion.compiled.sql);
+    const observation = compileSqliteQueryBindings<(typeof segments)[number]>((p) =>
+      this.query.insertInto("observations").values({
+        batch_id: batchId,
+        day,
+        start_ms: p((row) => row.startMs),
+        end_ms: p((row) => row.endMs),
+        text: p((row) => row.text),
+      }),
+    );
+    const insert = this.db.prepare(observation.compiled.sql);
     runSqliteImmediateTransactionSync(
       this.db,
       () => {
-        deleteBatch.run(batchId);
+        deleteBatch.run(...deletion.bind());
         for (const segment of segments) {
-          insert.run(batchId, day, segment.startMs, segment.endMs, segment.text);
+          insert.run(...observation.bind(segment));
         }
       },
       {
@@ -521,32 +554,37 @@ export class LogbookStore {
     drafts: LogbookCardDraft[],
   ): void {
     const now = Date.now();
-    const deleteWindow = this.db.prepare(
-      `DELETE FROM cards WHERE day = ? AND end_ms > ? AND start_ms < ?`,
+    const deletion = compileSqliteQueryBindings<void>(() =>
+      this.query
+        .deleteFrom("cards")
+        .where("day", "=", day)
+        .where("end_ms", ">", startMs)
+        .where("start_ms", "<", endMs),
     );
-    const insert = this.db.prepare(
-      `INSERT INTO cards (day, start_ms, end_ms, title, summary, detail, category, app_primary, app_secondary, distractions, keyframe_id, updated_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    const deleteWindow = this.db.prepare(deletion.compiled.sql);
+    const card = compileSqliteQueryBindings<LogbookCardDraft>((p) =>
+      this.query.insertInto("cards").values({
+        day: p((row) => row.day),
+        start_ms: p((row) => row.startMs),
+        end_ms: p((row) => row.endMs),
+        title: p((row) => row.title),
+        summary: p((row) => row.summary),
+        detail: p((row) => row.detail),
+        category: p((row) => row.category),
+        app_primary: p((row) => row.appPrimary ?? null),
+        app_secondary: p((row) => row.appSecondary ?? null),
+        distractions: p((row) => JSON.stringify(row.distractions)),
+        keyframe_id: p((row) => row.keyframeId ?? null),
+        updated_ms: now,
+      }),
     );
+    const insert = this.db.prepare(card.compiled.sql);
     runSqliteImmediateTransactionSync(
       this.db,
       () => {
-        deleteWindow.run(day, startMs, endMs);
+        deleteWindow.run(...deletion.bind());
         for (const draft of drafts) {
-          insert.run(
-            draft.day,
-            draft.startMs,
-            draft.endMs,
-            draft.title,
-            draft.summary,
-            draft.detail,
-            draft.category,
-            draft.appPrimary ?? null,
-            draft.appSecondary ?? null,
-            JSON.stringify(draft.distractions),
-            draft.keyframeId ?? null,
-            now,
-          );
+          insert.run(...card.bind(draft));
         }
       },
       {
@@ -618,24 +656,29 @@ export class LogbookStore {
   }
 
   saveStandup(day: string, text: string): void {
-    this.db
-      .prepare(
-        `INSERT INTO standups (day, text, updated_ms) VALUES (?, ?, ?)
-         ON CONFLICT(day) DO UPDATE SET text = excluded.text, updated_ms = excluded.updated_ms`,
-      )
-      .run(day, text, Date.now());
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      this.query
+        .insertInto("standups")
+        .values({ day, text, updated_ms: p(() => Date.now()) })
+        .onConflict((conflict) =>
+          conflict.column("day").doUpdateSet((eb) => ({
+            text: eb.ref("excluded.text"),
+            updated_ms: eb.ref("excluded.updated_ms"),
+          })),
+        ),
+    );
+    this.db.prepare(compiled.sql).run(...bind());
   }
 
   /** Deletes frame rows and files older than the retention window. */
   pruneFrames(olderThanMs: number): number {
-    const selectExpired = this.db.prepare(
-      `SELECT id, path, day FROM frames WHERE captured_at_ms < ?`,
-    );
-    const rows = selectExpired.all(olderThanMs) as Array<{
-      id: number;
-      path: string;
-      day: string;
-    }>;
+    const rows = executeSqliteQuerySync(
+      this.db,
+      this.query
+        .selectFrom("frames")
+        .select(["id", "path", "day"])
+        .where("captured_at_ms", "<", olderThanMs),
+    ).rows;
     if (rows.length === 0) {
       return 0;
     }
@@ -646,14 +689,31 @@ export class LogbookStore {
       rmSync(row.path, { force: true });
       days.add(row.day);
     }
-    const selectCurrent = this.db.prepare(`SELECT path FROM frames WHERE id = ?`);
-    const deleteById = this.db.prepare(`DELETE FROM frames WHERE id = ?`);
+    const currentPath = compileSqliteQueryBindings<number>((p) =>
+      this.query
+        .selectFrom("frames")
+        .select("path")
+        .where(
+          "id",
+          "=",
+          p((id) => id),
+        ),
+    );
+    const selectCurrent = this.db.prepare(currentPath.compiled.sql);
+    const deletion = compileSqliteQueryBindings<number>((p) =>
+      this.query.deleteFrom("frames").where(
+        "id",
+        "=",
+        p((id) => id),
+      ),
+    );
+    const deleteById = this.db.prepare(deletion.compiled.sql);
     const deleted = runSqliteImmediateTransactionSync(
       this.db,
       () => {
         let count = 0;
         for (const row of rows) {
-          const current = selectCurrent.get(row.id) as { path: string } | undefined;
+          const current = selectCurrent.get(...currentPath.bind(row.id));
           if (!current) {
             continue;
           }
@@ -662,7 +722,7 @@ export class LogbookStore {
           }
           // keyframe_id uses ON DELETE SET NULL, so the same commit cannot
           // leave surviving cards pointed at removed frame rows.
-          count += Number(deleteById.run(row.id).changes);
+          count += Number(deleteById.run(...deletion.bind(row.id)).changes);
         }
         return count;
       },

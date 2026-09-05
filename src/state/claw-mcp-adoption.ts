@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB } from "./openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -16,15 +18,15 @@ export function markClawMcpServerIndependentlyOwned(
   }
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
-      const result =
-        db /* sqlite-allow-raw: record a current non-Claw MCP owner after direct config. */
-          .prepare(
-            `UPDATE claw_mcp_server_refs
-                SET independent_owner = 1, updated_at_ms = @updated_at_ms
-              WHERE name = @name AND independent_owner <> 1`,
-          )
-          .run({ name, updated_at_ms: options.nowMs ?? Date.now() });
-      return Number(result.changes);
+      const result = executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "claw_mcp_server_refs">>(db)
+          .updateTable("claw_mcp_server_refs")
+          .set({ independent_owner: 1, updated_at_ms: options.nowMs ?? Date.now() })
+          .where("name", "=", name)
+          .where("independent_owner", "!=", 1),
+      );
+      return Number(result.numAffectedRows);
     }, options);
   } catch {
     // The canonical MCP write already succeeded; Claw status still detects config drift.

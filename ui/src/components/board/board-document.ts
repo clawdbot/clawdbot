@@ -23,6 +23,7 @@ import {
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import "../../styles/board-document.css";
 import "./board-view.ts";
 
@@ -261,9 +262,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
 
   private renderState() {
     if (this.documentState === "loading") {
-      return html`<div class="board-document__state" role="status" aria-live="polite">
-        ${t("common.loading")}
-      </div>`;
+      return renderPanelLoadingSkeleton("discussion", t("common.loading"));
     }
     if (this.documentState === "missing-session") {
       return html`<div class="board-document__state" role="status">

@@ -39,6 +39,7 @@ export async function runManagerInitializeSession(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
+  sessionEntry: SessionEntry;
 }> {
   const { input, sessionKey, agentId } = params;
   const backend = params.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
@@ -53,6 +54,7 @@ export async function runManagerInitializeSession(params: {
   const requestedModel = initialRuntimeOptions.model;
   const requestedThinking = initialRuntimeOptions.thinking;
   const previousMeta = params.deps.loadSessionEntry({ cfg: input.cfg, sessionKey, agentId })?.acp;
+  input.assertActive?.();
   const ensured = await withAcpRuntimeErrorBoundary({
     run: async () =>
       await runtime.ensureSession({
@@ -122,6 +124,7 @@ export async function runManagerInitializeSession(params: {
     runtime,
     handle,
     writeSessionMeta: params.writeSessionMeta,
+    assertCommitAllowed: input.assertActive,
   });
   if (!persisted?.acp) {
     throw new AcpRuntimeError(
@@ -142,6 +145,7 @@ export async function runManagerInitializeSession(params: {
     runtime,
     handle,
     meta,
+    sessionEntry: persisted,
   };
 }
 
@@ -157,6 +161,7 @@ function resolveEffectiveSessionModel(params: {
 }
 
 async function persistInitializedSessionMeta(params: {
+  assertCommitAllowed?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -172,6 +177,7 @@ async function persistInitializedSessionMeta(params: {
       agentId: params.agentId,
       mutate: () => params.meta,
       failOnError: true,
+      assertCommitAllowed: params.assertCommitAllowed,
     });
     if (persisted?.acp) {
       return persisted;

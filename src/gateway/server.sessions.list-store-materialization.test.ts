@@ -1,7 +1,6 @@
 /**
- * Sharing resolution runs per row, and each call materialized a whole session
- * lookup store. That made `sessions.list` quadratic in entries even after
- * connection reuse removed the per-row SQLite opens.
+ * Session listing keeps whole-store materialization, sharing refreshes, and
+ * transcript projection work bounded at their owning storage boundaries.
  */
 import path from "node:path";
 import { expect, test, vi } from "vitest";
@@ -35,51 +34,31 @@ const LIST_PARAMS = {
   limit: 100,
 };
 
-async function countMaterializedEntriesForRows(rows: number): Promise<number> {
-  await createSessionStoreDir();
-  const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
-    main: sessionStoreEntry("sess-main"),
-  };
-  for (let index = 0; index < rows; index++) {
-    entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
-      updatedAt: 1_781_000_000_000 - index * 1_000,
-    });
-  }
-  await writeSessionStore({ entries });
-  // Warm lazily-initialized module state so only steady-state reads are counted.
-  await directSessionReq("sessions.list", LIST_PARAMS);
-
-  let materialized = 0;
-  // Only the lookup-store path used by sharing resolution goes through
-  // `listSessionEntriesCore`; the listing itself and ACP metadata use the read-only
-  // variant, so this isolates the per-row store loads under test.
-  const original = sessionAccessor.listSessionEntriesCore;
-  const spies = [
-    vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation(((...args: never[]) => {
-      const result = (original as (...inner: never[]) => unknown[])(...args);
-      materialized += Array.isArray(result) ? result.length : 0;
-      return result;
-    }) as never),
-  ];
-  try {
-    const result = await directSessionReq("sessions.list", LIST_PARAMS);
-    expect(result.ok).toBe(true);
-    return materialized;
-  } finally {
-    for (const spy of spies) {
-      spy.mockRestore();
+test.each([5, 40])(
+  "sessions.list refreshes sharing without rematerializing a %i-row lookup store",
+  async (rows) => {
+    await createSessionStoreDir();
+    const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
+      main: sessionStoreEntry("sess-main"),
+    };
+    for (let index = 0; index < rows; index++) {
+      entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
+        updatedAt: 1_781_000_000_000 - index * 1_000,
+      });
     }
-  }
-}
-
-test("sessions.list does not materialize the lookup store once per row", async () => {
-  const small = await countMaterializedEntriesForRows(5);
-  const large = await countMaterializedEntriesForRows(40);
-
-  // The post-await sharing refresh intentionally rereads current ACL state,
-  // but one request-scoped load per store keeps that refresh linear.
-  expect(large).toBeLessThan(small * 12);
-});
+    await writeSessionStore({ entries });
+    // The initial listing uses read-only access; sharing must not reload the full lookup store.
+    const lookupStoreRead = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
+    try {
+      const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS);
+      expect(result.ok).toBe(true);
+      expect(result.payload?.sessions).toHaveLength(rows + 1);
+      expect(lookupStoreRead).not.toHaveBeenCalled();
+    } finally {
+      lookupStoreRead.mockRestore();
+    }
+  },
+);
 
 test("sessions.list reuses prepared store targets for sharing", async () => {
   await createSessionStoreDir();

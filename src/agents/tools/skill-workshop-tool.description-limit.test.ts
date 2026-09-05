@@ -2,15 +2,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -56,7 +64,7 @@ describe("skill_workshop description validation", () => {
       collection: [
         {
           action: "write" as const,
-          name: "long-description",
+          skill_key: "long-description",
           description: "x".repeat(161),
           content: "# Long Description\n",
         },
@@ -74,7 +82,13 @@ describe("skill_workshop description validation", () => {
       "Skill proposal description is too large (161 bytes, max 160).",
     );
     await expect(
-      fs.access(path.join(workspaceDir, "skills", "long-description", "SKILL.md")),
+      fs.access(
+        path.join(
+          resolveWorkshopSkillsDir({}, "main", testState.env),
+          "long-description",
+          "SKILL.md",
+        ),
+      ),
     ).rejects.toThrow();
     expect(collectionReconcile).not.toHaveProperty("result");
   });

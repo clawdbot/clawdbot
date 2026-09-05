@@ -1,6 +1,8 @@
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
@@ -112,6 +114,7 @@ describe("plugin board widget cells", () => {
     const targetSessionKey = "agent:main:target";
     const responses = [
       {
+        dashboardSessionKey,
         props: { sessionKey: targetSessionKey },
         response: {
           card: {
@@ -124,24 +127,81 @@ describe("plugin board widget cells", () => {
         },
         text: "Run focused checks",
         requestedSessionKey: targetSessionKey,
+        requestedAgentId: "main",
       },
       {
+        dashboardSessionKey,
         props: undefined,
         response: { card: null },
         text: "No progress card yet",
         requestedSessionKey: dashboardSessionKey,
+        requestedAgentId: "main",
       },
+      ...(
+        [
+          ["agent:research:global", undefined, "agent:research:global"],
+          ["agent:research:global", "global", "agent:research:global"],
+          ["agent:main:global", "global", "agent:main:global"],
+          ["agent:research:global", "agent:other:global", "agent:other:global"],
+          ["agent:research:main", "global", "agent:research:global"],
+          ["agent:research:dashboard", "notes", "agent:research:notes"],
+          ["agent:main:dashboard", "notes", "agent:main:notes"],
+        ] as const
+      ).map(([scopedDashboardSessionKey, override, requestedSessionKey]) => ({
+        dashboardSessionKey: scopedDashboardSessionKey,
+        props: override ? { sessionKey: override } : undefined,
+        response: {
+          card: {
+            sessionKey: requestedSessionKey,
+            revision: 1,
+            updatedAt: 1,
+            markdown: `Progress for ${requestedSessionKey}`,
+            steps: [{ step: "Owned work", status: "in_progress" }],
+          },
+        },
+        text: `Progress for ${requestedSessionKey}`,
+        requestedSessionKey: !override || override === "global" ? "global" : requestedSessionKey,
+        requestedAgentId: requestedSessionKey.split(":")[1],
+      })),
     ] as const;
 
     for (const [index, scenario] of responses.entries()) {
       const request = vi.fn(async () => scenario.response);
       const context = {
+        sessions: {
+          state: {
+            result: {
+              sessions: [
+                { key: "global", agentId: "main", status: "failed", startedAt: 0, endedAt: 2 },
+                { key: "global", agentId: "research", status: "done", startedAt: 0, endedAt: 2 },
+                {
+                  key: "agent:main:notes",
+                  agentId: "main",
+                  status: "failed",
+                  startedAt: 0,
+                  endedAt: 2,
+                },
+                {
+                  key: "agent:research:notes",
+                  agentId: "research",
+                  status: "done",
+                  startedAt: 0,
+                  endedAt: 2,
+                },
+              ],
+            },
+          },
+          subscribe: () => () => undefined,
+        },
         gateway: {
           snapshot: {
             phase: "connected",
             client: { request },
             hello: {
-              features: { methods: ["progressCard.get"] },
+              features: {
+                methods: ["progressCard.get"],
+                capabilities: [GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE],
+              },
               controlUiWidgetKinds: [
                 { pluginId: "session", kind: "session:progress", label: "Session progress" },
               ],
@@ -168,7 +228,13 @@ describe("plugin board widget cells", () => {
       const cell = document.createElement("openclaw-board-widget-cell");
       cell.widget = widget;
       cell.rect = { name: widget.name, x: 0, y: index * 4, w: 6, h: 4 };
-      cell.sessionKey = dashboardSessionKey;
+      cell.sessionKey = scenario.dashboardSessionKey;
+      cell.session = {
+        sessionKey: scenario.dashboardSessionKey.endsWith(":global")
+          ? "global"
+          : scenario.dashboardSessionKey,
+        agentId: scenario.dashboardSessionKey.split(":")[1],
+      };
       cell.active = index !== 0;
       cell.callbacks = callbacks();
       provider.append(cell);
@@ -182,14 +248,36 @@ describe("plugin board widget cells", () => {
 
       await vi.waitFor(
         () =>
+          expect(request).toHaveBeenCalledWith("progressCard.get", {
+            sessionKey: scenario.requestedSessionKey,
+            ...(scenario.requestedSessionKey === "global"
+              ? { agentId: scenario.requestedAgentId }
+              : {}),
+          }),
+        CHUNK_LOAD_WAIT,
+      );
+      await vi.waitFor(
+        () =>
           expect(cell.querySelector("openclaw-session-progress-widget")?.textContent).toContain(
             scenario.text,
           ),
         CHUNK_LOAD_WAIT,
       );
-      expect(request).toHaveBeenCalledWith("progressCard.get", {
-        sessionKey: scenario.requestedSessionKey,
-      });
+      if (
+        (scenario.requestedSessionKey === "global" && scenario.requestedAgentId === "research") ||
+        scenario.requestedSessionKey.endsWith(":notes")
+      ) {
+        expect(cell.querySelector(".session-progress-card__step")?.getAttribute("aria-label")).toBe(
+          t("sessionProgressCard.stepLabel", {
+            status: t(
+              scenario.requestedAgentId === "main"
+                ? "sessionProgressCard.status.failed"
+                : "sessionProgressCard.status.completed",
+            ),
+            step: "Owned work",
+          }),
+        );
+      }
     }
   });
 
@@ -252,6 +340,7 @@ describe("plugin board widget cells", () => {
     cell.widget = widget;
     cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
     cell.sessionKey = "agent:main:dashboard";
+    cell.session = { sessionKey: "agent:main:dashboard", agentId: "main" };
     cell.callbacks = callbacks();
     provider.append(cell);
     document.body.append(provider);
@@ -279,6 +368,17 @@ describe("plugin board widget cells", () => {
         expect(
           cell.querySelector('[data-test-id="session-progress-error"]')?.textContent,
         ).toContain("Select a session you can access or change sharing for this session."),
+      CHUNK_LOAD_WAIT,
+    );
+    expect(cell.querySelector('[data-test-id="session-progress-error"] button')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(3);
+
+    cell.widget = { ...widget, props: { sessionKey: "global" } };
+    await vi.waitFor(
+      () =>
+        expect(
+          cell.querySelector('[data-test-id="session-progress-error"]')?.textContent,
+        ).toContain(t("sessionProgressCard.ownerUnsupported")),
       CHUNK_LOAD_WAIT,
     );
     expect(cell.querySelector('[data-test-id="session-progress-error"] button')).toBeNull();

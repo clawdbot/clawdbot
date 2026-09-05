@@ -1,11 +1,8 @@
-import { consumeRootOptionToken } from "../infra/cli-root-options.js";
-import {
-  findMachineOutputRootCommandIndex,
-  hasMachineOutputOption,
-} from "./machine-output-argv.js";
+import { consumeRootOptionToken, findRootCommandIndex } from "../infra/cli-root-options.js";
+import { hasMachineOutputOption } from "./machine-output-argv.js";
 
 function resolveSkillsSubcommand(argv: readonly string[]): string | null {
-  const rootIndex = findMachineOutputRootCommandIndex(argv);
+  const rootIndex = findRootCommandIndex(argv);
   if (rootIndex === null) {
     return null;
   }
@@ -14,7 +11,7 @@ function resolveSkillsSubcommand(argv: readonly string[]): string | null {
     if (!arg || arg === "--") {
       return null;
     }
-    const rootConsumed = consumeRootOptionToken(argv.slice(2), index - 2);
+    const rootConsumed = consumeRootOptionToken(argv, index);
     if (rootConsumed > 0) {
       index += rootConsumed - 1;
       continue;

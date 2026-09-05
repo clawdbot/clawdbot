@@ -50,6 +50,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
@@ -1561,7 +1562,11 @@ describe("activateSetupInference", () => {
       if (outcome === "commit-error") {
         await expect(pending).rejects.toThrow("commit rejected");
       } else {
-        expect((await pending).ok).toBe(outcome === "success");
+        const result = await pending;
+        expect(result.ok).toBe(outcome === "success");
+        if (outcome === "cancelled" || outcome === "success") {
+          expect(result).not.toHaveProperty("disposition");
+        }
       }
       expect(events).toEqual([
         "Testing your AI connection…",
@@ -2089,6 +2094,56 @@ describe("activateSetupInference", () => {
     }
   });
 
+  it.each([false, true])(
+    "guards provider capability consent before it persists (cancelled %s)",
+    async (cancelled) => {
+      const controller = new AbortController();
+      const events: string[] = [];
+      vi.spyOn(pluginEnable, "enablePluginWithCapabilityConsent").mockImplementationOnce(
+        async (config, pluginId, options) => {
+          await options?.beforePersistentEffect?.();
+          events.push("consent");
+          return pluginEnable.enablePluginInConfig(config, pluginId);
+        },
+      );
+      const configHarness = createPreRosterConfigTransformHarness();
+      const runEmbeddedAgent = vi.fn(async () => {
+        events.push("probe");
+        throw new Error("401 rejected credential");
+      });
+
+      const result = await activateGroqSetup({
+        apiKey: "candidate-key",
+        signal: controller.signal,
+        beforePersistentEffect: () => {
+          events.push("lock");
+          if (cancelled) {
+            controller.abort();
+          }
+        },
+        deps: {
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        },
+      });
+
+      expect(events).toEqual(cancelled ? ["lock"] : ["lock", "consent", "probe"]);
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+      expect(configHarness.current()).toEqual({});
+      expect(configHarness.transform).not.toHaveBeenCalled();
+      if (cancelled) {
+        expect(result).toMatchObject({ ok: false, error: "Provider login was cancelled." });
+        expect(result).not.toHaveProperty("disposition");
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          status: "auth",
+          disposition: "rejected-before-promotion",
+        });
+      }
+    },
+  );
+
   it("uses the materialized runtime roster when activating from a missing config file", async () => {
     const runtimeConfig: OpenClawConfig = {
       agents: { entries: { main: { default: true } } },
@@ -2119,11 +2174,10 @@ describe("activateSetupInference", () => {
 
   it.each([
     {
-      name: "auto-enables the lean surface for a verified local model",
+      name: "preserves the full tool surface for a verified local model",
       providerId: "lmstudio",
       initialConfig: {} satisfies OpenClawConfig,
-      expectedLean: true,
-      expectedAnnouncement: true,
+      expectedLean: undefined,
     },
     {
       name: "preserves an explicit localModelLean=false",
@@ -2132,14 +2186,12 @@ describe("activateSetupInference", () => {
         agents: { defaults: { experimental: { localModelLean: false } } },
       } satisfies OpenClawConfig,
       expectedLean: false,
-      expectedAnnouncement: false,
     },
     {
-      name: "stages and announces lean tools for a newly configured managed provider",
+      name: "does not persist experimental defaults for a managed provider",
       providerId: "llama-cpp",
       initialConfig: {} satisfies OpenClawConfig,
-      expectedLean: true,
-      expectedAnnouncement: true,
+      expectedLean: undefined,
     },
     ...[false, true].map((localModelLean) => ({
       name: `preserves explicit lean=${localModelLean} for a managed provider`,
@@ -2148,9 +2200,8 @@ describe("activateSetupInference", () => {
         agents: { defaults: { experimental: { localModelLean } } },
       } satisfies OpenClawConfig,
       expectedLean: localModelLean,
-      expectedAnnouncement: false,
     })),
-  ])("$name", async ({ providerId, initialConfig, expectedLean, expectedAnnouncement }) => {
+  ])("$name", async ({ providerId, initialConfig, expectedLean }) => {
     const modelRef = `${providerId}/qwen-local`;
     const managed = providerId === "llama-cpp";
     const detect = vi.fn(async () => ({ modelRef, detail: "qwen-local at localhost" }));
@@ -2241,10 +2292,7 @@ describe("activateSetupInference", () => {
     if (!result.ok) {
       throw new Error(result.error);
     }
-    expect(result.lines).toEqual([
-      `Inference verified: ${modelRef}`,
-      ...(expectedAnnouncement ? ["I enabled the lean tool surface for this local runtime."] : []),
-    ]);
+    expect(result.lines).toEqual([`Inference verified: ${modelRef}`]);
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: providerId,
@@ -2255,9 +2303,17 @@ describe("activateSetupInference", () => {
     expect(detect).not.toHaveBeenCalled();
     expect(prepare).toHaveBeenCalledOnce();
     expect(updateAuthStore).not.toHaveBeenCalled();
+    expect(configHarness.current().agents?.defaults?.experimental?.localModelLean).toBe(
+      expectedLean,
+    );
+    expect(configHarness.current().wizard ?? {}).not.toHaveProperty("localModelLeanAutoModel");
     expect(configHarness.current()).toMatchObject({
-      ...(expectedAnnouncement ? { wizard: { localModelLeanAutoModel: modelRef } } : {}),
-      agents: { defaults: { model: modelRef, experimental: { localModelLean: expectedLean } } },
+      agents: {
+        defaults: {
+          model: modelRef,
+          ...(expectedLean !== undefined ? { experimental: { localModelLean: expectedLean } } : {}),
+        },
+      },
       models: {
         providers: {
           [providerId]: {
@@ -2433,7 +2489,6 @@ describe("activateSetupInference", () => {
 
   it("accepts OpenAI's gpt-5.6 alias reporting Sol while preserving authored rows", async () => {
     const sourceConfig = {
-      wizard: { localModelLeanAutoModel: "lmstudio/qwen-local" },
       agents: {
         defaults: {
           model: "lmstudio/qwen-local",
@@ -2491,8 +2546,7 @@ describe("activateSetupInference", () => {
     expect(configHarness.current().models?.providers?.openai?.models).toEqual(
       sourceConfig.models.providers.openai.models,
     );
-    expect(configHarness.current().agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-    expect(configHarness.current().wizard?.localModelLeanAutoModel).toBeUndefined();
+    expect(configHarness.current().agents?.defaults?.experimental?.localModelLean).toBe(true);
   });
 
   it("rejects an existing route that changes after its live probe", async () => {
@@ -2545,6 +2599,7 @@ describe("activateSetupInference", () => {
       status: "auth",
       error: expect.stringContaining("verified inference owner changed"),
     });
+    expect(result).not.toHaveProperty("disposition");
     expect(configHarness.current()).toEqual({});
   });
 
@@ -4029,16 +4084,15 @@ describe("activateSetupInference", () => {
           },
         });
 
-      await expect(activate()).resolves.toMatchObject({
-        ok: false,
-        status: "unknown",
-        error: expect.stringContaining("rolled back"),
-      });
-      await expect(activate()).resolves.toMatchObject({
-        ok: false,
-        status: "unknown",
-        error: expect.stringContaining("rolled back"),
-      });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const result = await activate();
+        expect(result).toMatchObject({
+          ok: false,
+          status: "unknown",
+          error: expect.stringContaining("rolled back"),
+        });
+        expect(result).not.toHaveProperty("disposition");
+      }
       expect(transformConfig).not.toHaveBeenCalled();
       expect(realStoreUpdates).toBe(4);
       expect(
@@ -4301,30 +4355,49 @@ describe("activateSetupInference", () => {
     }
   });
 
-  it("does not persist a provider key after a failed live test", async () => {
+  it("rejects a failed provider-key probe before credential or model promotion", async () => {
     const { stateDir, agentDir, initialConfig } = await createMainAgentFixture();
-    const transformConfig = vi.fn();
+    resolveAgentDir(initialConfig, "main");
+    const configHarness = createConfigTransformHarness(initialConfig);
+    const runEmbeddedAgent = vi.fn(
+      async (params: { agentDir?: string; authProfileId?: string }) => {
+        const probeAgentDir = expectDefined(params.agentDir, "probe auth directory");
+        const profileId = expectDefined(params.authProfileId, "probe auth profile");
+        expect(probeAgentDir).not.toBe(agentDir);
+        expect(readAuthProfileStoreForTest(probeAgentDir).profiles[profileId]).toMatchObject({
+          provider: "groq",
+          key: "bad-groq-key",
+        });
+        expect(readAuthProfileStoreForTest(agentDir).profiles).toEqual({});
+        throw new Error("401 rejected credential bad-groq-key");
+      },
+    );
 
     try {
       const result = await activateGroqSetup({
         apiKey: "bad-groq-key",
+        useRealAuthProfileStore: true,
         workspace: "/tmp/openclaw-workspace",
         deps: {
           readConfigFileSnapshot: mockConfigSnapshot(initialConfig),
-          runEmbeddedAgent: vi.fn(async () => {
-            throw new Error("401 rejected credential bad-groq-key");
-          }) as never,
-          transformConfigWithPendingPluginInstalls: transformConfig as never,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         },
       });
 
-      expect(result).toMatchObject({ ok: false, status: "auth" });
       if (!result.ok) {
         expect(result.error).toContain("401 rejected credential [redacted]");
         expect(result.error).not.toContain("bad-groq-key");
       }
-      expect(readInMemoryAuthProfileStore(agentDir).profiles).toEqual({});
-      expect(transformConfig).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(readAuthProfileStoreForTest(agentDir).profiles).toEqual({});
+      expect(configHarness.current()).toEqual(canonicalizeAgentEntriesForTest(initialConfig));
+      expect(configHarness.transform).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        ok: false,
+        status: "auth",
+        disposition: "rejected-before-promotion",
+      });
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
@@ -5127,6 +5200,7 @@ describe("activateSetupInference", () => {
     });
 
     expect(result).toMatchObject({ ok: false, status: "unavailable" });
+    expect(result).not.toHaveProperty("disposition");
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
     expect(transformConfig).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
@@ -5179,44 +5253,80 @@ describe("activateSetupInference", () => {
     });
   });
 
-  it("reports an indeterminate activation when final Codex retention fails", async () => {
-    const installRecord: PluginInstallRecord = {
-      source: "npm",
-      spec: "@openclaw/codex",
-      installPath: "/tmp/plugins/codex-final-retention-failure",
-    };
-    const markRetainedInstall = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    const refreshPluginRegistry = vi.fn(async () => {});
-    let tempDir: string | undefined;
-    const activation = activateCodexSetup({
-      workspace: "/tmp/openclaw-workspace",
-      deps: {
-        readConfigFileSnapshot: mockConfigSnapshot({}, { includeMetadata: true }),
-        ensureCodexRuntimePlugin: mockCodexRuntimeInstall(installRecord),
-        runEmbeddedAgent: vi.fn(async () => {
-          throw new Error("401 invalid_api_key");
-        }) as never,
-        transformConfigWithPendingPluginInstalls: vi.fn() as never,
-        markRetainedManagedNpmInstall: markRetainedInstall,
-        clearLoadInstalledPluginIndexInstallRecordsCache: vi.fn(),
-        clearPluginMetadataLifecycleCaches: vi.fn(),
-        invalidatePluginRuntimeDiscoveryAfterConfigMutation: vi.fn(async () => {}) as never,
-        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
-        createTempDir: async () => {
-          tempDir = await suiteTempRootTracker.make("case");
-          return tempDir;
+  it.each([true, false])(
+    "settles probe rejection only after final Codex retention (retained %s)",
+    async (retained) => {
+      const installRecord: PluginInstallRecord = {
+        source: "npm",
+        spec: "@openclaw/codex",
+        installPath: "/tmp/plugins/codex-final-retention",
+      };
+      const finalRetentionStarted = createDeferredCore();
+      const finalRetention = createDeferredCore<boolean>();
+      const markRetainedInstall = vi
+        .fn()
+        .mockResolvedValueOnce(true)
+        .mockImplementationOnce(() => {
+          finalRetentionStarted.resolve();
+          return finalRetention.promise;
+        });
+      const refreshPluginRegistry = vi.fn(async () => {});
+      const transformConfig = vi.fn();
+      const settled = vi.fn();
+      let tempDir: string | undefined;
+      const activation = activateCodexSetup({
+        workspace: "/tmp/openclaw-workspace",
+        deps: {
+          readConfigFileSnapshot: mockConfigSnapshot({}, { includeMetadata: true }),
+          ensureCodexRuntimePlugin: mockCodexRuntimeInstall(installRecord),
+          runEmbeddedAgent: vi.fn(async () => {
+            throw new Error("401 invalid_api_key");
+          }) as never,
+          transformConfigWithPendingPluginInstalls: transformConfig as never,
+          markRetainedManagedNpmInstall: markRetainedInstall,
+          clearLoadInstalledPluginIndexInstallRecordsCache: vi.fn(),
+          clearPluginMetadataLifecycleCaches: vi.fn(),
+          invalidatePluginRuntimeDiscoveryAfterConfigMutation: vi.fn(async () => {}) as never,
+          refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+          createTempDir: async () => {
+            tempDir = await suiteTempRootTracker.make("case");
+            return tempDir;
+          },
         },
-      },
-    });
+      });
+      const observed = activation.then(settled, settled);
+      try {
+        await finalRetentionStarted.promise;
+        expect(settled).not.toHaveBeenCalled();
+        expect(transformConfig).not.toHaveBeenCalled();
+      } finally {
+        finalRetention.resolve(retained);
+        await observed;
+      }
 
-    await expect(activation).rejects.toThrow(
-      "stopped before its Codex runtime package could be retained safely",
-    );
-    expect(markRetainedInstall).toHaveBeenCalledTimes(2);
-    expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
-    expect(tempDir).toBeDefined();
-    await expect(fs.stat(tempDir!)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+      const result = settled.mock.calls[0]?.[0];
+      if (retained) {
+        expect(result).toMatchObject({
+          ok: false,
+          status: "auth",
+          disposition: "rejected-before-promotion",
+        });
+      } else {
+        expect(result).toBeInstanceOf(SetupInferenceActivationIndeterminateError);
+        expect(result).toMatchObject({
+          message: expect.stringContaining(
+            "stopped before its Codex runtime package could be retained safely",
+          ),
+        });
+        expect(result).not.toHaveProperty("disposition");
+      }
+      expect(markRetainedInstall).toHaveBeenCalledTimes(2);
+      expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
+      expect(transformConfig).not.toHaveBeenCalled();
+      expect(tempDir).toBeDefined();
+      await expect(fs.stat(tempDir!)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("preserves Gateway registry authority after a failed scoped Codex probe", async () => {
     resetPluginRuntimeStateForTest();
@@ -5306,31 +5416,34 @@ describe("activateSetupInference", () => {
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
   });
 
-  it("marks an unowned Codex package generation retained when the live test fails", async () => {
+  it.each([
+    { status: "auth", error: "401 invalid_api_key" },
+    { status: "unknown", error: "unclassified probe failure" },
+  ])("retains Codex without promoting its rejected $status probe", async ({ status, error }) => {
     const installProjectDir = await suiteTempRootTracker.make("case");
     const packageDir = path.join(installProjectDir, "node_modules", "@openclaw", "codex");
     await fs.mkdir(packageDir, { recursive: true });
-    const transformConfig = vi.fn();
+    const configHarness = createPreRosterConfigTransformHarness();
     const refreshPluginRegistry = vi.fn();
     const runEmbeddedAgent = vi.fn(async () => {
-      throw new Error("401 invalid_api_key");
+      throw new Error(error);
     });
     try {
       const result = await activateCodexSetup({
         deps: {
+          readConfigFileSnapshot: configHarness.readSnapshot as never,
           ensureCodexRuntimePlugin: mockCodexRuntimeInstall({
             source: "npm",
             spec: "@openclaw/codex",
             installPath: packageDir,
           }),
           runEmbeddedAgent: runEmbeddedAgent as never,
-          transformConfigWithPendingPluginInstalls: transformConfig as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           readPersistedInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
           refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
         },
       });
 
-      expect(result).toMatchObject({ ok: false, status: "auth" });
       expect(runEmbeddedAgent).toHaveBeenCalledWith(
         expect.objectContaining({
           config: expect.objectContaining({
@@ -5344,8 +5457,14 @@ describe("activateSetupInference", () => {
       );
       await expect(fs.stat(packageDir)).resolves.toBeDefined();
       expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
-      expect(transformConfig).not.toHaveBeenCalled();
+      expect(configHarness.current()).toEqual({});
+      expect(configHarness.transform).not.toHaveBeenCalled();
       expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({
+        ok: false,
+        status,
+        disposition: "rejected-before-promotion",
+      });
     } finally {
       await fs.rm(installProjectDir, { recursive: true, force: true });
     }

@@ -76,6 +76,11 @@ describe("test runtime prerequisites", () => {
       ["src/commands/doctor-config-preflight.v17-atomicity.process.test.ts"],
       "runtime",
     ],
+    [
+      "Doctor retired plugin config",
+      ["src/commands/doctor-plugin-install-config.process.test.ts"],
+      "runtime",
+    ],
     ["commands directory", ["src/commands"], "runtime"],
     ["commands config", ["test/vitest/vitest.commands.config.ts"], "runtime"],
     ["ordinary Doctor unit test", ["src/commands/doctor-config-preflight.test.ts"], undefined],
@@ -1218,7 +1223,7 @@ describe("scripts/test-projects changed-target routing", () => {
           ? [
               "test/scripts/ci-workflow-guards.test.ts",
               "test/scripts/ci-changed-node-test-plan.test.ts",
-              "test/scripts/labeler-size-label.test.ts",
+              "test/scripts/labeler-label-cap.test.ts",
             ]
           : ["test/scripts/ci-workflow-guards.test.ts"],
       );
@@ -1935,6 +1940,16 @@ describe("scripts/test-projects changed-target routing", () => {
     (testFile) => {
       expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
         config: "test/vitest/vitest.agents-core-isolated.config.ts",
+        includePatterns: [testFile],
+      });
+    },
+  );
+
+  it.each(agentVitestProjectOwners.spawnProductionBoundary.include)(
+    "routes production-boundary agent test %s to its dedicated shard",
+    (testFile) => {
+      expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
+        config: "test/vitest/vitest.agents-spawn-production-boundary.config.ts",
         includePatterns: [testFile],
       });
     },

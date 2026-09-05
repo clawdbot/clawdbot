@@ -43,6 +43,28 @@ describe("resolveCompactionContextTokenBudget", () => {
 });
 
 describe("resolveEmbeddedCompactionThinkingLevel", () => {
+  it.each([
+    { configured: undefined, inherited: "high", expected: "off" },
+    { configured: "low", inherited: "high", expected: "low" },
+    { configured: "inherit", inherited: "high", expected: "high" },
+    { configured: "inherit", inherited: undefined, expected: "off" },
+  ] as const)(
+    "uses the prepared default only when compaction thinking is unset ($configured)",
+    ({ configured, inherited, expected }) => {
+      expect(
+        resolveEmbeddedCompactionThinkingLevel({
+          config: configured
+            ? { agents: { defaults: { compaction: { thinkingLevel: configured } } } }
+            : {},
+          provider: "demo",
+          modelId: "demo-model",
+          inheritedLevel: inherited,
+          compactionThinkingDefault: "off",
+        }),
+      ).toBe(expected);
+    },
+  );
+
   it("lets the compaction override replace the inherited session level", () => {
     expect(
       resolveEmbeddedCompactionThinkingLevel({

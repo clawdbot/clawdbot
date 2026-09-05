@@ -35,7 +35,10 @@ has no macOS app asset, use the newest one that does, or build from source with
 ## First run
 
 1. Install and launch **OpenClaw.app**.
-2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
+2. Pick **This Mac** for a local Gateway, or **Connect to an existing Gateway**
+   to enter its address and sign in. A saved Gateway opens its dashboard after
+   connection and completes first-run setup without changing the Mac's primary
+   Gateway. Continue below when setting up a new Gateway.
 3. For a new local Gateway, wait while the app installs its external CLI runtime
    and starts the Gateway. Connecting to a remote or independently managed local
    Gateway does not require installing a CLI on this Mac.
@@ -54,6 +57,12 @@ recovery.
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
+
+To add another Gateway for dashboard and chat access, open
+**Settings → Gateways → Add Gateway** and enter its hostname or HTTPS address.
+Cloudflare Access Gateways let you sign in with your personal account in the
+default browser. You can also start from **Get the apps → Open in Mac app** on
+the Gateway's website. See [browser sign-in](/platforms/mac/remote#connect-with-your-browser).
 
 Resize the Settings window to fit your display. Long settings panes scroll
 independently of the sidebar, keeping permission and capability controls reachable.
@@ -102,11 +111,17 @@ unknown values stay on stable app builds.
 
 ## Open dashboard links
 
+For a saved Gateway added with [browser sign-in](/platforms/mac/remote#connect-with-your-browser),
+the dashboard uses that profile's Keychain-backed personal session. You do not
+need a second sign-in inside the embedded browser. **Reconnect** in
+**Settings → Gateways** renews an expired session.
+
 For a remote Gateway with identity-aware authentication, the app opens the
 dashboard at its sign-in address: HTTPS `gateway.publicOrigin` for trusted-proxy
 authentication, or the active managed Tailscale Serve address when Tailscale
 identity is enabled. Serve does not require `gateway.publicOrigin`. Complete
-the sign-in inside the dashboard window; your existing Gateway profile then
+the sign-in inside the dashboard window if that profile has no saved browser
+session; your existing Gateway profile then
 owns the displayed identity and chat attribution. The native device connection
 keeps its configured transport, including SSH, and its credentials are not sent
 to the public dashboard or sign-in provider. Shared-secret Gateways without a

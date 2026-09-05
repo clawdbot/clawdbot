@@ -350,6 +350,7 @@ async function discoverCliRecords(
         if (
           !isCliEntrypoint(raw.entrypoint) ||
           raw.type !== "user" ||
+          raw.isMeta === true ||
           !isRecord(raw.message) ||
           raw.message.role !== "user"
         ) {
