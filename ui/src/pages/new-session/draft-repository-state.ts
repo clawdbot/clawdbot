@@ -1,3 +1,4 @@
+import { readMissingScopeError } from "@openclaw/gateway-client/browser";
 import type {
   ProjectRecord,
   WorktreesBranchesResult,
@@ -226,11 +227,16 @@ export class DraftRepositoryController {
             : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot },
         );
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (requestId !== this.requestToken) {
           return;
         }
-        this.adoptResolvedRepository({ kind: "unavailable", repoRoot });
+        const missing = readMissingScopeError(error);
+        this.adoptResolvedRepository(
+          missing
+            ? { kind: "forbidden", repoRoot, missingScope: missing.missingScope }
+            : { kind: "unavailable", repoRoot },
+        );
       });
   }
 

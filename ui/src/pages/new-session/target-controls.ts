@@ -13,7 +13,7 @@ import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "../../components/agent-select-registration.ts";
 import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
-import { resolveCloudPlacementDisabledReason } from "./submit-gates.ts";
+import { repositoryIssueText, resolveCloudPlacementDisabledReason } from "./submit-gates.ts";
 import { renderNewSessionTerminalHost } from "./terminal-start.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
@@ -219,7 +219,7 @@ export function renderNewSessionPlaceControls({
           folderLabel: projectState.label,
           worktree: place.worktree,
           worktreeAvailable: place.worktreeAvailable(),
-          repositoryUnavailable: place.repository.kind === "unavailable",
+          repositoryIssue: repositoryIssueText(place.repository),
           branches,
           branchesLoading: place.repository.kind === "checking",
           baseRef: place.baseRef,

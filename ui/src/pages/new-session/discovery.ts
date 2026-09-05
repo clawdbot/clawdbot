@@ -27,7 +27,11 @@ export type DraftRepositoryState =
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
   | { kind: "direct"; repoRoot: string }
-  | { kind: "unavailable"; repoRoot: string };
+  | { kind: "unavailable"; repoRoot: string }
+  // The Gateway refused the probe for this path (workspace containment), not Git.
+  // sessions.create and sessions.groups.update apply the same containment, so the
+  // folder needs the named scope rather than a retry.
+  | { kind: "forbidden"; repoRoot: string; missingScope: string };
 
 export type DraftCloudProfile = {
   id: string;
