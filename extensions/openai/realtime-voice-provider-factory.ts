@@ -62,6 +62,8 @@ type OpenAIInternalRealtimeBrowserSessionCreateRequest =
 type OpenAIInternalRealtimeVoiceCapabilities = RealtimeVoiceProviderCapabilities & {
   handlesAgentConsult?: boolean;
   supportsGatewayControl?: boolean;
+  voices?: readonly string[];
+  voiceSelectionPolicy?: "allowlist-default";
   voicesByModel?: Record<string, readonly string[]>;
 };
 

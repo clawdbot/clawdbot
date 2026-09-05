@@ -113,6 +113,8 @@ describe("OpenAI realtime voice provider routing", () => {
     ).toMatchObject({
       handlesAgentConsult: true,
       supportsToolCalls: false,
+      voices: ["marin", "cedar"],
+      voiceSelectionPolicy: "allowlist-default",
     });
     expect(
       internalApi.projectPublicProjection({
@@ -149,6 +151,8 @@ describe("OpenAI realtime voice provider routing", () => {
         handlesAgentConsult: true,
         supportsToolCalls: false,
         supportsVideoFrames: false,
+        voices: ["marin", "cedar"],
+        voiceSelectionPolicy: "allowlist-default",
       },
     },
     {
@@ -158,6 +162,8 @@ describe("OpenAI realtime voice provider routing", () => {
         transports: ["webrtc", "gateway-relay"],
         handlesAgentConsult: true,
         supportsToolCalls: false,
+        voices: ["marin", "cedar"],
+        voiceSelectionPolicy: "allowlist-default",
       },
     },
   ])("$name", ({ surface, expected }) => {

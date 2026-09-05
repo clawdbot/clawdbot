@@ -365,6 +365,8 @@ const TalkCatalogProviderSchema = closedObject({
   aliases: Type.Optional(Type.Array(NonEmptyString)),
   models: Type.Optional(Type.Array(Type.String())),
   voices: Type.Optional(Type.Array(Type.String())),
+  activeVoices: Type.Optional(Type.Array(Type.String())),
+  activeVoiceSelectionPolicy: Type.Optional(Type.Literal("allowlist-default")),
   voicesByModel: Type.Optional(Type.Record(Type.String(), Type.Array(Type.String()))),
   defaultModel: Type.Optional(Type.String()),
   modes: Type.Optional(Type.Array(TalkModeSchema)),

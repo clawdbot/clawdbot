@@ -665,6 +665,13 @@ describe("talk.catalog handler", () => {
       provider: { id: "openai" },
       providerConfig: {},
     } as never);
+    mocks.resolveRealtimeVoiceProviderCapabilities.mockReturnValueOnce({
+      transports: ["gateway-relay"],
+      inputAudioFormats: [],
+      outputAudioFormats: [],
+      voices: ["marin", "cedar"],
+      voiceSelectionPolicy: "allowlist-default",
+    });
     const respond = vi.fn();
 
     await callTalkHandler("talk.catalog", {
@@ -691,6 +698,8 @@ describe("talk.catalog handler", () => {
     expect(catalog.realtime.providers[0]).toMatchObject({
       models: ["gpt-realtime-2.1"],
       voices: ["alloy", "marin"],
+      activeVoices: ["marin", "cedar"],
+      activeVoiceSelectionPolicy: "allowlist-default",
     });
     expect(JSON.stringify(catalog)).not.toContain("gpt-live-test-canary");
     // Catalog readiness must mirror talk.client.create: top-level
@@ -716,6 +725,7 @@ describe("talk.catalog handler", () => {
     const provider = {
       id: "relay",
       label: "Relay Voice",
+      voices: ["relay-default"],
       isConfigured,
       capabilities: {
         transports: ["gateway-relay"],
@@ -757,6 +767,7 @@ describe("talk.catalog handler", () => {
     expect(isConfigured).toHaveBeenCalledWith(expect.not.objectContaining({ surface: "bridge" }));
     const catalog = expectRespondOk(respond);
     expect(catalog.realtime).toEqual(expect.objectContaining({ ready: true }));
+    expect(catalog.realtime.providers[0]).toMatchObject({ voices: ["relay-default"] });
   });
 
   it.each(["realtime-fast", "realtime-fast-alias"])(

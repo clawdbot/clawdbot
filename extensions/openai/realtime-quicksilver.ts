@@ -35,4 +35,10 @@ export const OPENAI_QUICKSILVER_CAPABILITIES = {
   handlesAgentConsult: true as const,
   supportsToolCalls: false,
   supportsVideoFrames: false,
-} satisfies Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };
+  voices: OPENAI_GPT_LIVE_VOICES,
+  voiceSelectionPolicy: "allowlist-default" as const,
+} satisfies Partial<RealtimeVoiceProviderCapabilities> & {
+  handlesAgentConsult: true;
+  voices: readonly string[];
+  voiceSelectionPolicy: "allowlist-default";
+};

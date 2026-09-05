@@ -28,9 +28,11 @@ type TalkMutationHarnessOptions = {
     params: Record<string, unknown>,
   ) => Promise<{ triggers: string[] }>;
   activeProvider?: string | null;
+  activeVoiceSelectionPolicy?: "allowlist-default";
   aliases?: string[];
   consultRouting?: string | null;
   defaultModel?: string;
+  model?: string | null;
   openAIProviderModel?: string;
   provider?: string | null;
   transport?: string | null;
@@ -62,9 +64,10 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
                 label: "OpenAI",
                 configured: true,
                 aliases: options.aliases ?? [],
-                models: ["gpt-live-test-canary"],
+                models: [options.defaultModel ?? "gpt-live-test-canary"],
                 voices: ["marin"],
-                voicesByModel: { "gpt-live-test-canary": ["cove", "spruce"] },
+                activeVoices: ["cove", "spruce"],
+                activeVoiceSelectionPolicy: options.activeVoiceSelectionPolicy,
                 transports: options.transports ?? ["gateway-relay"],
                 defaultModel: options.defaultModel ?? "gpt-live-test-canary",
               },
@@ -108,7 +111,9 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
     talk: {
       realtime: {
         provider: options.provider === undefined ? "openai" : options.provider,
-        model: "gpt-realtime-2.1",
+        ...(options.model === null
+          ? {}
+          : { model: options.model === undefined ? "gpt-realtime-2.1" : options.model }),
         transport: options.transport === undefined ? "gateway-relay" : options.transport,
         consultRouting: options.consultRouting,
         providers: options.openAIProviderModel
@@ -758,24 +763,87 @@ describe("renderTalk", () => {
 
 describe("TalkSettingsPage realtime transport mutation", () => {
   it.each([
-    ["gpt-live-test-canary", null, ["", "cove", "spruce"]],
-    [null, null, ["", "cove", "spruce"]],
-    ["gpt-realtime-2.1", null, ["", "marin"]],
-    ["gpt-live-test-canary", "custom-voice", ["", "cove", "spruce", "custom-voice"]],
-  ])("uses the draft model's voice catalog (%s, %s)", async (model, speakerVoice, expected) => {
-    const { page, request } = createTalkMutationHarness({ defaultModel: "gpt-live-test-canary" });
+    ["allowlist-default", true],
+    [undefined, false],
+  ] as const)(
+    "marks absent saved voices unsupported only for authoritative catalogs: %s",
+    async (activeVoiceSelectionPolicy, expectedWarning) => {
+      const { page, request } = createTalkMutationHarness({
+        activeVoiceSelectionPolicy,
+        model: null,
+      });
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+      page.configObject = {
+        talk: {
+          realtime: {
+            provider: "openai",
+            speakerVoice: "custom-voice",
+          },
+        },
+      };
+      await page.updateComplete;
+
+      const savedOption = page.querySelector<HTMLOptionElement>('option[value="custom-voice"]');
+      expect(savedOption?.textContent?.includes(t("talkPage.voice.unsupported"))).toBe(
+        expectedWarning,
+      );
+      expect(page.textContent?.includes(t("talkPage.voice.unsupportedDefault"))).toBe(
+        expectedWarning,
+      );
+    },
+  );
+
+  it("uses active-route voices until a public model is drafted, then restores them on reset", async () => {
+    const { page, request, runtimeConfig } = createTalkMutationHarness({
+      activeVoiceSelectionPolicy: "allowlist-default",
+      defaultModel: "gpt-realtime-2.1",
+      model: null,
+    });
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    page.configObject = {
+      talk: {
+        realtime: {
+          provider: "openai",
+          speakerVoice: "custom-voice",
+        },
+      },
+    };
     await page.updateComplete;
     expect(
       [...page.querySelectorAll("select option")].map((option) => option.getAttribute("value")),
-    ).toEqual(["", "marin"]);
+    ).toEqual(["", "cove", "spruce", "custom-voice"]);
+    expect(page.textContent).toContain(t("talkPage.voice.unsupportedDefault"));
 
-    page.configObject = { talk: { realtime: { provider: "openai", model, speakerVoice } } };
+    page.configObject = {
+      talk: {
+        realtime: {
+          provider: "openai",
+          model: "gpt-realtime-2.1",
+          speakerVoice: "custom-voice",
+        },
+      },
+    };
     await page.updateComplete;
-
     expect(
       [...page.querySelectorAll("select option")].map((option) => option.getAttribute("value")),
-    ).toEqual(expected);
+    ).toEqual(["", "marin", "custom-voice"]);
+    expect(page.textContent).not.toContain(t("talkPage.voice.unsupportedDefault"));
+
+    page.changeModel(null);
+    expect(runtimeConfig.removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "model"]);
+    page.configObject = {
+      talk: {
+        realtime: {
+          provider: "openai",
+          speakerVoice: "custom-voice",
+        },
+      },
+    };
+    await page.updateComplete;
+    expect(
+      [...page.querySelectorAll("select option")].map((option) => option.getAttribute("value")),
+    ).toEqual(["", "cove", "spruce", "custom-voice"]);
+    expect(page.textContent).toContain(t("talkPage.voice.unsupportedDefault"));
     expect(request).toHaveBeenCalledTimes(1);
   });
 

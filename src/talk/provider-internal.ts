@@ -22,6 +22,10 @@ import type {
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
 
 export type InternalRealtimeVoiceProviderCapabilities = RealtimeVoiceProviderCapabilities & {
+  /** Dynamic voice choices for the effective route without exposing its model identifier. */
+  voices?: readonly string[];
+  /** Treat absent configured voices as unsupported and fall back to the provider default. */
+  voiceSelectionPolicy?: "allowlist-default";
   /** Model-specific voice choices; the provider's voices remain the default catalog. */
   voicesByModel?: Record<string, readonly string[]>;
   /** The provider owns agent delegation instead of exposing client-side function tools. */

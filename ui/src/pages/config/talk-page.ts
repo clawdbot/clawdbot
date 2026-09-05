@@ -62,6 +62,8 @@ function toProviderOption(
     aliases: provider.aliases ?? [],
     models: provider.models ?? [],
     voices: provider.voices ?? [],
+    activeVoices: provider.activeVoices,
+    activeVoiceSelectionPolicy: provider.activeVoiceSelectionPolicy,
     voicesByModel: provider.voicesByModel,
     transports: provider.transports ?? [],
     defaultModel: provider.defaultModel ?? null,

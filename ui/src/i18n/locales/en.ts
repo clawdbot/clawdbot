@@ -2784,6 +2784,9 @@ export const en: TranslationMap & {
       title: "Speaker voice",
       description: "Voice used for spoken replies. GPT-Live locks the voice once a call starts.",
       default: "Provider default",
+      unsupported: "unsupported",
+      unsupportedDefault:
+        "This saved voice is unavailable for the selected route. Provider default will be used.",
     },
     gptLive: {
       title: "GPT-Live",
