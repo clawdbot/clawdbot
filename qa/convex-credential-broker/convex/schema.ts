@@ -8,6 +8,7 @@ const leaseEventType = v.union(
   v.literal("acquire"),
   v.literal("acquire_failed"),
   v.literal("release"),
+  v.literal("quarantine"),
 );
 const adminEventType = v.union(v.literal("add"), v.literal("disable"), v.literal("disable_failed"));
 
@@ -28,11 +29,21 @@ export default defineSchema({
         acquiredAtMs: v.number(),
         heartbeatAtMs: v.number(),
         expiresAtMs: v.number(),
+        quarantineOnExpiry: v.optional(v.boolean()),
+        requestId: v.optional(v.string()),
       }),
     ),
   })
     .index("by_kind_status", ["kind", "status"])
     .index("by_kind_lastLeasedAtMs", ["kind", "lastLeasedAtMs"]),
+
+  proof_requests: defineTable({
+    requestId: v.string(),
+    kind: v.string(),
+    ownerId: v.string(),
+    credentialId: v.id("credential_sets"),
+    claimedAtMs: v.number(),
+  }).index("by_request_id", ["requestId"]),
 
   credential_payload_chunks: defineTable({
     credentialId: v.id("credential_sets"),

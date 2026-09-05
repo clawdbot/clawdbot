@@ -1,0 +1,152 @@
+name: Telegram Test Server E2E Proof
+run-name: ${{ format('Telegram Test Server proof PR #{0} @{1}', inputs.pr_number, inputs.candidate_ref) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Exact same-repository PR head SHA
+        required: true
+        type: string
+      pr_number:
+        description: Open pull request whose exact head is under test
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: telegram-test-server-proof-${{ inputs.pr_number }}-${{ inputs.candidate_ref }}
+  cancel-in-progress: false
+
+jobs:
+  admit_request:
+    name: Admit exact Telegram Test Server proof
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check maintainer authority and exact PR head
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+          TARGET_PR: ${{ inputs.pr_number }}
+          WORKFLOW_REF: ${{ github.ref }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        with:
+          script: |
+            if (process.env.WORKFLOW_REF !== "refs/heads/main" || process.env.RUN_ATTEMPT !== "1") {
+              throw new Error("Proof must be dispatched from main on run attempt 1");
+            }
+            const allowed = new Set(["write", "maintain", "admin"]);
+            const permission = await github.rest.repos.getCollaboratorPermissionLevel({
+              ...context.repo,
+              username: context.actor,
+            });
+            if (!allowed.has(permission.data.permission)) {
+              throw new Error("Maintainer-level repository access required");
+            }
+            const { CANDIDATE_SHA, TARGET_PR } = process.env;
+            if (
+              !/^[a-f0-9]{40}$/.test(CANDIDATE_SHA) ||
+              !/^[1-9][0-9]*$/.test(TARGET_PR) ||
+              !Number.isSafeInteger(Number(TARGET_PR))
+            ) {
+              throw new Error("Invalid proof inputs");
+            }
+            const { data: pull } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: Number(TARGET_PR),
+            });
+            if (
+              pull.state !== "open" ||
+              pull.head.sha !== CANDIDATE_SHA ||
+              pull.head.repo?.id !== context.payload.repository.id
+            ) {
+              throw new Error("Exact open same-repository PR head required");
+            }
+      - name: Checkout trusted harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Preserve trusted candidate-ref admission
+        uses: ./.github/actions/mantis-validate-trusted-ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          candidate-ref: ${{ inputs.candidate_ref }}
+
+  run_telegram_proof:
+    name: Run one isolated Telegram Test Server DM
+    needs: admit_request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: qa-live-shared
+    steps:
+      - name: Checkout trusted harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup trusted tooling
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.x
+          install-bun: "false"
+          cache-mode: restore
+      - name: Prepare trusted dependencies before candidate execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive "$GITHUB_WORKFLOW_SHA" |
+            podman build --file scripts/mantis/telegram-test-server-proof.Dockerfile \
+              --tag localhost/mantis-telegram-proof -
+      - name: Build exact candidate without credentials or network
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+        run: node scripts/mantis/prepare-request-telegram.mts "$CANDIDATE_SHA"
+      - name: Prepare pinned TDLib before leasing
+        env:
+          TELEGRAM_USER_DRIVER_TDLIB_CACHE_DIR: ${{ runner.temp }}/mantis-tdlib
+        run: >-
+          python3 scripts/mantis/telegram-driver-preflight.py --prepare
+          .agents/skills/telegram-e2e-userbot/scripts/user-driver.py
+      - name: Run isolated Test Server DM and trusted capture
+        env:
+          TARGET_PR: ${{ inputs.pr_number }}
+          CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+          TELEGRAM_USER_DRIVER_TDLIB_CACHE_DIR: ${{ runner.temp }}/mantis-tdlib
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/mantis/run-request-telegram.mts
+          "$CANDIDATE_SHA" .artifacts/telegram-test-server-proof
+      - name: Upload normalized public observations
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: telegram-test-server-proof-${{ github.run_id }}-1
+          path: |
+            .artifacts/telegram-test-server-proof/telegram-send.json
+            .artifacts/telegram-test-server-proof/provider-request.json
+            .artifacts/telegram-test-server-proof/telegram-reply.json
+          retention-days: 14
+          if-no-files-found: error
+      - name: Summarize proof limits
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          {
+            echo "## Telegram Test Server proof"
+            echo
+            echo "- PR: #${{ inputs.pr_number }}"
+            echo "- Candidate: \`${{ inputs.candidate_ref }}\`"
+            echo "- Transport: Telegram Test Server"
+            echo "- Scope: one DM, deterministic mock provider, normalized trusted observations"
+            echo "- Limits: no production or personal Telegram, live model, readiness, label, repair, close, or merge effect"
+          } >> "$GITHUB_STEP_SUMMARY"

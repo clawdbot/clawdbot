@@ -476,7 +476,7 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
     return sent_ids
 
 
-def publish_recorder_ready(path, recorder):
+def publish_recorder_ready(path, recorder, require_dm_peer=False):
     if not path:
         return
     target = Path(path)
@@ -487,6 +487,13 @@ def publish_recorder_ready(path, recorder):
         "startedAtUnixMs": int(recorder.started_at * 1000),
         "chatId": recorder.chat_id,
     }
+    if require_dm_peer:
+        chat = recorder.client.request({"@type": "getChat", "chat_id": recorder.chat_id})
+        chat_type = chat.get("type") or {}
+        if chat_type.get("@type") != "chatTypePrivate" or chat_type.get("user_id") != recorder.sut_user_id:
+            raise driver.DriverError("Proof recorder requires the selected SUT private chat")
+        payload["chatType"] = "private"
+        payload["peerUserId"] = chat_type["user_id"]
     with pending.open("w") as handle:
         json.dump(payload, handle)
         handle.write("\n")
@@ -508,6 +515,7 @@ def main():
     parser.add_argument("--record", default="/tmp/tg-user-events.ndjson")
     parser.add_argument("--output", default="")
     parser.add_argument("--sut-user-id", default="")
+    parser.add_argument("--proof-dm-peer", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if sum(bool(value) for value in (args.send, args.send_photo, args.scenario)) > 1:
         parser.error("use only one of --send, --send-photo, or --scenario")
@@ -525,7 +533,9 @@ def main():
     sut_user_id = args.sut_user_id or sut.get("id") or ""
 
     recorder = EventRecorder(driver_obj.client, chat_id, args.record, sut_user_id or None)
-    publish_recorder_ready(args.ready_file, recorder)
+    if args.proof_dm_peer and not args.ready_file:
+        parser.error("--proof-dm-peer requires --ready-file")
+    publish_recorder_ready(args.ready_file, recorder, args.proof_dm_peer)
 
     sent_ids = []
     try:

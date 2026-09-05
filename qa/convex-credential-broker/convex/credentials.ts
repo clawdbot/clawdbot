@@ -29,7 +29,7 @@ const listStatus = v.union(v.literal("active"), v.literal("disabled"), v.literal
 type ActorRole = "ci" | "maintainer";
 type CredentialStatus = "active" | "disabled";
 type ListStatus = CredentialStatus | "all";
-type LeaseEventType = "acquire" | "acquire_failed" | "release";
+type LeaseEventType = "acquire" | "acquire_failed" | "release" | "quarantine";
 type AdminEventType = "add" | "disable" | "disable_failed";
 
 type BrokerErrorResult = {
@@ -50,6 +50,8 @@ type CredentialLease = {
   acquiredAtMs: number;
   heartbeatAtMs: number;
   expiresAtMs: number;
+  quarantineOnExpiry?: boolean;
+  requestId?: string;
 };
 
 type CredentialSetRecord = {
@@ -300,6 +302,7 @@ export const prepareLeaseAcquisition = internalQuery({
     kind: v.string(),
     leaseTtlMs: v.optional(v.number()),
     heartbeatIntervalMs: v.optional(v.number()),
+    requestId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const nowMs = Date.now();
@@ -327,13 +330,27 @@ export const prepareLeaseAcquisition = internalQuery({
         `heartbeatIntervalMs must be between ${MIN_HEARTBEAT_INTERVAL_MS} and ${MAX_HEARTBEAT_INTERVAL_MS}.`,
       );
     }
+    if (args.requestId) {
+      if (!/^[a-f0-9]{64}$/.test(args.requestId)) {
+        return { status: "invalid_request" } as const;
+      }
+      const consumed = await ctx.db
+        .query("proof_requests")
+        .withIndex("by_request_id", (q) => q.eq("requestId", args.requestId!))
+        .first();
+      if (consumed) {
+        return { status: "duplicate_request" } as const;
+      }
+    }
 
     const activeRows = (await ctx.db
       .query("credential_sets")
       .withIndex("by_kind_status", (q) => q.eq("kind", args.kind).eq("status", "active"))
       .collect()) as CredentialSetRecord[];
 
-    const availableRows = activeRows.filter((row) => !leaseIsActive(row.lease, nowMs));
+    const availableRows = activeRows.filter(
+      (row) => !leaseIsActive(row.lease, nowMs) && row.lease?.quarantineOnExpiry !== true,
+    );
     sortByLeastRecentlyLeasedThenId(availableRows);
     return {
       status: "ok",
@@ -352,10 +369,47 @@ export const tryAcquireLease = internalMutation({
     credentialId: v.id("credential_sets"),
     leaseTtlMs: v.number(),
     heartbeatIntervalMs: v.number(),
+    quarantineOnExpiry: v.optional(v.boolean()),
+    requestId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const nowMs = Date.now();
+    if (args.requestId) {
+      if (!/^[a-f0-9]{64}$/.test(args.requestId)) {
+        return { status: "invalid_request" } as const;
+      }
+      const consumed = await ctx.db
+        .query("proof_requests")
+        .withIndex("by_request_id", (q) => q.eq("requestId", args.requestId!))
+        .first();
+      if (consumed) {
+        return { status: "duplicate_request" } as const;
+      }
+    }
     const selected = (await ctx.db.get(args.credentialId)) as CredentialSetRecord | null;
+    const expiredQuarantinedLease =
+      selected?.status === "active" &&
+      selected.lease?.quarantineOnExpiry === true &&
+      !leaseIsActive(selected.lease, nowMs)
+        ? selected.lease
+        : undefined;
+    if (selected && expiredQuarantinedLease) {
+      await ctx.db.patch(selected["_id"], {
+        status: "disabled",
+        lease: undefined,
+        updatedAtMs: nowMs,
+      });
+      await insertLeaseEvent({
+        ctx,
+        kind: selected.kind,
+        eventType: "quarantine",
+        actorRole: expiredQuarantinedLease.actorRole,
+        ownerId: expiredQuarantinedLease.ownerId,
+        occurredAtMs: nowMs,
+        credentialId: selected["_id"],
+      });
+      return { status: "unavailable" } as const;
+    }
     if (
       !selected ||
       selected.kind !== args.kind ||
@@ -374,10 +428,28 @@ export const tryAcquireLease = internalMutation({
         acquiredAtMs: nowMs,
         heartbeatAtMs: nowMs,
         expiresAtMs: nowMs + args.leaseTtlMs,
+        ...(args.quarantineOnExpiry ? { quarantineOnExpiry: true } : {}),
+        ...(args.requestId ? { requestId: args.requestId } : {}),
       },
       lastLeasedAtMs: nowMs,
       updatedAtMs: nowMs,
     });
+    if (args.requestId) {
+      await ctx.db.insert("proof_requests", {
+        requestId: args.requestId,
+        kind: args.kind,
+        ownerId: args.ownerId,
+        credentialId: selected["_id"],
+        claimedAtMs: nowMs,
+      });
+    }
+    if (args.quarantineOnExpiry) {
+      await ctx.scheduler.runAfter(
+        args.leaseTtlMs + 1,
+        internal.credentials.quarantineExpiredLease,
+        { credentialId: selected["_id"], leaseToken },
+      );
+    }
 
     await insertLeaseEvent({
       ctx,
@@ -396,7 +468,55 @@ export const tryAcquireLease = internalMutation({
       payload: selected.payload,
       leaseTtlMs: args.leaseTtlMs,
       heartbeatIntervalMs: args.heartbeatIntervalMs,
+      ...(args.requestId ? { requestId: args.requestId } : {}),
     };
+  },
+});
+
+/** Broker-owned fail-closed cleanup for proof leases whose controller stops. */
+export const quarantineExpiredLease = internalMutation({
+  args: {
+    credentialId: v.id("credential_sets"),
+    leaseToken: v.string(),
+  },
+  handler: async (ctx, args): Promise<BrokerOkResult> => {
+    const nowMs = Date.now();
+    const row = (await ctx.db.get(args.credentialId)) as CredentialSetRecord | null;
+    const lease = row?.lease;
+    if (
+      !row ||
+      row.status !== "active" ||
+      !lease ||
+      lease.leaseToken !== args.leaseToken ||
+      lease.quarantineOnExpiry !== true
+    ) {
+      return { status: "ok" };
+    }
+    if (lease.expiresAtMs > nowMs) {
+      await ctx.scheduler.runAfter(
+        lease.expiresAtMs - nowMs + 1,
+        internal.credentials.quarantineExpiredLease,
+        args,
+      );
+      return { status: "ok" };
+    }
+    await ctx.db.patch(args.credentialId, {
+      status: "disabled",
+      lease: undefined,
+      updatedAtMs: nowMs,
+    });
+    await insertLeaseEvent({
+      ctx,
+      kind: row.kind,
+      eventType: "quarantine",
+      actorRole: lease.actorRole,
+      ownerId: lease.ownerId,
+      occurredAtMs: nowMs,
+      credentialId: args.credentialId,
+      code: "CONTROLLER_LEASE_EXPIRED",
+      message: "Proof controller stopped heartbeating before safe release.",
+    });
+    return { status: "ok" };
   },
 });
 
@@ -571,6 +691,49 @@ export const releaseLease = internalMutation({
       ctx,
       kind: args.kind,
       eventType: "release",
+      actorRole: args.actorRole,
+      ownerId: args.ownerId,
+      occurredAtMs: nowMs,
+      credentialId: args.credentialId,
+    });
+    return { status: "ok" };
+  },
+});
+
+/** Removes an uncertain leased identity from acquisition until a maintainer
+ * explicitly inspects and re-provisions it. */
+export const quarantineLease = internalMutation({
+  args: {
+    kind: v.string(),
+    ownerId: v.string(),
+    actorRole,
+    credentialId: v.id("credential_sets"),
+    leaseToken: v.string(),
+  },
+  handler: async (ctx, args): Promise<BrokerErrorResult | BrokerOkResult> => {
+    const nowMs = Date.now();
+    const row = (await ctx.db.get(args.credentialId)) as CredentialSetRecord | null;
+    if (!row) {
+      return brokerError("CREDENTIAL_NOT_FOUND", "Credential record does not exist.");
+    }
+    if (row.kind !== args.kind) {
+      return brokerError("KIND_MISMATCH", "Credential kind did not match this quarantine.");
+    }
+    if (!row.lease) {
+      return brokerError("LEASE_NOT_FOUND", "Credential is not currently leased.");
+    }
+    if (row.lease.ownerId !== args.ownerId || row.lease.leaseToken !== args.leaseToken) {
+      return brokerError("LEASE_NOT_OWNER", "Credential lease owner/token mismatch.");
+    }
+    await ctx.db.patch(args.credentialId, {
+      status: "disabled",
+      lease: undefined,
+      updatedAtMs: nowMs,
+    });
+    await insertLeaseEvent({
+      ctx,
+      kind: args.kind,
+      eventType: "quarantine",
       actorRole: args.actorRole,
       ownerId: args.ownerId,
       occurredAtMs: nowMs,

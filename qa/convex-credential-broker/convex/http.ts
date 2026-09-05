@@ -289,11 +289,34 @@ http.route({
       assertRoleAllowed(tokenRole, actorRole);
       const kind = requireString(body, "kind");
       const ownerId = requireString(body, "ownerId");
+      const requestId = readOptionalHttpString(body, "requestId");
+      if (requestId && !/^[a-f0-9]{64}$/.test(requestId)) {
+        throw new BrokerHttpError(
+          400,
+          "INVALID_BODY",
+          'Expected "requestId" to be lowercase SHA256.',
+        );
+      }
       const prepared = await ctx.runQuery(internal.credentials.prepareLeaseAcquisition, {
         kind,
         leaseTtlMs: optionalPositiveInteger(body, "leaseTtlMs"),
         heartbeatIntervalMs: optionalPositiveInteger(body, "heartbeatIntervalMs"),
+        requestId,
       });
+      if (prepared.status === "duplicate_request") {
+        return jsonResponse(409, {
+          status: "error",
+          code: "REQUEST_ALREADY_CONSUMED",
+          message: "Proof request was already consumed.",
+        });
+      }
+      if (prepared.status === "invalid_request") {
+        return jsonResponse(400, {
+          status: "error",
+          code: "INVALID_BODY",
+          message: "Invalid proof request id.",
+        });
+      }
       if (prepared.status !== "ok") return jsonResponse(200, prepared);
       for (const credentialId of prepared.credentialIds) {
         const result = await ctx.runMutation(internal.credentials.tryAcquireLease, {
@@ -303,8 +326,24 @@ http.route({
           credentialId,
           leaseTtlMs: prepared.leaseTtlMs,
           heartbeatIntervalMs: prepared.heartbeatIntervalMs,
+          quarantineOnExpiry: optionalBoolean(body, "quarantineOnExpiry"),
+          requestId,
         });
         if (result.status === "ok") return jsonResponse(200, result);
+        if (result.status === "duplicate_request") {
+          return jsonResponse(409, {
+            status: "error",
+            code: "REQUEST_ALREADY_CONSUMED",
+            message: "Proof request was already consumed.",
+          });
+        }
+        if (result.status === "invalid_request") {
+          return jsonResponse(400, {
+            status: "error",
+            code: "INVALID_BODY",
+            message: "Invalid proof request id.",
+          });
+        }
       }
       const exhausted = await ctx.runMutation(internal.credentials.recordLeaseAcquisitionFailure, {
         kind,
@@ -397,6 +436,32 @@ http.route({
         leaseToken: requireString(body, "leaseToken"),
       });
 
+      return jsonResponse(200, result);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      return jsonResponse(normalized.httpStatus, normalized.payload);
+    }
+  }),
+});
+
+http.route({
+  path: "/qa-credentials/v1/quarantine",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const tokenRole = resolveAuthRole(parseBearerToken(request));
+      const body = await parseJsonObject(request);
+      const actorRole = parseActorRole(body);
+      assertRoleAllowed(tokenRole, actorRole);
+      const result = await ctx.runMutation(internal.credentials.quarantineLease, {
+        kind: requireString(body, "kind"),
+        ownerId: requireString(body, "ownerId"),
+        actorRole,
+        credentialId: normalizeCredentialId(
+          requireString(body, "credentialId"),
+        ) as Id<"credential_sets">,
+        leaseToken: requireString(body, "leaseToken"),
+      });
       return jsonResponse(200, result);
     } catch (error) {
       const normalized = normalizeError(error);

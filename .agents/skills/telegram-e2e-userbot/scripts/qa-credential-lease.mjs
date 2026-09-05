@@ -226,8 +226,13 @@ export async function acquireQaLease({
   fetchImpl = fetch,
   sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   randomImpl = Math.random,
+  quarantineOnExpiry = false,
+  requestId,
 } = {}) {
   if (!kind) throw new Error("acquireQaLease requires a credential kind.");
+  if (requestId !== undefined && !/^[a-f0-9]{64}$/.test(requestId)) {
+    throw new Error("acquireQaLease requestId must be lowercase SHA256.");
+  }
   const broker = await resolveBrokerConfig({
     env,
     cwd,
@@ -241,7 +246,15 @@ export async function acquireQaLease({
     try {
       acquired = await callBroker(
         "acquire",
-        { kind, ownerId, actorRole: "ci", leaseTtlMs, heartbeatIntervalMs },
+        {
+          kind,
+          ownerId,
+          actorRole: "ci",
+          leaseTtlMs,
+          heartbeatIntervalMs,
+          quarantineOnExpiry,
+          ...(requestId ? { requestId } : {}),
+        },
         requestOptions,
       );
       break;
@@ -266,6 +279,20 @@ export async function acquireQaLease({
   };
   if (!identity.credentialId || !identity.leaseToken) {
     throw new Error("Broker acquire response is missing lease identity.");
+  }
+  if (requestId && acquired.requestId !== requestId) {
+    try {
+      await callBroker("quarantine", identity, requestOptions);
+    } catch (quarantineError) {
+      throw new AggregateError(
+        [
+          new Error("Broker did not acknowledge durable proof request consumption."),
+          quarantineError,
+        ],
+        "Unacknowledged proof request lease could not be quarantined.",
+      );
+    }
+    throw new Error("Broker did not acknowledge durable proof request consumption.");
   }
   let heartbeatError;
   let heartbeatInFlight;
@@ -329,11 +356,19 @@ export async function acquireQaLease({
     credentialId: acquired.credentialId,
     whenUnhealthy,
     assertHealthy,
+    quarantine: async () => {
+      if (released) return;
+      await stopHeartbeat();
+      await callBroker("quarantine", identity, requestOptions);
+      released = true;
+      heartbeatError = new Error("Credential identity was quarantined by the broker");
+      resolveUnhealthy(heartbeatError);
+    },
     release: async () => {
       if (released) return;
-      released = true;
       await stopHeartbeat();
       await callBroker("release", identity, requestOptions);
+      released = true;
     },
   };
 }
