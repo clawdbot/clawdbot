@@ -2,9 +2,9 @@
   "version": 1,
   "rounds": 7,
   "thresholds": {
-    "overallWallRatio": 1.1,
-    "criticalLaneWallRatio": 1.15,
-    "coldWallRatio": 1.2,
+    "overallWallRatio": 1.05,
+    "criticalLaneWallRatio": 1.1,
+    "criticalLaneWallDeltaMs": 1000,
     "improvementRatio": 0.95,
     "improvementPairCount": 5
   },

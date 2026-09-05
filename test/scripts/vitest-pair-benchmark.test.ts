@@ -37,9 +37,9 @@ const manifest: BenchmarkManifest = {
   version: 1,
   rounds: 7,
   thresholds: {
-    overallWallRatio: 1.1,
-    criticalLaneWallRatio: 1.15,
-    coldWallRatio: 1.2,
+    overallWallRatio: 1.05,
+    criticalLaneWallRatio: 1.1,
+    criticalLaneWallDeltaMs: 1000,
     improvementRatio: 0.95,
     improvementPairCount: 5,
   },
@@ -78,16 +78,29 @@ const execution = {
   success: true as const,
 };
 
+type BenchmarkDurations = {
+  baselineMs: number;
+  candidateMs: number;
+};
+
 function recordsFor(
-  candidateRatio: number | ((lane: string, round: number | null) => number),
+  durations:
+    | number
+    | BenchmarkDurations
+    | ((lane: string, round: number | null) => BenchmarkDurations),
 ): BenchmarkRunRecord[] {
-  const ratioFor = typeof candidateRatio === "function" ? candidateRatio : () => candidateRatio;
+  const durationsFor =
+    typeof durations === "function"
+      ? durations
+      : typeof durations === "number"
+        ? () => ({ baselineMs: 100, candidateMs: 100 * durations })
+        : () => durations;
   const records: BenchmarkRunRecord[] = [];
   for (const lane of manifest.lanes) {
     for (let round = 1; round <= manifest.rounds; round += 1) {
       const pair = `measured-${round}-${lane.id}`;
+      const pairDurations = durationsFor(lane.id, round);
       for (const side of ["baseline", "candidate"] as const) {
-        const ratio = side === "candidate" ? ratioFor(lane.id, round) : 1;
         records.push({
           id: `${pair}-${side}`,
           phase: "measured",
@@ -99,7 +112,7 @@ function recordsFor(
           command: ["node"],
           packageManager,
           startedAt: "2026-09-05T00:00:00.000Z",
-          durationMs: 100 * ratio,
+          durationMs: side === "baseline" ? pairDurations.baselineMs : pairDurations.candidateMs,
           userCpuMs: 50,
           systemCpuMs: 10,
           execution,
@@ -107,8 +120,8 @@ function recordsFor(
         });
       }
     }
+    const coldDurations = durationsFor(lane.id, null);
     for (const side of ["baseline", "candidate"] as const) {
-      const ratio = side === "candidate" ? ratioFor(lane.id, null) : 1;
       records.push({
         id: `cold-${lane.id}-${side}`,
         phase: "cold",
@@ -120,7 +133,7 @@ function recordsFor(
         command: ["node"],
         packageManager,
         startedAt: "2026-09-05T00:00:00.000Z",
-        durationMs: 100 * ratio,
+        durationMs: side === "baseline" ? coldDurations.baselineMs : coldDurations.candidateMs,
         userCpuMs: 50,
         systemCpuMs: 10,
         execution,
@@ -135,8 +148,10 @@ function inventoryPaths(lane: BenchmarkManifest["lanes"][number]): string[] {
   return [...(lane.config ? [lane.config] : []), ...lane.files];
 }
 
-function gatewayRegressionRatio(lane: string): number {
-  return new Map([["gateway", 1.3]]).get(lane) ?? 1;
+function gatewayRegressionDurations(lane: string): BenchmarkDurations {
+  return lane === "gateway"
+    ? { baselineMs: 10_000, candidateMs: 13_000 }
+    : { baselineMs: 10_000, candidateMs: 10_000 };
 }
 
 function writeExecutable(file: string, contents: string): void {
@@ -469,7 +484,7 @@ describe("Vitest pair benchmark contract", () => {
   });
 
   it("fails critical regressions and avoids noisy improvement claims", () => {
-    const regression = analyzeBenchmark(recordsFor(gatewayRegressionRatio), manifest);
+    const regression = analyzeBenchmark(recordsFor(gatewayRegressionDurations), manifest);
     expect(regression.verdict).toBe("regression");
     expect(regression.regressions).toStrictEqual(
       expect.arrayContaining([expect.stringContaining("gateway median paired wall ratio")]),
@@ -485,12 +500,101 @@ describe("Vitest pair benchmark contract", () => {
     expect(improved.performance).toBe("improved");
 
     const noisyFaster = analyzeBenchmark(
-      recordsFor((_lane, round) => (round !== null && round <= 4 ? 0.9 : 0.999)),
+      recordsFor((_lane, round) => ({
+        baselineMs: 100,
+        candidateMs: 100 * (round !== null && round <= 4 ? 0.9 : 0.999),
+      })),
       manifest,
     );
     expect(noisyFaster.verdict).toBe("pass");
     expect(noisyFaster.performance).toBe("no-material-change");
     expect(noisyFaster.lanes.every((lane) => lane.candidateImprovedPairs === 4)).toBe(true);
+  });
+
+  it("weights aggregate acceptance by duration for each measured round", () => {
+    const analysis = analyzeBenchmark(
+      recordsFor((lane) =>
+        lane === "gateway"
+          ? { baselineMs: 10_000, candidateMs: 10_600 }
+          : { baselineMs: 100, candidateMs: 90 },
+      ),
+      manifest,
+    );
+
+    expect(analysis.overall.measuredWallRatio).toBeCloseTo(10_870 / 10_300);
+    expect(analysis.verdict).toBe("regression");
+    expect(analysis.regressions[0]).toContain("overall median duration-weighted");
+  });
+
+  it("accepts the exact aggregate boundary and rejects values above it", () => {
+    expect(
+      analyzeBenchmark(recordsFor({ baselineMs: 1000, candidateMs: 1050 }), manifest).verdict,
+    ).toBe("pass");
+    expect(
+      analyzeBenchmark(recordsFor({ baselineMs: 1000, candidateMs: 1050.1 }), manifest).verdict,
+    ).toBe("regression");
+  });
+
+  it.each([
+    {
+      name: "ratio only",
+      baselineMs: 5000,
+      candidateMs: 5600,
+      regression: false,
+    },
+    {
+      name: "delta only",
+      baselineMs: 20_000,
+      candidateMs: 21_000,
+      regression: false,
+    },
+    {
+      name: "exact ratio boundary",
+      baselineMs: 10_000,
+      candidateMs: 11_000,
+      regression: false,
+    },
+    {
+      name: "exact delta boundary",
+      baselineMs: 5000,
+      candidateMs: 6000,
+      regression: true,
+    },
+    {
+      name: "ratio and delta above thresholds",
+      baselineMs: 10_000,
+      candidateMs: 11_200,
+      regression: true,
+    },
+  ])("applies both critical lane thresholds: $name", ({ baselineMs, candidateMs, regression }) => {
+    const analysis = analyzeBenchmark(
+      recordsFor((lane) => ({
+        baselineMs,
+        candidateMs: lane === "gateway" ? candidateMs : baselineMs,
+      })),
+      manifest,
+    );
+    const gateway = analysis.lanes.find((lane) => lane.id === "gateway");
+
+    expect(gateway?.regressions.length > 0).toBe(regression);
+    expect(analysis.verdict).toBe(regression ? "regression" : "pass");
+  });
+
+  it("keeps cold timing diagnostic and records measured lane deltas", () => {
+    const analysis = analyzeBenchmark(
+      recordsFor((_lane, round) =>
+        round === null
+          ? { baselineMs: 100, candidateMs: 1000 }
+          : { baselineMs: 10_000, candidateMs: 10_500 },
+      ),
+      manifest,
+    );
+
+    expect(analysis.verdict).toBe("pass");
+    expect(analysis.regressions).toEqual([]);
+    expect(analysis.overall.coldWallRatio).toBe(10);
+    expect(analysis.lanes.every((lane) => lane.coldWallRatio === 10)).toBe(true);
+    expect(analysis.lanes.every((lane) => lane.measuredWallDeltaMs === 500)).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(

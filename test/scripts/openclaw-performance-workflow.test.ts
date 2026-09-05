@@ -134,6 +134,7 @@ describe("OpenClaw performance workflow", () => {
     const candidate = findStep("Checkout Vitest pair candidate", "vitest_pair");
     const baseline = findStep("Checkout Vitest pair baseline", "vitest_pair");
     const run = findStep("Run Vitest pair benchmark", "vitest_pair");
+    const finalize = findStep("Finalize Vitest pair artifact", "vitest_pair");
     const upload = findStep("Upload Vitest pair artifact", "vitest_pair");
 
     expect(inputs?.mode).toMatchObject({
@@ -170,9 +171,38 @@ describe("OpenClaw performance workflow", () => {
     expect(run.run).toContain("--baseline-sha");
     expect(run.run).toContain("--candidate-sha");
     expect(run.run).toContain('--scratch "$VITEST_PAIR_ROOT/scratch"');
+    expect(finalize.if).toBe("${{ always() }}");
     expect(upload.if).toBe("${{ always() }}");
+    expect(upload.with?.name).toBe("vitest-pair-${{ github.run_id }}-${{ github.run_attempt }}");
+    expect(upload.with?.name).not.toContain("inputs.");
     expect(upload.with?.["if-no-files-found"]).toBe("error");
     expect(upload.with?.["retention-days"]).toBe(30);
+  });
+
+  posixIt("retains a terminal manifest when slash-containing refs fail validation", () => {
+    const validation = findStep("Validate Vitest pair request", "vitest_pair");
+    const root = tempDirs.make("vitest-pair-invalid-ref-");
+    const output = join(root, "results");
+    mkdirSync(output);
+    const target = "a".repeat(40);
+    const result = spawnSync("bash", ["-c", validation.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BASELINE_REF: "refs/heads/main",
+        RUN_ATTEMPT: "1",
+        TARGET_REF: target,
+        VITEST_PAIR_OUTPUT: output,
+        WORKFLOW_SHA: target,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(readFileSync(join(output, "terminal-manifest.json"), "utf8"))).toMatchObject({
+      status: "failure",
+      phase: "input-validation",
+      error: "baseline_ref must be an exact lowercase 40-character SHA",
+    });
   });
 
   it("fully isolates Vitest pair mode from Kova and publication", () => {

@@ -955,10 +955,16 @@ success or failure manifest. The workflow attempts finalization and artifact
 upload after harness failures. Runner loss or external workflow cancellation
 can still prevent those steps from running. Mutable pnpm and runtime caches stay
 in an unuploaded scratch tree. Thresholds are fixed in
-`scripts/vitest-pair-benchmark-lanes.json`; the report claims an improvement
-only when every representative lane's median clears the improvement ratio and
-at least five of its seven pairs individually meet that ratio. Otherwise it
-reports per-lane evidence without a broad improvement claim.
+`scripts/vitest-pair-benchmark-lanes.json`. Acceptance uses the median of seven
+per-round aggregate ratios, with each round weighted by total lane duration, and
+fails above 5%. A critical lane fails only when its median measured ratio is
+above 10% and its median paired delta is at least one second. The single cold
+pair remains diagnostic evidence and never fails acceptance. The report claims
+an improvement only when every representative lane's median clears the
+improvement ratio and at least five of its seven pairs individually meet that
+ratio. Otherwise it reports per-lane evidence without a broad improvement
+claim. Artifacts use only the trusted workflow run ID and attempt in their name;
+the exact baseline and candidate commits remain recorded inside the artifact.
 
 ## Full Release Validation
 

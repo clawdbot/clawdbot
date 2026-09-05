@@ -1651,7 +1651,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: vitest-pair-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.baseline_ref }}-${{ inputs.target_ref }}
+          name: vitest-pair-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/vitest-pair/results
           if-no-files-found: error
           retention-days: 30

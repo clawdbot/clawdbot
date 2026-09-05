@@ -30,7 +30,7 @@ export type BenchmarkLane = {
 type BenchmarkThresholds = {
   overallWallRatio: number;
   criticalLaneWallRatio: number;
-  coldWallRatio: number;
+  criticalLaneWallDeltaMs: number;
   improvementRatio: number;
   improvementPairCount: number;
 };
@@ -110,6 +110,7 @@ export type BenchmarkAnalysis = {
     id: string;
     critical: boolean;
     measuredWallRatio: number;
+    measuredWallDeltaMs: number;
     coldWallRatio: number;
     candidateImprovedPairs: number;
     measuredPairCount: number;
@@ -148,14 +149,10 @@ export function validateBenchmarkManifest(value: unknown): BenchmarkManifest {
     throw new Error("benchmark manifest thresholds are required");
   }
   const thresholds = value.thresholds as Record<string, unknown>;
-  for (const name of [
-    "overallWallRatio",
-    "criticalLaneWallRatio",
-    "coldWallRatio",
-    "improvementRatio",
-  ]) {
+  for (const name of ["overallWallRatio", "criticalLaneWallRatio", "improvementRatio"]) {
     assertFiniteRatio(thresholds[name], `thresholds.${name}`);
   }
+  assertFiniteRatio(thresholds.criticalLaneWallDeltaMs, "thresholds.criticalLaneWallDeltaMs");
   if (
     !Number.isInteger(thresholds.improvementPairCount) ||
     Number(thresholds.improvementPairCount) < 1 ||
@@ -207,7 +204,7 @@ export function validateBenchmarkManifest(value: unknown): BenchmarkManifest {
     thresholds: {
       overallWallRatio: thresholds.overallWallRatio as number,
       criticalLaneWallRatio: thresholds.criticalLaneWallRatio as number,
-      coldWallRatio: thresholds.coldWallRatio as number,
+      criticalLaneWallDeltaMs: thresholds.criticalLaneWallDeltaMs as number,
       improvementRatio: thresholds.improvementRatio as number,
       improvementPairCount: Number(thresholds.improvementPairCount),
     },
@@ -561,11 +558,20 @@ function median(values: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!;
 }
 
-function ratiosFor(
+type PairedMeasurement = {
+  lane: string;
+  round: number | null;
+  baselineDurationMs: number;
+  candidateDurationMs: number;
+  ratio: number;
+  deltaMs: number;
+};
+
+function pairedMeasurementsFor(
   records: BenchmarkRunRecord[],
   phase: "measured" | "cold",
   lane: string,
-): number[] {
+): PairedMeasurement[] {
   const selected = records.filter((record) => record.phase === phase && record.lane === lane);
   const pairs = new Map<string, Partial<Record<BenchmarkSide, BenchmarkRunRecord>>>();
   for (const record of selected) {
@@ -583,12 +589,68 @@ function ratiosFor(
     if (!pair.baseline || !pair.candidate) {
       throw new Error(`benchmark pair is incomplete: ${pairId}`);
     }
-    const baseline = pair.baseline.durationMs;
-    const candidate = pair.candidate.durationMs;
-    if (baseline <= 0 || candidate <= 0) {
+    if (pair.baseline.round !== pair.candidate.round) {
+      throw new Error(`benchmark pair has mismatched rounds: ${pairId}`);
+    }
+    const round = pair.baseline.round;
+    if (
+      (phase === "measured" && (!Number.isInteger(round) || round === null || round < 1)) ||
+      (phase === "cold" && round !== null)
+    ) {
+      throw new Error(`benchmark pair has an invalid ${phase} round: ${pairId}`);
+    }
+    const baselineDurationMs = pair.baseline.durationMs;
+    const candidateDurationMs = pair.candidate.durationMs;
+    if (baselineDurationMs <= 0 || candidateDurationMs <= 0) {
       throw new Error(`benchmark pair has a non-positive duration: ${pairId}`);
     }
-    return candidate / baseline;
+    return {
+      lane,
+      round,
+      baselineDurationMs,
+      candidateDurationMs,
+      ratio: candidateDurationMs / baselineDurationMs,
+      deltaMs: candidateDurationMs - baselineDurationMs,
+    };
+  });
+}
+
+function aggregateRatio(measurements: PairedMeasurement[]): number {
+  const baselineDurationMs = measurements.reduce(
+    (total, measurement) => total + measurement.baselineDurationMs,
+    0,
+  );
+  const candidateDurationMs = measurements.reduce(
+    (total, measurement) => total + measurement.candidateDurationMs,
+    0,
+  );
+  return candidateDurationMs / baselineDurationMs;
+}
+
+function measuredAggregateRatios(
+  measurements: PairedMeasurement[],
+  manifest: BenchmarkManifest,
+): number[] {
+  const expectedLanes = manifest.lanes.map((lane) => lane.id).toSorted();
+  const byRound = new Map<number, PairedMeasurement[]>();
+  for (const measurement of measurements) {
+    if (measurement.round === null || measurement.round > manifest.rounds) {
+      throw new Error(`benchmark measurement has an invalid round for ${measurement.lane}`);
+    }
+    const round = byRound.get(measurement.round) ?? [];
+    round.push(measurement);
+    byRound.set(measurement.round, round);
+  }
+  return Array.from({ length: manifest.rounds }, (_, index) => index + 1).map((round) => {
+    const roundMeasurements = byRound.get(round) ?? [];
+    const lanes = roundMeasurements.map((measurement) => measurement.lane).toSorted();
+    if (
+      lanes.length !== expectedLanes.length ||
+      lanes.some((lane, laneIndex) => lane !== expectedLanes[laneIndex])
+    ) {
+      throw new Error(`benchmark round ${round} does not contain every lane exactly once`);
+    }
+    return aggregateRatio(roundMeasurements);
   });
 }
 
@@ -596,32 +658,38 @@ export function analyzeBenchmark(
   records: BenchmarkRunRecord[],
   manifest: BenchmarkManifest,
 ): BenchmarkAnalysis {
+  const measuredMeasurements: PairedMeasurement[] = [];
+  const coldMeasurements: PairedMeasurement[] = [];
   const lanes = manifest.lanes.map((lane) => {
-    const wallRatios = ratiosFor(records, "measured", lane.id);
-    const coldRatios = ratiosFor(records, "cold", lane.id);
-    if (wallRatios.length !== manifest.rounds) {
+    const measured = pairedMeasurementsFor(records, "measured", lane.id);
+    const cold = pairedMeasurementsFor(records, "cold", lane.id);
+    if (measured.length !== manifest.rounds) {
       throw new Error(`lane ${lane.id} does not have exactly ${manifest.rounds} measured pairs`);
     }
-    if (coldRatios.length !== 1) {
+    if (cold.length !== 1) {
       throw new Error(`lane ${lane.id} does not have exactly one cold pair`);
     }
+    measuredMeasurements.push(...measured);
+    coldMeasurements.push(...cold);
+    const wallRatios = measured.map((measurement) => measurement.ratio);
     const measuredWallRatio = median(wallRatios);
-    const coldWallRatio = median(coldRatios);
+    const measuredWallDeltaMs = median(measured.map((measurement) => measurement.deltaMs));
+    const coldWallRatio = cold[0]!.ratio;
     const regressions: string[] = [];
-    if (lane.critical && measuredWallRatio > manifest.thresholds.criticalLaneWallRatio) {
+    if (
+      lane.critical &&
+      measuredWallRatio > manifest.thresholds.criticalLaneWallRatio &&
+      measuredWallDeltaMs >= manifest.thresholds.criticalLaneWallDeltaMs
+    ) {
       regressions.push(
-        `${lane.id} median paired wall ratio ${measuredWallRatio.toFixed(3)} exceeds ${manifest.thresholds.criticalLaneWallRatio.toFixed(3)}`,
-      );
-    }
-    if (coldWallRatio > manifest.thresholds.coldWallRatio) {
-      regressions.push(
-        `${lane.id} cold wall ratio ${coldWallRatio.toFixed(3)} exceeds ${manifest.thresholds.coldWallRatio.toFixed(3)}`,
+        `${lane.id} median paired wall ratio ${measuredWallRatio.toFixed(3)} exceeds ${manifest.thresholds.criticalLaneWallRatio.toFixed(3)} with ${measuredWallDeltaMs.toFixed(0)}ms median delta`,
       );
     }
     return {
       id: lane.id,
       critical: lane.critical,
       measuredWallRatio,
+      measuredWallDeltaMs,
       coldWallRatio,
       candidateImprovedPairs: wallRatios.filter(
         (ratio) => ratio <= manifest.thresholds.improvementRatio,
@@ -630,13 +698,12 @@ export function analyzeBenchmark(
       regressions,
     };
   });
-  const allWallRatios = manifest.lanes.flatMap((lane) => ratiosFor(records, "measured", lane.id));
-  const allColdRatios = manifest.lanes.flatMap((lane) => ratiosFor(records, "cold", lane.id));
-  const overallWallRatio = median(allWallRatios);
+  const allWallRatios = measuredMeasurements.map((measurement) => measurement.ratio);
+  const overallWallRatio = median(measuredAggregateRatios(measuredMeasurements, manifest));
   const regressions = lanes.flatMap((lane) => lane.regressions);
   if (overallWallRatio > manifest.thresholds.overallWallRatio) {
     regressions.unshift(
-      `overall median paired wall ratio ${overallWallRatio.toFixed(3)} exceeds ${manifest.thresholds.overallWallRatio.toFixed(3)}`,
+      `overall median duration-weighted paired wall ratio ${overallWallRatio.toFixed(3)} exceeds ${manifest.thresholds.overallWallRatio.toFixed(3)}`,
     );
   }
   const improvedLanes = lanes.filter(
@@ -653,7 +720,7 @@ export function analyzeBenchmark(
     performance,
     overall: {
       measuredWallRatio: overallWallRatio,
-      coldWallRatio: median(allColdRatios),
+      coldWallRatio: aggregateRatio(coldMeasurements),
       candidateImprovedPairs: allWallRatios.filter(
         (ratio) => ratio <= manifest.thresholds.improvementRatio,
       ).length,
