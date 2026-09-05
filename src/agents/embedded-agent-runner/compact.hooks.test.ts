@@ -17,6 +17,7 @@ import {
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import {
   requireActivePluginRegistry,
   withPluginRegistrationContext,
@@ -3325,19 +3326,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("carries the prepared provider reconciler into direct compaction", async () => {
     mockResolvedModel();
     const reconcile = vi.fn(async () => undefined);
-    const buildDefaultPlan = buildAgentRuntimePlanMock.getMockImplementation();
-    if (!buildDefaultPlan) {
-      throw new Error("Compaction runtime plan fixture is not configured");
-    }
-    buildAgentRuntimePlanMock.mockImplementation((params) => ({
-      ...buildDefaultPlan(params),
-      providerRuntimeHandle: {
-        provider: params.provider,
-        modelId: params.modelId,
-        workspaceDir: params.workspaceDir,
-        prepared: true,
-        plugin: { reconcileLocalService: reconcile },
-      },
+    const { resolvePreparedProviderRuntimeHandle } = await import("../runtime-plan/build.js");
+    vi.mocked(resolvePreparedProviderRuntimeHandle).mockImplementationOnce((params) => ({
+      provider: params.provider,
+      modelId: params.modelId,
+      workspaceDir: params.workspaceDir,
+      prepared: true,
+      plugin: { id: params.provider, label: "Fixture", auth: [], reconcileLocalService: reconcile },
     }));
 
     await expect(compactEmbeddedAgentSessionDirect(wrappedCompactionArgs())).resolves.toMatchObject(
@@ -3348,6 +3343,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       model: object;
     };
     expect(getModelProviderLocalServiceReconciler(streamRegistration.model)).toBe(reconcile);
+    expect(getModelProviderRuntimePluginHandle(streamRegistration.model)).toBe(
+      buildAgentRuntimePlanMock.mock.calls[0]?.[0].providerRuntimeHandle,
+    );
   });
 
   it("aborts in-flight compaction when the caller abort signal fires", async () => {
