@@ -1074,6 +1074,9 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       } else if (scenario === "allowlist-excluded") {
         cfg.plugins = { ...cfg.plugins, allow: ["different-plugin"] };
       }
+      if (scenario === "bundled") {
+        mockCurrentBundledPlugin(pluginId, packageName);
+      }
       mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({ [pluginId]: record });
       mocks.loadPluginMetadataSnapshot.mockReturnValue({
         plugins: [
