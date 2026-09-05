@@ -90,7 +90,7 @@ export function createOxlintShards({
 }: PlatformShardOptions = {}) {
   const coreShards = splitCore ? createCoreOxlintShards({ cwd, readDir }) : [CORE_SHARD];
   // Unsplit plugin lint can exceed small-host RAM even with a single lint thread.
-  // Chunk serial runs, and give explicit stripes independently bounded Programs.
+  // Chunk serial runs; explicit stripes use independently bounded Programs that stay serial.
   const chunkExtensions =
     splitExtensions ||
     platform === "win32" ||
@@ -268,13 +268,14 @@ export async function main(
   const shardArgs = parseShardRunnerArgs(extraArgs);
   const env = resolveLocalCheckEnv(runtimeEnv);
   const hostResources = resolveHostResources();
+  const splitExtensions = shardArgs.extensionStripe !== undefined;
   const shards = createOxlintShards({
     cwd: process.cwd(),
     env,
     platform: process.platform,
     hostResources,
     splitCore: shardArgs.splitCore,
-    splitExtensions: shardArgs.extensionStripe !== undefined,
+    splitExtensions,
   });
   const selectedShards = selectExtensionOxlintStripe(
     selectCoreOxlintStripe(filterOxlintShards(shards, shardArgs.only), shardArgs.coreStripe),
@@ -306,6 +307,7 @@ export async function main(
       platform: process.platform,
       hostResources,
       splitCore: shardArgs.splitCore,
+      splitExtensions,
     });
     // stderr: stdout may carry machine-readable oxlint output for callers.
     console.error(
@@ -507,8 +509,9 @@ export function resolveOxlintShardConcurrency({
   platform = process.platform,
   hostResources,
   splitCore = false,
-}: ResourceOptions & { splitCore?: boolean } = {}) {
-  if (shouldRunOxlintShardsSerial({ env, platform, hostResources })) {
+  splitExtensions = false,
+}: ResourceOptions & { splitCore?: boolean; splitExtensions?: boolean } = {}) {
+  if (splitExtensions || shouldRunOxlintShardsSerial({ env, platform, hostResources })) {
     return 1;
   }
 

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 
@@ -68,11 +69,12 @@ describe("CLI executable implementation identity", () => {
   it.runIf(process.platform === "win32")(
     "rejects mixed-case relative PATH entries and accepts mixed-case absolute entries",
     async () => {
-      // Keep the relative PATH fixture on the same Windows drive as cwd.
+      // Keep the PATH fixture on cwd's drive, outside concurrent compiler input scans.
+      const artifactRoot = path.join(process.cwd(), ".artifacts");
+      fs.mkdirSync(artifactRoot, { recursive: true });
       const root = fs.realpathSync.native(
-        fs.mkdtempSync(path.join(process.cwd(), "openclaw-cli-path-case-")),
+        makeTempDir(tempDirs, "openclaw-cli-path-case-", artifactRoot),
       );
-      tempDirs.push(root);
       const binDir = path.join(root, "bin");
       const executable = path.join(binDir, "mixed-identity.exe");
       fs.mkdirSync(binDir);

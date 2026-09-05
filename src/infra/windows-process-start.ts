@@ -1,6 +1,7 @@
 // Reads PID-reuse-safe Windows process start identities without workspace imports.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { resolveDiagnosticProcessEnv } from "./process-env.ts";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_PROCESS_START_TIMEOUT_MS = 10_000;
@@ -94,6 +95,7 @@ export function readWindowsProcessStartTimeSync(
       `$process = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop; [Console]::Out.Write($process.CreationDate.ToUniversalTime().ToString("o"))`,
     ],
     {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf8",
       timeout: Math.min(timeoutMs, DEFAULT_TIMEOUT_MS),
       windowsHide: true,
@@ -113,6 +115,7 @@ export function readWindowsProcessStartTimeSync(
     windowsWmicPath(),
     ["process", "where", `ProcessId=${pid}`, "get", "CreationDate", "/value"],
     {
+      env: resolveDiagnosticProcessEnv(),
       timeout: remainingMs,
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],

@@ -93,6 +93,8 @@ export const SystemAgentChatResultSchema = closedObject({
     Type.Literal("open-agent"),
     Type.Literal("exit"),
   ]),
+  /** Optional navigation only; the destination obtains its own human authorization. */
+  handoff: Type.Optional(closedObject({ kind: Type.Literal("model-accounts") })),
   /** Optional localized-draft intent for an `open-agent` handoff. */
   agentDraft: Type.Optional(Type.Literal("hatch")),
   /** Destination agent for a specific `open-agent` handoff. */

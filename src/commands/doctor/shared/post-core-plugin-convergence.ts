@@ -1,5 +1,6 @@
 // Reconciles configured plugin installs after the core package update has completed.
 import path from "node:path";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {
@@ -145,9 +146,8 @@ function formatPeerLinkPackageReadWarning(failure: { error: unknown }): PostCore
 /**
  * Mandatory post-core convergence pass. Runs AFTER the core package files
  * are swapped and the in-update doctor pass has already returned, but BEFORE
- * the gateway is restarted. Transient missing-plugin fetch failures stay
- * nonblocking. Consent that prevents activation retains its typed update
- * outcome and, like payload smoke failure, blocks explicit update completion.
+ * the gateway is restarted. Transient repair fetch failures stay nonblocking;
+ * consent that prevents activation and payload smoke failures are errors.
  * Gateway startup quarantines known payload failures before any module import,
  * then boots with those plugins marked configured-unavailable.
  */
@@ -276,7 +276,11 @@ export async function runPostCorePluginConvergence(params: {
     notices,
     warnings,
     outcomes: repair.outcomes,
-    errored: repair.capabilityConsentRequired === true || smoke.failures.length > 0,
+    errored:
+      repair.outcomes?.some(
+        (outcome) =>
+          outcome.status === "error" && outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+      ) === true || smoke.failures.length > 0,
     smokeFailures: smoke.failures,
     installRecords: records,
   };

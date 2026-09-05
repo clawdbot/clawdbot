@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
 import { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { shouldComputeCommandAuthorized } from "../../auto-reply/command-detection.js";
@@ -86,6 +87,7 @@ function hasRestartUnsafeMessageSemantics(rawMessage: string, cfg: OpenClawConfi
 
 function fingerprintRestartSafeChatRequest(params: {
   message: string;
+  mentions?: readonly HumanMention[];
   senderIsOwner: boolean;
 }): string {
   const identity = loadOrCreateProcessDeviceIdentity();
@@ -95,6 +97,9 @@ function fingerprintRestartSafeChatRequest(params: {
         RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN,
         params.message,
         params.senderIsOwner,
+        ...(params.mentions?.length
+          ? [params.mentions.map(({ profileId, start, end }) => [profileId, start, end])]
+          : []),
       ]),
     )
     .digest("hex");
@@ -107,6 +112,7 @@ export function createRestartSafeChatRequest(params: {
   goalRequestFingerprint?: string;
   eligible: boolean;
   message: string;
+  mentions?: readonly HumanMention[];
   senderIsOwner: boolean;
   cfg: OpenClawConfig;
 }): RestartSafeChatRequest | undefined {
@@ -121,6 +127,7 @@ export function createRestartSafeChatRequest(params: {
   return {
     fingerprint: fingerprintRestartSafeChatRequest({
       message: params.message,
+      mentions: params.mentions,
       senderIsOwner: params.senderIsOwner,
     }),
   };

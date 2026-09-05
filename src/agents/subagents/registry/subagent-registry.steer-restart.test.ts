@@ -5,6 +5,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../../../tasks/task-runtime.test-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 
 const noop = () => {};
 let lifecycleHandler:
@@ -203,6 +210,8 @@ describe("subagent registry steer restarts", () => {
     emitSessionLifecycleEventMock.mockReset();
     removeInternalSessionEffectsSessionMock.mockClear();
     mod.resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
   });
 
   const flushAnnounce = async () => {
@@ -317,6 +326,9 @@ describe("subagent registry steer restarts", () => {
     };
     task?: string;
   }) => {
+    if (params.fallback && listMainRuns().includes(params.fallback)) {
+      persistSubagentRunsToDiskOrThrow(subagentRuns, [params.previousRunId]);
+    }
     const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: params.previousRunId,
       nextRunId: params.nextRunId,
@@ -343,6 +355,8 @@ describe("subagent registry steer restarts", () => {
     lifecycleHandler = undefined;
     removeInternalSessionEffectsSessionMock.mockClear();
     mod.resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
   });
 
   it("honors persisted steer suppression and only announces the replacement run", async () => {
@@ -627,13 +641,14 @@ describe("subagent registry steer restarts", () => {
       childSessionKey: "agent:main:subagent:fallback-generation",
       task: "restored replacement source",
     });
-    const fallback = listMainRuns()[0];
-    expect(fallback?.runId).toBe("run-fallback-generation-old");
-    if (!fallback) {
-      throw new Error("expected fallback run");
-    }
-    fallback.generation = 2;
-    mod.releaseSubagentRun(fallback.runId);
+    const fallback = expectDefined(
+      replaceRunAfterSteer({
+        previousRunId: "run-fallback-generation-old",
+        nextRunId: "run-fallback-generation-restored",
+      }),
+      "restored fallback run",
+    );
+    subagentRuns.delete(fallback.runId);
 
     const run = expectDefined(
       replaceRunAfterSteer({
@@ -697,7 +712,7 @@ describe("subagent registry steer restarts", () => {
       }),
       'replaceRunAfterSteer({ previousRunId: "run-legacy-owner-restored", ne... test invariant',
     );
-    expect(second.taskRunId).toBeUndefined();
+    expect(second.taskRunId).toBe("run-legacy-owner-restored");
     expect(second.generation).toBe(3);
   });
 
@@ -719,6 +734,7 @@ describe("subagent registry steer restarts", () => {
     previous.execution.endedAt = 121_000;
     previous.accumulatedRuntimeMs = 0;
     previous.execution.outcome = { status: "ok" };
+    persistSubagentRunsToDiskOrThrow(subagentRuns, [previous.runId]);
 
     const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-runtime-old",
@@ -788,22 +804,22 @@ describe("subagent registry steer restarts", () => {
       childSessionKey: "agent:main:subagent:generation-persist",
       task: "preserve the source owner",
     });
-    mod.testing.setDepsForTest({
-      ensureContextEnginesInitialized: () => {},
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      resolveContextEngine: async () => noopContextEngine,
-      persistSubagentRunsToDiskOrThrow: () => {
-        throw new Error("disk unavailable");
-      },
-    });
-
-    expect(
-      mod.replaceSubagentRunAfterSteerCore({
-        previousRunId: "run-generation-persist-old",
-        nextRunId: "run-generation-persist-new",
-        lifecycleGeneration: "test-generation",
-      }),
-    ).toBe(false);
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`CREATE TEMP TRIGGER reject_generation_replacement
+      BEFORE INSERT ON subagent_runs
+      WHEN NEW.run_id = 'run-generation-persist-new'
+      BEGIN SELECT RAISE(ABORT, 'replacement unavailable'); END`);
+    try {
+      expect(
+        mod.replaceSubagentRunAfterSteerCore({
+          previousRunId: "run-generation-persist-old",
+          nextRunId: "run-generation-persist-new",
+          lifecycleGeneration: "test-generation",
+        }),
+      ).toBe(false);
+    } finally {
+      database.exec("DROP TRIGGER reject_generation_replacement");
+    }
     expect(listMainRuns()).toEqual([
       expect.objectContaining({ runId: "run-generation-persist-old" }),
     ]);
@@ -828,6 +844,7 @@ describe("subagent registry steer restarts", () => {
       announcedAt: 2_000,
       lastDropReason: "sink_unavailable",
     };
+    persistSubagentRunsToDiskOrThrow(subagentRuns, [previous.runId]);
 
     const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delivery-old",
@@ -861,6 +878,7 @@ describe("subagent registry steer restarts", () => {
         resultText: "final summary before wake",
         capturedAt: 1234,
       };
+      persistSubagentRunsToDiskOrThrow(subagentRuns, [previous.runId]);
     }
 
     const replaced = mod.replaceSubagentRunAfterSteerCore({

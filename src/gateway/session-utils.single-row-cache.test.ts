@@ -273,6 +273,9 @@ describe("single gateway session row child projections", () => {
             });
             expect(metadata.entry?.skillsSnapshot).toBeUndefined();
             expect(metadata.entry?.systemPromptReport).toBeUndefined();
+            expect(parse.mock.calls.some(([value]) => value.includes("saved skill prompt"))).toBe(
+              false,
+            );
             expect(loadSessionEntry("main", { agentId: MAIN_AGENT_ID, clone })).toMatchObject({
               agentId: metadata.agentId,
               canonicalKey: metadata.canonicalKey,
@@ -324,11 +327,10 @@ describe("single gateway session row child projections", () => {
       async ({ now, storePath }) => {
         const store: Record<string, SessionEntry> = {
           "agent:main:subagent:parent-a": parentSession("parent-a", now),
-          "agent:main:subagent:child-a": runningChildSession(
-            "child-a",
-            "agent:main:subagent:parent-a",
-            now,
-          ),
+          "agent:main:subagent:child-a": {
+            ...runningChildSession("child-a", "agent:main:subagent:parent-a", now),
+            skillsSnapshot: { prompt: "child saved skill prompt", skills: [] },
+          },
           "agent:main:subagent:parent-b": parentSession("parent-b", now),
           "agent:main:subagent:child-b": runningChildSession(
             "child-b",
@@ -351,7 +353,9 @@ describe("single gateway session row child projections", () => {
           const loaded = loadGatewaySessionEntryReadOnly("agent:main:subagent:parent-a", {
             clone: false,
             includeStoreChildEntries: true,
+            projection: "list",
           });
+          expect(loaded.store["agent:main:subagent:child-a"]?.skillsSnapshot).toBeUndefined();
           const entriesSpy = vi.spyOn(Object, "entries");
           try {
             const row = buildGatewaySessionInfo({ ...loaded, key: loaded.canonicalKey, now });

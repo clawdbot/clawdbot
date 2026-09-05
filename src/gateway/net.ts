@@ -243,7 +243,7 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export function resolveRequestClientIp(
+export function resolveRequestClientIpFromHeaders(
   req?: IncomingMessage,
   trustedProxies?: string[],
   allowRealIpFallback = false,

@@ -225,6 +225,12 @@ providers may also include thinking configuration in their cache identity, so
 changing only the thinking level can increase latency and input-token cost even
 when the model itself stays the same.
 
+Retained reasoning is model-bound on current Claude models. Moving a session
+off Claude Fable 5.1 continues without Fable's earlier thinking, moving onto it
+keeps the thinking of Opus 5, Sonnet 5, Opus 4.8, and Fable 5, and switching
+away and back or changing `/think` invalidates the pre-switch Fable reasoning.
+See [Anthropic](/providers/anthropic#tool-calls-and-retained-thinking).
+
 <a id="model-in-chat" />
 
 ## `/model` in chat
@@ -307,6 +313,18 @@ build stamp is ignored.
 
 The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
+At publish time, it also hydrates model ids and metadata from models.dev for
+providers whose owning plugin explicitly opts in with
+[`modelCatalog.modelsDev`](/plugins/manifest#modelcatalog-reference). Each mapping
+names the upstream provider once, rather than mapping individual models; there
+is no central provider fallback. Manifest values remain authoritative, so
+hydration only fills undefined metadata and never supplies transport settings
+or prices; costs still come from each provider's pricing policy. Only rows with
+tool calling and text output are imported, and rows models.dev marks deprecated
+or retired are skipped. Hydration errors fail publication and preserve the last
+published artifact instead of publishing an incomplete replacement. This is a
+publication-time contract: it adds no Gateway fetches or hot reload, and updated
+metadata still becomes visible after a Gateway restart.
 Its scheduled workflow checks OpenClaw's default-branch plugin manifests and
 public pricing sources every four hours; every catalog content change is
 preserved as a public commit. Provider-owned policies select complete price

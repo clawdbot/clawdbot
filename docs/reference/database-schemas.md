@@ -4,6 +4,7 @@ read_when:
   - Diagnosing a newer database schema error
   - Checking database compatibility before an update or downgrade
   - Proposing a SQLite or persistent-store change
+  - Preparing storage operations for another database backend
   - Recovering a database for an older OpenClaw release
 title: "Database schemas"
 ---
@@ -17,7 +18,92 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 | Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
-A few high-volume or lifecycle-specific features use dedicated SQLite stores, including the task registry and trajectory data.
+The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
+
+### Meeting transcript tables
+
+Meeting captures use three `STRICT` tables in the shared
+`state/openclaw.sqlite` database, separate from per-agent conversation transcripts.
+The transcript store (`src/transcripts/store.ts`) owns their reads and writes;
+`src/transcripts/sqlite-schema.ts` ensures the tables on first use. Markdown and
+JSON files under the transcripts directory are explicit exports, not runtime
+storage. See [Transcripts CLI](/cli/transcripts).
+
+#### `meeting_transcript_sessions`
+
+One row per capture identity. The primary key is `(session_id, started_at)`;
+`selector` is unique. Indexes support start-time, session-ID, slug, and export-key
+lookups.
+
+| Columns                                  | Type                                        | Purpose                                                                 |
+| ---------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
+| `session_id`, `started_at`               | `TEXT NOT NULL`                             | Capture ID and original start time.                                     |
+| `selector`, `export_key`, `session_slug` | `TEXT NOT NULL`                             | Canonical selector and derived export identity.                         |
+| `provider_id`, `source_json`             | `TEXT NOT NULL`                             | Source provider and locator.                                            |
+| `title`, `stopped_at`, `metadata_json`   | Nullable `TEXT`                             | Display title, terminal time, and session metadata including ownership. |
+| `export_manifest_json`                   | `TEXT NOT NULL`, default `{}`               | Export artifact ownership manifest.                                     |
+| `export_pending_json`                    | `TEXT NOT NULL`, default `[]`               | Pending export artifacts.                                               |
+| `next_utterance_seq`                     | Nonnegative `INTEGER NOT NULL`, default `0` | Next append sequence.                                                   |
+| `created_at_ms`, `updated_at_ms`         | Nonnegative `INTEGER NOT NULL`              | Store timestamps.                                                       |
+
+Reopening an occupancy-driven capture clears `stopped_at` without changing the
+primary key, so the same meeting retains its utterances.
+
+#### `meeting_transcript_utterances`
+
+Append-ordered speech records. The primary key is
+`(session_id, session_started_at, sequence)`; the session pair references
+`meeting_transcript_sessions(session_id, started_at)` with `ON DELETE CASCADE`.
+
+| Columns                                  | Type                           | Purpose                                          |
+| ---------------------------------------- | ------------------------------ | ------------------------------------------------ |
+| `session_id`, `session_started_at`       | `TEXT NOT NULL`                | Owning capture identity.                         |
+| `sequence`                               | Nonnegative `INTEGER NOT NULL` | Stable append order within the capture.          |
+| `utterance_id`, `started_at`, `ended_at` | Nullable `TEXT`                | Provider utterance identity and timing.          |
+| `speaker_id`, `speaker_label`            | Nullable `TEXT`                | Provider speaker identity and display label.     |
+| `text`                                   | `TEXT NOT NULL`                | Captured transcript text.                        |
+| `final`                                  | Nullable `INTEGER`, `0` or `1` | Whether the provider marked the utterance final. |
+| `metadata_json`                          | Nullable `TEXT`                | Provider utterance metadata.                     |
+
+#### `meeting_transcript_summaries`
+
+One current summary per capture. The primary key is
+`(session_id, session_started_at)` and references the session primary key with
+`ON DELETE CASCADE`. At least one of `summary_json` or `markdown` must be non-null.
+
+| Columns                            | Type                           | Purpose                                                                                                     |
+| ---------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `session_id`, `session_started_at` | `TEXT NOT NULL`                | Owning capture identity.                                                                                    |
+| `generated_at`                     | Nullable `TEXT`                | Summary generation time.                                                                                    |
+| `summary_json`                     | Nullable `TEXT`                | Free-form summary, including participants, `source` (`model` or `heuristic`), and optional model reference. |
+| `markdown`                         | Nullable `TEXT`                | Rendered meeting notes.                                                                                     |
+| `utterance_count`                  | Nonnegative `INTEGER NOT NULL` | Number of utterances covered by the stored summary.                                                         |
+
+These are existing feature-local tables. Occupancy episodes and model-backed
+notes do not change their schema or database version.
+
+### Update run ledger
+
+`update_runs` stores one durable record per update in the shared
+`state/openclaw.sqlite` database. `src/infra/update-run-ledger.ts` owns writes
+from the admitting Gateway, orchestrator CLI, and restarted Gateway. The table
+is additive at shared schema version 15: the canonical schema declares it and
+first use ensures it inside the same write transaction. Existing tables and the
+schema version stay unchanged; older readers ignore the new table.
+
+`run_id` is the UUID primary key. Rows retain creation/update timestamps,
+trigger, phase, status, reason, origin, target, before/after versions, steps,
+verification facts, repair attempts, confirmation/finish timestamps, and known
+downtime. Each JSON column has a 16 KiB hard limit with deterministic truncation
+and redaction. The ledger stores bounded diagnostic summaries, not raw logs or
+credentials. There is no automatic history deletion.
+
+The CLI and Gateway share WAL-backed transactions, including while the Gateway
+is stopped. The first terminal outcome wins; subsequent verification can enrich
+its observed facts without rewriting success, failure, skip, or rollback status.
+The restart sentinel carries `stats.runId` and remains the continuation owner;
+consuming it does not delete the run row. Chat, CLI, and status reports read that
+row. See [Run history and reports](/cli/update#run-history-and-reports).
 
 ## Versioning contract
 
@@ -130,6 +216,157 @@ Disconnect removes usable local credentials and retains a secret-free disconnect
 Personal publication receipts remain for the logical session's lifetime. Archive/reset preserves receipts and invalidates incompatible unfinished work. Permanent session deletion fences execution and removes its personal receipts. There is no timed idempotency expiry, and deleting local state does not undo an already-created GitHub commit or pull request.
 
 See the accepted [personal GitHub ownership and publication design](https://github.com/openclaw/openclaw/issues/133590) and the operator-facing [GitHub connections guide](/concepts/user-model#github-connections).
+
+## Personal model accounts
+
+Personal model accounts use the existing `secret_store_entries` identity scope, keyed by the canonical Gateway profile. A versioned `model-accounts` record owns provider selections, while each `model-account:<profile-id>` record owns one inline OAuth or token credential and its usage state. Each record retains the existing 64 KiB secret-store limit; connecting more accounts or merging profiles does not combine credentials under one size limit. This adds no table, column, index, or schema version. Generic secret-list/read methods and profile preferences do not expose these records.
+
+The credential and its selected link commit in one synchronous transaction after the Gateway revalidates the initiating authorization. Runtime loads only an explicitly selected credential and routes refresh and usage updates to that same owner. Shared and agent-local auth saves exclude the reserved personal-profile namespace, including runtime snapshots and CLI mirrors.
+
+Unlink records an explicit disconnected selection and retains credentials used by existing session pins. A verified identity merge transfers only the live source's records, preserving the target's selections and disconnections while retaining old credential IDs for pinned sessions. Credentials stranded on an alias by an older build are not adopted at runtime. A compatible downgrade leaves private records outside the older shared-account pool; re-upgrade can use retained records, while accounts stranded by older identity merges need reconnecting.
+
+See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts) for connection, cancellation, session billing, and unlink behavior.
+
+## Apple companion delivery journals
+
+Companion Watch chat has separate app-local storage. It does not change the
+Gateway control-plane or per-agent database schema, and `openclaw doctor`
+does not migrate it. Open the updated iPhone and Watch apps to use the new
+delivery protocol. See [Watch voice and chat](/platforms/ios#apple-watch-voice-and-chat)
+for delivery statuses and recovery.
+
+The iPhone's existing `client-state.sqlite` owns `watch_message_journal`.
+The named GRDB migration `client-state-watch-message-journal-v9` adds that table
+and a nullable `watch_route_generation TEXT` column to
+`gateway_routing_identity`. The generation changes after Forget and re-pairing;
+a late callback or queued command from the old pairing cannot become new work.
+Admission, accepted run identity and terminal receipt state share one journal
+owner, separate from the general chat outbox.
+The journal's nullable `command_fingerprint BLOB` stores SHA-256 of each
+admitted command's canonical bytes. Dismiss preserves this hash, so reusing an
+ID with changed content or submission time cannot return the original result
+after its command text is cleared. The hash expires with the row or is removed
+by Forget; legacy imports have no command fingerprint.
+The migration is registered by shared Apple client storage, so the Mac client
+also sees the additive schema; it does not process companion Watch delivery.
+
+The additive `client-state-watch-message-legacy-receipts-v1` migration creates
+`watch_message_legacy_imports`. It stores SHA-256 hashes of exact legacy command
+IDs and imported content, never the text or Gateway ID. A nullable content hash
+records the older app's ID-only recent-message suppression policy; it is not
+proof of a matching body or successful execution.
+
+Old Watch UserDefaults are decoded and reconciled in one SQLite transaction
+whenever the phone prepares its journal. Imported rows and their hash receipts
+commit together before cleanup checks that both source blobs are unchanged.
+This also recovers messages written by an older app after downgrade. Unprovable
+queued text becomes **Needs review**, never an automatic send. Conflicting IDs
+or unseen messages associated with a previously forgotten Gateway preserve the
+source and surface a recovery error instead of discarding or retargeting text.
+
+Imported text remains until explicit discard or Gateway Forget. Its hash-only
+receipt has no timed expiry and survives both actions, so an identical old
+snapshot cannot resurrect deleted text. This storage grows per legacy ID and is
+removed only by a full onboarding reset, which clears the old UserDefaults
+before deleting client state. New commands and their reply replay instead have
+an immutable 48-hour deadline. Dismiss hides a completed card without changing
+its receipt, acknowledgment state or deadline; active deliveries cannot be
+discarded or dismissed.
+Expired copies are pruned when delivery state is next used, including opening
+the phone's delivery list. An idle or suspended app does not promise immediate
+wall-clock erasure.
+
+The Watch owns its outbound commands and received results in its own SQLite
+journal. A 90-second speech timeout does not remove this delivery state or
+cancel the remote run. Both apps commit before issuing their application-level
+admission or terminal receipt. A permanent rejection is explicitly not an
+admission and creates no phone journal row. If dispatch became ambiguous before an accepted run was recorded,
+recovery reports uncertainty rather than automatically executing the message
+again. The phone retains its current WAL policy: this is app-termination
+recovery, not a claim of power-loss durability.
+
+Forget removes phone journal rows in the existing irreversible removal
+transaction, including rows imported without a routing parent. The phone first
+accounts for retained legacy source and refuses removal if that cannot be done
+safely. The additive
+schema leaves the old reader's explicit routing updates intact, and a deletion
+trigger keeps its Forget path effective after downgrade. An older app cannot
+offer the new receipt protocol. Do not remove migration markers or reset
+`client-state.sqlite` to downgrade: that file also contains other user-owned
+client state.
+
+The [accepted design](https://github.com/openclaw/openclaw/issues/136617) records
+the schema, migration, ownership, retention and validation boundaries.
+
+## Preparing for another database backend
+
+SQLite remains the supported runtime store. Preparation for PostgreSQL should
+improve the existing store owners and their tests before adding a driver or
+configuration option. The initial target is remote persistence for one Gateway;
+multiple active Gateways would require a separate ownership and coordination
+design. A shared database alone does not make process-local writer queues,
+session lifecycles, or host-owned leases safe across Gateway instances.
+
+### Keep operations at the owning store
+
+Callers should request domain operations, such as claiming a cron run or
+appending a transcript report, from the store that owns the invariant. That
+owner selects and decodes rows, validates current authority, commits changes,
+and publishes the result. Avoid exposing a generic SQL callback to application
+code or adding an asynchronous wrapper around an existing asynchronous facade.
+The plugin KV API already has asynchronous methods over its SQLite owner.
+
+Use Kysely for ordinary queries and mutations. The current
+`getNodeSqliteKysely` facade compiles queries; `executeSqliteQuerySync` runs them
+on the supplied `node:sqlite` connection. Calling Kysely's asynchronous
+`execute` method on that facade is an error. Query compilation with another
+dialect can identify syntax coupling, but does not prove driver behavior,
+isolation, or database compatibility.
+
+Acquire a connection once for an operation and pass that exact connection
+through its transactional helpers. SQLite write callbacks remain synchronous:
+finish asynchronous planning first, then reread authoritative rows after write
+admission. Publish live session changes and other dependent effects only after
+the durable write succeeds. A future network-backed owner must preserve that
+ordering while awaiting its driver.
+
+### Preserve the data and concurrency contracts
+
+An adapter must make these contracts explicit and verify them against a real
+database:
+
+| Contract           | Required behavior                                                                                                                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Store identity     | Keep global and per-agent ownership, incognito lifetime, quarantine, and disposal explicit. Filesystem paths currently participate in admission and registry identity; replacing a path with a connection string is not sufficient. |
+| Read consistency   | Define whether each operation needs one snapshot or a fresh authoritative reread. Keep ordered, bounded queries and batch enrichment inside that consistency boundary.                                                              |
+| Conditional writes | Preserve exact revision, session generation, writer claim, and lease-owner predicates. A stale or refused mutation must not publish a success result or alter live state.                                                           |
+| Canonical payloads | Preserve serialized transcript and record text where byte identity, replay, or exact JSON comparison is part of the contract. Keep derived query projections separate.                                                              |
+| Scalar decoding    | Decode driver values at the store boundary, including counts, integer ranges, nullable booleans, timestamps, JSON, and binary bytes. Match TypeScript declarations to observed driver values.                                       |
+| Failure and retry  | Define which failures permit retry of the whole operation. Keep external effects outside a retried transaction, and revalidate authority after awaited work.                                                                        |
+
+Kysely's TypeScript types do not convert driver results; the driver determines
+runtime values. See [Kysely data types](https://kysely.dev/docs/recipes/data-types).
+PostgreSQL transactions must use one acquired client, and its default Read
+Committed isolation can give successive statements different snapshots. An
+adapter therefore needs operation-specific isolation and retry decisions, not
+a mechanical replacement of `BEGIN IMMEDIATE`. See
+[node-postgres transactions](https://node-postgres.com/features/transactions)
+and [PostgreSQL isolation](https://www.postgresql.org/docs/current/transaction-iso.html).
+
+Do not automatically convert canonical JSON text to `jsonb`: PostgreSQL's
+`jsonb` representation changes whitespace, object-key order, and duplicate-key
+handling. A searchable `jsonb` projection would need an explicit design and
+migration decision. See [PostgreSQL JSON types](https://www.postgresql.org/docs/current/datatype-json.html).
+
+### Keep engine-specific capabilities owned
+
+SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
+databases, WAL maintenance, integrity checks, and backup operations remain
+SQLite capabilities. Keep their implementation behind the memory or database
+lifecycle owner. A future backend must supply equivalent product behavior or
+an explicit capability boundary; a second SQL dialect alone cannot replace
+these features. Schema, retention, migration, and multi-host changes still use
+the review checkpoint below.
 
 ## Review checkpoint for material changes
 
@@ -262,21 +499,31 @@ Schema 9 stores an `agent_databases.path` value relative to the state directory 
 
 ## Integrity checks
 
-| When                                        | Check                                                           |
-| ------------------------------------------- | --------------------------------------------------------------- |
-| Every open                                  | Validate the `schema_meta` table and primary metadata row       |
-| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan |
-| Gateway background verifier                 | Run the full scan about once daily and log results              |
-| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database    |
+| When                                        | Check                                                               |
+| ------------------------------------------- | ------------------------------------------------------------------- |
+| Every open                                  | Validate the `schema_meta` table and primary metadata row           |
+| Every physical writable agent-database open | Run full integrity, foreign-key, schema, and canonical-index checks |
+| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan     |
+| Gateway background verifier                 | Run the full scan about once daily and log results                  |
+| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database        |
 
-The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier owns the slower recurring full scan for live databases that do not need migration.
+The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
+
+Memory search and maintenance managers borrow the verified per-agent connection. Acquisition does not reopen or rescan a healthy shared handle. Native and transformed plugin modules share the same process-owned connection lifecycle, query cache, and commit observers. Nested synchronous writes use SQLite savepoints on that connection. A manager retains that exact connection against cache eviction until its work drains, then releases its borrow without closing the database. Explicit quarantine and disposal still revoke it. Full memory rebuilds use separate temporary shadow databases and publish their derived tables in one synchronous transaction. Read-only memory status keeps its separate diagnostic connection and does not create or migrate a missing database.
+
+The shared cache targets 64 handles, but live borrows, synchronous transactions, and incognito state are not evicted. After owners release them, the next new connection trims idle handles back to that target.
+
 Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
+
+Background verification errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while proven corruption is reconfirmed by the database owner before quarantine. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
 
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 
 ## Troubleshooting
+
+`SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
 ### Why you cannot go back after updating to 2026.7.2
 

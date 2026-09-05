@@ -635,12 +635,12 @@ export async function runDoctorConfigPreflight(
     }
     if (
       migrationCheckpoint &&
-      shouldPersistRefreshedPluginIndex &&
-      configSnapshotRead.pluginMetadataSnapshot?.policyHash !==
+      configSnapshotRead.pluginMetadataSnapshot &&
+      configSnapshotRead.pluginMetadataSnapshot.policyHash !==
         resolveInstalledPluginIndexPolicyHash(baseConfig, startupMigrationEnv)
     ) {
-      // State migration can change activation policy after the initial index was derived.
-      // Persist only a generation that describes the post-migration policy.
+      // State migration can invalidate an initially persisted inventory too.
+      // Refresh before deciding whether the post-migration index needs persistence.
       configSnapshotRead = await readConfigSnapshotForPreflight(false);
       snapshot = configSnapshotRead.snapshot;
       baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
@@ -683,8 +683,7 @@ export async function runDoctorConfigPreflight(
       configSnapshotRead = persistedSnapshotRead;
       migrationCheckpointIdentity = persistedIdentity;
     }
-    await completeStartupMigrationPreflight({
-      baseConfig,
+    configSnapshotRead = await completeStartupMigrationPreflight({
       freshConfigGuardAllowed,
       gatewayStartupCheckpointRequired,
       migrationCheckpoint,
@@ -693,13 +692,15 @@ export async function runDoctorConfigPreflight(
       readConfigSnapshotForPreflight,
       shouldRecordStartupCheckpoint,
       shouldRecordStateCheckpoint,
-      snapshot,
+      snapshotRead: configSnapshotRead,
       startupMigrationEnv,
       startupMigrationHeartbeatError,
       startupMigrationLease,
       startupMigrationWarnings,
       stateMigrationsAllowed,
     });
+    snapshot = configSnapshotRead.snapshot;
+    baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
 
     return {
       snapshot,

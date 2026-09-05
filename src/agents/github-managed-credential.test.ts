@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
 
 const commands = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock("../process/exec.js", () => ({ runCommandBuffered: commands.run }));
@@ -33,6 +34,8 @@ const result = (stdout = "") => ({
 
 describe("managed credential isolation", () => {
   beforeEach(() => {
+    // Cases reuse token literals with different verification responses.
+    clearGitHubCredentialVerificationCache();
     commands.run.mockReset().mockImplementation(async () => {
       throw new Error("Unexpected subprocess at the managed credential boundary");
     });

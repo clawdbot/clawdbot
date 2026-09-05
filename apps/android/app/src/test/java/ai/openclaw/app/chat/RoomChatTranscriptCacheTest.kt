@@ -329,36 +329,47 @@ class RoomChatTranscriptCacheTest {
   @Test
   fun legacyTranscriptRowsRemainReadable() =
     runTest {
-      database.dao().insertMessages(
+      val encoded =
         listOf(
+          """["legacy one","legacy two"]""",
+          """[{"type":"text","text":"structured legacy"}]""",
+          """{"content":[],"provenance":{"kind":"internal_system","sourceTool":"restart-sentinel"},"__openclaw":{"kind":"compaction","id":"checkpoint-1","tokensBefore":42500.0,"tokensAfter":2000.0}}""",
+          """{"content":[],"provenance":{"kind":"internal_system"},"__openclaw":{"kind":"compaction"}}""",
+        )
+      database.dao().insertMessages(
+        encoded.mapIndexed { index, payload ->
           CachedMessageEntity(
             gatewayId = "gateway-a",
             agentId = "main",
             sessionKey = "main",
-            rowOrder = 0,
+            rowOrder = index,
             role = "assistant",
-            textPartsJson = """["legacy one","legacy two"]""",
-            timestampMs = 10,
+            textPartsJson = payload,
+            timestampMs = 10L + index,
             idempotencyKey = null,
-          ),
-          CachedMessageEntity(
-            gatewayId = "gateway-a",
-            agentId = "main",
-            sessionKey = "main",
-            rowOrder = 1,
-            role = "assistant",
-            textPartsJson = """[{"type":"text","text":"structured legacy"}]""",
-            timestampMs = 11,
-            idempotencyKey = null,
-          ),
-        ),
+          )
+        },
       )
 
       val loaded = loadTranscript()
 
       assertEquals(listOf("legacy one", "legacy two"), loaded[0].content.map { it.text })
       assertEquals(listOf("structured legacy"), loaded[1].content.map { it.text })
-      assertEquals(listOf(null, null), loaded.map { it.senderLabel })
+      assertTrue(loaded.all { it.senderLabel == null })
+      assertEquals(ChatMessageProvenance("internal_system", "restart-sentinel"), loaded[2].provenance)
+      assertEquals(ChatTranscriptMarker("compaction", "checkpoint-1", 42_500.0, 2_000.0), loaded[2].transcriptMarker)
+      assertEquals(ChatMessageProvenance("internal_system"), loaded[3].provenance)
+      assertEquals(ChatTranscriptMarker("compaction"), loaded[3].transcriptMarker)
+
+      saveTranscript(messages = loaded)
+      assertEquals(
+        encoded.drop(2),
+        database
+          .dao()
+          .messages("gateway-a", "main", "main")
+          .drop(2)
+          .map { it.textPartsJson },
+      )
     }
 
   @Test

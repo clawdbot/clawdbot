@@ -93,6 +93,41 @@ describe("update failure triage diagnostics", () => {
     expect(recorded.error).toContain("terminal recovery cause");
   });
 
+  it("retains package rollback proof without promoting restart safety", async () => {
+    const stateDir = tempDirs.make("openclaw-update-triage-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const outputPath = await writeTriageUpdateFailure(
+      {
+        result: {
+          status: "error",
+          mode: "npm",
+          reason: "openclaw doctor",
+          before: { version: "2026.8.1" },
+          after: { version: "2026.8.1" },
+          steps: [],
+          recovery: {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+            packageRollbackVerified: true,
+          },
+        },
+      },
+      { env },
+    );
+
+    const recorded = await readTriageUpdateFailure(outputPath, { env, stateDir });
+
+    expect(recorded).toMatchObject({
+      result: {
+        recovery: {
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+          packageRollbackVerified: true,
+        },
+      },
+    });
+  });
+
   it("retains actual plugin sync and npm errors after a successful core replacement", async () => {
     const stateDir = tempDirs.make("openclaw-update-triage-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

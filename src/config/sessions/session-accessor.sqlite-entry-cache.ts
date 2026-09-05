@@ -10,10 +10,7 @@ import {
   projectSqliteSessionParticipantsBatch,
 } from "./session-accessor.sqlite-participant-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import {
-  parseSessionEntryJson,
-  sessionEntryMetadataJson,
-} from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -23,12 +20,8 @@ export type SessionEntryCacheSnapshot = {
   keys: string[];
 };
 
-type SqliteSessionEntryCache = LoadedSessionEntrySnapshot & {
+type SqliteSessionEntryCache = SessionEntryCacheSnapshot & {
   validityToken: SqliteSessionEntryCacheValidityToken;
-};
-
-type LoadedSessionEntrySnapshot = SessionEntryCacheSnapshot & {
-  updatedAtByKey: Map<string, number>;
 };
 
 type SqliteSessionEntryCacheValidityToken = {
@@ -40,8 +33,6 @@ type SqliteSessionEntryCacheWriteGeneration = {
   after: number;
   before: number;
 };
-
-const MAX_INCREMENTAL_ENTRY_READ_KEYS = 500;
 
 // Retain listing metadata only; complete prompt snapshots belong to the caller's full read.
 // Weak connection ownership lets closed read-only and evicted database handles release their
@@ -133,57 +124,20 @@ export function trackSessionEntryCacheWrite(
     : { before, after: readSessionNodesGeneration(database.db) };
 }
 
-function parseSessionEntryProjection(
-  row: Parameters<typeof parseSessionEntryJson>[0],
-  projection: "full" | "list" = "list",
-): SessionEntry | null {
-  const entry = parseSessionEntryJson(row);
-  if (entry && projection === "list") {
-    // Drop caller-owned prompt payloads before either a reload or a tracked write publishes.
-    delete entry.skillsSnapshot;
-    delete entry.systemPromptReport;
-  }
-  return entry;
-}
-
-function selectSessionEntrySnapshotRows(
-  database: SessionEntryCacheDatabase,
-  projection: "full" | "list" = "list",
-) {
-  const db = getSessionKysely(database.db);
-  return db
-    .selectFrom("session_nodes")
-    .select("session_key")
-    .select(projection === "full" ? "entry_json" : sessionEntryMetadataJson)
-    .$if(hasSqliteSessionOwnerColumns(database.db), (query) =>
-      query.select([
-        "owner_actor_type",
-        "owner_actor_id",
-        "owner_assigned_by_type",
-        "owner_assigned_by_id",
-        "owner_assigned_at",
-      ]),
-    );
-}
-
 function loadSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
   projection: "full" | "list" = "list",
-): LoadedSessionEntrySnapshot {
+): SessionEntryCacheSnapshot {
   const rows = iterateSqliteQuerySync(
     database.db,
-    selectSessionEntrySnapshotRows(database, projection)
-      .select("updated_at")
-      .orderBy("session_key"),
+    selectSessionEntryRows(database, projection).select("updated_at").orderBy("session_key"),
   );
   const parsedEntries = new Map<string, SessionEntry>();
   const keys: string[] = [];
-  const updatedAtByKey = new Map<string, number>();
   // Stream raw JSON so a full read never holds both serialized and parsed store-wide payloads.
   for (const row of rows) {
     keys.push(row.session_key);
-    updatedAtByKey.set(row.session_key, row.updated_at);
-    const entry = parseSessionEntryProjection(row, projection);
+    const entry = parseSessionEntryJson(row, projection);
     if (!entry) {
       continue;
     }
@@ -193,62 +147,6 @@ function loadSessionEntrySnapshot(
   return {
     entries,
     keys,
-    updatedAtByKey,
-  };
-}
-
-function incrementallyRevalidateSessionEntrySnapshot(
-  database: SessionEntryCacheDatabase,
-  cached: SqliteSessionEntryCache,
-  validityToken: SqliteSessionEntryCacheValidityToken,
-): SqliteSessionEntryCache {
-  const db = getSessionKysely(database.db);
-  const versions = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("session_nodes").select(["session_key", "updated_at"]),
-  ).rows;
-  const updatedAtByKey = new Map(versions.map((row) => [row.session_key, row.updated_at]));
-  const changedKeys = versions
-    .filter((row) => cached.updatedAtByKey.get(row.session_key) !== row.updated_at)
-    .map((row) => row.session_key);
-  const removedKeys = cached.keys.filter((sessionKey) => !updatedAtByKey.has(sessionKey));
-
-  if (changedKeys.length === 0 && removedKeys.length === 0) {
-    cached.validityToken = validityToken;
-    return cached;
-  }
-
-  // Keep the parameterized IN probe below SQLite variable limits. A bulk change is
-  // already cheaper to reload than to preserve individual parsed identities.
-  if (changedKeys.length > MAX_INCREMENTAL_ENTRY_READ_KEYS) {
-    const loaded = loadSessionEntrySnapshot(database);
-    return { ...loaded, validityToken };
-  }
-
-  const entries = new Map(cached.entries);
-  for (const sessionKey of [...changedKeys, ...removedKeys]) {
-    entries.delete(sessionKey);
-  }
-  if (changedKeys.length > 0) {
-    const changedRows = iterateSqliteQuerySync(
-      database.db,
-      selectSessionEntrySnapshotRows(database).where("session_key", "in", changedKeys),
-    );
-    for (const row of changedRows) {
-      const entry = parseSessionEntryProjection(row);
-      if (entry) {
-        entries.set(
-          row.session_key,
-          projectSqliteSessionParticipants(database.db, row.session_key, entry),
-        );
-      }
-    }
-  }
-  return {
-    entries,
-    keys: versions.map((row) => row.session_key).toSorted(),
-    updatedAtByKey,
-    validityToken,
   };
 }
 
@@ -269,47 +167,12 @@ export function readSessionEntryCache(
   if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
     return cached;
   }
-  if (cached && cached.validityToken.dataVersion === validityToken.dataVersion) {
-    // updated_at is entry-controlled, not a rowversion. Other connections can rewrite entry_json
-    // without advancing it, so data_version changes must fully reload or same-ms rewrites go stale.
-    // The TEMP generation changes only for session_nodes DML, including raw same-connection
-    // writers. Unrelated transcript-table writes therefore stay on the O(1) cache-hit path.
-    const revalidated = incrementallyRevalidateSessionEntrySnapshot(
-      database,
-      cached,
-      validityToken,
-    );
-    if (readDataVersion(database.db) !== validityToken.dataVersion) {
-      // An external commit raced the two incremental reads. Reload from one row snapshot;
-      // publishing their mixed result could temporarily omit or retain the wrong keys.
-      const reloadToken = readCacheValidityToken(database.db);
-      const loaded = loadSessionEntrySnapshot(database);
-      const next = { ...loaded, validityToken: reloadToken };
-      sessionEntryCaches.set(database.db, next);
-      return next;
-    }
-    sessionEntryCaches.set(database.db, revalidated);
-    return revalidated;
-  }
+  // Only tracked publications identify changed rows. A generation gap can contain
+  // same-timestamp or owner-only edits; updated_at cannot validate a partial reload.
   const loaded = loadSessionEntrySnapshot(database);
   const next = { ...loaded, validityToken };
   sessionEntryCaches.set(database.db, next);
   return next;
-}
-
-function invalidateTrackedCache(database: OpenClawAgentDatabase): void {
-  const invalidate = () => {
-    sessionEntryCaches.delete(database.db);
-  };
-  if (deferOpenClawAgentPostCommitPublication(database, invalidate)) {
-    return;
-  }
-  if (database.db.isTransaction) {
-    throw new Error(
-      "SQLite session entry writes must use runOpenClawAgentWriteTransaction for cache publication",
-    );
-  }
-  invalidate();
 }
 
 function publishTrackedCacheUpdate(database: OpenClawAgentDatabase, publish: () => void): void {
@@ -326,14 +189,13 @@ function publishTrackedCacheUpdate(database: OpenClawAgentDatabase, publish: () 
 
 function publishSqliteSessionEntryCacheUpsert(
   database: OpenClawAgentDatabase,
-  row: {
-    current_session_id: string;
-    entry_json: string;
-    session_key: string;
-    updated_at: number;
-  },
-  writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
+  update: { sessionKey: string; entry: SessionEntry },
+  writeGeneration: SqliteSessionEntryCacheWriteGeneration,
 ): void {
+  const { sessionKey } = update;
+  // Carry the writer's canonical metadata forward, but own detached nested values.
+  // Saved prompts are caller-owned and must never be serialized into the listing cache.
+  const { skillsSnapshot: _skills, systemPromptReport: _report, ...metadata } = update.entry;
   const ownerRow = hasSqliteSessionOwnerColumns(database.db)
     ? executeSqliteQuerySync(
         database.db,
@@ -346,25 +208,16 @@ function publishSqliteSessionEntryCacheUpsert(
             "owner_assigned_by_id",
             "owner_assigned_at",
           ])
-          .where("session_key", "=", row.session_key)
+          .where("session_key", "=", sessionKey)
           .limit(1),
       ).rows[0]
     : undefined;
-  const parsedEntry = parseSessionEntryProjection({
-    current_session_id: row.current_session_id,
-    entry_json: row.entry_json,
-    updated_at: row.updated_at,
-    ...ownerRow,
-  });
+  const parsedEntry = parseSessionEntryJson({ entry_json: JSON.stringify(metadata), ...ownerRow });
   if (!parsedEntry) {
-    invalidateTrackedCache(database);
+    publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
     return;
   }
-  const entry = projectSqliteSessionParticipants(database.db, row.session_key, parsedEntry);
-  if (!writeGeneration) {
-    invalidateTrackedCache(database);
-    return;
-  }
+  const entry = projectSqliteSessionParticipants(database.db, sessionKey, parsedEntry);
   publishTrackedCacheUpdate(database, () => {
     const cached = sessionEntryCaches.get(database.db);
     if (!cached) {
@@ -374,12 +227,10 @@ function publishSqliteSessionEntryCacheUpsert(
       cached.validityToken.sessionNodesGeneration === writeGeneration.before;
     // Borrowed cache views are synchronous, so the commit owner can update one
     // row in place without cloning every session map on each active-run write.
-    cached.entries.set(row.session_key, entry);
-    const knownKey = cached.updatedAtByKey.has(row.session_key);
-    cached.updatedAtByKey.set(row.session_key, row.updated_at);
-    if (!knownKey) {
-      cached.keys = [...cached.keys, row.session_key].toSorted();
+    if (!cached.entries.has(sessionKey) && !cached.keys.includes(sessionKey)) {
+      cached.keys = [...cached.keys, sessionKey].toSorted();
     }
+    cached.entries.set(sessionKey, entry);
     // Advance only across the bracketed row write. A raw write before/after this bracket leaves
     // a generation gap, while the retained data_version still exposes external commits.
     if (generationIsContinuous) {
@@ -393,17 +244,13 @@ function publishSqliteSessionEntryCacheUpsert(
 
 export function publishSessionEntryCacheInvalidation(
   database: OpenClawAgentDatabase,
-  row?: {
-    current_session_id: string;
-    entry_json: string;
-    session_key: string;
-    updated_at: number;
-  },
+  update?: { sessionKey: string; entry: SessionEntry },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
-  if (row) {
-    publishSqliteSessionEntryCacheUpsert(database, row, writeGeneration);
+  if (update && writeGeneration) {
+    publishSqliteSessionEntryCacheUpsert(database, update, writeGeneration);
     return;
   }
-  invalidateTrackedCache(database);
+  // A cold write has no snapshot to patch; do not hydrate owner/participants or prompt JSON.
+  publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
 }

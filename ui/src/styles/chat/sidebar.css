@@ -125,7 +125,10 @@ openclaw-chat-sidebar-region,
 
 .sidebar-region {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "main-header" "main";
   flex: 1 1 0;
   width: 100%;
   min-width: 0;
@@ -133,21 +136,61 @@ openclaw-chat-sidebar-region,
   overflow: hidden;
 }
 
+.sidebar-region__header {
+  grid-area: main-header;
+  min-width: 0;
+}
+
 .sidebar-region__primary {
   display: flex;
   flex: 1 1 0;
-  min-width: 312px;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
-.sidebar-region--bottom {
-  flex-direction: column;
+.sidebar-region--open:not(.sidebar-region--expanded) {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, var(--side-panel-width));
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "main-header divider side-header" "main divider side";
 }
 
-.sidebar-region--bottom .sidebar-region__primary {
-  width: 100%;
-  min-height: 200px;
+.sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded) {
+  grid-template-columns: minmax(0, var(--side-panel-width)) auto minmax(0, 1fr);
+  grid-template-areas: "side-header divider main-header" "side divider main";
+}
+
+.sidebar-region--bottom.sidebar-region--open:not(.sidebar-region--expanded),
+.sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
+  /* Fit saved heights to short task panes without consuming the main content row. */
+  --side-panel-max-height: calc(
+    (100% - 2 * var(--rail-header-height) - var(--resize-handle-size, 6px)) * 0.6
+  );
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(
+      0,
+      min(var(--side-panel-height), var(--side-panel-max-height))
+    );
+  grid-template-areas: "main-header" "main" "divider" "side-header" "side";
+}
+
+.sidebar-region [data-region="main"] {
+  grid-area: main;
+}
+
+.sidebar-region [data-region="side"] {
+  grid-area: side;
+}
+
+.sidebar-region [data-region-header="side"] {
+  grid-area: side-header;
+  height: auto;
+}
+
+.sidebar-region__primary[hidden],
+.sidebar-region:not(.sidebar-region--open) [data-region-header="side"],
+.sidebar-region--expanded [data-region-header="side"] {
+  display: none;
 }
 
 .sidebar-region--bottom .sidebar-column__divider {
@@ -277,531 +320,11 @@ openclaw-chat-sidebar-region,
 .sidebar-column__divider {
   --resize-handle-line-inline: 100%;
   z-index: 2;
+  grid-area: divider;
 }
 
-.sidebar-region--narrow:not(.sidebar-region--expanded) {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(200px, 1fr) minmax(160px, 1fr);
-}
-
-.sidebar-region--narrow .sidebar-region__primary {
-  grid-column: 1;
-  grid-row: 1;
-  min-width: 0;
-  min-height: 200px;
-}
-
-/* One chat-side panel owns all lateral tools. Tabs change content without
-   changing the panel geometry, so resize and focus survive tab switches. */
-.side-panel {
-  position: relative;
-  flex: 0 0 auto;
-  border-inline-start: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
-  background: var(--bg);
-}
-
-:root[data-theme-mode="dark"] .side-panel {
-  --rail-header-background: var(--bg-accent);
-  background: var(--bg-accent);
-}
-
-.side-panel--bottom {
-  width: 100%;
-  min-width: 0;
-  border-block-start: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
-  border-inline-start: 0;
-}
-
-.side-panel__header {
-  --rail-header-action-glyph-size: 15px;
-  margin-bottom: 0;
-  padding-left: 0;
-  border-bottom: 0;
-}
-
-/* Width model: the tabs region takes the free space, but the strip itself sizes
-   to its tabs and is the only thing that clips. The new-tab control sits outside
-   that clip, so it hugs the last tab when everything fits and stays pinned at
-   the visible edge once the tabs overflow. */
-.side-panel__header-tabs {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  align-items: center;
-}
-
-.side-panel__header-tabs .side-panel-type-menu {
-  flex: 0 0 auto;
-}
-
-.side-panel__header .tabstrip {
-  --track-width: 0;
-  display: block;
-  min-width: 0;
-  flex: 0 1 auto;
-  overflow: hidden;
-}
-
-/* Overflow indicator: the edge that still hides tabs fades out, so a partially
-   scrolled pill reads as "more tabs this way" instead of a hard cut or a tab
-   that lost its label. The classes are physical because the masks are: the ref
-   measures client rects so they stay correct under RTL. */
-.side-panel__header .tabstrip.has-scroll-right {
-  mask-image: linear-gradient(to right, black calc(100% - 30px), transparent 100%);
-}
-
-.side-panel__header .tabstrip.has-scroll-left {
-  mask-image: linear-gradient(to right, transparent 0, black 30px);
-}
-
-.side-panel__header .tabstrip.has-scroll-left.has-scroll-right {
-  mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    black 30px,
-    black calc(100% - 30px),
-    transparent 100%
-  );
-}
-
-.side-panel__header .tabstrip::part(nav) {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-  align-items: center;
-}
-
-/* Third regime: once every tab is at its floor the row must scroll, not clip.
-   Clipping cuts a tab mid-pill, which reads as an icon-only tab and as a hard
-   label cut past the fade mask that lives inside the pill. */
-.side-panel__header .tabstrip::part(tabs) {
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-inline-start: 6px;
-  scrollbar-width: none;
-  scroll-snap-type: inline proximity;
-  scroll-padding-inline: 6px;
-}
-
-.side-panel__header .tabstrip::part(body) {
-  display: none;
-}
-
-.side-panel__header .tabstrip-tab {
-  position: relative;
-  width: max-content;
-  min-width: 63px;
-  max-width: 160px;
-  flex: 0 1 auto;
-  scroll-margin-inline-end: 16px;
-  scroll-snap-align: start;
-}
-
-.side-panel__header .tabstrip-tab:not(:first-of-type) {
-  margin-left: 0;
-}
-
-.side-panel__header .tabstrip-tab__close:has(~ .tabstrip-tab) {
-  margin-right: 0;
-}
-
-.side-panel__header .tabstrip-separator {
-  width: 1px;
-  height: 12px;
-  margin: 0 3px;
-  background: color-mix(in srgb, var(--muted) 20%, transparent);
-  transition: opacity 120ms ease;
-}
-
-/* Hide, never unmount: the separators bracketing the active pill keep their
-   width, otherwise switching tabs shifts every neighbour horizontally. */
-.side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close + .tabstrip-separator,
-.side-panel__header .tabstrip-separator:has(+ .tabstrip-tab[active]) {
-  opacity: 0;
-}
-
-.side-panel__header .tabstrip-tab:is(.is-drop-before, .is-drop-after)::after {
-  position: absolute;
-  top: 5px;
-  bottom: 5px;
-  width: 2px;
-  border-radius: var(--radius-full);
-  background: var(--text);
-  content: "";
-}
-
-.side-panel__header .tabstrip-tab.is-drop-before::after {
-  inset-inline-start: 0;
-}
-
-.side-panel__header .tabstrip-tab.is-drop-after::after {
-  inset-inline-end: 0;
-}
-
-.side-panel__header .tabstrip-tab::part(base) {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  height: 28px;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 7px;
-  padding-block: 0;
-  padding-inline: 8px 0;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  white-space: nowrap;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
-}
-
-.side-panel__header
-  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base),
-.side-panel__header .tabstrip-tab[active]::part(base) {
-  border-start-start-radius: var(--radius-md);
-  border-end-start-radius: var(--radius-md);
-  border-start-end-radius: 0;
-  border-end-end-radius: 0;
-}
-
-.side-panel__header
-  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base) {
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  color: var(--text);
-}
-
-.side-panel__header .tabstrip-tab[active]::part(base) {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.side-panel__header .tabstrip-tab__icon {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-}
-
-.side-panel__header .tabstrip-tab[active] .tabstrip-tab__icon {
-  color: var(--text);
-}
-
-.side-panel__header .tabstrip-tab__icon svg,
-.side-panel-type-option__icon svg {
-  display: block;
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.6px;
-}
-
-.side-panel__header .tabstrip-tab__label {
-  min-width: 24px;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: clip;
-}
-
-.side-panel__header .tabstrip-tab__tooltip-trigger {
-  display: inline-flex;
-  width: max-content;
-  max-width: 100%;
-  height: 100%;
-  min-width: 24px;
-  align-items: center;
-  gap: 7px;
-  overflow: hidden;
-}
-
-.side-panel__header .tabstrip-tab__tooltip-trigger.has-label-overflow {
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 11px), transparent 100%);
-  mask-image: linear-gradient(to right, black calc(100% - 11px), transparent 100%);
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-}
-
-.side-panel__header .tabstrip-tab__label-tooltip {
-  display: inline-flex !important;
-  width: max-content;
-  max-width: 100%;
-  min-width: 24px;
-  align-self: center;
-  align-items: center;
-  flex: 1 1 auto;
-}
-
-.side-panel__header .tabstrip-tab__close {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  align-self: center;
-  margin: 0;
-  border-start-start-radius: 0;
-  border-end-start-radius: 0;
-  border-start-end-radius: var(--radius-md);
-  border-end-end-radius: var(--radius-md);
-  opacity: 0;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease,
-    opacity 120ms ease;
-}
-
-.side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close,
-.side-panel__header .tabstrip-tab:hover + .tabstrip-tab__close,
-.side-panel__header .tabstrip-tab__close:hover,
-.side-panel__header .tabstrip-tab__close:focus-visible {
-  opacity: 1;
-}
-
-.side-panel__header .tabstrip-tab:not([active]):hover + .tabstrip-tab__close,
-.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:hover,
-.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:focus-visible {
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  color: var(--text);
-}
-
-.side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close {
-  background: var(--bg-hover);
-}
-
-.side-panel__header .tabstrip-tab__close-box {
-  width: 12px;
-  height: 12px;
-  opacity: 0.72;
-}
-
-.side-panel__header .tabstrip-tab__close svg {
-  width: 11px;
-  height: 11px;
-}
-
-.side-panel__header .tabstrip-tab__close:hover .tabstrip-tab__close-box,
-.side-panel__header .tabstrip-tab__close:focus-visible .tabstrip-tab__close-box {
-  opacity: 1;
-}
-
-.side-panel__header .tabstrip-tab__close-box,
-.side-panel__header .tabstrip-new-control {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.side-panel__header .tabstrip-new-control {
-  flex: 0 0 auto;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .side-panel__header .tabstrip-tab::part(base),
-  .side-panel__header .tabstrip-tab__close,
-  .side-panel__header .tabstrip-separator {
-    transition: none;
-  }
-}
-
-.side-panel__actions {
-  gap: 6px;
-  padding-right: 4px;
-}
-
-.side-panel__action-group {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: var(--rail-header-action-gap);
-}
-
-.side-panel__action-group--close {
-  padding-left: 5px;
-  border-left: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
-}
-
-.side-panel__body,
-.side-panel__panel {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 0;
-  overflow: hidden;
-}
-
-.side-panel__panel[hidden] {
-  display: none;
-}
-
-.side-panel__panel
-  > :is(
-    .chat,
-    .chat-workspace-rail,
-    .chat-tasks-rail,
-    openclaw-chat-detail-panel,
-    openclaw-chat-session-rail,
-    openclaw-session-discussion,
-    openclaw-terminal-panel,
-    openclaw-browser-panel,
-    openclaw-desktop-panel
-  ) {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 0;
-}
-
-.side-panel__empty-header-title {
-  padding-left: var(--rail-header-padding-start);
-  color: var(--text);
-  font-size: var(--rail-header-title-size);
-}
-
-.side-panel-type-menu::part(menu) {
-  width: max-content;
-  min-width: 0;
-  max-width: min(208px, calc(100vw - 24px));
-  padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
-}
-
-.side-panel-type-menu__item {
-  font-size: calc(13px * var(--control-ui-text-scale));
-  white-space: nowrap;
-}
-
-.side-panel-type-menu__item::part(base) {
-  min-height: var(--menu-item-height);
-  padding: 9px 8px;
-  border-radius: var(--menu-item-radius);
-  background: color-mix(in srgb, var(--text) 3%, transparent);
-}
-
-.side-panel-type-menu__item:hover::part(base),
-.side-panel-type-menu__item:focus-visible::part(base) {
-  background: var(--bg-hover);
-}
-
-.side-panel-type-menu__item + .side-panel-type-menu__item {
-  margin-top: 1px;
-}
-
-.side-panel-type-option__icon {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 16px;
-  color: var(--muted);
-}
-
-.side-panel-type-option__label {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.side-panel-type-option__shortcut {
-  display: inline-flex;
-  min-width: 42px;
-  height: 18px;
-  align-items: center;
-  justify-content: center;
-  padding: 0 6px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 6%, transparent);
-  color: var(--muted);
-  font: 500 calc(10px * var(--control-ui-text-scale)) / 1 var(--mono);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.side-panel-empty {
-  display: flex;
-  width: 100%;
-  min-height: 0;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  padding: 28px;
-  text-align: center;
-}
-
-.side-panel-empty__title {
-  margin-top: 14px;
-  color: var(--text);
-  font-size: var(--control-ui-text-md);
-  font-weight: 500;
-  line-height: 1.25;
-}
-
-.side-panel-empty--selector .side-panel-empty__title {
-  margin-top: 0;
-  font-size: var(--control-ui-text-md);
-}
-
-.side-panel-empty--selector {
-  transform: translateY(-18px);
-}
-
-.side-panel-empty__types {
-  display: grid;
-  width: min(100%, 320px);
-  margin-top: 16px;
-  gap: 6px;
-}
-
-.side-panel-empty__type {
-  display: grid;
-  min-height: var(--menu-item-height);
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 9px 10px;
-  border: 0;
-  border-radius: var(--menu-item-radius);
-  background: color-mix(in srgb, var(--text) 3%, transparent);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  text-align: left;
-}
-
-.side-panel-empty__type:hover,
-.side-panel-empty__type:focus-visible {
-  background: var(--bg-hover);
-}
-
-.sidebar-region--expanded .sidebar-region__primary {
-  display: none;
-}
-
-.sidebar-region--expanded .side-panel {
-  flex: 1 1 0;
-}
-
-.side-panel--narrow {
-  grid-column: 1;
-  grid-row: 2;
-  width: 100% !important;
-  min-width: 0;
+.sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
+  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(0, 1fr);
 }
 
 .chat-workspace-rail {

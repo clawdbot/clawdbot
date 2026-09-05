@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
   createMockGatewayService,
@@ -13,7 +14,7 @@ import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-ser
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
-  taskState: "3",
+  taskState: 3 as number | string,
 }));
 
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
@@ -25,8 +26,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync: vi.fn(() => ({
     pid: 0,
-    output: [null, mocks.taskState, ""],
-    stdout: mocks.taskState,
+    output: [null, JSON.stringify({ state: mocks.taskState, lastRunResult: 0 }), ""],
+    stdout: JSON.stringify({ state: mocks.taskState, lastRunResult: 0 }),
     stderr: "",
     status: 0,
     signal: null,
@@ -43,7 +44,7 @@ type NativeOfflineCase = {
   loaded: boolean;
   offline: boolean;
   enabled?: boolean;
-  state?: string;
+  state?: number | string;
 };
 
 const nativeOfflineCases: NativeOfflineCase[] = [
@@ -87,15 +88,16 @@ const nativeOfflineCases: NativeOfflineCase[] = [
     offline: false,
   },
   ...[
-    { label: "disabled", state: "1", offline: true },
-    { label: "ready", state: "3", offline: true },
-    { label: "queued", state: "2", offline: false },
-    { label: "running", state: "4", offline: false },
-    { label: "unknown", state: "0", offline: false },
+    { label: "disabled", state: 1, offline: true },
+    { label: "ready", state: 3, offline: true },
+    { label: "queued", state: 2, offline: false },
+    { label: "running", state: 4, offline: false },
+    { label: "unknown", state: 0, offline: false },
     { label: "malformed", state: "3 trailing output", offline: false },
   ].map<NativeOfflineCase>((task) => ({
     platform: "win32",
-    runtime: "stopped",
+    runtime:
+      task.state === 1 || task.state === 3 ? "stopped" : task.state === 4 ? "running" : "unknown",
     loaded: true,
     label: task.label,
     state: task.state,
@@ -111,6 +113,9 @@ it.each(nativeOfflineCases)(
       await withEnvAsync(
         {
           HOME: home,
+          USERPROFILE: home,
+          APPDATA: path.join(home, "AppData"),
+          OPENCLAW_GATEWAY_PORT: undefined,
           OPENCLAW_HOME: undefined,
           OPENCLAW_STATE_DIR: undefined,
           OPENCLAW_CONFIG_PATH: undefined,
@@ -121,7 +126,7 @@ it.each(nativeOfflineCases)(
         },
         async () => {
           mockProcessPlatform(scenario.platform);
-          mocks.taskState = scenario.state ?? "3";
+          mocks.taskState = scenario.state ?? 3;
           const service = createMockGatewayService({
             readCommand: async () => ({
               programArguments: [
@@ -131,7 +136,10 @@ it.each(nativeOfflineCases)(
               ],
               environment: { HOME: home },
             }),
-            readRuntime: async () => ({ status: scenario.runtime }),
+            readRuntime:
+              scenario.platform === "win32"
+                ? readScheduledTaskRuntime
+                : async () => ({ status: scenario.runtime }),
             isLoaded: async () => scenario.loaded,
             isEnabled: async () => {
               if (scenario.enabled === undefined) {

@@ -16,6 +16,8 @@ import {
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
@@ -97,11 +99,13 @@ export function custodianErrorMessage(error: unknown): string {
 
 function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
   const key = `msg-${message.id}`;
+  const rawMessage = { role: message.role, content: message.text };
   return {
     kind: "group",
     key,
     role: message.role,
-    messages: [{ message: { role: message.role, content: message.text }, key }],
+    messages: [{ message: rawMessage, key }],
+    visibleContent: resolveMessageVisibleContent(rawMessage, normalizeMessage(rawMessage)),
     timestamp: message.at,
     isStreaming: false,
   };
@@ -255,54 +259,62 @@ export function renderCustodianTranscriptEntry(params: {
   const question = params.message.question;
   const step = params.message.step;
   return html`
-    ${params.message.text
-      ? renderMessageGroup(toCustodianMessageGroup(params.message), {
-          showReasoning: false,
-          showToolCalls: false,
-          assistantName: t("custodian.title"),
-          assistantAvatar: params.assistantAvatar,
-        })
-      : nothing}
+    ${
+      params.message.text
+        ? renderMessageGroup(toCustodianMessageGroup(params.message), {
+            showReasoning: false,
+            showToolCalls: false,
+            assistantName: t("custodian.title"),
+            assistantAvatar: params.assistantAvatar,
+          })
+        : nothing
+    }
     ${renderCustodianEarlierDivider(params.message, params.boundaryAfterId)}
-    ${params.showQuestion && question
-      ? renderCustodianQuestionCard({
-          question,
-          disabled: params.questionDisabled,
-          onSelect: params.onSelect,
-          onSkip: params.onSkip,
-        })
-      : nothing}
-    ${params.showWizardStep && step
-      ? html`<section
-          class="custodian__wizard-step"
-          aria-label=${formatUiExternalText(step.title ?? step.message, "Setup")}
-        >
-          ${step.title
-            ? html`<strong class="custodian__wizard-title"
-                >${formatUiExternalText(step.title)}</strong
-              >`
-            : nothing}
-          ${renderWizardStepControls({
-            step,
-            value: params.wizardValue,
-            busy: params.wizardDisabled,
-            inputId: `custodian-wizard-input-${params.message.id}`,
-            sensitiveRevealed: params.wizardSecretVisible,
-            onValueChange: params.onWizardValueChange,
-            onAnswer: params.onWizardAnswer,
-            leadingAction: params.showWizardCancel
-              ? html`<button
-                  class="btn btn--ghost custodian__wizard-cancel"
-                  type="button"
-                  ?disabled=${params.wizardDisabled}
-                  @click=${params.onWizardCancel}
-                >
-                  ${t("custodian.cancel")}
-                </button>`
-              : undefined,
-            onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
-          })}
-        </section>`
-      : nothing}
+    ${
+      params.showQuestion && question
+        ? renderCustodianQuestionCard({
+            question,
+            disabled: params.questionDisabled,
+            onSelect: params.onSelect,
+            onSkip: params.onSkip,
+          })
+        : nothing
+    }
+    ${
+      params.showWizardStep && step
+        ? html`<section
+            class="custodian__wizard-step"
+            aria-label=${formatUiExternalText(step.title ?? step.message, "Setup")}
+          >
+            ${
+              step.title
+                ? html`<strong class="custodian__wizard-title"
+                    >${formatUiExternalText(step.title)}</strong
+                  >`
+                : nothing
+            }
+            ${renderWizardStepControls({
+              step,
+              value: params.wizardValue,
+              busy: params.wizardDisabled,
+              inputId: `custodian-wizard-input-${params.message.id}`,
+              sensitiveRevealed: params.wizardSecretVisible,
+              onValueChange: params.onWizardValueChange,
+              onAnswer: params.onWizardAnswer,
+              leadingAction: params.showWizardCancel
+                ? html`<button
+                    class="btn btn--ghost custodian__wizard-cancel"
+                    type="button"
+                    ?disabled=${params.wizardDisabled}
+                    @click=${params.onWizardCancel}
+                  >
+                    ${t("custodian.cancel")}
+                  </button>`
+                : undefined,
+              onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
+            })}
+          </section>`
+        : nothing
+    }
   `;
 }

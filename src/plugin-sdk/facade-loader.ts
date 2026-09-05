@@ -75,68 +75,92 @@ function getModuleLoader(modulePath: string) {
   });
 }
 
-function createLazyFacadeValueLoader<T>(load: () => T): () => T {
-  let loaded = false;
-  let value: T;
-  return () => {
-    if (!loaded) {
-      value = load();
-      loaded = true;
+/** Create an object proxy that loads the underlying facade only on first use. */
+export function createLazyFacadeObjectValue<T extends object>(load: () => T): T {
+  let resolvedValue: T | undefined;
+  const resolve = () => (resolvedValue ??= load());
+  const target = {};
+  // Proxy invariants inspect the target, even though the loaded object owns all values.
+  // Mirror descriptors and integrity at reflection boundaries, never on ordinary reads.
+  const syncProperty = (property: PropertyKey) => {
+    const descriptor = Reflect.getOwnPropertyDescriptor(resolve(), property);
+    if (descriptor) {
+      Object.defineProperty(target, property, descriptor);
+    } else {
+      Reflect.deleteProperty(target, property);
     }
-    return value;
+    return descriptor;
   };
-}
-
-function createLazyFacadeProxyValue<T extends object>(params: {
-  load: () => T;
-  target: object;
-}): T {
-  const resolve = createLazyFacadeValueLoader(params.load);
-  return new Proxy(params.target, {
+  const syncTarget = () => {
+    const original = resolve();
+    const descriptors = Object.getOwnPropertyDescriptors(original);
+    for (const property of Reflect.ownKeys(target)) {
+      if (!Object.hasOwn(descriptors, property)) {
+        Reflect.deleteProperty(target, property);
+      }
+    }
+    Object.defineProperties(target, descriptors);
+    Reflect.setPrototypeOf(target, Reflect.getPrototypeOf(original));
+    if (!Reflect.isExtensible(original)) {
+      Reflect.preventExtensions(target);
+    }
+  };
+  return new Proxy(target, {
     defineProperty(_target, property, descriptor) {
-      return Reflect.defineProperty(resolve(), property, descriptor);
+      const defined = Reflect.defineProperty(resolve(), property, descriptor);
+      if (defined) {
+        syncProperty(property);
+      }
+      return defined;
     },
     deleteProperty(_target, property) {
-      return Reflect.deleteProperty(resolve(), property);
+      return (
+        Reflect.deleteProperty(resolve(), property) && Reflect.deleteProperty(target, property)
+      );
     },
     get(_target, property, receiver) {
       return Reflect.get(resolve(), property, receiver);
     },
     getOwnPropertyDescriptor(_target, property) {
-      return Reflect.getOwnPropertyDescriptor(resolve(), property);
+      return syncProperty(property);
     },
     getPrototypeOf() {
       return Reflect.getPrototypeOf(resolve());
     },
     has(_target, property) {
-      return Reflect.has(resolve(), property);
+      const present = Reflect.has(resolve(), property);
+      if (!present) {
+        Reflect.deleteProperty(target, property);
+      }
+      return present;
     },
     isExtensible() {
-      return Reflect.isExtensible(resolve());
+      const extensible = Reflect.isExtensible(resolve());
+      if (!extensible) {
+        syncTarget();
+      }
+      return extensible;
     },
     ownKeys() {
+      syncTarget();
       return Reflect.ownKeys(resolve());
     },
     preventExtensions() {
-      return Reflect.preventExtensions(resolve());
+      if (!Reflect.preventExtensions(resolve())) {
+        return false;
+      }
+      syncTarget();
+      return true;
     },
     set(_target, property, value, receiver) {
       return Reflect.set(resolve(), property, value, receiver);
     },
     setPrototypeOf(_target, prototype) {
-      return Reflect.setPrototypeOf(resolve(), prototype);
+      return (
+        Reflect.setPrototypeOf(resolve(), prototype) && Reflect.setPrototypeOf(target, prototype)
+      );
     },
   }) as T;
-}
-
-/** Create an object proxy that loads the underlying facade only on first property access. */
-export function createLazyFacadeObjectValue<T extends object>(load: () => T): T {
-  return createLazyFacadeProxyValue({ load, target: {} });
-}
-
-/** Create an array proxy that loads the underlying facade only on first array access. */
-export function createLazyFacadeArrayValue<T extends readonly unknown[]>(load: () => T): T {
-  return createLazyFacadeProxyValue({ load, target: [] });
 }
 
 /** Resolved public-surface module path plus the filesystem root it must stay within. */

@@ -700,7 +700,6 @@ def normalize_message(message, users=None):
         "replyToMessageId": reply_to_message_id,
         "threadId": message.get("message_thread_id"),
         **message_content(content),
-        "contentType": content.get("@type"),
         "raw": message,
     }
 
@@ -994,6 +993,7 @@ def serve_message(message, users):
         "senderUsername": normalized.get("senderUsername"),
         "replyToMessageId": normalized.get("replyToMessageId"),
         "timestamp": int(message.get("date") or 0) * 1000,
+        "contentType": normalized["contentType"],
         "text": normalized["text"],
         "entities": normalized["entities"],
     }
@@ -1023,8 +1023,8 @@ def message_content(content):
     key = "text" if content.get("@type") == "messageText" else "caption"
     formatted = content.get(key)
     if isinstance(formatted, dict) and isinstance(formatted.get("text"), str):
-        return {"text": formatted["text"], "entities": formatted["entities"]}
-    return {"text": "", "entities": []}
+        return {"contentType": content.get("@type"), "text": formatted["text"], "entities": formatted["entities"]}
+    return {"contentType": content.get("@type"), "text": "", "entities": []}
 
 
 def write_ndjson(payload):

@@ -8,9 +8,9 @@ import { runCiGitStep } from "./ci-git-owner.test-support.js";
 
 const reader = prerequisites.outboundMessageTerminalReader;
 
-it.skipIf(process.platform === "win32")(
-  "opens the pinned reader after checkout authentication has ended",
-  async () => {
+it.skipIf(process.platform === "win32").each(["historical", "base"])(
+  "reads the %s prerequisite after checkout authentication has ended",
+  async (mode) => {
     let stdout = "";
     let stderr = "";
     const code = await runManagedCommand({
@@ -20,7 +20,7 @@ it.skipIf(process.platform === "win32")(
         "-S",
         "test/scripts/fixtures/ci-checkout-auth.py",
         path.resolve(".github/actions/git-owner/owner.py"),
-        "historical",
+        mode,
       ],
       stdio: ["ignore", "pipe", "pipe"],
       timeoutMs: 30_000,
@@ -33,8 +33,10 @@ it.skipIf(process.platform === "win32")(
     });
     expect(code, stderr).toBe(0);
     expect(JSON.parse(stdout)).toEqual({
-      historicalReaderPrepared: true,
+      mode,
+      preparedObjectsReadable: true,
       credentialPersisted: false,
+      postCheckoutRequests: 0,
     });
   },
   50_000,

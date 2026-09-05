@@ -3,14 +3,15 @@ import { once } from "node:events";
 import { access, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
 import {
   createCodexNodeExecServerCommand,
   createCodexNodeExecServerInvokePolicy,
@@ -133,7 +134,12 @@ async function readNodeProcessNotifications(
   );
 }
 
+beforeEach(() => {
+  setManagedCodexPluginRoot(fileURLToPath(new URL("../", import.meta.url)));
+});
+
 afterEach(() => {
+  setManagedCodexPluginRoot(undefined);
   vi.unstubAllEnvs();
 });
 

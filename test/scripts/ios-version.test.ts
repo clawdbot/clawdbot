@@ -6,9 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   encodeIosAppStoreVersion,
   extractChangelogSection,
-  normalizeGatewayVersionToPinnedIosVersion,
   normalizeIosAppStoreRevision,
-  normalizePinnedIosVersion,
   renderIosReleaseNotes,
   resolveGatewayVersionForIosRelease,
   resolveIosVersion,
@@ -193,9 +191,10 @@ describe("resolveIosVersion", () => {
     expect(shortFlagResult.stderr).toBe("Missing value for --root.\n");
   });
 
-  it("derives Apple marketing fields from the root package release version", () => {
+  it("derives Apple marketing fields from the mobile gateway version", () => {
     const rootDir = writeIosFixture({
-      packageVersion: "2026.4.6",
+      mobileVersion: "2026.4.6",
+      packageVersion: "2026.9.9",
       changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.6\n\nStable notes.\n",
     });
 
@@ -207,8 +206,8 @@ describe("resolveIosVersion", () => {
       changelogPath: path.join(rootDir, "apps/ios/CHANGELOG.md"),
       gatewayVersion: "2026.4.6",
       marketingVersion: "2026.4.6",
-      versionSource: "package",
-      versionSourcePath: path.join(rootDir, "package.json"),
+      versionSource: "mobile",
+      versionSourcePath: path.join(rootDir, "apps/mobile/version.json"),
     });
   });
 
@@ -227,13 +226,13 @@ describe("resolveIosVersion", () => {
     expect(() => normalizeIosAppStoreRevision("1.5")).toThrow("integer from 0 to 9");
   });
 
-  it("rejects semver-only package versions", () => {
+  it("rejects semver-only mobile gateway versions", () => {
     const rootDir = writeIosFixture({
-      packageVersion: "1.2.3",
+      mobileVersion: "1.2.3",
       changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
     });
 
-    expect(() => resolveIosVersion(rootDir)).toThrow("Expected YYYY.M.PATCH");
+    expect(() => resolveIosVersion(rootDir)).toThrow("Expected a stable release version");
   });
 
   it("rejects prerelease suffixes in explicit gateway versions", () => {
@@ -246,51 +245,18 @@ describe("resolveIosVersion", () => {
       "Expected release version like 2026.6.5",
     );
   });
-
-  it("rejects impossible pinned release versions", () => {
-    expect(() => normalizePinnedIosVersion("2026.13.6")).toThrow(
-      "Expected release version like 2026.6.5",
-    );
-    expect(() => normalizePinnedIosVersion("2026.4.9007199254740993")).toThrow(
-      "Expected release version like 2026.6.5",
-    );
-  });
 });
 
-describe("gateway version normalization", () => {
-  it("keeps stable gateway release values", () => {
-    expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6")).toBe("2026.4.6");
-  });
-
-  it("strips beta suffixes when pinning from gateway version", () => {
-    expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-beta.2")).toBe("2026.4.6");
-  });
-
-  it("strips alpha suffixes when pinning from gateway version", () => {
-    expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-alpha.2")).toBe("2026.4.6");
-  });
-
-  it("strips fallback correction suffixes when pinning from gateway version", () => {
-    expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-3")).toBe("2026.4.6");
-  });
-
-  it("rejects impossible gateway release versions", () => {
-    expect(() => normalizeGatewayVersionToPinnedIosVersion("2026.13.6-alpha.1")).toThrow(
-      "Expected YYYY.M.PATCH",
-    );
-    expect(() =>
-      normalizeGatewayVersionToPinnedIosVersion("2026.4.6-alpha.9007199254740993"),
-    ).toThrow("Expected YYYY.M.PATCH");
-  });
-
-  it("reads and normalizes the root package version for iOS releases", () => {
+describe("gateway version ownership", () => {
+  it("reads the mobile version independently of package.json", () => {
     const rootDir = writeIosFixture({
-      packageVersion: "2026.4.7-beta.5",
+      mobileVersion: "2026.4.7",
+      packageVersion: "2026.9.9",
       changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
     });
 
     expect(resolveGatewayVersionForIosRelease(rootDir)).toEqual({
-      packageVersion: "2026.4.7-beta.5",
+      gatewayVersion: "2026.4.7",
       pinnedIosVersion: "2026.4.7",
     });
   });

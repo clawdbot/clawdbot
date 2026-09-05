@@ -45,12 +45,12 @@ describe("prepared reply dispatch runtime", () => {
   });
 
   it("carries newly selected provider auth into a derived generation and its refresh", async () => {
-    const { resolveAmbientAgentCredentialsForDiscovery } = await vi.importActual<
+    const { prepareAmbientAgentCredentialsForDiscovery } = await vi.importActual<
       typeof import("./agent-auth-discovery.js")
     >("./agent-auth-discovery.js");
     mocks.resolveAmbientCredentials.mockImplementation((options) =>
-      resolveAmbientAgentCredentialsForDiscovery(
-        options as Parameters<typeof resolveAmbientAgentCredentialsForDiscovery>[0],
+      prepareAmbientAgentCredentialsForDiscovery(
+        options as Parameters<typeof prepareAmbientAgentCredentialsForDiscovery>[0],
       ),
     );
     mocks.discoverAuthStorage.mockImplementation((_dir, options) => ({

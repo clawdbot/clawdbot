@@ -6,7 +6,6 @@
   },
   "name": "WhatsApp",
   "description": "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",
-  "icon": "https://cdn.simpleicons.org/whatsapp",
   "skills": ["./skills"],
   "activation": {
     "onStartup": false

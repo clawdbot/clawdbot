@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import {
+  isPathOwnedBySurvivingAgent,
+  readAgentDeleteDatabaseRegistry,
+  resolveSurvivingDatabaseFilePaths,
+} from "../agents/agent-delete-databases.js";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
@@ -24,6 +29,7 @@ import { moveToTrash } from "../commands/cleanup-utils.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
@@ -75,8 +81,8 @@ function rowToWorkspaceFile(row: WorkspaceFileRow): PersistedClawWorkspaceFile {
     sourcePath: row.source_path,
     contentDigest: row.content_digest,
     status: row.status,
-    createdAtMs: Number(row.created_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
+    createdAtMs: sqliteNumber(row.created_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
   };
 }
 
@@ -129,14 +135,19 @@ export function synthesizeOrphanInstall(params: {
   };
 }
 
-export function deletionEffects(config: OpenClawConfig, agentId: string, fallbackWorkspace = "") {
+export function deletionEffects(
+  config: OpenClawConfig,
+  agentId: string,
+  fallbackWorkspace = "",
+  env?: NodeJS.ProcessEnv,
+) {
   const agent = listAgentEntries(config).find((candidate) => candidate.id === agentId);
   const pruned = pruneAgentConfig(config, agentId);
   const workspace = agent?.workspace ?? fallbackWorkspace;
-  const agentDir = resolveAgentDir(config, agentId);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const agentDir = resolveAgentDir(config, agentId, env);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env);
   const workspaceSharedWith = workspace
-    ? findOverlappingWorkspaceAgentIds(config, agentId, workspace)
+    ? findOverlappingWorkspaceAgentIds(config, agentId, workspace, env)
     : [];
   return {
     pruned,
@@ -144,7 +155,6 @@ export function deletionEffects(config: OpenClawConfig, agentId: string, fallbac
     agentDir,
     sessionsDir,
     workspaceSharedWith,
-    workspaceRetained: workspaceSharedWith.length > 0,
   };
 }
 
@@ -250,17 +260,28 @@ export async function cleanupClawAgentFilesystem(params: {
   runtime: RuntimeEnv;
   trashPath?: ClawTrashPath;
   retainWorkspace?: boolean;
+  stateDatabase?: OpenClawStateDatabaseOptions;
 }): Promise<string[]> {
   const errors: string[] = [];
   const trashPath = params.trashPath ?? moveToTrash;
-  const workspaceSharedWith = params.targets.workspaceDir
-    ? findOverlappingWorkspaceAgentIds(
-        params.nextConfig,
-        params.agentId,
-        params.targets.workspaceDir,
-      )
-    : [];
-  if (params.targets.workspaceDir && !params.retainWorkspace && workspaceSharedWith.length === 0) {
+  const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
+    readAgentDeleteDatabaseRegistry(params.stateDatabase),
+    params.agentId,
+    params.stateDatabase?.env,
+  );
+  const sharedWithSurvivor = (pathname: string) =>
+    isPathOwnedBySurvivingAgent(
+      params.nextConfig,
+      params.agentId,
+      pathname,
+      survivingDatabaseFilePaths,
+      params.stateDatabase?.env,
+    );
+  if (
+    params.targets.workspaceDir &&
+    !params.retainWorkspace &&
+    !sharedWithSurvivor(params.targets.workspaceDir)
+  ) {
     const legacyPlan = prepareLegacyWorkspaceStateReset(params.targets.workspaceDir);
     const statePlan = prepareWorkspaceStateDeletion(params.targets.workspaceDir);
     const workspaceRemoved = await trashPath(params.targets.workspaceDir, params.runtime);
@@ -278,10 +299,16 @@ export async function cleanupClawAgentFilesystem(params: {
       errors.push(`Could not trash workspace ${params.targets.workspaceDir}.`);
     }
   }
-  if (!(await trashPath(params.targets.agentDir, params.runtime))) {
+  if (
+    !sharedWithSurvivor(params.targets.agentDir) &&
+    !(await trashPath(params.targets.agentDir, params.runtime))
+  ) {
     errors.push(`Could not trash agent state ${params.targets.agentDir}.`);
   }
-  if (!(await trashPath(params.targets.sessionsDir, params.runtime))) {
+  if (
+    !sharedWithSurvivor(params.targets.sessionsDir) &&
+    !(await trashPath(params.targets.sessionsDir, params.runtime))
+  ) {
     errors.push(`Could not trash session transcripts ${params.targets.sessionsDir}.`);
   }
   return errors;

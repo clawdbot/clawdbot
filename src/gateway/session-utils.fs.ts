@@ -181,13 +181,6 @@ function findExistingTranscriptPath(
 export class ArchivedTranscriptReader {
   constructor(private readonly scope: ArchivedTranscriptReadScope) {}
 
-  async resolvePath(opts: {
-    allowResetArchiveFallback?: boolean | undefined;
-    resetArchiveOnly?: boolean | undefined;
-  }): Promise<string | null> {
-    return (await this.resolveArtifact(opts))?.path ?? null;
-  }
-
   private activePath(): string | null {
     return findExistingTranscriptPath(
       this.scope.sessionId,
@@ -467,22 +460,6 @@ export function capArrayByJsonBytes<T>(
   return { items: next, bytes };
 }
 
-export async function resolveSessionHistoryTranscriptPathAsync(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  opts?: { agentId?: string; allowResetArchiveFallback?: boolean },
-): Promise<string | null> {
-  return await new ArchivedTranscriptReader({
-    agentId: opts?.agentId,
-    sessionFile,
-    sessionId,
-    storePath,
-  }).resolvePath({
-    allowResetArchiveFallback: opts?.allowResetArchiveFallback,
-  });
-}
-
 export async function readLatestSessionUsageFromTranscriptFileAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -542,10 +519,11 @@ export function buildSessionPreviewItems(
   messages: readonly unknown[],
   maxItems: number,
   maxChars: number,
+  view: "display" | "model-context" = "display",
 ): SessionPreviewItem[] {
   const items: SessionPreviewItem[] = [];
   for (const message of messages) {
-    const projected = projectSessionDisplayMessage(message, { maxChars });
+    const projected = projectSessionDisplayMessage(message, { maxChars, view });
     if (!projected) {
       continue;
     }

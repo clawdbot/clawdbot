@@ -27,6 +27,7 @@ describe("SessionRowSchema", () => {
       ],
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      archiveReason: "manual",
       icon: "🦞",
       channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
       visibility: "suggest",
@@ -38,6 +39,8 @@ describe("SessionRowSchema", () => {
     const roundTripped = structuredClone(row);
 
     expect(SessionRowSchema.properties.activeLeafEntryId).toBeDefined();
+    expect(SessionRowSchema.properties.activeModel).toBeDefined();
+    expect(SessionRowSchema.properties.activeModelProvider).toBeDefined();
     expect(SessionRowSchema.properties.lastRunId).toBeDefined();
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, activeLeafEntryId: null })).toBe(true);
@@ -49,12 +52,29 @@ describe("SessionRowSchema", () => {
         })),
       }),
     ).toBe(false);
+    expect(
+      Value.Check(SessionRowSchema, {
+        ...roundTripped,
+        expandedParticipants: Array.from({ length: 32 }, (_, index) => ({
+          identity: { type: "profile", id: `profile-${index}` },
+        })),
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionRowSchema, {
+        ...roundTripped,
+        expandedParticipants: Array.from({ length: 33 }, (_, index) => ({
+          identity: { type: "profile", id: `profile-${index}` },
+        })),
+      }),
+    ).toBe(false);
     expect(roundTripped).toMatchObject({
       activeLeafEntryId: "leaf-rendered",
       lastRunId: "run-settled",
       createdActor: { avatarUrl: "/api/users/profile-ada/avatar?v=7" },
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      archiveReason: "manual",
       channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
       visibility: "suggest",
       sharingRole: "owner",
@@ -66,6 +86,9 @@ describe("SessionRowSchema", () => {
       false,
     );
     expect(Value.Check(SessionRowSchema, { ...roundTripped, lastRunId: "" })).toBe(false);
+    expect(Value.Check(SessionRowSchema, { ...roundTripped, archiveReason: "unknown" })).toBe(
+      false,
+    );
   });
 
   it("keeps sessions.assignOwner target actors closed and non-empty", () => {

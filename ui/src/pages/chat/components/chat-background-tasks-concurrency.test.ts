@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import {
   createBackgroundTasksProps,
@@ -91,6 +91,52 @@ afterEach(() => {
 });
 
 describe("background tasks concurrent snapshots", () => {
+  it("does not retry a transient snapshot after the pane switches sessions", async () => {
+    vi.useFakeTimers();
+    try {
+      const replacement = makeTask({
+        id: "task-new-session",
+        sessionKey: "agent:main:replacement",
+      });
+      let unavailable = true;
+      const request = vi.fn(() => {
+        if (unavailable) {
+          return Promise.reject(
+            new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message: "task registry changed during tasks.list; retry",
+              retryable: true,
+              retryAfterMs: 100,
+            }),
+          );
+        }
+        return Promise.resolve({ tasks: [replacement] });
+      });
+      const host: BackgroundTasksHost = {
+        sessionKey: "agent:main:current",
+        client: { request } as unknown as GatewayBrowserClient,
+        connected: true,
+        connectionEpoch: 1,
+        hello: null,
+      };
+
+      createBackgroundTasksProps(host);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(2);
+      host.sessionKey = "agent:main:replacement";
+      unavailable = false;
+      createBackgroundTasksProps(host);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(createBackgroundTasksProps(host).tasks?.map((task) => task.id)).toEqual([
+        replacement.id,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps global owner switches separate through canonical acknowledgments and late responses", async () => {
     const mainTask = makeTask({ id: "main-task", sessionKey: "global" });
     const workTask = makeTask({ id: "work-task", sessionKey: "global", agentId: "work" });

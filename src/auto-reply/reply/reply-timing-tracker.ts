@@ -21,16 +21,6 @@ type ReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams> = {
   logIfSlow: (params: TLogParams, options?: { repeat?: boolean }) => void;
 };
 
-const disabledTimingTracker: ReplyTimingTracker<object> = {
-  async measure(_name, run) {
-    return await run();
-  },
-  measureSync(_name, run) {
-    return run();
-  },
-  logIfSlow() {},
-};
-
 /** Checks config/env diagnostic flags for reply profiling. */
 export function isReplyProfilerEnabled(params?: {
   config?: OpenClawConfig;
@@ -44,7 +34,7 @@ export function isReplyProfilerEnabled(params?: {
   );
 }
 
-/** Creates a no-timer pass-through unless reply profiling is enabled. */
+/** Keeps slow replies diagnosable; profiling lowers the warning thresholds. */
 export function createReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams>(params: {
   log: { warn: (message: string, details?: Record<string, unknown>) => void };
   config?: OpenClawConfig;
@@ -59,24 +49,20 @@ export function createReplyTimingTracker<TLogParams extends object = ReplyTiming
   ) => string;
   detailKeys?: (params: TLogParams) => readonly string[];
 }): ReplyTimingTracker<TLogParams> {
-  const enabled =
+  const profilerEnabled =
     params.enabled ?? isReplyProfilerEnabled({ config: params.config, env: params.env });
-  if (!enabled) {
-    // Normal turns share this pass-through, avoiding Date.now and span arrays.
-    return disabledTimingTracker as ReplyTimingTracker<TLogParams>;
-  }
-
   const startedAt = Date.now();
   const spans: ReplyTimingSummary["spans"] = [];
   let didLog = false;
-  const totalWarnMs = params.totalWarnMs ?? 1_000;
-  const stageWarnMs = params.stageWarnMs ?? 500;
+  const totalWarnMs = params.totalWarnMs ?? (profilerEnabled ? 1_000 : 10_000);
+  const stageWarnMs = params.stageWarnMs ?? (profilerEnabled ? 500 : 5_000);
   const toMs = (value: number) => Math.max(0, Math.round(value));
   const record = (name: string, spanStartedAt: number) => {
+    const currentAt = Date.now();
     spans.push({
       name,
-      durationMs: toMs(Date.now() - spanStartedAt),
-      elapsedMs: toMs(Date.now() - startedAt),
+      durationMs: toMs(currentAt - spanStartedAt),
+      elapsedMs: toMs(currentAt - startedAt),
     });
   };
 

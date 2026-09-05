@@ -6,8 +6,8 @@ import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   dropMemoryPathFtsTriggers,
-  ensureDir,
   ensureMemoryChunkProvenance,
+  ensureMemoryIndexSchema,
   ensureMemoryRecallMetadataSchema,
   ensureMemoryPathFtsTriggers,
   loadSqliteVecExtension,
@@ -16,9 +16,9 @@ import {
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  openOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
-  ensureOpenClawAgentDatabaseSchema,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -69,6 +69,8 @@ function tableExists(db: DatabaseSync, schema: string, tableName: string): boole
   return row?.ok === 1;
 }
 
+export { tableExists as memoryDatabaseTableExists };
+
 function readTableSql(db: DatabaseSync, schema: string, tableName: string): string | null {
   const row = db
     .prepare(`SELECT sql FROM ${schema}.sqlite_master WHERE type = 'table' AND name = ?`)
@@ -96,6 +98,8 @@ export function readMemoryDatabaseRevision(db: DatabaseSync): number {
   }
   return row.revision;
 }
+
+export class MemoryIndexRevisionConflictError extends Error {}
 
 /** Reset derived content without replacing the shared agent database or its schema. */
 export async function resetMemoryDatabase(params: {
@@ -217,33 +221,33 @@ export async function publishMemoryDatabaseTables(params: {
   sourcePath: string;
   metaKey: string;
   expectedRevision: number;
+  sourceHasVectors: boolean;
   vectorExtensionPath?: string;
 }): Promise<void> {
   ensureMemoryRecallMetadataSchema(params.targetDb);
   // Existing pre-provenance databases lack the provenance table the publish
   // below writes to; ensure it (idempotent) alongside the recall columns.
   ensureMemoryChunkProvenance(params.targetDb);
+  if (params.sourceHasVectors && !hasSqliteVecExtension(params.targetDb)) {
+    const loaded = await loadSqliteVecExtension({
+      db: params.targetDb,
+      extensionPath: params.vectorExtensionPath,
+    });
+    if (!loaded.ok) {
+      throw new Error(
+        `Failed to load sqlite-vec before publishing the full memory reindex: ` +
+          (loaded.error ?? "unknown sqlite-vec load error"),
+      );
+    }
+  }
+  // The target can be shared with sessions and other managers. Never leave an
+  // attached shadow on it across an await or outside the synchronous publication.
   params.targetDb.prepare(`ATTACH DATABASE ? AS ${MEMORY_REINDEX_SCHEMA}`).run(params.sourcePath);
   try {
-    if (
-      tableExists(params.targetDb, MEMORY_REINDEX_SCHEMA, "memory_index_chunks_vec") &&
-      !hasSqliteVecExtension(params.targetDb)
-    ) {
-      const loaded = await loadSqliteVecExtension({
-        db: params.targetDb,
-        extensionPath: params.vectorExtensionPath,
-      });
-      if (!loaded.ok) {
-        throw new Error(
-          `Failed to load sqlite-vec before publishing the full memory reindex: ` +
-            (loaded.error ?? "unknown sqlite-vec load error"),
-        );
-      }
-    }
     runSqliteImmediateTransactionSync(params.targetDb, () => {
       const liveRevision = readMemoryDatabaseRevision(params.targetDb);
       if (liveRevision !== params.expectedRevision) {
-        throw new Error(
+        throw new MemoryIndexRevisionConflictError(
           `Memory index changed while full reindex was building ` +
             `(expected revision ${params.expectedRevision}, found ${liveRevision}); retry the full reindex.`,
         );
@@ -392,21 +396,13 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
   }
 }
 
-export function openMemoryDatabaseAtPath(
-  dbPath: string,
-  allowExtension: boolean,
-  agentId?: string,
-): DatabaseSync {
-  ensureDir(path.dirname(dbPath));
+export function openMemoryDatabaseAtPath(dbPath: string, allowExtension: boolean): DatabaseSync {
   const db = openNodeSqliteDatabase(dbPath, { allowExtension });
   try {
     configureMemorySqliteWalMaintenance(db, {
       busyTimeoutMs: 5000,
       databasePath: dbPath,
     });
-    if (agentId) {
-      ensureOpenClawAgentDatabaseSchema(db, { agentId, path: dbPath, register: true });
-    }
     return db;
   } catch (err) {
     try {
@@ -417,7 +413,42 @@ export function openMemoryDatabaseAtPath(
   }
 }
 
+function openUninitializedMemoryDatabase(allowExtension: boolean) {
+  const database = openNodeSqliteDatabase(":memory:", { allowExtension });
+  try {
+    ensureMemoryIndexSchema({ cacheEnabled: true, db: database, ftsEnabled: true });
+    database.exec("PRAGMA query_only = ON");
+    return { db: database, release: () => database.close() };
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
+
+/** Open an existing memory index through the agent database query-only owner. */
+export function openMemoryDatabaseReadOnlyAtPath(
+  dbPath: string,
+  allowExtension: boolean,
+  agentId: string,
+) {
+  const opened = openOpenClawAgentDatabaseReadOnly({ agentId, path: dbPath }, { allowExtension });
+  if (!opened.found) {
+    if (opened.reason === "database-missing") {
+      return openUninitializedMemoryDatabase(allowExtension);
+    }
+    throw new Error(`Memory index database schema is missing: ${dbPath}`);
+  }
+  const { database } = opened;
+  if (!tableExists(database.db, "main", MEMORY_INDEX_STATE_TABLE)) {
+    database.close();
+    return openUninitializedMemoryDatabase(allowExtension);
+  }
+  return { db: database.db, release: database.close };
+}
+
 export function closeMemoryDatabase(db: DatabaseSync): void {
   closeMemorySqliteWalMaintenance(db);
-  db.close();
+  if (db.isOpen) {
+    db.close();
+  }
 }

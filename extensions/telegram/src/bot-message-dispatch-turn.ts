@@ -26,6 +26,8 @@ import {
   canPushToolProgress,
   handleApprovalEvent,
   handleCommandOutput,
+  handleCompactionEnd,
+  handleCompactionStart,
   handleItemEvent,
   handlePatchSummary,
   handlePlanUpdate,
@@ -53,7 +55,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
   const toolProgressEnabled =
     turn.streamMode !== "off" &&
-    resolveChannelStreamingPreviewToolProgress(turn.telegramCfg, true, turn.streamMode);
+    resolveChannelStreamingPreviewToolProgress(
+      turn.telegramCfg,
+      turn.streamMode !== "progress",
+      turn.streamMode,
+    );
   const beginDeliveryCorrelation = () =>
     telegramInboundEventDelivery.begin(
       context.ctxPayload.SessionKey,
@@ -271,12 +277,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               turn.streamMode === "progress" ? turn.commentaryProgressEnabled : undefined,
             progressPreambleEnabled: turn.progressPreambleEnabled,
             commentaryPayloadsEnabled: turn.progressPreambleEnabled,
-            // Read the current getter after core freezes visibility so draft
-            // and durable commentary cannot both own the same preamble.
+            // The progress draft is the only commentary owner and retires before
+            // the clean final. A durable copy would restore the queue burst this
+            // owner boundary prevents; verbose still controls durable tool output.
             shouldDeliverCommentaryPayloads:
-              turn.streamMode === "progress" && turn.commentaryProgressEnabled
-                ? () => turn.verboseProgressActive()
-                : undefined,
+              turn.progressPreambleEnabled === true ? () => false : undefined,
             reasoningPayloadsEnabled: turn.durableReasoningPayloadsEnabled,
             onToolStart: (payload) => handleToolStart(turn, payload),
             onItemEvent: (payload) => handleItemEvent(turn, payload),
@@ -303,19 +308,14 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             },
             onCommandOutput: (payload) => handleCommandOutput(turn, payload),
             onPatchSummary: (payload) => handlePatchSummary(turn, payload),
-            onCompactionStart: turn.statusReactionController
-              ? async () => {
-                  await turn.statusReactionController?.setCompacting();
-                  return false;
-                }
-              : undefined,
-            onCompactionEnd: turn.statusReactionController
-              ? async () => {
-                  turn.statusReactionController?.cancelPending();
-                  await turn.statusReactionController?.setThinking();
-                  return false;
-                }
-              : undefined,
+            // Ambient room events are intentionally invisible, including reactions.
+            // User requests in group chats are not room_event turns and retain these callbacks.
+            onCompactionStart: isRoomEvent
+              ? undefined
+              : async () => await handleCompactionStart(turn),
+            onCompactionEnd: isRoomEvent
+              ? undefined
+              : async (payload) => await handleCompactionEnd(turn, payload),
             onModelSelected,
           },
         }),

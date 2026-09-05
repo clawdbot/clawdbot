@@ -2,6 +2,7 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { isBuiltInModelProviderOverlayId } from "../config/model-provider-config.js";
 import { resolveIsNixMode } from "../config/paths.js";
@@ -285,14 +286,12 @@ export async function checkTelemetryUpdate(
         lastFailedAttempt = { at: nowMs, endpoint, stateDirectory };
         return cached;
       }
-      const parsed = TelemetryResponseSchema.safeParse(await response.json());
-      if (!parsed.success) {
-        lastFailedAttempt = { at: nowMs, endpoint, stateDirectory };
-        return cached;
-      }
-      const note = parsed.data.note?.trim().slice(0, TELEMETRY_NOTE_MAX_LENGTH);
+      const parsed = TelemetryResponseSchema.parse(
+        await readProviderJsonResponse(response, "Telemetry update response"),
+      );
+      const note = parsed.note?.trim().slice(0, TELEMETRY_NOTE_MAX_LENGTH);
       const update = {
-        version: parsed.data.version,
+        version: parsed.version,
         ...(note ? { note } : {}),
       };
       writeConfigMachineState(TELEMETRY_STATE_KEY, {

@@ -1324,7 +1324,9 @@ HOOK
       const repo = join(tmp, "repo");
       const outer = join(tmp, "outer");
       const temp = join(tmp, "temp");
-      for (const dir of [bin, repo, outer, temp]) mkdirSync(dir, { recursive: true });
+      for (const dir of [bin, repo, outer, temp]) {
+        mkdirSync(dir, { recursive: true });
+      }
       writeFileSync(
         join(repo, "package.json"),
         JSON.stringify({ packageManager: `pnpm@${version}` }),
@@ -2128,7 +2130,10 @@ HOOK
 
   it.each([
     ["openclaw@npm:@scope/candidate@1.0.0", "--allow-scripts=@scope/candidate"],
+    ["openclaw@npm:@scope/candidate.tgz@1.0.0", "--allow-scripts=@scope/candidate.tgz"],
     ["file:/tmp/openclaw.tgz", "--allow-scripts=file:/tmp/openclaw.tgz"],
+    ["vendor/repo.tgz", "--allow-scripts=vendor/repo.tgz"],
+    ["vendor/repo#release.tgz", "--allow-scripts=vendor/repo#release.tgz"],
     [
       "https://example.invalid/openclaw.tgz",
       "--allow-scripts=https://example.invalid/openclaw.tgz",
@@ -2153,11 +2158,73 @@ HOOK
     }
   });
 
-  it("relativizes absolute npm path identities against the command cwd", () => {
+  it.each(["absolute", "relative", "file:absolute", "file:relative"])(
+    "uses the absolute npm tarball identity for %s input",
+    (form) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-archive-identity-"));
+      const npm = join(tmp, "npm");
+      const commandCwd = join(tmp, "work");
+      const candidate = join(tmp, "candidate.tgz");
+      const protocol = form.startsWith("file:") ? "file:" : "";
+      const spec = `${protocol}${form.endsWith("relative") ? "../candidate.tgz" : candidate}`;
+      mkdirSync(commandCwd);
+      writeNpmLifecycleFixture(npm);
+      try {
+        const result = runInstallCliShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `node_bin() { printf '%s\\n' ${JSON.stringify(process.execPath)}; }`,
+            `cd ${JSON.stringify(commandCwd)}`,
+            `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(spec)} "$PWD"`,
+          ].join("\n"),
+          { NPM_FAKE_VERSION: "12.0.0" },
+        );
+        expect(result.status).toBe(0);
+        expect(result.stdout.trim()).toBe(`--allow-scripts=${protocol}${candidate}`);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    { version: "11.16.0", advisory: true },
+    { version: "12.0.0", advisory: false },
+  ])(
+    "handles comma tarball identity under npm $version before mutation",
+    ({ version, advisory }) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-archive-comma,"));
+      const npm = join(tmp, "npm");
+      const args = join(tmp, "args");
+      writeNpmLifecycleFixture(npm);
+      try {
+        const result = runInstallCliShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `node_bin() { printf '%s\\n' ${JSON.stringify(process.execPath)}; }`,
+            `cd ${JSON.stringify(tmp)}`,
+            `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(join(tmp, "candidate.tgz"))} "$PWD"`,
+          ].join("\n"),
+          { NPM_FAKE_VERSION: version, NPM_FAKE_ARGS: args },
+        );
+        expect(result.status).toBe(advisory ? 0 : 1);
+        if (advisory) {
+          expect(result.stdout).toBe("--allow-scripts=./candidate.tgz");
+        } else {
+          expect(result.stderr).toContain("without commas");
+        }
+        expect(existsSync(args)).toBe(false);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("retains relative directory identities under comma ancestors", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-identity-comma,"));
     const npm = join(tmp, "npm");
     const commandCwd = join(tmp, "safe");
-    const candidate = join(tmp, "candidate.tgz");
+    const candidate = join(tmp, "candidate");
     mkdirSync(commandCwd);
     writeNpmLifecycleFixture(npm);
     try {
@@ -2171,7 +2238,7 @@ HOOK
         { NPM_FAKE_VERSION: "12.0.0" },
       );
       expect(result.status).toBe(0);
-      expect(result.stdout.trim()).toBe("--allow-scripts=../candidate.tgz");
+      expect(result.stdout.trim()).toBe("--allow-scripts=../candidate");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

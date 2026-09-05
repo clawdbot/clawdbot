@@ -4,11 +4,9 @@ import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.R
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
-import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
@@ -108,7 +106,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -131,7 +128,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -884,84 +880,13 @@ fun OnboardingFlow(
     }
 
     pendingTrust?.let { prompt ->
-      val manualEntry = prompt.fingerprintSha256 == null
-      val systemTrustAvailable = prompt.systemTrustAvailable
-      var manualFingerprint by
-        rememberSaveable(prompt.endpoint.stableId, prompt.probeFailure) {
-          mutableStateOf("")
-        }
-      val normalizedManualFingerprint = normalizeGatewayTlsFingerprintInput(manualFingerprint)
-      AlertDialog(
-        onDismissRequest = viewModel::declineGatewayTrustPrompt,
-        containerColor = ClawTheme.colors.surfaceRaised,
-        title = { Text(stringResource(R.string.trust_this_gateway), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-        text = {
-          val message =
-            when {
-              manualEntry -> {
-                nativeString(
-                  "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
-                )
-              }
-
-              prompt.previousFingerprintSha256.isNullOrBlank() -> {
-                stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
-              }
-
-              else -> {
-                stringResource(
-                  R.string.gateway_trust_changed,
-                  prompt.previousFingerprintSha256,
-                  prompt.fingerprintSha256,
-                )
-              }
-            }
-          Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-              message,
-              style = ClawTheme.type.body,
-              color = ClawTheme.colors.textMuted,
-            )
-            if (systemTrustAvailable) {
-              Text(
-                nativeString("This gateway now presents a certificate trusted by this device."),
-                style = ClawTheme.type.body,
-                color = ClawTheme.colors.textMuted,
-              )
-            }
-            if (manualEntry) {
-              OutlinedTextField(
-                value = manualFingerprint,
-                onValueChange = { manualFingerprint = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(nativeString("SHA-256 fingerprint")) },
-                singleLine = true,
-              )
-            }
-          }
-        },
-        confirmButton = {
-          TextButton(
-            onClick = {
-              viewModel.acceptGatewayTrustPrompt(if (manualEntry) normalizedManualFingerprint else null)
-            },
-            enabled = !manualEntry || normalizedManualFingerprint != null,
-          ) {
-            Text(nativeString("Trust"))
-          }
-        },
-        dismissButton = {
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (systemTrustAvailable) {
-              TextButton(onClick = viewModel::useSystemGatewayTrustPrompt) {
-                Text(nativeString("Use system trust"))
-              }
-            }
-            TextButton(onClick = viewModel::declineGatewayTrustPrompt) {
-              Text(nativeString("Cancel"))
-            }
-          }
-        },
+      GatewayTrustDialog(
+        prompt = prompt,
+        confirmLabel = nativeString("Trust"),
+        cancelLabel = nativeString("Cancel"),
+        onAccept = viewModel::acceptGatewayTrustPrompt,
+        onUseSystemTrust = viewModel::useSystemGatewayTrustPrompt,
+        onDecline = viewModel::declineGatewayTrustPrompt,
       )
     }
 
@@ -1860,6 +1785,7 @@ private fun SetupCodeEntryScreen(
             value = setupCode,
             onValueChange = onSetupCodeChange,
             placeholder = nativeString("Paste setup code"),
+            secret = true,
           )
         }
         error?.let { message ->
@@ -1933,7 +1859,7 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Token")) {
-            ClawTextField(value = token, onValueChange = onTokenChange, placeholder = nativeString("Paste token"))
+            ClawTextField(value = token, onValueChange = onTokenChange, placeholder = nativeString("Paste token"), secret = true)
             Text(
               text = nativeString("Paste a shared Gateway token or operator-issued token."),
               style = ClawTheme.type.caption,
@@ -1943,7 +1869,7 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Password")) {
-            ClawTextField(value = password, onValueChange = onPasswordChange, placeholder = nativeString("Password optional"))
+            ClawTextField(value = password, onValueChange = onPasswordChange, placeholder = nativeString("Password optional"), secret = true)
           }
         }
         item {
@@ -2945,64 +2871,6 @@ internal fun recoveryGatewayName(
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
     ?: "Home Gateway"
-
-/** Resolves onboarding setup-code or manual fields into the gateway plan used for connect. */
-internal fun resolveOnboardingGatewayConnectPlan(
-  setupCode: String,
-  savedManualHost: String,
-  savedManualPort: String,
-  savedManualTls: Boolean,
-  manualHost: String,
-  manualPort: String,
-  manualTls: Boolean,
-  token: String,
-  password: String,
-): GatewayConnectPlan? =
-  resolveGatewayConnectPlan(
-    useSetupCode = setupCode.isNotBlank(),
-    setupCode = setupCode,
-    savedManualHost = savedManualHost,
-    savedManualPort = savedManualPort,
-    savedManualTls = savedManualTls,
-    manualHostInput = manualHost,
-    manualPortInput = manualPort,
-    manualTlsInput = manualTls,
-    bootstrapTokenInput = "",
-    tokenInput = token,
-    passwordInput = password,
-  )
-
-/** Selects the recovery detail line from endpoint metadata and transient gateway status. */
-internal fun recoveryGatewayDetail(
-  ready: Boolean,
-  remoteAddress: String?,
-  statusText: String,
-  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
-  gatewayConnectionProblem: GatewayConnectionProblem?,
-): String =
-  if (ready) {
-    remoteAddress?.takeIf { it.isNotBlank() } ?: nativeString("Ready for chat and voice")
-  } else if (nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval)) {
-    nativeString("Gateway paired. Waiting for node capability approval.")
-  } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
-    recoveryGatewayApprovalCommand(gatewayConnectionProblem)
-      ?.let { nativeString("Gateway approval is pending. Run this on the gateway host:") }
-      ?: nativeString(
-        "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry.",
-      )
-  } else if (gatewayConnectionProblem?.isPairingRequired == true && gatewayConnectionProblem.canAutoRetry) {
-    nativeString("Gateway approval is in progress. OpenClaw will retry automatically.")
-  } else if (gatewayConnectionProblem != null) {
-    recoveryGatewayAuthDetail(gatewayConnectionProblem)
-  } else if (nodeCapabilityApproval == GatewayNodeCapabilityApproval.Loading) {
-    nativeString("Gateway paired. Checking node capability approval.")
-  } else if (statusText.contains("operator offline", ignoreCase = true)) {
-    nativeString("Gateway paired. Waiting for operator access.")
-  } else if (gatewayStatusLooksLikePairing(statusText)) {
-    nativeString("Gateway approval is in progress. OpenClaw will retry automatically.")
-  } else {
-    remoteAddress?.takeIf { it.isNotBlank() } ?: nativeString("Gateway unreachable")
-  }
 
 internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnectionProblem): String =
   when (gatewayConnectionProblem.code) {

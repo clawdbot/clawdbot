@@ -209,6 +209,11 @@ export async function refreshChromeMcpCleanupProcess(session: ChromeMcpSession):
   session.processCleanupRefresh = refresh;
   try {
     await refresh;
+  } catch (err) {
+    // Capture can fail during start, before cleanup runs or the SDK loses its PID.
+    const target = cleanupTarget(state);
+    session.processCleanup = { status: "uncertain", ...(target ? { target } : {}) };
+    throw err;
   } finally {
     if (session.processCleanupRefresh === refresh) {
       session.processCleanupRefresh = undefined;
@@ -332,7 +337,7 @@ async function closeChromeMcpSessionHandle(session: ChromeMcpSession): Promise<v
   }
   // MCP SDK owns the exact spawned ChildProcess; always close it even when
   // descendant discovery or platform tree cleanup fails.
-  await attempt(async () => await session.client.close());
+  await attempt(async () => await session.closeTransport());
   if (!terminateFirst) {
     await attempt(async () => await terminateChromeMcpProcessTree(target));
   }
@@ -345,18 +350,23 @@ async function closeChromeMcpSessionHandle(session: ChromeMcpSession): Promise<v
   session.processCleanup = { status: "closed" };
 }
 
-export async function closeTrackedChromeMcpSession(
+export function closeTrackedChromeMcpSession(
   cacheKey: string,
   session: ChromeMcpSession,
 ): Promise<void> {
   if (session.processCleanup?.status === "closed") {
-    return;
+    return Promise.resolve();
   }
   const existing = cleanupPromises.get(session);
   if (existing) {
-    return await existing;
+    return existing;
   }
 
+  // Revoke sends before discovery yields: a finishing start must not initialize
+  // and spawn descendants after the cleanup snapshot has been captured.
+  session.transport.send = async () => {
+    throw new Error("Chrome MCP session is closing");
+  };
   // Publish cleanup ownership before awaiting so a replacement session cannot
   // overtake the exact process/client handle being closed.
   const retained = retainedCleanupSessions.get(cacheKey) ?? new Set<ChromeMcpSession>();
@@ -374,7 +384,10 @@ export async function closeTrackedChromeMcpSession(
     }
   })();
   cleanupPromises.set(session, cleanup);
-  return await cleanup;
+  // Client.connect intentionally does not await close on initialization failure.
+  // Keep that rejection observed without hiding it from cleanup/admission callers.
+  void cleanup.catch(() => {});
+  return cleanup;
 }
 
 export async function drainRetainedChromeMcpCleanup(cacheKey: string): Promise<void> {

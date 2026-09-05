@@ -171,6 +171,11 @@ can overstate the live context window. Context displays and diagnostics use
 the latest prompt snapshot (`promptTokens`, or the last model call when no
 prompt snapshot is available) for `context.used`.
 
+Native Codex turn usage sums the reported counts from each unique completed
+model response, including responses before a retry or cancellation. Missing
+response counts stay unknown; they do not erase already observed usage. A
+missing final response snapshot leaves context usage unavailable.
+
 ## Cost estimation (when shown)
 
 Costs are estimated from your model pricing config:

@@ -48,6 +48,16 @@ on:
         required: false
         default: ""
         type: string
+      recovered_clawhub_run_id:
+        description: Human recovery only - original Plugin ClawHub Release run id bound by the parent authorization receipt (discovered from the parent run when omitted)
+        required: false
+        default: ""
+        type: string
+      recovered_clawhub_run_attempt:
+        description: Human recovery only - original Plugin ClawHub Release run attempt bound by the parent authorization receipt (discovered from the parent run when omitted)
+        required: false
+        default: ""
+        type: string
       dry_run:
         description: Validate the full ClawHub artifact handoff without publishing.
         required: false
@@ -338,6 +348,7 @@ jobs:
           fi
 
           cat .local/plugin-clawhub-release-plan.json
+          jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-clawhub-release-plan.json >> "$GITHUB_STEP_SUMMARY"
 
           candidate_count="$(jq -r '.candidates | length' .local/plugin-clawhub-release-plan.json)"
           bootstrap_candidate_count="$(jq -r '.bootstrapCandidates | length' .local/plugin-clawhub-release-plan.json)"
@@ -429,6 +440,8 @@ jobs:
     permissions:
       actions: read
       contents: read
+    outputs:
+      direct_recovery: ${{ steps.approval.outputs.direct_recovery }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -436,6 +449,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate release publish approval run
+        id: approval
         env:
           ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true"
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
@@ -476,6 +490,9 @@ jobs:
               }'
           )"
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
+          # Published only after the parent run validated, so the approval job never mints a
+          # recovery receipt for an unvalidated parent.
+          echo "direct_recovery=${direct_recovery}" >> "$GITHUB_OUTPUT"
 
   pack_plugins_clawhub_artifacts:
     needs: [preview_plugins_clawhub, validate_release_publish_approval]
@@ -594,16 +611,57 @@ jobs:
           retention-days: 30
 
   approve_plugins_clawhub_release:
-    needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, seal_clawhub_transactions]
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && needs.seal_clawhub_transactions.result == 'success'
+    needs:
+      [
+        preview_plugins_clawhub,
+        pack_plugins_clawhub_artifacts,
+        seal_clawhub_transactions,
+        validate_release_publish_approval,
+      ]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && needs.pack_plugins_clawhub_artifacts.result == 'success' && needs.seal_clawhub_transactions.result == 'success'
     runs-on: ubuntu-latest
     environment: clawhub-plugin-release
     permissions:
+      actions: read
       contents: read
     steps:
       - name: Approve Plugin ClawHub release publish
         run: |
           echo "Approved CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows release publish gate."
+
+      # The automated bot-dispatched route is unchanged; direct human dispatch binds this approval
+      # to the exact child run and to the original child attempt whose parent receipt ClawHub
+      # resolves for explicit-recovery finalization (openclaw/clawhub
+      # convex/lib/openClawPublishAuthorization.ts validateRecoveryReceipt).
+      - name: Checkout trusted release tooling
+        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+      - name: Setup Node
+        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Write recovery environment approval receipt
+        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          RECOVERED_CLAWHUB_RUN_ID: ${{ inputs.recovered_clawhub_run_id }}
+          RECOVERED_CLAWHUB_RUN_ATTEMPT: ${{ inputs.recovered_clawhub_run_attempt }}
+        run: |
+          node scripts/clawhub-parent-authorization.mjs recovery-approval --output "$RUNNER_TEMP/openclaw-clawhub-recovery-approval/approval.json"
+      - name: Upload recovery environment approval receipt
+        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-clawhub-recovery-approval-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openclaw-clawhub-recovery-approval/approval.json
+          if-no-files-found: error
+          retention-days: 30
 
   publish_plugins_clawhub:
     needs:
@@ -614,7 +672,7 @@ jobs:
         approve_plugins_clawhub_release,
       ]
     if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@db2a12c4625ffa162910a3e6aa2cb786ced89e2f # reviewed parent receipt contract
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@d118f17fd366e5cdc3ad9c8abcea51941b97636f # reviewed parent receipt contract
     permissions:
       actions: read
       contents: read

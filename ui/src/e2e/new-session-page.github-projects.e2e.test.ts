@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   WORKSPACE,
   ONE_PIXEL_PNG_B64,
@@ -74,18 +75,26 @@ suite.define(() => {
         await projects.getByRole("button", { name: /openclaw\/openclaw/u }).click();
 
         await captureProjectUiProof(suite, page, "github-worktree-direct.png");
-        const detail = page.locator("#new-session-detail-trigger");
-        await expect.poll(() => detail.isVisible()).toBe(true);
-        await pollLocatorText(detail).toContain("Runs directly");
-        await detail.click();
-        const branches = page.locator("wa-popover.new-session-page__detail-popover");
-        await branches.getByRole("button", { name: "Worktree", exact: true }).click();
-        await expect.poll(() => detail.getAttribute("data-worktree")).toBe("true");
-        const baseRef = branches.getByLabel("Base branch");
-        expect(await baseRef.getAttribute("placeholder")).toBe("Base branch");
+        const checkout = page.locator("#new-session-checkout-trigger");
+        await expect.poll(() => checkout.isVisible()).toBe(true);
+        await pollLocatorText(checkout).toContain("Current checkout");
+        await checkout.click();
+        const checkoutPopover = page.locator("wa-popover.new-session-page__checkout-popover");
+        await checkoutPopover
+          .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+          .click();
+        await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
+        await pollLocatorText(checkout.locator(".new-session-page__trigger-label")).toBe(
+          "New worktree",
+        );
+        const baseRef = checkoutPopover.getByLabel("From");
+        expect(await baseRef.getAttribute("placeholder")).toBe("From");
         expect(await baseRef.inputValue()).toBe("");
-        expect(await branches.locator("datalist option").count()).toBe(0);
-        await captureProjectUiProof(suite, page, "github-worktree-selected.png");
+        expect(await checkoutPopover.locator("datalist option").count()).toBe(0);
+        await captureProjectUiProof(suite, page, "github-worktree-selected.png", {
+          surface: checkoutPopover.locator('wa-popup [part="popup"]'),
+          content: [baseRef],
+        });
         await page.locator(".new-session-page__message").fill("inspect the worktree");
         await page.getByRole("button", { name: "Start session" }).click();
 
@@ -152,10 +161,13 @@ suite.define(() => {
     const mediaBlocked = new Promise<void>((resolve) => {
       releaseMedia = resolve;
     });
+    let metadataRequested = false;
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+      const metadata = new URL(route.request().url()).searchParams.has("meta");
+      metadataRequested ||= metadata;
       await mediaBlocked;
       await route.fulfill(
-        new URL(route.request().url()).searchParams.has("meta")
+        metadata
           ? { json: { available: true } }
           : { contentType: "image/png", body: Buffer.from(ONE_PIXEL_PNG_B64, "base64") },
       );
@@ -181,6 +193,7 @@ suite.define(() => {
               fileName: "synthetic.png",
             },
           ],
+          mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
         },
       },
     };
@@ -287,13 +300,13 @@ suite.define(() => {
       expect(await trigger.getAttribute("data-project-id")).toBeNull();
 
       if (worktree) {
-        const detailTrigger = page.locator("#new-session-detail-trigger");
-        await detailTrigger.click();
+        const checkoutTrigger = page.locator("#new-session-checkout-trigger");
+        await checkoutTrigger.click();
         await page
-          .locator("wa-popover.new-session-page__detail-popover")
-          .getByRole("button", { name: "Worktree", exact: true })
+          .locator("wa-popover.new-session-page__checkout-popover")
+          .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
           .click();
-        await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
+        await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
         await page.keyboard.press("Escape");
       }
 
@@ -367,13 +380,15 @@ suite.define(() => {
         };
       });
       await gateway.resolveDeferred("chat.startup");
-      await page
-        .getByText("Message received. Waiting for the agent to start it.", { exact: true })
-        .waitFor();
+      await expect.poll(() => metadataRequested).toBe(true);
+      expect(await page.locator(".chat-notice").count()).toBe(0);
       const working = page.locator('.chat-working-indicator[role="status"]');
       await pollLocatorText(working).toContain("Preparing workspace…");
       if (artifactDir) {
-        await page.screenshot({ path: path.join(artifactDir, "preparing.png"), fullPage: true });
+        await writeFile(
+          path.join(artifactDir, "preparing.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working, userImage]),
+        );
       }
       await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
       await expect
@@ -459,7 +474,10 @@ suite.define(() => {
         await canonicalBubble.waitFor();
         await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
         if (artifactDir) {
-          await page.screenshot({ path: path.join(artifactDir, "promoted.png"), fullPage: true });
+          await writeFile(
+            path.join(artifactDir, "promoted.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [canonicalBubble]),
+          );
         }
         await gateway.emitChatFinal({ runId, sessionKey, text: "Project workspace is ready." });
         await page

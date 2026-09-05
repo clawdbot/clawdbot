@@ -418,6 +418,14 @@ link-local, and private-network targets.
   and that the gateway is reachable from LINE.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
+- **Pushes refused with HTTP 429:** Run
+  `openclaw channels status --channel line --probe --json`. For a limited allowance,
+  the account’s `quota` contains `used` and `limit`. Missing quota is unknown, not unlimited.
+  A healthy bot identity can coexist with an exhausted push allowance. Check the
+  account allowance or plan in LINE Official Account Manager before retrying;
+  429 can also reflect rate limits or temporary message reservations. Ordinary
+  reply-token messages do not consume this monthly allowance, unlike pushes.
+  See [LINE message pricing](https://developers.line.biz/en/docs/messaging-api/pricing/).
 - **Bot silently skips messages (events dead-lettered):** `openclaw logs` shows
   `line: spooled update <id> ... dead-lettered` lines with the failure reason.
   Inspect with `openclaw channels dead-letters list --channel line --account default`

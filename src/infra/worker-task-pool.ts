@@ -3,20 +3,20 @@ import { parentPort, Worker, type Transferable, type WorkerOptions } from "node:
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 
 type WorkerTaskInput<Input> = Input | (() => Input | Promise<Input>);
 type WorkerTaskOptions<Input> = {
-  timeoutMs: number;
+  /** When supplied, queueing and asynchronous preparation consume the execution deadline. */
+  timeoutMs?: number;
   signal?: AbortSignal;
   transferList?: (input: Input) => readonly Transferable[];
 };
 type WorkerReply<Output> = { status: "ok"; value: Output } | { status: "failed"; error: string };
-type Task<Input, Output> = {
-  input: WorkerTaskInput<Input>;
+type Task<Input, Output> = Deferred<Output> & {
+  input?: WorkerTaskInput<Input>;
   options: WorkerTaskOptions<Input>;
-  resolve: (value: Output) => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
   abort: () => void;
   done: boolean;
   slot?: Slot<Input, Output>;
@@ -62,30 +62,28 @@ export class WorkerTaskPool<Input, Output> {
     if (this.closedError) {
       return Promise.reject(this.closedError);
     }
-    return new Promise<Output>((resolve, reject) => {
-      const abort = () =>
-        this.cancel(task, toErrorObject(options.signal?.reason, "worker task aborted"));
-      const task: Task<Input, Output> = {
-        input,
-        options,
-        resolve,
-        reject,
-        abort,
-        done: false,
-        // Queueing and asynchronous preparation consume the same budget as execution.
-        timer: setTimeout(
-          () => this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
-          resolveTimerTimeoutMs(options.timeoutMs, 60_000),
-        ),
-      };
-      options.signal?.addEventListener("abort", abort, { once: true });
-      this.queue.push(task);
-      if (options.signal?.aborted) {
-        abort();
-      } else {
-        this.dispatch();
-      }
-    });
+    // A Promise executor would let the task's timer/abort closures retain input too.
+    const task: Task<Input, Output> = {
+      ...createDeferredCore<Output>(),
+      input,
+      options,
+      abort: () => this.cancel(task, toErrorObject(options.signal?.reason, "worker task aborted")),
+      done: false,
+    };
+    if (options.timeoutMs !== undefined) {
+      task.timer = setTimeout(
+        () => this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
+        resolveTimerTimeoutMs(options.timeoutMs, 60_000),
+      );
+    }
+    options.signal?.addEventListener("abort", task.abort, { once: true });
+    this.queue.push(task);
+    if (options.signal?.aborted) {
+      task.abort();
+    } else {
+      this.dispatch();
+    }
+    return task.promise;
   }
 
   close(
@@ -123,12 +121,15 @@ export class WorkerTaskPool<Input, Output> {
   }
 
   private async start(slot: Slot<Input, Output>, task: Task<Input, Output>): Promise<void> {
+    // Execution owns the input now; retaining it on task duplicates the worker's clone.
+    const taskInput = task.input!;
+    delete task.input;
     let input: Input;
     try {
       input =
-        typeof task.input === "function"
-          ? await (task.input as () => Input | Promise<Input>)() // SAFETY: Callable inputs are factories.
-          : task.input;
+        typeof taskInput === "function"
+          ? await (taskInput as () => Input | Promise<Input>)() // SAFETY: Callable inputs are factories.
+          : taskInput;
     } catch (error) {
       this.fail(slot, toErrorObject(error, "worker task preparation failed"));
       return;
@@ -234,15 +235,20 @@ export class WorkerTaskPool<Input, Output> {
         void this.retire(slot).then(complete);
         return;
       }
-      slot.worker?.unref();
-      const idleMs = this.options.idleTimeoutMs ?? 60_000;
-      if (idleMs > 0) {
-        slot.idleTimer = setTimeout(() => void this.retire(slot), idleMs);
-        slot.idleTimer.unref();
-      }
+      this.idle(slot);
     }
     complete();
     this.dispatch();
+  }
+
+  // A separate scope keeps the idle timer from retaining the completed task/result.
+  private idle(slot: Slot<Input, Output>): void {
+    slot.worker?.unref();
+    const idleMs = this.options.idleTimeoutMs ?? 60_000;
+    if (idleMs > 0) {
+      slot.idleTimer = setTimeout(() => void this.retire(slot), idleMs);
+      slot.idleTimer.unref();
+    }
   }
 
   private retire(slot: Slot<Input, Output>): Promise<void> {

@@ -46,21 +46,19 @@ type ZaloLifecycleMocks = {
   getZaloRuntimeMock: UnknownMock;
 };
 
-const lifecycleMocks = vi.hoisted(
-  (): ZaloLifecycleMocks => ({
-    setWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-    deleteWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-    getWebhookInfoMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-    getUpdatesMock: vi.fn(() => new Promise(() => {})),
-    sendChatActionMock: vi.fn(async () => ({ ok: true })),
-    sendMessageMock: vi.fn(async () => ({
-      ok: true,
-      result: { message_id: "zalo-test-reply-1" },
-    })),
-    sendPhotoMock: vi.fn(async () => ({ ok: true })),
-    getZaloRuntimeMock: vi.fn(),
-  }),
-);
+const lifecycleMocks = vi.hoisted((): ZaloLifecycleMocks => ({
+  setWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
+  deleteWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
+  getWebhookInfoMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
+  getUpdatesMock: vi.fn(() => new Promise(() => {})),
+  sendChatActionMock: vi.fn(async () => ({ ok: true })),
+  sendMessageMock: vi.fn(async () => ({
+    ok: true,
+    result: { message_id: "zalo-test-reply-1" },
+  })),
+  sendPhotoMock: vi.fn(async () => ({ ok: true })),
+  getZaloRuntimeMock: vi.fn(),
+}));
 
 const setWebhookMock = lifecycleMocks.setWebhookMock;
 export const getUpdatesMock = lifecycleMocks.getUpdatesMock;

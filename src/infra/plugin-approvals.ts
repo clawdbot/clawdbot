@@ -41,6 +41,8 @@ export type PluginApprovalRequestPayload = {
   scope?: ApprovalScope | null;
   toolName?: string | null;
   toolCallId?: string | null;
+  /** Exact MCP persistence intent; the host separately binds live tool-call proof. */
+  mcpTool?: { server: string; tool: string };
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
   /** Trusted in-process metadata; public Gateway callers cannot submit this field. */
   externalResolution?: {

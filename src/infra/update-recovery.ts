@@ -9,6 +9,7 @@ export const updateRecoverySchema = z.discriminatedUnion("serviceRestartSafe", [
   }),
   z.strictObject({
     serviceRestartSafe: z.literal(false),
+    packageRollbackVerified: z.boolean().optional(),
     reason: z.enum([
       "source-rollback-failed",
       "state-migration-started",

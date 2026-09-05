@@ -1,4 +1,7 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  buildTemporalContextText,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -69,6 +72,7 @@ export function buildTurnStartParams(
     memoryCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
     clearInheritedServiceTier?: boolean;
+    sessionStatusAvailable?: boolean;
   },
 ): CodexTurnStartParams {
   const modelSelection = options.preserveNativeTurnSettings
@@ -92,10 +96,18 @@ export function buildTurnStartParams(
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
   const currentSenderContext =
     params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
+  // Codex emits only changed values and cannot retract omitted fragments from model history.
+  // Always send configured-or-host context so warm threads see rollover and removed overrides.
+  let additionalContext = buildCodexTemporalAdditionalContext(params, {
+    sessionStatusAvailable: options.sessionStatusAvailable === true,
+  });
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
-  let additionalContext: CodexTurnStartParams["additionalContext"] = currentSenderContext
-    ? { openclaw_current_sender: { kind: "untrusted", value: currentSenderContext } }
-    : undefined;
+  if (currentSenderContext) {
+    additionalContext = {
+      ...additionalContext,
+      openclaw_current_sender: { kind: "untrusted", value: currentSenderContext },
+    };
+  }
   if (params.permissionChange?.notice) {
     // Application context is a developer message in Codex 0.151.0 and also
     // reaches native-preserved threads without overriding their turn settings.
@@ -148,6 +160,21 @@ export function buildTurnStartParams(
         }
       : {}),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
+  };
+}
+
+export function buildCodexTemporalAdditionalContext(
+  params: Pick<EmbeddedRunAttemptParams, "config">,
+  options: { sessionStatusAvailable: boolean },
+): NonNullable<CodexTurnStartParams["additionalContext"]> {
+  return {
+    openclaw_temporal_context: {
+      kind: "application",
+      value: buildTemporalContextText({
+        configuredTimezone: params.config?.agents?.defaults?.userTimezone,
+        sessionStatusAvailable: options.sessionStatusAvailable,
+      }),
+    },
   };
 }
 

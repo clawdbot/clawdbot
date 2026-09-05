@@ -5,6 +5,7 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -24,12 +25,14 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
-import { handoffUpdateFromGateway } from "./update-command-handoff.js";
+import {
+  formatUpdateAncestryBlockMessage,
+  handoffUpdateFromGateway,
+} from "./update-command-handoff.js";
 import {
   captureOwnedManagedUpdateContext,
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
-import { runPackageInstallUpdate } from "./update-command-package.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
@@ -40,6 +43,11 @@ import {
   type PreManagedServiceStop,
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
+import {
+  selectPackageExecutor,
+  type PackageUpdatePreparation,
+  type PreparedPackageUpdate,
+} from "./update-package-executor.js";
 
 const CLI_NAME = resolveCliName();
 
@@ -115,6 +123,7 @@ export async function executeMutableUpdate(params: {
           jsonMode: Boolean(params.opts.json),
           timeoutMs: params.updateStepTimeoutMs,
           phase,
+          updateRun: params.opts.run,
           handoffFromGateway: (state) =>
             handoffUpdateFromGateway({
               state,
@@ -196,7 +205,7 @@ export async function executeMutableUpdate(params: {
         [
           `${updateLabel} cannot run from inside the gateway service process.`,
           "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
-          `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
+          `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a terminal outside the gateway service.`,
         ].join("\n"),
       );
     }
@@ -205,14 +214,36 @@ export async function executeMutableUpdate(params: {
       params.stop();
       throw new UpdatePreMutationError(
         "managed-service-preflight",
-        preManagedServiceStop.blockMessage,
+        formatUpdateAncestryBlockMessage(preManagedServiceStop.blockMessage),
       );
     }
   };
 
+  const buildPackagePreparation = (): PackageUpdatePreparation => ({
+    root: params.root,
+    installKind: params.installKind,
+    tag: params.tag,
+    installSpec: params.packageInstallSpec ?? undefined,
+    timeoutMs: params.updateStepTimeoutMs,
+    startedAt: params.startedAt,
+    progress: params.progress,
+    jsonMode: Boolean(params.opts.json),
+    invocationCwd: params.invocationCwd,
+    honorPackageRoot:
+      params.managedServiceRootRedirect !== null || params.managedServiceNodeRunner !== undefined,
+    nodeRunner: params.packageUpdateNodeRunner,
+    installEnv: params.packageInstallEnv,
+    installTarget: params.packageInstallTarget,
+  });
+
   let result: UpdateRunResult;
   let failure: MutableUpdateExecutionResult["failure"];
+  const packageExecutor =
+    params.updateInstallKind === "package" ? selectPackageExecutor() : undefined;
+  let preparedPackageUpdate: PreparedPackageUpdate | undefined;
+  let packageActivationStarted = false;
   try {
+    preparedPackageUpdate = await packageExecutor?.prepare(buildPackagePreparation());
     if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
       await stopManagedServiceBeforeMutableUpdate(
         gitMutationRoots ?? undefined,
@@ -233,51 +264,53 @@ export async function executeMutableUpdate(params: {
       );
     }
     preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
-    result =
-      params.updateInstallKind === "package"
-        ? await runPackageInstallUpdate({
-            root: params.root,
-            installKind: params.installKind,
-            tag: params.tag,
-            installSpec: params.packageInstallSpec ?? undefined,
-            timeoutMs: params.updateStepTimeoutMs,
-            startedAt: params.startedAt,
-            progress: params.progress,
-            jsonMode: Boolean(params.opts.json),
-            ...resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart),
-            managedServiceEnv: preManagedServiceStop?.serviceEnv,
-            invocationCwd: params.invocationCwd,
-            honorPackageRoot:
-              params.managedServiceRootRedirect !== null ||
-              params.managedServiceNodeRunner !== undefined,
-            nodeRunner: params.packageUpdateNodeRunner,
-            installEnv: params.packageInstallEnv,
-            installTarget: params.packageInstallTarget,
-          })
-        : await updateGitInstall({
-            root: params.root,
-            switchToGit: params.switchToGit,
-            installKind: params.installKind,
-            timeoutMs: params.timeoutMs,
-            startedAt: params.startedAt,
-            progress: params.progress,
-            channel: params.channel,
-            tag: params.tag,
-            devTarget: params.devTarget,
-            beforeGitMutation:
-              params.updateInstallKind === "git"
-                ? createBeforeGitMutation({
-                    roots: gitMutationRoots ?? [params.root],
-                    shouldRestart: params.shouldRestart,
-                    stopManagedService: stopManagedServiceBeforeMutableUpdate,
-                    getPreManagedServiceStop: () => preManagedServiceStop,
-                    switchToGit: params.switchToGit,
-                  })
-                : undefined,
-            allowGatewayServiceRepair: false,
-            allowGatewayActivation: false,
-          });
+    if (params.opts.run && params.updateInstallKind === "package") {
+      recordUpdateRunPhase(params.opts.run.runId, "activating", undefined, {
+        env: params.opts.run.env,
+      });
+    }
+    if (packageExecutor && preparedPackageUpdate) {
+      packageActivationStarted = true;
+      result = await packageExecutor.activate({
+        prepared: preparedPackageUpdate,
+        activation: {
+          ...resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart),
+          managedServiceEnv: preManagedServiceStop?.serviceEnv,
+        },
+      });
+    } else {
+      result = await updateGitInstall({
+        root: params.root,
+        switchToGit: params.switchToGit,
+        installKind: params.installKind,
+        timeoutMs: params.timeoutMs,
+        startedAt: params.startedAt,
+        progress: params.progress,
+        channel: params.channel,
+        tag: params.tag,
+        devTarget: params.devTarget,
+        beforeGitMutation:
+          params.updateInstallKind === "git"
+            ? createBeforeGitMutation({
+                updateRun: params.opts.run,
+                roots: gitMutationRoots ?? [params.root],
+                shouldRestart: params.shouldRestart,
+                stopManagedService: stopManagedServiceBeforeMutableUpdate,
+                getPreManagedServiceStop: () => preManagedServiceStop,
+                switchToGit: params.switchToGit,
+              })
+            : undefined,
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+      });
+    }
   } catch (err) {
+    if (packageExecutor && preparedPackageUpdate && !packageActivationStarted) {
+      await packageExecutor.discard(
+        preparedPackageUpdate,
+        err instanceof UpdateCommandAbort ? "update-aborted" : "pre-activation-failed",
+      );
+    }
     params.stop();
     if (err instanceof UpdateCommandAbort) {
       return null;

@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements lab server behavior.
+import { once } from "node:events";
 import fs from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";
@@ -962,10 +963,7 @@ export async function startQaLabServer(
   };
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(params?.port ?? 0, params?.host ?? "127.0.0.1", () => resolve());
-    });
+    await once(server.listen(params?.port ?? 0, params?.host ?? "127.0.0.1"), "listening");
     serverListening = true;
     const address = server.address();
     if (!address || typeof address === "string") {

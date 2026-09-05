@@ -10,6 +10,7 @@ import {
 } from "../agents/agent-lifecycle-registry.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import {
+  clearGitHubCredentialVerificationCache,
   refreshGitHubOAuthToken,
   type GitHubOAuthTokenPair,
 } from "../agents/github-oauth-client.js";
@@ -42,6 +43,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { assertGitHubCliAvailable } from "./github-cli-preflight.js";
 import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-device-flow.js";
 import {
   authorizationStillOwned,
@@ -533,6 +535,7 @@ export function createGitHubOAuthLifecycle(params: {
       if (stopping) {
         throw new Error("GitHub authorization lifecycle is stopping.");
       }
+      assertGitHubCliAvailable();
       const expectedIdentity = structuredClone(
         resolveConfiguredGitHubToolIdentity({ config: params.getConfig(), ...input }) ?? null,
       );
@@ -621,6 +624,7 @@ export function createGitHubOAuthLifecycle(params: {
       interval.unref?.();
     },
     stop: async () => {
+      clearGitHubCredentialVerificationCache();
       stopping = true;
       if (interval) {
         clearInterval(interval);

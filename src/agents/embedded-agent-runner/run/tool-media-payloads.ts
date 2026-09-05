@@ -15,8 +15,8 @@ type EmbeddedRunPayload = NonNullable<EmbeddedAgentRunResult["payloads"]>[number
 
 /**
  * Merges media emitted by tools into the channel payloads produced by the
- * assistant turn. The first non-reasoning reply owns the media so text and
- * attachments stay together; metadata is preserved for delivery bookkeeping.
+ * assistant turn. The first successful, non-reasoning reply owns the media so
+ * text and attachments stay together; metadata is preserved for delivery bookkeeping.
  */
 export function mergeAttemptToolMediaPayloads(params: {
   payloads?: EmbeddedRunPayload[];
@@ -32,8 +32,8 @@ export function mergeAttemptToolMediaPayloads(params: {
     new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
   );
   const payloads = params.payloads?.length ? [...params.payloads] : [];
-  const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning);
-  const visiblePayload = payloads.at(payloadIndex);
+  const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning && !payload.isError);
+  const visiblePayload = payloads[payloadIndex];
   const isSourceReplyTranscriptMirror =
     params.sourceReplyDeliveryMode === "message_tool_only" &&
     visiblePayload &&

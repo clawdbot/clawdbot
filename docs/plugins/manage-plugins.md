@@ -315,13 +315,17 @@ openclaw plugins uninstall <plugin-id>
 openclaw plugins uninstall <plugin-id> --keep-files
 ```
 
-Uninstall removes the package's persisted install record and every owned child
-entry from plugin config, allow/deny lists, memory/context slots, exact linked
-`plugins.load.paths`, and channel config entries when applicable. You may address a multi-entry
-package by any child id; the preview names the package owner and all siblings
-that will be removed. The managed install directory is removed once unless you
-pass `--keep-files`. A running managed Gateway restarts automatically when the
-uninstall changes plugin source.
+Uninstall removes the package's persisted install record and every owned child's
+settings from plugin config, allow/deny lists, memory/context slots, exact linked
+`plugins.load.paths`, and channel config entries when applicable. It retains only
+an exact `enabled: false` marker for each removed child so remaining model,
+provider, or channel selections cannot automatically reinstall the package during
+startup repair. Reinstalling does not silently re-enable it; enabling the plugin
+again replaces the marker. You may address a multi-entry package by any child id;
+the preview names the package owner and all siblings that will be removed. The
+managed install directory is removed once unless you pass `--keep-files`. A
+running managed Gateway restarts automatically when the uninstall changes plugin
+source.
 
 If an installed Claw references the plugin, preview and uninstall print the
 affected Claw package names. Ordinary plugin uninstall can still proceed and

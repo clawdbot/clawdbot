@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
+import * as downloads from "../../lib/download.ts";
 import * as toast from "../../lib/toast.ts";
-import * as usageQuery from "./query.ts";
 import type { UsageSessionEntry } from "./types.ts";
 import {
   cacheSnapshot,
@@ -222,7 +222,7 @@ describe("UsagePage detail requests", () => {
         return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
       },
     );
-    const download = vi.spyOn(usageQuery, "downloadTextFile").mockImplementation(() => {});
+    const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const notice = vi.spyOn(toast, "showToast").mockReturnValue(true);
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);

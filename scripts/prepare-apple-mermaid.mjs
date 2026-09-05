@@ -7,7 +7,7 @@ import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const spec = createPnpmRunnerSpawnSpec({
   cwd: root,
-  pnpmArgs: ["--filter", "@openclaw/mermaid-renderer", "build"],
+  pnpmArgs: ["--dir", "packages/mermaid-renderer", "build"],
   stdio: "inherit",
 });
 const result = spawnSync(spec.command, spec.args, spec.options);

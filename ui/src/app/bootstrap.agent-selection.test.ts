@@ -164,9 +164,7 @@ it.each([
     };
     window.history.replaceState({}, "", "/settings/appearance");
 
-    runtime = bootstrapApplication({
-      sessionPathBuilderReady: new Promise<void>(() => {}),
-    });
+    runtime = bootstrapApplication();
 
     expect(runtime.context.gateway.connection.gatewayUrl).toBe(targetGatewayUrl);
     expect(runtime.context.gateway.snapshot.sessionKey).toBe("global");

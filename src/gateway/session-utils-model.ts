@@ -234,7 +234,7 @@ type GatewaySessionThinkingProjectionParams = {
   providerPolicySource?: ThinkingProviderPolicySource;
 };
 
-export function resolveGatewaySessionThinkingProjectionInternal(
+export function resolveGatewaySessionRuntimeProjection(
   params: GatewaySessionThinkingProjectionParams,
 ) {
   const { cfg, agentId, sessionKey, entry } = params;
@@ -258,6 +258,13 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     acpRuntime: acpMeta != null,
     acpBackend: acpMeta?.backend,
   });
+  return { acpMeta, agentRuntime };
+}
+
+export function resolveGatewaySessionThinkingProjectionInternal(
+  params: GatewaySessionThinkingProjectionParams,
+) {
+  const { acpMeta, agentRuntime } = resolveGatewaySessionRuntimeProjection(params);
   const catalogEntry = params.modelCatalog
     ? findModelCatalogEntry(params.modelCatalog, {
         provider: params.provider,
@@ -663,14 +670,14 @@ function resolveSessionDisplayModelIdentityRef(params: {
   };
 }
 
-export async function projectSessionPatchResult(params: {
+export function projectSessionPatchResult(params: {
   canonicalKey: string;
   cfg: OpenClawConfig;
   entry: SessionEntry;
-  modelCatalogByAgent: ReadonlyMap<string, Promise<ModelCatalogEntry[]>>;
+  modelCatalog?: ModelCatalogEntry[];
   storePath: string;
   targetAgentId: string;
-}): Promise<SessionsPatchResult> {
+}): SessionsPatchResult {
   const agentId = resolveSessionAgentId({
     config: params.cfg,
     sessionKey: params.canonicalKey,
@@ -683,7 +690,7 @@ export async function projectSessionPatchResult(params: {
     provider: resolved.provider,
     model: resolved.model,
   });
-  const modelCatalog = await params.modelCatalogByAgent.get(params.targetAgentId);
+  const modelCatalog = params.modelCatalog;
   const thinking = resolveGatewaySessionThinkingProjectionInternal({
     cfg: params.cfg,
     agentId,

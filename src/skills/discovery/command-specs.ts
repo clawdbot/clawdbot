@@ -11,7 +11,12 @@ import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.j
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
 import { filterWorkspaceSkills, loadVisibleSkills } from "../loading/workspace-skill-loader.js";
-import type { SkillEligibilityContext, SkillCommandSpec, SkillEntry } from "../types.js";
+import type {
+  SkillEligibilityContext,
+  SkillCommandSpec,
+  SkillEntry,
+  SkillSnapshot,
+} from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { sanitizeSkillCommandName, SKILL_COMMAND_MAX_LENGTH } from "./command-name.js";
 import { filterUserInvocableSkillEntries, isSkillPromptVisible } from "./skill-index.js";
@@ -68,6 +73,7 @@ export function buildWorkspaceSkillCommandSpecs(
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
+    librarySelections?: SkillSnapshot["librarySelections"];
     agentId?: string;
     skillFilter?: string[];
     includeAllowlistHidden?: boolean;
@@ -89,6 +95,7 @@ export function buildWorkspaceSkillCommandSpecs(
         config: opts?.config,
         managedSkillsDir: opts?.managedSkillsDir,
         bundledSkillsDir: opts?.bundledSkillsDir,
+        librarySelections: opts?.librarySelections,
         skillFilter: effectiveSkillFilter,
         eligibility: opts?.eligibility,
         pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,

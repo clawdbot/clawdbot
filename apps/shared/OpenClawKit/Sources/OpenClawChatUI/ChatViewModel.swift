@@ -239,6 +239,7 @@ public final class OpenClawChatViewModel {
 
     @ObservationIgnored
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
+    private(set) var isTransportDetached = false
     @ObservationIgnored
     private nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
     var runOwnershipGeneration: UInt64 = 0
@@ -565,9 +566,17 @@ public final class OpenClawChatViewModel {
     }
 
     isolated deinit {
-        self.reportToolActivityChanges(from: self.pendingToolCallsById, to: [:])
+        self.detachTransport()
+    }
+
+    /// Permanently retires a replaced presentation without aborting its gateway run.
+    public func detachTransport() {
+        guard !self.isTransportDetached else { return }
+        self.isTransportDetached = true
+        self.endPendingToolActivities()
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
+        self.bootstrapOutboxBranchStateCapture?.task.cancel()
         self.swarmRefreshTask?.cancel()
         self.outboxRetryTask?.cancel()
         for task in self.outboxBranchReconcileRetryTasks.values {
@@ -582,6 +591,10 @@ public final class OpenClawChatViewModel {
         }
         for (_, task) in self.pendingRunOwnerTasks {
             task.cancel()
+        }
+        for tail in self.settingsPatchTailsByTarget.values {
+            tail.routeLeaseTask.cancel()
+            tail.task.cancel()
         }
     }
 
@@ -804,7 +817,7 @@ extension OpenClawChatViewModel {
     func isCurrentSession(_ snapshot: SessionSnapshot) -> Bool {
         let contractSensitive = self.usesMutableContractRouting(for: snapshot.sessionRoutingContract) ||
             self.usesMutableContractRouting(for: self.sessionRoutingContract)
-        return self.sessionKey == snapshot.key &&
+        return !self.isTransportDetached && self.sessionKey == snapshot.key &&
             self.sessionGeneration == snapshot.generation &&
             (!self.usesMutableAgentRouting || self.activeAgentId == snapshot.agentID) &&
             (!contractSensitive || self.sessionRoutingContract == snapshot.sessionRoutingContract)
@@ -880,7 +893,7 @@ extension OpenClawChatViewModel {
         paintCachedTranscript: Bool = true)
     {
         let sessionKey = requestedSessionKey ?? self.sessionKey
-        guard sessionKey == self.sessionKey else { return }
+        guard !self.isTransportDetached, sessionKey == self.sessionKey else { return }
         if self.swarmSessionKey != sessionKey {
             self.swarmEnabled = false
             self.resetSwarmProgress()

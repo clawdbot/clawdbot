@@ -1,5 +1,6 @@
 // Inference backend detection tests cover the documented ladder and login-awareness.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as facadeRuntime from "../plugin-sdk/facade-runtime.js";
 import type { LocalCommandProbe } from "../system-agent/probes.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
@@ -58,6 +59,16 @@ afterAll(() => {
   vi.resetModules();
 });
 
+beforeEach(() => {
+  vi.spyOn(facadeRuntime, "tryLoadActivatedBundledPluginPublicSurfaceModule").mockResolvedValue(
+    null,
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 function probeDeps(found: Record<string, boolean>) {
   return async (command: string): Promise<LocalCommandProbe> => ({
     command,
@@ -66,6 +77,92 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
+  it.each([
+    {
+      account: { type: "chatgpt", email: "alex@example.com" },
+      detail: "logged in · ChatGPT account · alex@example.com",
+      credentials: true,
+    },
+    {
+      account: { type: "chatgpt" },
+      detail: "logged in · ChatGPT account · email unavailable",
+      credentials: true,
+    },
+    {
+      account: { type: "apiKey", email: "stale@example.com" },
+      detail: "logged in · API key (usage-billed)",
+      credentials: true,
+    },
+    {
+      account: { type: "none", requiresOpenaiAuth: true },
+      detail: "installed, not logged in — run `codex login`, then check again",
+      credentials: false,
+    },
+    {
+      account: { type: "none", requiresOpenaiAuth: false },
+      detail: "installed",
+      credentials: undefined,
+    },
+    { account: { type: "unknown" }, detail: "installed", credentials: undefined },
+  ])(
+    "shows native Codex authentication before installing its runtime: $detail",
+    async ({ account, detail, credentials }) => {
+      vi.mocked(facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule).mockImplementation(
+        async ({ dirName }) =>
+          dirName === "openai" ? { readCodexCliAccount: async () => account } : null,
+      );
+      const candidates = await detectInferenceBackends({
+        env: {},
+        platform: "linux",
+        deps: {
+          probeLocalCommand: probeDeps({ codex: true }),
+          readCodexCliCredentials: () => ({ type: "oauth", email: "saved@example.com" }),
+        },
+      });
+
+      expect(candidates).toMatchObject([{ kind: "codex-cli", detail }]);
+      expect(candidates[0]?.credentials).toBe(credentials);
+      expect(JSON.stringify(candidates)).not.toContain("saved@example.com");
+    },
+  );
+
+  it("does not promote native API-key access using an unrelated saved OAuth token", async () => {
+    vi.mocked(facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule).mockResolvedValue({
+      readCodexCliAccount: async () => ({ type: "apiKey" }),
+    });
+    const candidates = await detectInferenceBackends({
+      env: { OPENAI_API_KEY: "synthetic-environment-key" },
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ codex: true }),
+        readCodexCliCredentials: () => ({ type: "oauth" }),
+      },
+    });
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual(["openai-api-key", "codex-cli"]);
+  });
+
+  it.each([
+    ["claude.ai", "logged in · Claude account · alex@example.com"],
+    ["api_key", "logged in · API key (usage-billed)"],
+    ["unknown", "logged in · authentication method unavailable"],
+  ])("shows the native Claude authentication method: %s", async (authMethod, detail) => {
+    vi.mocked(facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule).mockResolvedValue({
+      probeClaudeCliAuthStatus: () => ({
+        status: "available",
+        authMethod,
+        email: "alex@example.com",
+      }),
+    });
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "linux",
+      deps: { probeLocalCommand: probeDeps({ claude: true }) },
+    });
+
+    expect(candidates).toMatchObject([{ kind: "claude-cli", credentials: true, detail }]);
+  });
+
   it("returns nothing when no backend exists", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
@@ -164,7 +261,10 @@ describe("detectInferenceBackends", () => {
     });
 
     expect(candidates.map((candidate) => candidate.kind)).toEqual(["openai-api-key", "codex-cli"]);
-    expect(candidates[1]).toMatchObject({ credentials: true, detail: "logged in" });
+    expect(candidates[1]).toMatchObject({
+      credentials: true,
+      detail: "logged in · authentication method unavailable",
+    });
   });
 
   it("keeps API-key-helper-backed Claude after environment keys", async () => {
@@ -219,7 +319,7 @@ describe("detectInferenceBackends", () => {
       {
         kind: "claude-cli",
         credentials: true,
-        detail: "logged in · Claude subscription",
+        detail: "logged in · Claude account · email unavailable",
       },
     ]);
   });
@@ -381,13 +481,17 @@ describe("detectInferenceBackends", () => {
   });
 
   it.each([
-    ["ChatGPT", "Logged in using ChatGPT", "logged in · ChatGPT subscription"],
+    ["ChatGPT", "Logged in using ChatGPT", "logged in · ChatGPT account · email unavailable"],
     [
       "API key",
       "Logged in using an API key - sk-proj-1***23456",
       "logged in · API key (usage-billed)",
     ],
-    ["unrecognized auth", "Logged in using access token", "logged in"],
+    [
+      "unrecognized auth",
+      "Logged in using access token",
+      "logged in · authentication method unavailable",
+    ],
   ])("classifies Codex %s login status", async (_auth, loginOutput, expectedDetail) => {
     const probe = async (command: string, args: string[] = ["--version"]) => ({
       command,
@@ -538,7 +642,7 @@ describe("detectInferenceBackends", () => {
       {
         kind: "codex-cli",
         credentials: true,
-        detail: "logged in · ChatGPT subscription",
+        detail: "logged in · ChatGPT account · email unavailable",
       },
     ]);
   });

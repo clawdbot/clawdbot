@@ -55,13 +55,14 @@ function runPreflight(
     getRuntimeConfig: () =>
       options?.requesterOnlyEnabled
         ? {
+            tools: { swarm: false },
             agents: {
-              list: [{ id: "main", tools: { swarm: true } }, { id: "worker" }],
+              entries: { main: { tools: { swarm: true } }, worker: {} },
             },
           }
-        : options?.enabled
-          ? { tools: { swarm: true } }
-          : {},
+        : options?.enabled === undefined
+          ? {}
+          : { tools: { swarm: options.enabled } },
     dedupe: options?.cached
       ? new Map([
           [
@@ -144,6 +145,7 @@ describe("agent request Swarm preflight", () => {
 
   it("rejects collector flags while Swarm is disabled", () => {
     const { respond, result } = runPreflight(undefined, true, {
+      enabled: false,
       backend: true,
       register: true,
     });
@@ -175,16 +177,19 @@ describe("agent request Swarm preflight", () => {
     }
   });
 
-  it("accepts an enabled backend request for a registered collector", () => {
-    const { respond, result } = runPreflight({ type: "object" }, true, {
-      enabled: true,
-      backend: true,
-      register: true,
-    });
+  it.each([undefined, true])(
+    "accepts a registered backend collector with Swarm enabled=%s",
+    (enabled) => {
+      const { respond, result } = runPreflight({ type: "object" }, true, {
+        enabled,
+        backend: true,
+        register: true,
+      });
 
-    expect(result).toBeDefined();
-    expect(respond).not.toHaveBeenCalled();
-  });
+      expect(result).toBeDefined();
+      expect(respond).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects ordinary turns and mismatched launch identities for an active collector", () => {
     for (const options of [
@@ -291,6 +296,7 @@ describe("agent request Swarm preflight", () => {
 
   it("allows an exact cached collector replay after Swarm is disabled", async () => {
     const replayed = runPreflight({ type: "object" }, true, {
+      enabled: false,
       backend: true,
       register: true,
       launchPending: false,

@@ -45,14 +45,21 @@ export type SessionSqliteMigrationTargetManifest = SessionSqliteMigrationTargetI
   validationBeforeArchive: "not_run" | "passed" | "failed";
 };
 
+export type SessionSqliteMigrationGithubIssue = {
+  marker: string;
+  status: "attempted";
+  title: string;
+};
+
 export type SessionSqliteMigrationManifest = {
   completedAt?: string;
   failedAt?: string;
   failureReports?: {
+    githubIssue?: SessionSqliteMigrationGithubIssue;
     jsonPath: string;
     markdownPath: string;
   };
-  manifestVersion: 1 | 2 | 3;
+  manifestVersion: 1 | 2 | 3 | 4;
   openClawVersion: string;
   restore?: {
     attemptedAt: string;
@@ -110,6 +117,12 @@ const RestoreConflictSchema = z.object({
   reason: z.string(),
   sourcePath: AbsolutePathSchema,
 });
+const GithubIssueMarkerSchema = z.string().regex(/^openclaw-report:[a-f0-9]{64}$/u);
+const MigrationGithubIssueSchema = z.object({
+  marker: GithubIssueMarkerSchema,
+  status: z.literal("attempted"),
+  title: z.string().min(1).max(512),
+});
 const MigrationTargetSchema = z
   .object({
     agentId: z.string().min(1),
@@ -161,11 +174,12 @@ const MigrationManifestSchema = z
     failedAt: z.string().optional(),
     failureReports: z
       .object({
+        githubIssue: MigrationGithubIssueSchema.optional(),
         jsonPath: AbsolutePathSchema,
         markdownPath: AbsolutePathSchema,
       })
       .optional(),
-    manifestVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    manifestVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
     openClawVersion: z.string().min(1),
     restore: z
       .object({
@@ -182,6 +196,13 @@ const MigrationManifestSchema = z
     targets: z.array(MigrationTargetSchema),
   })
   .superRefine((manifest, context) => {
+    if (manifest.failureReports?.githubIssue && manifest.manifestVersion !== 4) {
+      context.addIssue({
+        code: "custom",
+        message: "GitHub issue receipt requires manifest version 4",
+        path: ["failureReports", "githubIssue"],
+      });
+    }
     const targetKeys = new Set<string>();
     for (const target of manifest.targets) {
       const targetKey = sessionSqliteMigrationTargetKey(target);

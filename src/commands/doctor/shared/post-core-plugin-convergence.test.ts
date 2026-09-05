@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
@@ -474,7 +475,14 @@ describe("runPostCorePluginConvergence", () => {
       changes: [],
       warnings: ['Plugin "consent-fixture" requires capability consent.'],
       failedPluginIds: ["consent-fixture"],
-      capabilityConsentRequired: true,
+      outcomes: [
+        {
+          pluginId: "consent-fixture",
+          status: "error",
+          code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+          message: 'Plugin "consent-fixture" requires capability consent.',
+        },
+      ],
       records: {},
     });
 

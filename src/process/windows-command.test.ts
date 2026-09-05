@@ -91,6 +91,24 @@ describe("Windows command helpers", () => {
     });
   });
 
+  it.each([".EXE;.CMD;", ";;"])(
+    "reports an unresolved command for a bare file with PATHEXT %j",
+    async (pathext) => {
+      await withTempDir("openclaw-windows-command-bare-file-", async (binDir) => {
+        await writeFile(path.join(binDir, "runner"), "bare file\n");
+
+        await withMockedWindowsPlatform(async () => {
+          expect(() =>
+            resolveSafeChildProcessInvocation({
+              argv: ["runner"],
+              env: { PATH: binDir, PATHEXT: pathext },
+            }),
+          ).toThrow(/spawn runner ENOENT/);
+        });
+      });
+    },
+  );
+
   it("requires an explicit relative path for executables in the child cwd", async () => {
     await withTempDir("openclaw-windows-command-bare-cwd-", async (cwd) => {
       await writeFile(path.join(cwd, "tool.exe"), "");

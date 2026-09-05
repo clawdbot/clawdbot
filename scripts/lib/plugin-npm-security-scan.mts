@@ -199,6 +199,7 @@ const FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT = {
 };
 
 const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurityInventoryPolicy>([
+  ["release/2026.9.1", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {

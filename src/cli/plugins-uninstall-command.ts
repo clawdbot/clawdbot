@@ -69,7 +69,7 @@ async function runPluginUninstallCommandUnlocked(
   const { loadInstalledPluginIndex } = await import("../plugins/installed-plugin-index.js");
   const { createInstalledPluginIndexScopeLookup } =
     await import("../plugins/installed-plugin-index-scope-lookup.js");
-  const { resolveInstalledPluginLifecycleOwnership } =
+  const { createInstalledPluginOwnershipResolver } =
     await import("../plugins/installed-plugin-package-ownership.js");
   const {
     loadInstalledPluginIndexInstallRecords,
@@ -87,7 +87,7 @@ async function runPluginUninstallCommandUnlocked(
     resolveUninstallChannelConfigKeys,
     UNINSTALL_ACTION_LABELS,
   } = await import("../plugins/uninstall.js");
-  const { prepareConfigForPendingPluginDirectoryRemovalSet, recordPluginPackageUninstallPlan } =
+  const { prepareConfigForDisabledPluginSet, recordPluginPackageUninstallPlan } =
     await import("../plugins/uninstall-package-plan.js");
   const { commitPluginInstallRecordsWithConfig } =
     await import("../plugins/install-record-commit.js");
@@ -135,7 +135,8 @@ async function runPluginUninstallCommandUnlocked(
   }
   const { plugin } = selection.value;
   const requestedPluginId = selection.value.pluginId;
-  const ownership = resolveInstalledPluginLifecycleOwnership(installedIndex, requestedPluginId);
+  const ownership =
+    createInstalledPluginOwnershipResolver(installedIndex).resolveLifecycle(requestedPluginId);
   if (!ownership.ok) {
     runtime.error(ownership.error);
     runtime.exit(1);
@@ -298,10 +299,7 @@ async function runPluginUninstallCommandUnlocked(
     let finalWriteOptions = mutationWriteOptions;
     let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
     if (plan.directoryRemoval) {
-      const disabledConfig = prepareConfigForPendingPluginDirectoryRemovalSet(
-        sourceConfig,
-        policyPluginIds,
-      );
+      const disabledConfig = prepareConfigForDisabledPluginSet(sourceConfig, policyPluginIds);
       const disabledCommit = await tracePluginLifecyclePhaseAsync(
         "config disable",
         () =>

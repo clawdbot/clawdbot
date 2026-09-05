@@ -2,6 +2,12 @@
 
 The Linux companion is a Tauri v2 desktop shell for local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
+Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
+newer plus a `libstdc++` that provides `GLIBCXX_3.4.30`. Ubuntu 22.04 and
+Debian 12 meet that ABI floor. RHEL 9 and Rocky Linux 9 ship glibc 2.34, so
+they cannot run the published AppImage. Extraction does not bypass this
+requirement.
+
 ## Linux prerequisites
 
 Debian and Ubuntu development packages:
@@ -9,7 +15,8 @@ Debian and Ubuntu development packages:
 ```bash
 sudo apt update
 sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
-  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+  patchelf xdg-utils
 ```
 
 Install a current stable Rust toolchain with `rustup`.
@@ -21,15 +28,23 @@ WebM/VP9, Opus, Vorbis, and WAV normally work through `plugins-good`.
 H.264/MP4, AAC, and MP3 require the `libav` and/or `plugins-bad` packages.
 The `.deb` uses the host's plugins and declares all three packages as
 dependencies. The AppImage bundles the GStreamer media framework and the
-plugins available on its Ubuntu build host. For a source build or when
-rebuilding either Linux bundle, install the packages explicitly:
+plugins required for the formats above. For a source build or when rebuilding
+either Linux bundle, install the packages and inspection tool explicitly:
 
 ```bash
-sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad gstreamer1.0-tools patchelf xdg-utils
 ```
 
-The released AppImage therefore carries the codecs installed by the release
-workflow instead of relying on GStreamer packages from the user's system.
+The packaging script stages only that media capability set before Tauri invokes
+linuxdeploy. This prevents optional host plugins from adding unrelated system
+libraries to the AppImage dependency closure.
+
+The packaging flow provisions Tauri's five AppImage tools into a clean,
+digest-pinned cache. After Tauri builds the AppImage, the finalizer re-verifies
+that cache, removes bundled Wayland client libraries from the retained AppDir,
+and rebuilds the artifact. WebKitGTK and Mesa then use one compatible host
+stack.
 
 ## Develop and build
 
@@ -133,8 +148,22 @@ menu bar images into. Non-Apple platforms keep the full-color `32x32.png`.
 Build a `.deb` and AppImage locally (the same command CI runs):
 
 ```bash
-cd apps/linux/src-tauri
-pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
+plugins=$(mktemp -d)
+cache=$(mktemp -d)
+trap 'rm -rf "$plugins" "$cache"' EXIT
+export XDG_CACHE_HOME="$cache"
+apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins"
+apps/linux/scripts/tauri-appimage-tools.sh prepare
+apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
+export LDAI_RUNTIME_FILE="$cache/tauri/.appimage-runtime-x86_64"
+(
+  cd apps/linux/src-tauri
+  GSTREAMER_PLUGINS_DIR="$plugins" \
+    pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
+      --config '{"bundle":{"createUpdaterArtifacts":false,"useLocalToolsDir":false}}'
+)
+apps/linux/scripts/finalize-appimage.sh \
+  apps/linux/src-tauri/target/release/bundle/appimage
 ```
 
 Bundles land in `target/release/bundle/{deb,appimage}/`. The `Linux App` CI
@@ -143,11 +172,14 @@ requests touching `apps/linux/**` and on manual dispatch.
 
 ## Releases
 
-The `Linux App Release` workflow (manual dispatch, release operators) builds
-the bundles from an existing stable release tag (prerelease tags are
-rejected: their semver suffix breaks Debian upgrade ordering) and attaches them to that tag's
-GitHub release with a `SHA256SUMS.linux-app.txt` checksum file. The tag commit
-must be reachable from `main` or its matching `release/YYYY.M.PATCH` branch;
-numeric correction tags use the base version's release branch. Dispatch from
-`main` or an exact protected `release-publish/<sha-prefix>-<serial>` tooling tag
-whose commit is contained in `main`. Builds use the validated release tag SHA.
+Manually dispatch `Linux App Release Request` from `main`. Provide the existing
+stable release tag in `tag`; prerelease tags are rejected because their semver
+suffix breaks Debian upgrade ordering. Enable the optional
+`desktop-test-bundles` input only when unsigned macOS and Windows test bundles
+are needed.
+
+A successful request automatically triggers `Linux App Release`. It builds from
+the validated release tag SHA and attaches the bundles to that tag's GitHub
+release with a `SHA256SUMS.linux-app.txt` checksum file. The tag commit must be
+reachable from `main` or its matching `release/YYYY.M.PATCH` branch; numeric
+correction tags use the base version's release branch.

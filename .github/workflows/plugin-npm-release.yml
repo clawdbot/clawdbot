@@ -377,6 +377,7 @@ jobs:
           fi
 
           cat .local/plugin-npm-release-plan.json
+          jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-npm-release-plan.json >> "$GITHUB_STEP_SUMMARY"
 
           candidate_count="$(jq -r '.candidates | length' .local/plugin-npm-release-plan.json)"
           selection_count="$(jq -r '.all | length' .local/plugin-npm-release-plan.json)"
@@ -496,6 +497,7 @@ jobs:
           sparse-checkout: |
             packages/normalization-core
             scripts
+            src/plugins
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -756,6 +758,10 @@ jobs:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
+          sparse-checkout: |
+            .github/workflows
+            scripts
+            src/plugins
 
       - name: Download immutable npm preflight artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -782,15 +788,18 @@ jobs:
               "fetch",
               "--no-tags",
               "--depth=1",
+              "--filter=blob:none",
               "origin",
               source_sha,
               timeout=120,
               reclaim_locks=True,
           )
+          # The partial fetch leaves this one manifest blob for git show to hydrate.
           package_json = git_output(
               workspace,
               "show",
               f"{source_sha}:{os.environ['PACKAGE_DIR']}/package.json",
+              timeout=120,
           )
           target = os.path.join(
               os.environ["RUNNER_TEMP"],
@@ -1396,15 +1405,18 @@ jobs:
               "fetch",
               "--no-tags",
               "--depth=1",
+              "--filter=blob:none",
               "origin",
               target_sha,
               timeout=120,
               reclaim_locks=True,
           )
+          # The partial fetch leaves this one manifest blob for git show to hydrate.
           package_json = git_output(
               workspace,
               "show",
               f"{target_sha}:{os.environ['PACKAGE_DIR']}/package.json",
+              timeout=120,
           )
           target = os.path.join(
               os.environ["RUNNER_TEMP"],

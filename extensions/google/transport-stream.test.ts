@@ -7,6 +7,7 @@ import { gzipSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { Model, ProviderContext } from "openclaw/plugin-sdk/llm";
+import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGoogleVertexAdcState } from "./google-oauth.test-support.js";
@@ -480,6 +481,25 @@ describe("google transport stream", () => {
     vi.doUnmock("openclaw/plugin-sdk/provider-transport-runtime");
     vi.doUnmock("google-auth-library");
     vi.resetModules();
+  });
+
+  it("reports every parsed Google SSE chunk as request activity", async () => {
+    const chunks = [
+      { usageMetadata: { totalTokenCount: 1 } },
+      { candidates: [{ finishReason: "STOP" }] },
+    ];
+    guardedFetchMock.mockResolvedValueOnce(buildSseResponse(chunks));
+    const controller = new AbortController();
+    const onActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
+
+    try {
+      await runGeminiStreamResult({ options: { signal: controller.signal } });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(onActivity).toHaveBeenCalledTimes(chunks.length);
   });
 
   it("resolves qualified AI Studio video after payload hooks and preserves part order", async () => {

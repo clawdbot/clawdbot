@@ -78,6 +78,7 @@ async function waitForDispatch<T>(
   deadlineMs?: number,
   signal?: AbortSignal,
   onSignalAbort?: () => Promise<void> | void,
+  onTimeout?: () => void,
 ): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
   let onAbort: (() => void) | undefined;
@@ -92,6 +93,7 @@ async function waitForDispatch<T>(
     const cancellation = new Promise<never>((_resolve, reject) => {
       if (remainingTimeoutMs !== undefined) {
         timeout = setTimeout(() => {
+          onTimeout?.();
           reject(new Error(`gateway request timeout for ${method}`));
         }, remainingTimeoutMs);
       }
@@ -128,6 +130,7 @@ export async function waitForGatewayDispatch<T>(
   timeoutMs?: number,
   signal?: AbortSignal,
   onSignalAbort?: () => Promise<void> | void,
+  onTimeout?: () => void,
 ): Promise<T> {
   return await waitForDispatch(
     method,
@@ -135,6 +138,7 @@ export async function waitForGatewayDispatch<T>(
     resolveDispatchDeadlineMs(timeoutMs),
     signal,
     onSignalAbort,
+    onTimeout,
   );
 }
 
@@ -157,49 +161,66 @@ export async function dispatchGatewayRequestInProcessRaw(
     rejectFirstResponse = reject;
   });
   const deadlineMs = resolveDispatchDeadlineMs(options.timeoutMs);
-  const { handleGatewayRequest } = await import("./server-methods.js");
-  void handleGatewayRequest({
-    req: {
-      type: "req",
-      id: `${options.requestIdPrefix ?? "in-process"}-${randomUUID()}`,
-      method,
-      params,
-    },
+  const req = {
+    type: "req" as const,
+    id: `${options.requestIdPrefix ?? "in-process"}-${randomUUID()}`,
+    method,
+    params,
+  };
+  const entry = options.context.requestEntryLifetime?.enter({
+    req,
     client: options.client,
-    isWebchatConnect: options.isWebchatConnect ?? (() => false),
-    respond: (ok, payload, error, meta) => {
-      const response = { ok, payload, error, ...(meta ? { meta } : {}) };
-      if (!firstResponse) {
-        firstResponse = response;
-        resolveFirstResponse?.(response);
-        return;
-      }
-      if (!finalResponse) {
-        finalResponse = response;
-        resolveFinalResponse?.(response);
-      }
-    },
     context: options.context,
-    methodRegistry: options.methodRegistry,
-    sessionMutationCommitGuard: options.sessionMutationCommitGuard,
-    ...(options.signal ? { signal: options.signal } : {}),
-  })
-    .then(() => {
-      if (!firstResponse) {
-        rejectFirstResponse?.(
-          new Error(`Gateway method "${method}" completed without a response.`),
-        );
-      }
-    })
-    .catch((err: unknown) => {
-      const error = err instanceof Error ? err : new Error(String(err));
-      if (!firstResponse) {
-        rejectFirstResponse?.(error);
-        return;
-      }
-      postFirstResponseError = error;
-      rejectFinalResponse?.(error);
-    });
+  });
+  try {
+    const { handleGatewayRequest } = await import("./server-methods.js");
+    entry?.assertOpen();
+    void options.context
+      .trackExecution(() =>
+        handleGatewayRequest({
+          req,
+          requestEntry: entry,
+          client: options.client,
+          isWebchatConnect: options.isWebchatConnect ?? (() => false),
+          respond: (ok, payload, error, meta) => {
+            const response = { ok, payload, error, ...(meta ? { meta } : {}) };
+            if (!firstResponse) {
+              firstResponse = response;
+              resolveFirstResponse?.(response);
+              return;
+            }
+            if (!finalResponse) {
+              finalResponse = response;
+              resolveFinalResponse?.(response);
+            }
+          },
+          context: options.context,
+          methodRegistry: options.methodRegistry,
+          sessionMutationCommitGuard: options.sessionMutationCommitGuard,
+          ...(options.signal ? { signal: options.signal } : {}),
+        })
+          .then(() => {
+            if (!firstResponse) {
+              rejectFirstResponse?.(
+                new Error(`Gateway method "${method}" completed without a response.`),
+              );
+            }
+          })
+          .finally(() => entry?.release()),
+      )
+      .catch((err: unknown) => {
+        const error = err instanceof Error ? err : new Error(String(err));
+        if (!firstResponse) {
+          rejectFirstResponse?.(error);
+          return;
+        }
+        postFirstResponseError = error;
+        rejectFinalResponse?.(error);
+      });
+  } catch (error) {
+    entry?.release();
+    throw error;
+  }
 
   firstResponse = await waitForDispatch(
     method,

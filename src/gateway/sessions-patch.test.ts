@@ -370,26 +370,37 @@ describe("gateway sessions patch", () => {
     );
     expect(archived.archivedAt).toEqual(expect.any(Number));
     expect(archived.archivedBy).toEqual(archivedBy);
+    expect(archived.archiveReason).toBe("manual");
     expect(archived.pinnedAt).toBeUndefined();
 
     const idempotent = expectPatchOk(
       await runPatch({
-        store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
+        store: mainStoreEntry({
+          archivedAt: archived.archivedAt,
+          archivedBy,
+          archiveReason: "manual",
+        }),
         patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
         archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       }),
     );
     expect(idempotent.archivedAt).toBe(archived.archivedAt);
     expect(idempotent.archivedBy).toEqual(archivedBy);
+    expect(idempotent.archiveReason).toBe("manual");
 
     const restored = expectPatchOk(
       await runPatch({
-        store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
+        store: mainStoreEntry({
+          archivedAt: archived.archivedAt,
+          archivedBy,
+          archiveReason: "manual",
+        }),
         patch: { key: MAIN_SESSION_KEY, archived: false, expectedSessionId: "sess" },
       }),
     );
     expect(restored.archivedAt).toBeUndefined();
     expect(restored.archivedBy).toBeUndefined();
+    expect(restored.archiveReason).toBeUndefined();
   });
 
   test.each([
@@ -520,18 +531,24 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("off");
   });
 
-  test("clears thinkingLevel when patch sets null", async () => {
-    const store: Record<string, SessionEntry> = {
-      [MAIN_SESSION_KEY]: { thinkingLevel: "low" } as SessionEntry,
-    };
-    const entry = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, thinkingLevel: null },
-      }),
-    );
-    expect(entry.thinkingLevel).toBeUndefined();
-  });
+  test.each(["thinkingLevel", "contextWindow"] as const)(
+    "clears %s without loading the catalog",
+    async (field) => {
+      const store = mainStoreEntry({ thinkingLevel: "low", contextWindow: "extended" });
+      const loadGatewayModelCatalog = vi.fn(async () => {
+        throw new Error("Catalog must not be needed for a clear");
+      });
+      const entry = expectPatchOk(
+        await runPatch({
+          store,
+          patch: { key: MAIN_SESSION_KEY, [field]: null },
+          loadGatewayModelCatalog,
+        }),
+      );
+      expect(entry[field]).toBeUndefined();
+      expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+    },
+  );
 
   test("persists responseUsage=off (does not clear)", async () => {
     const entry = expectPatchOk(
@@ -1135,16 +1152,108 @@ describe("gateway sessions patch", () => {
       modelOverrideSource: "user",
       liveModelSwitchPending: true,
     });
-    const entry = await applyMainModelPatch({
-      store,
-      cfg: createAllowlistedAnthropicModelCfg(),
-      model: null,
+    const loadGatewayModelCatalog = vi.fn(async () => {
+      throw new Error("Catalog must not be needed for an unqualified reset");
     });
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: null },
+        loadGatewayModelCatalog,
+      }),
+    );
 
     expectModelSelection(entry, undefined, undefined);
     expect(entry.modelOverrideSource).toBeUndefined();
     expect(entry.liveModelSwitchPending).toBeUndefined();
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
   });
+
+  test.each([true, false])(
+    "model reset revalidates retained selections once (context supported: %s)",
+    async (supported) => {
+      const loadGatewayModelCatalog = vi.fn(async () => [
+        {
+          ...catalogEntry(ANTHROPIC_SONNET_MODEL),
+          reasoning: true,
+          contextWindows: supported
+            ? [{ id: "extended", label: "Extended", contextWindow: 200_000 }]
+            : [],
+        },
+      ]);
+      const entry = expectPatchOk(
+        await runPatch({
+          cfg: { agents: { defaults: { model: ANTHROPIC_SONNET_MODEL } } },
+          store: mainStoreEntry({
+            providerOverride: "anthropic",
+            modelOverride: ANTHROPIC_OPUS_ID,
+            thinkingLevel: "high",
+            contextWindow: "extended",
+          }),
+          patch: { key: MAIN_SESSION_KEY, model: null },
+          loadGatewayModelCatalog,
+        }),
+      );
+      expectModelSelection(entry, undefined, undefined);
+      expect(entry.thinkingLevel).toBe("high");
+      expect(entry.contextWindow).toBe(supported ? "extended" : undefined);
+      expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+    },
+  );
+
+  test("one catalog prepares a combined model, thinking, and context-window patch", async () => {
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      {
+        ...catalogEntry(ANTHROPIC_SONNET_MODEL),
+        reasoning: true,
+        contextWindows: [{ id: "extended", label: "Extended", contextWindow: 200_000 }],
+      },
+    ]);
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        store: mainStoreEntry({}),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          model: ANTHROPIC_SONNET_MODEL,
+          thinkingLevel: "high",
+          contextWindow: "extended",
+        },
+        loadGatewayModelCatalog,
+      }),
+    );
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expect(entry).toMatchObject({ thinkingLevel: "high", contextWindow: "extended" });
+    expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+  });
+
+  test.each([
+    { patch: { category: "" }, message: "invalid category" },
+    { patch: { model: "" }, message: "invalid model: empty" },
+  ])(
+    "preserves early validation before catalog preparation: $message",
+    async ({ patch, message }) => {
+      const loadGatewayModelCatalog = vi.fn(async () => {
+        throw new Error("Catalog failure must not replace early validation");
+      });
+      const store = mainStoreEntry({ label: "Original" });
+      expectPatchError(
+        await runPatch({
+          store,
+          patch: { key: MAIN_SESSION_KEY, contextWindow: "extended", ...patch },
+          loadGatewayModelCatalog,
+        }),
+        message,
+      );
+      expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+      expect(store[MAIN_SESSION_KEY]).toEqual({
+        sessionId: "sess",
+        updatedAt: 1,
+        label: "Original",
+      });
+    },
+  );
 
   test.each([
     {

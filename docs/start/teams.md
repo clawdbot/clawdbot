@@ -29,7 +29,7 @@ The Gateway binds to loopback by default. Give teammates access through authenti
 
 - **Tailnet (recommended):** put the host on your tailnet and enable [Tailscale Serve](/gateway/tailscale). With `gateway.auth.allowTailscale`, Control UI sign-in can use each person's Tailscale identity - no shared secret to distribute.
 - **Trusted proxy:** front the Gateway with an identity-aware proxy such as Cloudflare Access - see [Trusted proxy auth](/gateway/trusted-proxy-auth).
-- **Shared secret:** token or password auth works for small teams, but skips per-person identity - see [Authentication](/gateway/authentication).
+- **Shared secret:** token or password auth works for small teams, but everyone uses one owner profile instead of per-person identity - see [Authentication](/gateway/authentication).
 
 The identity-backed options are worth the setup: they are what turns "someone did something" into "who did what" in the session UI and commit credit below.
 
@@ -60,7 +60,7 @@ If the same people should be allowed across several channels, define the list on
 
 ## Step 3: Sign the team in to the Control UI
 
-Each teammate opens the [Control UI](/web/control-ui) through the ingress from step 1 and gets a durable Gateway profile: display name, avatar, and per-person appearance preferences. With Cloudflare Access or Tailscale Serve, GitHub-backed sign-in verifies the account behind the profile - see [User model](/concepts/user-model).
+With per-person sign-in, each teammate opens the [Control UI](/web/control-ui) through the ingress from step 1 and gets a durable Gateway profile: display name, avatar, and per-person appearance preferences. Shared-secret connections use the same owner profile. With Cloudflare Access or Tailscale Serve, GitHub-backed sign-in verifies the account behind the profile - see [User model](/concepts/user-model).
 
 Teammates can also create and import [personal skills](/tools/skills#personal-skills-on-a-shared-gateway) under **Plugins → Skills** without permission to change shared Gateway configuration. Skills stay personal until explicitly shared with the team. A session retains its selected revisions when another teammate joins; changing its assignee does not replace its skills. Your existing workspace skills remain in place, and extra channel identities for one operator do not enable the team-specific guidance.
 
@@ -69,6 +69,8 @@ Teammates can also create and import [personal skills](/tools/skills#personal-sk
 A conversation that starts in the team channel can continue as a session the whole team can open, steer, and take over. [Multi-user mode](/concepts/multi-user) gives every session three layers of attribution - an immutable creator, an assignable owner (assign sessions like GitHub issues from the session context menu), and the history of people who actually prompted - plus live [presence](/concepts/presence): who is viewing, and who is typing, with drafts that never reach the model or the transcript.
 
 For coding work, verified GitHub identity pays off at the commit: with **Git co-author credit** enabled, commits from a shared session carry `Co-authored-by` trailers for the people who steered it, and generated pull requests link back to the session so reviewers can read the conversation that produced the diff.
+
+Teammates can add their own provider accounts under **Settings → Profile → Connected accounts**, using the sign-in methods offered by each provider. Their new sessions prefer that account without making it a Gateway-wide default. Collaborators use the session's selected account, and shared same-provider failover can still apply - see [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
 
 ## Step 5: Bound what each person can do
 

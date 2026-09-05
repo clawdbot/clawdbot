@@ -182,9 +182,9 @@ describe("listPersistedBundledPluginLocationBridges", () => {
       {
         bundledPluginId: "qqbot",
         pluginId: "openclaw-qqbot",
-        npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+        npmSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
         expectedIntegrity:
-          "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q==",
+          "sha512-yngu/2cPeZjJfIfHWCXWB2/6KlDHrb9vpOUjKLdQxePLSp6wCn3CFOALcBIVq/9o6jlYz9WTU9idW6nfX1xpFA==",
         channelIds: ["qqbot"],
       },
     ]);

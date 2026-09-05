@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
 import { describe, expect, vi } from "vitest";
-import { isVitestWorkerMetadataRequest } from "../../scripts/lib/vitest-cli-mode.mts";
+import { parseCLI } from "vitest/node";
+import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import { stripVitestAnsi } from "../../scripts/lib/vitest-unhandled-errors.mts";
 import {
   isVitestWorkerDeclaration,
@@ -17,7 +19,7 @@ import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
 import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
-import { createDeferred } from "../helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import {
   createWorkerArtifactTest,
@@ -29,6 +31,22 @@ import {
 
 const root = process.cwd();
 const it = createWorkerArtifactTest();
+const compilerModuleUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsdown")).href;
+
+function interceptCompilerBuild(directory: string, source: string): string {
+  // Sync require hooks still use the CJS filesystem loader; a resolve-only data URL is not loadable.
+  const wrapper = writeFixture(
+    directory,
+    "tsdown-wrapper.mjs",
+    `import {build as compile} from ${JSON.stringify(compilerModuleUrl)};\n${source}`,
+  );
+  return `import {registerHooks} from 'node:module';
+registerHooks({resolve(specifier,context,nextResolve) {
+  return specifier==='tsdown'
+    ? {url:${JSON.stringify(pathToFileURL(wrapper).href)},format:'module',shortCircuit:true}
+    : nextResolve(specifier,context);
+}});`;
+}
 const compilerModule = "scripts/lib/vitest-worker-run.mts";
 const compilerEntry = "scripts/lib/vitest-worker-compiler.mts";
 const artifactsModule = "scripts/lib/vitest-worker-artifacts.mts";
@@ -132,9 +150,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       expect(fs.existsSync(directory)).toBe(false);
     }));
 
-  it("rejects output altered after the real compiler returns before publishing a manifest", ({
-    workerArtifacts,
-  }) =>
+  it("rejects compiler output altered before publishing a manifest", ({ workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node } = workerArtifacts.createFixtureCommands();
       const directory = workerArtifacts.fixtureDirectory();
@@ -142,25 +158,24 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       const preload = writeFixture(
         directory,
         "compiler-fault.mjs",
-        `
+        interceptCompilerBuild(
+          directory,
+          `
         import fs from 'node:fs';
         import path from 'node:path';
-        import Module from 'node:module';
-        const load=Module._load;
-        Module._load=function(id,...args) {
-          const mod=load.call(this,id,...args);
-          if(id!=='tsdown') return mod;
-          return {...mod,async build(options) {
-            const result=await mod.build(options);
-            fs.appendFileSync(path.join(options.outDir,'infra/runtime-process-entrypoints.js'),'altered after compiler');
-            fs.writeFileSync(${JSON.stringify(altered)},'real compiler returned');
-            return result;
-          }};
-        };
-      `,
+        export async function build(options) {
+          const result = await compile(options);
+          fs.appendFileSync(path.join(options.outDir,'infra/runtime-process-entrypoints.js'),'altered after compile');
+          fs.writeFileSync(${JSON.stringify(altered)},'compiler returned');
+          return result;
+        }
+        `,
+        ),
       );
       const owner = createVitestWorkerRun();
       try {
+        // Inject only into the actual native compiler entry, never the parent's
+        // module cache or a production build flag. node() joins this direct child.
         const result = await node([
           "--import",
           pathToFileURL(preload).href,
@@ -169,7 +184,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         ]);
         expect(result.code).not.toBe(0);
         expect(result.stderr).toContain("Compiled subprocess artifact changed");
-        expect(fs.readFileSync(altered, "utf8")).toBe("real compiler returned");
+        expect(fs.readFileSync(altered, "utf8")).toBe("compiler returned");
         expect(fs.existsSync(path.join(owner.descriptor.directory, "manifest.json"))).toBe(false);
       } finally {
         await owner.dispose();
@@ -188,14 +203,16 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         const preload = writeFixture(
           directory,
           "compiler-lifetime.mjs",
-          `
+          interceptCompilerBuild(
+            directory,
+            `
       import fs from 'node:fs';
       import path from 'node:path';
       import {spawn} from 'node:child_process';
-      import Module, {syncBuiltinESMExports} from 'node:module';
+      import {syncBuiltinESMExports} from 'node:module';
       const directory=${JSON.stringify(directory)}, mode=${JSON.stringify(mode)};
       const record=(name,value)=>fs.writeFileSync(path.join(directory,name),value);
-      const load=Module._load, write=fs.writeFileSync;
+      const write=fs.writeFileSync;
       const gate=()=>new Promise(resolve=>{
         const poll=setInterval(()=>{
           if(fs.existsSync(path.join(directory,'release'))) {clearInterval(poll);resolve();}
@@ -205,11 +222,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           clearInterval(poll);process.exit(0);
         });
       });
-      Module._load=function(id,...args) {
-        const mod=load.call(this,id,...args);
-        if(id!=='tsdown') return mod;
-        return {...mod,async build(options) {
-          const result=await mod.build(options);
+      export async function build(options) {
+        const result=await compile(options);
         if(mode==='cancel while compiling') {
           record('compiling',String(process.pid));
           await gate();
@@ -231,9 +245,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           await new Promise((resolve,reject)=>{leaf.once('message',resolve);leaf.once('error',reject);});
           leaf.unref();
         }
-          return result;
-        }};
-      };
+        return result;
+      }
       fs.writeFileSync=(filename,...args)=>{
         const result=write(filename,...args);
         if(path.basename(String(filename))==='manifest.json' && mode==='close before ready') {
@@ -243,6 +256,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       };
       syncBuiltinESMExports();
     `,
+          ),
         );
         const driver = writeFixture(
           directory,
@@ -474,22 +488,45 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       }),
   );
 
-  it("observes readiness when borrower completion wins the file-watch event", ({
-    workerArtifacts,
-  }) =>
-    workerArtifacts.fixtureLifetime.run(async () => {
-      const filename = path.join(workerArtifacts.fixtureDirectory(), "ready");
-      const { promise: completion, resolve: finish } = createDeferred();
-      let ready = false;
-      const waiting = waitForFixtureFile(filename, completion).then(() => {
-        ready = true;
-      });
-      fs.writeFileSync(filename, "ready");
-      finish();
-      await nextTurn();
-      expect(ready).toBe(true);
-      await waiting;
-    }));
+  it.for(["borrower completion", "persistent file"] as const)(
+    "observes readiness from %s without a file-watch event",
+    { concurrent: false },
+    (observation, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const filename = path.join(workerArtifacts.fixtureDirectory(), "ready");
+        const { promise: completion, resolve: finish } = createDeferred();
+        const watchFile = fs.watchFile;
+        // A successful initial stat establishes a baseline without notifying Node's
+        // watchFile listener. A receipt created during that stat must still be seen.
+        const watcher = vi
+          .spyOn(fs, "watchFile")
+          .mockImplementation((target, ...args) =>
+            target === filename
+              ? watchFile(filename, { interval: 50 }, () => {})
+              : watchFile(target, ...args),
+          );
+        let ready = false;
+        const waiting = waitForFixtureFile(filename, completion).then(() => {
+          ready = true;
+        });
+        try {
+          fs.writeFileSync(filename, "ready");
+          if (observation === "borrower completion") {
+            finish();
+            await nextTurn();
+            expect(ready).toBe(true);
+          }
+          await withTestTimeout(waiting, 10_000, "Persistent readiness was not observed");
+          expect(ready).toBe(true);
+        } finally {
+          finish();
+          await waiting.finally(() => {
+            fs.unwatchFile(filename);
+            watcher.mockRestore();
+          });
+        }
+      }),
+  );
 
   it("keeps standalone configured Vitest on source without a subprocess owner", ({
     workerArtifacts,
@@ -742,13 +779,19 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
 
   it.each([
     { args: ["run", "--", "--help"], metadata: false },
-    { args: ["run", "--testNamePattern", "--help"], metadata: false },
+    { args: ["run", "--testNamePattern", "--help"], metadata: true },
     { args: ["run", "--help"], metadata: true },
     { args: ["bench", "--run"], metadata: false },
     { args: ["related", "--run"], metadata: false },
     { args: ["list"], metadata: true },
-  ])("classifies metadata requests for $args", ({ args, metadata }) => {
-    expect(isVitestWorkerMetadataRequest(args)).toBe(metadata);
+    { args: ["--browser.headless", "run", "--version"], metadata: false },
+    { args: ["--browser.headless", "--version"], metadata: true },
+  ])("classifies native execution requests for $args", ({ args, metadata }) => {
+    const execution = parseVitestExecutionArgs(args, parseCLI);
+    expect(execution === null).toBe(metadata);
+    if (!metadata) {
+      expect(execution?.filter).toEqual(parseCLI(["vitest", ...args]).filter);
+    }
   });
 
   it("shares one lazy build across projects and supports Promise config factories with the runner loader", ({
@@ -1147,7 +1190,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         "vitest.config.mts",
         `
       import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
-      export default {plugins:shared.plugins,test:{include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1}};
+      export default {root:${JSON.stringify(directory)},plugins:shared.plugins,test:{include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1}};
     `,
       );
       const handle = spawnWatchedVitestProcess({
@@ -1188,6 +1231,35 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       const initialDirectory = initial.descriptor.directory;
       try {
         const manifest = await prepareWorkers(initial);
+        expect(fs.existsSync(path.join(initialDirectory, "dist/native"))).toBe(false);
+        expect(Object.keys(manifest.outputs).some((name) => name.endsWith(".node"))).toBe(false);
+        // Observe the installed config before/after a real compiled parent import.
+        // A bundled second fs-safe instance would leave this observer at "auto".
+        const policy = await node(
+          [
+            "--input-type=module",
+            "--eval",
+            `import assert from 'node:assert/strict';
+             import {pathToFileURL} from 'node:url';
+             import {getFsSafeNativeConfig} from '@openclaw/fs-safe/config';
+             assert.equal(getFsSafeNativeConfig().mode,'auto');
+             await import(pathToFileURL(process.argv[1]));
+             assert.equal(getFsSafeNativeConfig().mode,'off');`,
+            path.join(initialDirectory, "dist/infra/sqlite-readonly-location.js"),
+          ],
+          fixture,
+          {
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            WINDIR: process.env.WINDIR,
+            HOME: fixture,
+            USERPROFILE: fixture,
+            TMPDIR: fixture,
+            TMP: fixture,
+            TEMP: fixture,
+          },
+        );
+        expect(policy.code, policy.stderr + policy.stdout).toBe(0);
         for (const filename of Object.keys(manifest.inputs)) {
           const target = path.join(fixture, path.relative(root, filename));
           fs.mkdirSync(path.dirname(target), { recursive: true });

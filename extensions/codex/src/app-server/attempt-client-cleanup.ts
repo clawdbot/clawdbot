@@ -51,18 +51,6 @@ export function assertCodexThreadResumeSubscription(
   }
 }
 
-async function closeClientAndWaitIfAvailable(client: CodexAppServerClient): Promise<void> {
-  const closeable = client as {
-    close?: CodexAppServerClient["close"];
-    closeAndWait?: CodexAppServerClient["closeAndWait"];
-  };
-  if (typeof closeable.closeAndWait === "function") {
-    await closeable.closeAndWait();
-    return;
-  }
-  closeable.close?.();
-}
-
 export async function closeCodexStartupClientBestEffort(
   client: CodexAppServerClient | undefined,
 ): Promise<void> {
@@ -73,7 +61,7 @@ export async function closeCodexStartupClientBestEffort(
   // Detached entries retain every ordinary and native lease; only isolated or
   // already-closed shared clients may be joined without aborting sibling turns.
   if (!retiredSharedClient || retiredSharedClient.closed) {
-    await closeClientAndWaitIfAvailable(client);
+    await client.closeAndWait();
   }
 }
 
@@ -203,68 +191,4 @@ export async function unsubscribeCodexThreadBestEffort(
     });
     return false;
   }
-}
-
-/**
- * Retires the shared client after a timed-out turn so later runs do not reuse a
- * potentially wedged app-server connection.
- */
-export async function retireCodexAppServerClientAfterTimedOutTurn(
-  client: CodexAppServerClient,
-  params: {
-    threadId: string;
-    turnId: string;
-    reason: string;
-    /**
-     * Only the terminal-idle watch proves the physical client is dead (zero
-     * notifications for the whole window). Completion/assistant/budget
-     * timeouts are per-turn conditions on a possibly healthy shared process —
-     * failing co-leases for those would abort innocent sibling turns.
-     */
-    suspectPhysicalClient: boolean;
-  },
-): Promise<void> {
-  const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client, {
-    failActiveLeases: params.suspectPhysicalClient,
-  });
-  const detachedSharedClient = Boolean(retiredSharedClient);
-  const clientAlreadyClosed =
-    params.suspectPhysicalClient && (retiredSharedClient?.closed ?? false);
-  // Best-effort interrupt/unsubscribe only make sense while the transport is
-  // still open; a suspect client was just closed (child gets SIGKILLed).
-  if (!clientAlreadyClosed) {
-    await interruptCodexTurnAndWaitBestEffort(client, {
-      threadId: params.threadId,
-      turnId: params.turnId,
-      timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-    });
-    await unsubscribeCodexThreadBestEffort(client, {
-      threadId: params.threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-    });
-  }
-  let closedClient = retiredSharedClient?.closed ?? false;
-  if (!detachedSharedClient) {
-    const close = (client as { close?: () => void }).close;
-    if (typeof close === "function") {
-      try {
-        close.call(client);
-        closedClient = true;
-      } catch (error) {
-        embeddedAgentLog.debug("codex app-server client close failed during timeout cleanup", {
-          threadId: params.threadId,
-          turnId: params.turnId,
-          error,
-        });
-      }
-    }
-  }
-  embeddedAgentLog.warn("codex app-server client retired after timed-out turn", {
-    threadId: params.threadId,
-    turnId: params.turnId,
-    reason: params.reason,
-    detachedSharedClient,
-    closedClient,
-    activeSharedClientLeases: retiredSharedClient?.activeLeases ?? 0,
-  });
 }

@@ -108,7 +108,7 @@ describe("exhausted delivery producer recovery", () => {
       now += 1;
       await enqueue("later-control");
       await queueStorage.reserveDeliveryAttempt("later-control", 1, tmpDir());
-      now += 30_000;
+      now += 60_000;
       closeOpenClawStateDatabaseForTest();
 
       const log = await recover(mode);
@@ -136,7 +136,7 @@ describe("exhausted delivery producer recovery", () => {
     "%s cannot terminalize a replacement producer acquired during recovery admission",
     async (mode) => {
       const originalClaim = await reserveProducer("replaced-producer");
-      now += 30_001;
+      now += 60_001;
       let replacementClaim: string | undefined;
       resolveAdapter.mockReturnValue({
         durableFinal: {
@@ -297,7 +297,7 @@ describe("exhausted delivery producer recovery", () => {
       const load = queueStorage.loadUnfinishedDelivery;
       vi.spyOn(queueStorage, "loadUnfinishedDelivery").mockImplementationOnce(async (...args) => {
         const snapshot = await load(...args);
-        now += 29_999;
+        now += 59_999;
         expect(await renewDeliveryPlatformSendLease(id, tmpDir(), claimId)).toBeGreaterThan(now);
         now += 2;
         return snapshot;
@@ -306,7 +306,7 @@ describe("exhausted delivery producer recovery", () => {
       expect(await queueStorage.loadPendingDelivery(id, tmpDir())).toMatchObject({
         recoveryState: "send_attempt_started",
         platformSendAttemptId: claimId,
-        availableAt: startTime + 59_999,
+        availableAt: startTime + 119_999,
       });
     },
   );

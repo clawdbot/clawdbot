@@ -1,6 +1,6 @@
 import { html } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import {
   renderComposerDictationSendAction,
@@ -58,7 +58,7 @@ export class NewSessionDictationControl {
     return renderComposerDictationStatus(this.dictation ?? undefined);
   }
 
-  render(ownerKey: string) {
+  render(ownerKey: string, inputDeviceId?: string) {
     if (this.owner?.key !== ownerKey) {
       this.owner = { key: ownerKey };
       this.dictation?.dispose();
@@ -115,7 +115,7 @@ export class NewSessionDictationControl {
           devices: this.devicePicker.devices,
           loading: this.devicePicker.loading,
           open: this.devicePicker.open,
-          selectedDeviceId: loadSettings().realtimeTalkInputDeviceId?.trim() ?? "",
+          selectedDeviceId: inputDeviceId?.trim() ?? "",
           voiceActive: false,
           issue: this.devicePicker.issue,
           showRealtimeCapability: false,

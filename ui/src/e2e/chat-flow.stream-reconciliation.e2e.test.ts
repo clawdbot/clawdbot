@@ -321,7 +321,7 @@ suite.define(() => {
             .poll(async () =>
               (await page.locator(".chat-working-indicator__tokens").textContent())?.trim(),
             )
-            .toBe("2,400 output tokens");
+            .toBe("2.4k output tokens");
           await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);
           expect(
             (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map(

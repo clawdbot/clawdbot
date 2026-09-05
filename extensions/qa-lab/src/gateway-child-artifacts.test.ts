@@ -3,10 +3,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
 import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
+import {
   openOpenClawAgentDatabase,
   openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { qaGatewayCleanupRuntimeEntrypoint } from "./gateway-child-artifacts-runtime.test-support.js";
 import { cleanupQaGatewayTempRoots } from "./gateway-child-artifacts.js";
 import { readQaAuthProfiles, writeQaAuthProfiles } from "./providers/shared/auth-store.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -31,48 +36,13 @@ describe("cleanupQaGatewayTempRoots", () => {
     const tmp = path.join(root, "tmp");
     await Promise.all([home, tmp, stagedBundledPluginsRoot].map((dir) => fs.mkdir(dir)));
     const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
-    const source = `
-      import assert from "node:assert/strict";
-      import fs from "node:fs";
-      import path from "node:path";
-      import { openOpenClawAgentDatabase, openOpenClawStateDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-      import { stageQaLiveApiKeyProfiles } from ${JSON.stringify(new URL("./providers/live-frontier/auth.ts", import.meta.url).href)};
-      import { readQaAuthProfiles } from ${JSON.stringify(new URL("./providers/shared/auth-store.ts", import.meta.url).href)};
-      import { cleanupQaGatewayTempRoots } from ${JSON.stringify(new URL("./gateway-child-artifacts.ts", import.meta.url).href)};
-      const tempRoot = ${JSON.stringify(tempRoot)};
-      const roots = [tempRoot, tempRoot + "-sibling"];
-      await Promise.all(roots.map(root => stageQaLiveApiKeyProfiles({
-        cfg: {}, stateDir: path.join(root, "state"), providerIds: ["openai"],
-        env: { OPENAI_API_KEY: "qa-fake-not-a-real-key" },
-      })));
-      const stores = roots.map(root => {
-        const stateDir = path.join(root, "state");
-        const agentDir = path.join(stateDir, "agents", "qa", "agent");
-        const env = { OPENCLAW_STATE_DIR: stateDir };
-        return {
-          agentDir,
-          agent: openOpenClawAgentDatabase({ agentId: "qa", env, path: path.join(agentDir, "openclaw-agent.sqlite") }),
-          shared: openOpenClawStateDatabase({ env }),
-          profiles: readQaAuthProfiles(agentDir),
-        };
-      });
-      const sibling = stores[1];
-      const leases = () => sibling.shared.db.prepare("SELECT * FROM agent_database_leases ORDER BY lease_id").all();
-      const beforeLeases = leases();
-      await cleanupQaGatewayTempRoots({ tempRoot, stagedBundledPluginsRoot: ${JSON.stringify(stagedBundledPluginsRoot)} });
-      assert.equal(fs.existsSync(tempRoot), false);
-      assert.equal(sibling.agent.db.isOpen, true);
-      assert.equal(sibling.shared.db.isOpen, true);
-      assert.deepEqual(readQaAuthProfiles(sibling.agentDir), sibling.profiles);
-      assert.deepEqual(leases(), beforeLeases);
-      process.stdout.write(JSON.stringify({
-        targetClosed: !stores[0].agent.db.isOpen && !stores[0].shared.db.isOpen,
-        siblingUsable: true,
-      }));
-    `;
     const result = await runQaScenarioCommandLifecycle({
       command: process.execPath,
-      args: ["--import", "tsx", "--input-type=module", "--eval", source],
+      args: [
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(qaGatewayCleanupRuntimeEntrypoint)),
+        tempRoot,
+        stagedBundledPluginsRoot,
+      ],
       cwd: repoRoot,
       env: {
         PATH: process.env.PATH,
@@ -93,7 +63,7 @@ describe("cleanupQaGatewayTempRoots", () => {
       },
       timeoutMs: 90_000,
     });
-    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(result, result.failureMessage).toMatchObject({ exitCode: 0, stderr: "" });
     expect(result.failureMessage).toBeUndefined();
     // Check from outside the process: SQLite exit hooks run after cleanup returns.
     await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });

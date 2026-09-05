@@ -17,6 +17,7 @@ function group(
     kind: "group",
     key: `group:${key}`,
     role,
+    visibleContent: "text",
     messages: [
       {
         key,
@@ -395,6 +396,16 @@ describe("coalesceAgentRunFrames", () => {
         }),
       ],
       outcome: { kind: "completed", actionOwner: { key: "final-image" } },
+    },
+    {
+      name: "omitted-image-only final",
+      parts: [
+        group("assistant", "final-omitted-image", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-omitted-image" } },
     },
     {
       name: "empty final",

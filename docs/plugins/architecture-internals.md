@@ -1043,6 +1043,13 @@ Official external npm entries should prefer an exact `npmSpec` plus
 `expectedIntegrity`. Bare package names and dist-tags still work for
 compatibility, but they surface source-plane warnings so the catalog can move
 toward pinned, integrity-checked installs without breaking existing plugins.
+When an official package is renamed, the catalog entry may declare
+`legacyNpmPackageNames` with the former package names. Trusted update rewrites
+matching npm records to the current `npmSpec`, and migrates a catalog lookup
+alias such as a channel id to the canonical plugin id. Duplicate alias+canonical
+records drop only when the canonical install is also trusted official.
+`legacyPluginIds` remains the contract for plugin-id cutovers that are not lookup
+aliases.
 When onboarding installs from a local catalog path, it records a managed plugin
 plugin index entry with `source: "path"` and a workspace-relative
 `sourcePath` when possible. The absolute operational load path stays in

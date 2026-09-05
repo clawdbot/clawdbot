@@ -4,7 +4,11 @@ import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizePluginId } from "../../../plugins/config-state.js";
+import {
+  isExplicitPluginDisableMarker,
+  isRetiredPluginId,
+  normalizePluginId,
+} from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import {
@@ -145,10 +149,11 @@ function scanStalePluginConfigWithState(
 
   const entries = asNullableRecord(plugins?.entries);
   if (entries) {
-    for (const rawPluginId of Object.keys(entries)) {
+    for (const [rawPluginId, entry] of Object.entries(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
       if (
         !pluginId ||
+        (isExplicitPluginDisableMarker(entry) && !isRetiredPluginId(pluginId)) ||
         knownIds.has(pluginId) ||
         officialLookupIds.has(pluginId) ||
         registryState.knownChannelIds.has(pluginId)

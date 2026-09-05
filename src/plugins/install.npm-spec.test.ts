@@ -324,6 +324,7 @@ type MockNpmPackage = {
   versions?: string[];
   installedVersion?: string;
   installedIntegrity?: string;
+  omitViewIntegrity?: boolean;
   omitInstalledVersion?: boolean;
   omitInstalledIntegrity?: boolean;
   materializesRootOpenClaw?: boolean;
@@ -484,7 +485,9 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
             name: viewPackage.packageName,
             version: viewPackage.version,
             dist: {
-              integrity: viewPackage.integrity ?? "sha512-plugin-test",
+              ...(viewPackage.omitViewIntegrity
+                ? {}
+                : { integrity: viewPackage.integrity ?? "sha512-plugin-test" }),
               shasum: viewPackage.shasum ?? "pluginshasum",
             },
             ...(viewPackage.openclaw ? { openclaw: viewPackage.openclaw } : {}),
@@ -1340,6 +1343,38 @@ describe("installPluginFromNpmSpec", () => {
       false,
     );
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "drift-plugin"))).toBe(false);
+  });
+
+  it("rejects a trusted pin when registry metadata omits integrity before install", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "missing-registry-integrity-plugin";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@latest`,
+      packageName,
+      version: "1.0.0",
+      pluginId: packageName,
+      integrity: "sha512-substituted",
+      shasum: "substituted-shasum",
+      omitViewIntegrity: true,
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@latest`,
+      expectedIntegrity: "sha512-trusted",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: `aborted: npm package integrity missing for ${packageName}@1.0.0`,
+    });
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
+    ).toBe(false);
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
   it("rejects npm installs when the installed version drifts from verified metadata", async () => {
@@ -3622,6 +3657,32 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
+  it("accepts a trusted catalog lookup id replacement during update", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      packageName: "@tencent-connect/openclaw-qqbot",
+      version: "2.0.3",
+      pluginId: "openclaw-qqbot",
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      npmDir: npmRoot,
+      mode: "update",
+      expectedPluginId: "qqbot",
+      expectedReplacementPluginId: "openclaw-qqbot",
+      trustedSourceLinkedOfficialInstall: true,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("openclaw-qqbot");
+    }
+  });
+
   it.each([
     {
       name: "untrusted source",
@@ -3826,6 +3887,9 @@ describe("installPluginFromNpmSpec", () => {
       expectedIntegrity: "sha512-old",
       actualIntegrity: "sha512-new",
     });
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
+    ).toBe(false);
   });
 
   it("classifies npm package-not-found errors with a stable error code", async () => {

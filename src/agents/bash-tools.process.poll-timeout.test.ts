@@ -16,6 +16,7 @@ import { createProcessSessionFixture } from "./bash-process-registry.test-helper
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { processSchema } from "./bash-tools.schemas.js";
+import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -278,6 +279,8 @@ test("waiting poll retains terminal state and its receipt after indexed cleanup"
       type: "text",
       text: expect.stringContaining("done after cleanup"),
     });
+    expect(remove).not.toHaveBeenCalled();
+    acknowledgeInternalToolResult(poll);
     expect(remove).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
@@ -323,6 +326,8 @@ test("waiting poll does not adopt a same-id successor after removal", async () =
       status: "completed",
       aggregated: expect.stringContaining("successor output"),
     });
+    expect(successorRemove).not.toHaveBeenCalled();
+    acknowledgeInternalToolResult(successorPoll);
     expect(successorRemove).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
@@ -373,6 +378,8 @@ test("waiting poll never recommends successor logs for omitted original output",
     expect(originalText).not.toContain("successor output");
     expect(originalText).not.toContain("use action=log");
     expect(originalText).toContain("omitted output is no longer available through action=log");
+    expect(originalRemove).not.toHaveBeenCalled();
+    acknowledgeInternalToolResult(original);
     expect(originalRemove).toHaveBeenCalledOnce();
     expect(successorRemove).not.toHaveBeenCalled();
 
@@ -893,6 +900,8 @@ test.each([
     const pollText = poll.content[0]?.type === "text" ? poll.content[0].text : "";
     expect(pollText).toContain("terminal output");
     expect(pollText.includes("Verify the resulting state before retrying")).toBe(timedOut);
+    expect(remove).not.toHaveBeenCalled();
+    acknowledgeInternalToolResult(poll);
     expect(remove).toHaveBeenCalledOnce();
   },
 );

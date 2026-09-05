@@ -12,6 +12,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { withInstallationTarget } from "../../infra/installation-target-context.js";
+import { takeMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
@@ -686,6 +687,48 @@ describe("agent harness host capability", () => {
     expect(scopes.every((signal) => signal.aborted)).toBe(true);
     expect(() => host.capabilities.assertActive()).not.toThrow();
     host.close();
+  });
+
+  it("hands off MCP persistence proof once without serializing the callback", async () => {
+    const { attempt } = await admittedAttempt("mcp-persistence-proof");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const authority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)!;
+    const scope = {
+      authority,
+      agentId: "main",
+      toolCallId: "item-1",
+      server: "docs",
+      tool: "write_note",
+    };
+    let active = true;
+    let proof: (() => boolean) | undefined;
+    mockCallGatewayTool.mockImplementationOnce(async (_method, _opts, payload) => {
+      expect(payload).toMatchObject({
+        mcpTool: { server: "docs", tool: "write_note" },
+        toolCallId: "item-1",
+      });
+      expect(payload).not.toHaveProperty("isMcpToolApprovalActive");
+      expect(takeMcpToolApprovalBinding({ ...scope, agentId: "other" })).toBeUndefined();
+      proof = takeMcpToolApprovalBinding(scope);
+      expect(takeMcpToolApprovalBinding(scope)).toBeUndefined();
+      return { id: "approval-1" };
+    });
+    await host.capabilities.requestApproval({
+      title: "MCP approval",
+      description: "Write a note",
+      severity: "warning",
+      toolName: "codex_mcp_tool_approval",
+      toolCallId: "item-1",
+      timeoutMs: 1_000,
+      mcpTool: { server: "docs", tool: "write_note" },
+      isMcpToolApprovalActive: () => active,
+    });
+    expect(proof?.()).toBe(true);
+    active = false;
+    expect(proof?.()).toBe(false);
+    active = true;
+    host.close();
+    expect(proof?.()).toBe(false);
   });
 
   it("revokes a retained bound tool when the same run id gets a replacement owner", async () => {

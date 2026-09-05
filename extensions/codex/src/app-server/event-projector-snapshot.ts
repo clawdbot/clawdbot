@@ -5,6 +5,7 @@ import type {
 import { projectAgentHarnessTranscriptMessageForDisplay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { createAssistantReasoningMessage } from "./event-projector-assistant-message.js";
 import type { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { applyCodexTranscriptTaint } from "./transcript-mirror-attestation.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -20,13 +21,12 @@ export function buildCodexMessagesSnapshot(params: {
   assistantMessages?: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   toolMessages: readonly AgentMessage[];
   lastAssistant: AssistantMessage | undefined;
-  createAssistantMirrorMessage: (title: string, text: string) => AssistantMessage;
 }): AgentMessage[] {
   const messages = promptSnapshot(params.runParams, params.turnId, params.upstreamUserText);
   if (params.reasoningText) {
     messages.push(
       attachCodexMirrorIdentity(
-        params.createAssistantMirrorMessage("Codex reasoning", params.reasoningText),
+        createAssistantReasoningMessage(params.runParams, params.reasoningText),
         `${params.turnId}:reasoning`,
       ),
     );
@@ -92,8 +92,6 @@ export function buildCodexSteeringMessagesSnapshot(params: {
     assistantMessages,
     toolMessages: params.toolMessages,
     lastAssistant: undefined,
-    createAssistantMirrorMessage: (title, text) =>
-      params.assistantProjection.createAssistantMirrorMessage(title, text),
   }).filter((message) => message.role !== "user");
   return {
     messages,

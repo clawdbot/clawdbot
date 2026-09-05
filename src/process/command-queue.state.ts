@@ -1,6 +1,7 @@
 // Shared command-queue runtime state, split out of command-queue.ts so the
 // capacity-group policy can read lane state without importing the queue itself.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 
 export type CommandLaneTaskMarker = Readonly<{
@@ -24,10 +25,12 @@ export type QueueEntry = {
   activeAheadAtEnqueue: number;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
+  taskTimeoutSubscribe?: CommandQueueEnqueueOptions["taskTimeoutSubscribe"];
   taskTimeoutAbortSignal?: AbortSignal;
   taskTimeoutAbortGraceMs?: number;
   taskTimeoutReleaseSignal?: AbortSignal;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  releaseQueuedAbort?: () => void;
 };
 
 type QueueRing = {
@@ -145,8 +148,28 @@ export function dequeueLaneQueue(queue: LaneQueue): QueueEntry | undefined {
   if (entry) {
     delete entry.queued;
     queue.length -= 1;
+    entry.releaseQueuedAbort?.();
   }
   return entry;
+}
+
+/** Cancellation is infrequent; compact only its priority ring while keeping FIFO order. */
+export function removeLaneQueueEntry(queue: LaneQueue, entry: QueueEntry): boolean {
+  if (!entry.queued) {
+    return false;
+  }
+  const ring = getPriorityRing(queue, entry.priority);
+  const count = ring.length;
+  for (let index = 0; index < count; index += 1) {
+    const candidate = dequeueQueueRing(ring)!;
+    if (candidate !== entry) {
+      appendQueueRing(ring, candidate);
+    }
+  }
+  delete entry.queued;
+  queue.length -= 1;
+  entry.releaseQueuedAbort?.();
+  return true;
 }
 
 /**

@@ -589,11 +589,33 @@ describe("provider request config", () => {
     });
   });
 
-  it("merges header names case-insensitively", () => {
-    const resolved = resolveProviderRequestHeaders({
+  it.each([
+    {
+      label: "OpenAI",
       provider: "openai",
-      api: "openai-responses",
+      api: "openai-responses" as const,
       baseUrl: "https://api.openai.com/v1",
+      expectedUserAgent: /^openclaw\//,
+    },
+    {
+      label: "native OpenCode Go",
+      provider: "opencode-go",
+      api: "openai-completions" as const,
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      expectedUserAgent: /^openclaw\//,
+    },
+    {
+      label: "proxied OpenCode Go",
+      provider: "opencode-go",
+      api: "openai-completions" as const,
+      baseUrl: "https://proxy.example.com/v1",
+      expectedUserAgent: /^custom-agent\//,
+    },
+  ])("merges $label User-Agent headers case-insensitively", (testCase) => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: testCase.provider,
+      api: testCase.api,
+      baseUrl: testCase.baseUrl,
       capability: "llm",
       transport: "stream",
       callerHeaders: {
@@ -605,7 +627,7 @@ describe("provider request config", () => {
     expect(
       Object.keys(resolved ?? {}).filter((key) => key.toLowerCase() === "user-agent"),
     ).toHaveLength(1);
-    expect(resolved?.["User-Agent"]).toMatch(/^openclaw\//);
+    expect(new Headers(resolved).get("user-agent")).toMatch(testCase.expectedUserAgent);
   });
 
   it("drops forbidden header keys while merging", () => {

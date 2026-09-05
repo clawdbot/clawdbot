@@ -11,6 +11,7 @@ import {
   setPluginInstallRecordMapEntry,
 } from "../../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store-write.js";
@@ -27,10 +28,45 @@ import {
 } from "../../../plugins/installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "../../../plugins/manifest-registry-installed.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
+import {
+  isTrustedOfficialPluginInstallRecord,
+  resolveTrustedOfficialClawHubPackageName,
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
+} from "../../../plugins/official-external-install-records.js";
 
 const DOCTOR_PLUGIN_ID_ALIASES: Readonly<Record<string, readonly string[]>> = {
   openai: ["openai-codex"],
 };
+
+/** Backfill shipped ClawHub authority only from a catalog-bound legacy install record. */
+export function migrateOfficialPluginInstallProvenance(
+  records: Record<string, PluginInstallRecord>,
+): Record<string, PluginInstallRecord> {
+  const migrated = copyPluginInstallRecordMap(records);
+  for (const [pluginId, record] of Object.entries(records)) {
+    // Partial or conflicting authority is not a legacy shape. Local sources must
+    // be reinstalled; package metadata cannot establish the missing source fact.
+    if (
+      record.source !== "clawhub" ||
+      record.clawhubUrl !== undefined ||
+      record.clawhubChannel !== undefined ||
+      record.sourcePath !== undefined ||
+      !resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record })
+    ) {
+      continue;
+    }
+    const normalized: PluginInstallRecord = {
+      ...record,
+      clawhubUrl: "https://clawhub.ai",
+      clawhubChannel: "official",
+    };
+    const packageName = resolveTrustedOfficialClawHubPackageName(normalized);
+    if (isTrustedOfficialPluginInstallRecord({ pluginId, packageName, record: normalized })) {
+      setPluginInstallRecordMapEntry(migrated, pluginId, normalized);
+    }
+  }
+  return migrated;
+}
 
 type PluginRegistryDoctorMigrationPreflight =
   | {
@@ -316,12 +352,13 @@ export async function migratePluginRegistryForDoctor(
   const config = stripShippedPluginInstallConfigRecords(rawConfig) as OpenClawConfig;
   const durableInstallRecords =
     params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params));
-  const installRecords = copyPluginInstallRecordMap(
+  let installRecords = copyPluginInstallRecordMap(
     extractShippedPluginInstallConfigRecords(rawConfig),
   );
   for (const [pluginId, record] of Object.entries(durableInstallRecords)) {
     setPluginInstallRecordMapEntry(installRecords, pluginId, record);
   }
+  installRecords = migrateOfficialPluginInstallProvenance(installRecords);
   const migrationParams = {
     ...params,
     config,

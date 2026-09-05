@@ -105,45 +105,55 @@ export function renderConfiguredModel(props: {
       </div>
       <div class="model-setup__row">
         <div class="model-setup__provider-copy">
-          ${providerId
-            ? renderProviderBrandIcon(providerId, { className: "model-setup__icon" })
-            : nothing}
+          ${
+            providerId
+              ? renderProviderBrandIcon(providerId, { className: "model-setup__icon" })
+              : nothing
+          }
           <div class="model-setup__current-copy">
             <strong>${providerLabel}</strong>
             <div class="muted">${detail}</div>
-            ${props.verify.phase === "checking"
-              ? html`<div class="model-setup__testing" role="status">
-                  ${t("modelSetup.verify.checking", { modelRef: configuredRef })}
-                </div>`
-              : props.verify.phase === "ok"
-                ? html`<div class="model-setup__verified" role="status">
-                    ${props.verify.latencyMs === undefined
-                      ? t("modelSetup.verify.ready")
-                      : t("modelSetup.verify.readyIn", {
-                          latencyMs: String(props.verify.latencyMs),
-                        })}
+            ${
+              props.verify.phase === "checking"
+                ? html`<div class="model-setup__testing" role="status">
+                    ${t("modelSetup.verify.checking", { modelRef: configuredRef })}
                   </div>`
-                : props.verify.phase === "failed"
-                  ? renderModelSetupFailure(props.verify.status, props.verify.error)
-                  : nothing}
+                : props.verify.phase === "ok"
+                  ? html`<div class="model-setup__verified" role="status">
+                      ${
+                        props.verify.latencyMs === undefined
+                          ? t("modelSetup.verify.ready")
+                          : t("modelSetup.verify.readyIn", {
+                              latencyMs: String(props.verify.latencyMs),
+                            })
+                      }
+                    </div>`
+                  : props.verify.phase === "failed"
+                    ? renderModelSetupFailure(props.verify.status, props.verify.error)
+                    : nothing
+            }
           </div>
         </div>
         <div class="model-setup__row-actions">
-          ${props.canVerify
-            ? html`<button
-                type="button"
-                class="btn"
-                ?disabled=${props.actionsDisabled}
-                @click=${props.onVerify}
-              >
-                ${verificationButtonLabel(props.verify)}
-              </button>`
-            : nothing}
-          ${props.onContinue
-            ? html`<button type="button" class="btn primary" @click=${props.onContinue}>
-                ${icons.messageSquare} ${t("modelSetup.success.continueSetup")}
-              </button>`
-            : nothing}
+          ${
+            props.canVerify
+              ? html`<button
+                  type="button"
+                  class="btn"
+                  ?disabled=${props.actionsDisabled}
+                  @click=${props.onVerify}
+                >
+                  ${verificationButtonLabel(props.verify)}
+                </button>`
+              : nothing
+          }
+          ${
+            props.onContinue
+              ? html`<button type="button" class="btn primary" @click=${props.onContinue}>
+                  ${icons.messageSquare} ${t("modelSetup.success.continueSetup")}
+                </button>`
+              : nothing
+          }
         </div>
       </div>
     </section>

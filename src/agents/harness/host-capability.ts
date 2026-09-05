@@ -7,6 +7,7 @@ import {
   installationTargetEnv,
   withInstallationTarget,
 } from "../../infra/installation-target-context.js";
+import { registerMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import {
@@ -55,6 +56,8 @@ import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import {
   registerAgentHarnessScheduledToolProjectionCapability,
   registerAgentHarnessTtsProvenanceTransferCapability,
+  resolveAgentQuestionAnswerAuthority,
+  withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
@@ -517,8 +520,10 @@ export function createAgentHarnessHostCapabilities(params: {
       // Only host-created core tools can seed TTS provenance. Plugin-bound tools
       // must not replay a retained core result into this attempt's authority set.
       const tools = bindTools(
-        withInstallationTarget(installationTarget, () =>
-          createOpenClawCodingTools({ ...options, operationalRunInstance }),
+        withAgentQuestionAnswerAuthority(resolveAgentQuestionAnswerAuthority(capabilities), () =>
+          withInstallationTarget(installationTarget, () =>
+            createOpenClawCodingTools({ ...options, operationalRunInstance }),
+          ),
         ),
         bindingOptions,
         observeCoreTtsToolResult,
@@ -555,36 +560,54 @@ export function createAgentHarnessHostCapabilities(params: {
     requestApproval: async (request) => {
       assertActive();
       request.signal?.throwIfAborted();
-      const result = await withCaller(
-        async () =>
-          await withGatewayToolApprovalOwner(
-            params.pluginId,
-            async () =>
-              await callGatewayTool(
-                "plugin.approval.request",
-                { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
-                {
-                  title: request.title,
-                  description: request.description,
-                  severity: request.severity,
-                  toolName: request.toolName,
-                  toolCallId: request.toolCallId,
-                  timeoutMs: request.timeoutMs,
-                  twoPhase: true,
-                  ...(request.allowedDecisions
-                    ? { allowedDecisions: request.allowedDecisions }
-                    : {}),
-                },
-                { expectFinal: false, requireAgentRuntimeIdentity: true, signal: request.signal },
-              ),
-          ),
-        request.signal,
-      );
-      // Gateway approval calls may outlive their owning attempt. A late
-      // request result must not escape after exact authority has closed.
-      assertActive();
-      request.signal?.throwIfAborted();
-      return result;
+      const releaseMcpBinding =
+        request.mcpTool && request.toolCallId && request.isMcpToolApprovalActive && attempt.agentId
+          ? registerMcpToolApprovalBinding({
+              authority: delegatedAuthority,
+              agentId: attempt.agentId,
+              toolCallId: request.toolCallId,
+              ...request.mcpTool,
+              isActive: () => {
+                assertActive();
+                return !request.signal?.aborted && request.isMcpToolApprovalActive!();
+              },
+            })
+          : undefined;
+      try {
+        const result = await withCaller(
+          async () =>
+            await withGatewayToolApprovalOwner(
+              params.pluginId,
+              async () =>
+                await callGatewayTool(
+                  "plugin.approval.request",
+                  { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+                  {
+                    title: request.title,
+                    description: request.description,
+                    severity: request.severity,
+                    toolName: request.toolName,
+                    toolCallId: request.toolCallId,
+                    ...(request.mcpTool ? { mcpTool: request.mcpTool } : {}),
+                    timeoutMs: request.timeoutMs,
+                    twoPhase: true,
+                    ...(request.allowedDecisions
+                      ? { allowedDecisions: request.allowedDecisions }
+                      : {}),
+                  },
+                  { expectFinal: false, requireAgentRuntimeIdentity: true, signal: request.signal },
+                ),
+            ),
+          request.signal,
+        );
+        // Gateway approval calls may outlive their owning attempt. A late
+        // request result must not escape after exact authority has closed.
+        assertActive();
+        request.signal?.throwIfAborted();
+        return result;
+      } finally {
+        releaseMcpBinding?.();
+      }
     },
     waitForApproval: async (request) => {
       assertActive();

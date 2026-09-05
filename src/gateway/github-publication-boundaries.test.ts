@@ -501,6 +501,31 @@ describe("Gateway GitHub publication boundaries", () => {
     });
   });
 
+  it("reports missing managed credentials as an identity failure after admission", async () => {
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const coordinator = createTestGitHubPublicationCoordinator({
+      placements: createWorkerSessionPlacementStore({ database }),
+    });
+    coordinator.read("create-schema");
+    const requestId = "publication-missing-credential";
+    seedLocalPublication(database, { requestId, status: "requested" });
+    const config = { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } };
+    mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
+    const { prepareGitHubPublicationIdentity } = await vi.importActual<
+      typeof import("../agents/github-tool-identity.js")
+    >("../agents/github-tool-identity.js");
+    mocks.prepareIdentity.mockImplementation(prepareGitHubPublicationIdentity);
+
+    await coordinator.resumeSessionRequests();
+
+    expect(coordinator.read(requestId)).toMatchObject({
+      status: "failed",
+      code: "identity_unavailable",
+      nextAction: expect.stringContaining("Reconnect"),
+    });
+    expect(commands.some((argv) => argv.includes("push") || argv.includes("POST"))).toBe(false);
+  });
+
   it("terminalizes local recovery when the managed worktree fingerprint changed", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const first = createTestGitHubPublicationCoordinator({

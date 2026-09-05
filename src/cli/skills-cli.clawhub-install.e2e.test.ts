@@ -20,7 +20,7 @@ async function spawnOpenClaw(
   options: { cwd: string; env: NodeJS.ProcessEnv },
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", "src/entry.ts", ...args], {
+    const child = spawn(process.execPath, ["openclaw.mjs", ...args], {
       cwd: options.cwd,
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"],

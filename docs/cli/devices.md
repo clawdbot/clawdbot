@@ -41,6 +41,8 @@ Paired device display names use this precedence: operator label (`operatorLabel`
 
 Approve a pending pairing request by exact `requestId`. Omitting `requestId`, or passing `--latest`, only previews the newest pending request and exits (code 1); rerun with the exact request ID to approve.
 
+The printed approval command keeps your active profile or container, explicit Gateway URL, nondefault timeout, and JSON output mode. Token and password option values are omitted; supply the same credentials again when the preview asks you to reuse those options.
+
 ```bash
 openclaw devices approve
 openclaw devices approve <requestId>
@@ -111,10 +113,10 @@ openclaw devices rotate --device <deviceId> --role operator --scope operator.rea
 ```
 
 - The target role must already exist in that device's approved pairing contract; rotation cannot mint a new unapproved role.
-- Omitting `--scope` reuses the stored token's cached approved scopes on later reconnects. Passing explicit `--scope` values replaces the stored scope set for future cached-token reconnects.
+- Omitting `--scope` retains the target token's current scopes. Passing explicit `--scope` values replaces that scope set, within the device's approved baseline, for future cached-token reconnects.
 - A non-admin paired-device caller can rotate only its **own** device token, and the target scope set must stay within the caller's own operator scopes; rotation cannot mint or preserve a broader token than the caller already has.
 
-Returns rotation metadata as JSON. If the caller rotates its own token while authenticated with that device token, the response includes the replacement token so the client can persist it before reconnecting. Shared/admin rotations never echo the bearer token.
+Returns rotation metadata as JSON. If the caller rotates its own token while authenticated with that device token, the response includes the replacement token so the client can persist it before reconnecting. Shared-secret callers and callers rotating another device never receive the bearer token.
 
 ### `openclaw devices revoke --device <id> --role <role>`
 
@@ -130,6 +132,7 @@ A non-admin paired-device caller can revoke only its **own** device token. Revok
 
 - These commands require `operator.pairing` (or `operator.admin`) scope. Non-operator device roles always require `operator.admin`; see [Operator scopes](/gateway/operator-scopes).
 - Token rotation and revocation stay inside the device's approved pairing role set and scope baseline. A stray cached token entry does not grant a token-management target.
+- For operator tokens, the CLI first reads the pairing list, then requests pairing plus the target token's scopes (or explicit rotate scopes). If the target is not visible, it requests admin access for cross-device management. A narrowed token does not inherit a broader device approval baseline; the caller must already be authorized for the requested scopes.
 - For paired-device token sessions, cross-device management (`remove`, `rename`, `rotate`, `revoke`) is self-only unless the caller has `operator.admin`.
 - Token rotation returns a new token (sensitive) — treat it like a secret.
 - If pairing scope is unavailable on local loopback and no explicit `--url` is passed, `list`/`approve` can fall back to local pairing state.

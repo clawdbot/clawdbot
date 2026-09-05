@@ -825,7 +825,7 @@ describe("external shared-state ownership", () => {
     }
   });
 
-  it("fences Doctor repair, startup checkpoint, compaction, and config health", async () => {
+  it("fences state repair and config health writes while allowing health reads", async () => {
     const fixture = claimFixture();
     if (process.platform !== "win32") {
       fs.chmodSync(fixture.databasePath, 0o666);
@@ -850,7 +850,7 @@ describe("external shared-state ownership", () => {
       homedir: () => fixture.unmarkedEnv.OPENCLAW_STATE_DIR ?? "",
       logger: { warn: () => undefined },
     };
-    expect(() => readConfigHealthStateFromStore(healthDeps)).toThrow(OpenClawStateOwnershipError);
+    expect(readConfigHealthStateFromStore(healthDeps)).toEqual({ entries: {} });
     expect(() =>
       writeConfigHealthStateToStore(healthDeps, {
         entries: { "/tmp/openclaw.json": { lastObservedSuspiciousSignature: "test" } },

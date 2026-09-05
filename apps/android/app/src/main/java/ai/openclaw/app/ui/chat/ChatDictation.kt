@@ -101,10 +101,6 @@ internal class AndroidChatDictationRecognizer(
     generation += 1
     val operation = generation
     retireRecognizer()
-    if (!isAvailable) {
-      onEvent(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_SERVER_DISCONNECTED))
-      return
-    }
     val active = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
     active.setRecognitionListener(
       object : RecognitionListener {
@@ -205,8 +201,6 @@ internal class ChatDictationController(
   private val lock = Any()
   private val _state = MutableStateFlow<ChatDictationState>(ChatDictationState.Idle)
   val state: StateFlow<ChatDictationState> = _state.asStateFlow()
-  val isAvailable: Boolean
-    get() = recognizer.isAvailable
 
   private var completion: CompletableDeferred<String?>? = null
   private var ownsMic = false

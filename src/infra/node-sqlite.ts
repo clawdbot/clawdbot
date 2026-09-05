@@ -122,7 +122,11 @@ export function tryAcquireExclusiveSqliteCoordinator(
   const database = openNodeSqliteDatabase(location);
   try {
     // Kysely transaction callbacks cannot own a lock beyond their synchronous commit section.
-    database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; BEGIN EXCLUSIVE;`);
+    // This handle never writes or commits data. Keep the empty database's initial
+    // journal in memory so acquiring a lock does not create filesystem artifacts.
+    database.exec(
+      `PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA journal_mode = MEMORY; BEGIN EXCLUSIVE;`,
+    );
   } catch (error) {
     database.close();
     if (isSqliteLockError(error)) {

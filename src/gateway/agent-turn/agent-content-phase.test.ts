@@ -6,6 +6,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createChatRunState } from "../server-chat-state.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import type { AgentTurnContext } from "./types.js";
 
@@ -52,9 +53,12 @@ it.each(["main", "work"])(
     }));
     const context: AgentTurnContext = {
       addChatRun: vi.fn(),
+      agentRunSeq: new Map(),
+      broadcast: vi.fn(),
       broadcastToConnIds: vi.fn(),
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
+      chatRunState: createChatRunState(),
       dedupe: new Map(),
       deps: {},
       getRuntimeConfig: () => cfg,
@@ -62,6 +66,8 @@ it.each(["main", "work"])(
       loadGatewayModelCatalog: vi.fn(async () => []),
       loadGatewayModelCatalogSnapshot,
       logGateway: createSubsystemLogger("test/agent-content"),
+      nodeSendToSession: vi.fn(),
+      removeChatRun: vi.fn(() => undefined),
     };
     const respond = vi.fn();
     const result = await prepareAgentContentPhase({

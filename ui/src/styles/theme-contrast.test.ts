@@ -105,7 +105,7 @@ describe("Control UI theme contrast", () => {
       .map((entry) => readFileSync(path.join(themesDir, entry), "utf8")),
   ].join("\n");
   const groupedCss = readFileSync(path.join(here, "chat", "grouped.css"), "utf8");
-  const chatLayoutCss = readFileSync(path.join(here, "chat", "layout.css"), "utf8");
+  const chatComposerCss = readFileSync(path.join(here, "chat", "composer.css"), "utf8");
   const layoutCss = readFileSync(path.join(here, "layout.css"), "utf8");
 
   it("keeps chat timestamps and slash-arg hints AA without opacity dimming", () => {
@@ -118,7 +118,7 @@ describe("Control UI theme contrast", () => {
       requireCssColor(dark, "card"),
     ];
     const timestampRule = readRuleBody(groupedCss, ".chat-group-timestamp");
-    const slashArgsRule = readRuleBody(chatLayoutCss, ".slash-menu-args,\n.slash-menu-desc");
+    const slashArgsRule = readRuleBody(chatComposerCss, ".slash-menu-args,\n.slash-menu-desc");
 
     expect(timestampRule).toMatch(/color:\s*var\(--muted\)/);
     expect(slashArgsRule).toMatch(/color:\s*var\(--muted\)/);

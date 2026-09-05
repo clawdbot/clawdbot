@@ -1758,7 +1758,7 @@ describe("whatsapp inbound dispatch", () => {
     expect(deliverReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses error payload text", async () => {
+  it("delivers final error payload text", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     await dispatchBufferedReply({ deliverReply });
 
@@ -1767,8 +1767,23 @@ describe("whatsapp inbound dispatch", () => {
 
     await deliver?.({ text: "provider exploded", isError: true }, { kind: "final" });
 
-    expect(deliverReply).not.toHaveBeenCalled();
+    expect(deliverReply).toHaveBeenCalledTimes(1);
   });
+
+  it.each([{ kind: "block" as const }, { kind: "tool" as const }])(
+    "suppresses $kind error payload noise",
+    async ({ kind }) => {
+      const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+      await dispatchBufferedReply({ deliverReply });
+
+      const deliver = getCapturedDeliver();
+      expect(deliver).toBeTypeOf("function");
+
+      await deliver?.({ text: "tool call failed", isError: true }, { kind });
+
+      expect(deliverReply).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

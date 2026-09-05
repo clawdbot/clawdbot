@@ -73,6 +73,8 @@ import {
   sessionAgentStatusExpiresAt,
   SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
 } from "../sessions/session-agent-status.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
+import type { UserModelAccountSelection } from "./model-account-authority.js";
 import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
@@ -120,8 +122,7 @@ export function resolveSessionPatchModelSelection(params: {
   };
 }
 
-/** Project a validated gateway session patch for one session entry. */
-export async function projectSessionsPatchEntry(params: {
+type SessionPatchProjectionParams = {
   cfg: OpenClawConfig;
   creation?: { via: SessionCreatedVia; actor?: SessionEntry["createdActor"] };
   existingEntry?: SessionEntry;
@@ -134,11 +135,64 @@ export async function projectSessionsPatchEntry(params: {
   /** Trusted catalog runtime must own selection checks before the new row is persisted. */
   preparedAgentRuntime?: string;
   archivedBy?: SessionEntry["archivedBy"];
-  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
-}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
+  personalModelSelection?: UserModelAccountSelection;
+};
+
+type SessionPatchProjectionResult =
+  | { ok: true; entry: SessionEntry }
+  | { ok: false; error: ErrorShape };
+
+type SessionPatchPreparation =
+  | { kind: "complete"; result: SessionPatchProjectionResult }
+  | {
+      kind: "model-catalog";
+      finish: (catalog: ModelCatalogEntry[] | undefined) => SessionPatchProjectionResult;
+    };
+
+/** Stop at the first actual catalog use without committing or acquiring runtime effects. */
+export function prepareSessionsPatchEntry(
+  params: SessionPatchProjectionParams,
+): SessionPatchPreparation {
+  const projection = projectSessionPatchSteps(params);
+  const first = projection.next();
+  if (first.done) {
+    return { kind: "complete", result: first.value };
+  }
+  return {
+    kind: "model-catalog",
+    finish: (catalog) => {
+      const completed = projection.next(catalog);
+      if (!completed.done) {
+        throw new Error("Session patch preparation requested the catalog more than once");
+      }
+      return completed.value;
+    },
+  };
+}
+
+/** Project a validated gateway session patch for one session entry. */
+export async function projectSessionsPatchEntry(
+  params: SessionPatchProjectionParams & {
+    loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  },
+): Promise<SessionPatchProjectionResult> {
+  const preparation = prepareSessionsPatchEntry(params);
+  if (preparation.kind === "complete") {
+    return preparation.result;
+  }
+  if (!params.loadGatewayModelCatalog) {
+    return preparation.finish(undefined);
+  }
+  const catalog = await params.loadGatewayModelCatalog();
+  return preparation.finish(Array.isArray(catalog) ? catalog : []);
+}
+
+function* projectSessionPatchSteps(
+  params: SessionPatchProjectionParams,
+): Generator<void, SessionPatchProjectionResult, ModelCatalogEntry[] | undefined> {
   const { cfg, storeKey, patch, creation } = params;
   if ("execSecurity" in patch || "execAsk" in patch) {
     return invalid(
@@ -200,13 +254,18 @@ export async function projectSessionsPatchEntry(params: {
     );
   };
   let loadedModelCatalog: ModelCatalogEntry[] | undefined;
-  const loadPreparedModelCatalogForPatch = async () => {
-    if (!loadedModelCatalog && params.loadGatewayModelCatalog) {
-      const catalog = await params.loadGatewayModelCatalog();
-      loadedModelCatalog = Array.isArray(catalog) ? catalog : [];
+  let catalogPrepared = false;
+  function* loadPreparedModelCatalogForPatch(): Generator<
+    void,
+    ModelCatalogEntry[] | undefined,
+    ModelCatalogEntry[] | undefined
+  > {
+    if (!catalogPrepared) {
+      loadedModelCatalog = yield;
+      catalogPrepared = true;
     }
     return loadedModelCatalog;
-  };
+  }
 
   const existing =
     params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
@@ -214,6 +273,8 @@ export async function projectSessionsPatchEntry(params: {
   const next: SessionEntry = {
     ...existing,
     sessionId: existing?.sessionId || randomUUID(),
+    // Reset retains sessionId, so rollback also needs the original lifecycle revision.
+    ...(existing?.sessionId ? {} : { lifecycleRevision: randomUUID() }),
     updatedAt: Math.max(existing?.updatedAt ?? 0, now),
     ...(params.preparedSessionRoot ? { sessionRoot: params.preparedSessionRoot } : {}),
     // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
@@ -287,6 +348,7 @@ export async function projectSessionsPatchEntry(params: {
       // Archived sessions leave the active quick-access set in the same write.
       if (next.archivedAt === undefined) {
         next.archivedAt = now;
+        next.archiveReason = "manual";
         if (params.archivedBy) {
           next.archivedBy = params.archivedBy;
         } else {
@@ -297,6 +359,7 @@ export async function projectSessionsPatchEntry(params: {
     } else {
       delete next.archivedAt;
       delete next.archivedBy;
+      delete next.archiveReason;
     }
   }
 
@@ -334,7 +397,7 @@ export async function projectSessionsPatchEntry(params: {
         const hintProvider =
           normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
         const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
-        const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+        const thinkingCatalog = yield* loadPreparedModelCatalogForPatch();
         const thinkingRuntime = resolveThinkingRuntime(hintProvider, hintModel, existing);
         return invalid(
           `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog, thinkingRuntime)})`,
@@ -489,7 +552,7 @@ export async function projectSessionsPatchEntry(params: {
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
-      const catalog = await loadPreparedModelCatalogForPatch();
+      const catalog = yield* loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
           ok: false,
@@ -514,6 +577,18 @@ export async function projectSessionsPatchEntry(params: {
       selection = resolved;
     }
     if (selection) {
+      if (selection.profile && isUserModelAuthProfileId(selection.profile)) {
+        if (params.personalModelSelection?.authProfileId !== selection.profile) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.FORBIDDEN,
+              "Choose your personal account from an identified Gateway connection.",
+            ),
+          };
+        }
+        params.personalModelSelection.assertCurrent();
+      }
       // Catalog membership does not guarantee an activatable harness. Reject before
       // committing the session so sticky defaults cannot retain an unusable selection.
       const harnessSelection = {
@@ -568,7 +643,7 @@ export async function projectSessionsPatchEntry(params: {
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else {
-      const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+      const thinkingCatalog = yield* loadPreparedModelCatalogForPatch();
       thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
       if (
         !isThinkingLevelSupported({
@@ -595,7 +670,7 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
-  const contextWindowPatch = await applySessionContextWindowPatch({
+  const contextWindowPatch = yield* applySessionContextWindowPatch({
     defaultModel: resolvedDefault.model,
     defaultProvider: resolvedDefault.provider,
     loadModelCatalog: loadPreparedModelCatalogForPatch,

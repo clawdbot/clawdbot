@@ -202,6 +202,69 @@ describe("exportTrajectoryCommand", () => {
     expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("rejects an %s explicit store before resolving one", async (_label, store) => {
+    const runtime = createRuntime();
+
+    await expectTrajectoryFailure(
+      exportTrajectoryCommand({ sessionKey: "agent:main:telegram:direct:123", store }, runtime),
+      runtime,
+      "--store must not be blank",
+    );
+    expect(mocks.resolveStorePath).not.toHaveBeenCalled();
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["empty", "agent", "", "--agent must not be blank"],
+    ["whitespace-only", "agent", "   ", "--agent must not be blank"],
+    ["empty", "store", "", "--store must not be blank"],
+    ["whitespace-only", "store", "   ", "--store must not be blank"],
+  ])("rejects an %s encoded %s before reading a session", async (_label, field, value, message) => {
+    const runtime = createRuntime();
+    const requestJsonBase64 = Buffer.from(
+      JSON.stringify({ sessionKey: "agent:main:telegram:direct:123", [field]: value }),
+      "utf8",
+    ).toString("base64url");
+
+    await expectTrajectoryFailure(
+      exportTrajectoryCommand({ requestJsonBase64 }, runtime),
+      runtime,
+      message,
+    );
+    expect(mocks.resolveStorePath).not.toHaveBeenCalled();
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
+  });
+
+  it("honours a non-blank encoded store and agent", async () => {
+    const runtime = createRuntime();
+    mocks.getRuntimeConfig.mockReturnValue({ agents: { list: [{ id: "main" }, { id: "work" }] } });
+    mocks.resolveStorePath.mockReturnValue("/tmp/encoded-store.json");
+    const requestJsonBase64 = Buffer.from(
+      JSON.stringify({
+        sessionKey: "agent:main:telegram:direct:123",
+        store: "/tmp/encoded-store.json",
+        agent: "work",
+      }),
+      "utf8",
+    ).toString("base64url");
+
+    await exportTrajectoryCommand({ requestJsonBase64 }, runtime);
+
+    expect(mocks.resolveStorePath).toHaveBeenCalledWith("/tmp/encoded-store.json", {
+      agentId: "work",
+    });
+    expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
+      agentId: "work",
+      sessionKey: "agent:main:telegram:direct:123",
+      storePath: "/tmp/encoded-store.json",
+    });
+  });
+
   it("routes invalid explicit stores through the command failure owner", async () => {
     const runtime = createRuntime();
     mocks.resolveStorePath.mockReturnValue("/tmp/missing.sqlite");

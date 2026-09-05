@@ -19,6 +19,7 @@ struct ChatMermaidBlockView: View {
     @State private var token: UUID?
     @State private var generation = UUID()
     @State private var showSource = false
+    @State private var isHovered = false
     /// Keep the selected preview stable while rotation re-renders the inline diagram.
     @State private var expanded: PreviewSelection?
 
@@ -32,15 +33,15 @@ struct ChatMermaidBlockView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Spacer()
-                Button {
-                    self.copySource()
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Copy diagram source")
+                ChatCopyButton(text: self.source, label: "Copy diagram source", revealed: self.isHovered)
                 Menu {
+                    #if os(macOS)
+                    Button {
+                        ChatPasteboard.copy(self.source)
+                    } label: {
+                        Text("Copy diagram source").font(OpenClawChatTypography.body)
+                    }
+                    #endif
                     Button {
                         self.showSource.toggle()
                     } label: {
@@ -65,9 +66,15 @@ struct ChatMermaidBlockView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .frame(width: 44, height: 44)
+                        .frame(width: ChatCopyButton.controlSize, height: ChatCopyButton.controlSize)
                 }
                 .accessibilityLabel("Diagram options")
+                #if os(macOS)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Diagram options")
+                #endif
             }
             .foregroundStyle(.secondary)
             if self.showSource {
@@ -104,6 +111,7 @@ struct ChatMermaidBlockView: View {
         } action: { self.width = $0 }
         .onChange(of: self.request, initial: true) { _, _ in self.render() }
         .onDisappear { self.cancel() }
+        .onHover { self.isHovered = $0 }
         #if os(macOS)
         .sheet(item: self.$expanded) { self.preview($0) }
         #else
@@ -196,15 +204,6 @@ struct ChatMermaidBlockView: View {
             ChatMermaidRenderer.shared.cancel(token)
         }
     }
-
-    private func copySource() {
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(self.source, forType: .string)
-        #else
-        UIPasteboard.general.string = self.source
-        #endif
-    }
 }
 
 @MainActor
@@ -226,6 +225,9 @@ private struct ChatMermaidPreviewView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close diagram preview")
+                #if os(macOS)
+                .keyboardShortcut(.cancelAction)
+                #endif
             }
             if self.failed {
                 Text("Diagram preview unavailable")
@@ -237,7 +239,9 @@ private struct ChatMermaidPreviewView: View {
         }
         .background(OpenClawChatTheme.assistantBubble)
         #if os(macOS)
-        .frame(minWidth: 500, minHeight: 350)
+        .frame(minWidth: 500, idealWidth: 900, minHeight: 350, idealHeight: 600)
+        // Mac sheets default to a form width; fit both axes so Expand honors the ideal size.
+        .presentationSizing(.fitted)
         #endif
     }
 }
@@ -267,7 +271,7 @@ private struct ChatMermaidSvgView {
         view.backgroundColor = .clear
         #endif
         let encoded = Data(self.svg.utf8).base64EncodedString()
-        // Sanitized SVG stays an image document. The preview needs no scripts or network.
+        // Script-free SVG stays an image; auto margins center short diagrams without clipping tall ones.
         view.loadHTMLString("""
         <!doctype html><html><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none';
@@ -275,8 +279,8 @@ private struct ChatMermaidSvgView {
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=8, user-scalable=yes">
         <style>
         html,body{margin:0;height:100%;background:\(self.background)}
-        body{display:flex;align-items:center}
-        img{display:block;width:100%;height:auto}
+        body{display:flex}
+        img{display:block;width:100%;height:auto;margin:auto 0}
         </style>
         </head><body><img alt="" src="data:image/svg+xml;base64,\(encoded)"></body></html>
         """, baseURL: nil)

@@ -1,22 +1,7 @@
 import fs from "node:fs";
+import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { makeTempDir } from "./temp-dir.js";
-
-function hasUnjoinedWork(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  if ("processTreeState" in value && value.processTreeState !== "terminated") {
-    return true;
-  }
-  if (value instanceof AggregateError && value.errors.some(hasUnjoinedWork)) {
-    return true;
-  }
-  return (
-    ("cause" in value && hasUnjoinedWork(value.cause)) ||
-    ("error" in value && hasUnjoinedWork(value.error))
-  );
-}
 
 /** Own whole fixture bodies; an explicit root scopes deliberate retention without changing env. */
 export function createFixtureLifetime(ownerRoot?: string) {
@@ -32,18 +17,14 @@ export function createFixtureLifetime(ownerRoot?: string) {
     }
   }
 
-  function track<T>(completion: Promise<T>, cleanup = false): Promise<T> {
+  function admit<T>(body: Promise<T> | (() => Promise<T>), cleanup = false): Promise<T> {
+    // Register before scheduling callbacks, and observe late rejection even
+    // when Vitest has already rejected its separate timeout/cancellation promise.
     register();
+    const completion = typeof body === "function" ? Promise.resolve().then(body) : body;
     work.push({ completion, cleanup });
     void completion.catch(() => {});
     return completion;
-  }
-
-  function run<T>(body: () => Promise<T>): Promise<T> {
-    // Register before the callback's first await, and observe late rejection even
-    // when Vitest has already rejected its separate timeout/cancellation promise.
-    register();
-    return track(Promise.resolve().then(body));
   }
 
   async function drain() {
@@ -104,12 +85,9 @@ export function createFixtureLifetime(ownerRoot?: string) {
   }
 
   return {
-    run,
-    track,
-    verifyCleanup: (body: () => Promise<void>) => {
-      register();
-      return track(Promise.resolve().then(body), true);
-    },
+    run: <T>(body: () => Promise<T>) => admit(body),
+    track: <T>(completion: Promise<T>, cleanup = false) => admit(completion, cleanup),
+    verifyCleanup: (body: () => Promise<void>) => admit(body, true),
     createTempDir: (prefix: string, root = ownerRoot) => {
       register(root);
       return makeTempDir(roots, prefix, root);

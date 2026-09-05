@@ -37,6 +37,8 @@ type AgentRuntimePluginRegistryParams = {
   /** Exact registry from the supplied lifecycle metadata generation. */
   reusableRegistry?: PluginRegistry;
   selections?: readonly AgentHarnessPluginSelection[];
+  /** Config-wide harness runtimes carried by a prepared lifecycle batch. */
+  configuredHarnessRuntimes?: readonly string[];
   /** Lifecycle-owned selection; standalone/direct generations stay source-default. */
   preferBuiltPluginArtifacts?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
@@ -81,7 +83,11 @@ function resolveAgentRuntimePluginRegistryLoad(
     config: params.config,
     workspaceDir: workspaceDir ?? process.cwd(),
     basePluginIds: startupPluginIds,
-    selections: resolveAgentRuntimePluginSelections(params.config, params.selections ?? []),
+    selections: resolveAgentRuntimePluginSelections(
+      params.config,
+      params.selections ?? [],
+      params.configuredHarnessRuntimes,
+    ),
     metadataSnapshot,
   });
   return {

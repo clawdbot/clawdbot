@@ -170,18 +170,20 @@ export function renderChatVoiceStatus(
           >${icons.alertTriangle}</span
         >
         <span class="agent-chat__talk-status-text">${props.detail}</span>
-        ${props.onDismissError
-          ? html`
-              <button
-                class="callout__dismiss"
-                type="button"
-                @click=${props.onDismissError}
-                aria-label=${t("chat.composer.dismissVoiceInputError")}
-              >
-                ${icons.x}
-              </button>
-            `
-          : nothing}
+        ${
+          props.onDismissError
+            ? html`
+                <button
+                  class="callout__dismiss"
+                  type="button"
+                  @click=${props.onDismissError}
+                  aria-label=${t("chat.composer.dismissVoiceInputError")}
+                >
+                  ${icons.x}
+                </button>
+              `
+            : nothing
+        }
       </div>
     </div>
   `;

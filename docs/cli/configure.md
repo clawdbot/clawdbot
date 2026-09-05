@@ -19,6 +19,8 @@ Use `openclaw onboard` or `openclaw setup` for the full guided first-run journey
 
 Before `openclaw configure` changes local credentials or configuration, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
 
+This comparison also applies when `OPENCLAW_HOME` relocates the CLI's default state directory. The installed service's recorded environment determines its paths, including while the Gateway is stopped; the CLI's path overrides do not replace them. If the service definition or its recorded paths cannot be verified, OpenClaw warns and leaves configuration available. Inspect the service with `openclaw gateway status --deep` before relying on local changes to reach it.
+
 `--section <section>`: repeatable section filter. Available sections:
 
 `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`

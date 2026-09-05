@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +11,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -40,10 +42,6 @@ async function snapshotTree(root: string): Promise<string[]> {
 async function sha256File(filePath: string): Promise<string> {
   const contents = await fs.readFile(filePath);
   return createHash("sha256").update(contents).digest("hex");
-}
-
-function snapshotDatabaseArtifacts(snapshot: string[]): string[] {
-  return snapshot.filter((entry) => /^f .*\.sqlite(?:-(?:wal|shm))? /.test(entry));
 }
 
 function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
@@ -82,6 +80,31 @@ function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv =
     },
     maxBuffer: 4 * 1024 * 1024,
     timeout: 60_000,
+  });
+}
+
+async function expectPreviewLedger(root: string, runId: string, before: string[]): Promise<void> {
+  const after = await snapshotTree(root);
+  const ledgerArtifacts = after.filter((entry) =>
+    /^(?:d state\/state$|f state\/state\/openclaw\.sqlite(?:-(?:wal|shm))? )/.test(entry),
+  );
+  expect(ledgerArtifacts).toContain("d state/state");
+  expect(ledgerArtifacts).toContainEqual(
+    expect.stringMatching(/^f state\/state\/openclaw\.sqlite [a-f0-9]{64}$/),
+  );
+  expect(after.filter((entry) => !ledgerArtifacts.includes(entry))).toEqual(before);
+
+  const status = runUpdateProcess(root, ["update", "status", "--json"]);
+  expect(status.error).toBeUndefined();
+  expect(status.status, status.stderr).toBe(0);
+  const report = JSON.parse(status.stdout);
+  expect(report.activeRun).toBeUndefined();
+  expect(report.lastRun).toMatchObject({
+    runId,
+    trigger: "cli",
+    phase: "finished",
+    status: "skipped",
+    reason: "dry-run",
   });
 }
 
@@ -126,12 +149,14 @@ describe("update process state", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
+    const preview = JSON.parse(result.stdout);
+    expect(preview).toMatchObject({
+      runId: expect.any(String),
       dryRun: true,
       actions: expect.arrayContaining([expect.any(String)]),
     });
     expect(await fs.readFile(configPath)).toEqual(configBefore);
-    expect(await snapshotTree(root)).toEqual(treeBefore);
+    await expectPreviewLedger(root, preview.runId, treeBefore);
   });
 
   it("keeps migration-pending config and SQLite markers immutable for the shorthand", async () => {
@@ -154,20 +179,19 @@ describe("update process state", () => {
       wal: await sha256File(walPath),
     };
     const treeBefore = await snapshotTree(root);
-    const databaseArtifactsBefore = snapshotDatabaseArtifacts(treeBefore);
 
     const result = runUpdateProcess(root, ["--update", "--dry-run", "--no-restart", "--json"]);
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ dryRun: true });
+    const preview = JSON.parse(result.stdout);
+    expect(preview).toMatchObject({ runId: expect.any(String), dryRun: true });
     expect(await fs.readFile(configPath)).toEqual(configBefore);
-    expect(await snapshotTree(root)).toEqual(treeBefore);
+    await expectPreviewLedger(root, preview.runId, treeBefore);
     expect({
       migration: await sha256File(migrationMarkerPath),
       wal: await sha256File(walPath),
     }).toEqual(markerHashesBefore);
-    expect(snapshotDatabaseArtifacts(await snapshotTree(root))).toEqual(databaseArtifactsBefore);
   });
 
   it.each(["update", "repair"])(
@@ -282,4 +306,72 @@ describe("update process state", () => {
       expect(await sha256File(databasePath)).toBe(beforeDatabaseHash);
     },
   );
+});
+
+it("exits the node worker after a stop frame while the supervisor keeps stdin open", async () => {
+  const root = tempDirs.make("openclaw-worker-exit-");
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(root, "openclaw.json");
+  await fs.writeFile(configPath, JSON.stringify({ nodeHost: { skills: { enabled: false } } }));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_NO_RESPAWN: "1",
+    OPENCLAW_STATE_DIR: stateDir,
+  };
+  delete env.VITEST;
+  delete env.VITEST_POOL_ID;
+  delete env.VITEST_WORKER_ID;
+  const result = await runCliProcessChild({
+    nodeArgs: [path.resolve("openclaw.mjs"), "node", "worker"],
+    env,
+    interact: async (child) => {
+      let stdout = "";
+      let stderr = "";
+      child.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+      });
+      await new Promise<void>((resolve, reject) => {
+        const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+          reject(new Error(`worker exited before ready: ${code ?? signal}`));
+        };
+        const onData = (chunk: string) => {
+          stdout += chunk;
+          if (stdout.includes('"type":"ready"')) {
+            child.stdout.off("data", onData);
+            child.off("exit", onExit);
+            resolve();
+          }
+        };
+        child.stdout.on("data", onData);
+        child.once("exit", onExit);
+      });
+      child.stdin.write('{"type":"stop"}\n');
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(
+            new Error(
+              formatCliProcessFailure({
+                reason: "worker stayed alive after stop while stdin remained open",
+                stdout,
+                stderr,
+              }),
+            ),
+          );
+        }, 2_500);
+        timer.unref();
+        void once(child, "exit").then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    },
+  });
+
+  expect(result.code).toBe(0);
+  expect(result.signal).toBeNull();
 });

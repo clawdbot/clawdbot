@@ -36,6 +36,7 @@ import {
   isSameOpenClawAgentDatabasePath,
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabases,
 } from "./openclaw-agent-db-registry.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
@@ -54,6 +55,7 @@ import {
   readOpenClawAgentDatabaseRegistryToken,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
+  settleOpenClawAgentDatabaseWorkerClose,
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -995,7 +997,7 @@ describe("openclaw agent database", () => {
 
     expect(() =>
       runOpenClawStateWriteTransaction(
-        (database) => assertAgentDeletionPathFence(database.db, fence),
+        (database) => assertAgentDeletionPathFence(database, fence),
         { env },
       ),
     ).toThrow("deletion journal changed");
@@ -3014,12 +3016,14 @@ describe("openclaw agent database", () => {
     const second = openOpenClawAgentDatabase({ agentId: "worker-2", env, path: secondPath });
 
     expect(closeOpenClawAgentDatabaseByPath(path.join(stateDir, "missing.sqlite"))).toBe(false);
+    expect(closeOpenClawAgentDatabaseByPath(firstPath, "worker-2")).toBe(false);
     expect(first.db.isOpen).toBe(true);
     expect(second.db.isOpen).toBe(true);
 
     expect(
       closeOpenClawAgentDatabaseByPath(
         path.join(stateDir, "relocated", "nested", "..", "first.sqlite"),
+        "worker-1",
       ),
     ).toBe(true);
     expect(first.db.isOpen).toBe(false);
@@ -3048,6 +3052,22 @@ describe("openclaw agent database", () => {
 
     close.mockRestore();
     expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+    expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).not.toThrow();
+  });
+
+  it("settles a Worker lease after a recoverable handle-close failure", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    vi.spyOn(database.walMaintenance, "close").mockImplementationOnce(() => {
+      throw new Error("wal close failed");
+    });
+
+    const settled = settleOpenClawAgentDatabaseWorkerClose(database.path);
+
+    expect(settled).toMatchObject({ settled: true });
+    expect(settled.errors.map((error) => error.message)).toEqual(["wal close failed"]);
+    expect(database.db.isOpen).toBe(false);
     expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).not.toThrow();
   });
 
@@ -4774,6 +4794,91 @@ describe("openclaw agent database", () => {
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
       /integrity_check failed.*missing from index unsafe_index_records_value/iu,
     );
+  });
+
+  it.each(["path", "agent"] as const)(
+    "revalidates default and relocated replacements after %s unregister",
+    (scope) => {
+      const stateDir = createTempStateDir();
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      try {
+        const databasePaths = [
+          openOpenClawAgentDatabase({ agentId: "worker-1", env }).path,
+          openOpenClawAgentDatabase({
+            agentId: "worker-1",
+            env,
+            path: path.join(stateDir, "relocated.sqlite"),
+          }).path,
+        ];
+        const unrelatedPath = openOpenClawAgentDatabase({ agentId: "worker-2", env }).path;
+        for (const databasePath of [...databasePaths, unrelatedPath]) {
+          expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        }
+        if (scope === "agent") {
+          unregisterOpenClawAgentDatabases({ agentId: "worker-1", env });
+        } else {
+          for (const databasePath of databasePaths) {
+            unregisterOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env });
+          }
+        }
+        expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+          expect.objectContaining({ agentId: "worker-2", path: unrelatedPath }),
+        ]);
+        nowSpy.mockReturnValue(2_000);
+        for (const databasePath of databasePaths) {
+          fs.copyFileSync(ensureCurrentWorkerAgentDatabaseTemplate(), databasePath);
+          const reopened = openOpenClawAgentDatabase({
+            agentId: "worker-1",
+            env,
+            path: databasePath,
+          });
+          expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(
+            OPENCLAW_AGENT_SCHEMA_VERSION,
+          );
+        }
+        openOpenClawAgentDatabase({ agentId: "worker-2", env });
+        expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual(
+          expect.arrayContaining([
+            ...databasePaths.map((databasePath) =>
+              expect.objectContaining({
+                agentId: "worker-1",
+                path: databasePath,
+                lastSeenAt: 2_000,
+              }),
+            ),
+            expect.objectContaining({
+              agentId: "worker-2",
+              path: unrelatedPath,
+              lastSeenAt: 1_000,
+            }),
+          ]),
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it("initializes an empty replacement after physical close without a registry mutation", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = database.path;
+    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+    fs.rmSync(databasePath);
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env, path: databasePath });
+
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("auth_profile_store"),
+    ).toEqual({ name: "auth_profile_store" });
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+      expect.objectContaining({ agentId: "worker-1", path: databasePath }),
+    ]);
   });
 
   it("converges same-version divergence after a validated handle is physically reopened", () => {

@@ -8,6 +8,7 @@ import {
   listWorkboardCards,
   readId,
   registerWorkboardResultMethods,
+  respondError,
 } from "./gateway-helpers.js";
 import {
   registerWorkboardWorkspaceBoardMethod,
@@ -15,6 +16,7 @@ import {
   registerWorkboardWorkspaceCardMethods,
   registerWorkboardWorkspaceWorkflowMethods,
 } from "./gateway-workspace-methods.js";
+import { registerWorkboardStoreLifecycle } from "./store-lifecycle.js";
 import { WorkboardStore } from "./store.js";
 
 const READ_SCOPE = "operator.read" as const;
@@ -38,8 +40,26 @@ export function registerWorkboardGatewayMethods(params: {
   api: OpenClawPluginApi;
   store?: WorkboardStore;
 }) {
-  const { api } = params;
+  const { api: hostApi } = params;
   const store = params.store ?? WorkboardStore.openSqlite();
+  if (!params.store) {
+    registerWorkboardStoreLifecycle(hostApi, store);
+  }
+  const api: OpenClawPluginApi = {
+    ...hostApi,
+    registerGatewayMethod: (method, handler, options) =>
+      hostApi.registerGatewayMethod(
+        method,
+        async (request) => {
+          try {
+            return await store.runOperation(() => handler(request));
+          } catch (error) {
+            respondError(request.respond, error);
+          }
+        },
+        options,
+      ),
+  };
   const dispatchCards = createWorkboardDispatchHandler({
     api,
     store,

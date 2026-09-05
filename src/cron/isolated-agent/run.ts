@@ -1,7 +1,11 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimeLease } from "../../agents/prepared-model-runtime.types.js";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  resolveAgentRunErrorLifecycleFields,
+} from "../../agents/run-termination.js";
+import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -197,6 +201,15 @@ export async function runCronIsolatedAgentTurn(params: {
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
   let cronRunSessionCleanupHandled = false;
+  // The execution owner spans fallback and interim-ack retries. Individual
+  // attempts must not retire the shared run before that execution settles.
+  const lifecycle = createAgentLifecycleTerminalBackstop({
+    runId: initialSessionId,
+    sessionKey: prepared.context.runSessionKey,
+    startedAt: turnStartedAtMs,
+    getLifecycleGeneration: () => runLifecycleGeneration,
+    resolveTerminationFields: (error) => resolveAgentRunErrorLifecycleFields(error, abortSignal),
+  });
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
     const existingRunContext = getAgentRunContext(initialSessionId);
@@ -254,6 +267,7 @@ export async function runCronIsolatedAgentTurn(params: {
       setRunContinuationCliExecutionProvider:
         prepared.context.runContinuationSession?.setCliExecutionProvider,
       abortSignal,
+      lifecycle,
       onExecutionStarted: notifyExecutionStarted,
       onExecutionPhase: notifyExecutionPhase,
       onLaneWait: params.onLaneWait,
@@ -287,6 +301,9 @@ export async function runCronIsolatedAgentTurn(params: {
     } finally {
       releasePreparedRuntime();
     }
+    // Publish the execution fact captured before bookkeeping; cron persistence
+    // and delivery retain their separate workflow outcome.
+    lifecycle.emit("end", execution.runResult);
     const finalized = await finalizeCronRun({
       prepared: prepared.context,
       execution,
@@ -308,6 +325,7 @@ export async function runCronIsolatedAgentTurn(params: {
       ? finalized
       : { ...finalized, nextCheck: { delayMs } };
   } catch (err) {
+    lifecycle.emit("error", err);
     consumeCronNextCheckProposal(initialSessionId, params.job.id);
     const isCronLaneTimeout = isAborted() || isCronNestedLaneTaskTimeoutError(err);
     const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);

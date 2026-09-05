@@ -230,7 +230,7 @@ function mockBrokenBraveInstall(
     ...recordOverrides,
   });
   mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-  mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot("brave"));
+  mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot("brave", installDir));
   mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
     officialWebSearchPluginEntry({
       id: "brave",
@@ -408,7 +408,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         plugins: [{ id: "codex", packageVersion: "2026.5.6", channels: ["codex"] }],
         diagnostics:
           previousState === "damaged"
-            ? brokenPluginSnapshot("codex").diagnostics
+            ? brokenPluginSnapshot("codex", installDir).diagnostics
             : previousState === "stale-descriptor"
               ? [{ level: "error", pluginId: "codex", message: "without channelConfigs metadata" }]
               : [],
@@ -461,7 +461,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         expect(result.warnings).toEqual([]);
         expect(result.notices).toEqual([expect.stringContaining("--accept-capabilities")]);
         expect(result.outcomes).toBeUndefined();
-        expect(result.capabilityConsentRequired).toBeUndefined();
       } else {
         expect(result.warnings).toEqual([expect.stringContaining("--accept-capabilities")]);
         expect(result.notices).toBeUndefined();
@@ -472,7 +471,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
           }),
         ]);
-        expect(result.capabilityConsentRequired).toBe(true);
       }
     },
   );
@@ -541,7 +539,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       ]);
       expect(result.notices).toBeUndefined();
-      expect(result.capabilityConsentRequired).toBe(true);
       if (siblingSucceeded) {
         expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
           result.records,
@@ -819,7 +816,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
       if (accepted) {
         expect(consent).toHaveBeenCalledOnce();
-        expect(result.capabilityConsentRequired).toBeUndefined();
+        expect(result.outcomes).toBeUndefined();
         expect(result.warnings).toEqual([]);
         expect(result.records.matrix).toMatchObject({
           acceptedSurface: { tools: ["matrix.write"] },
@@ -834,7 +831,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         expect(result.records).toEqual({});
         expect(result.failedPluginIds).toEqual(["matrix"]);
         expect(result.warnings.join("\n")).toMatch(/capabilit/i);
-        expect(result.capabilityConsentRequired).toBe(true);
+        expect(result.outcomes).toEqual([
+          expect.objectContaining({
+            pluginId: "matrix",
+            status: "error",
+            code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+          }),
+        ]);
         expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
       }
 
@@ -1954,7 +1957,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         payload === "healthy" ? [] : ['Repaired missing configured plugin "google-meet".'],
       );
       expect(result.warnings).toEqual([]);
-      expect(result.capabilityConsentRequired).toBeUndefined();
+      expect(result.outcomes).toBeUndefined();
     },
   );
 
@@ -2801,8 +2804,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       plugins: [],
       diagnostics: [
-        ...brokenPluginSnapshot("brave").diagnostics,
-        ...brokenPluginSnapshot("discord").diagnostics,
+        ...brokenPluginSnapshot("brave", records.brave.installPath).diagnostics,
+        ...brokenPluginSnapshot("discord", records.discord.installPath).diagnostics,
       ],
     });
     mocks.updateNpmInstalledPlugins.mockResolvedValue({
@@ -3972,6 +3975,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         {
           level: "error",
           pluginId: "demo",
+          source: records.demo.installPath,
           message: "extension entry escapes package directory: ./index.ts",
         },
       ],
@@ -4163,7 +4167,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect(onCapabilityConsent).toHaveBeenCalledOnce();
       expect(result.records.discord?.acceptedSurface?.tools).toEqual(["fixture.write"]);
       expect(result.repairedPluginIds).toEqual(["discord"]);
-      expect(result.capabilityConsentRequired).toBe(siblingConsentRequired ? true : undefined);
+      expect(result.outcomes).toEqual(
+        siblingConsentRequired
+          ? [
+              expect.objectContaining({
+                pluginId: "sibling",
+                status: "error",
+                code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+              }),
+            ]
+          : undefined,
+      );
     },
   );
 
@@ -4386,7 +4400,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       clawhubUrl: "https://clawhub.ai",
     });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot(pluginId));
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot(pluginId, installDir));
     if (catalogKind === "provider") {
       mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
         officialWebSearchPluginEntry({

@@ -14,6 +14,7 @@ import {
   hashControlUiAssetManifestEntries,
   type ControlUiAssetManifestEntry,
 } from "../src/gateway/control-ui-asset-manifest.ts";
+import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../src/gateway/control-ui-root-assets.ts";
 import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
@@ -394,10 +395,39 @@ export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
   };
 }
 
-function controlUiServiceWorkerBuildIdPlugin(buildId: string, buildOutDir: string): Plugin {
+function controlUiBuildOutputPlugin(buildId: string, buildOutDir: string): Plugin {
+  let publicAssets: ControlUiAssetManifestEntry[] = [];
+  let cacheId: string | undefined;
   return {
-    name: "control-ui-service-worker-build-id",
+    name: "control-ui-build-output",
     apply: "build",
+    configResolved(config) {
+      const publicDir = config.build.copyPublicDir && config.publicDir;
+      publicAssets = publicDir
+        ? collectControlUiAssetManifestEntries(publicDir, publicDir).filter(
+            (entry) => entry.path !== "sw.js",
+          )
+        : [];
+      // Public bytes can change during same-commit source rebuilds; the runtime
+      // build identity stays separate from this immutable URL namespace.
+      cacheId = publicDir
+        ? `${buildId}-${hashControlUiAssetManifestEntries(publicAssets)}`
+        : undefined;
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(html) {
+        // Vite recreates the module entry tag from a fixed attribute set. Finalize every script
+        // after synthesis so Cloudflare Rocket Loader cannot defer the Control UI boot sequence.
+        const marked = html.replace(
+          /<script\b(?![^>]*\bdata-cfasync\s*=)/giu,
+          '<script data-cfasync="false"',
+        );
+        return cacheId
+          ? marked.replace(/<html\b/iu, `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${cacheId}"`)
+          : marked;
+      },
+    },
     writeBundle() {
       const swPath = path.join(buildOutDir, "sw.js");
       const publicSwPath = path.join(here, "public/sw.js");
@@ -409,6 +439,28 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string, buildOutDir: strin
       }
       fs.mkdirSync(buildOutDir, { recursive: true });
       fs.writeFileSync(swPath, updated);
+      for (const asset of publicAssets) {
+        const fontStylesheet = asset.path.startsWith("fonts/") && asset.path.endsWith(".css");
+        if (!fontStylesheet && asset.path !== "manifest.webmanifest") {
+          continue;
+        }
+        const filePath = path.join(buildOutDir, asset.path);
+        const assetSource = fs.readFileSync(filePath, "utf8");
+        if (fontStylesheet) {
+          // Relative CSS URLs do not inherit their parent stylesheet's query.
+          const versioned = assetSource.replace(
+            /url\("([^"/?#]+\.woff2)"\)/gu,
+            `url("$1?v=${cacheId}")`,
+          );
+          fs.writeFileSync(filePath, versioned);
+        } else {
+          const manifest = JSON.parse(assetSource) as { icons: Array<{ src: string }> };
+          for (const icon of manifest.icons) {
+            icon.src += `?v=${cacheId}`;
+          }
+          fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
+        }
+      }
     },
   };
 }
@@ -452,8 +504,10 @@ function controlUiPrecompressedAssetsPlugin(buildOutDir: string): Plugin {
   };
 }
 
-function collectControlUiAssetManifestEntries(buildOutDir: string): ControlUiAssetManifestEntry[] {
-  const assetsRoot = path.join(buildOutDir, "assets");
+function collectControlUiAssetManifestEntries(
+  buildOutDir: string,
+  assetsRoot = path.join(buildOutDir, "assets"),
+): ControlUiAssetManifestEntry[] {
   const entries: ControlUiAssetManifestEntry[] = [];
   const visit = (directory: string) => {
     for (const entry of fs
@@ -563,7 +617,7 @@ export default function controlUiViteConfig(options: { outDir?: string } = {}): 
       controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
       controlUiPrecompressedAssetsPlugin(buildOutDir),
-      controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId, buildOutDir),
+      controlUiBuildOutputPlugin(buildInfo.buildId, buildOutDir),
       controlUiAssetManifestPlugin(buildOutDir),
       {
         name: "control-ui-dev-stubs",

@@ -88,7 +88,15 @@ describe("CI test timing refit", () => {
       const artifacts = path.join(root, ".artifacts");
       fs.mkdirSync(artifacts, { recursive: true });
       const directory = mkdtempSync(path.join(artifacts, "ci-ui-timings-"));
-      const files = ["ui/src/e2e/first.e2e.test.ts", "ui/src/e2e/second.e2e.test.ts"];
+      const projectNames = [
+        "ui-e2e-bundled",
+        "ui-e2e-standalone",
+        "ui-e2e-serial",
+        "ui-e2e-serial-standalone",
+      ];
+      const files = (kind === "uiE2e" ? projectNames : ["first", "second"]).map(
+        (name) => `ui/src/e2e/${name}.e2e.test.ts`,
+      );
       const configFile = path.join(directory, "vitest.config.mjs");
       try {
         for (const file of files) {
@@ -110,8 +118,14 @@ it.todo("retains todo coverage");
           `export default ${JSON.stringify({
             root: directory,
             test: {
-              ...(kind === "uiE2e" ? { name: "ui-e2e" } : {}),
-              include: files,
+              ...(kind === "uiE2e"
+                ? {
+                    include: [],
+                    projects: files.map((file, index) => ({
+                      test: { name: projectNames[index], include: [file] },
+                    })),
+                  }
+                : { include: files }),
               reporters: config.test?.reporters,
               fileParallelism: false,
             },
@@ -150,11 +164,17 @@ it.todo("retains todo coverage");
   it("accepts completed passed file summaries once, excluding failed, skipped and unfinished files", () => {
     const legacyFile = "ui/src/e2e/legacy.e2e.test.ts";
     const serialFile = "ui/src/e2e/serial.e2e.test.ts";
+    const standaloneFile = "ui/src/e2e/standalone.e2e.test.ts";
+    const serialStandaloneFile = "ui/src/e2e/serial-standalone.e2e.test.ts";
+    const unnamedFile = "ui/src/e2e/unnamed.e2e.test.ts";
     const log = [
       `✓ |ui-e2e-bundled| ${measuredFile} (3 tests | 1 skipped | 1 todo) 4000ms`,
       `✓ \u001b[32mui-e2e-bundled\u001b[0m ${measuredFile} (3 tests | 1 skipped | 1 todo) 4000ms`,
       `✓ ui-e2e-serial ${serialFile} (1 test) 2000ms`,
       `✓ |ui-e2e| ${legacyFile} (1 test) 3000ms`,
+      `✓ |ui-e2e-standalone| ${standaloneFile} (1 test) 5000ms`,
+      `✓ ui-e2e-serial-standalone ${serialStandaloneFile} (1 test) 6000ms`,
+      `✓ ${unnamedFile} (1 test) 7000ms`,
       "❯ ui-e2e ui/src/e2e/failed.e2e.test.ts (1 test | 1 failed) 20s",
       "❯ ui-e2e ui/src/e2e/timeout.e2e.test.ts (0 test) 30s",
       "↓ ui-e2e ui/src/e2e/skipped.e2e.test.ts (1 test | 1 skipped) 0ms",
@@ -165,21 +185,41 @@ it.todo("retains todo coverage");
     ].join("\n");
     const runs = [1, 2].map((id) => timingRun(id, [{ kind: "uiE2e", text: log }]));
     expect(refitTestTimings(runs).timings.uiE2e).toEqual({
-      fileSeconds: { [legacyFile]: 3, [measuredFile]: 4, [serialFile]: 2 },
+      fileSeconds: {
+        [legacyFile]: 3,
+        [measuredFile]: 4,
+        [serialFile]: 2,
+        [standaloneFile]: 5,
+        [serialStandaloneFile]: 6,
+        [unnamedFile]: 7,
+      },
       perFileOverheadSeconds: 2,
     });
   });
 
-  it.each([false, true])(
-    "keeps parallel file weights without refitting serial overhead (mixed projects: %s)",
-    (mixed) => {
+  it.each([
+    { parallelProject: "ui-e2e-bundled", serialProject: "ui-e2e-serial", mixed: false },
+    { parallelProject: "ui-e2e-bundled", serialProject: "ui-e2e-serial", mixed: true },
+    {
+      parallelProject: "ui-e2e-standalone",
+      serialProject: "ui-e2e-serial-standalone",
+      mixed: false,
+    },
+    {
+      parallelProject: "ui-e2e-standalone",
+      serialProject: "ui-e2e-serial-standalone",
+      mixed: true,
+    },
+  ])(
+    "keeps $parallelProject weights without refitting $serialProject overhead (mixed: $mixed)",
+    ({ parallelProject, serialProject, mixed }) => {
       const first = "ui/src/e2e/parallel-first.e2e.test.ts";
       const second = "ui/src/e2e/parallel-second.e2e.test.ts";
       const serialFile = "ui/src/e2e/serial.e2e.test.ts";
-      const serialLine = `✓ |ui-e2e-serial| ${serialFile} (1 test) 2000ms`;
+      const serialLine = `✓ |${serialProject}| ${serialFile} (1 test) 2000ms`;
       const parallel = [
-        `✓ |ui-e2e-bundled| ${first} (1 test) 4000ms`,
-        `✓ ui-e2e-bundled ${second} (1 test) 4000ms`,
+        `✓ |${parallelProject}| ${first} (1 test) 4000ms`,
+        `✓ ${parallelProject} ${second} (1 test) 4000ms`,
         ...(mixed ? [serialLine] : []),
         `Duration ${mixed ? 7 : 5}s (transform 1s, setup 0ms, tests ${mixed ? 10 : 8}s, environment 0ms)`,
       ].join("\n");
@@ -419,15 +459,13 @@ it.todo("retains todo coverage");
     );
     const first = refitTestTimings(runs);
     const reordered = runs.toReversed().map((run) =>
-      Object.assign({}, run, {
-        logs: [
-          {
-            kind: "uiE2e" as const,
-            text: uiLog(Object.fromEntries(Object.entries(files).toReversed())),
-          },
-          { kind: "compact" as const, labels: ["ubuntu-24.04"], text: compactLog(20) },
-        ],
-      }),
+      timingRun(run.id, [
+        {
+          kind: "uiE2e",
+          text: uiLog(Object.fromEntries(Object.entries(files).toReversed())),
+        },
+        { kind: "compact", labels: ["ubuntu-24.04"], text: compactLog(20) },
+      ]),
     );
 
     expect(JSON.stringify(refitTestTimings(reordered))).toBe(JSON.stringify(first));
@@ -438,7 +476,7 @@ it.todo("retains todo coverage");
     ]);
     expect(
       refitTestTimings(
-        runs.map((run) => Object.assign({}, run, { id: run.id + 2 })),
+        runs.map((run) => timingRun(run.id + 2, run.logs)),
         first.timings,
       ).timings,
     ).toEqual(first.timings);

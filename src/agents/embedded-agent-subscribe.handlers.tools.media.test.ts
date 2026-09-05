@@ -1,6 +1,7 @@
 // Tool media handler tests cover media extraction from tool results, trusted
 // local media flags, and quiet/verbose tool-output emission paths.
 import { describe, expect, it, vi } from "vitest";
+import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
@@ -66,9 +67,8 @@ function createMockContext(overrides?: {
     emitBlockReply: vi.fn(),
     hookRunner: undefined,
     // Fill in remaining required fields with no-ops.
-    blockChunker: null,
+    blockChunker: new EmbeddedBlockChunker(),
     noteLastAssistant: vi.fn(),
-    noteCompletedAssistant: vi.fn(),
     stripBlockTags: vi.fn((t: string) => t),
     emitBlockChunk: vi.fn(),
     flushBlockReplyBuffer: vi.fn(),
@@ -82,7 +82,7 @@ function createMockContext(overrides?: {
     noteCompactionRetry: vi.fn(),
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
-    recordAssistantUsage: vi.fn(),
+    captureModelEvent: vi.fn(),
     incrementCompactionCount: vi.fn(),
     getUsageTotals: vi.fn(() => undefined),
     getLastAssistantUsage: vi.fn(() => undefined),

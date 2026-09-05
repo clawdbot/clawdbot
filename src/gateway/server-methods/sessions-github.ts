@@ -8,6 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { prepareCurrentGitHubPublicationIdentity } from "../github-publication-availability.js";
+import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
@@ -44,18 +45,6 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const loaded = loadGatewaySessionEntryReadOnly(
-        sessionKey,
-        caller?.agentId ? { agentId: caller.agentId } : undefined,
-      );
-      if (!loaded.entry?.sessionId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "GitHub publication session was not found"),
-        );
-        return;
-      }
       try {
         if (params.selection?.source === "personal") {
           if (!params.sessionKey) {
@@ -65,6 +54,18 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           const result = await coordinator.requestPersonalForSession(params, action);
           action.assertCurrent();
           respond(true, result);
+          return;
+        }
+        const loaded = loadGatewaySessionEntryReadOnly(
+          sessionKey,
+          caller?.agentId ? { agentId: caller.agentId } : undefined,
+        );
+        if (!loaded.entry?.sessionId) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "GitHub publication session was not found"),
+          );
           return;
         }
         sessionMutationAuthorization?.assertCurrent();
@@ -91,6 +92,10 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           errorShape(
             ErrorCodes.UNAVAILABLE,
             error instanceof Error ? error.message : "GitHub publication request failed",
+            error instanceof GitHubPublicationKnownFailure &&
+              error.rejection?.idempotencyKey === params.idempotencyKey
+              ? { details: error.rejection }
+              : undefined,
           ),
         );
       }

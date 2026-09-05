@@ -6,18 +6,21 @@ scenario:
   coverage:
     primary:
       - telegram.conversation-routing-and-delivery
-  objective: Preserve semantic whitespace and formatting ranges across real Telegram message boundaries.
+  objective: Preserve literal Markdown, image destinations, and semantic formatting across real Telegram message boundaries.
   successCriteria:
     - Actual Test Server messages match the literal text, chunk count, and UTF-16 entity ranges.
     - Code indentation and internal whitespace survive, and each visible checkbox stays with its bold label.
     - Plain-text fallback cannot satisfy the required native formatting entities.
+    - Inline-code and escaped image syntax remain native text messages; a genuine image retains its balanced URL and arrives as a photo.
   docsRefs:
     - docs/channels/telegram.md
     - docs/concepts/markdown-formatting.md
+    - docs/nodes/images.md
   codeRefs:
     - packages/markdown-core/src/render-aware-chunking.ts
     - extensions/telegram/src/format.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+    - src/media/parse.ts
   execution:
     kind: flow
     channel: telegram
@@ -25,7 +28,7 @@ scenario:
     timeoutMs: 180000
     suiteIsolation: isolated
     isolationReason: Native receive cursors and default formatting assertions belong to this proof.
-    summary: Send literal Markdown through the normal Gateway and inspect TDLib text and entities.
+    summary: Send literal Markdown through the normal Gateway and inspect TDLib content types, text, and entities.
     config:
       requiredProviderMode: live-frontier
       requiredChannelDriver: live
@@ -52,6 +55,14 @@ flow:
           saveAs: runId
         - set: proofs
           value: []
+        - set: candidateHead
+          value:
+            expr: "(await qaImport('node:child_process')).execFileSync('git', ['rev-parse', 'HEAD'], { cwd: env.repoRoot, encoding: 'utf8' }).trim()"
+        - set: imageUrl
+          value: https://artifacts.openclaw.ai/mantis/qa30-media-markdown/83b55b46f3b3575690f7bc2252ef66d78323cd517079da66aef9b9d475e934c9/markdown-image(chart.png)
+        - set: imageMarkdown
+          value:
+            expr: "`![chart](${imageUrl})`"
         - set: fixtures
           value:
             expr: |
@@ -60,6 +71,7 @@ flow:
                   id: "inline-code-utf16-and-link",
                   markdown: "😀 `a   b` [x](https://example.com/qa)",
                   expectedChunks: [{
+                    contentType: "messageText",
                     text: "😀 a   b x",
                     entities: [
                       { offset: 3, length: 5, type: { "@type": "textEntityTypeCode" } },
@@ -71,17 +83,40 @@ flow:
                   id: "fenced-code-rendered-boundary",
                   markdown: "```\n" + "A".repeat(3977) + "\n  x  \n \ny\n```",
                   expectedChunks: [
-                    { text: "A".repeat(3976), entities: [{ offset: 0, length: 3976, type: { "@type": "textEntityTypePre" } }] },
-                    { text: "A\n  x  \n \ny", entities: [{ offset: 0, length: 11, type: { "@type": "textEntityTypePre" } }] }
+                    { contentType: "messageText", text: "A".repeat(3976), entities: [{ offset: 0, length: 3976, type: { "@type": "textEntityTypePre" } }] },
+                    { contentType: "messageText", text: "A\n  x  \n \ny", entities: [{ offset: 0, length: 11, type: { "@type": "textEntityTypePre" } }] }
                   ]
                 },
                 {
                   id: "task-marker-boundary",
                   markdown: "- [ ] **" + "A".repeat(1988) + "**\n- [x] **" + "B".repeat(1988) + "**",
                   expectedChunks: [
-                    { text: "• [ ] " + "A".repeat(1988), entities: [{ offset: 6, length: 1988, type: { "@type": "textEntityTypeBold" } }] },
-                    { text: "• [x] " + "B".repeat(1988), entities: [{ offset: 6, length: 1988, type: { "@type": "textEntityTypeBold" } }] }
+                    { contentType: "messageText", text: "• [ ] " + "A".repeat(1988), entities: [{ offset: 6, length: 1988, type: { "@type": "textEntityTypeBold" } }] },
+                    { contentType: "messageText", text: "• [x] " + "B".repeat(1988), entities: [{ offset: 6, length: 1988, type: { "@type": "textEntityTypeBold" } }] }
                   ]
+                },
+                {
+                  id: "inline-code-image-is-text",
+                  markdown: "`" + imageMarkdown + "`",
+                  expectedChunks: [{
+                    contentType: "messageText",
+                    text: imageMarkdown,
+                    entities: [{ offset: 0, length: imageMarkdown.length, type: { "@type": "textEntityTypeCode" } }]
+                  }]
+                },
+                {
+                  id: "escaped-image-is-text",
+                  markdown: "\\" + imageMarkdown,
+                  expectedChunks: [{
+                    contentType: "messageText",
+                    text: "!chart",
+                    entities: [{ offset: 1, length: 5, type: { "@type": "textEntityTypeTextUrl", url: imageUrl } }]
+                  }]
+                },
+                {
+                  id: "balanced-image-url-is-photo",
+                  markdown: imageMarkdown,
+                  expectedChunks: [{ contentType: "messagePhoto", text: "", entities: [] }]
                 }
               ]
         - forEach:
@@ -116,12 +151,12 @@ flow:
                   expr: "readTelegramMessages().slice(startIndex)"
               - set: actual
                 value:
-                  expr: "received.map(({ text, entities }) => ({ text, entities: entities.map(({ offset, length, type }) => ({ offset, length, type: { '@type': type['@type'], ...(type['@type'] === 'textEntityTypeTextUrl' ? { url: type.url } : {}), ...(type['@type'] === 'textEntityTypePreCode' ? { language: type.language } : {}) } })) }))"
+                  expr: "received.map(({ contentType, text, entities }) => ({ contentType, text, entities: entities.map(({ offset, length, type }) => ({ offset, length, type: { '@type': type['@type'], ...(type['@type'] === 'textEntityTypeTextUrl' ? { url: type.url } : {}), ...(type['@type'] === 'textEntityTypePreCode' ? { language: type.language } : {}) } })) }))"
               - assert:
                   expr: "String(received.at(-1)?.botApiMessageId) === String(receipt.messageId) && JSON.stringify(actual) === JSON.stringify(fixture.expectedChunks)"
                   message:
-                    expr: "JSON.stringify({ case: fixture.id, expected: fixture.expectedChunks, observed: actual.map((message, index) => ({ text: message.text === fixture.expectedChunks[index]?.text ? message.text : message.text.replace(/\\S/gu, '?'), nonWhitespaceRedacted: message.text !== fixture.expectedChunks[index]?.text, entities: message.entities.map((entity) => ({ offset: entity.offset, length: entity.length, type: entity.type['@type'], expectedTypePayload: JSON.stringify(entity.type) === JSON.stringify(fixture.expectedChunks[index]?.entities.find((expected) => expected.offset === entity.offset && expected.length === entity.length)?.type) })) })) })"
+                    expr: "JSON.stringify({ case: fixture.id, expected: fixture.expectedChunks, observed: actual.map((message, index) => ({ contentType: message.contentType, text: message.text === fixture.expectedChunks[index]?.text ? message.text : message.text.replace(/\\S/gu, '?'), nonWhitespaceRedacted: message.text !== fixture.expectedChunks[index]?.text, entities: message.entities.map((entity) => ({ offset: entity.offset, length: entity.length, type: entity.type['@type'], expectedTypePayload: JSON.stringify(entity.type) === JSON.stringify(fixture.expectedChunks[index]?.entities.find((expected) => expected.offset === entity.offset && expected.length === entity.length)?.type) })) })) })"
               - set: proofs
                 value:
                   expr: "proofs.concat([{ case: fixture.id, chunks: actual }])"
-      detailsExpr: "JSON.stringify({ transport: 'Telegram Test Server', topology: 'leased group', operation: 'Gateway send', modelInvocation: false, cases: proofs })"
+      detailsExpr: "JSON.stringify({ transport: 'Telegram Test Server', topology: 'leased group', operation: 'Gateway send', candidateHead, modelInvocation: false, cases: proofs })"

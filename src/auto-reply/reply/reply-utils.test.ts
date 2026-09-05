@@ -1533,6 +1533,14 @@ describe("createStreamingDirectiveAccumulator", () => {
     const second = accumulator.consume("test 2");
     expect(second?.replyToId).toBe("abc-123");
     expect(second?.replyToTag).toBe(true);
+
+    expect(accumulator.consume("[[reply_to_current]][[reply_to: later]]")).toBeNull();
+    expect(accumulator.consume("third")).toMatchObject({
+      text: "third",
+      replyToId: "later",
+      replyToCurrent: true,
+      replyToTag: true,
+    });
   });
 
   it("clears sticky reply context on reset", () => {

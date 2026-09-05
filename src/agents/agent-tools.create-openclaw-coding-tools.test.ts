@@ -27,7 +27,7 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
+import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -606,7 +606,7 @@ describe("createOpenClawCodingTools", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [{ label: "runtime toolsAllow", entries: ["automations"] }],
-        callableToolNames: allowed.map((tool) => tool.name),
+        hasCallableTools: allowed.length > 0,
         toolsEnabled: true,
       }),
     ).toBeNull();
@@ -1671,8 +1671,7 @@ describe("createOpenClawCodingTools", () => {
       "workboard_heartbeat",
     );
     expect(
-      isPluginToolAllowed(
-        new Set(latestCreateOpenClawToolsOptions().pluginToolAllowlist),
+      createPluginToolAllowlist(latestCreateOpenClawToolsOptions().pluginToolAllowlist).allowsTool(
         "workboard",
         "workboard_heartbeat",
       ),

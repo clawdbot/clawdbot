@@ -10,6 +10,7 @@ import type { SkillCommandSpec } from "../../skills/types.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
+import { buildCommandContext } from "./commands-context.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { stripInlineStatus } from "./reply-inline.js";
@@ -355,6 +356,49 @@ describe("handleInlineActions", () => {
       kind: "continue",
       cleanedBody: "use the monochrome version",
       queueModeOverride: "steer",
+    });
+  });
+
+  it("propagates skill selections returned by a continuing built-in command", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({ Body: "/dashboard", CommandBody: "/dashboard" });
+    handleCommandsMock.mockResolvedValueOnce({
+      shouldContinue: true,
+      explicitSkillSelections: [
+        { name: "control_ui", path: "/tmp/skills/control-ui/SKILL.md" },
+        { name: "release_notes", path: "/tmp/skills/release-notes/SKILL.md" },
+      ],
+    });
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: "/dashboard",
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: "/dashboard",
+        commandBodyNormalized: "/dashboard",
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands: [
+          {
+            name: "release_notes",
+            skillName: "release-notes",
+            description: "Release notes",
+            skillFile: "/tmp/skills/release-notes/SKILL.md",
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "continue",
+      explicitSkillSelections: [
+        { name: "control_ui", path: "/tmp/skills/control-ui/SKILL.md" },
+        { name: "release_notes", path: "/tmp/skills/release-notes/SKILL.md" },
+      ],
     });
   });
 
@@ -979,6 +1023,35 @@ describe("handleInlineActions", () => {
 
     expect(result).toMatchObject({ kind: "continue", cleanedBody: body });
     expect(ctx.Body).toBe(body);
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves suppressed inline command text under a wildcard command allowlist", async () => {
+    const body = "Explain /help please";
+    const cfg = { commands: { allowFrom: { "*": ["*"] } } };
+    const ctx = buildTestCtx({
+      Body: body,
+      CommandBody: body,
+      CommandInterpretationSuppressed: true,
+    });
+    const command = buildCommandContext({
+      ctx,
+      cfg,
+      isGroup: false,
+      triggerBodyNormalized: ctx.commandText,
+      commandAuthorized: ctx.CommandAuthorized,
+    });
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing: createTypingController(),
+      cleanedBody: ctx.agentText,
+      command,
+      overrides: { cfg, allowTextCommands: true },
+    });
+
+    expect(result).toMatchObject({ kind: "continue", cleanedBody: body });
+    expect(ctx.agentText).toBe(body);
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 

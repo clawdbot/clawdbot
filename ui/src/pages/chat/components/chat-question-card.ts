@@ -547,71 +547,83 @@ class ChatQuestionPanel extends LitElement {
           disabled,
           onSelect: (label) => this.toggleOption(model, question, label),
         })}
-        ${question.secretStore
-          ? html`
-              <div class="chat-question-panel__store">
-                <div class="chat-question-panel__store-requester">
-                  ${t("chat.questions.storeRequestedBy", {
-                    agent: model.agentId ?? t("common.unknown"),
-                    session: model.sessionKey ?? t("common.unknown"),
-                  })}
-                </div>
-                <div class="chat-question-panel__store-entry">
-                  ${t("chat.questions.storeEntry", {
-                    name: question.secretStore.name,
-                    kind:
-                      question.secretStore.kind === "secret"
-                        ? t("secretsStore.protectedSecret")
-                        : t("secretsStore.agentReadable"),
-                  })}
-                </div>
-                ${question.secretStore.reason
-                  ? html`<div class="chat-question-panel__store-reason">
-                      ${question.secretStore.reason}
-                    </div>`
-                  : nothing}
-                ${question.secretStoreExisting
-                  ? html`<div class="chat-question-panel__store-replacement">
-                      ${question.secretStoreExisting.updatedBy
-                        ? t("chat.questions.storeReplacementBy", {
-                            name: question.secretStore.name,
-                            updated: formatRelativeTimestamp(
-                              question.secretStoreExisting.updatedAtMs,
-                            ),
-                            updatedBy: question.secretStoreExisting.updatedBy,
-                          })
-                        : t("chat.questions.storeReplacement", {
-                            name: question.secretStore.name,
-                            updated: formatRelativeTimestamp(
-                              question.secretStoreExisting.updatedAtMs,
-                            ),
-                          })}
-                    </div>`
-                  : nothing}
-                ${question.secretStore.kind === "secret"
-                  ? html`<label class="chat-question-panel__store-hosts">
-                      <span>${t("secretsStore.allowedHosts")}</span>
-                      <input
-                        class="chat-question-panel__other chat-question-panel__hosts"
-                        type="text"
-                        autocomplete="off"
-                        placeholder=${t("secretsStore.allowedHostsPlaceholder")}
-                        .value=${model.secretStoreAllowedHostsDraft ??
-                        question.secretStore.allowedHosts?.join(", ") ??
-                        ""}
-                        ?disabled=${disabled}
-                        @input=${(event: Event) => {
-                          const target = event.target;
-                          if (target instanceof HTMLInputElement) {
-                            props.onSecretStoreAllowedHostsChange?.(target.value);
+        ${
+          question.secretStore
+            ? html`
+                <div class="chat-question-panel__store">
+                  <div class="chat-question-panel__store-requester">
+                    ${t("chat.questions.storeRequestedBy", {
+                      agent: model.agentId ?? t("common.unknown"),
+                      session: model.sessionKey ?? t("common.unknown"),
+                    })}
+                  </div>
+                  <div class="chat-question-panel__store-entry">
+                    ${t("chat.questions.storeEntry", {
+                      name: question.secretStore.name,
+                      kind:
+                        question.secretStore.kind === "secret"
+                          ? t("secretsStore.protectedSecret")
+                          : t("secretsStore.agentReadable"),
+                    })}
+                  </div>
+                  ${
+                    question.secretStore.reason
+                      ? html`<div class="chat-question-panel__store-reason">
+                          ${question.secretStore.reason}
+                        </div>`
+                      : nothing
+                  }
+                  ${
+                    question.secretStoreExisting
+                      ? html`<div class="chat-question-panel__store-replacement">
+                          ${
+                            question.secretStoreExisting.updatedBy
+                              ? t("chat.questions.storeReplacementBy", {
+                                  name: question.secretStore.name,
+                                  updated: formatRelativeTimestamp(
+                                    question.secretStoreExisting.updatedAtMs,
+                                  ),
+                                  updatedBy: question.secretStoreExisting.updatedBy,
+                                })
+                              : t("chat.questions.storeReplacement", {
+                                  name: question.secretStore.name,
+                                  updated: formatRelativeTimestamp(
+                                    question.secretStoreExisting.updatedAtMs,
+                                  ),
+                                })
                           }
-                        }}
-                      />
-                    </label>`
-                  : nothing}
-              </div>
-            `
-          : nothing}
+                        </div>`
+                      : nothing
+                  }
+                  ${
+                    question.secretStore.kind === "secret"
+                      ? html`<label class="chat-question-panel__store-hosts">
+                          <span>${t("secretsStore.allowedHosts")}</span>
+                          <input
+                            class="chat-question-panel__other chat-question-panel__hosts"
+                            type="text"
+                            autocomplete="off"
+                            placeholder=${t("secretsStore.allowedHostsPlaceholder")}
+                            .value=${
+                              model.secretStoreAllowedHostsDraft ??
+                              question.secretStore.allowedHosts?.join(", ") ??
+                              ""
+                            }
+                            ?disabled=${disabled}
+                            @input=${(event: Event) => {
+                              const target = event.target;
+                              if (target instanceof HTMLInputElement) {
+                                props.onSecretStoreAllowedHostsChange?.(target.value);
+                              }
+                            }}
+                          />
+                        </label>`
+                      : nothing
+                  }
+                </div>
+              `
+            : nothing
+        }
         ${renderQuestionFreeText({
           question,
           value: this.freeTextById.get(question.questionId) ?? "",
@@ -621,54 +633,66 @@ class ChatQuestionPanel extends LitElement {
         })}
 
         <div class="chat-question-panel__footer">
-          ${model.error
-            ? html`<span class="chat-question-panel__error" role="status">
-                ${t("chat.questions.submitFailed", { error: model.error })}
-                ${props.onDismissError
-                  ? html`<button
-                      type="button"
-                      class="chat-question-panel__error-dismiss"
-                      aria-label=${t("chat.actions.dismissError")}
-                      @click=${props.onDismissError}
-                    >
-                      ×
-                    </button>`
-                  : nothing}
-              </span>`
-            : nothing}
-          ${this.currentQuestionIndex > 0
-            ? html`<button
-                class="btn btn--sm chat-question-panel__back"
-                type="button"
-                ?disabled=${disabled}
-                @click=${() => this.goBack()}
-              >
-                ${t("chat.questions.back")}
-              </button>`
-            : nothing}
-          ${props.onSkip
-            ? html`<button
-                class="btn btn--sm chat-question-panel__skip"
-                type="button"
-                ?disabled=${disabled}
-                @click=${() => void this.skip(model)}
-              >
-                ${this.pendingAction === "skip"
-                  ? t("chat.questions.skipping")
-                  : t("chat.questions.skip")}
-              </button>`
-            : nothing}
+          ${
+            model.error
+              ? html`<span class="chat-question-panel__error" role="status">
+                  ${t("chat.questions.submitFailed", { error: model.error })}
+                  ${
+                    props.onDismissError
+                      ? html`<button
+                          type="button"
+                          class="chat-question-panel__error-dismiss"
+                          aria-label=${t("chat.actions.dismissError")}
+                          @click=${props.onDismissError}
+                        >
+                          ×
+                        </button>`
+                      : nothing
+                  }
+                </span>`
+              : nothing
+          }
+          ${
+            this.currentQuestionIndex > 0
+              ? html`<button
+                  class="btn btn--sm chat-question-panel__back"
+                  type="button"
+                  ?disabled=${disabled}
+                  @click=${() => this.goBack()}
+                >
+                  ${t("chat.questions.back")}
+                </button>`
+              : nothing
+          }
+          ${
+            props.onSkip
+              ? html`<button
+                  class="btn btn--sm chat-question-panel__skip"
+                  type="button"
+                  ?disabled=${disabled}
+                  @click=${() => void this.skip(model)}
+                >
+                  ${
+                    this.pendingAction === "skip"
+                      ? t("chat.questions.skipping")
+                      : t("chat.questions.skip")
+                  }
+                </button>`
+              : nothing
+          }
           <button
             class="btn btn--sm primary chat-question-panel__advance"
             type="button"
             ?disabled=${disabled || !canAdvance || !props.onSubmit}
             @click=${() => this.advanceOrSubmit(model, question)}
           >
-            ${this.pendingAction === "submit" || model.submitting
-              ? t("chat.questions.submitting")
-              : isLast
-                ? t("chat.questions.submit")
-                : t("chat.questions.next")}
+            ${
+              this.pendingAction === "submit" || model.submitting
+                ? t("chat.questions.submitting")
+                : isLast
+                  ? t("chat.questions.submit")
+                  : t("chat.questions.next")
+            }
           </button>
         </div>
       </section>

@@ -9,9 +9,9 @@ import {
   maybeStopManagedServiceBeforeMutableUpdate,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
-  resolveUpdatedGatewayRestartPort,
   type PreManagedServiceStop,
 } from "../cli/update-cli/update-command-service-maintenance.js";
+import { resolveUpdatedGatewayRestartPort } from "../cli/update-cli/update-command-service-plan.js";
 import { createConfigIO } from "../config/io.js";
 import { isDefaultInstallIdentity, resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import {

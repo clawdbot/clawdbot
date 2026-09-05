@@ -66,10 +66,19 @@ export type SpawnSecretInput = {
   createData: () => Buffer;
 };
 
+export type ProcessAdapterConstruction = {
+  assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
+  /** Publish resource cleanup before readiness or private-input delivery can fail. */
+  onSpawnCleanup?: (cleanup: Promise<void>) => void;
+};
+
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
   stdin?: ManagedRunStdin;
   oomScoreWrapperSelected?: boolean;
+  /** Both output subscriptions observe bytes separately from decoded text. */
+  supportsRawOutput: boolean;
   onStdout: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
   onStderr: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
@@ -79,6 +88,8 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
 };
 
 type SpawnBaseInput = {
+  /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
+  assertCurrent?: () => void;
   runId?: string;
   sessionId: string;
   backendId: string;

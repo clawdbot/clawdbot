@@ -35,10 +35,6 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
-import {
-  readCodexAppServerBinding,
-  testCodexAppServerBindingStore,
-} from "./session-binding.test-helpers.js";
 
 type ReplyBackend = Parameters<
   NonNullable<ReturnType<typeof createParams>["replyOperation"]>["attachBackend"]
@@ -193,6 +189,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const assistantEvents = agentEvents.filter((event) => event.stream === "assistant");
     expect(assistantEvents).toHaveLength(2);
     expect(assistantEvents[0]?.data).toEqual({
+      itemId: "msg-1",
       text: "hello back",
       delta: "hello back",
       replaceable: true,
@@ -218,6 +215,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(globalAssistantEvents[0]?.runId).toBe("run-1");
     expect(globalAssistantEvents[0]?.sessionKey).toBe("agent:main:session-1");
     expect(globalAssistantEvents[0]?.data).toEqual({
+      itemId: "msg-1",
       text: "hello back",
       delta: "hello back",
       replaceable: true,
@@ -301,6 +299,12 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const harness = createAppServerHarness(async (method) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
         if (method === "thread/start") {
           return threadStartResult();
         }
@@ -342,7 +346,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       params.runId = "diagnostic-run-1";
       const run = runCodexAppServerAttempt(params, {
         nativeHookRelay: { enabled: false },
-        turnCompletionIdleTimeoutMs: 5,
       });
       await harness.waitForMethod("turn/start");
       await run;
@@ -378,6 +381,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
   }, 240_000);
 
   it("classifies codex model-call timeout diagnostics", async () => {
+    vi.useFakeTimers();
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const stopDiagnostics = onInternalDiagnosticEvent((event) => {
       if (event.type.startsWith("model.call.")) {
@@ -392,10 +396,11 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       params.config = {
         diagnostics: { enabled: true, otel: { enabled: true, traces: true } },
       } as never;
-      params.timeoutMs = 200;
+      params.timeoutMs = 60_000;
 
-      const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 5 });
+      const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
+      await vi.advanceTimersByTimeAsync(60_000);
       const result = await run;
       await flushDiagnosticEvents();
 
@@ -438,7 +443,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(settled).toBe(true);
   });
 
-  it("freezes recovered timeout success locally before agent_end", async () => {
+  it("freezes native terminal success locally before agent_end", async () => {
     let releaseAgentEnd: () => void = () => undefined;
     const agentEndSettled = new Promise<void>((resolve) => {
       releaseAgentEnd = resolve;
@@ -453,7 +458,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       path.join(tempDir, "workspace"),
     );
     params.onAgentEvent = onRunAgentEvent;
-    params.timeoutMs = 200;
     const attachBackend = vi.fn();
     const detachBackend = vi.fn();
     const freezeAbort = vi.fn();
@@ -463,10 +467,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       freezeAbort,
     } as unknown as NonNullable<typeof params.replyOperation>;
     const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params, {
-      turnAssistantCompletionIdleTimeoutMs: 5,
-      turnTerminalIdleTimeoutMs: 500,
-    });
+    const run = runCodexAppServerAttempt(params);
 
     await harness.waitForMethod("turn/start");
     await harness.notify({
@@ -482,6 +483,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         },
       },
     });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
 
     const [replyBackend] = mockCall(attachBackend, "reply backend") as [
@@ -512,65 +514,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(terminalLifecycleEvents[0]?.data.aborted).toBeUndefined();
     expect(detachBackend).toHaveBeenCalledWith(replyBackend);
     expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBeUndefined();
-  });
-
-  it("freezes recovered client-close success locally before agent_end", async () => {
-    let releaseAgentEnd: () => void = () => undefined;
-    const agentEndSettled = new Promise<void>((resolve) => {
-      releaseAgentEnd = resolve;
-    });
-    const agentEnd = vi.fn(() => agentEndSettled);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
-    );
-    const onAttemptAbort = vi.fn();
-    let replyBackend: Pick<ReplyBackend, "isAbortable"> | undefined;
-    const params = createParams(
-      path.join(tempDir, "recovered-client-close.jsonl"),
-      path.join(tempDir, "recovered-client-close-workspace"),
-    );
-    params.onAttemptAbort = onAttemptAbort;
-    params.replyOperation = {
-      attachBackend: (backend: ReplyBackend) => {
-        replyBackend = backend;
-      },
-      detachBackend: vi.fn(),
-      freezeAbort: vi.fn(),
-    } as unknown as NonNullable<typeof params.replyOperation>;
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
-
-    await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          id: "msg-final-1",
-          type: "agentMessage",
-          text: "Done before restart.",
-          status: "completed",
-        },
-      },
-    });
-    harness.close();
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
-
-    expect(replyBackend?.isAbortable?.()).toBe(false);
-    expect(abortAgentHarnessRun("session-1")).toBe(false);
-    expect(onAttemptAbort).not.toHaveBeenCalled();
-
-    releaseAgentEnd();
-    const result = await run;
-    expect(readAttemptTerminal(result)).toMatchObject({
-      aborted: false,
-      timedOut: false,
-      promptError: null,
-    });
-    expect(result.assistantTexts).toEqual(["Done before restart."]);
-    const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [{ success?: boolean }, unknown];
-    expect(agentEndPayload.success).toBe(true);
   });
 
   it("keeps a successful memory preflight cancellable for the main turn", async () => {
@@ -648,7 +591,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       freezeAbort,
     } as unknown as NonNullable<typeof params.replyOperation>;
     const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
+    const run = runCodexAppServerAttempt(params);
 
     await harness.waitForMethod("turn/start");
     harness.close();
@@ -788,7 +731,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
           url: "ws://127.0.0.1:39175",
         },
       },
-      turnTerminalIdleTimeoutMs: 60_000,
     });
 
     await harness.waitForMethod("turn/start");
@@ -806,29 +748,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       promptError: "codex app-server client closed before turn completed",
     });
     expect(result.codexAppServerFailure).toMatchObject({ transport: "websocket" });
-  });
-
-  it("clears a stale binding when completed-turn coverage persistence fails", async () => {
-    const sessionFile = path.join(tempDir, "binding-coverage-failure.jsonl");
-    const workspaceDir = path.join(tempDir, "binding-coverage-workspace");
-    const harness = createStartedThreadHarness();
-    const bindingStore = {
-      ...testCodexAppServerBindingStore,
-      mutate: vi.fn(async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
-        const mutation = args[1];
-        if (mutation.kind === "patch" && mutation.patch.historyCoveredThrough) {
-          throw new Error("simulated binding coverage write failure");
-        }
-        return await testCodexAppServerBindingStore.mutate(...args);
-      }),
-    };
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), { bindingStore });
-    await harness.waitForMethod("turn/start");
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    expect(readAttemptTerminal(await run)).toMatchObject({ promptError: null, aborted: false });
-    expect(bindingStore.mutate).toHaveBeenCalled();
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
   it("does not wait for agent_end hooks before resolving channel-backed codex turns", async () => {

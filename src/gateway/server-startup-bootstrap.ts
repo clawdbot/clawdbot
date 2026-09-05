@@ -40,7 +40,6 @@ import { applyLoggingConfig } from "../logging/logger.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -331,8 +330,7 @@ export async function prepareGatewayServerBootstrap(input: {
   const reloadAuthOverride = authBootstrap.generatedToken
     ? mergeGatewayAuthConfig(resolvedStartupAuthOverride, { token: authBootstrap.generatedToken })
     : resolvedStartupAuthOverride;
-  const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
-  setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+  setDiagnosticsEnabledForProcess(isDiagnosticsEnabled(cfgAtStart));
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   const activeTaskCount = { get: () => 0 };
   setPreRestartDeferralCheck(
@@ -407,6 +405,7 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
     return next;
   };
+  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
   const prepareReloadCandidate = (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
@@ -444,8 +443,12 @@ export async function prepareGatewayServerBootstrap(input: {
     };
     const reapplyRuntimeOverlays = (config: OpenClawConfig): OpenClawConfig =>
       applyFixedGatewayOverlays(applyReloadableGatewayAuthRefs(reapplyCompareOverlays(config)));
+    const runtimeConfig = reapplyRuntimeOverlays(params.runtimeConfig);
+    // Both managed writes and watcher reloads must reject unmigrated workspaces
+    // before persistence or publication, using the candidate's final config and env.
+    assertConfiguredWorkspaceStateReady({ cfg: runtimeConfig, env: runtimeEnv.env });
     return {
-      runtimeConfig: reapplyRuntimeOverlays(params.runtimeConfig),
+      runtimeConfig,
       compareConfig: reapplyCompareOverlays(params.sourceConfig),
       runtimeEnv,
       reapplyRuntimeOverlays,
@@ -523,14 +526,7 @@ export async function prepareGatewayServerBootstrap(input: {
   });
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const existingPluginMetadataSnapshot = getGatewayPluginMetadataSnapshot();
-  const currentPluginMetadataSnapshot =
-    existingPluginMetadataSnapshot ??
-    completePluginMetadataSnapshot({
-      snapshot: pluginMetadataSnapshot,
-      config: startupActivationSourceConfig,
-      env: process.env,
-      workspaceDir: defaultWorkspaceDir,
-    });
+  const currentPluginMetadataSnapshot = existingPluginMetadataSnapshot ?? pluginMetadataSnapshot;
   if (!existingPluginMetadataSnapshot) {
     setGatewayPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
       config: startupActivationSourceConfig,
@@ -570,7 +566,6 @@ export async function prepareGatewayServerBootstrap(input: {
     generatedStartupAuthToken: authBootstrap.generatedToken !== undefined,
     resolvedStartupAuthOverride,
     startupTailscaleOverride,
-    diagnosticsEnabled,
     activeTaskCount,
     applyFixedGatewayOverlays,
     prepareReloadCandidate,

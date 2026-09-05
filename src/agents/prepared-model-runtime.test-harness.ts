@@ -2,6 +2,10 @@ import { vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import {
+  getPreparedModelFullCatalogAuth,
+  setPreparedModelFullCatalogAuth,
+} from "./prepared-model-runtime-auth.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 type LoadStaticCatalog =
@@ -49,19 +53,8 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
-  createPreparedModelCatalogWorkerInput: vi.fn(
-    ({
-      agentFacts,
-    }: {
-      agentFacts: { input: unknown; authStore: unknown; providerIds: unknown };
-    }) => ({
-      kind: "catalog",
-      generationFingerprint: "test-generation",
-      input: agentFacts.input,
-      authStore: agentFacts.authStore,
-      providerIds: agentFacts.providerIds,
-    }),
-  ),
+  createPreparedModelCatalogWorker:
+    vi.fn<typeof import("./prepared-model-catalog-worker.js").createPreparedModelCatalogWorker>(),
   configuredAgentIds: [] as string[],
   configuredAgentIdsError: undefined as Error | undefined,
   configuredAgentDirs: new Map<string, string>(),
@@ -117,18 +110,30 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("./prepared-model-catalog-worker.js", () => ({
-  createPreparedModelCatalogWorkerInput: (
-    ...args: Parameters<typeof preparedModelRuntimeMocks.createPreparedModelCatalogWorkerInput>
-  ) => preparedModelRuntimeMocks.createPreparedModelCatalogWorkerInput(...args),
-  createPreparedModelCatalogWorker: () => ({
-    loadCatalog: (...args: unknown[]) =>
-      preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args),
-    loadAuth: () =>
-      Promise.resolve({
-        authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
-        authModes: {},
-      }),
-  }),
+  createPreparedModelCatalogWorker: (
+    ...factoryArgs: Parameters<typeof preparedModelRuntimeMocks.createPreparedModelCatalogWorker>
+  ) => {
+    preparedModelRuntimeMocks.createPreparedModelCatalogWorker(...factoryArgs);
+    return {
+      loadCatalog: async (...args: unknown[]) => {
+        const catalog = await preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args);
+        // Real worker replies always pair inventory with the observed auth generation.
+        setPreparedModelFullCatalogAuth(
+          catalog,
+          getPreparedModelFullCatalogAuth(catalog) ?? {
+            authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
+            authModes: {},
+          },
+        );
+        return catalog;
+      },
+      loadAuth: () =>
+        Promise.resolve({
+          authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
+          authModes: {},
+        }),
+    };
+  },
 }));
 
 vi.mock("./model-catalog.js", async () => ({
@@ -138,7 +143,7 @@ vi.mock("./model-catalog.js", async () => ({
 }));
 
 vi.mock("./agent-auth-discovery.js", () => ({
-  resolveAmbientAgentCredentialsForDiscovery: (...args: unknown[]) =>
+  prepareAmbientAgentCredentialsForDiscovery: async (...args: unknown[]) =>
     preparedModelRuntimeMocks.resolveAmbientCredentials(...args),
 }));
 
@@ -403,7 +408,7 @@ export function resetPreparedModelRuntimeHarness(state: OpenClawTestState): void
   preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot
     .mockReset()
     .mockResolvedValue({ entries: [], routeVariants: [] });
-  preparedModelRuntimeMocks.createPreparedModelCatalogWorkerInput.mockClear();
+  preparedModelRuntimeMocks.createPreparedModelCatalogWorker.mockClear();
   preparedModelRuntimeMocks.discoverAuthStorage
     .mockReset()
     .mockImplementation(() => preparedModelRuntimeMocks.authStorage);
@@ -450,7 +455,7 @@ export async function cleanupPreparedModelRuntimeHarness(
   // A failed assertion may precede an async owner's terminal join. Reset is not a drain;
   // keep that namespace alive rather than deleting files a late build may still capture.
   if (failed) {
-    state.restoreEnv();
+    await state.restoreEnv();
     console.warn(`Retained prepared-model fixture after failed test: ${state.root}`);
     return;
   }

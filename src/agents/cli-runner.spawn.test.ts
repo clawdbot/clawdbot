@@ -39,16 +39,19 @@ import {
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
 import { logCliInvocation } from "./cli-runner/execute-logging.js";
-import { executePreparedCliRun } from "./cli-runner/execute.js";
+import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner/execute.js";
 import {
   buildCliExecLogLine,
   createManagedRun,
   setCliRunnerExecuteTestDeps,
   supervisorSpawnMock,
+  wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
 import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
 // Approval behavior is injected below; loading its gateway/tool graph here is incidental.
 vi.mock("./bash-tools.exec-approval-request.js", () => ({

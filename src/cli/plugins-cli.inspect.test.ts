@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
+import type { PluginInspectReport } from "../plugins/status.js";
 import {
   createInstalledPluginIndexSnapshot,
   createPluginRecord,
@@ -47,6 +48,34 @@ function setInspectInstallRecords(
   return metadata;
 }
 
+function createInspectReport(
+  overrides: Partial<PluginInspectReport> & Pick<PluginInspectReport, "plugin">,
+): PluginInspectReport {
+  return {
+    workspaceDir: "/workspace",
+    shape: "non-capability",
+    capabilityMode: "none",
+    capabilityCount: 0,
+    capabilities: [],
+    typedHooks: [],
+    customHooks: [],
+    tools: [],
+    commands: [],
+    cliCommands: [],
+    services: [],
+    gatewayDiscoveryServices: [],
+    gatewayMethods: [],
+    mcpServers: [],
+    lspServers: [],
+    httpRouteCount: 0,
+    bundleCapabilities: [],
+    diagnostics: [],
+    policy: { allowedModels: [], hasAllowedModelsConfig: false },
+    compatibility: [],
+    ...overrides,
+  };
+}
+
 describe("plugins cli inspect", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
@@ -54,6 +83,65 @@ describe("plugins cli inspect", () => {
     workshopMocks.loadMetadata.mockReset();
     workshopMocks.loadMetadata.mockReturnValue({ index: createInstalledPluginIndexSnapshot([]) });
   });
+
+  it.each(
+    [false, true].flatMap((runtime) =>
+      [false, true].flatMap((json) =>
+        ["empty", "all", "single", "missing"].map((selection) => ({ runtime, json, selection })),
+      ),
+    ),
+  )(
+    "preserves global diagnostics on stderr with $selection, runtime=$runtime, json=$json",
+    async ({ runtime, json, selection }) => {
+      const plugin = createPluginRecord({ id: "shared-plugin" });
+      const diagnostic = { level: "warn" as const, pluginId: plugin.id, message: "Plugin warning" };
+      const inspect = createInspectReport({ plugin, diagnostics: [diagnostic] });
+      const reports = selection === "empty" || selection === "missing" ? [] : [inspect];
+      const report = {
+        plugins: reports.map((entry) => entry.plugin),
+        diagnostics: [
+          {
+            level: "warn" as const,
+            code: "workspace-scope-omitted",
+            message: "Workspace discovery was skipped; select the system owner.",
+          },
+          diagnostic,
+        ],
+      };
+      buildPluginSnapshotReportMock.mockReturnValue(report);
+      buildPluginDiagnosticsReportMock.mockReturnValue(report);
+      buildPluginInspectReportMock.mockReturnValue(inspect);
+      buildAllPluginInspectReportsMock.mockReturnValue(reports);
+      const args = [
+        "plugins",
+        "inspect",
+        selection === "single" ? plugin.id : selection === "missing" ? "missing-plugin" : "--all",
+        ...(runtime ? ["--runtime"] : []),
+        ...(json ? ["--json"] : []),
+      ];
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        const command = runPluginsCommand(args);
+        if (selection === "missing") {
+          await expect(command).rejects.toThrow("__exit__:1");
+          expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+        } else {
+          await command;
+          if (json) {
+            expect(pluginsCliRuntimeLogs).toHaveLength(1);
+            expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toEqual(
+              selection === "single" ? inspect : reports,
+            );
+          }
+        }
+        const warnings = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+        expect(warnings.match(/Workspace discovery was skipped/g)).toHaveLength(1);
+        expect(warnings).not.toContain("Plugin warning");
+      } finally {
+        stderr.mockRestore();
+      }
+    },
+  );
 
   it.each([false, true])(
     "reports package-owned install provenance with runtime=%s",
@@ -168,18 +256,12 @@ describe("plugins cli inspect", () => {
         plugins: [createPluginRecord({ id: pluginId, name: "Mem0" })],
         diagnostics: [],
       });
-      const inspectReport = {
-        workspaceDir: "/workspace",
+      const inspectReport = createInspectReport({
         plugin: createPluginRecord({ id: pluginId, name: "Mem0" }),
         shape: "hook-only",
         capabilityMode: "plain",
         capabilityCount: 1,
-        capabilities: [],
         typedHooks: [{ name: "agent_end" }],
-        customHooks: [],
-        tools: [],
-        commands: [],
-        cliCommands: [],
         services: ["mem0-background"],
         gatewayDiscoveryServices: ["mem0-discovery", "mem0-discovery-secondary"],
         mcpServers: [
@@ -187,18 +269,12 @@ describe("plugins cli inspect", () => {
           { name: "remote", hasStdioTransport: false },
           { name: "broken", hasStdioTransport: false, unsupported: true },
         ],
-        lspServers: [],
-        httpRouteCount: 0,
-        bundleCapabilities: [],
-        diagnostics: [],
         policy: {
           allowConversationAccess: true,
           allowedModels: [],
           hasAllowedModelsConfig: false,
         },
-        usesLegacyBeforeAgentStart: false,
-        compatibility: [],
-      };
+      });
       buildPluginInspectReportMock.mockReturnValue(inspectReport);
 
       await runPluginsCommand(["plugins", "inspect", pluginId]);
@@ -276,32 +352,15 @@ describe("plugins cli inspect", () => {
       ],
       diagnostics: [],
     });
-    buildPluginInspectReportMock.mockReturnValue({
-      workspaceDir: "/workspace",
-      plugin: createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
-      shape: "hook-only",
-      capabilityMode: "plain",
-      capabilityCount: 1,
-      capabilities: [],
-      typedHooks: [],
-      customHooks: [],
-      tools: [],
-      commands: [],
-      cliCommands: [],
-      services: [],
-      gatewayDiscoveryServices: ["mem0-runtime-discovery"],
-      mcpServers: [],
-      lspServers: [],
-      httpRouteCount: 0,
-      bundleCapabilities: [],
-      diagnostics: [],
-      policy: {
-        allowedModels: [],
-        hasAllowedModelsConfig: false,
-      },
-      usesLegacyBeforeAgentStart: false,
-      compatibility: [],
-    });
+    buildPluginInspectReportMock.mockReturnValue(
+      createInspectReport({
+        plugin: createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
+        shape: "hook-only",
+        capabilityMode: "plain",
+        capabilityCount: 1,
+        gatewayDiscoveryServices: ["mem0-runtime-discovery"],
+      }),
+    );
 
     for (const selector of ["openclaw-mem0", "Mem0"]) {
       await runPluginsCommand(["plugins", "inspect", selector, "--runtime"]);

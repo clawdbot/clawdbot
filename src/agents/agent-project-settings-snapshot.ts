@@ -104,6 +104,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
       const activationState = resolvePolicyPluginActivationState({
         id: record.id,
         origin: record.origin,
+        channelIds: record.channels,
         config: normalizedPlugins,
         rootConfig: config,
       });

@@ -1,4 +1,8 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { beforeAll, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
@@ -11,10 +15,429 @@ beforeAll(() => {
 });
 
 const linuxIt = it.skipIf(process.platform !== "linux").concurrent;
+const releasePolicyIt = it.skipIf(process.platform === "win32");
 const base = "c".repeat(40);
 const head = "a".repeat(40);
 const policyImport =
   "from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout\nimport os, subprocess\n";
+const gitOwnerPath = join(process.cwd(), ".github/actions/git-owner/owner.py");
+const releaseAncestryPolicyPath = join(
+  process.cwd(),
+  ".github/actions/git-owner/release-ancestry.py",
+);
+const releaseAncestryPolicy = readFileSync(releaseAncestryPolicyPath, "utf8");
+const fastReleaseAncestryPolicy = releaseAncestryPolicy.replace(
+  "max_fetch_seconds = 30",
+  "max_fetch_seconds = 2",
+);
+const expiredReleaseAncestryPolicy = releaseAncestryPolicy.replace(
+  "max_total_seconds = 120",
+  "max_total_seconds = 0",
+);
+
+type AncestryFixture = {
+  origin: string;
+  root: string;
+  source: string;
+  target: string;
+};
+
+function fixtureGit(cwd: string, args: string[], input?: string) {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+      GIT_AUTHOR_NAME: "fixture",
+      GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+      GIT_COMMITTER_NAME: "fixture",
+    },
+    input,
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return result.stdout.trim();
+}
+
+function fixtureCommit(origin: string, tree: string, parent: string | undefined, label: string) {
+  return fixtureGit(
+    process.cwd(),
+    [`--git-dir=${origin}`, "commit-tree", tree, ...(parent ? ["-p", parent] : [])],
+    `${label}\n`,
+  );
+}
+
+function createAncestryFixture(options: {
+  sourceDistance: number;
+  targetDistance: number;
+  related: boolean;
+}): AncestryFixture {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-release-ancestry-"));
+  const origin = join(root, "origin.git");
+  fixtureGit(root, ["init", "--quiet", "--bare", origin]);
+  const tree = fixtureGit(root, [`--git-dir=${origin}`, "mktree"], "");
+  const sourceRoot = fixtureCommit(origin, tree, undefined, "source root");
+  const targetRoot = options.related
+    ? sourceRoot
+    : fixtureCommit(origin, tree, undefined, "target root");
+  let source = sourceRoot;
+  for (let index = 0; index < options.sourceDistance; index++) {
+    source = fixtureCommit(origin, tree, source, `source ${String(index)}`);
+  }
+  let target = targetRoot;
+  for (let index = 0; index < options.targetDistance; index++) {
+    target = fixtureCommit(origin, tree, target, `target ${String(index)}`);
+  }
+  fixtureGit(root, [`--git-dir=${origin}`, "update-ref", "refs/heads/release-source", source]);
+  fixtureGit(root, [`--git-dir=${origin}`, "update-ref", "refs/heads/main", target]);
+  return { origin, root, source, target };
+}
+
+function createProvisionalMergeBaseFixture(): AncestryFixture & { base: string } {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-release-ancestry-provisional-"));
+  const origin = join(root, "origin.git");
+  fixtureGit(root, ["init", "--quiet", "--bare", origin]);
+  const commits = Array.from({ length: 341 }, (_, index) => {
+    const mark = index + 1;
+    const parent = mark > 1 ? `from :${String(mark - 1)}\n` : "";
+    return `commit refs/heads/main
+mark :${String(mark)}
+committer fixture <fixture@example.invalid> ${String(mark)} +0000
+data 1
+x
+${parent}
+`;
+  });
+  commits.push(`commit refs/heads/main
+mark :342
+committer fixture <fixture@example.invalid> 342 +0000
+data 1
+x
+from :341
+merge :1
+
+`);
+  for (let mark = 343; mark <= 562; mark += 1) {
+    const parent = mark === 343 ? 121 : mark - 1;
+    commits.push(`commit refs/heads/release-source
+mark :${String(mark)}
+committer fixture <fixture@example.invalid> ${String(mark)} +0000
+data 1
+x
+from :${String(parent)}
+
+`);
+  }
+  commits.push(`commit refs/heads/release-source
+mark :563
+committer fixture <fixture@example.invalid> 563 +0000
+data 1
+x
+from :562
+merge :1
+
+`);
+  fixtureGit(origin, ["fast-import", "--quiet"], commits.join(""));
+  fixtureGit(origin, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+  return {
+    base: fixtureGit(origin, ["rev-parse", "refs/heads/main~221"]),
+    origin,
+    root,
+    source: fixtureGit(origin, ["rev-parse", "refs/heads/release-source"]),
+    target: fixtureGit(origin, ["rev-parse", "refs/heads/main"]),
+  };
+}
+
+function cloneAncestrySource(fixture: AncestryFixture, name: string) {
+  const checkout = join(fixture.root, name);
+  fixtureGit(fixture.root, [
+    "clone",
+    "--quiet",
+    "--depth=1",
+    "--branch",
+    "release-source",
+    pathToFileURL(fixture.origin).href,
+    checkout,
+  ]);
+  return checkout;
+}
+
+function writeGitProxy(
+  fixture: AncestryFixture,
+  name: string,
+  body: string,
+): { binDir: string; realGit: string } {
+  const binDir = join(fixture.root, name);
+  const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  mkdirSync(binDir);
+  writeFileSync(
+    join(binDir, "git"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+${body}
+`,
+  );
+  chmodSync(join(binDir, "git"), 0o755);
+  return { binDir, realGit };
+}
+
+function runReleaseAncestry(
+  checkout: string,
+  mode: "ancestor" | "merge-base",
+  env: Record<string, string> = {},
+) {
+  return spawnSync("python3", ["-I", "-S", gitOwnerPath, "--policy", releaseAncestryPolicyPath], {
+    cwd: checkout,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      RELEASE_ANCESTRY_MODE: mode,
+      RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
+      ...env,
+    },
+  });
+}
+
+function expectPolicySuccess(result: ReturnType<typeof runReleaseAncestry>, mode: string) {
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  expect(result.stdout).toContain(`Established release ${mode} relationship`);
+}
+
+releasePolicyIt("hydrates a divergent release merge base beyond the legacy 50+50 ceiling", () => {
+  const fixture = createAncestryFixture({
+    sourceDistance: 8,
+    targetDistance: 950,
+    related: true,
+  });
+  try {
+    const legacy = cloneAncestrySource(fixture, "legacy");
+    const legacyTarget = "refs/remotes/origin/legacy-target";
+    const refs = [fixture.source, `+refs/heads/main:${legacyTarget}`];
+    fixtureGit(legacy, [
+      "fetch",
+      "--no-tags",
+      "--filter=blob:none",
+      "--depth=50",
+      "origin",
+      ...refs,
+    ]);
+    fixtureGit(legacy, [
+      "fetch",
+      "--no-tags",
+      "--filter=blob:none",
+      "--deepen=50",
+      "origin",
+      ...refs,
+    ]);
+    const legacyResult = spawnSync("git", ["merge-base", fixture.source, legacyTarget], {
+      cwd: legacy,
+      encoding: "utf8",
+    });
+    expect(legacyResult.status).toBe(1);
+    expect(fixtureGit(legacy, ["rev-parse", "--is-shallow-repository"])).toBe("true");
+
+    const checkout = cloneAncestrySource(fixture, "progressive");
+    expectPolicySuccess(runReleaseAncestry(checkout, "merge-base"), "merge-base");
+    expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+    expect(fixtureGit(checkout, ["merge-base", fixture.source, "origin/main"])).not.toBe("");
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+releasePolicyIt("deepens past a provisional shallow merge base", () => {
+  const fixture = createProvisionalMergeBaseFixture();
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    expectPolicySuccess(runReleaseAncestry(checkout, "merge-base"), "merge-base");
+    expect(fixtureGit(checkout, ["merge-base", fixture.source, "refs/remotes/origin/main"])).toBe(
+      fixture.base,
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+releasePolicyIt("accepts a newly proven relation when deepening only moves a boundary", () => {
+  const fixture = createAncestryFixture({
+    sourceDistance: 64,
+    targetDistance: 8,
+    related: true,
+  });
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    expectPolicySuccess(runReleaseAncestry(checkout, "merge-base"), "merge-base");
+    expect(fixtureGit(checkout, ["merge-base", fixture.source, fixture.target])).not.toBe("");
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+releasePolicyIt("hydrates a Tideclaw target more than 180 commits beyond its source", () => {
+  const fixture = createAncestryFixture({
+    sourceDistance: 0,
+    targetDistance: 181,
+    related: true,
+  });
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    expectPolicySuccess(runReleaseAncestry(checkout, "ancestor"), "ancestor");
+    fixtureGit(checkout, ["merge-base", "--is-ancestor", fixture.source, fixture.target]);
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+releasePolicyIt("freezes the target SHA after the initial release ancestry fetch", () => {
+  const fixture = createAncestryFixture({
+    sourceDistance: 8,
+    targetDistance: 220,
+    related: true,
+  });
+  const moved = fixtureCommit(
+    fixture.origin,
+    fixtureGit(fixture.root, [`--git-dir=${fixture.origin}`, "mktree"], ""),
+    fixture.target,
+    "moved target",
+  );
+  const marker = join(fixture.root, "target-moved");
+  const proxy = writeGitProxy(
+    fixture,
+    "moving-git",
+    `"$REAL_GIT" "$@"
+status=$?
+if [[ "$status" == 0 && " $* " == *" --depth=64 "* && ! -e "$MOVE_MARKER" ]]; then
+  "$REAL_GIT" --git-dir="$ORIGIN" update-ref refs/heads/main "$MOVED_TARGET"
+  : > "$MOVE_MARKER"
+fi
+exit "$status"`,
+  );
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    expectPolicySuccess(
+      runReleaseAncestry(checkout, "merge-base", {
+        MOVE_MARKER: marker,
+        MOVED_TARGET: moved,
+        ORIGIN: fixture.origin,
+        PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+        REAL_GIT: proxy.realGit,
+      }),
+      "merge-base",
+    );
+    expect(fixtureGit(fixture.root, [`--git-dir=${fixture.origin}`, "rev-parse", "main"])).toBe(
+      moved,
+    );
+    expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+releasePolicyIt("rejects fully hydrated disconnected release histories", () => {
+  const fixture = createAncestryFixture({
+    sourceDistance: 8,
+    targetDistance: 12,
+    related: false,
+  });
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    const result = runReleaseAncestry(checkout, "merge-base");
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+    expect(result.stdout).toContain("is invalid after complete history");
+    expect(fixtureGit(checkout, ["rev-parse", "--is-shallow-repository"])).toBe("false");
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+releasePolicyIt("rejects a successful release history deepen that makes no progress", () => {
+  const fixture = createAncestryFixture({
+    sourceDistance: 8,
+    targetDistance: 220,
+    related: true,
+  });
+  const proxy = writeGitProxy(
+    fixture,
+    "no-progress-git",
+    `if [[ " $* " == *" fetch "* && " $* " == *" --deepen=128 "* ]]; then
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+  );
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    const result = runReleaseAncestry(checkout, "merge-base", {
+      PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+      REAL_GIT: proxy.realGit,
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(125);
+    expect(result.stdout).toContain("completed without ancestry progress");
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+releasePolicyIt.each([
+  { label: "timeout", failure: "hang" },
+  { label: "Git failure", failure: 23 },
+] as const)(
+  "retries a drained release ancestry fetch after $label",
+  async ({ failure }) => {
+    const report = await runCiGitStep({
+      policy: failure === "hang" ? fastReleaseAncestryPolicy : releaseAncestryPolicy,
+      env: {
+        RELEASE_ANCESTRY_MODE: "merge-base",
+        RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
+      },
+      fetchResults: [failure, 0],
+      commandResults: {
+        "rev-parse --verify HEAD^{commit}": { code: 0, output: `${head}\n` },
+        "rev-parse --verify refs/remotes/origin/main^{commit}": {
+          code: 0,
+          output: `${base}\n`,
+        },
+        "rev-parse --is-shallow-repository": { code: 0, output: "false\n" },
+        [`merge-base ${head} ${base}`]: { code: 0, output: `${base}\n` },
+      },
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(report.fetches).toHaveLength(2);
+    expect(report.output).toContain("fetch failed on attempt 1; retrying");
+  },
+  55_000,
+);
+
+releasePolicyIt(
+  "preserves the final release ancestry Git failure after bounded retries",
+  async () => {
+    const report = await runCiGitStep({
+      policy: releaseAncestryPolicy,
+      env: {
+        RELEASE_ANCESTRY_MODE: "merge-base",
+        RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
+      },
+      fetchResults: [23, 23, 23],
+      commandResults: {
+        "rev-parse --verify HEAD^{commit}": { code: 0, output: `${head}\n` },
+      },
+    });
+    expect(report.code, report.output).toBe(23);
+    expect(report.fetches).toHaveLength(3);
+  },
+);
+
+releasePolicyIt("returns 124 when the release ancestry total budget is exhausted", async () => {
+  const report = await runCiGitStep({
+    policy: expiredReleaseAncestryPolicy,
+    env: {
+      RELEASE_ANCESTRY_MODE: "merge-base",
+      RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
+    },
+    fetchResults: [],
+  });
+  expect(report.code, report.output).toBe(124);
+  expect(report.commands).toEqual([]);
+});
 
 // Protect the one-source distribution contract independently of the generator's formatter.
 it("keeps exactly one byte-identical generated CI owner", () => {
@@ -322,99 +745,30 @@ sys.stdout.write(git_output(os.getcwd(), "rev-parse", "HEAD", env={"CI_OWNER_PRO
   55_000,
 );
 
-const lookups: { step: string; env: Record<string, string>; output: string }[] = [
-  {
-    step: "Resolve exact diff base",
-    env: { RELEASE_GATE: "false" },
-    output: `sha=${base}\nhead_sha=${head}\n`,
-  },
-  {
-    step: "Validate historical release target",
-    env: { HISTORICAL_TARGET_TAG: "v2026.8.1", EXPECTED_SHA: head },
-    output: "eligible=true\n",
-  },
-  {
-    step: "Validate release candidate target",
-    env: { RELEASE_CANDIDATE_REF: "release/2026.8.1", EXPECTED_SHA: head },
-    output: "eligible=true\n",
-  },
-  {
-    step: "Validate target context",
-    env: { TARGET_CONTEXT_REF: "release/2026.8.1", TARGET_REF: head },
-    output: "eligible=true\n",
-  },
-  {
-    step: "Classify candidate cache trust",
-    env: {
-      CHECKOUT_REVISION: head,
-      WORKFLOW_REVISION: head,
-      RELEASE_CANDIDATE_TARGET: "false",
-      TARGET_CONTEXT_TARGET: "false",
-      TARGET_REF: "",
-    },
-    output: "trust=main\ncache_mode=restore\ncache_write_allowed=true\n",
-  },
-];
-
-linuxIt.each(
-  lookups.flatMap((lookup) =>
-    ([0, 23, "cleanup-failure"] as const).map((code) => Object.assign({}, lookup, { code })),
-  ),
-)(
-  "$step drains lookup output before consumption ($code)",
-  async ({ step, env, output, code }) => {
+linuxIt.each([0, 23, "cleanup-failure"] as const)(
+  "generic Git output drains its writers before consumption (%s)",
+  async (code) => {
+    const output = `${head}\trefs/heads/main\n`;
     const report = await runCiGitStep({
-      job: "preflight",
-      step,
-      env: { GITHUB_EVENT_NAME: "workflow_dispatch", ...env },
-      prepare: true,
+      policy:
+        policyImport +
+        'import sys\nsys.stdout.write(git_output(os.getcwd(), "ls-remote", "origin", "refs/heads/main"))\n',
       fetchResults: [],
-      lsRemoteResults: [{ code, output: `${head}\trefs/heads/main\n` }],
+      lsRemoteResults: [{ code, output }],
     });
     expect(report.code, report.output).toBe(code === "cleanup-failure" ? 125 : code);
-    expect(report.githubOutput).toBe(code === 0 ? output : "");
-    expect(report.commands.filter(({ args }) => args[0] === "ls-remote")).toHaveLength(1);
-    if (code !== 0) {
-      expect(report.commands.some(({ tool }) => tool === "gh")).toBe(false);
+    expect(report.commands.map(({ args }) => args)).toEqual([
+      ["ls-remote", "origin", "refs/heads/main"],
+    ]);
+    expect(report.readyAttempts).toEqual([1]);
+    if (code === 0) {
+      expect(report.output).toBe(output);
+    } else {
+      expect(report.output).not.toContain(output);
     }
   },
   55_000,
 );
-
-linuxIt.each([0, 23, "cleanup-failure"] as const)(
-  "historical tag fallback follows only successful empty peeled lookup (%s)",
-  async (code) => {
-    const report = await runCiGitStep({
-      job: "preflight",
-      step: "Validate historical release target",
-      env: { HISTORICAL_TARGET_TAG: "v2026.8.1", EXPECTED_SHA: head },
-      prepare: true,
-      fetchResults: [],
-      lsRemoteResults: [
-        { code, output: "" },
-        { code: 0, output: `${head}\trefs/tags/v2026.8.1\n` },
-      ],
-    });
-    expect(report.code, report.output).toBe(code === "cleanup-failure" ? 125 : code);
-    expect(
-      report.commands.filter(({ args }) => args[0] === "ls-remote").map(({ args }) => args.at(-1)),
-    ).toEqual(
-      code === 0 ? ["refs/tags/v2026.8.1^{}", "refs/tags/v2026.8.1"] : ["refs/tags/v2026.8.1^{}"],
-    );
-    expect(report.githubOutput).toBe(code === 0 ? "eligible=true\n" : "");
-  },
-  55_000,
-);
-
-it("preserves no per-operation deadline on all six CI remote lookups", () => {
-  const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
-    jobs: { preflight: { steps: { run?: string }[] } };
-  };
-  const calls = workflow.jobs.preflight.steps.flatMap(({ run }) =>
-    Array.from((run ?? "").matchAll(/--git (\S+) ls-remote/gu)),
-  );
-  expect(calls.map((call) => call[1])).toEqual(Array(6).fill("0"));
-});
 
 const posixIt = it.skipIf(process.platform === "win32").concurrent;
 const auditFiles = [".pre-commit-config.yaml", ".github/zizmor.yml"];
@@ -917,9 +1271,11 @@ posixIt.each([0, 2, 23, 125, 143, "hang", "cleanup-failure", "cancel"] as const)
       expect(report.githubOutput).toBe("");
       expect(report.githubSummary).toBe("");
       expect(report.commands.at(-1)?.args[0]).toBe("ls-remote");
-      if (typeof code === "number" || code === "hang")
+      if (typeof code === "number" || code === "hang") {
         expect(report.output).toContain(`(status ${code === "hang" ? 124 : code})`);
-      else expect(report.output).not.toContain("Unable to determine");
+      } else {
+        expect(report.output).not.toContain("Unable to determine");
+      }
     }
   },
   55_000,
@@ -932,7 +1288,9 @@ posixIt.each(
     { match: "^rev-parse refs/remotes", occurrence: 1 },
     { match: "^rev-parse refs/remotes", occurrence: 2 },
     { match: "^diff ", occurrence: 1 },
-  ].flatMap((site) => (["cleanup-failure", "cancel"] as const).map((code) => ({ ...site, code }))),
+  ].flatMap((site) =>
+    (["cleanup-failure", "cancel"] as const).map((code) => Object.assign({}, site, { code })),
+  ),
 )(
   "maturity $code at $match/$occurrence stops before fallback/output",
   async ({ match, occurrence, code }) => {
@@ -1002,7 +1360,7 @@ posixIt.each(
     { match: "^fetch ", occurrence: 2 },
     { match: "^ls-tree ", occurrence: 5 },
   ].flatMap((site) =>
-    ([23, "cleanup-failure", "cancel"] as const).map((code) => ({ ...site, code })),
+    ([23, "cleanup-failure", "cancel"] as const).map((code) => Object.assign({}, site, { code })),
   ),
 )(
   "generated publisher verify_publication $code at $match is terminal",
@@ -1239,7 +1597,9 @@ posixIt.each([
     expect(report.fetches).toHaveLength(fetches);
     expect(report.githubOutput).toBe("");
     expect(report.githubSummary).toBe("");
-    if (diagnostic) expect(report.output).toContain(diagnostic);
+    if (diagnostic) {
+      expect(report.output).toContain(diagnostic);
+    }
   },
   55_000,
 );

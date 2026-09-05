@@ -1,10 +1,12 @@
 import {
-  resolveMemoryIndexIdentityReason,
+  formatMemoryIndexRebuildGuidance,
+  resolveMemoryIndexIdentityDiagnostic,
   type MemoryEmbeddingProbeResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
+  resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -35,7 +37,6 @@ import {
   type DreamingArtifactsAuditSummary,
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
   auditShortTermPromotionArtifacts,
@@ -66,19 +67,19 @@ function formatMemoryIndexIdentityWarning(
   reason: string;
   fix: string;
 } | null {
-  const reason = resolveMemoryIndexIdentityReason(status);
-  if (!reason) {
+  const diagnostic = resolveMemoryIndexIdentityDiagnostic(status);
+  if (!diagnostic) {
     return null;
   }
   return {
-    reason,
-    fix: `Run: openclaw memory status --index --agent ${agentId}`,
+    reason: `${diagnostic.reason} (owner: ${diagnostic.owner}, code: ${diagnostic.code})`,
+    fix: `Run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
   };
 }
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
   const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg });
-  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  const deep = resolveMemoryDeepDreamingConfig({ pluginConfig, cfg });
   const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
   const timezone = deep.timezone ?? light.timezone ?? rem.timezone;
   const formatCron = (cron: string) => (timezone ? `${cron} (${timezone})` : cron);
@@ -163,7 +164,7 @@ export async function runMemoryStatus(
     agent: opts.agent,
     allAgents: true,
     diagnosticsToStderr: Boolean(opts.json),
-    purpose: opts.index ? "cli" : "status",
+    purpose: opts.index || opts.fix ? "cli" : "status",
     inspectSources: true,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
@@ -311,6 +312,22 @@ export async function runMemoryStatus(
       `${label("Workspace")} ${info(workspacePath)}`,
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
+    if (status.storage) {
+      const storage = status.storage;
+      const bytes = (value: number) =>
+        formatByteSize(value, { style: "iec", maxUnit: "tera", separator: " ", fractionDigits: 1 });
+      lines.push(
+        `${label("Agent database")} ${info(bytes(storage.databaseBytes))} · WAL ${bytes(storage.walBytes)} · reusable ${bytes(storage.reusableBytes)}`,
+      );
+      lines.push(
+        `${label("Stored embedding cache")} ${info(bytes(storage.embeddingCacheBytes))} · ${storage.embeddingCacheEntries} entries`,
+      );
+      lines.push(
+        muted(
+          "Database includes sessions and other agent data. Reusable pages remain allocated until compaction.",
+        ),
+      );
+    }
     if (embeddingProbe) {
       const state =
         embeddingProbe.ok && embeddingProbe.checked === false

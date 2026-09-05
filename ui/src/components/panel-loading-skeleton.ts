@@ -54,6 +54,9 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
       box-sizing: border-box;
     }
 
+    /* Terminal/desktop/browser hosts use shadow roots, so base.css's .skeleton
+       and global reduced-motion gate cannot reach here. Keep this primitive
+       declaration-identical to base.css; the unit test guards against drift. */
     .skeleton {
       position: relative;
       overflow: hidden;
@@ -62,7 +65,6 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     }
 
     .skeleton::after {
-      content: "";
       position: absolute;
       inset: 0;
       background: linear-gradient(
@@ -71,8 +73,9 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
         var(--skeleton-highlight, var(--bg-hover)) 50%,
         transparent 75%
       );
+      content: "";
       transform: translateX(-100%);
-      animation: panel-skeleton-shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
+      animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
       will-change: transform;
     }
 
@@ -208,7 +211,10 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
       border-radius: 8px;
     }
 
-    @keyframes panel-skeleton-shimmer {
+    @keyframes shimmer {
+      from {
+        transform: translateX(-100%);
+      }
       to {
         transform: translateX(100%);
       }

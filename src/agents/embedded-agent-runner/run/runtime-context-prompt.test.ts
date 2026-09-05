@@ -1,6 +1,12 @@
 // Runtime-context prompt tests keep hidden OpenClaw context separate from the
 // user-visible prompt while preserving model-only hook additions.
 import { describe, expect, it } from "vitest";
+import { stripInternalMetadataForDisplay } from "../../../auto-reply/reply/display-text-sanitize.js";
+import {
+  extractInternalRuntimeContext,
+  hasInternalRuntimeContext,
+  stripInternalRuntimeContext,
+} from "../../internal-runtime-context.js";
 import {
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
@@ -612,9 +618,6 @@ describe("runtime context prompt submission", () => {
       role: "custom",
       customType: "openclaw.runtime-context",
       content: [
-        "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
         "secret runtime context",
         "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
@@ -633,5 +636,17 @@ describe("runtime context prompt submission", () => {
     expect(parts.runtimeSystemContext).toContain("OpenClaw runtime event.");
     expect(parts.runtimeSystemContext).toContain("not user-authored");
     expect(parts.runtimeSystemContext).toContain("internal event");
+  });
+
+  it("detects and hides the delimiter-only carrier on user-visible surfaces", () => {
+    const content = buildRuntimeContextCustomMessage("secret runtime context")!.content;
+    expect(hasInternalRuntimeContext(content)).toBe(true);
+    expect(extractInternalRuntimeContext(content).runtimeContext).toBe(content);
+    for (const strip of [stripInternalRuntimeContext, stripInternalMetadataForDisplay]) {
+      expect(strip(content)).toBe("");
+      expect(strip(`Visible answer\n\n${content}\n\nMore answer`)).toBe(
+        "Visible answer\n\nMore answer",
+      );
+    }
   });
 });

@@ -54,6 +54,7 @@ import {
   OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
   OPENAI_GPT_56_TERRA_MODEL_ID,
+  OPENAI_GPT_6_ASTRA_MODEL_ID,
   OPENAI_PROVIDER_MODERN_MODEL_IDS,
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
@@ -92,7 +93,7 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.151.0";
+const OPENAI_CODEX_CLIENT_VERSION = "0.153.4";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -528,9 +529,12 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
       if (isOpenAIPlatformOnlyRouteModelId(modelId)) {
         return [];
       }
-      // Static OAuth rows are offline hints, not entitlement claims. Keep only
-      // the proven GPT-5.6 subscription route; live discovery may add others.
-      if (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID) {
+      // Offline hints cover established subscription routes. Astra's phased
+      // rollout and other GPT-5.6 tiers require successful account discovery.
+      if (
+        modelId === OPENAI_GPT_6_ASTRA_MODEL_ID ||
+        (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID)
+      ) {
         return [];
       }
       return [normalizeOpenAICodexCatalogModel(model)];
@@ -793,6 +797,10 @@ function buildOpenAIUnknownModelHint(modelId: string): string | undefined {
 
 const OPENAI_GPT_FORWARD_COMPAT_CASES = [
   {
+    match: [OPENAI_GPT_6_ASTRA_MODEL_ID],
+    templateIds: [OPENAI_GPT_56_SOL_MODEL_ID, OPENAI_GPT_55_MODEL_ID],
+  },
+  {
     match: [OPENAI_CHAT_LATEST_MODEL_ID],
     templateIds: OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS,
     patch: { reasoning: false, cost: OPENAI_CHAT_LATEST_COST, contextWindow: 400_000 },
@@ -837,6 +845,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
   const modelId = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const exactModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
   if (
+    modelId === OPENAI_GPT_6_ASTRA_MODEL_ID ||
     modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
     modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
     modelId === OPENAI_GPT_56_LUNA_MODEL_ID

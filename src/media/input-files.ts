@@ -11,7 +11,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
@@ -216,7 +216,7 @@ async function fetchWithGuard(params: {
 
   try {
     if (!response.ok) {
-      await discardIgnoredResponseBody(response);
+      await cancelUnreadResponseBody(response);
       throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
     }
 
@@ -224,11 +224,11 @@ async function fetchWithGuard(params: {
     try {
       contentLength = parseMediaContentLength(response.headers.get("content-length"));
     } catch (err) {
-      await discardIgnoredResponseBody(response);
+      await cancelUnreadResponseBody(response);
       throw err;
     }
     if (contentLength !== null && contentLength > params.maxBytes) {
-      await discardIgnoredResponseBody(response);
+      await cancelUnreadResponseBody(response);
       throw new Error(
         `Content too large: ${contentLength} bytes (limit: ${params.maxBytes} bytes)`,
       );
@@ -243,18 +243,6 @@ async function fetchWithGuard(params: {
   }
 }
 
-async function discardIgnoredResponseBody(response: Response): Promise<void> {
-  const body = response.body;
-  if (!body) {
-    return;
-  }
-  try {
-    await body.cancel();
-  } catch {
-    // Best-effort cleanup after rejecting a response body.
-  }
-}
-
 function decodeTextContent(buffer: Buffer, charset: string | undefined): string {
   const encoding = normalizeOptionalLowercaseString(charset) || "utf-8";
   try {
@@ -262,13 +250,6 @@ function decodeTextContent(buffer: Buffer, charset: string | undefined): string 
   } catch {
     return new TextDecoder("utf-8").decode(buffer);
   }
-}
-
-function clampText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  return truncateUtf16Safe(text, maxChars);
 }
 
 function withInputFileTimeout<T>(params: {
@@ -290,11 +271,17 @@ function withInputFileTimeout<T>(params: {
   });
 }
 
-async function normalizeInputImage(params: {
+/** Validates image bytes and converts HEIC/HEIF to JPEG, keeping the original Buffer otherwise. */
+export async function normalizeInputImageBuffer(params: {
   buffer: Buffer;
   mimeType?: string;
-  limits: InputImageLimits;
-}): Promise<InputImageContent> {
+  limits: Pick<InputImageLimits, "allowedMimes" | "maxBytes">;
+}): Promise<{ buffer: Buffer; mimeType: string }> {
+  if (params.buffer.byteLength > params.limits.maxBytes) {
+    throw new Error(
+      `Image too large: ${params.buffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
+    );
+  }
   const declaredMime = normalizeMimeType(params.mimeType) ?? "application/octet-stream";
   const detectedMime = normalizeMimeType(
     await detectMime({ buffer: params.buffer, headerMime: params.mimeType }),
@@ -311,11 +298,7 @@ async function normalizeInputImage(params: {
   }
 
   if (!HEIC_INPUT_IMAGE_MIMES.has(sourceMime)) {
-    return {
-      type: "image",
-      data: params.buffer.toString("base64"),
-      mimeType: sourceMime,
-    };
+    return { buffer: params.buffer, mimeType: sourceMime };
   }
 
   // Normalize HEIC/HEIF to JPEG because downstream model and channel surfaces expect common images.
@@ -325,11 +308,7 @@ async function normalizeInputImage(params: {
       `Image too large after HEIC conversion: ${normalizedBuffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
     );
   }
-  return {
-    type: "image",
-    data: normalizedBuffer.toString("base64"),
-    mimeType: NORMALIZED_INPUT_IMAGE_MIME,
-  };
+  return { buffer: normalizedBuffer, mimeType: NORMALIZED_INPUT_IMAGE_MIME };
 }
 
 /** Extracts and normalizes an input_image source from base64 or guarded URL input. */
@@ -337,26 +316,17 @@ export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
 ): Promise<InputImageContent> {
+  let buffer: Buffer;
+  let mimeType: string | undefined;
   if (source.type === "base64") {
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
     const canonicalData = canonicalizeBase64(source.data);
     if (!canonicalData) {
       throw new Error("input_image base64 source has invalid 'data' field");
     }
-    const buffer = Buffer.from(canonicalData, "base64");
-    if (buffer.byteLength > limits.maxBytes) {
-      throw new Error(
-        `Image too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`,
-      );
-    }
-    return await normalizeInputImage({
-      buffer,
-      mimeType: normalizeMimeType(source.mediaType) ?? "image/png",
-      limits,
-    });
-  }
-
-  if (source.type === "url") {
+    buffer = Buffer.from(canonicalData, "base64");
+    mimeType = normalizeMimeType(source.mediaType) ?? "image/png";
+  } else if (source.type === "url") {
     if (!limits.allowUrl) {
       throw new Error("input_image URL sources are disabled by config");
     }
@@ -371,14 +341,13 @@ export async function extractImageContentFromSource(
       },
       auditContext: "openresponses.input_image",
     });
-    return await normalizeInputImage({
-      buffer: result.buffer,
-      mimeType: parseContentType(result.contentType).mimeType,
-      limits,
-    });
+    buffer = result.buffer;
+    mimeType = parseContentType(result.contentType).mimeType;
+  } else {
+    throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
   }
-
-  throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
+  const image = await normalizeInputImageBuffer({ buffer, mimeType, limits });
+  return { type: "image", data: image.buffer.toString("base64"), mimeType: image.mimeType };
 }
 
 /** Extracts model-visible text and images from an input_file source after MIME validation. */
@@ -481,7 +450,7 @@ export async function extractFileContentFromBuffer(params: {
         },
       }),
     });
-    const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
+    const text = extracted.text ? truncateUtf16Safe(extracted.text, limits.maxChars) : "";
     return {
       filename,
       text,
@@ -489,6 +458,6 @@ export async function extractFileContentFromBuffer(params: {
     };
   }
 
-  const text = clampText(decodeTextContent(buffer, charset), limits.maxChars);
+  const text = truncateUtf16Safe(decodeTextContent(buffer, charset), limits.maxChars);
   return { filename, text };
 }

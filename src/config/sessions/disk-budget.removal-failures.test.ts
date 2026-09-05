@@ -126,12 +126,19 @@ describe("session artifact deletion failures", () => {
         const retainedStore = {
           [activeKey]: { sessionId: "active", updatedAt: 1 },
           [preservedKey]: { sessionId: "preserved", updatedAt: 1 },
-          [laterKey]: { sessionId: "later", updatedAt: 3 },
+          [laterKey]: {
+            sessionId: "later",
+            updatedAt: 3,
+            archivedAt: 3,
+            archiveReason: "active-session-cap",
+          },
         } satisfies Record<string, SessionEntry>;
         const store: Record<string, SessionEntry> = {
           [oldKey]: {
             sessionId: "old",
             updatedAt: 2,
+            archivedAt: 2,
+            archiveReason: "active-session-cap",
             skillsSnapshot: {
               prompt: "",
               skills: [],
@@ -285,10 +292,18 @@ describe("session artifact deletion failures", () => {
       const activeKey = "agent:main:main";
       const prompt = "p".repeat(600);
       const store: Record<string, SessionEntry> = {
-        [oldKey]: { sessionId: "old", updatedAt: 1, delivery: { kind: "none" } },
+        [oldKey]: {
+          sessionId: "old",
+          updatedAt: 1,
+          archivedAt: 1,
+          archiveReason: "active-session-cap",
+          delivery: { kind: "none" },
+        },
         [laterKey]: {
           sessionId: "later",
           updatedAt: 2,
+          archivedAt: 2,
+          archiveReason: "active-session-cap",
           delivery: { kind: "none" },
           skillsSnapshot: { prompt, skills: [] },
         },

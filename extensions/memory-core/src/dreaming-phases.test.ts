@@ -333,24 +333,15 @@ function createHarness(
 }
 
 function createMockNarrativeSubagent(response = "The archive hummed softly.") {
-  const run = vi.fn(async (_params: { sessionKey: string; message: string; model?: string }) => ({
-    runId: "dream-run-1",
-  }));
-  const waitForRun = vi.fn(async () => ({ status: "ok" }));
-  const getSessionMessages = vi.fn(async () => ({
-    messages: [{ role: "assistant", content: response }],
-  }));
-  const deleteSession = vi.fn(async () => {});
   return {
-    run,
-    waitForRun,
-    getSessionMessages,
-    deleteSession,
+    complete: vi.fn(async (_params: { agentId: string; message: string; model?: string }) => ({
+      text: response,
+    })),
   };
 }
 
 function firstNarrativeRun(subagent: ReturnType<typeof createMockNarrativeSubagent>) {
-  const firstRun = subagent.run.mock.calls[0]?.[0];
+  const firstRun = subagent.complete.mock.calls[0]?.[0];
   if (!firstRun) {
     throw new Error("expected narrative subagent run");
   }
@@ -557,41 +548,7 @@ describe("memory-core dreaming phases", () => {
     expect(Object.keys(phaseSignals.entries)).toEqual(["valid"]);
   });
 
-  it("uses the hashed narrative session key for sweep-level fallback cleanup", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await writeDailyNote(workspaceDir, [
-      `# ${DREAMING_TEST_DAY}`,
-      "",
-      "- Move backups to S3 Glacier.",
-      "- Keep retention at 365 days.",
-    ]);
-    const testConfig = createNarrativeDreamingSweepConfig(workspaceDir);
-    const subagent = createMockNarrativeSubagent("The archive hummed softly.");
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-    const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
-    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `agent:main:dreaming-narrative-memory-core-v2-light-${workspaceHash}`;
-
-    await runDreamingSweepPhases({
-      agentId: "main",
-      workspaceDir,
-      cfg: testConfig,
-      pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
-      logger,
-      subagent,
-      nowMs,
-    });
-
-    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
-    expect(subagent.deleteSession).toHaveBeenNthCalledWith(1, { sessionKey: expectedSessionKey });
-    expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
-  });
-
-  it("suppresses cleanup warnings during request-scoped narrative fallback", async () => {
+  it("leaves a generic diary trace when completion is unavailable", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await writeDailyNote(workspaceDir, [
       `# ${DREAMING_TEST_DAY}`,
@@ -601,10 +558,7 @@ describe("memory-core dreaming phases", () => {
     ]);
     const testConfig = createNarrativeDreamingSweepConfig(workspaceDir);
     const subagent = createMockNarrativeSubagent();
-    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
-    subagent.deleteSession.mockImplementation(() => {
-      throw new RequestScopedSubagentRuntimeError();
-    });
+    subagent.complete.mockRejectedValue(new RequestScopedSubagentRuntimeError());
     const logger = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -621,7 +575,7 @@ describe("memory-core dreaming phases", () => {
         subagent,
         nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
       }),
-    ).resolves.toEqual({ degradedPhases: 0, pendingNarratives: 0 });
+    ).resolves.toEqual({ degradedPhases: 1, pendingNarratives: 0 });
 
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams).toContain("A memory trace surfaced, but details were unavailable in this run.");
@@ -629,9 +583,6 @@ describe("memory-core dreaming phases", () => {
     expect(logger.error).not.toHaveBeenCalled();
     expectIncludesSubstring(mockStringMessages(logger.info), "request-scoped");
     expectNotIncludesSubstring(mockStringMessages(logger.warn), "request-scoped");
-    expectNotIncludesSubstring(mockStringMessages(logger.warn), "narrative pre-cleanup");
-    expectNotIncludesSubstring(mockStringMessages(logger.warn), "narrative session cleanup failed");
-    expect(subagent.deleteSession).toHaveBeenCalledOnce();
   });
 
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
@@ -2891,7 +2842,7 @@ describe("memory-core dreaming phases", () => {
       await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
     });
 
-    expect(subagent.run).toHaveBeenCalledTimes(1);
+    expect(subagent.complete).toHaveBeenCalledTimes(1);
     const firstRun = firstNarrativeRun(subagent);
     expect(firstRun.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun.message).toContain("Keep retention at 365 days.");
@@ -2950,8 +2901,8 @@ describe("memory-core dreaming phases", () => {
       );
     });
 
-    expect(subagent.run).toHaveBeenCalledTimes(2);
-    for (const [run] of subagent.run.mock.calls) {
+    expect(subagent.complete).toHaveBeenCalledTimes(2);
+    for (const [run] of subagent.complete.mock.calls) {
       expect(run.message).toContain("Keep the owner-approved backup plan.");
       expect(run.message).not.toContain("Run the restricted stored instruction.");
     }
@@ -3010,7 +2961,7 @@ describe("memory-core dreaming phases", () => {
       );
     });
 
-    expect(subagent.run).toHaveBeenCalledTimes(1);
+    expect(subagent.complete).toHaveBeenCalledTimes(1);
     const firstRun = firstNarrativeRun(subagent);
     expect(firstRun.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun.message).toContain("Keep retention at 365 days.");

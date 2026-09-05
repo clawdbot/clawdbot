@@ -3,11 +3,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  findPlatformMessageRejectedError,
-  isProvenDeliveryNotSentError,
-} from "../../infra/delivery-recovery.shared.js";
-import { collectErrorGraphCandidates, toErrorObject } from "../../infra/errors.js";
+import { isRetryableDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -70,27 +67,6 @@ type ReplyDispatchCancelHandler = (
 
 export type { ReplyDispatchDeliveryOutcome };
 
-function isRetryableNoSendFailure(error: unknown): boolean {
-  return (
-    isProvenDeliveryNotSentError(error) &&
-    !findPlatformMessageRejectedError(error) &&
-    !collectErrorGraphCandidates(error, (candidate) => [
-      candidate.cause,
-      candidate.original,
-      candidate.error,
-      candidate.reason,
-      ...(Array.isArray(candidate.errors) ? candidate.errors : []),
-    ]).some(
-      (candidate) =>
-        isRecord(candidate) &&
-        (candidate.sentBeforeError === true ||
-          candidate.visibleReplySent === true ||
-          (isRecord(candidate.deliveryResult) &&
-            candidate.deliveryResult.visibleReplySent === true)),
-    )
-  );
-}
-
 type ReplyDispatchDeliveryOutcomeTracker = {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
   resolve: (outcome: ReplyDispatchDeliveryOutcome) => void;
@@ -130,15 +106,20 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
   isTracked: () => boolean;
 } {
-  let resolveOutcome!: (outcome: ReplyDispatchDeliveryOutcome) => void;
-  const tracker: ReplyDispatchDeliveryOutcomeTracker = {
-    promise: new Promise((resolve) => {
-      resolveOutcome = resolve;
-    }),
-    resolve: (outcome) => resolveOutcome(outcome),
-    tracked: false,
-  };
-  deliveryOutcomeTrackers.set(payload, tracker);
+  // Nested dispatch observers share the next enqueue's receipt. Enqueue consumes
+  // it so a later send of the same payload owns a separate settlement.
+  let tracker = deliveryOutcomeTrackers.get(payload);
+  if (!tracker) {
+    let resolveOutcome!: (outcome: ReplyDispatchDeliveryOutcome) => void;
+    tracker = {
+      promise: new Promise((resolve) => {
+        resolveOutcome = resolve;
+      }),
+      resolve: (outcome) => resolveOutcome(outcome),
+      tracked: false,
+    };
+    deliveryOutcomeTrackers.set(payload, tracker);
+  }
   return { promise: tracker.promise, isTracked: () => tracker.tracked };
 }
 
@@ -457,7 +438,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         })(),
       };
     } catch (error) {
-      const retryableNoSend = isRetryableNoSendFailure(error);
+      const retryableNoSend = isRetryableDeliveryNotSentError(error);
       if (retryableNoSend) {
         retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
       }
@@ -497,6 +478,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     });
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+    const deliveryOutcomeTracker = deliveryOutcomeTrackers.get(payload);
+    deliveryOutcomeTrackers.delete(payload);
     const fallback = undeliveredFallbacks.get(payload);
     undeliveredFallbacks.delete(payload);
     const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
@@ -531,7 +514,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         : null;
     queuedCounts[kind] += 1;
     pending += 1;
-    const deliveryOutcomeTracker = deliveryOutcomeTrackers.get(payload);
     if (deliveryOutcomeTracker) {
       deliveryOutcomeTracker.tracked = true;
     }
@@ -565,7 +547,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         deliveryOutcome = "failed-before-deliver";
       } finally {
         deliveryOutcomeTracker?.resolve(deliveryOutcome);
-        deliveryOutcomeTrackers.delete(payload);
         try {
           options.onDeliverySettled?.(dispatchInfo);
         } catch (err: unknown) {

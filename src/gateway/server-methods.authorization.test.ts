@@ -31,7 +31,8 @@ const getUserProfileDisplay = vi.hoisted(() =>
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
 
-vi.mock("../state/user-profiles.js", () => ({
+vi.mock("../state/user-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
   ensureProfileForEmail,
   getUserProfileDisplay,
   getUserProfileListItem: vi.fn(),

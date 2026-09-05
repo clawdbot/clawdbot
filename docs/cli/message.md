@@ -50,6 +50,10 @@ Every action accepts: `--channel <name>`, `--account <id>`, `--json`,
 `--dry-run`, `--verbose`. Actions that take a destination also accept
 `-t, --target <dest>`.
 
+Local message actions run the loaded plugins' shutdown hooks before exiting, including
+after an action fails. Cleanup has a 2.5-second overall budget and does not change
+the action's exit status. `message read` skips these shutdown hooks.
+
 ## SecretRef resolution
 
 `openclaw message` resolves channel SecretRefs before running the action,

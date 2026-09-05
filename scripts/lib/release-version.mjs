@@ -123,6 +123,15 @@ export function parseReleaseVersion(version) {
 }
 
 /**
+ * @param {string} version
+ * @returns {string | null}
+ */
+export function parsePinnedReleaseVersion(version) {
+  const parsed = parseReleaseVersion(version);
+  return parsed && parsed.version === parsed.baseVersion ? parsed.baseVersion : null;
+}
+
+/**
  * Patch 33 and later final releases belong to the trailing-month
  * extended-stable line; correction suffixes are not valid on that line.
  *

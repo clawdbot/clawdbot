@@ -11,6 +11,11 @@ import type { MediaUnderstandingSkipError } from "../../../packages/media-unders
 import type { AcpSessionResolution } from "../../acp/control-plane/manager.types.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
+import {
+  emitAcpLifecycleEnd,
+  resolveAcpLifecycleEndFields,
+} from "../../agents/command/attempt-execution.js";
+import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
@@ -21,13 +26,16 @@ import { resolveStableChannelMessageIngress } from "../../channels/message-acces
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   listSessionParticipantsReadOnly,
+  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { ReplyDispatchRun } from "../get-reply-options.types.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import {
   resolveAgentTurnAttachments,
@@ -176,6 +184,8 @@ vi.mock("../../agents/command/attempt-execution.runtime.js", () => ({
   emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
   emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
   emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
+  resolveAcpLifecycleEndFields: (...args: Parameters<typeof resolveAcpLifecycleEndFields>) =>
+    resolveAcpLifecycleEndFields(...args),
 }));
 
 vi.mock("../../acp/policy.js", () => ({
@@ -350,6 +360,12 @@ async function runDispatch(params: {
   bodyForAgent: string;
   runId?: string;
   onAgentRunStart?: Parameters<typeof tryDispatchAcpReplyCore>[0]["onAgentRunStart"];
+  userTurnTranscriptRecorder?: Parameters<
+    typeof tryDispatchAcpReplyCore
+  >[0]["userTurnTranscriptRecorder"];
+  prepareAssistantTranscriptMessage?: Parameters<
+    typeof tryDispatchAcpReplyCore
+  >[0]["prepareAssistantTranscriptMessage"];
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
@@ -386,6 +402,8 @@ async function runDispatch(params: {
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     ...(params.runId ? { runId: params.runId } : {}),
     onAgentRunStart: params.onAgentRunStart,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
     sessionKey: targetSessionKey,
     images: params.images,
     abortSignal: params.abortSignal,
@@ -516,6 +534,7 @@ describe("tryDispatchAcpReplyCore", () => {
     auditMocks.emitAcpRuntimeEvent.mockReset();
     auditMocks.emitAcpLifecycleEnd.mockReset();
     auditMocks.emitAcpLifecycleError.mockReset();
+    auditMocks.emitAcpLifecycleError.mockReturnValue({ reason: "failed", status: "error" });
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
     managerMocks.runTurn.mockImplementation(
@@ -959,6 +978,56 @@ describe("tryDispatchAcpReplyCore", () => {
     ]);
   });
 
+  it.each([false, true, "delivery-throws"] as const)(
+    "reports uncertain question input through ACP delivery policy (suppressed=%s)",
+    async (mode) => {
+      const suppressUserDelivery = mode === true;
+      if (mode === "delivery-throws") {
+        routeMocks.routeReply.mockRejectedValueOnce(new Error("synthetic notice delivery failure"));
+      }
+      setReadyAcpResolution();
+      const registration = registerPendingAgentQuestion({
+        questionId: "synthetic-acp-question",
+        sessionKey,
+        questions: [
+          { id: "answer", header: "Answer", question: "Continue?", options: [], isOther: true },
+        ],
+        gatewayCall: async () => {
+          throw new Error("custom response lost");
+        },
+      });
+      registration.attachRegistration(Promise.resolve());
+      const { dispatcher } = createDispatcher();
+      const recordProcessed = vi.fn();
+      try {
+        const result = await runDispatch({
+          bodyForAgent: "candidate answer",
+          dispatcher,
+          shouldRouteToOriginating: true,
+          suppressUserDelivery,
+          recordProcessed,
+        });
+        expect(result).toMatchObject({ queuedFinal: mode === false });
+        expect(recordProcessed).toHaveBeenCalledWith(
+          "error",
+          expect.objectContaining({ reason: "acp_question_answer_unconfirmed" }),
+        );
+        expect(managerMocks.runTurn).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        if (suppressUserDelivery) {
+          expect(routeMocks.routeReply).not.toHaveBeenCalled();
+        } else {
+          expect(routePayload()).toMatchObject({
+            isError: true,
+            text: expect.stringContaining("confirmation was lost"),
+          });
+        }
+      } finally {
+        registration.dispose();
+      }
+    },
+  );
+
   it("routes default ACP output to the originating channel as a final reply", async () => {
     setReadyAcpResolution();
     mockRoutedTextTurn("hello");
@@ -1034,6 +1103,7 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(transcript.sessionKey).toBe(sessionKey);
     expect(transcript.promptText).toBe("reply");
     expect(transcript.finalText).toBe("hello");
+    expect(transcript.terminalOutcome).toMatchObject({ reason: "completed", status: "ok" });
     expect(routeCall().mirror).toBe(false);
   });
 
@@ -1056,6 +1126,7 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(transcript.sessionKey).toBe(sessionKey);
     expect(transcript.promptText).toBe("reply");
     expect(String(transcript.finalText)).toContain("acp exploded mid-turn");
+    expect(transcript.terminalOutcome).toMatchObject({ reason: "failed", status: "error" });
   });
 
   it("keeps streamed output ahead of the error when a turn fails mid-stream", async () => {
@@ -1300,6 +1371,7 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(transcript.sessionKey).toBe(sessionKey);
     expect(transcript.promptText).toBe("cancel this turn");
     expect(transcript.finalText).toBe("partial");
+    expect(transcript.terminalOutcome).toMatchObject({ reason: "cancelled", status: "error" });
     expect(recordProcessed).toHaveBeenCalledWith("completed", { reason: "acp_aborted" });
     expect(markIdle).toHaveBeenCalledWith("message_aborted");
     expect(transcriptMocks.persistAcpDispatchTranscript.mock.invocationCallOrder[0]).toBeLessThan(
@@ -1307,7 +1379,7 @@ describe("tryDispatchAcpReplyCore", () => {
     );
     expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
       expect.objectContaining({
-        resultStatus: "cancelled",
+        endFields: { aborted: true, stopReason: "stop", status: "cancelled" },
       }),
     );
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
@@ -1457,10 +1529,76 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(markIdle).toHaveBeenCalledWith("message_aborted");
     expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
       expect.objectContaining({
-        abortSignal: abortController.signal,
-        resultStatus: "completed",
+        endFields: { aborted: true, stopReason: "aborted" },
       }),
     );
+  });
+
+  it("keeps settled ACP completion aligned with transcript persistence during caller cancellation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const target = {
+        agentId: "codex-acp",
+        sessionId: "acp-cancel-during-transcript",
+        sessionKey,
+        storePath: path.join(state.sessionsDir("codex-acp"), "sessions.json"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      setReadyAcpResolution();
+      const text = "Completed output awaiting transcript persistence.";
+      mockVisibleTextTurn(text);
+      const controller = new AbortController();
+      const recorder = createUserTurnTranscriptRecorder({
+        target: { ...target, sessionEntry: undefined },
+        resolveInput: async () => {
+          controller.abort();
+          return { text: "Cancel while saving this turn." };
+        },
+      });
+      const actualTranscript = await vi.importActual<
+        typeof import("./dispatch-acp-transcript.runtime.js")
+      >("./dispatch-acp-transcript.runtime.js");
+      transcriptMocks.persistAcpDispatchTranscript.mockImplementationOnce(async (input) => {
+        await actualTranscript.persistAcpDispatchTranscript(
+          input as Parameters<typeof actualTranscript.persistAcpDispatchTranscript>[0],
+        );
+      });
+      auditMocks.emitAcpLifecycleEnd.mockImplementationOnce(emitAcpLifecycleEnd);
+      const preparedMessages: unknown[] = [];
+      let dispatchedRun: ReplyDispatchRun | undefined;
+      await runDispatch({
+        bodyForAgent: "Cancel while saving this turn.",
+        runId: "acp-cancel-during-transcript",
+        cfg: createAcpTestConfig({ session: { store: target.storePath } }),
+        abortSignal: controller.signal,
+        userTurnTranscriptRecorder: recorder,
+        prepareAssistantTranscriptMessage: (message) => {
+          preparedMessages.push(structuredClone(message));
+          return message;
+        },
+        onAgentRunStart: (_runId, _meta, run) => {
+          dispatchedRun = run;
+          return "reply-dispatch";
+        },
+      });
+      const persistedMessages = (await loadTranscriptEvents(target)).flatMap((event) => {
+        const entry = requireRecord(event, "transcript event");
+        return entry.type === "message" ? [entry.message] : [];
+      });
+      const expectedAssistant = {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        stopReason: "stop",
+      };
+      expect({
+        preparedMessages,
+        persistedMessages,
+        terminalOutcome: dispatchedRun?.getResult().terminalOutcome,
+      }).toMatchObject({
+        preparedMessages: [expectedAssistant],
+        persistedMessages: [{ role: "user" }, expectedAssistant],
+        terminalOutcome: { reason: "completed", status: "ok" },
+      });
+    });
   });
 
   it("records an ACP error when output finalization fails", async () => {
@@ -1480,6 +1618,11 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
       expect.objectContaining({
         error: expect.objectContaining({ message: "output settlement failed" }),
+      }),
+    );
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalOutcome: expect.objectContaining({ reason: "failed", status: "error" }),
       }),
     );
   });

@@ -384,8 +384,7 @@ extension OpenClawConfigFile {
         self.logger.debug("browser control updated enabled=\(enabled)")
     }
 
-    static func gatewayPort() -> Int? {
-        let root = self.loadDict()
+    static func gatewayPort(root: [String: Any] = OpenClawConfigFile.loadDict()) -> Int? {
         guard let gateway = root["gateway"] as? [String: Any] else { return nil }
         if let port = gateway["port"] as? Int, port > 0 {
             return port

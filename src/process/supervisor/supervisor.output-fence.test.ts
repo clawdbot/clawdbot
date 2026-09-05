@@ -80,42 +80,54 @@ describe("process supervisor output fence", () => {
     vi.restoreAllMocks();
   });
 
-  it("refreshes the no-output deadline before delivering a raw-only UTF-8 chunk", async () => {
-    vi.useFakeTimers();
-    const adapter = createStubChildAdapter({
-      onKill: (signal, current) => {
-        current.settle(null, signal ?? "SIGKILL");
-      },
-    });
-    createChildAdapterMock.mockResolvedValue(adapter);
+  it.each([false, true])(
+    "refreshes the no-output deadline for raw-only UTF-8 output (raw observer=%s)",
+    async (observeRaw) => {
+      vi.useFakeTimers();
+      const adapter = createStubChildAdapter({
+        onKill: (signal, current) => {
+          current.settle(null, signal ?? "SIGKILL");
+        },
+      });
+      createChildAdapterMock.mockResolvedValue(adapter);
 
-    const supervisor = createProcessSupervisor();
-    const runId = "raw-output-deadline";
-    let callbackOutputAtMs: number | undefined;
-    const run = await spawnChild(supervisor, {
-      runId,
-      sessionId: "s-raw-output-deadline",
-      argv: createSilentIdleArgv(),
-      noOutputTimeoutMs: 10,
-      onStdoutRaw: () => {
-        callbackOutputAtMs = supervisor.getRecord(runId)?.lastOutputAtMs;
-      },
-    });
-    const startedAtMs = supervisor.getRecord(runId)?.startedAtMs;
+      const supervisor = createProcessSupervisor();
+      const runId = "raw-output-deadline";
+      let callbackOutputAtMs: number | undefined;
+      const run = await spawnChild(supervisor, {
+        runId,
+        sessionId: "s-raw-output-deadline",
+        argv: createSilentIdleArgv(),
+        noOutputTimeoutMs: 10,
+        ...(observeRaw
+          ? {
+              onStdoutRaw: () => {
+                callbackOutputAtMs = supervisor.getRecord(runId)?.lastOutputAtMs;
+              },
+            }
+          : {}),
+      });
+      const startedAtMs = supervisor.getRecord(runId)?.startedAtMs;
 
-    await vi.advanceTimersByTimeAsync(9);
-    adapter.emitStdoutRaw(Buffer.from([0xe2]));
+      await vi.advanceTimersByTimeAsync(9);
+      adapter.emitStdoutRaw(Buffer.from([0xe2]));
 
-    expect(callbackOutputAtMs).toBeGreaterThan(startedAtMs ?? Number.POSITIVE_INFINITY);
-    await vi.advanceTimersByTimeAsync(9);
-    expect(adapter.killMock).not.toHaveBeenCalled();
+      expect(supervisor.getRecord(runId)?.lastOutputAtMs).toBeGreaterThan(
+        startedAtMs ?? Number.POSITIVE_INFINITY,
+      );
+      if (observeRaw) {
+        expect(callbackOutputAtMs).toBe(supervisor.getRecord(runId)?.lastOutputAtMs);
+      }
+      await vi.advanceTimersByTimeAsync(9);
+      expect(adapter.killMock).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(run.wait()).resolves.toMatchObject({
-      reason: "no-output-timeout",
-      noOutputTimedOut: true,
-    });
-  });
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(run.wait()).resolves.toMatchObject({
+        reason: "no-output-timeout",
+        noOutputTimedOut: true,
+      });
+    },
+  );
 
   it.each(OUTPUT_LISTENER_KINDS)(
     "stops $name, capture, and the output clock once the run result settles",

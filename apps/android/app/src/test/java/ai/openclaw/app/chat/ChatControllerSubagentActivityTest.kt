@@ -9,7 +9,10 @@ import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerSubagentActivityTest {
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -248,8 +251,10 @@ class ChatControllerSubagentActivityTest {
   private fun TestScope.newController(): ChatController =
     ChatController(
       scope = backgroundScope,
+      commandOutbox = backgroundScope.createChatCommandOutbox(),
+      cacheScope = { ChatCacheScope("gateway-test", 1L) },
       json = json,
-      requestGateway = { _, _ -> "{}" },
+      requestGateway = { method, _ -> emptyChatGatewayResponse(method) },
     )
 
   private fun taskPayload(

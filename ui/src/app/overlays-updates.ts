@@ -36,6 +36,7 @@ import { createUpdateNoticeSession } from "./update-success-notice.ts";
 
 export type ApplicationUpdateOverlayHooks = {
   connectionBootstrap?: ConnectionBootstrapCoordinator;
+  getActiveSessionKey?: () => string | undefined;
   /** Barrier awaited after update-running is published and before update.run
    * is issued, so in-flight config writes cannot overlap the install. */
   drainConfigWrites?: () => Promise<void>;
@@ -484,7 +485,7 @@ export function createApplicationUpdateOverlays(
       }
     },
     refreshUpdateStatus,
-    async runUpdate(this: void) {
+    async runUpdate(this: void, options?: { sessionKey?: string }) {
       const client = gateway.snapshot.client;
       if (
         !client ||
@@ -496,6 +497,7 @@ export function createApplicationUpdateOverlays(
       ) {
         return;
       }
+      const sessionKey = options?.sessionKey ?? hooks.getActiveSessionKey?.();
       const generation = ++updateRunGeneration;
       updateStatusRevision += 1;
       updateRequestRunning = true;
@@ -532,7 +534,10 @@ export function createApplicationUpdateOverlays(
         };
         setPendingUpdate(admittedPending);
         publish();
-        const response = await client.request<UpdateRunResponse>("update.run", {});
+        const response = await client.request<UpdateRunResponse>(
+          "update.run",
+          sessionKey ? { sessionKey } : {},
+        );
         if (
           disposed ||
           generation !== updateRunGeneration ||

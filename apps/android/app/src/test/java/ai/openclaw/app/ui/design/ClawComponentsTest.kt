@@ -1,7 +1,11 @@
 package ai.openclaw.app.ui.design
 
 import ai.openclaw.app.AppearanceThemeFamily
+import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.appearanceAccentPalette
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.ui.SettingsRefreshControls
+import ai.openclaw.app.ui.SettingsSummaryContent
 import ai.openclaw.app.ui.chat.ChatMarkdown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +53,39 @@ import org.robolectric.annotation.GraphicsMode
 class ClawComponentsTest {
   @get:Rule
   val composeRule = createComposeRule()
+
+  @Test
+  fun gatewaySummaryShowsFailuresWithoutInventingDataAndRetainsLoadedSnapshots() {
+    val state = mutableStateOf(GatewaySummaryState<String>(refreshing = true))
+    val connected = mutableStateOf(true)
+    composeRule.setContent {
+      ClawDesignTheme {
+        Column {
+          SettingsRefreshControls(connected.value, state.value.refreshing, state.value.errorText, onRefresh = {})
+          SettingsSummaryContent(state.value, connected.value, "Connect to load the summary.") { snapshot ->
+            Text(snapshot)
+          }
+        }
+      }
+    }
+    composeRule.onNodeWithText("Refreshing").assertIsDisplayed().assertIsNotEnabled()
+    composeRule.onNodeWithText("Load from gateway").assertDoesNotExist()
+
+    composeRule.runOnIdle { state.value = GatewaySummaryState(errorText = nativeText("Could not load channels.")) }
+    composeRule.onNodeWithText("Could not load channels.").assertIsDisplayed()
+    composeRule.onNodeWithText("Load from gateway").assertDoesNotExist()
+
+    composeRule.runOnIdle { state.value = GatewaySummaryState(summary = "Last successful response") }
+    composeRule.onNodeWithText("Last successful response").assertIsDisplayed()
+    composeRule.onNodeWithText("Could not load channels.").assertDoesNotExist()
+    composeRule.runOnIdle { state.value = state.value.copy(errorText = nativeText("Could not load channels.")) }
+    composeRule.onNodeWithText("Last successful response").assertIsDisplayed()
+    composeRule.onNodeWithText("Could not load channels.").assertIsDisplayed()
+
+    composeRule.runOnIdle { connected.value = false }
+    composeRule.onNodeWithText("Connect to load the summary.").assertIsDisplayed()
+    composeRule.onNodeWithText("Last successful response").assertDoesNotExist()
+  }
 
   @Test
   fun selectedLabelsStayReadableAcrossThemeFamiliesAndLightAccents() {

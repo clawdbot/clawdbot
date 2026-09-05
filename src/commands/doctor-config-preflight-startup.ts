@@ -1,7 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
-import type { ConfigFileSnapshot } from "../config/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   MigrationCheckpointIdentity,
   StartupMigrationLease,
@@ -40,9 +38,8 @@ type MigrationCheckpoint = {
   }) => void;
 };
 
-/** Completes startup checkpointing and plugin verification after state migration has run. */
+/** Completes startup verification and returns the accepted config and metadata generation. */
 export async function completeStartupMigrationPreflight(params: {
-  baseConfig: OpenClawConfig;
   freshConfigGuardAllowed: boolean | undefined;
   gatewayStartupCheckpointRequired: boolean;
   migrationCheckpoint: MigrationCheckpoint | undefined;
@@ -53,13 +50,16 @@ export async function completeStartupMigrationPreflight(params: {
   ) => Promise<DoctorConfigPreflightPluginSnapshotRead>;
   shouldRecordStartupCheckpoint: boolean;
   shouldRecordStateCheckpoint: boolean;
-  snapshot: ConfigFileSnapshot;
+  snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
   startupMigrationEnv: NodeJS.ProcessEnv;
   startupMigrationHeartbeatError: unknown;
   startupMigrationLease: StartupMigrationLease | undefined;
   startupMigrationWarnings: readonly string[];
   stateMigrationsAllowed: boolean | undefined;
-}): Promise<void> {
+}): Promise<DoctorConfigPreflightPluginSnapshotRead> {
+  let snapshotRead = params.snapshotRead;
+  const snapshot = snapshotRead.snapshot;
+  const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
   if (
     (params.shouldRecordStateCheckpoint || params.shouldRecordStartupCheckpoint) &&
     params.startupMigrationHeartbeatError
@@ -73,7 +73,7 @@ export async function completeStartupMigrationPreflight(params: {
     params.stateMigrationsAllowed &&
     params.freshConfigGuardAllowed &&
     params.startupMigrationWarnings.length === 0 &&
-    params.snapshot.valid
+    snapshot.valid
   ) {
     if (!params.migrationCheckpoint) {
       throw new Error("OpenClaw state migration checkpoint module was not loaded.");
@@ -85,7 +85,7 @@ export async function completeStartupMigrationPreflight(params: {
     });
   }
   if (params.gatewayStartupCheckpointRequired) {
-    if (params.shouldRecordStartupCheckpoint && !params.snapshot.valid) {
+    if (params.shouldRecordStartupCheckpoint && !snapshot.valid) {
       throwStartupMigrationRefusal(
         formatStartupMigrationFailure([
           'OpenClaw config is invalid; run "openclaw doctor --fix" before startup.',
@@ -93,15 +93,15 @@ export async function completeStartupMigrationPreflight(params: {
       );
     }
     setActiveDegradedPlugins([]);
-    if (params.snapshot.valid) {
+    if (snapshot.valid) {
       const pluginConvergence = params.shouldRecordStartupCheckpoint
         ? await runStartupUpgradeConvergence({
-            cfg: params.baseConfig,
+            cfg: baseConfig,
             env: process.env,
             ...(params.measure ? { measure: params.measure } : {}),
           })
         : await refreshStartupPluginQuarantine({
-            cfg: params.baseConfig,
+            cfg: baseConfig,
             env: process.env,
             ...(params.measure ? { measure: params.measure } : {}),
           });
@@ -127,6 +127,7 @@ export async function completeStartupMigrationPreflight(params: {
         ) {
           throwStartupMigrationIdentityChanged();
         }
+        snapshotRead = convergedSnapshotRead;
       }
     }
     recordStartupMigrationWarnings(params.startupMigrationWarnings);
@@ -142,6 +143,7 @@ export async function completeStartupMigrationPreflight(params: {
       lease: params.startupMigrationLease,
     });
   }
+  return snapshotRead;
 }
 
 export function noteStateMigrationResult(result: MigrationMessages): void {

@@ -4,7 +4,7 @@ import {
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
-import { registerToolEffectReceipt, type ToolEffectReceipt } from "./tool-effect-receipt.js";
+import type { ToolEffectReceipt } from "./tool-effect-receipt.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 
 type ToolTerminal = {
@@ -30,6 +30,7 @@ export function createEmbeddedToolLifecycleRunner(
   ctx: EmbeddedAgentSubscribeContext,
 ): EmbeddedToolLifecycleRunner {
   return async <T>(toolParams: EmbeddedToolLifecycleParams<T>): Promise<T> => {
+    ctx.flushAssistantStream();
     await handleToolExecutionStart(ctx, {
       type: "tool_execution_start",
       toolName: toolParams.toolName,
@@ -57,16 +58,16 @@ export function createEmbeddedToolLifecycleRunner(
       const effectReceipt = trustedNoStart
         ? ({ state: "not_started" } as const)
         : terminal.effectReceipt;
-      await notifyTerminal(toolParams.onTerminal, { ...terminal, effectReceipt });
-      throw registerToolEffectReceipt(error, effectReceipt);
+      await toolParams.onTerminal?.({ ...terminal, effectReceipt });
+      throw error;
     }
     const terminal = await finishToolLifecycle(ctx, toolParams, {
       executionStarted,
       isError: false,
       result: completedResult,
     });
-    await notifyTerminal(toolParams.onTerminal, terminal);
-    return registerToolEffectReceipt(completedResult, terminal.effectReceipt);
+    await toolParams.onTerminal?.(terminal);
+    return completedResult;
   };
 }
 
@@ -75,6 +76,7 @@ async function finishToolLifecycle(
   toolParams: EmbeddedToolLifecycleParams<unknown>,
   outcome: { executionStarted: boolean; isError: boolean; result: unknown },
 ): Promise<ToolTerminal> {
+  ctx.flushAssistantStream();
   const terminal = await handleToolExecutionEnd(ctx, {
     type: "tool_execution_end",
     toolName: toolParams.toolName,
@@ -90,15 +92,4 @@ async function finishToolLifecycle(
     executedArguments: terminal.executedArguments ?? toolParams.args,
     effectReceipt: terminal.effectReceipt,
   };
-}
-
-async function notifyTerminal(
-  callback: ((terminal: ToolTerminal) => void | Promise<void>) | undefined,
-  terminal: ToolTerminal,
-): Promise<void> {
-  try {
-    await callback?.(terminal);
-  } catch (error) {
-    throw registerToolEffectReceipt(error, terminal.effectReceipt);
-  }
 }
