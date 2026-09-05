@@ -41,6 +41,7 @@ import {
   appendWorkspaceMountArgs,
   filterBindsConflictingWithProtectedMounts,
   formatReadOnlyWorkspaceSkillMountHashState,
+  prepareWorkspaceSkillMountpoints,
   resolveReadOnlyWorkspaceSkillMounts,
   resolveProtectedSkillMountContainerPaths,
   SANDBOX_MOUNT_FORMAT_VERSION,
@@ -318,14 +319,8 @@ function formatUlimitValue(
   return `${name}=${soft}:${hard}`;
 }
 
-export function buildSandboxCreateArgs(params: {
-  name: string;
+export function validateSandboxDockerConfig(params: {
   cfg: SandboxDockerConfig;
-  scopeKey: string;
-  createdAtMs?: number;
-  labels?: Record<string, string>;
-  configHash?: string;
-  includeBinds?: boolean;
   bindSourceRoots?: string[];
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
@@ -345,6 +340,22 @@ export function buildSandboxCreateArgs(params: {
       params.allowContainerNamespaceJoin ??
       params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
   });
+}
+
+export function buildSandboxCreateArgs(params: {
+  name: string;
+  cfg: SandboxDockerConfig;
+  scopeKey: string;
+  createdAtMs?: number;
+  labels?: Record<string, string>;
+  configHash?: string;
+  includeBinds?: boolean;
+  bindSourceRoots?: string[];
+  allowSourcesOutsideAllowedRoots?: boolean;
+  allowReservedContainerTargets?: boolean;
+  allowContainerNamespaceJoin?: boolean;
+}) {
+  validateSandboxDockerConfig(params);
 
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
@@ -668,6 +679,18 @@ async function ensureSandboxContainerLifecycle(
         running = false;
       }
     }
+  }
+  if (!hasContainer || !running) {
+    validateSandboxDockerConfig({
+      cfg: params.cfg.docker,
+      bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
+    });
+    await prepareWorkspaceSkillMountpoints(
+      params.workspaceDir,
+      params.cfg.docker.workdir,
+      readOnlyWorkspaceSkillMounts,
+      params.cfg.docker.binds,
+    );
   }
   if (!hasContainer) {
     await createSandboxContainer({

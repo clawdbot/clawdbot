@@ -1839,13 +1839,33 @@ describe("buildOpenAIProvider", () => {
     ).toEqual({ effort: "high", transport: "sse" });
   });
 
-  it("delegates an unlisted first-party model to its explicitly selected Codex runtime", () => {
+  it.each([
+    { name: "native auth", auth: {} },
+    {
+      name: "resolved OAuth",
+      auth: { authProfileId: "openai:subscription", authProfileMode: "oauth" },
+    },
+    { name: "OAuth mode", auth: { authProfileMode: "oauth" } },
+    {
+      name: "explicit ChatGPT OAuth route",
+      auth: {
+        authProfileId: "openai:subscription",
+        authProfileMode: "oauth",
+        providerConfig: {
+          auth: "oauth",
+          api: "openai-chatgpt-responses",
+          baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+        },
+      },
+    },
+  ])("delegates an unlisted first-party model to Codex with $name", ({ auth }) => {
     const provider = buildOpenAIProvider();
     const model = provider.resolveDynamicModel?.({
       provider: "openai",
       modelId: "gpt-future",
       modelRegistry: { find: () => null },
       agentRuntimeId: "codex",
+      ...auth,
     } as never);
 
     expect(model).toMatchObject({
@@ -1875,6 +1895,53 @@ describe("buildOpenAIProvider", () => {
         } as never)
         ?.levels.map((level) => level.id),
     ).toEqual(expect.arrayContaining(["xhigh", "max"]));
+  });
+
+  it.each([
+    { name: "unresolved profile", auth: { authProfileId: "openai:unknown" } },
+    { name: "API-key profile", auth: { authProfileMode: "api_key" } },
+    { name: "token profile", auth: { authProfileMode: "token" } },
+    {
+      name: "OAuth with authored API-key auth",
+      auth: { authProfileMode: "oauth", providerConfig: { auth: "api-key" } },
+    },
+    {
+      name: "OAuth with a custom endpoint",
+      auth: {
+        authProfileMode: "oauth",
+        providerConfig: {
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://example.com/codex",
+        },
+      },
+    },
+    {
+      name: "OAuth with a plaintext endpoint",
+      auth: {
+        authProfileMode: "oauth",
+        providerConfig: {
+          api: "openai-chatgpt-responses",
+          baseUrl: "http://chatgpt.com/backend-api/codex",
+        },
+      },
+    },
+    {
+      name: "OAuth with a Platform route",
+      auth: {
+        authProfileMode: "oauth",
+        providerConfig: { api: "openai-responses", baseUrl: OPENAI_API_BASE_URL },
+      },
+    },
+  ])("does not delegate an unlisted model to Codex with $name", ({ auth }) => {
+    expect(
+      buildOpenAIProvider().resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-future",
+        modelRegistry: { find: () => null },
+        agentRuntimeId: "codex",
+        ...auth,
+      } as never),
+    ).toBeUndefined();
   });
 
   it("does not invent an unlisted model for authored Platform credentials", () => {

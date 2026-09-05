@@ -294,18 +294,23 @@ describe("archive utils", () => {
   it("rejects tar path traversal (zip slip)", async () => {
     await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
       const insideDir = path.join(workDir, "inside");
+      const outsideFile = path.join(workDir, "outside.txt");
       await fs.mkdir(insideDir, { recursive: true });
-      await fs.writeFile(path.join(workDir, "outside.txt"), "pwnd");
+      await fs.writeFile(outsideFile, "pwnd");
 
       await tar.c({ cwd: insideDir, file: archivePath }, ["../outside.txt"]);
+      await fs.writeFile(outsideFile, "SAFE");
 
-      await expect(
+      await expectRejectedCode(
         extractArchive({
           archivePath,
           destDir: extractDir,
           timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
         }),
-      ).rejects.toThrow(/escapes destination/i);
+        "entry-path",
+      );
+      await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("SAFE");
+      expect(await fs.readdir(extractDir)).toEqual([]);
     });
   });
 
@@ -405,14 +410,18 @@ describe("archive utils", () => {
       await fs.mkdir(inputDir, { recursive: true });
       await fs.writeFile(outsideFile, "owned");
       await tar.c({ file: archivePath, preservePaths: true }, [outsideFile]);
+      await fs.writeFile(outsideFile, "SAFE");
 
-      await expect(
+      await expectRejectedCode(
         extractArchive({
           archivePath,
           destDir: extractDir,
           timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
         }),
-      ).rejects.toThrow(/absolute|drive path|escapes destination/i);
+        "entry-path",
+      );
+      await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("SAFE");
+      expect(await fs.readdir(extractDir)).toEqual([]);
     });
   });
 });

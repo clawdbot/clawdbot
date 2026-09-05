@@ -1,6 +1,6 @@
 // Sandbox browser creation tests cover Docker args, bridge auth, noVNC access,
 // config hashing, and cached bridge invalidation.
-import { mkdirSync, readFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
@@ -16,6 +16,7 @@ import {
   SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
   SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
 } from "./constants.js";
+import { createBrowserSandboxConfig as buildConfig } from "./container-lifecycle.test-support.js";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
@@ -108,55 +109,6 @@ async function loadFreshBrowserModulesForTest() {
   vi.resetModules();
   ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
   ({ ensureSandboxBrowser } = await import("./browser.js"));
-}
-
-function buildConfig(noVncEnabled: boolean): SandboxConfig {
-  return {
-    mode: "all",
-    backend: "docker",
-    scope: "session",
-    workspaceAccess: "none",
-    workspaceRoot: "/tmp/openclaw-sandboxes",
-    dockerTmpfsSource: "default",
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: true,
-      tmpfs: ["/tmp", "/var/tmp", "/run"],
-      network: "none",
-      capDrop: ["ALL"],
-      env: { LANG: "C.UTF-8" },
-    },
-    ssh: {
-      command: "ssh",
-      workspaceRoot: "/tmp/openclaw-sandboxes",
-      strictHostKeyChecking: true,
-      updateHostKeys: true,
-    },
-    browser: {
-      enabled: true,
-      image: "openclaw-sandbox-browser:bookworm-slim",
-      containerPrefix: "openclaw-sbx-browser-",
-      network: "openclaw-sandbox-browser",
-      cdpPort: 9222,
-      vncPort: 5900,
-      noVncPort: 6080,
-      headless: false,
-      noVncEnabled,
-      allowHostControl: false,
-      autoStart: true,
-      autoStartTimeoutMs: 12_000,
-    },
-    tools: {
-      allow: ["browser"],
-      deny: [],
-    },
-    prune: {
-      idleHours: 24,
-      maxAgeDays: 7,
-    },
-  };
 }
 
 function computeTestBrowserHash(params: {
@@ -388,6 +340,70 @@ describe("ensureSandboxBrowser create args", () => {
     expect(createArgs.filter((arg) => arg === "--init")).toHaveLength(1);
     expect(createArgs).toContain(`openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`);
   });
+
+  it.each([false, true])(
+    "prepares managed skill mountpoints before browser creation, restart, and auto-start (custom=%s)",
+    async (custom) => {
+      const workspaceDir = realpathSync(tempDirs.make("openclaw-browser-mounts-"));
+      const skillsWorkspaceDir = realpathSync(tempDirs.make("openclaw-browser-skills-"));
+      mkdirSync(path.join(skillsWorkspaceDir, "skills"));
+      const cfg = buildConfig(false);
+      cfg.workspaceAccess = "rw";
+      const mountRoot = path.join(workspaceDir, custom ? "browser-custom" : ".openclaw");
+      if (custom) {
+        mkdirSync(mountRoot);
+        cfg.docker.dangerouslyAllowReservedContainerTargets = true;
+        cfg.browser.binds = [`${mountRoot}:/workspace/.openclaw:ro`];
+      }
+      const params = {
+        scopeKey: "session:test",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        skillsWorkspaceDir,
+        cfg,
+      };
+      const execute = dockerMocks.execDocker.getMockImplementation()!;
+      dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
+        if (args[0] === "start") {
+          for (const relative of [".", "sandbox-skills", "sandbox-skills/skills"]) {
+            const stat = lstatSync(path.join(mountRoot, relative));
+            expect(stat.isDirectory()).toBe(true);
+            expect(stat.uid).toBe(statSync(workspaceDir).uid);
+          }
+        }
+        return await execute(args);
+      });
+      await ensureTestSandboxBrowser(params);
+      const createArgs = requireDockerCreateArgs();
+      if (custom) {
+        expect(createArgs).toContain(`${mountRoot}:/workspace/.openclaw:ro`);
+      }
+      expect(createArgs).toContain(
+        `${path.join(skillsWorkspaceDir, "skills")}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
+      );
+      const configHash = collectDockerFlagValues(createArgs, "--label")
+        .find((entry) => entry.startsWith("openclaw.configHash="))
+        ?.slice("openclaw.configHash=".length);
+      dockerMocks.readDockerContainerLabel.mockResolvedValue(configHash);
+      dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");
+      dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: false });
+      rmSync(path.join(mountRoot, "sandbox-skills"), { recursive: true });
+      await ensureTestSandboxBrowser(params);
+
+      rmSync(path.join(mountRoot, "sandbox-skills"), { recursive: true });
+      vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as Response);
+      const attach =
+        bridgeMocks.startBrowserBridgeServer.mock.calls.at(-1)?.[0].onEnsureAttachTarget;
+      expect(attach).toBeTypeOf("function");
+      await attach({});
+      expect(
+        dockerMocks.execDocker.mock.calls.filter(([args]) => args[0] === "create"),
+      ).toHaveLength(1);
+      expect(
+        dockerMocks.execDocker.mock.calls.filter(([args]) => args[0] === "start"),
+      ).toHaveLength(3);
+    },
+  );
 
   it("serializes concurrent provisioning for the same browser container", async () => {
     let created = false;

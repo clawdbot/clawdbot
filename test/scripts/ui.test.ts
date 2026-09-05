@@ -58,35 +58,37 @@ async function waitForExit(
 }
 
 describe("scripts/ui windows spawn behavior", () => {
-  it("reuses the runtime identity for the documented standalone UI rebuild", () => {
-    const commit = "0123456789abcdef0123456789abcdef01234567";
-    const firstBuild = normalizeControlUiBuildInfo({
-      version: "2026.8.1",
-      commit,
-      builtAt: "2026-08-14T23:00:00.000Z",
-    });
+  it.each(["0123456789abcdef0123456789abcdef01234567", null])(
+    "reuses the runtime identity for the documented standalone UI rebuild with commit=%s",
+    (commit) => {
+      const firstBuild = normalizeControlUiBuildInfo({
+        version: "2026.8.1",
+        commit,
+        builtAt: "2026-08-14T23:00:00.000Z",
+      });
 
-    const env = resolveUiBuildEnvironment({
-      env: {},
-      now: () => new Date("2026-08-14T23:05:00.000Z"),
-      readBuildInfo: () => firstBuild,
-      readGitCommit: () => commit,
-      readPackageVersion: () => "2026.8.1",
-    });
-    const rebuiltUi = normalizeControlUiBuildInfo({
-      version: "2026.8.1",
-      commit: env.GIT_COMMIT,
-      builtAt: env.OPENCLAW_BUILD_TIMESTAMP,
-      buildId: env.OPENCLAW_CONTROL_UI_BUILD_ID,
-    });
+      const env = resolveUiBuildEnvironment({
+        env: {},
+        now: () => new Date("2026-08-14T23:05:00.000Z"),
+        readBuildInfo: () => firstBuild,
+        readGitCommit: () => commit,
+        readPackageVersion: () => "2026.8.1",
+      });
+      const rebuiltUi = normalizeControlUiBuildInfo({
+        version: "2026.8.1",
+        commit: env.GIT_COMMIT,
+        builtAt: env.OPENCLAW_BUILD_TIMESTAMP,
+        buildId: env.OPENCLAW_CONTROL_UI_BUILD_ID,
+      });
 
-    expect(rebuiltUi).toMatchObject({
-      builtAt: firstBuild.builtAt,
-      buildId: firstBuild.buildId,
-      commit: firstBuild.commit,
-      version: firstBuild.version,
-    });
-  });
+      expect(rebuiltUi).toMatchObject({
+        builtAt: firstBuild.builtAt,
+        buildId: firstBuild.buildId,
+        commit: firstBuild.commit,
+        version: firstBuild.version,
+      });
+    },
+  );
 
   it("does not reuse build info from a different source revision", () => {
     const env = resolveUiBuildEnvironment({

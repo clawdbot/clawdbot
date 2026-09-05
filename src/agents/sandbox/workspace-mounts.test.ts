@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   appendWorkspaceMountArgs,
   filterBindsConflictingWithProtectedMounts,
+  prepareWorkspaceSkillMountpoints,
   resolveProtectedSkillMountContainerPaths,
   type ReadOnlyWorkspaceSkillMount,
 } from "./workspace-mounts.js";
@@ -335,5 +336,164 @@ describe("filterBindsConflictingWithProtectedMounts", () => {
       protectedPaths,
     );
     expect(filtered).toEqual([]);
+  });
+});
+
+describe("prepareWorkspaceSkillMountpoints", () => {
+  it.each([
+    ["deep bind", "/workspace", "/workspace/.openclaw/sandbox-skills", ".openclaw/sandbox-skills"],
+    ["above workdir", "/project/deep/workspace", "/project", "deep/workspace"],
+    ["same prefix", "/workspace", "/workspace", ""],
+  ])(
+    "prepares necessary attachments for %s",
+    async (_name, workdir, containerTarget, attachment) => {
+      const workspaceDir = fs.realpathSync(makeTempWorkspace());
+      const custom = fs.realpathSync(makeTempWorkspace());
+      const containerPath = `${workdir}/.openclaw/sandbox-skills/skills`;
+      const mounts = [{ hostPath: custom, containerPath }];
+      const binds = [`${custom}:${containerTarget}:ro`];
+      await prepareWorkspaceSkillMountpoints(workspaceDir, workdir, mounts, binds);
+      const deepBind = containerTarget.endsWith("sandbox-skills");
+      const attachmentRoot = deepBind ? workspaceDir : custom;
+      if (attachment) {
+        expect(fs.lstatSync(path.join(attachmentRoot, attachment)).isDirectory()).toBe(true);
+      }
+      const skillRoot = containerTarget === "/project" ? workspaceDir : custom;
+      const suffix = deepBind ? "skills" : ".openclaw/sandbox-skills/skills";
+      expect(fs.lstatSync(path.join(skillRoot, suffix)).isDirectory()).toBe(true);
+      if (containerTarget === workdir) {
+        expect(fs.readdirSync(workspaceDir)).toEqual([]);
+      }
+    },
+  );
+
+  it.each([
+    ["/workspace", "rw", false],
+    ["/custom/work", "ro", false],
+    ["/custom/work", "rw", true],
+  ] as const)(
+    "prepares the deepest surviving parent (%s, %s, reversed=%s)",
+    async (workdir, mode, reversed) => {
+      const workspaceDir = fs.realpathSync(makeTempWorkspace());
+      const shallow = fs.realpathSync(makeTempWorkspace());
+      const deep = fs.realpathSync(makeTempWorkspace());
+      const ignored = fs.realpathSync(makeTempWorkspace());
+      const containerPath = `${workdir}/.openclaw/sandbox-skills/skills`;
+      const mounts = [{ hostPath: ignored, containerPath }];
+      const binds = [
+        `${shallow}:${workdir}/.openclaw:rw`,
+        `${deep}:${workdir}/.openclaw/sandbox-skills:${mode}`,
+        `${ignored}:${containerPath}:rw`,
+        `${ignored}:${workdir}/.openclaw/sandbox-skills-other:rw`,
+      ];
+      if (reversed) {
+        binds.reverse();
+      }
+      await prepareWorkspaceSkillMountpoints(workspaceDir, workdir, mounts, binds);
+      expect(fs.readdirSync(deep)).toEqual(["skills"]);
+      expect(fs.lstatSync(path.join(deep, "skills")).isDirectory()).toBe(true);
+      expect(fs.readdirSync(workspaceDir)).toEqual([".openclaw"]);
+      expect(fs.readdirSync(path.join(workspaceDir, ".openclaw"))).toEqual([]);
+      expect(fs.readdirSync(shallow)).toEqual(["sandbox-skills"]);
+      expect(fs.readdirSync(path.join(shallow, "sandbox-skills"))).toEqual([]);
+      expect(fs.readdirSync(ignored)).toEqual([]);
+    },
+  );
+
+  it.each(["rw", "ro"])(
+    "preserves existing %s parent directory contents and ownership",
+    async (mode) => {
+      const workspaceDir = fs.realpathSync(makeTempWorkspace());
+      const parent = fs.realpathSync(makeTempWorkspace());
+      const target = path.join(parent, "skills");
+      fs.mkdirSync(target);
+      fs.writeFileSync(path.join(target, "witness"), "unchanged");
+      const before = fs.statSync(target);
+      await prepareWorkspaceSkillMountpoints(
+        workspaceDir,
+        "/workspace",
+        [
+          {
+            hostPath: workspaceDir,
+            containerPath: "/workspace/.agents/skills",
+          },
+        ],
+        [`${parent}:/workspace/.agents:${mode}`],
+      );
+      const after = fs.statSync(target);
+      expect([after.uid, after.gid, after.mode, after.ino]).toEqual([
+        before.uid,
+        before.gid,
+        before.mode,
+        before.ino,
+      ]);
+      expect(fs.readFileSync(path.join(target, "witness"), "utf8")).toBe("unchanged");
+      expect(fs.readdirSync(workspaceDir)).toEqual([".agents"]);
+      expect(fs.readdirSync(path.join(workspaceDir, ".agents"))).toEqual([]);
+    },
+  );
+
+  it.each(["file", "internal link", "external link", "dangling link"])(
+    "preserves a custom parent suffix occupied by %s",
+    async (kind) => {
+      const workspaceDir = fs.realpathSync(makeTempWorkspace());
+      const parent = fs.realpathSync(makeTempWorkspace());
+      const outside = fs.realpathSync(makeTempWorkspace());
+      fs.writeFileSync(path.join(outside, "witness"), "unchanged");
+      const target = path.join(parent, "skills");
+      if (kind === "file") {
+        fs.writeFileSync(target, "preserve");
+      } else {
+        const destination =
+          kind === "external link"
+            ? outside
+            : path.join(parent, kind === "internal link" ? "other" : "missing");
+        if (kind === "internal link") {
+          fs.mkdirSync(destination);
+        }
+        fs.symlinkSync(destination, target, process.platform === "win32" ? "junction" : "dir");
+      }
+      const before = fs.lstatSync(target);
+      await expect(
+        prepareWorkspaceSkillMountpoints(
+          workspaceDir,
+          "/workspace",
+          [
+            {
+              hostPath: workspaceDir,
+              containerPath: "/workspace/.agents/skills",
+            },
+          ],
+          [`${parent}:/workspace/.agents:ro`],
+        ),
+      ).rejects.toThrow(/Required mountpoint "skills"/);
+      expect(fs.lstatSync(target).ino).toBe(before.ino);
+      expect(fs.readFileSync(path.join(outside, "witness"), "utf8")).toBe("unchanged");
+      expect(fs.readdirSync(outside)).toEqual(["witness"]);
+      expect(fs.readdirSync(workspaceDir)).toEqual([]);
+      if (kind === "file") {
+        expect(fs.readFileSync(target, "utf8")).toBe("preserve");
+      }
+    },
+  );
+
+  it("rejects ambiguous duplicate parent binds before creating directories", async () => {
+    const workspaceDir = fs.realpathSync(makeTempWorkspace());
+    const parent = fs.realpathSync(makeTempWorkspace());
+    await expect(
+      prepareWorkspaceSkillMountpoints(
+        workspaceDir,
+        "/workspace",
+        [
+          {
+            hostPath: workspaceDir,
+            containerPath: "/workspace/.agents/skills",
+          },
+        ],
+        [`${parent}:/workspace/.agents:rw`, `${workspaceDir}:/workspace/.agents:ro`],
+      ),
+    ).rejects.toThrow(/duplicate parent/);
+    expect(fs.readdirSync(parent)).toEqual([]);
+    expect(fs.readdirSync(workspaceDir)).toEqual([]);
   });
 });

@@ -51,6 +51,8 @@ suite.define(() => {
       await unreadRow.waitFor({ state: "visible", timeout: 10_000 });
       await unreadDot.waitFor({ state: "visible" });
       await captureUiProof(suite, page, "optimistic-read-before.png");
+      // The initial chat's child roster loads independently of the visible sidebar.
+      await gateway.waitForRequest("sessions.list", { match: { spawnedBy: otherKey } });
       const listRequestsBefore = (await gateway.getRequests("sessions.list")).length;
       const patchRequestsBefore = (await gateway.getRequests("sessions.patch")).length;
 

@@ -354,13 +354,15 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
     };
   } else if (
     ctx.agentRuntimeId === "codex" &&
-    ctx.authProfileId === undefined &&
-    ctx.authProfileMode === undefined &&
-    ctx.providerConfig?.auth === undefined
+    isOpenAICodexBaseUrl(synthBaseUrl) &&
+    (ctx.providerConfig?.api ?? "openai-chatgpt-responses") === "openai-chatgpt-responses" &&
+    (ctx.authProfileMode === "oauth" ||
+      (ctx.authProfileMode === undefined && ctx.authProfileId === undefined)) &&
+    (ctx.providerConfig?.auth === undefined || ctx.providerConfig.auth === ctx.authProfileMode)
   ) {
-    // Codex owns its account-scoped model catalog. When that catalog is not yet
-    // available, keep the requested identity intact and let the native runtime
-    // decide whether the account can actually use it.
+    // Codex owns account-scoped model identities, including with a resolved OAuth
+    // profile. Keep the requested identity intact for native account validation;
+    // Platform credentials and authored non-Codex routes cannot use this fallback.
     templateIds = OPENAI_CODEX_GPT_56_MODEL_IDS;
     patch = {
       reasoning: true,

@@ -5,11 +5,12 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { ensureDirectoryWithinRoot } from "../../infra/fs-safe-advanced.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
-import { normalizeContainerPathCore } from "./path-utils.js";
+import { isPathInsideContainerRoot, normalizeContainerPathCore } from "./path-utils.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
 export const SANDBOX_MOUNT_FORMAT_VERSION = 4;
@@ -20,6 +21,75 @@ export type ReadOnlyWorkspaceSkillMount = {
   hostPath: string;
   containerPath: string;
 };
+
+/** Keep managed overlay mountpoints removable by the workspace's host owner. */
+export async function prepareWorkspaceSkillMountpoints(
+  workspaceDir: string,
+  workdir: string,
+  mounts: readonly ReadOnlyWorkspaceSkillMount[],
+  binds?: readonly string[],
+): Promise<void> {
+  if (mounts.length === 0) {
+    return;
+  }
+  const overlayTargets = resolveProtectedSkillMountContainerPaths(mounts);
+  const parents = filterBindsConflictingWithProtectedMounts(binds, overlayTargets).flatMap(
+    (bind) => {
+      const spec = splitSandboxBindSpec(bind);
+      return spec
+        ? [{ host: spec.host, container: normalizeMountContainerPath(spec.container) }]
+        : [];
+    },
+  );
+  const seenParents = new Set<string>();
+  for (const parent of parents) {
+    if (!mounts.some((mount) => isPathInsideContainerRoot(parent.container, mount.containerPath))) {
+      continue;
+    }
+    if (seenParents.has(parent.container)) {
+      throw new Error(
+        `Sandbox skill mountpoint has duplicate parent binds at ${JSON.stringify(parent.container.slice(0, 160))}. Remove the duplicate bind before retrying.`,
+      );
+    }
+    seenParents.add(parent.container);
+  }
+  // Custom binds precede the workspace at equal depth, as in the mount resolver.
+  parents.push({ host: workspaceDir, container: normalizeMountContainerPath(workdir) });
+  parents.sort((a, b) => b.container.length - a.container.length);
+  const neededTargets = new Set(overlayTargets);
+  const destinations = [];
+  // Visit the whole containing bind chain: each parent may itself need a
+  // mountpoint in another host-backed bind, including above the workdir.
+  for (const target of neededTargets) {
+    const parent = parents.find(
+      (entry) => entry.container !== target && isPathInsideContainerRoot(entry.container, target),
+    );
+    if (!parent) {
+      if (overlayTargets.has(target)) {
+        throw new Error("Sandbox skill mountpoint has no containing workspace bind.");
+      }
+      continue; // The outermost bind attaches to the container image, not a host source.
+    }
+    destinations.push({ parent, requestedPath: path.posix.relative(parent.container, target) });
+    neededTargets.add(parent.container);
+  }
+  for (const { parent, requestedPath } of destinations) {
+    // Even for a read-only container bind, the gateway prepares missing host
+    // directories so rootful engines do not create them as root. Never follow
+    // symlinks in the suffix or repair existing ownership.
+    const rootDir = await fs.promises.realpath(parent.host);
+    const result = await ensureDirectoryWithinRoot({
+      rootDir,
+      requestedPath,
+      scopeLabel: "sandbox workspace skill mountpoints",
+    });
+    if (!result.ok) {
+      throw new Error(
+        `${result.error} Required mountpoint ${JSON.stringify(requestedPath.slice(0, 160))} is beneath container bind ${JSON.stringify(parent.container.slice(0, 160))}. Move conflicting files or links aside before retrying.`,
+      );
+    }
+  }
+}
 
 function formatManagedWorkspaceBind(params: {
   hostPath: string;

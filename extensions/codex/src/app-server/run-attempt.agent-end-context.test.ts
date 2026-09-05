@@ -1,10 +1,12 @@
 import path from "node:path";
 import * as agentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
+  createCodexRuntimePlanFixture,
   createParams,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
@@ -17,6 +19,12 @@ import {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt agent-end context", () => {
+  beforeEach(() => {
+    // Context assertions own the clock; cold preparation must not consume the
+    // attempt budget before the fixture sends its terminal outcome.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  });
+
   it.each(["completed", "aborted", "provider refusal"] as const)(
     "hands deep-turn context to agent-end without reviewing a refusal: %s",
     async (outcome) => {
@@ -32,11 +40,18 @@ describe("runCodexAppServerAttempt agent-end context", () => {
         entry: { sessionFile, sessionId: source.sessionId, updatedAt: Date.now() },
       });
       const workspaceDir = path.join(tempDir, "agent-end-context-workspace");
-      const harness = createStartedThreadHarness();
+      const turnStarted = createDeferred<void>();
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "turn/start") {
+          turnStarted.resolve();
+        }
+      });
       const runAgentEndSideEffects = vi
         .spyOn(agentHarnessRuntime, "runAgentEndSideEffects")
         .mockImplementation(() => {});
       const params = createParams(sessionFile, workspaceDir);
+      // Use the host-prepared tool policy; provider discovery is outside this context test.
+      params.runtimePlan = createCodexRuntimePlanFixture();
       const abortController = new AbortController();
       params.abortSignal = abortController.signal;
       params.sessionTarget = source;
@@ -48,7 +63,14 @@ describe("runCodexAppServerAttempt agent-end context", () => {
       ];
 
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      // Preserve an early attempt error instead of waiting on a readiness
+      // signal that a failed attempt can never produce.
+      await Promise.race([
+        turnStarted.promise,
+        run.then(() => {
+          throw new Error("Codex attempt settled before turn/start");
+        }),
+      ]);
       for (let index = 0; index < 10; index++) {
         await harness.notify({
           method: "rawResponse/completed",

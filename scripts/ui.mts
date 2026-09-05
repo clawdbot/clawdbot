@@ -79,7 +79,7 @@ export function resolveUiBuildEnvironment(
   if (
     existing.buildId === "dev" ||
     !existing.builtAt ||
-    existing.commit !== buildEnv.GIT_COMMIT ||
+    existing.commit !== (buildEnv.GIT_COMMIT?.trim() || null) ||
     existing.version !== version ||
     existing.release !== release
   ) {

@@ -12,11 +12,14 @@ function inferenceUnavailableMessage(failures: readonly unknown[]): string {
   if (!detail) {
     return INFERENCE_UNAVAILABLE_MESSAGE;
   }
+  if (isSystemAgentInferenceUnavailableError(failures[0])) {
+    return detail;
+  }
   const summary =
     detail.length > INFERENCE_FAILURE_SUMMARY_MAX_CHARS
       ? `${truncateUtf16Safe(detail, INFERENCE_FAILURE_SUMMARY_MAX_CHARS - 1)}…`
       : detail;
-  return `${INFERENCE_UNAVAILABLE_MESSAGE} Cause: ${summary}`;
+  return `OpenClaw could not complete inference. Cause: ${summary}`;
 }
 
 /** Safe public error for an OpenClaw turn that could not complete with intelligence. */
