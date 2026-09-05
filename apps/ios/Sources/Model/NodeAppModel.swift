@@ -470,7 +470,7 @@ final class NodeAppModel {
     @ObservationIgnored private var operatorTalkConnectionGeneration: UInt64 = 0
     @ObservationIgnored private var operatorTalkHydrationGeneration: UInt64?
     @ObservationIgnored private var credentialHandoffFailureGeneration: UInt64?
-    @ObservationIgnored private(set) var gatewayConnectGeneration: UInt64 = 0
+    private(set) var gatewayConnectGeneration: UInt64 = 0
     private var forceOperatorTalkPermissionUpgradeRequest = false
     @ObservationIgnored private var talkPermissionUpgradeTask: Task<Void, Never>?
     @ObservationIgnored private var talkPermissionUpgradeReconnectTask: Task<Void, Never>?
