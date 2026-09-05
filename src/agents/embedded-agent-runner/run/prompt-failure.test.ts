@@ -7,7 +7,9 @@ import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 
 type Params = Parameters<typeof handleEmbeddedPromptFailure>[0];
 
-function makeParams(overrides: Partial<Params> = {}): Params {
+function makeParams(
+  overrides: Partial<Omit<Params, "failover">> & { failover?: Partial<Params["failover"]> } = {},
+): Params {
   const provider = "openai";
   const modelId = "gpt-5";
   const defaults: Params = {
@@ -47,21 +49,23 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     externalAbort: false,
     pluginHarnessOwnsTransport: false,
     timedOutByRunBudget: false,
-    resolveAuthProfileFailureReason: vi.fn<Params["resolveAuthProfileFailureReason"]>(
-      () => "rate_limit",
-    ),
-    advanceAuthProfile: vi.fn(async () => true),
-    advanceRateLimitAuthProfile: vi.fn(async () => true),
-    maybeMarkAuthProfileFailure: vi.fn(async () => {}),
-    maybeRetryTransient: vi.fn(async () => false),
-    getTransientRetryCount: () => 0,
+    failover: {
+      resolveAuthProfileFailureReason: vi.fn<Params["failover"]["resolveAuthProfileFailureReason"]>(
+        () => "rate_limit",
+      ),
+      advanceAuthProfile: vi.fn(async () => true),
+      advanceRateLimitAuthProfile: vi.fn(async () => true),
+      maybeMarkAuthProfileFailure: vi.fn(async () => {}),
+      maybeRetryTransient: vi.fn(async () => false),
+      transientRetryCount: 0,
+    },
     attemptedThinking: new Set(),
     thinkLevel: "low",
     getThinkLevel: () => "low",
     traceAttempts: [],
     previousRetryFailoverReason: null,
   };
-  return { ...defaults, ...overrides };
+  return { ...defaults, ...overrides, failover: { ...defaults.failover, ...overrides.failover } };
 }
 
 describe("handleEmbeddedPromptFailure", () => {
@@ -75,8 +79,10 @@ describe("handleEmbeddedPromptFailure", () => {
         promptError,
         fallbackConfigured,
         pluginHarnessOwnsTransport: true,
-        advanceAuthProfile: vi.fn(async () => false),
-        resolveAuthProfileFailureReason: vi.fn(() => null),
+        failover: {
+          advanceAuthProfile: vi.fn(async () => false),
+          resolveAuthProfileFailureReason: vi.fn(() => null),
+        },
         thinkLevel: "high",
         attemptedThinking: new Set(["high"]),
       });
@@ -104,8 +110,10 @@ describe("handleEmbeddedPromptFailure", () => {
       const params = makeParams({
         promptError: new FailoverError("Provider stopped responding", { reason: "timeout" }),
         fallbackConfigured,
-        advanceAuthProfile: vi.fn(async () => false),
-        resolveAuthProfileFailureReason: vi.fn(() => null),
+        failover: {
+          advanceAuthProfile: vi.fn(async () => false),
+          resolveAuthProfileFailureReason: vi.fn(() => null),
+        },
       });
       params.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
 
@@ -125,8 +133,10 @@ describe("handleEmbeddedPromptFailure", () => {
   it("retains a harness's provider-started timeout without inventing its phase", async () => {
     const params = makeParams({
       promptError: new FailoverError("Harness deadline reached", { reason: "timeout" }),
-      advanceAuthProfile: vi.fn(async () => false),
-      resolveAuthProfileFailureReason: vi.fn(() => null),
+      failover: {
+        advanceAuthProfile: vi.fn(async () => false),
+        resolveAuthProfileFailureReason: vi.fn(() => null),
+      },
     });
     params.attempt.terminal = { kind: "timeout", phase: "tool_execution", source: "runtime" };
     params.attempt.promptTimeoutOutcome = { providerStarted: true };
@@ -143,7 +153,7 @@ describe("handleEmbeddedPromptFailure", () => {
     async (phase) => {
       const params = makeParams({
         promptError: new Error("Opaque provider failure"),
-        resolveAuthProfileFailureReason: vi.fn(() => null),
+        failover: { resolveAuthProfileFailureReason: vi.fn(() => null) },
       });
       params.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
 
@@ -153,8 +163,8 @@ describe("handleEmbeddedPromptFailure", () => {
         stopReason: "timeout",
         ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
       });
-      expect(params.maybeRetryTransient).not.toHaveBeenCalled();
-      expect(params.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(params.failover.maybeRetryTransient).not.toHaveBeenCalled();
+      expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
       expect(error).toHaveProperty("cause", params.promptError);
     },
   );
@@ -196,11 +206,11 @@ describe("handleEmbeddedPromptFailure", () => {
       for (const callback of [
         params.maybeRefreshRuntimeAuthForAuthError,
         params.suspendForFailure,
-        params.resolveAuthProfileFailureReason,
-        params.advanceAuthProfile,
-        params.advanceRateLimitAuthProfile,
-        params.maybeMarkAuthProfileFailure,
-        params.maybeRetryTransient,
+        params.failover.resolveAuthProfileFailureReason,
+        params.failover.advanceAuthProfile,
+        params.failover.advanceRateLimitAuthProfile,
+        params.failover.maybeMarkAuthProfileFailure,
+        params.failover.maybeRetryTransient,
       ]) {
         expect(callback).not.toHaveBeenCalled();
       }
@@ -232,7 +242,7 @@ describe("handleEmbeddedPromptFailure", () => {
       const params = makeParams({
         promptError,
         promptErrorSource,
-        resolveAuthProfileFailureReason: vi.fn(() => null),
+        failover: { resolveAuthProfileFailureReason: vi.fn(() => null) },
       });
 
       await expect(handleEmbeddedPromptFailure(params)).rejects.toBeInstanceOf(Error);
@@ -257,8 +267,10 @@ describe("handleEmbeddedPromptFailure", () => {
       modelId: "sonnet",
       activeErrorContext: { provider: "claude-cli", model: "sonnet" },
       maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => true),
-      maybeRetryTransient: vi.fn(async () => true),
-      resolveAuthProfileFailureReason: vi.fn(() => null),
+      failover: {
+        maybeRetryTransient: vi.fn(async () => true),
+        resolveAuthProfileFailureReason: vi.fn(() => null),
+      },
     });
 
     await expect(handleEmbeddedPromptFailure(params)).rejects.toMatchObject({
@@ -267,9 +279,9 @@ describe("handleEmbeddedPromptFailure", () => {
 
     for (const callback of [
       params.maybeRefreshRuntimeAuthForAuthError,
-      params.maybeRetryTransient,
-      params.advanceAuthProfile,
-      params.advanceRateLimitAuthProfile,
+      params.failover.maybeRetryTransient,
+      params.failover.advanceAuthProfile,
+      params.failover.advanceRateLimitAuthProfile,
     ]) {
       expect(callback).not.toHaveBeenCalled();
     }
@@ -293,11 +305,13 @@ describe("handleEmbeddedPromptFailure", () => {
     try {
       const outcome = await handleEmbeddedPromptFailure(
         makeParams({
-          advanceRateLimitAuthProfile: vi.fn(async () => {
-            events.push("advance");
-            return true;
-          }),
-          maybeMarkAuthProfileFailure,
+          failover: {
+            advanceRateLimitAuthProfile: vi.fn(async () => {
+              events.push("advance");
+              return true;
+            }),
+            maybeMarkAuthProfileFailure,
+          },
         }),
       );
 
