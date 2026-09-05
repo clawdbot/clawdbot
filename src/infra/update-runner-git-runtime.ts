@@ -127,6 +127,24 @@ export async function prepareGitRuntimePromotion(
         (other) => other !== entry.sourceRoot && isPathInside(other, entry.sourceRoot),
       ),
   );
+  const destinations = roots.map(({ destinationRoot }) =>
+    path.join(
+      resolvePathViaExistingAncestorSync(path.dirname(destinationRoot)),
+      path.basename(destinationRoot),
+    ),
+  );
+  // External payloads may survive a moved symlink, but stores inside renamed
+  // directory entries disappear from the candidate's retained dependency links.
+  for (const store of stores.keys()) {
+    const payload = await fs.realpath(store);
+    if (
+      (!copiedRoots.has(store) && destinations.some((dest) => isPathInside(dest, store))) ||
+      (!roots.some(({ sourceRoot }) => isPathInside(sourceRoot, payload)) &&
+        destinations.some((dest) => isPathInside(dest, payload)))
+    ) {
+      throw new Error("Candidate pnpm virtual store overlaps a runtime directory being replaced.");
+    }
+  }
   const staged: Array<{ destination: string; temporary: string; previous: boolean }> = [];
   const promoted: typeof staged = [];
   let restoreStarted = false;

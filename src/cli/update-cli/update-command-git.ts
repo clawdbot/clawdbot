@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
@@ -281,7 +282,7 @@ export async function updateGitInstall(params: {
       beforeGitMutation: params.beforeGitMutation,
       validateCandidate: params.validateCandidate,
       prepareGitExposure: params.switchToGit
-        ? async (candidateRoot, candidateSha) => {
+        ? async (candidateRoot, candidateSha, candidateEnv) => {
             if (!installTarget) {
               throw new Error("global install target missing after package-to-Git preflight");
             }
@@ -296,7 +297,7 @@ export async function updateGitInstall(params: {
               runCommand: runCommandWithTimeout,
               runStep: (stepParams) => runUpdateStep({ ...stepParams, progress: params.progress }),
               timeoutMs: effectiveTimeout,
-              env: installEnv,
+              env: mergeProcessEnv([installEnv, candidateEnv]),
               installCwd: candidateRoot,
               expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
               activateGitRoot: updateRoot,

@@ -60,7 +60,7 @@ type PackageUpdateStepRunner = (params: {
 type PackageUpdateStepsResult = {
   reason?: "already-current";
   steps: UpdateStepResult[];
-  verifiedPackageRoot: string | null;
+  activePackageRoot: string | null;
   afterVersion: string | null;
   failedStep: UpdateStepResult | null;
   recovery: UpdateRecovery;
@@ -682,7 +682,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   let stagedInstall: StagedPackageInstall | null = null;
   let packedInstallDir: string | null = null;
   const originalPackageRoot = params.installTarget.packageRoot ?? params.packageRoot ?? null;
-  let verifiedPackageRoot = originalPackageRoot;
+  let activePackageRoot = originalPackageRoot;
   let afterVersion: string | null = null;
   const initialRecovery = await verifyPackageUpdateRecovery(originalPackageRoot);
   let liveTreeMutated = false;
@@ -690,7 +690,6 @@ export async function runGlobalPackageUpdateSteps(params: {
   const steps: UpdateStepResult[] = [];
   const packageUpdateFailure = async (
     failedStep: UpdateStepResult,
-    failureRoot: string | null,
     failedSteps = [failedStep],
   ): Promise<PackageUpdateStepsResult> => {
     let recovery: UpdateRecovery = liveTreeMutated
@@ -711,7 +710,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
     return {
       steps: failedSteps,
-      verifiedPackageRoot: failureRoot,
+      activePackageRoot,
       afterVersion,
       failedStep,
       recovery,
@@ -723,10 +722,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       installTarget: params.installTarget,
     });
     if (npmPreflight.failedStep) {
-      return await packageUpdateFailure(
-        npmPreflight.failedStep,
-        params.packageRoot ?? params.installTarget.packageRoot,
-      );
+      return await packageUpdateFailure(npmPreflight.failedStep);
     }
     const pnpmPreflight = await validatePnpmIsolatedUpdate({
       installTarget: params.installTarget,
@@ -736,10 +732,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       env: params.env,
     });
     if (pnpmPreflight.failedStep) {
-      return await packageUpdateFailure(
-        pnpmPreflight.failedStep,
-        params.packageRoot ?? params.installTarget.packageRoot,
-      );
+      return await packageUpdateFailure(pnpmPreflight.failedStep);
     }
     const packageRoot = params.packageRoot ?? params.installTarget.packageRoot;
     if (packageRoot) {
@@ -801,7 +794,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         name: `${params.installTarget.manager} staging preflight`,
       });
       if (bin.failedStep) {
-        return await packageUpdateFailure(bin.failedStep, originalPackageRoot);
+        return await packageUpdateFailure(bin.failedStep);
       }
       globalBinDir = bin.result
         ? readPackageManagerProbeValue(bin.result.stdout) || undefined
@@ -818,9 +811,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     );
     stagedInstall = preparedInstall.stagedInstall;
     if (preparedInstall.failedStep) {
-      return await packageUpdateFailure(preparedInstall.failedStep, params.packageRoot ?? null, [
-        preparedInstall.failedStep,
-      ]);
+      return await packageUpdateFailure(preparedInstall.failedStep);
     }
     const commandEnv = stagedInstall?.native?.env ?? effectiveInstallEnv;
     const installEnv = commandEnv === undefined ? {} : { env: commandEnv };
@@ -852,10 +843,7 @@ export async function runGlobalPackageUpdateSteps(params: {
             exitCode: 1,
             stderrTail: `pnpm ${probeName} selected ${reportedPath || "an unknown path"}, expected staged destination ${expectedPath}. The live installation was left unchanged.`,
           };
-          return await packageUpdateFailure(failedStep, originalPackageRoot, [
-            ...steps,
-            failedStep,
-          ]);
+          return await packageUpdateFailure(failedStep, [...steps, failedStep]);
         }
       }
     }
@@ -873,7 +861,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     packedInstallDir = preparedSpec.packDir;
     steps.push(...preparedSpec.steps);
     if (preparedSpec.failedStep) {
-      return await packageUpdateFailure(preparedSpec.failedStep, params.packageRoot ?? null, steps);
+      return await packageUpdateFailure(preparedSpec.failedStep, steps);
     }
 
     // pnpm selects its version from cwd. Keep every pnpm mutation beside its
@@ -927,11 +915,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       stagedInstall = preparedFallbackInstall.stagedInstall;
       if (preparedFallbackInstall.failedStep) {
         steps.push(preparedFallbackInstall.failedStep);
-        return await packageUpdateFailure(
-          preparedFallbackInstall.failedStep,
-          params.packageRoot ?? null,
-          steps,
-        );
+        return await packageUpdateFailure(preparedFallbackInstall.failedStep, steps);
       }
 
       const fallbackArgv = globalInstallFallbackArgs(
@@ -978,7 +962,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           exitCode: 1,
           stderrTail: "could not identify a unique active staged pnpm replacement package",
         };
-        return await packageUpdateFailure(failedStep, originalPackageRoot, [...steps, failedStep]);
+        return await packageUpdateFailure(failedStep, [...steps, failedStep]);
       }
       stagedInstall.packageRoot = candidate.packageRoot;
     }
@@ -1019,6 +1003,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       params.installTarget.packageRoot !== null &&
       refreshedPnpmPackageRoot === null;
     if (pnpmReplacementMissing) {
+      activePackageRoot = null;
       const replacementStep: UpdateStepResult = {
         name: "global install verify",
         command: `resolve pnpm replacement in ${params.installTarget.globalRoot ?? "unknown root"}`,
@@ -1028,7 +1013,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         stderrTail: "could not identify a unique active pnpm replacement package",
       };
       steps.push(replacementStep);
-      return await packageUpdateFailure(replacementStep, params.packageRoot ?? null, steps);
+      return await packageUpdateFailure(replacementStep, steps);
     }
     const livePackageRoot =
       refreshedPnpmPackageRoot ??
@@ -1044,7 +1029,9 @@ export async function runGlobalPackageUpdateSteps(params: {
       ).packageRoot ??
       null;
     const verificationPackageRoot = stagedInstall?.packageRoot ?? livePackageRoot;
-    verifiedPackageRoot = livePackageRoot ?? verificationPackageRoot;
+    if (!stagedInstall) {
+      activePackageRoot = livePackageRoot;
+    }
     if (finalInstallStep.exitCode === 0 && !verificationPackageRoot) {
       const failedStep: UpdateStepResult = {
         name: "global install verify",
@@ -1054,7 +1041,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         exitCode: 1,
         stderrTail: "could not identify the installed package root",
       };
-      return await packageUpdateFailure(failedStep, null, [...steps, failedStep]);
+      return await packageUpdateFailure(failedStep, [...steps, failedStep]);
     }
 
     if (finalInstallStep.exitCode === 0 && verificationPackageRoot) {
@@ -1084,7 +1071,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         return {
           reason: "already-current",
           steps,
-          verifiedPackageRoot: originalPackageRoot,
+          activePackageRoot: originalPackageRoot,
           afterVersion: candidateVersion,
           failedStep: null,
           recovery: await verifyPackageUpdateRecovery(originalPackageRoot),
@@ -1126,7 +1113,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           }
         } catch (error) {
           if (failedLifecycleStep) {
-            return await packageUpdateFailure(failedLifecycleStep, verifiedPackageRoot, steps);
+            return await packageUpdateFailure(failedLifecycleStep, steps);
           }
           const lifecycleStep: UpdateStepResult = {
             name: `${params.installTarget.manager} package lifecycle`,
@@ -1137,7 +1124,7 @@ export async function runGlobalPackageUpdateSteps(params: {
             stderrTail: formatErrorMessage(error),
           };
           steps.push(lifecycleStep);
-          return await packageUpdateFailure(lifecycleStep, verifiedPackageRoot, steps);
+          return await packageUpdateFailure(lifecycleStep, steps);
         }
       }
       if (verificationErrors.length > 0) {
@@ -1157,7 +1144,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         steps.push(...validation);
         const rejectedCandidate = validation.find(isBlockingPackageUpdateStep);
         if (rejectedCandidate) {
-          return await packageUpdateFailure(rejectedCandidate, livePackageRoot, steps);
+          return await packageUpdateFailure(rejectedCandidate, steps);
         }
         if (params.activateGitRoot) {
           if (
@@ -1194,24 +1181,18 @@ export async function runGlobalPackageUpdateSteps(params: {
           steps.push(swap.postVerifyStep);
         }
         failedVerification = swap.status === "failed";
+        activePackageRoot = swap.activePackageRoot;
         // Verified rollback restores package files, not state changed by hooks.
         if (swap.status === "committed") {
-          verifiedPackageRoot = stagedInstall.native
-            ? path.join(
-                stagedInstall.native.liveProjectRoot,
-                path.relative(stagedInstall.native.projectRoot, stagedInstall.packageRoot),
-              )
-            : (params.installTarget.packageRoot ?? verifiedPackageRoot);
           afterVersion = candidateVersion;
         } else {
           packageRollbackVerified = swap.packageRollbackVerified;
-          afterVersion = await readPackageVersionIfPresent(livePackageRoot);
         }
       }
 
       if (!stagedInstall && !failedVerification) {
-        const postVerifyStep = verifiedPackageRoot
-          ? ((await params.postVerifyStep?.(verifiedPackageRoot)) ?? null)
+        const postVerifyStep = activePackageRoot
+          ? ((await params.postVerifyStep?.(activePackageRoot)) ?? null)
           : null;
         if (postVerifyStep) {
           steps.push(postVerifyStep);
@@ -1219,7 +1200,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           steps.push({
             name: "post-install verification",
             command: "verify installed package",
-            cwd: verifiedPackageRoot ?? process.cwd(),
+            cwd: activePackageRoot ?? process.cwd(),
             durationMs: 0,
             exitCode: 1,
             stderrTail:
@@ -1228,7 +1209,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         }
       }
       if (failedVerification && stagedInstall) {
-        afterVersion = await readPackageVersionIfPresent(livePackageRoot);
+        afterVersion = await readPackageVersionIfPresent(activePackageRoot);
       }
     }
 
@@ -1237,11 +1218,11 @@ export async function runGlobalPackageUpdateSteps(params: {
       : (steps.find((step) => step !== updateStep && isBlockingPackageUpdateStep(step)) ?? null);
 
     if (failedStep) {
-      return await packageUpdateFailure(failedStep, verifiedPackageRoot, steps);
+      return await packageUpdateFailure(failedStep, steps);
     }
     return {
       steps,
-      verifiedPackageRoot,
+      activePackageRoot,
       afterVersion,
       failedStep,
       recovery: afterVersion
@@ -1255,13 +1236,13 @@ export async function runGlobalPackageUpdateSteps(params: {
     const failedStep: UpdateStepResult = {
       name: "package update",
       command: "update installed package",
-      cwd: verifiedPackageRoot ?? params.installCwd ?? process.cwd(),
+      cwd: activePackageRoot ?? params.installCwd ?? process.cwd(),
 
       durationMs: 0,
       exitCode: 1,
       stderrTail: formatErrorMessage(error),
     };
-    return await packageUpdateFailure(failedStep, verifiedPackageRoot, [...steps, failedStep]);
+    return await packageUpdateFailure(failedStep, [...steps, failedStep]);
   } finally {
     await cleanupStagedPackageInstall(stagedInstall);
     if (packedInstallDir) {

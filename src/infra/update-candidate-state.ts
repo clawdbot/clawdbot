@@ -144,15 +144,25 @@ export async function readUpdateStateSchemaVersionsInProcess(
 }
 
 /** Schema fencing reads private copies in a child under a fixed inspection deadline. */
-export async function readUpdateStateSchemaVersions(
-  input: StateInput,
-): Promise<UpdateStateSchemaVersion[]> {
+export async function readUpdateStateSchemaVersions({
+  root,
+  nodeRunner = process.execPath,
+  ...input
+}: StateInput & {
+  // Omit only before activation; null forbids falling back after an uncertain swap.
+  root?: string | null;
+  nodeRunner?: string;
+}): Promise<UpdateStateSchemaVersion[]> {
+  if (root === null) {
+    throw new Error("The active installation root is unknown; state inspection is unsafe.");
+  }
   const sourceEnv = input.env ?? process.env;
   const result = await runCommandBuffered(
     [
-      process.execPath,
+      nodeRunner,
       ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
+        resolveRuntimeWorkerUrl({ ...runtimeProcessEntrypoints.updateCandidateState, root }),
+        nodeRunner,
       ),
     ],
     {

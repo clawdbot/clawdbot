@@ -94,8 +94,19 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   let rollbackAttempted = false;
   let rollbackStopState: PreManagedServiceStop | undefined;
   let rolledBack = false;
-  let extraDowntimeMs = 0;
-  let pendingRestartAtMs: number | undefined;
+  let completedDowntimeMs: number | undefined;
+  let pendingRestartAtMs =
+    params.preManagedServiceStop?.stoppedAtMs ??
+    params.controlPlaneUpdateSentinelMeta?.serviceStoppedAtMs;
+  // Health resets replace ledger verification. Keep completed outages here so
+  // recovery never counts the online plugin work between service stops.
+  const recordVerifiedDowntime = (verifiedAtMs: number) => {
+    if (pendingRestartAtMs !== undefined) {
+      completedDowntimeMs =
+        (completedDowntimeMs ?? 0) + Math.max(0, verifiedAtMs - pendingRestartAtMs);
+      pendingRestartAtMs = undefined;
+    }
+  };
   // Finalization owns the complete outcome, including recovery, restart, and completion work.
   const completedResult = (result: UpdateRunResult): UpdateRunResult => ({
     ...result,
@@ -123,14 +134,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   const printFinalResult = (input: UpdateRunResult) => {
     const nextAction = recordNextAction(input);
     const run = params.opts.run;
-    const verifiedAtMs = run ? getUpdateRun(run.runId, { env: run.env })?.confirmedAtMs : null;
-    const stoppedAtMs =
-      params.preManagedServiceStop?.stoppedAtMs ??
-      params.controlPlaneUpdateSentinelMeta?.serviceStoppedAtMs;
-    const downtimeMs =
-      verifiedAtMs && stoppedAtMs && pendingRestartAtMs === undefined
-        ? Math.max(0, verifiedAtMs - stoppedAtMs) + extraDowntimeMs
-        : undefined;
+    const downtimeMs = pendingRestartAtMs === undefined ? completedDowntimeMs : undefined;
     if (run && rolledBack) {
       finishUpdateRun(
         run.runId,
@@ -156,9 +160,6 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       !rollbackAttempted
     ) {
       rollbackAttempted = true;
-      const previouslyConfirmed = params.opts.run
-        ? getUpdateRun(params.opts.run.runId, { env: params.opts.run.env })?.confirmedAtMs != null
-        : false;
       const rollback = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
         rollbackFailedUpdate({
           result,
@@ -180,14 +181,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       result = rollback.result;
       rollbackStopState = rollback.stoppedForRollback;
       rolledBack = rollback.rolledBack;
-      if (previouslyConfirmed) {
-        extraDowntimeMs +=
-          pendingRestartAtMs !== undefined && rollback.verifiedAtMs !== undefined
-            ? Math.max(0, rollback.verifiedAtMs - pendingRestartAtMs)
-            : (rollback.downtimeMs ?? 0);
-      }
-      if (rolledBack) {
-        pendingRestartAtMs = undefined;
+      pendingRestartAtMs ??= rollbackStopState?.stoppedAtMs;
+      if (rollback.verifiedAtMs !== undefined) {
+        recordVerifiedDowntime(rollback.verifiedAtMs);
       }
       recoverService = false;
     }
@@ -514,7 +510,6 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
 
     await restoreWindowsAutoStart(resultWithPostUpdate);
     let verificationFailure = "restart-unhealthy";
-    let lastVerifiedAtMs: number | undefined;
     const restart = async () =>
       withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
         maybeRestartService({
@@ -537,9 +532,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           onVerificationFailure: (reason) => {
             verificationFailure = reason;
           },
-          onVerified: (verifiedAtMs) => {
-            lastVerifiedAtMs = verifiedAtMs;
-          },
+          onVerified: recordVerifiedDowntime,
         }),
       );
     let restartOk = await restart();
@@ -568,7 +561,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           );
         }
         stopped.windowsTaskAutoStartRecovery?.beginMutation();
-        pendingRestartAtMs = stopped.stoppedAtMs;
+        pendingRestartAtMs ??= stopped.stoppedAtMs;
       }));
       if (resultWithPostUpdate.postUpdate?.plugins?.changed) {
         // Convergence awaited package managers and plugin hooks. Revalidate the
@@ -593,15 +586,10 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           serviceCommand: state.command,
         });
         pendingRestartAtMs ??= Date.now();
-        lastVerifiedAtMs = undefined;
         restartScriptPath = null;
         refreshGatewayServiceEnv = false;
         await restoreWindowsAutoStart(resultWithPostUpdate);
         restartOk = await restart();
-        if (lastVerifiedAtMs !== undefined) {
-          extraDowntimeMs += Math.max(0, lastVerifiedAtMs - pendingRestartAtMs);
-          pendingRestartAtMs = undefined;
-        }
       }
     }
     if (!restartOk) {

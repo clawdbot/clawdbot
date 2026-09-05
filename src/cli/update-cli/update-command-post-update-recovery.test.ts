@@ -514,7 +514,7 @@ describe("failed package update recovery safety", () => {
       serviceEnv: env,
       serviceUpdateVerdict: {
         kind: "owned",
-        root: "/managed/candidate",
+        root: process.cwd(),
         fingerprint: "fixture",
         refreshDefinition: true,
       },
@@ -522,6 +522,7 @@ describe("failed package update recovery safety", () => {
     mocks.restartCandidate.mockResolvedValueOnce(true);
     const rollback = vi.fn(async () => ({
       name: "package rollback",
+      activePackageRoot: originalRoot,
       command: "restore",
       cwd: originalRoot,
       exitCode: 0,
@@ -535,7 +536,7 @@ describe("failed package update recovery safety", () => {
       {
         status: "error",
         mode: "pnpm",
-        root: "/managed/candidate",
+        root: process.cwd(),
         before: { version: "2026.9.1" },
         after: { version: "2026.9.3" },
         reason: "version-mismatch",

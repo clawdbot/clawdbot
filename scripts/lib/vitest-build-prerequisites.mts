@@ -44,6 +44,16 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "",
   })),
+  ...[
+    "src/cli/update-cli/update-command-rollback.test.ts",
+    "src/cli/update-cli/update-command-post-update-recovery.test.ts",
+    "src/cli/update-cli/update-command-service.integration.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.cli.config.ts"],
+    mode: "runtime" as const,
+    dir: "src/cli",
+  })),
   {
     file: "src/infra/update-candidate-canary.integration.test.ts",
     configs: ["test/vitest/vitest.infra.config.ts"],

@@ -12,7 +12,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { createUpdateProgress } from "./progress.js";
-import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
+import {
+  continueMigratedUpdateInFreshProcess,
+  inspectActivatedUpdateState,
+} from "./update-command-migrated.js";
 import { createUpdateRunProgress } from "./update-command-run.js";
 
 // Model the already-running updater's older schema contract. The candidate
@@ -32,6 +35,23 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("refuses state inspection when activation leaves no known runtime root", async () => {
+  const result = { status: "error" as const, mode: "npm" as const, steps: [], durationMs: 0 };
+  await expect(
+    inspectActivatedUpdateState({
+      result,
+      root: process.cwd(),
+      schemaVersions: [],
+      config: {},
+      env: { OPENCLAW_STATE_DIR: dirs.make("unknown-update-runtime-") },
+    }),
+  ).resolves.toBe("rollback-state-unverified");
+  expect(result).toMatchObject({
+    reason: "rollback-state-unverified",
+    steps: [expect.objectContaining({ name: "state schema verification", exitCode: 1 })],
+  });
 });
 
 it.each([false, true])(

@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import {
   readUpdateStateSchemaVersions,
   snapshotUpdateCandidateState,
@@ -127,6 +129,67 @@ it("keeps absent stores explicit and observes newly created databases for rollba
   expect(after.find((entry) => entry.path === main)?.userVersion).toBe(3);
   expect(updateStateSchemaVersionsMatch(before, after)).toBe(false);
   expect(updateStateSchemaVersionsMatch(after, after.toReversed())).toBe(true);
+});
+
+it("inspects with the installed candidate and selected Node after the old package is removed", async () => {
+  const stateDir = path.join(root, "state-owner");
+  await createDatabase(path.join(stateDir, "state", "openclaw.sqlite"));
+  const previousRoot = path.join(root, "previous-package");
+  const candidateRoot = path.join(root, "candidate-package");
+  const worker = `
+    import path from "node:path";
+    import { DatabaseSync } from "node:sqlite";
+    let input = "";
+    for await (const chunk of process.stdin) input += chunk;
+    const file = path.join(JSON.parse(input).stateDir, "state", "openclaw.sqlite");
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      console.log(JSON.stringify([{ path: file, userVersion: db.prepare("PRAGMA user_version").get().user_version }]));
+    } finally {
+      db.close();
+    }
+  `;
+  for (const packageRoot of [previousRoot, candidateRoot]) {
+    const file = path.join(packageRoot, "dist/infra/update-candidate-state.worker.js");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(path.join(packageRoot, "package.json"), '{"type":"module"}');
+    await fs.writeFile(file, worker);
+  }
+  const entrypoint = runtimeProcessEntrypoints.updateCandidateState;
+  const originalModuleUrl = entrypoint.currentModuleUrl;
+  Object.assign(entrypoint, {
+    currentModuleUrl: pathToFileURL(path.join(previousRoot, "dist/old-updater.js")).href,
+  });
+  try {
+    const before = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+    expect(before).toEqual([
+      { path: path.join(stateDir, "state", "openclaw.sqlite"), userVersion: 3 },
+    ]);
+    await fs.rm(previousRoot, { recursive: true });
+    const selectedNodeMarker = path.join(root, "selected-node-ran");
+    let nodeRunner = process.execPath;
+    if (process.platform !== "win32") {
+      nodeRunner = path.join(root, "selected-node");
+      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+      await fs.writeFile(
+        nodeRunner,
+        `#!/bin/sh\nprintf selected > ${quote(selectedNodeMarker)}\nexec ${quote(process.execPath)} "$@"\n`,
+        { mode: 0o755 },
+      );
+    }
+    const after = await readUpdateStateSchemaVersions({
+      stateDir,
+      config: {},
+      root: candidateRoot,
+      nodeRunner,
+    });
+    expect(after).toEqual(before);
+    if (process.platform !== "win32") {
+      expect(await fs.readFile(selectedNodeMarker, "utf8")).toBe("selected");
+    }
+  } finally {
+    Object.assign(entrypoint, { currentModuleUrl: originalModuleUrl });
+  }
 });
 
 it.runIf(process.platform !== "win32")(

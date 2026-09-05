@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
@@ -213,9 +214,15 @@ beforeEach(async () => {
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(
     path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: VERSION }),
+    JSON.stringify({ name: "openclaw", version: VERSION, type: "module" }),
   );
   await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
+  const worker = "dist/infra/update-candidate-state.worker.js";
+  await fs.mkdir(path.dirname(path.join(root, worker)), { recursive: true });
+  await fs.writeFile(
+    path.join(root, worker),
+    `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
+  );
   await writeConfig(VERSION);
   mocks.ports.mockImplementation(async (port) => ({
     port,

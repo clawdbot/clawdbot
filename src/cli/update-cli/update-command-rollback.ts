@@ -16,6 +16,7 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { confirmGatewayReachable } from "../daemon-cli/restart-health-probe.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import { readPackageUpdateIdentity } from "./update-command-package.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   maybeRestartService,
@@ -55,14 +56,12 @@ export async function rollbackFailedUpdate(params: {
   result: UpdateRunResult;
   rolledBack: boolean;
   stoppedForRollback?: PreManagedServiceStop;
-  downtimeMs?: number;
   verifiedAtMs?: number;
 }> {
   const { preManagedServiceStop: before, packageTransaction, opts } = params;
   let result = params.result;
   const env = before?.serviceEnv ?? opts.run?.env ?? process.env;
   const recoveryEnv = { ...env, [ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]: "1" };
-  const state = { stateDir: resolveStateDir(env), config: params.config, env };
   const port = before?.stopped
     ? await resolveUpdatedGatewayRestartPort({ config: params.config, serviceEnv: env })
     : undefined;
@@ -82,7 +81,13 @@ export async function rollbackFailedUpdate(params: {
   };
   const stateUnchanged = async () => {
     const baseline = params.schemaVersions;
-    const current = await readUpdateStateSchemaVersions(state);
+    const current = await readUpdateStateSchemaVersions({
+      stateDir: resolveStateDir(env),
+      config: params.config,
+      env,
+      root: result.root ?? null,
+      nodeRunner: params.nodeRunner,
+    });
     if (baseline === undefined || !updateStateSchemaVersionsMatch(baseline, current)) {
       return false;
     }
@@ -164,12 +169,19 @@ export async function rollbackFailedUpdate(params: {
     if (!packageTransaction) {
       throw new Error("The retained package transaction is unavailable.");
     }
-    const restored = await packageTransaction.rollback();
+    const { activePackageRoot, ...restored } = await packageTransaction.rollback();
     // Restoration changes the active runtime before any later reporting or
     // restart can fail. Carry that identity through every recovery outcome.
-    result = { ...result, steps: [...result.steps, restored] };
+    result = {
+      ...result,
+      root: activePackageRoot ?? undefined,
+      after: undefined,
+      steps: [...result.steps, restored],
+    };
+    if (activePackageRoot) {
+      result.after = await readPackageUpdateIdentity(activePackageRoot);
+    }
     if (restored.exitCode === 0) {
-      result.root = params.previousRoot;
       result.after = result.before;
       result.recovery = {
         serviceRestartSafe: false,
@@ -301,9 +313,6 @@ export async function rollbackFailedUpdate(params: {
       rolledBack: healthy,
       stoppedForRollback,
       ...(verifiedAtMs === undefined ? {} : { verifiedAtMs }),
-      ...(verifiedAtMs !== undefined && stopped.stoppedAtMs !== undefined
-        ? { downtimeMs: Math.max(0, verifiedAtMs - stopped.stoppedAtMs) }
-        : {}),
     };
   } catch (error) {
     let detail = formatErrorMessage(error);

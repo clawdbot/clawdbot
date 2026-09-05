@@ -221,6 +221,10 @@ Git updates build the complete runtime, including plugins and the Control UI,
 in a temporary candidate worktree. Dev updates preserve local commits by
 rebasing the candidate before its build. The updater publishes that prepared
 runtime during activation instead of repeating the build while stopped.
+Candidate installs and nested build commands use a private pnpm virtual store,
+so preparing an update cannot prune dependencies used by the serving Gateway.
+The candidate's temporary workspace settings are restored before checking for
+source changes; the live checkout's workspace settings are preserved.
 
 For package installs with a managed Gateway service, `openclaw update` targets
 the package root used by that service. If the shell `openclaw` command comes

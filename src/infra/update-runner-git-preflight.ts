@@ -16,9 +16,9 @@ import {
 import { MAX_LOG_CHARS, runStep } from "./update-runner-command.js";
 import {
   gitCleanCheckArgs,
+  prepareCandidateCommandEnv,
   resolveBuildEnv,
   resolveDevPreflightLintEnv,
-  resolveInstallEnv,
   shouldInstallWithoutScriptsOnWindows,
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
@@ -26,6 +26,7 @@ import type {
   CommandRunner,
   RunStepOptions,
   UpdateRunResult,
+  UpdateRunnerOptions,
   UpdateStepResult,
 } from "./update-runner-types.js";
 
@@ -344,7 +345,7 @@ async function testPreflightCandidate(params: {
   rebaseFrom?: string;
   runLint: boolean;
   validateCandidate?: (root: string) => Promise<void>;
-  prepareGitExposure?: (root: string, sha: string) => Promise<void>;
+  prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
   runCommand: CommandRunner;
   timeoutMs: number;
@@ -431,7 +432,7 @@ async function testPreflightCandidate(params: {
           compatFallback: manager.fallback && manager.manager === "npm",
         });
     const installName = preferIgnoreScripts ? "deps install (ignore scripts)" : "deps install";
-    const installEnv = await resolveInstallEnv(
+    const candidateCommand = await prepareCandidateCommandEnv(
       manager.manager,
       manager.env ?? params.defaultCommandEnv,
       params.worktreeDir,
@@ -440,7 +441,7 @@ async function testPreflightCandidate(params: {
     );
     const buildArgs = managerScriptArgs(manager.manager, "build");
     const buildEnv = resolveBuildEnv(
-      manager.env ?? params.defaultCommandEnv,
+      candidateCommand.env,
       path.join(params.gitRoot, ".artifacts", "build-all-cache"),
     );
     const configArgs = managerScriptArgs(manager.manager, "openclaw", [
@@ -450,7 +451,7 @@ async function testPreflightCandidate(params: {
     ]);
     const lintArgs = managerScriptArgs(manager.manager, "lint");
     let failure =
-      (await runCandidateCheck(installName, installArgv, installEnv)) ??
+      (await runCandidateCheck(installName, installArgv, candidateCommand.env)) ??
       (await runCandidateCheck("build", buildArgs, buildEnv));
     if (
       !failure &&
@@ -459,7 +460,7 @@ async function testPreflightCandidate(params: {
       failure = await runCandidateCheck(
         "ui:build",
         managerScriptArgs(manager.manager, "ui:build"),
-        manager.env,
+        candidateCommand.env,
       );
     }
     if (
@@ -477,23 +478,16 @@ async function testPreflightCandidate(params: {
       return { status: "failed" };
     }
     if (!failure) {
-      const cleanCheck = await runCandidateCheck(
-        "build clean check",
-        gitCleanCheckArgs(params.worktreeDir),
-      );
-      const status = params.steps.at(-1);
-      if (cleanCheck || status?.stdoutTail?.trim()) {
-        if (status) {
-          status.exitCode = 1;
-        }
-        return { status: "failed" };
-      }
       failure =
         (params.validateCandidate
           ? null
-          : await runCandidateCheck("config validate", configArgs, manager.env)) ??
+          : await runCandidateCheck("config validate", configArgs, candidateCommand.env)) ??
         (params.runLint
-          ? await runCandidateCheck("lint", lintArgs, resolveDevPreflightLintEnv(manager.env))
+          ? await runCandidateCheck(
+              "lint",
+              lintArgs,
+              resolveDevPreflightLintEnv(candidateCommand.env),
+            )
           : null);
     }
     if (failure) {
@@ -501,7 +495,19 @@ async function testPreflightCandidate(params: {
     }
     // Global source exposure can run package lifecycle scripts. Validate and retain
     // the resulting candidate only after that preparation finishes.
-    await params.prepareGitExposure?.(params.worktreeDir, candidateSha);
+    await params.prepareGitExposure?.(params.worktreeDir, candidateSha, candidateCommand.env);
+    await candidateCommand.restoreWorkspace?.();
+    const cleanCheck = await runCandidateCheck(
+      "build clean check",
+      gitCleanCheckArgs(params.worktreeDir),
+    );
+    const status = params.steps.at(-1);
+    if (cleanCheck || status?.stdoutTail?.trim()) {
+      if (status) {
+        status.exitCode = 1;
+      }
+      return { status: "failed" };
+    }
     await params.validateCandidate?.(params.worktreeDir);
     await params.prepareCandidate?.(params.worktreeDir, params.preflightRoot);
     return { status: "ok", candidateSha };
@@ -516,7 +522,7 @@ export async function runGitCandidatePreflight(params: {
   targetRevision?: string;
   beforeSha?: string | null;
   validateCandidate?: (root: string) => Promise<void>;
-  prepareGitExposure?: (root: string, sha: string) => Promise<void>;
+  prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;

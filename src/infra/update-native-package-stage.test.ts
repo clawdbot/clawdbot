@@ -12,6 +12,24 @@ import {
 
 const runFile = promisify(execFile);
 
+async function writeStoredRuntime(packageRoot: string, store: string, generation: string) {
+  const payload = path.join(store, generation, "node_modules", "aged-runtime");
+  const modules = path.join(packageRoot, "node_modules");
+  await fs.mkdir(payload, { recursive: true });
+  await fs.mkdir(modules, { recursive: true });
+  await fs.writeFile(
+    path.join(payload, "index.cjs"),
+    `module.exports = ${JSON.stringify(generation)};`,
+  );
+  await fs.rm(path.join(modules, "aged-runtime"), { force: true });
+  await fs.symlink(path.relative(modules, payload), path.join(modules, "aged-runtime"));
+  await fs.writeFile(
+    path.join(packageRoot, "openclaw.mjs"),
+    '#!/usr/bin/env node\nimport value from "./node_modules/aged-runtime/index.cjs";\nconsole.log(value);\n',
+    { mode: 0o755 },
+  );
+}
+
 describe.skipIf(process.platform === "win32")("native package stage", () => {
   it.each(["bun", "pnpm10", "pnpm11"] as const)(
     "preserves the live %s project and executes its relocated candidate launcher",
@@ -33,15 +51,17 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         await fs.mkdir(liveBinDir);
         await fs.mkdir(external);
         await fs.writeFile(path.join(external, "dependency"), "shared dependency");
+        const virtualStoreDir = path.join(project, layout === "pnpm10" ? "5/.pnpm" : "store");
+        if (layout === "pnpm10") {
+          const externalStore = path.join(external, "pnpm-store");
+          await fs.mkdir(externalStore);
+          await fs.symlink(externalStore, virtualStoreDir);
+        }
         await fs.writeFile(
           path.join(project, "package.json"),
           JSON.stringify({ dependencies: { sibling: "file:../sibling" } }),
         );
-        await fs.writeFile(
-          path.join(packageRoot, "openclaw.mjs"),
-          '#!/usr/bin/env node\nconsole.log("old");\n',
-          { mode: 0o755 },
-        );
+        await writeStoredRuntime(packageRoot, virtualStoreDir, "old");
         await fs.symlink(packageRoot, path.join(project, "owned-package"));
         await fs.symlink(path.relative(project, external), path.join(project, "shared-package"));
         if (layout === "pnpm11") {
@@ -53,7 +73,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         const modulesManifest = path.join(packageRoot, ".modules.yaml");
         await fs.writeFile(
           modulesManifest,
-          JSON.stringify({ virtualStoreDir: path.join(project, "store"), storeDir: external }),
+          JSON.stringify({ virtualStoreDir, storeDir: external }),
         );
         const installTarget: ResolvedGlobalInstallTarget = {
           manager: layout === "bun" ? "bun" : "pnpm",
@@ -73,6 +93,28 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         }
         const candidateRoot = path.join(stage.projectRoot, path.relative(project, packageRoot));
         const candidateEntry = path.join(candidateRoot, "openclaw.mjs");
+        const candidateStore = path.join(
+          stage.projectRoot,
+          path.relative(project, virtualStoreDir),
+        );
+        expect((await fs.lstat(candidateStore)).isSymbolicLink()).toBe(false);
+        expect(await fs.realpath(candidateStore)).toBe(candidateStore);
+        expect(
+          (await runFile(process.execPath, [candidateEntry], { timeout: 5000 })).stdout.trim(),
+        ).toBe("old");
+        // An aged pnpm install prunes the old payload before installing its replacement.
+        await fs.rm(path.join(candidateStore, "old"), { recursive: true });
+        expect(
+          (
+            await runFile(process.execPath, [path.join(packageRoot, "openclaw.mjs")], {
+              timeout: 5000,
+            })
+          ).stdout.trim(),
+        ).toBe("old");
+        if (layout === "pnpm10") {
+          expect((await fs.lstat(virtualStoreDir)).isSymbolicLink()).toBe(true);
+          expect(await fs.realpath(virtualStoreDir)).toBe(path.join(external, "pnpm-store"));
+        }
         expect(await fs.realpath(path.join(stage.projectRoot, "owned-package"))).toBe(
           candidateRoot,
         );
@@ -82,8 +124,8 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         );
         expect(
           JSON.parse(await fs.readFile(path.join(candidateRoot, ".modules.yaml"), "utf8")),
-        ).toEqual({ virtualStoreDir: path.join(stage.projectRoot, "store"), storeDir: external });
-        await fs.writeFile(candidateEntry, '#!/usr/bin/env node\nconsole.log("candidate");\n');
+        ).toEqual({ virtualStoreDir: candidateStore, storeDir: external });
+        await writeStoredRuntime(candidateRoot, candidateStore, "candidate");
         const externalEntry = path.join(external, "entry.mjs");
         await fs.writeFile(externalEntry, 'console.log("external");\n');
         const externalLauncher = path.join(stage.binDir, "shared");
@@ -122,7 +164,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           ).stdout.trim(),
         ).toBe("old");
         expect(JSON.parse(await fs.readFile(modulesManifest, "utf8"))).toEqual({
-          virtualStoreDir: path.join(project, "store"),
+          virtualStoreDir,
           storeDir: external,
         });
         await fs.rename(project, `${project}.previous`);
@@ -141,7 +183,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           "shared dependency",
         );
         expect(JSON.parse(await fs.readFile(modulesManifest, "utf8"))).toEqual({
-          virtualStoreDir: path.join(project, "store"),
+          virtualStoreDir,
           storeDir: external,
         });
       });

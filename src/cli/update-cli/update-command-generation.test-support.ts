@@ -199,6 +199,7 @@ export function registerGenerationRecoveryTests(
             await fs.writeFile(path.join(root, "dist/index.js"), previousBytes);
             return {
               name: "package rollback",
+              activePackageRoot: root,
               command: "restore",
               cwd: root,
               exitCode: 0,

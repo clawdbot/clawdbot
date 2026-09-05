@@ -124,7 +124,11 @@ export type UpdateRunnerOptions = {
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
   validateCandidate?: (root: string) => Promise<void>;
-  prepareGitExposure?: (candidateRoot: string, candidateSha: string) => Promise<void>;
+  prepareGitExposure?: (
+    candidateRoot: string,
+    candidateSha: string,
+    env: NodeJS.ProcessEnv | undefined,
+  ) => Promise<void>;
   beforeGitMutation?: (target: {
     schemaVersions?: OpenClawSchemaVersions;
     metadataUnreadable?: string;

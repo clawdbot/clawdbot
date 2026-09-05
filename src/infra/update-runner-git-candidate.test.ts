@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import YAML from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import { updateGitCheckout } from "./update-runner-git.js";
@@ -33,12 +34,7 @@ type VirtualStoreLayout =
   | "external"
   | "symlink";
 
-async function writeRuntime(
-  directory: string,
-  sha: string,
-  store: string,
-  layout: VirtualStoreLayout,
-) {
+async function writeRuntime(directory: string, sha: string, store: string, layout: string) {
   const root = await fs.realpath(directory);
   const dist = path.join(root, "dist");
   const external = path.join(store, sha);
@@ -198,6 +194,7 @@ describe("Git candidate activation", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
     await fs.rm(directory, { recursive: true, force: true });
   });
@@ -275,6 +272,152 @@ describe("Git candidate activation", () => {
   });
 
   it.each([
+    { source: "workspace", version: "10.23.0", dirtyWorkspace: false },
+    { source: "workspace symlink", version: "10.23.0", dirtyWorkspace: false },
+    { source: "ambient", version: "11.24.0", dirtyWorkspace: false },
+    { source: "workspace", version: "10.23.0", dirtyWorkspace: true },
+  ])(
+    "isolates candidate installs from the $source virtual store (build changes workspace: $dirtyWorkspace)",
+    async ({ source, version, dirtyWorkspace }) => {
+      const operatorStore = path.join(root, "node_modules", "operator-store");
+      const workspace = `# preserve operator formatting\npackages:\n  - packages/*\n${
+        source !== "ambient" ? `virtualStoreDir: ${JSON.stringify(operatorStore)}\n` : ""
+      }`;
+      const workspaceFile = path.join(remote, "pnpm-workspace.yaml");
+      const workspaceTarget =
+        source === "workspace symlink"
+          ? path.join(directory, "operator-workspace.yaml")
+          : workspaceFile;
+      await fs.writeFile(workspaceTarget, workspace);
+      if (workspaceTarget !== workspaceFile) {
+        await fs.symlink(workspaceTarget, workspaceFile);
+      }
+      await fs.writeFile(
+        path.join(remote, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version: "2026.9.1",
+          packageManager: `pnpm@${version}`,
+        }),
+      );
+      await git(remote, "add", ".");
+      await git(remote, "commit", "-m", "operator store");
+      await git(root, "fetch", "origin");
+      await git(root, "merge", "--ff-only", "origin/main");
+      beforeSha = await git(root, "rev-parse", "HEAD");
+      await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), operatorStore);
+      const target = await advanceRemote();
+      for (const key of [
+        "npm_config_virtual_store_dir",
+        "NPM_CONFIG_VIRTUAL_STORE_DIR",
+        "PNPM_CONFIG_VIRTUAL_STORE_DIR",
+        "pnpm_config_virtual_store_dir",
+      ]) {
+        vi.stubEnv(key, operatorStore);
+      }
+      vi.stubEnv("OPENCLAW_UPDATE_PREFLIGHT_LINT", "1");
+      const candidateCommands = ["install", "build", "ui:build", "openclaw", "lint"];
+      const command = runCommand;
+      runCommand = async (argv, options) => {
+        if (argv[0] !== "pnpm") {
+          return command(argv, options);
+        }
+        if (argv[1] === "--version") {
+          return { code: 0, stdout: version, stderr: "" };
+        }
+        if (!candidateCommands.includes(argv[1]!)) {
+          return command(argv, options);
+        }
+        const cwd = options.cwd!;
+        expect(await fs.readFile(workspaceTarget, "utf8")).toBe(workspace);
+        const config = YAML.parse(await fs.readFile(path.join(cwd, "pnpm-workspace.yaml"), "utf8"));
+        const env = { ...process.env, ...options.env };
+        // pnpm10 gives workspace YAML priority; pnpm11 normalizes environment keys
+        // in insertion order. A nested install never inherits the outer CLI flags.
+        const ambient =
+          Object.entries(env).findLast(
+            ([key]) => key.toLowerCase() === "pnpm_config_virtual_store_dir",
+          )?.[1] ??
+          env.npm_config_virtual_store_dir ??
+          env.NPM_CONFIG_VIRTUAL_STORE_DIR;
+        const selected =
+          source !== "ambient"
+            ? (config.virtualStoreDir ?? ambient)
+            : (ambient ?? config.virtualStoreDir);
+        const store = path.resolve(cwd, selected ?? "node_modules/.pnpm");
+        // Model pruning the previous package generation, as the real pnpm proof does.
+        await fs.rm(path.join(store, beforeSha), { recursive: true, force: true });
+        await writeRuntime(
+          cwd,
+          await git(cwd, "rev-parse", "HEAD"),
+          path.join(directory, "shared-store"),
+          store,
+        );
+        if (argv[1] === "build") {
+          await fs.rm(path.join(cwd, "dist", "control-ui", "index.html"));
+          if (dirtyWorkspace) {
+            await fs.appendFile(
+              path.join(cwd, "pnpm-workspace.yaml"),
+              "# build changed this file\n",
+            );
+          }
+        }
+        expect(stopped).toBe(false);
+        await expectRuntime(root, beforeSha);
+        events.push(argv[1]!);
+        return { code: 0, stdout: "", stderr: "" };
+      };
+      const result = await update({
+        devTarget: { mode: "detached", ref: target },
+        validateCandidate: undefined,
+        prepareGitExposure: async (cwd, sha, env) => {
+          expect(sha).toBe(target);
+          expect(env).toBeDefined();
+          await runCommand(["pnpm", "install"], { cwd, env });
+          events.push("exposure");
+        },
+        beforeGitMutation: async () => {
+          await expectRuntime(root, beforeSha);
+          expect(await fs.readFile(path.join(root, "pnpm-workspace.yaml"), "utf8")).toBe(workspace);
+          stopped = true;
+          events.push("stop");
+        },
+      });
+      expect(await fs.readFile(path.join(root, "pnpm-workspace.yaml"), "utf8")).toBe(workspace);
+      expect(await fs.readFile(workspaceTarget, "utf8")).toBe(workspace);
+      if (source === "workspace symlink") {
+        expect(await fs.readlink(path.join(root, "pnpm-workspace.yaml"))).toBe(workspaceTarget);
+      }
+      const candidateEvents = [...candidateCommands, "install", "exposure"];
+      if (dirtyWorkspace) {
+        expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({
+            name: expect.stringContaining("clean check"),
+            exitCode: 1,
+            stdoutTail: expect.stringContaining("pnpm-workspace.yaml"),
+          }),
+        );
+        expect(events).toEqual(candidateEvents);
+        expect(stopped).toBe(false);
+        expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+        await expectRuntime(root, beforeSha);
+        return;
+      }
+      expect(result.status, JSON.stringify(result)).toBe("ok");
+      expect(events).toEqual([...candidateEvents, "stop"]);
+      expect(await git(root, "rev-parse", "HEAD")).toBe(target);
+      await expectRuntime(root, target);
+      const manifest = YAML.parse(
+        await fs.readFile(path.join(root, "node_modules", ".modules.yaml"), "utf8"),
+      );
+      expect(path.resolve(root, "node_modules", manifest.virtualStoreDir)).toBe(
+        path.join(root, "node_modules", ".pnpm"),
+      );
+    },
+  );
+
+  it.each([
     { layout: "node_modules/.pnpm", localCommit: false },
     { layout: "node_modules/.pnpm", localCommit: true },
     { layout: ".pnpm", localCommit: false },
@@ -332,32 +475,51 @@ describe("Git candidate activation", () => {
     },
   );
 
-  it.each([".", "..", "../checkout", ".artifacts/checkout"])(
-    "refuses virtual store %s before promotion can replace a checkout",
-    async (store) => {
-      const cleanupRoot = path.join(directory, "candidate-scope");
-      const candidateRoot = path.join(cleanupRoot, "worktree");
-      const modules = path.join(candidateRoot, "node_modules");
-      await fs.mkdir(modules, { recursive: true });
-      await fs.mkdir(path.resolve(candidateRoot, store), { recursive: true });
-      if (store === ".artifacts/checkout") {
-        await fs.symlink(directory, path.join(root, ".artifacts"), "junction");
-      }
-      await git(candidateRoot, "init", "--initial-branch=main");
-      await fs.writeFile(path.join(candidateRoot, ".gitignore"), "node_modules/\n");
-      await fs.writeFile(
-        path.join(modules, ".modules.yaml"),
-        JSON.stringify({
-          virtualStoreDir: path.relative(modules, path.resolve(candidateRoot, store)),
-        }),
-      );
-      await expect(
-        prepareGitRuntimePromotion(root, candidateRoot, runCommand, 5000, cleanupRoot),
-      ).rejects.toThrow(/virtual store/i);
-      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
-      await expectRuntime(root, beforeSha);
-    },
-  );
+  it.each([
+    ".",
+    "..",
+    "../checkout",
+    ".artifacts/checkout",
+    "live:node_modules",
+    "live:dist",
+    "live:packages/runtime/node_modules",
+    "link:node_modules",
+  ])("refuses virtual store %s before promotion can replace a checkout", async (store) => {
+    const cleanupRoot = path.join(directory, "candidate-scope");
+    const candidateRoot = path.join(cleanupRoot, "worktree");
+    const modules = path.join(candidateRoot, "node_modules");
+    await fs.mkdir(modules, { recursive: true });
+    const replacedRoot = /^(?:live|link):(.+)$/u.exec(store)?.[1];
+    const payload = replacedRoot
+      ? path.join(root, replacedRoot, "operator-store")
+      : path.resolve(candidateRoot, store);
+    const storePath = store.startsWith("link:") ? path.join(directory, "external-store") : payload;
+    await fs.mkdir(payload, { recursive: true });
+    if (storePath !== payload) {
+      await fs.symlink(payload, storePath, "junction");
+    }
+    if (replacedRoot) {
+      const candidateRuntime = path.join(candidateRoot, replacedRoot);
+      await fs.mkdir(candidateRuntime, { recursive: true });
+      await fs.writeFile(path.join(candidateRuntime, "candidate.cjs"), "module.exports = 1;\n");
+    }
+    if (store === ".artifacts/checkout") {
+      await fs.symlink(directory, path.join(root, ".artifacts"), "junction");
+    }
+    await git(candidateRoot, "init", "--initial-branch=main");
+    await fs.writeFile(path.join(candidateRoot, ".gitignore"), "node_modules/\ndist/\n");
+    await fs.writeFile(
+      path.join(modules, ".modules.yaml"),
+      JSON.stringify({
+        virtualStoreDir: path.relative(modules, storePath),
+      }),
+    );
+    await expect(
+      prepareGitRuntimePromotion(root, candidateRoot, runCommand, 5000, cleanupRoot),
+    ).rejects.toThrow(/virtual store/i);
+    expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    await expectRuntime(root, beforeSha);
+  });
 
   it("leaves the old runtime serving when candidate validation fails", async () => {
     await advanceRemote();

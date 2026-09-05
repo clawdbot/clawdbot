@@ -241,7 +241,8 @@ describe("package update recovery safety", () => {
                 ? "doctor"
                 : null,
           );
-          expect(result.afterVersion).toBe(outcome === "backup failed" ? "1.0.0" : "2.0.0");
+          expect(result.activePackageRoot).toBe(outcome === "backup failed" ? null : packageRoot);
+          expect(result.afterVersion).toBe(outcome === "backup failed" ? null : "2.0.0");
           if (!transaction) {
             throw new Error("activated package did not retain a transaction");
           }
@@ -258,8 +259,9 @@ describe("package update recovery safety", () => {
             activationFailed ? "old launcher\n" : "new launcher\n",
           );
           if (outcome !== "confirm") {
-            expect((await transaction.rollback()).exitCode).toBe(0);
-            expect((await transaction.rollback()).exitCode).toBe(0);
+            const restored = await transaction.rollback();
+            expect(restored).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
+            expect(await transaction.rollback()).toEqual(restored);
             await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
           }
           await transaction.complete();
@@ -449,6 +451,7 @@ describe("package update recovery safety", () => {
         // Restored package bytes cannot undo the lifecycle's state mutation.
         expect(result.recovery?.serviceRestartSafe).toBe(false);
         expect(result.failedStep?.stderrTail).toContain("source cleanup failed after commit");
+        expect(result.activePackageRoot).toBe(failure === "backup" ? null : packageRoot);
         if (failure === "backup") {
           await expect(
             fs.readFile(path.join(packageRoot, "dist", "index.js")),

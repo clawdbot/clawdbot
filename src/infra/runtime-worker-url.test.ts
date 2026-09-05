@@ -29,6 +29,17 @@ describe("resolveRuntimeWorkerUrl", () => {
           }),
         ),
       ).toBe(path.join(root, "dist/agents/code-mode.worker.js"));
+      const candidateRoot = path.join(root, "candidate");
+      expect(
+        fileURLToPath(
+          resolveRuntimeWorkerUrl({
+            currentModuleUrl,
+            sourceWorkerName: "code-mode.worker",
+            distWorkerPath: "agents/code-mode.worker.js",
+            root: candidateRoot,
+          }),
+        ),
+      ).toBe(path.join(candidateRoot, "dist/agents/code-mode.worker.js"));
     }
   });
 });

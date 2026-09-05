@@ -67,6 +67,17 @@ describe("test runtime prerequisites", () => {
     ["ACP CLI process", ["src/cli/acp-cli-exit.process.test.ts"], "runtime"],
     ["update CLI process", ["src/cli/update-dry-run-state.process.test.ts"], "runtime"],
     ["migrated update process", ["src/cli/update-cli/update-command-migrated.test.ts"], "runtime"],
+    ["update rollback", ["src/cli/update-cli/update-command-rollback.test.ts"], "runtime"],
+    [
+      "update recovery",
+      ["src/cli/update-cli/update-command-post-update-recovery.test.ts"],
+      "runtime",
+    ],
+    [
+      "update service recovery",
+      ["src/cli/update-cli/update-command-service.integration.test.ts"],
+      "runtime",
+    ],
     [
       "candidate Gateway canary",
       ["src/infra/update-candidate-canary.integration.test.ts"],
@@ -75,7 +86,7 @@ describe("test runtime prerequisites", () => {
     ["infra config", ["test/vitest/vitest.infra.config.ts"], "runtime"],
     ["ordinary update unit test", ["src/infra/update-candidate-canary.test.ts"], undefined],
     ["CLI directory", ["src/cli"], "runtime"],
-    ["CLI config", ["test/vitest/vitest.cli.config.ts"], undefined],
+    ["CLI config", ["test/vitest/vitest.cli.config.ts"], "runtime"],
     ["CLI process config", ["test/vitest/vitest.cli-process.config.ts"], "runtime"],
     ["ordinary CLI unit test", ["src/cli/command-path-policy.test.ts"], undefined],
     ["Doctor CLI processes", ["src/commands/doctor-config-preflight.process.test.ts"], "runtime"],

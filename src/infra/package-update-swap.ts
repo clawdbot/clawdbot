@@ -22,7 +22,9 @@ const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 export type PackageUpdateTransaction = {
   backupRoot: string;
   assertRollbackSafe?: () => Promise<void>;
-  rollback: () => Promise<UpdateStepResult & { reason?: "rollback-project-changed" }>;
+  rollback: () => Promise<
+    UpdateStepResult & { activePackageRoot: string | null; reason?: "rollback-project-changed" }
+  >;
   complete: () => Promise<void>;
 };
 
@@ -45,11 +47,13 @@ export type StagedPackageInstall = {
 type StagedPackageSwapResult =
   | {
       status: "committed";
+      activePackageRoot: string | null;
       step: UpdateStepResult;
       postVerifyStep: UpdateStepResult | null;
     }
   | {
       status: "failed";
+      activePackageRoot: string | null;
       step: UpdateStepResult;
       postVerifyStep: UpdateStepResult | null;
       packageRollbackVerified: boolean;
@@ -169,6 +173,7 @@ export async function swapStagedPackageInstall(params: {
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
 }): Promise<StagedPackageSwapResult> {
   const startedAt = Date.now();
+  let activePackageRoot = params.installTarget.packageRoot;
   const native = params.stage.native;
   const targetLayout = native
     ? {
@@ -200,6 +205,7 @@ export async function swapStagedPackageInstall(params: {
   if (!targetLayout || !targetPackageRoot || !targetSwapRoot) {
     return {
       status: "failed",
+      activePackageRoot,
       step: step(1, null, "cannot resolve npm global prefix layout"),
       postVerifyStep: null,
       packageRollbackVerified: false,
@@ -251,6 +257,9 @@ export async function swapStagedPackageInstall(params: {
       // the complete original runtime; its surviving version file alone proves nothing.
       const original = await verifyPackageUpdateRecovery(params.installTarget.packageRoot);
       packageRollbackVerified = original.serviceRestartSafe && original.version === previousVersion;
+      if (packageRollbackVerified) {
+        activePackageRoot = params.installTarget.packageRoot;
+      }
     }
     const restoredVersion = await readPackageVersionIfPresent(params.installTarget.packageRoot);
     if (!hadPackage || !previousVersion || restoredVersion !== previousVersion) {
@@ -372,6 +381,7 @@ export async function swapStagedPackageInstall(params: {
                 "Package transaction is already complete; its backup is no longer retained.",
               ),
               name: "global install rollback",
+              activePackageRoot,
             });
           }
           // Repeated completion paths must never remove an already-restored package.
@@ -385,6 +395,7 @@ export async function swapStagedPackageInstall(params: {
               return {
                 ...step(1, null, formatErrorMessage(error)),
                 name: "global install rollback",
+                activePackageRoot,
                 ...(error instanceof NativePackageRollbackError ? { reason: error.reason } : {}),
               };
             }
@@ -398,6 +409,7 @@ export async function swapStagedPackageInstall(params: {
                 messages.join("\n") || null,
               ),
               name: "global install rollback",
+              activePackageRoot,
               command: `restore ${backupRoot} -> ${targetSwapRoot}`,
               durationMs: Date.now() - rollbackStartedAt,
             };
@@ -425,6 +437,7 @@ export async function swapStagedPackageInstall(params: {
     // A copy-fallback move can reject after committing its destination and
     // partially removing its source. Only a completed backup permits restoration.
     packageRollbackVerified = false;
+    activePackageRoot = null;
     if (hadPackage) {
       await movePathWithCopyFallback({
         from: targetSwapRoot,
@@ -434,6 +447,7 @@ export async function swapStagedPackageInstall(params: {
       packageRollbackVerified = true;
     }
     rollback.push(async () => {
+      activePackageRoot = null;
       await removePath(targetSwapRoot);
       if (hadPackage) {
         await movePathWithCopyFallback({
@@ -441,9 +455,11 @@ export async function swapStagedPackageInstall(params: {
           sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
           to: targetSwapRoot,
         });
+        activePackageRoot = params.installTarget.packageRoot;
       }
     });
     await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot);
+    activePackageRoot = targetPackageRoot;
     projectActivated = true;
     for (const shim of shims) {
       // Register before copying: replacing an entry can fail after removing it.
@@ -484,6 +500,7 @@ export async function swapStagedPackageInstall(params: {
       const rollbackMessages = await restoreSwap();
       return {
         status: "failed",
+        activePackageRoot,
         step: packageRollbackVerified
           ? step(
               0,
@@ -507,6 +524,7 @@ export async function swapStagedPackageInstall(params: {
     ];
     return {
       status: "committed",
+      activePackageRoot,
       step: step(
         0,
         [
@@ -529,6 +547,7 @@ export async function swapStagedPackageInstall(params: {
     const errors = [formatErrorMessage(error), ...(retained ? [] : await restoreSwap())];
     return {
       status: "failed",
+      activePackageRoot,
       step: step(1, null, errors.join("\n")),
       postVerifyStep: null,
       packageRollbackVerified: retained ? false : packageRollbackVerified,

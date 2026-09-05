@@ -28,7 +28,10 @@ const CLI_NAME = resolveCliName();
 
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(
-  params: Pick<FinishUpdateParams, "result" | "root" | "schemaVersions"> & {
+  params: Pick<
+    FinishUpdateParams,
+    "result" | "root" | "schemaVersions" | "packageUpdateNodeRunner"
+  > & {
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
     candidateSchemaVersions?: OpenClawSchemaVersions;
@@ -43,6 +46,8 @@ export async function inspectActivatedUpdateState(
       stateDir: resolveStateDir(env),
       config,
       env,
+      root: result.root ?? null,
+      nodeRunner: params.packageUpdateNodeRunner,
     });
     const sharedVersion = current.find(
       (entry) => entry.path === resolveOpenClawStateSqlitePath(env),
@@ -140,7 +145,10 @@ export async function continueMigratedUpdateInFreshProcess(
   }
   const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-migrated-"));
   try {
-    const root = result.root ?? params.root;
+    const root = result.root;
+    if (!root) {
+      throw new Error("The active installation root is unknown; candidate finalization is unsafe.");
+    }
     const { packageTransaction: _transaction, preManagedServiceStop, ...serializable } = params;
     let stopState: MigratedUpdateFinalizationInput["params"]["preManagedServiceStop"];
     if (preManagedServiceStop) {

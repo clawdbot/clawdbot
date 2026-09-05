@@ -262,8 +262,8 @@ export async function runPackageInstallUpdate(
     postVerifyStep: (root) => runPackageUpdateDoctor({ ...params, root }),
   });
 
-  const afterBuildId = packageUpdate.verifiedPackageRoot
-    ? await readBuiltGatewayBuildId(packageUpdate.verifiedPackageRoot)
+  const afterBuildId = packageUpdate.activePackageRoot
+    ? await readBuiltGatewayBuildId(packageUpdate.activePackageRoot)
     : null;
   return {
     status:
@@ -273,7 +273,7 @@ export async function runPackageInstallUpdate(
           ? "error"
           : "ok",
     mode: installTarget.manager,
-    root: packageUpdate.verifiedPackageRoot ?? params.root,
+    root: packageUpdate.activePackageRoot ?? undefined,
     reason: packageUpdate.failedStep?.name ?? packageUpdate.reason,
     before,
     after: {

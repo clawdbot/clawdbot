@@ -1,3 +1,4 @@
+import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -22,16 +23,30 @@ function readPnpmStageArgs(argv: string[]) {
 }
 
 describe.runIf(process.platform !== "win32")("native package transactions", () => {
-  it.each(
-    (["pnpm10", "pnpm11", "bun"] as const).flatMap((layout) =>
+  it.each([
+    ...(["pnpm10", "pnpm11", "bun"] as const).flatMap((layout) =>
       (["none", "before", "after", "upgrade", "remove"] as const).map((siblingChange) => ({
         layout,
         siblingChange,
+        shimFailure: false,
+        rollbackFailure: "none" as const,
       })),
     ),
-  )(
-    "preserves $layout native project ownership (sibling change=$siblingChange)",
-    async ({ layout, siblingChange }) => {
+    {
+      layout: "pnpm11",
+      siblingChange: "none",
+      shimFailure: true,
+      rollbackFailure: "none",
+    } as const,
+    ...(["shim", "package"] as const).map((rollbackFailure) => ({
+      layout: "pnpm11" as const,
+      siblingChange: "none" as const,
+      shimFailure: false,
+      rollbackFailure,
+    })),
+  ])(
+    "preserves $layout native project ownership (sibling change=$siblingChange, shim failure=$shimFailure, rollback failure=$rollbackFailure)",
+    async ({ layout, siblingChange, shimFailure, rollbackFailure }) => {
       await withTestDir({ prefix: "openclaw-native-update-" }, async (base) => {
         const manager = layout === "bun" ? "bun" : "pnpm";
         const project = path.join(base, manager, "global");
@@ -79,6 +94,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           ...(layout === "pnpm11" ? { pnpmIsolated: { layoutVersion: 11 } } : {}),
         };
         let retained: PackageUpdateTransaction | undefined;
+        let stagedLauncher: string;
         const preparationStarted = createDeferred();
         const finishPreparation = createDeferred();
         const phases: string[] = [];
@@ -144,15 +160,19 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
               );
               await fs.rm(path.join(stageGlobal, "hash-openclaw"));
               await fs.symlink("new", path.join(stageGlobal, "hash-openclaw"));
+              if (shimFailure) {
+                await fs.rm(path.join(stageGlobal, "old"), { recursive: true });
+              }
             }
             const linkedPackage =
               layout === "pnpm11"
                 ? path.join(stageGlobal, "hash-openclaw", "node_modules", "openclaw")
                 : candidateRoot;
             await fs.mkdir(stageBin, { recursive: true });
+            stagedLauncher = path.join(stageBin, "openclaw");
             await fs.symlink(
               path.relative(stageBin, path.join(linkedPackage, "dist", "index.js")),
-              path.join(stageBin, "openclaw"),
+              stagedLauncher,
             );
             return {
               name,
@@ -182,6 +202,11 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           },
           onTransaction: (transaction) => {
             retained = transaction;
+            if (shimFailure) {
+              // Lose a prepared launcher after backup, so publication fails only
+              // after the new native project has replaced the old package path.
+              unlinkSync(stagedLauncher);
+            }
           },
           timeoutMs: 1000,
         });
@@ -206,6 +231,23 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           }
         }
         const result = await update;
+        if (shimFailure) {
+          const activeRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
+          expect(result.failedStep).toMatchObject({ name: "global install swap", exitCode: 1 });
+          expect(result.activePackageRoot).toBe(activeRoot);
+          expect(result.afterVersion).toBe("2.0.0");
+          await expect(fs.stat(packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
+          expect(await retained?.rollback()).toMatchObject({
+            exitCode: 0,
+            activePackageRoot: packageRoot,
+          });
+          await retained?.complete();
+          expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+            '"version":"1.0.0"',
+          );
+          expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
+          return;
+        }
         if (siblingChange === "before") {
           // Exercise normal confirmation too: a stale project swap must not hide
           // the sibling in a backup that successful cleanup subsequently deletes.
@@ -239,14 +281,14 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         await expect(fs.readFile(metadata, "utf8")).resolves.toBe("candidate metadata\n");
         await expect(fs.readFile(sibling, "utf8")).resolves.toBe("unrelated package\n");
         await expect(fs.realpath(launcher)).resolves.toBe(
-          path.join(result.verifiedPackageRoot!, "dist", "index.js"),
+          path.join(result.activePackageRoot!, "dist", "index.js"),
         );
         if (!retained) {
           throw new Error("transaction missing");
         }
         if (["after", "upgrade", "remove"].includes(siblingChange)) {
           const lateSiblingEntry = path.join(
-            path.dirname(result.verifiedPackageRoot!),
+            path.dirname(result.activePackageRoot!),
             "sibling",
             "index.js",
           );
@@ -263,7 +305,11 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           }
           const candidateLauncher = await fs.readlink(launcher);
           const rollback = await retained.rollback();
-          expect(rollback).toMatchObject({ exitCode: 1, reason: "rollback-project-changed" });
+          expect(rollback).toMatchObject({
+            exitCode: 1,
+            reason: "rollback-project-changed",
+            activePackageRoot: result.activePackageRoot,
+          });
           expect(rollback.stderrTail).toContain("sibling");
           expect(rollback.stderrTail).not.toContain(base);
           await retained.complete();
@@ -281,17 +327,53 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           await expect(fs.readFile(metadata, "utf8")).resolves.toBe("candidate metadata\n");
           await expect(fs.readlink(launcher)).resolves.toBe(candidateLauncher);
           await expect(
-            fs.readFile(path.join(result.verifiedPackageRoot!, "package.json"), "utf8"),
+            fs.readFile(path.join(result.activePackageRoot!, "package.json"), "utf8"),
           ).resolves.toContain('"version":"2.0.0"');
           await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
           return;
         }
         // Verification may repair only the candidate payload without changing sibling ownership.
         await fs.writeFile(
-          path.join(result.verifiedPackageRoot!, "package.json"),
+          path.join(result.activePackageRoot!, "package.json"),
           '{"name":"openclaw","version":"2.0.1"}',
         );
-        expect((await retained.rollback()).exitCode).toBe(0);
+        const copyFile = fs.copyFile.bind(fs);
+        const rename = fs.rename.bind(fs);
+        const backupRoot = retained.backupRoot;
+        const copySpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
+          if (rollbackFailure === "shim" && String(args[1]) === launcher) {
+            throw Object.assign(new Error("launcher restoration failed"), { code: "EACCES" });
+          }
+          return copyFile(...args);
+        });
+        const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+          if (rollbackFailure === "package" && String(args[0]) === backupRoot) {
+            throw Object.assign(new Error("package restoration failed"), { code: "EACCES" });
+          }
+          return rename(...args);
+        });
+        try {
+          expect(await retained.rollback()).toMatchObject({
+            exitCode: rollbackFailure === "none" ? 0 : 1,
+            activePackageRoot: rollbackFailure === "package" ? null : packageRoot,
+          });
+        } finally {
+          copySpy.mockRestore();
+          renameSpy.mockRestore();
+        }
+        if (rollbackFailure !== "none") {
+          await retained.complete();
+          if (rollbackFailure === "package") {
+            await expect(fs.stat(packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
+            await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
+          } else {
+            expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+              '"version":"1.0.0"',
+            );
+            await expect(fs.stat(launcher)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+          return;
+        }
         await retained.complete();
         await expect(
           fs.readFile(path.join(packageRoot, "package.json"), "utf8"),

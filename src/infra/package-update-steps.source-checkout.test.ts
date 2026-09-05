@@ -276,7 +276,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           }
         } else {
           expect(result.failedStep).toBeNull();
-          expect(result.verifiedPackageRoot).toBe(packageRoot);
+          expect(result.activePackageRoot).toBe(packageRoot);
           expect(result.afterVersion).toBe(SOURCE_VERSION);
           expect(postVerifyStep).toHaveBeenCalledWith(packageRoot);
           await expect(fs.realpath(packageRoot)).resolves.toBe(checkoutRoot);

@@ -9,10 +9,12 @@ import {
   resolvePnpmGlobalDirFromGlobalRoot,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import {
   relocateRuntimeLauncher,
   relocateRuntimeSymlink,
   relocateRuntimeTree,
+  type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
 
 export type NativePackageStage = {
@@ -113,7 +115,10 @@ export async function prepareNativePackageStage(params: {
   if (installTarget.manager === "bun" && process.platform === "win32") {
     throw new Error("Bun Windows binary launchers cannot be relocated by the staged updater.");
   }
-  const env = { ...(params.env ?? process.env) };
+  const env =
+    installTarget.manager === "pnpm"
+      ? resolvePnpmCandidateEnv(params.env ?? process.env, ".pnpm")
+      : { ...(params.env ?? process.env) };
   const bunOwner =
     installTarget.manager === "bun"
       ? resolveBunGlobalInstallOwner(installTarget.packageRoot, env)
@@ -146,25 +151,45 @@ export async function prepareNativePackageStage(params: {
     binDir = await fs.mkdtemp(`${prefix}.bin-`);
     await fs.cp(liveProjectRoot, projectRoot, { recursive: true, verbatimSymlinks: true });
     await fs.chmod(projectRoot, (await fs.stat(liveProjectRoot)).mode);
-    await relocateRuntimeTree(projectRoot, liveProjectRoot, projectRoot, [
+    const relocations: RuntimeRelocation[] = [
       {
         sourceRoot: liveProjectRoot,
         destinationRoot: projectRoot,
         sourceAliases: [ownerRoot],
       },
-    ]);
+    ];
+    if (
+      installTarget.manager === "pnpm" &&
+      path.basename(installTarget.globalRoot) === "node_modules"
+    ) {
+      // pnpm 10 reuses its global project; pruning must not follow a copied store
+      // symlink into the serving generation. pnpm 11 creates a fresh package group.
+      const privateStore = path.join(
+        projectRoot,
+        path.relative(ownerRoot, path.dirname(installTarget.globalRoot)),
+        ".pnpm",
+      );
+      const store = await fs.lstat(privateStore).catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return undefined;
+        }
+        throw error;
+      });
+      if (store?.isSymbolicLink()) {
+        const sourceRoot = await fs.realpath(privateStore);
+        await fs.unlink(privateStore);
+        await fs.cp(sourceRoot, privateStore, { recursive: true, verbatimSymlinks: true });
+        relocations.unshift({ sourceRoot, destinationRoot: privateStore });
+      }
+    }
+    await relocateRuntimeTree(projectRoot, liveProjectRoot, projectRoot, relocations);
     // pnpm 11 derives its destinations before reading environment config. Explicit
     // CLI config selects the copied project and bin in both pnpm 10 and pnpm 11.
     const configArgs =
       installTarget.manager === "pnpm"
         ? [`--config.global-dir=${projectRoot}`, `--config.global-bin-dir=${binDir}`]
         : [];
-    if (installTarget.manager === "pnpm") {
-      // External project stores can prune the serving generation. The global CLI
-      // rejects this selector; normalize its env spellings to keep the store private.
-      delete env.pnpm_config_virtual_store_dir;
-      env.PNPM_CONFIG_VIRTUAL_STORE_DIR = ".pnpm";
-    } else {
+    if (installTarget.manager === "bun") {
       env.BUN_INSTALL_GLOBAL_DIR = projectRoot;
       env.BUN_INSTALL_BIN = binDir;
       if (bunOwner?.bunInstall) {

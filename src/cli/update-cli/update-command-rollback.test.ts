@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/config.js";
@@ -37,6 +38,8 @@ import { completeUpdateCommandRun } from "./update-command-run.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+let candidateRoot: string;
+let previousRoot: string;
 afterEach(() => vi.unstubAllEnvs());
 async function readPreviousConfig(env: NodeJS.ProcessEnv) {
   const snapshot = await createConfigIO({ env, pluginValidation: "skip" }).readConfigFileSnapshot();
@@ -54,6 +57,23 @@ function setVersion(file: string, version: number) {
 
 describe("verified package rollback", () => {
   beforeEach(() => {
+    previousRoot = fs.realpathSync(dirs.make("rollback-previous-runtime-"));
+    candidateRoot = fs.realpathSync(dirs.make("rollback-candidate-runtime-"));
+    for (const [root, version] of [
+      [previousRoot, "2026.9.1"],
+      [candidateRoot, "2026.9.3"],
+    ] as const) {
+      fs.writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({ type: "module", version }),
+      );
+    }
+    const worker = "dist/infra/update-candidate-state.worker.js";
+    fs.mkdirSync(path.dirname(path.join(candidateRoot, worker)), { recursive: true });
+    fs.writeFileSync(
+      path.join(candidateRoot, worker),
+      `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
+    );
     vi.resetAllMocks();
     mocks.reachable.mockResolvedValue({ reachable: true });
     mocks.stop.mockResolvedValue({
@@ -61,7 +81,7 @@ describe("verified package rollback", () => {
       stoppedAtMs: 100,
       serviceUpdateVerdict: {
         kind: "owned",
-        root: "/candidate",
+        root: candidateRoot,
         fingerprint: "fixture",
         refreshDefinition: true,
       },
@@ -88,8 +108,9 @@ describe("verified package rollback", () => {
       });
       const rollback = vi.fn(async () => ({
         name: "global install rollback",
+        activePackageRoot: candidateRoot,
         command: "restore",
-        cwd: "/candidate",
+        cwd: candidateRoot,
         durationMs: 1,
         exitCode: 1,
         reason: "rollback-project-changed" as const,
@@ -101,12 +122,12 @@ describe("verified package rollback", () => {
         result: {
           status: "error",
           mode: "pnpm",
-          root: "/candidate",
+          root: candidateRoot,
           reason: "readyz-unhealthy",
           steps: [],
           durationMs: 1,
         },
-        previousRoot: "/previous",
+        previousRoot,
         schemaVersions,
         config,
         opts: { json: true, run },
@@ -132,7 +153,7 @@ describe("verified package rollback", () => {
       expect(outcome.result).toMatchObject({
         status: "error",
         reason: "rollback-project-changed",
-        root: "/candidate",
+        root: candidateRoot,
       });
       expect(rollback).toHaveBeenCalledTimes(duringStop ? 1 : 0);
       expect(mocks.stop).toHaveBeenCalledTimes(!reachable || duringStop ? 1 : 0);
@@ -161,6 +182,7 @@ describe("verified package rollback", () => {
     { change: "shared", previousVerified: true, restored: false, service: "stopped" },
     { change: "agent", previousVerified: true, restored: false, service: "stopped" },
     { change: "during-stop", previousVerified: true, restored: false, service: "stopped" },
+    { change: "unknown-runtime", previousVerified: true, restored: false, service: "stopped" },
     { change: "none", previousVerified: false, restored: false, service: "stopped" },
     { change: "none", previousVerified: true, restored: false, service: "absent" },
     { change: "none", previousVerified: true, restored: false, service: "no-restart" },
@@ -191,7 +213,7 @@ describe("verified package rollback", () => {
         status: "error",
         reason: "version-mismatch",
         mode: "npm",
-        root: "/candidate",
+        root: change === "unknown-runtime" ? undefined : candidateRoot,
         before: { version: "2026.9.1" },
         after: { version: "2026.9.3" },
         steps: [],
@@ -199,15 +221,16 @@ describe("verified package rollback", () => {
       };
       const rollback = vi.fn(async () => ({
         name: "rollback",
+        activePackageRoot: previousRoot,
         command: "restore",
-        cwd: "/previous",
+        cwd: previousRoot,
         exitCode: 0,
         durationMs: 1,
       }));
       const outcome = await rollbackFailedUpdate({
         result,
-        previousRoot: "/previous",
-        nodeRunner: "/candidate/node",
+        previousRoot,
+        nodeRunner: process.execPath,
         schemaVersions,
         previousVerified,
         packageTransaction: { backupRoot: "/backup", rollback, complete: vi.fn() },
@@ -225,7 +248,7 @@ describe("verified package rollback", () => {
                 serviceNodeRunner: "/previous/node",
                 serviceUpdateVerdict: {
                   kind: "owned",
-                  root: "/previous",
+                  root: previousRoot,
                   fingerprint: "fixture",
                   refreshDefinition: true,
                 },
@@ -239,7 +262,7 @@ describe("verified package rollback", () => {
         expect(mocks.stop).not.toHaveBeenCalled();
         expect(mocks.reachable).not.toHaveBeenCalled();
         expect(outcome.result).toMatchObject({
-          root: "/previous",
+          root: previousRoot,
           after: result.before,
           reason: result.reason,
           recovery: { serviceRestartSafe: false, packageRollbackVerified: true },
@@ -247,12 +270,12 @@ describe("verified package rollback", () => {
         return;
       }
       if (restored) {
-        expect(outcome).toMatchObject({ verifiedAtMs: 125, downtimeMs: 25 });
+        expect(outcome).toMatchObject({ verifiedAtMs: 125 });
         expect(mocks.restart).toHaveBeenCalledWith(
           expect.objectContaining({ nodeRunner: "/previous/node" }),
         );
         expect(outcome.result).toMatchObject({
-          root: "/previous",
+          root: previousRoot,
           after: result.before,
           reason: "version-mismatch",
         });
@@ -264,10 +287,14 @@ describe("verified package rollback", () => {
         );
       } else {
         expect(outcome.result.reason).toBe(
-          previousVerified ? "state-migrated-no-rollback" : "previous-version-unverified",
+          change === "unknown-runtime"
+            ? "rollback-state-unverified"
+            : previousVerified
+              ? "state-migrated-no-rollback"
+              : "previous-version-unverified",
         );
         if (!previousVerified) {
-          expect(outcome.result).toMatchObject({ root: "/previous", after: result.before });
+          expect(outcome.result).toMatchObject({ root: previousRoot, after: result.before });
         }
       }
     },
@@ -291,11 +318,11 @@ describe("verified package rollback", () => {
         status: "error",
         mode: "npm",
         reason: "readyz-unhealthy",
-        root: "/candidate",
+        root: candidateRoot,
         steps: [],
         durationMs: 1,
       },
-      previousRoot: "/previous",
+      previousRoot,
       rollbackBlockedReason: "state-migrated-no-rollback",
       config: {},
       opts: { json: true },
@@ -313,73 +340,82 @@ describe("verified package rollback", () => {
     expect(mocks.restart).not.toHaveBeenCalled();
   });
 
-  it.each(["source-failed", "restart-unhealthy", "restart-threw"] as const)(
-    "retains active installation identity after %s",
-    async (failure) => {
-      const stateDir = dirs.make("rollback-source-failed-");
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const config = await readPreviousConfig(env);
-      const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {}, env });
-      const result: UpdateRunResult = {
-        status: "error",
-        mode: "npm",
-        root: "/candidate",
-        reason: "readyz-unhealthy",
-        steps: [],
-        durationMs: 1,
-        before: { version: "2026.9.1" },
-        after: { version: "2026.9.3" },
-      };
-      if (failure === "restart-threw") {
-        mocks.restart.mockRejectedValueOnce(new Error("Service restart transport failed"));
-      } else {
-        mocks.restart.mockResolvedValueOnce(false);
-      }
-      const outcome = await rollbackFailedUpdate({
-        result,
-        previousRoot: "/previous",
-        config,
-        opts: { json: true },
-        timeoutMs: 1_000,
-        schemaVersions,
-        previousVerified: true,
-        preManagedServiceStop: {
-          stopped: true,
-          inspected: true,
-          runtimeInspected: true,
-          running: true,
-          serviceEnv: env,
-        },
-        packageTransaction: {
-          backupRoot: "/backup",
-          complete: vi.fn(async () => {}),
-          rollback: vi.fn(async () => ({
-            name: "rollback",
-            command: "restore",
-            cwd: "/previous",
-            exitCode: failure === "source-failed" ? 1 : 0,
-            durationMs: 1,
-          })),
-        },
-      });
-      expect(outcome.result).toMatchObject({
-        root: failure === "source-failed" ? "/candidate" : "/previous",
-        after: failure === "source-failed" ? result.after : result.before,
-        reason: failure === "source-failed" ? "source-rollback-failed" : result.reason,
-        steps: [
-          expect.objectContaining({
-            name: "rollback",
-            exitCode: failure === "source-failed" ? 1 : 0,
+  it.each([
+    "source-failed",
+    "restored-shims-failed",
+    "partial-restore",
+    "restart-unhealthy",
+    "restart-threw",
+  ] as const)("retains active installation identity after %s", async (failure) => {
+    const restoredPackage = failure !== "source-failed" && failure !== "partial-restore";
+    const rollbackSucceeded = failure === "restart-unhealthy" || failure === "restart-threw";
+    const activePackageRoot =
+      failure === "partial-restore" ? null : restoredPackage ? previousRoot : candidateRoot;
+    const stateDir = dirs.make("rollback-source-failed-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const config = await readPreviousConfig(env);
+    const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {}, env });
+    const result: UpdateRunResult = {
+      status: "error",
+      mode: "npm",
+      root: candidateRoot,
+      reason: "readyz-unhealthy",
+      steps: [],
+      durationMs: 1,
+      before: { version: "2026.9.1" },
+      after: { version: "2026.9.3" },
+    };
+    if (failure === "restart-threw") {
+      mocks.restart.mockRejectedValueOnce(new Error("Service restart transport failed"));
+    } else {
+      mocks.restart.mockResolvedValueOnce(false);
+    }
+    const outcome = await rollbackFailedUpdate({
+      result,
+      previousRoot,
+      config,
+      opts: { json: true },
+      timeoutMs: 1_000,
+      schemaVersions,
+      previousVerified: true,
+      preManagedServiceStop: {
+        stopped: true,
+        inspected: true,
+        runtimeInspected: true,
+        running: true,
+        serviceEnv: env,
+      },
+      packageTransaction: {
+        backupRoot: "/backup",
+        complete: vi.fn(async () => {}),
+        rollback: vi.fn(async () => ({
+          name: "rollback",
+          activePackageRoot,
+          command: "restore",
+          cwd: previousRoot,
+          exitCode: rollbackSucceeded ? 0 : 1,
+          durationMs: 1,
+        })),
+      },
+    });
+    expect(outcome.result).toMatchObject({
+      root: activePackageRoot ?? undefined,
+      after:
+        activePackageRoot === null ? undefined : restoredPackage ? result.before : result.after,
+      reason: rollbackSucceeded ? result.reason : "source-rollback-failed",
+      steps: [
+        expect.objectContaining({
+          name: "rollback",
+          exitCode: rollbackSucceeded ? 0 : 1,
+        }),
+      ],
+      ...(!rollbackSucceeded
+        ? {}
+        : {
+            recovery: { serviceRestartSafe: true, packageRollbackVerified: true },
           }),
-        ],
-        ...(failure === "source-failed"
-          ? {}
-          : {
-              recovery: { serviceRestartSafe: true, packageRollbackVerified: true },
-            }),
-      });
-      expect(outcome.rolledBack).toBe(false);
-      expect(mocks.restart).toHaveBeenCalledTimes(failure === "source-failed" ? 0 : 1);
-    },
-  );
+    });
+    expect(outcome.rolledBack).toBe(false);
+    expect(mocks.restart).toHaveBeenCalledTimes(rollbackSucceeded ? 1 : 0);
+  });
 });

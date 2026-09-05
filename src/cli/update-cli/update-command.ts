@@ -701,6 +701,7 @@ async function updateCommandInternal(
   const rollbackBlockedReason = await inspectActivatedUpdateState({
     result,
     root,
+    packageUpdateNodeRunner,
     schemaVersions: execution.schemaVersions,
     candidateSchemaVersions: execution.candidateSchemaVersions,
     config: finalizationConfigSnapshot.config,

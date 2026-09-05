@@ -82,17 +82,29 @@ describe("CLI runtime admission", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
   posixIt.each([
     ["ordinary target", [ordinaryQa]],
-    ["ordinary CLI config", ["--config", "test/vitest/vitest.cli.config.ts"]],
     [
-      "CLI process exclusion",
-      [
-        "--config",
-        "test/vitest/vitest.cli-process.config.ts",
-        ...listVitestRuntimeConsumerFiles(["test/vitest/vitest.cli-process.config.ts"]).flatMap(
-          (file) => ["--exclude", file],
-        ),
-      ],
+      "ordinary CLI selection",
+      ["--config", "test/vitest/vitest.cli.config.ts", "command-path-policy.test.ts"],
     ],
+    ...(
+      [
+        ["cli", "src/cli"],
+        ["cli-process", ""],
+      ] as const
+    ).map(([project, dir]) => {
+      const config = `test/vitest/vitest.${project}.config.ts`;
+      return [
+        `${project} runtime exclusions`,
+        [
+          "--config",
+          config,
+          ...listVitestRuntimeConsumerFiles([config]).flatMap((file) => [
+            "--exclude",
+            path.posix.relative(dir, file),
+          ]),
+        ],
+      ];
+    }),
     [
       "Gateway scoped exclusion",
       ["--config", "test/vitest/vitest.gateway-core.config.ts", "--exclude", "gateway-*.test.ts"],
@@ -190,6 +202,12 @@ syncBuiltinESMExports();\n`,
       ["run", "-c=", "test/vitest/vitest.extension-qa.config.ts"],
     ],
     ["root config", "scripts/run-vitest.mts", ["run", "--config", "vitest.config.ts"]],
+    [
+      "CLI config",
+      "scripts/run-vitest.mts",
+      ["run", "--config", "test/vitest/vitest.cli.config.ts"],
+      "runtime",
+    ],
     [
       "CLI process",
       "scripts/run-vitest.mts",

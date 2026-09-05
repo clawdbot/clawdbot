@@ -229,7 +229,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       });
 
       expect(result.failedStep).toBeNull();
-      expect(result.verifiedPackageRoot).toBe(packageRoot);
+      expect(result.activePackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("2.0.0");
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
         '"version":"2.0.0"',
@@ -828,7 +828,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         "expected installed version 2.0.0, found 1.5.0",
       );
       // Staged tree never reached live swap — do not exempt the future-config guard.
-      expect(result.verifiedPackageRoot).toBe(packageRoot);
+      expect(result.activePackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("1.0.0");
       expect(postVerifyStep).not.toHaveBeenCalled();
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(

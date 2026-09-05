@@ -657,8 +657,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             (shard.planConcurrency === 2 ? 360 : isCombinedUnbuiltCliJob(shard) ? 250 : 210),
         ),
     ).toBe(true);
-    // Runtime consumers retain their build floor without unrelated Doctor work.
-    // The complete CLI catalog still leaves its slow gateway files alone.
+    // Whole CLI owns a runtime prerequisite; slow process files retain their
+    // singleton envelopes without inheriting that build.
     expect(
       fallback
         .filter((shard) => !shard.requiresDist)
@@ -678,9 +678,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           predictedSeconds: shard.predictedSeconds,
         }))
         .toSorted((a, b) =>
-          a.groups[0]!.includePatterns!.join(",").localeCompare(
-            b.groups[0]!.includePatterns!.join(","),
-          ),
+          (a.groups[0]!.includePatterns ?? a.groups[0]!.configs)
+            .join(",")
+            .localeCompare((b.groups[0]!.includePatterns ?? b.groups[0]!.configs).join(",")),
         ),
     ).toEqual([
       {
@@ -706,6 +706,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         planConcurrency: 1,
         pretestBuildMode: undefined,
         predictedSeconds: 200,
+      },
+      {
+        groups: [
+          {
+            configs: ["test/vitest/vitest.cli.config.ts"],
+            includePatterns: undefined,
+            pretestBuildMode: "runtime",
+          },
+        ],
+        planConcurrency: 1,
+        pretestBuildMode: "runtime",
+        // Hybrid scales the 88s whole-CLI hint to 77s, then adds one 100s build.
+        predictedSeconds: 177,
       },
     ]);
     const agentChatStripes = fallback
@@ -882,20 +895,42 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const plan = createNodeTestShardBundles(options);
       const combined = plan.filter(isCombinedUnbuiltCliJob);
       expect(combined).toHaveLength(2);
-      expect(
-        combined.some((job) => job.groups.some((group) => group.shard_name === "agentic-cli")),
-      ).toBe(true);
+      const cliJobs = plan.filter((job) =>
+        job.groups.some((group) => group.shard_name === "agentic-cli"),
+      );
+      expect(cliJobs).toHaveLength(1);
+      expect(cliJobs[0]).toMatchObject({
+        planConcurrency: 1,
+        pretestBuildMode: "runtime",
+        // The 136s sample becomes 118s on hybrid, plus its 100s build.
+        predictedSeconds: 218,
+      });
+      expect(cliJobs[0]!.groups).toHaveLength(1);
+      expect(cliJobs[0]!.groups[0]!.includePatterns).toBeUndefined();
+      const processGroups = plan.flatMap((job) =>
+        job.groups.filter((group) =>
+          group.configs.includes("test/vitest/vitest.cli-process.config.ts"),
+        ),
+      );
+      expect(processGroups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        listMatchedTestFiles(createCliProcessVitestConfig({})).toSorted(),
+      );
       expect(
         combined.every((job) => job.predictedSeconds! <= 250 && job.planConcurrency === 1),
       ).toBe(true);
-      for (const job of plan.filter((candidate) => candidate.pretestBuildMode)) {
+      for (const job of plan.filter(
+        (candidate) => candidate.pretestBuildMode && candidate !== cliJobs[0],
+      )) {
         expect(job.predictedSeconds).toBeLessThanOrEqual(150);
         expect(job.groups.every((group) => group.pretestBuildMode === "runtime")).toBe(true);
       }
       const processKeys = combined.flatMap((job) =>
         job.groups.flatMap((group) => (group.timing_key ? [group.timing_key] : [])),
       );
-      expect(processKeys).toHaveLength(3);
+      expect(processKeys).toHaveLength(
+        combined.reduce((count, job) => count + job.groups.length, 0),
+      );
+      expect(new Set(processKeys).size).toBe(processKeys.length);
       // Each child still fits its 150s limit, but two no longer fit a 250s bin.
       timings.mockReturnValue(Object.fromEntries(processKeys.map((key) => [key, 160])));
       const overBudget = createNodeTestShardBundles(options);
@@ -913,7 +948,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const oversized = createNodeTestShardBundles(options).filter((job) =>
         job.groups.some((group) => processKeys.includes(group.timing_key ?? "")),
       );
-      expect(oversized).toHaveLength(3);
+      expect(oversized).toHaveLength(processKeys.length);
       expect(oversized.every((job) => job.groups.length === 1)).toBe(true);
 
       // Cheaper complete CLI children can share below 150s. A later unrelated
@@ -2477,6 +2512,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       checkName: "checks-node-agentic-cli",
       shardName: "agentic-cli",
       configs: ["test/vitest/vitest.cli.config.ts"],
+      pretestBuildMode: "runtime",
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
     });
