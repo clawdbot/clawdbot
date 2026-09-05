@@ -10,6 +10,19 @@ import {
 
 const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
 
+/**
+ * Post-compaction context accounting observed by the native compaction producer.
+ *
+ * `available` records a reliable app-server snapshot (contextUsage is the
+ * transcript boundary readers already understand); `unavailable` explicitly
+ * marks usage as unknown so transcript fallback cannot resurrect the stale
+ * pre-compaction count. Billing history is unaffected: this representation
+ * carries no input/output/cache/cost buckets.
+ */
+export type CodexCompactionUsageAfter =
+  | { state: "available"; promptTokens: number; totalTokens: number }
+  | { state: "unavailable" };
+
 export async function persistCodexContextCompactionActivity(params: {
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
   config?: EmbeddedRunAttemptParams["config"];
@@ -19,6 +32,8 @@ export async function persistCodexContextCompactionActivity(params: {
   turnId: string;
   itemId: string;
   timestamp: number;
+  /** Post-compaction context usage; omitted only when no accounting boundary is needed. */
+  usageAfter?: CodexCompactionUsageAfter;
 }): Promise<void> {
   const target = params.sessionTarget;
   if (!target?.sessionId || !target.sessionKey || !target.storePath) {
@@ -39,6 +54,10 @@ export async function persistCodexContextCompactionActivity(params: {
       itemId: params.itemId,
       ...(params.runId ? { runId: params.runId } : {}),
     },
+    // Carried in the normalized usage shape so transcript-derived readers treat
+    // this marker as an accounting boundary (available replaces the context
+    // count, unavailable clears it until a later valid snapshot).
+    ...(params.usageAfter ? { usage: { contextUsage: params.usageAfter } } : {}),
     __openclaw: { itemId: params.itemId, ...(params.runId ? { runId: params.runId } : {}) },
     timestamp: params.timestamp,
     idempotencyKey: activityId,

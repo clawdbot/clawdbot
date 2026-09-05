@@ -17,6 +17,7 @@ import {
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import * as compactionActivity from "./context-compaction-activity.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
@@ -1445,6 +1446,203 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.compacted).toBe(true);
     expect(result.result?.tokensAfter).toBe(321);
     expect(compactDetails(result).signal).toBe("thread/compact/start");
+  });
+
+  it("records an available usage boundary when the app-server reports a post-compaction count", async () => {
+    const fake = createFakeCodexClient({ autoCompleteCompaction: false });
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+    const persistActivity = vi.spyOn(compactionActivity, "persistCodexContextCompactionActivity");
+    try {
+      const pendingResult = startCompaction(sessionFile);
+      await vi.waitFor(() => {
+        expect(fake.request).toHaveBeenCalledWith(
+          "thread/compact/start",
+          { threadId: "thread-1" },
+          { assertCurrent: expect.any(Function) },
+        );
+      });
+      await flushAsyncTasks();
+      fake.emit({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "compact-item-1", type: "contextCompaction" },
+        },
+      });
+      fake.emit({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          tokenUsage: {
+            last: { inputTokens: 800, outputTokens: 200, totalTokens: 1_000 },
+          },
+        },
+      });
+      fake.emit({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "compact-item-1", type: "contextCompaction" },
+        },
+      });
+      await flushAsyncTasks();
+      fake.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", threadId: "thread-1", status: "completed" },
+        },
+      });
+      const result = requireCompactResult(await pendingResult);
+
+      expect(result.ok).toBe(true);
+      expect(result.compacted).toBe(true);
+      expect(result.result?.tokensAfter).toBe(1_000);
+      expect(persistActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "compact-item-1",
+          usageAfter: { state: "available", promptTokens: 800, totalTokens: 1_000 },
+        }),
+      );
+    } finally {
+      persistActivity.mockRestore();
+    }
+  });
+
+  it("records the recomputed context total when the app-server reports a zero-input recompute", async () => {
+    // Codex recompute_token_usage (pinned @openai/codex 0.153.4) zeroes the
+    // input/output split and reports the estimated compacted context size in
+    // totalTokens. A zero prompt count is not a coherent boundary: mapping it
+    // through verbatim would leave the stale pre-compaction total in place.
+    const fake = createFakeCodexClient({ autoCompleteCompaction: false });
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+    const persistActivity = vi.spyOn(compactionActivity, "persistCodexContextCompactionActivity");
+    try {
+      const pendingResult = startCompaction(sessionFile);
+      await vi.waitFor(() => {
+        expect(fake.request).toHaveBeenCalledWith(
+          "thread/compact/start",
+          { threadId: "thread-1" },
+          { assertCurrent: expect.any(Function) },
+        );
+      });
+      await flushAsyncTasks();
+      fake.emit({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "compact-item-1", type: "contextCompaction" },
+        },
+      });
+      fake.emit({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          tokenUsage: {
+            last: { inputTokens: 0, outputTokens: 0, totalTokens: 1_000 },
+          },
+        },
+      });
+      fake.emit({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "compact-item-1", type: "contextCompaction" },
+        },
+      });
+      await flushAsyncTasks();
+      fake.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", threadId: "thread-1", status: "completed" },
+        },
+      });
+      const result = requireCompactResult(await pendingResult);
+
+      expect(result.ok).toBe(true);
+      expect(result.compacted).toBe(true);
+      expect(result.result?.tokensAfter).toBe(1_000);
+      expect(persistActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "compact-item-1",
+          // The recomputed active-context total becomes the prompt side so the
+          // transcript boundary replaces (not ignores) the stale count.
+          usageAfter: { state: "available", promptTokens: 1_000, totalTokens: 1_000 },
+        }),
+      );
+    } finally {
+      persistActivity.mockRestore();
+    }
+  });
+
+  it("records an unavailable usage boundary when the app-server reports no post-compaction count", async () => {
+    const fake = createFakeCodexClient({ autoCompleteCompaction: false });
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+    const persistActivity = vi.spyOn(compactionActivity, "persistCodexContextCompactionActivity");
+    try {
+      const pendingResult = startCompaction(sessionFile);
+      await vi.waitFor(() => {
+        expect(fake.request).toHaveBeenCalledWith(
+          "thread/compact/start",
+          { threadId: "thread-1" },
+          { assertCurrent: expect.any(Function) },
+        );
+      });
+      await flushAsyncTasks();
+      fake.emit({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "compact-item-1", type: "contextCompaction" },
+        },
+      });
+      fake.emit({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "compact-item-1", type: "contextCompaction" },
+        },
+      });
+      await flushAsyncTasks();
+      fake.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", threadId: "thread-1", status: "completed" },
+        },
+      });
+      const result = requireCompactResult(await pendingResult);
+
+      expect(result.ok).toBe(true);
+      expect(result.compacted).toBe(true);
+      expect(result.result?.tokensAfter).toBeUndefined();
+      expect(persistActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "compact-item-1",
+          usageAfter: { state: "unavailable" },
+        }),
+      );
+    } finally {
+      persistActivity.mockRestore();
+    }
   });
 
   it("lets terminal interruption win after the compaction item completes", async () => {

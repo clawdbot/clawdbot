@@ -8,7 +8,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
-import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
+import {
+  persistCodexContextCompactionActivity,
+  type CodexCompactionUsageAfter,
+} from "./context-compaction-activity.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexAsyncDeliveryProjection } from "./event-projector-async-delivery.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
@@ -31,7 +34,10 @@ import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.j
 import { CodexTerminalFailureProjection } from "./event-projector-terminal-failure.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
-import { CodexUsageProjection } from "./event-projector-usage.js";
+import {
+  CodexUsageProjection,
+  resolveCodexCompactionContextUsageAfter,
+} from "./event-projector-usage.js";
 import { readCodexErrorNotificationMessage, readItem } from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
 import {
@@ -76,6 +82,7 @@ export class CodexAppServerEventProjector {
   private contextTokensSource: "runtime" | "runtime-configured" | "resolved" | undefined;
   private readonly usageProjection = new CodexUsageProjection();
   private completedCompactionCount = 0;
+  private compactionWindowContextUsageAfter: CodexCompactionUsageAfter | undefined;
   private pendingSteeringAssistantBoundaryItemId: string | undefined;
 
   constructor(
@@ -291,6 +298,11 @@ export class CodexAppServerEventProjector {
         break;
       case "thread/tokenUsage/updated": {
         const data = this.usageProjection.recordThread(params);
+        if (this.isCompacting()) {
+          const usageAfter = resolveCodexCompactionContextUsageAfter(data);
+          this.compactionWindowContextUsageAfter =
+            usageAfter ?? this.compactionWindowContextUsageAfter;
+        }
         if (data.modelContextWindow !== undefined) {
           this.contextTokens = data.modelContextWindow;
           // Retain an authored cap so its removal cannot make a constrained
@@ -453,6 +465,7 @@ export class CodexAppServerEventProjector {
         return;
       }
       this.activeCompactionItemIds.add(itemId);
+      this.compactionWindowContextUsageAfter = undefined;
       const messages = await this.toolTranscriptProjection.readMirroredSessionMessages(
         this.options.runAbortSignal,
       );
@@ -555,6 +568,7 @@ export class CodexAppServerEventProjector {
         turnId: this.turnId,
         itemId,
         timestamp: this.transcriptCheckpoint.nextTimestamp(),
+        usageAfter: this.compactionWindowContextUsageAfter ?? { state: "unavailable" },
       });
       if (!this.isCompactionProjectionActive()) {
         return;

@@ -32,8 +32,14 @@ import {
   isCodexAppServerPrewriteRequestCancellationError,
   type CodexAppServerClient,
 } from "./client.js";
-import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
-import { readCodexThreadContextSnapshot } from "./event-projector-usage.js";
+import {
+  persistCodexContextCompactionActivity,
+  type CodexCompactionUsageAfter,
+} from "./context-compaction-activity.js";
+import {
+  readCodexThreadContextSnapshot,
+  resolveCodexCompactionContextUsageAfter,
+} from "./event-projector-usage.js";
 import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
@@ -75,7 +81,13 @@ type CodexAppServerCompactOptions = {
 };
 
 type CodexNativeCompactionCompletion =
-  | { completed: true; turnId?: string; itemId?: string; tokensAfter?: number }
+  | {
+      completed: true;
+      turnId?: string;
+      itemId?: string;
+      tokensAfter?: number;
+      contextUsageAfter: CodexCompactionUsageAfter;
+    }
   | { completed: false; reason: string };
 
 function watchCodexNativeCompactionCompletion(params: {
@@ -95,7 +107,7 @@ function watchCodexNativeCompactionCompletion(params: {
   let compactionTurnId: string | undefined;
   let compactionItemId: string | undefined;
   let compactionItemCompleted = false;
-  let tokensAfter: number | undefined;
+  let contextUsageAfter: CodexCompactionUsageAfter | undefined;
   const { promise: completion, resolve: resolveCompletion } =
     createDeferred<CodexNativeCompactionCompletion>();
   let removeNotificationHandler = () => {};
@@ -115,13 +127,20 @@ function watchCodexNativeCompactionCompletion(params: {
     clearTimeout(interruptGraceTimeout);
     resolveCompletion(result);
   };
-  const complete = () =>
+  const complete = () => {
+    // The app-server only emits thread/tokenUsage/updated after a successful
+    // recompute; its absence means the post-compaction count is unknown.
+    const usageAfter: CodexCompactionUsageAfter = contextUsageAfter ?? { state: "unavailable" };
     finish({
       completed: true,
       ...(compactionTurnId ? { turnId: compactionTurnId } : {}),
       ...(compactionItemId ? { itemId: compactionItemId } : {}),
-      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
+      // tokensAfter derives from the same boundary snapshot; one source of
+      // truth avoids parallel accounting state that can drift apart.
+      ...(usageAfter.state === "available" ? { tokensAfter: usageAfter.totalTokens } : {}),
+      contextUsageAfter: usageAfter,
     });
+  };
   const fail = (reason: string) => finish({ completed: false, reason });
   const retireUnconfirmed = (reason: string) => {
     if (settled || retirementStarted) {
@@ -236,8 +255,14 @@ function watchCodexNativeCompactionCompletion(params: {
       return;
     }
     if (notification.method === "thread/tokenUsage/updated") {
-      tokensAfter =
-        readCodexThreadContextSnapshot(notification.params).activeContextTokens ?? tokensAfter;
+      // The last reliable snapshot wins: an event without a trustworthy
+      // active-context count (missing, zeroed, or non-finite) must not clobber
+      // an already-observed recompute boundary.
+      const snapshot = readCodexThreadContextSnapshot(notification.params);
+      const usageAfter = resolveCodexCompactionContextUsageAfter(snapshot);
+      if (usageAfter !== undefined) {
+        contextUsageAfter = usageAfter;
+      }
       return;
     }
     const item = readCodexNotificationItem(notification.params);
@@ -832,6 +857,7 @@ async function compactCodexNativeThread(
               turnId: completion.turnId,
               itemId: completion.itemId,
               timestamp: Date.now(),
+              usageAfter: completion.contextUsageAfter,
             });
           }
           assertCurrent();

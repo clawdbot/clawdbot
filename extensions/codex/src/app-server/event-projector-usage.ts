@@ -3,6 +3,7 @@ import {
   asSafeIntegerInRange,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexCompactionUsageAfter } from "./context-compaction-activity.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
 function readTokenCount(record: JsonObject, key: string): number | undefined {
@@ -43,6 +44,48 @@ export function readCodexThreadContextSnapshot(params: JsonObject): {
     ...(modelContextWindow && modelContextWindow > 0 ? { modelContextWindow } : {}),
     ...(inputTokens !== undefined ? { promptTokens: inputTokens } : {}),
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
+  };
+}
+
+/**
+ * Resolves the post-compaction usage boundary from a codex thread context
+ * snapshot. Returns `undefined` only when the snapshot carries no reliable
+ * active-context count (callers then record explicit `unavailable`).
+ *
+ * Codex recomputes usage when a compaction item completes: the app-server
+ * zeroes the input/output split (`inputTokens: 0`, `outputTokens: 0`) and
+ * reports the estimated compacted context size in `totalTokens`. A zero prompt
+ * count is not a real prompt-side measurement, so it is discarded and the
+ * recomputed active-context total is recorded as the prompt side instead.
+ * Recording zero verbatim would make downstream readers reject the boundary
+ * (they require a positive prompt count) and leave the stale pre-compaction
+ * total marked fresh in transcript fallback.
+ */
+export function resolveCodexCompactionContextUsageAfter(
+  snapshot: Pick<
+    ReturnType<typeof readCodexThreadContextSnapshot>,
+    "activeContextTokens" | "promptTokens"
+  >,
+): CodexCompactionUsageAfter | undefined {
+  const totalTokens = snapshot.activeContextTokens;
+  if (typeof totalTokens !== "number" || !Number.isFinite(totalTokens) || totalTokens <= 0) {
+    return undefined;
+  }
+  const promptTokens = snapshot.promptTokens;
+  const hasCoherentPrompt =
+    typeof promptTokens === "number" &&
+    Number.isFinite(promptTokens) &&
+    promptTokens > 0 &&
+    promptTokens <= totalTokens;
+  return {
+    state: "available" as const,
+    // Prefer the provider-reported prompt side; fall back to the active-context
+    // total when the breakdown omits input tokens or zeroes them during the
+    // compaction recompute. Either value is a genuine post-compaction snapshot
+    // and strictly better than stale pre-compaction usage in transcript
+    // fallback.
+    promptTokens: Math.floor(hasCoherentPrompt ? promptTokens : totalTokens),
+    totalTokens: Math.floor(totalTokens),
   };
 }
 

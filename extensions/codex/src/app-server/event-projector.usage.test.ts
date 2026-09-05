@@ -4,6 +4,7 @@ import {
   onAgentEvent,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import * as compactionActivity from "./context-compaction-activity.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -577,5 +578,83 @@ describe("CodexAppServerEventProjector usage projection", () => {
 
     expect(result.assistantTexts).toEqual(["OK from raw"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "OK from raw" }]);
+  });
+
+  it("records an unavailable usage boundary after automatic compaction without a post-compaction count", async () => {
+    const persistActivity = vi.spyOn(compactionActivity, "persistCodexContextCompactionActivity");
+    try {
+      const projector = await createProjector();
+      const compaction = { item: { type: "contextCompaction", id: "compact-auto-1" } };
+      await projector.handleNotification(forCurrentTurn("item/started", compaction));
+      await projector.handleNotification(forCurrentTurn("item/completed", compaction));
+
+      expect(persistActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          itemId: "compact-auto-1",
+          usageAfter: { state: "unavailable" },
+        }),
+      );
+    } finally {
+      persistActivity.mockRestore();
+    }
+  });
+
+  it("records the app-server's available count observed during automatic compaction", async () => {
+    const persistActivity = vi.spyOn(compactionActivity, "persistCodexContextCompactionActivity");
+    try {
+      const projector = await createProjector();
+      const compaction = { item: { type: "contextCompaction", id: "compact-auto-2" } };
+      await projector.handleNotification(forCurrentTurn("item/started", compaction));
+      await projector.handleNotification(
+        forCurrentTurn("thread/tokenUsage/updated", {
+          tokenUsage: {
+            last: {
+              totalTokens: 2_000,
+              inputTokens: 1_800,
+              outputTokens: 200,
+              cachedInputTokens: 300,
+            },
+          },
+        }),
+      );
+      await projector.handleNotification(forCurrentTurn("item/completed", compaction));
+
+      expect(persistActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          itemId: "compact-auto-2",
+          usageAfter: { state: "available", promptTokens: 1_800, totalTokens: 2_000 },
+        }),
+      );
+    } finally {
+      persistActivity.mockRestore();
+    }
+  });
+
+  it("records the recomputed context total after automatic compaction reports a zero-input recompute", async () => {
+    const persistActivity = vi.spyOn(compactionActivity, "persistCodexContextCompactionActivity");
+    try {
+      const projector = await createProjector();
+      const compaction = { item: { type: "contextCompaction", id: "compact-auto-3" } };
+      await projector.handleNotification(forCurrentTurn("item/started", compaction));
+      await projector.handleNotification(
+        forCurrentTurn("thread/tokenUsage/updated", {
+          tokenUsage: {
+            last: { inputTokens: 0, outputTokens: 0, totalTokens: 2_500 },
+          },
+        }),
+      );
+      await projector.handleNotification(forCurrentTurn("item/completed", compaction));
+
+      expect(persistActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          itemId: "compact-auto-3",
+          // Codex recompute zeroes the input split; the recomputed context
+          // total must be recorded as the prompt side of the boundary.
+          usageAfter: { state: "available", promptTokens: 2_500, totalTokens: 2_500 },
+        }),
+      );
+    } finally {
+      persistActivity.mockRestore();
+    }
   });
 });
