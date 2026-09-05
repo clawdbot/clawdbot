@@ -482,7 +482,7 @@ export function createSessionsSpawnTool(
           runTimeoutSeconds,
           sandbox,
           expectsCompletionMessage,
-          options: opts,
+          options: { ...opts, toolCallId: _toolCallId },
         });
       const visibleResult = opts?.expectedParentSessionId
         ? await runWithScopedSessionAccess({

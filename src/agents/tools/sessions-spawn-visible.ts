@@ -18,6 +18,7 @@ import { recordSessionParticipantBestEffort } from "../../sessions/session-parti
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
+import { recordPreExecutionBlockedToolCall } from "../agent-tools.before-tool-call.state.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
@@ -65,6 +66,10 @@ export type VisibleSessionsSpawnDeps = {
 
 type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
   SpawnedToolContext & {
+    /** Current tool call's own id, used only to mark a pre-execution rejection
+     * below (see preExecutionRejected) so the run's completion classification
+     * doesn't treat an unattempted spawn as a failed mutating action. */
+    toolCallId?: string;
     agentSessionKey?: string;
     requesterTurnRunId?: string;
     completionOwnerKey?: string;
@@ -96,6 +101,19 @@ export async function maybeSpawnVisibleSession(params: {
   expectsCompletionMessage: boolean;
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
+  // Every validation check below this point runs before any real spawn is
+  // attempted -- rejecting here mutates nothing. Mark the call as
+  // pre-execution-blocked so the run's completion classification (which
+  // treats sessions_spawn as unconditionally mutating, since a REAL spawn
+  // is) doesn't mistake a validation "no" for a failed mutation and taint
+  // an otherwise-successful run as agent-tool-failure.
+  const preExecutionRejected = <T extends { status: string; error: string }>(result: T): T => {
+    recordPreExecutionBlockedToolCall(
+      params.options?.toolCallId,
+      params.options?.requesterTurnRunId,
+    );
+    return result;
+  };
   const promptedAt = Date.now();
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
@@ -184,18 +202,18 @@ export async function maybeSpawnVisibleSession(params: {
   const maxDepth =
     cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth >= maxDepth) {
-    return {
+    return preExecutionRejected({
       status: "forbidden",
       error: `sessions_spawn is not allowed at this depth (current depth: ${callerDepth}, max: ${maxDepth})`,
-    };
+    });
   }
   const maxChildren =
     cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT;
   if (params.requestedAgentId && !isValidAgentId(params.requestedAgentId)) {
-    return {
+    return preExecutionRejected({
       status: "error",
       error: `Invalid agentId "${params.requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}.`,
-    };
+    });
   }
   const requesterAgentId = resolveSessionAgentId({
     config: cfg,
@@ -207,17 +225,20 @@ export async function maybeSpawnVisibleSession(params: {
     cfg.agents?.defaults?.subagents?.requireAgentId ??
     false;
   if (requireAgentId && !params.requestedAgentId) {
-    return { status: "forbidden", error: "sessions_spawn requires agentId; use an allowed agent." };
+    return preExecutionRejected({
+      status: "forbidden",
+      error: "sessions_spawn requires agentId; use an allowed agent.",
+    });
   }
   const targetAgentId = params.requestedAgentId
     ? normalizeAgentId(params.requestedAgentId)
     : requesterAgentId;
   if (params.raw.context === "fork" && targetAgentId !== requesterAgentId) {
-    return {
+    return preExecutionRejected({
       status: "error",
       error:
         'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
-    };
+    });
   }
   const targetPolicy = resolveSubagentTargetPolicy({
     requesterAgentId,
@@ -229,7 +250,7 @@ export async function maybeSpawnVisibleSession(params: {
     configuredAgentIds: listAgentIds(cfg),
   });
   if (!targetPolicy.ok) {
-    return { status: "forbidden", error: targetPolicy.error };
+    return preExecutionRejected({ status: "forbidden", error: targetPolicy.error });
   }
   const resolvedModel =
     modelOverride ?? resolveSubagentSpawnModelSelection({ cfg, agentId: targetAgentId });
@@ -251,12 +272,12 @@ export async function maybeSpawnVisibleSession(params: {
     }).sandboxed;
   const requesterSandboxed = params.options?.sandboxed === true || requesterRuntime.sandboxed;
   if (!childRuntimeSandboxed && (requesterSandboxed || params.sandbox === "require")) {
-    return {
+    return preExecutionRejected({
       status: "forbidden",
       error: requesterSandboxed
         ? "Sandboxed sessions cannot spawn unsandboxed sessions."
         : 'sessions_spawn sandbox="require" needs sandboxed target.',
-    };
+    });
   }
   const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
     config: cfg,
@@ -271,11 +292,11 @@ export async function maybeSpawnVisibleSession(params: {
     spawnedCwd &&
     (!spawnedWorkspaceCwd || !isPathInside(spawnedWorkspaceCwd, spawnedCwd))
   ) {
-    return {
+    return preExecutionRejected({
       status: "forbidden",
       error:
         "cwd override is not supported outside the target agent workspace for sandboxed visible session runs",
-    };
+    });
   }
 
   const reservation = reserveChildAdmissionSlot({
@@ -291,10 +312,10 @@ export async function maybeSpawnVisibleSession(params: {
     },
   });
   if (!reservation.ok) {
-    return {
+    return preExecutionRejected({
       status: "forbidden",
       error: `sessions_spawn has reached max active children for this session (${reservation.activeChildren}/${maxChildren})`,
-    };
+    });
   }
   try {
     const gatewayCall = params.options?.callGateway ?? callInProcessGatewayTool;

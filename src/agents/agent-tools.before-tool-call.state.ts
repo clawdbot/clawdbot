@@ -32,6 +32,38 @@ export function peekAdjustedParamsForToolCall(toolCallId: string, runId?: string
   return params === undefined ? undefined : structuredClone(params);
 }
 
+// Same bound as the wrapper's other adjusted-param/replay-safe tracking sets
+// (MAX_TRACKED_ADJUSTED_PARAMS in agent-tools.before-tool-call.wrapper.ts) --
+// kept as its own local constant rather than imported to avoid a state<->wrapper
+// import cycle, since this module is otherwise import-free by design.
+const MAX_PRE_EXECUTION_BLOCKED_IDS = 1024;
+
+/**
+ * Mark a call that never actually attempted its mutating work -- either a
+ * generic before_tool_call hook veto (see buildBlockedToolResult), or a
+ * tool's own internal validation rejecting the call before any real
+ * execution (e.g. sessions_spawn's target-policy check). Both cases mean
+ * the same thing to the run's completion classification: nothing was
+ * mutated, so this call must not taint the turn as a failed mutating
+ * action (#<incident>: a rejected sessions_spawn(agentId: "job-search")
+ * call permanently marked an otherwise-successful cron run as
+ * agent-tool-failure, even though the model recovered and completed the
+ * real task).
+ */
+export function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {
+  if (!toolCallId) {
+    return;
+  }
+  preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+  while (preExecutionBlockedToolCallIds.size > MAX_PRE_EXECUTION_BLOCKED_IDS) {
+    const oldest = preExecutionBlockedToolCallIds.values().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    preExecutionBlockedToolCallIds.delete(oldest);
+  }
+}
+
 /** Consume whether policy prevented the target tool from starting. */
 export function consumePreExecutionBlockedToolCall(toolCallId: string, runId?: string): boolean {
   const key = buildAdjustedParamsKey({ runId, toolCallId });
