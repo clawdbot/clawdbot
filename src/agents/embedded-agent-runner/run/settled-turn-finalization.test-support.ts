@@ -6,7 +6,10 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
-import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
+import {
+  completeEmbeddedAttemptResult,
+  type EmbeddedRunAttemptWithReceiptEvidence,
+} from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
@@ -137,4 +140,72 @@ export function createSettledFinalizationTestInput(
       abortSignal: laneController.abortSignal,
     },
   } as unknown as Parameters<typeof prepareTerminalWithSettledTurnFinalization>[0];
+}
+
+export function projectSettledProviderFailureAttempt(
+  base: EmbeddedRunAttemptResult,
+): EmbeddedRunAttemptResult {
+  const assistant = base.currentAttemptCompletedAssistant;
+  if (!assistant) {
+    throw new Error("Missing failed assistant");
+  }
+  return completeEmbeddedAttemptResult({
+    attempt: {
+      runId: "run-settled",
+      admittedRunContext: { operationalRunInstance: { runId: "run-settled" } },
+      sessionId: base.sessionIdUsed,
+      provider: assistant.provider,
+      modelId: assistant.model,
+      model: { api: assistant.api },
+      trigger: "user",
+    } as never,
+    subscription: {
+      assistantTexts: [],
+      didSendDeterministicApprovalPrompt: () => false,
+      didSendViaMessagingTool: () => false,
+      getAcceptedSessionSpawns: () => [],
+      getAssistantTurnCount: () => 1,
+      getCompactionCount: () => 0,
+      getHeartbeatToolResponse: () => undefined,
+      getItemLifecycle: () => base.itemLifecycle,
+      getLastAssistantTextMessageIndex: () => undefined,
+      getLastCompactionTokensAfter: () => undefined,
+      getLastToolError: () => undefined,
+      getLatestMcpAppChannelView: () => undefined,
+      getLatestMcpConnectAction: () => undefined,
+      getMessagingToolSentMediaUrls: () => [],
+      getMessagingToolSentTargets: () => [],
+      getMessagingToolSentTexts: () => [],
+      getMessagingToolSourceReplyPayloads: () => [],
+      getSourceReplyDelivered: () => undefined,
+      getPendingToolMediaReply: () => undefined,
+      getToolAutoDeliveryMediaUrls: () => [],
+      getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: true }),
+      getSuccessfulCronAdds: () => [],
+      getVisibleBlockReplyCount: () => 0,
+      hasToolMediaBlockReply: () => false,
+      setTerminalLifecycleMeta: () => {},
+      toolMetas: base.toolMetas,
+    } as never,
+    state: {
+      terminal: base.terminal,
+      currentAttemptAssistant: assistant,
+      currentAttemptCompletedAssistant: assistant,
+      sessionIdUsed: base.sessionIdUsed,
+      messagesSnapshot: base.messagesSnapshot,
+      yieldDetected: false,
+      didDeliverSourceReplyViaMessageTool: false,
+    } as never,
+    clientToolCallSlots: [],
+    hookRunner: null,
+    hookAgentId: "main",
+    bootstrapPromptWarning: {},
+    cache: {
+      observabilityEnabled: false,
+      trace: null,
+      break: null,
+      changesForTurn: null,
+      streamStrategy: "default",
+    },
+  });
 }

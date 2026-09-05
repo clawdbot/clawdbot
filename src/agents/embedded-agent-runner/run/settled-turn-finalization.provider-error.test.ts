@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
-import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import {
   createSettledFinalizationTestInput,
   createSettledProviderFailureAttempt,
+  projectSettledProviderFailureAttempt,
 } from "./settled-turn-finalization.test-support.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
@@ -17,65 +17,7 @@ function createAssistantReportedProviderFailureAttempt(): EmbeddedRunAttemptResu
   }
   assistant.errorMessage = "WebSocket error";
   assistant.errorCode = "ERR_WEBSOCKET_TRANSPORT";
-  return completeEmbeddedAttemptResult({
-    attempt: {
-      runId: "run-settled",
-      admittedRunContext: { operationalRunInstance: { runId: "run-settled" } },
-      sessionId: base.sessionIdUsed,
-      provider: "openai",
-      modelId: "gpt-5.6-luna",
-      model: { api: "openai-responses" },
-      trigger: "user",
-    } as never,
-    subscription: {
-      assistantTexts: [],
-      didSendDeterministicApprovalPrompt: () => false,
-      didSendViaMessagingTool: () => false,
-      getAcceptedSessionSpawns: () => [],
-      getAssistantTurnCount: () => 1,
-      getCompactionCount: () => 0,
-      getHeartbeatToolResponse: () => undefined,
-      getItemLifecycle: () => base.itemLifecycle,
-      getLastAssistantTextMessageIndex: () => undefined,
-      getLastCompactionTokensAfter: () => undefined,
-      getLastToolError: () => undefined,
-      getLatestMcpAppChannelView: () => undefined,
-      getLatestMcpConnectAction: () => undefined,
-      getMessagingToolSentMediaUrls: () => [],
-      getMessagingToolSentTargets: () => [],
-      getMessagingToolSentTexts: () => [],
-      getMessagingToolSourceReplyPayloads: () => [],
-      getSourceReplyDelivered: () => undefined,
-      getPendingToolMediaReply: () => undefined,
-      getToolAutoDeliveryMediaUrls: () => [],
-      getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: true }),
-      getSuccessfulCronAdds: () => [],
-      getVisibleBlockReplyCount: () => 0,
-      hasToolMediaBlockReply: () => false,
-      setTerminalLifecycleMeta: () => {},
-      toolMetas: base.toolMetas,
-    } as never,
-    state: {
-      terminal: { kind: "ok" },
-      currentAttemptAssistant: assistant,
-      currentAttemptCompletedAssistant: assistant,
-      sessionIdUsed: base.sessionIdUsed,
-      messagesSnapshot: base.messagesSnapshot,
-      yieldDetected: false,
-      didDeliverSourceReplyViaMessageTool: false,
-    } as never,
-    clientToolCallSlots: [],
-    hookRunner: null,
-    hookAgentId: "main",
-    bootstrapPromptWarning: {},
-    cache: {
-      observabilityEnabled: false,
-      trace: null,
-      break: null,
-      changesForTurn: null,
-      streamStrategy: "default",
-    },
-  });
+  return projectSettledProviderFailureAttempt(base);
 }
 
 function prepareRequest(
