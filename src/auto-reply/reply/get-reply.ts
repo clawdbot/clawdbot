@@ -88,6 +88,10 @@ import {
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+import {
+  recordReplyPreRunRejection,
+  resolveReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -665,6 +669,12 @@ export async function getReplyFromConfig(
   } catch (error) {
     if (error instanceof ModelSelectionLockedError) {
       typing.cleanup();
+      // Locked /reset rejects during session init, before any directive work;
+      // record it or the dispatch terminal outcome reports a completed turn.
+      recordReplyPreRunRejection(resolveReplyOperationRunState(opts), {
+        code: "model-selection-locked",
+        errorText: error.message,
+      });
       return { text: error.message };
     }
     throw error;
@@ -807,6 +817,12 @@ export async function getReplyFromConfig(
     } catch (error) {
       if (error instanceof ModelSelectionLockedError) {
         typing.cleanup();
+        // Locked model selection answers the turn before a model run starts, so
+        // record the rejection or the dispatch terminal outcome reports completed.
+        recordReplyPreRunRejection(resolveReplyOperationRunState(opts), {
+          code: "model-selection-locked",
+          errorText: error.message,
+        });
         return { text: error.message };
       }
       if (!isSessionWorkStartInvalidatedError(error)) {
@@ -1230,6 +1246,12 @@ export async function getReplyFromConfig(
     } catch (error) {
       if (error instanceof ModelSelectionLockedError) {
         typing.cleanup();
+        // Locked model selection answers the turn before a model run starts, so
+        // record the rejection or the dispatch terminal outcome reports completed.
+        recordReplyPreRunRejection(resolveReplyOperationRunState(opts), {
+          code: "model-selection-locked",
+          errorText: error.message,
+        });
         return { text: error.message };
       }
       if (!isSessionWorkStartInvalidatedError(error)) {

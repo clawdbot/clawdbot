@@ -158,6 +158,29 @@ describe("mixed inline directives", () => {
     },
   );
 
+  it.each(["", "please reply "])(
+    "records the pre-run rejection code for a restricted explicit model with prefix %j",
+    async (prefix) => {
+      const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
+      const { result } = await applyMixedDirectives({
+        body: `${prefix}/model openai/gpt-5.6-luna -s`,
+        cfg: { agents: { defaults: { modelPolicy: { allow: ["anthropic/*"] } } } },
+        sessionEntry,
+        allowedModels: [{ provider: "anthropic", id: "claude-opus-4-6", name: "Opus" }],
+      });
+      // Directive-only turns get the precise policy code; mixed turns flow through the
+      // session transaction, which records no code, so they report the generic one.
+      expect(result).toMatchObject({
+        kind: "reply",
+        reply: { isError: true, text: expect.stringContaining("is not allowed") },
+        preRunRejection: {
+          code: prefix ? "session-directive-rejected" : "model-policy-rejected",
+          errorText: expect.stringContaining("is not allowed"),
+        },
+      });
+    },
+  );
+
   describe.each(["", "please reply "])("off-catalog selection with prefix %j", (prefix) => {
     it.each([undefined, {}, { allow: [] }])(
       "uses policy %j independently of inventory",
@@ -1014,6 +1037,10 @@ describe("mixed inline directives", () => {
     expect(result).toEqual({
       kind: "reply",
       reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
+      preRunRejection: {
+        code: "session-directive-rejected",
+        errorText: MODEL_SELECTION_LOCKED_MESSAGE,
+      },
     });
     expect(persistenceMocks.persist).toHaveBeenCalledWith(
       expect.objectContaining({ requireModelSelectionUnlocked: true }),
@@ -1046,6 +1073,10 @@ describe("mixed inline directives", () => {
     expect(result).toEqual({
       kind: "reply",
       reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
+      preRunRejection: {
+        code: "session-directive-rejected",
+        errorText: MODEL_SELECTION_LOCKED_MESSAGE,
+      },
     });
     expect(sessionEntry).toEqual(lockedEntry);
     expect(persistenceMocks.persist).toHaveBeenCalledOnce();

@@ -26,6 +26,10 @@ import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import type { createModelSelectionState } from "./model-selection.js";
+import type {
+  ReplyPreRunRejection,
+  ReplyPreRunRejectionCode,
+} from "./reply-operation-run-state.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -100,7 +104,12 @@ function formatModelOverrideResetEvent(params: {
 }
 
 type ApplyDirectiveResult =
-  | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
+  | {
+      kind: "reply";
+      reply: ReplyPayload | ReplyPayload[] | undefined;
+      /** Set when this reply rejected the turn before any model run started. */
+      preRunRejection?: ReplyPreRunRejection;
+    }
   | {
       kind: "continue";
       directives: InlineDirectives;
@@ -115,6 +124,17 @@ type ApplyDirectiveResult =
         dropPolicy?: InlineDirectives["dropPolicy"];
       };
     };
+
+// One rejection shape per site: the reply text stays the user-visible error and
+// the closed code is what the dispatch terminal outcome records diagnostically.
+const directiveRejection = (
+  code: ReplyPreRunRejectionCode,
+  text: string,
+): ApplyDirectiveResult => ({
+  kind: "reply",
+  reply: { text, isError: true },
+  preRunRejection: { code, errorText: text },
+});
 
 export async function applyInlineDirectiveOverrides(params: {
   ctx: MsgContext;
@@ -263,10 +283,7 @@ export async function applyInlineDirectiveOverrides(params: {
 
   if (directives.modelScopeConflict) {
     typing.cleanup();
-    return {
-      kind: "reply",
-      reply: { text: "Use only one model scope option.", isError: true },
-    };
+    return directiveRejection("model-scope-conflict", "Use only one model scope option.");
   }
 
   if (
@@ -274,13 +291,10 @@ export async function applyInlineDirectiveOverrides(params: {
     !canWriteModelDefaults
   ) {
     typing.cleanup();
-    return {
-      kind: "reply",
-      reply: {
-        text: "Agent and global model defaults require owner authority or operator.admin scope.",
-        isError: true,
-      },
-    };
+    return directiveRejection(
+      "model-scope-not-authorized",
+      "Agent and global model defaults require owner authority or operator.admin scope.",
+    );
   }
 
   if (
@@ -307,10 +321,7 @@ export async function applyInlineDirectiveOverrides(params: {
     });
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
-      return {
-        kind: "reply",
-        reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
-      };
+      return directiveRejection("model-selection-locked", MODEL_SELECTION_LOCKED_MESSAGE);
     }
   }
 
@@ -341,7 +352,9 @@ export async function applyInlineDirectiveOverrides(params: {
     const unexpectedArguments = maybeHandleUnexpectedDirectiveArguments(directives);
     if (unexpectedArguments) {
       typing.cleanup();
-      return { kind: "reply", reply: unexpectedArguments };
+      // This ends the turn before any model run, so the dispatch terminal outcome
+      // needs the closed rejection code instead of reporting a completed turn.
+      return directiveRejection("session-directive-rejected", unexpectedArguments.text);
     }
   }
 
@@ -414,10 +427,7 @@ export async function applyInlineDirectiveOverrides(params: {
       });
       if (modelResolution.errorText) {
         typing.cleanup();
-        return {
-          kind: "reply",
-          reply: { text: modelResolution.errorText, isError: true },
-        };
+        return directiveRejection("model-policy-rejected", modelResolution.errorText);
       }
       const modelSelection = modelResolution.modelSelection;
       if (modelSelection) {
@@ -429,10 +439,7 @@ export async function applyInlineDirectiveOverrides(params: {
         });
         if (runtime.kind === "invalid") {
           typing.cleanup();
-          return {
-            kind: "reply",
-            reply: { text: runtime.errorText, isError: true },
-          };
+          return directiveRejection("model-runtime-invalid", runtime.errorText);
         }
         const applied = await (
           await loadDirectivePersist()
@@ -463,11 +470,11 @@ export async function applyInlineDirectiveOverrides(params: {
         });
         if (applied.status === "rejected") {
           typing.cleanup();
-          return { kind: "reply", reply: { text: applied.message, isError: true } };
+          return directiveRejection("model-selection-rejected", applied.message);
         }
         if (applied.status === "conflict") {
           typing.cleanup();
-          return { kind: "reply", reply: { text: applied.message, isError: true } };
+          return directiveRejection("model-selection-conflict", applied.message);
         }
         const label = `${modelSelection.provider}/${modelSelection.model}`;
         const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
@@ -547,9 +554,13 @@ export async function applyInlineDirectiveOverrides(params: {
     directiveAck = (await handleDirectives(persistenceState)).reply;
     if (persistenceState.outcome.kind === "rejected") {
       typing.cleanup();
+      const { errorText } = persistenceState.outcome;
+      // The transaction outcome records no rejection code, so the mixed path reports the
+      // generic session-directive code and errorText names the concrete cause.
       return {
         kind: "reply",
-        reply: { text: persistenceState.outcome.errorText, isError: true },
+        reply: { text: errorText, isError: true },
+        preRunRejection: { code: "session-directive-rejected", errorText },
       };
     }
     ({ provider, model } = persistenceState.outcome);

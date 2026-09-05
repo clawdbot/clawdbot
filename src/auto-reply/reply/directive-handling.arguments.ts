@@ -5,7 +5,7 @@ import type { InlineDirectives } from "./directive-handling.parse.js";
 /** Rejects prose left over after canonical command-specific validation succeeds. */
 export function maybeHandleUnexpectedDirectiveArguments(
   directives: InlineDirectives,
-): ReplyPayload | undefined {
+): (ReplyPayload & { text: string }) | undefined {
   const command = directives.command;
   const unconsumedArguments = command?.unconsumedArguments;
   if (!command || !unconsumedArguments) {

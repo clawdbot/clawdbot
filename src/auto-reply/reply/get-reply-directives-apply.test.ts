@@ -254,6 +254,10 @@ describe("applyInlineDirectiveOverrides", () => {
       expect(result).toEqual({
         kind: "reply",
         reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
+        preRunRejection: {
+          code: "model-selection-locked",
+          errorText: MODEL_SELECTION_LOCKED_MESSAGE,
+        },
       });
       expect(typing.cleanup).toHaveBeenCalledOnce();
       expect(mocks.handleDirective).not.toHaveBeenCalled();
@@ -351,9 +355,83 @@ describe("applyInlineDirectiveOverrides", () => {
       expect(result).toEqual({
         kind: "reply",
         reply: { text: errorText, isError: true },
+        preRunRejection: { code: "session-directive-rejected", errorText },
       });
       expect(typing.cleanup).toHaveBeenCalledOnce();
       expect(mocks.handleDirective).toHaveBeenCalledOnce();
     },
   );
+
+  it("records the native model-argument rejection before the focused persistence service", async () => {
+    const body = "/model openai/gpt-5.5 extra";
+    // The explicit native command owns the leftover argument boundary.
+    const directives = parseInlineSessionDirectives(body, {
+      command: { kind: "native", name: "model" },
+    });
+    const typing = createMockTypingController();
+    const sessionEntry = { sessionId: "session-1", updatedAt: 1 };
+
+    const result = await applyInlineDirectiveOverrides({
+      ctx: buildTestCtx({ Body: body, CommandAuthorized: true }),
+      cfg: {},
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      agentCfg: {},
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      sessionScope: undefined,
+      isGroup: false,
+      allowTextCommands: true,
+      command: {
+        surface: "webchat",
+        channel: "webchat",
+        ownerList: [],
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+        rawBodyNormalized: body,
+        commandBodyNormalized: body,
+      },
+      directives,
+      messageProviderKey: "webchat",
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+      elevatedFailures: [],
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      provider: "openai",
+      model: "gpt-5.5",
+      modelState: createFastTestModelSelectionState({
+        agentCfg: {},
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+      initialModelLabel: "openai/gpt-5.5",
+      formatModelSwitchEvent: (label) => label,
+      resolvedElevatedLevel: "off",
+      defaultActivation: () => "always",
+      contextTokens: 8192,
+      effectiveModelDirective: directives.rawModelDirective,
+      typing,
+    });
+
+    expect(directives.command).toMatchObject({
+      name: "model",
+      unconsumedArguments: "extra",
+    });
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: 'Unexpected argument "extra" for /model.', isError: true },
+      preRunRejection: {
+        code: "session-directive-rejected",
+        errorText: 'Unexpected argument "extra" for /model.',
+      },
+    });
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+    // The focused model-only persistence service must never see leftover arguments.
+    expect(mocks.applyModelSelection).not.toHaveBeenCalled();
+    expect(mocks.handleDirective).not.toHaveBeenCalled();
+  });
 });

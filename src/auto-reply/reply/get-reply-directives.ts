@@ -58,6 +58,11 @@ import {
 } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
+import {
+  recordReplyPreRunRejection,
+  resolveReplyOperationRunState,
+  type ReplyPreRunRejection,
+} from "./reply-operation-run-state.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { TypingController } from "./typing.js";
 
@@ -143,7 +148,11 @@ type ReplyDirectiveContinuation = {
 };
 
 type ReplyDirectiveResult =
-  | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
+  | {
+      kind: "reply";
+      reply: ReplyPayload | ReplyPayload[] | undefined;
+      preRunRejection?: ReplyPreRunRejection;
+    }
   | { kind: "continue"; result: ReplyDirectiveContinuation };
 
 export async function resolveReplyDirectives(params: {
@@ -216,6 +225,12 @@ export async function resolveReplyDirectives(params: {
   const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
   let provider = initialProvider;
   let model = initialModel;
+
+  // The dispatch terminal outcome reads this fact to report why no model run
+  // happened; the first rejecting directive decision owns it for the turn.
+  const replyOperationRunState = resolveReplyOperationRunState(opts);
+  const recordPreRunRejection = (rejection: ReplyPreRunRejection | undefined) =>
+    recordReplyPreRunRejection(replyOperationRunState, rejection);
 
   const commandText = sessionCtx.commandText;
   const command = buildCommandContext({
@@ -502,6 +517,10 @@ export async function resolveReplyDirectives(params: {
   } catch (error) {
     if (error instanceof ModelSelectionLockedError) {
       typing.cleanup();
+      recordPreRunRejection({
+        code: "model-selection-locked",
+        errorText: error.message,
+      });
       return { kind: "reply", reply: { text: error.message, isError: true } };
     }
     if (!isSessionWorkStartInvalidatedError(error)) {
@@ -572,7 +591,12 @@ export async function resolveReplyDirectives(params: {
     typing,
   });
   if (applyResult.kind === "reply") {
-    return { kind: "reply", reply: markCommandReplyForDelivery(applyResult.reply) };
+    recordPreRunRejection(applyResult.preRunRejection);
+    return {
+      kind: "reply",
+      reply: markCommandReplyForDelivery(applyResult.reply),
+      ...(applyResult.preRunRejection ? { preRunRejection: applyResult.preRunRejection } : {}),
+    };
   }
   directives = applyResult.directives;
   provider = applyResult.provider;
