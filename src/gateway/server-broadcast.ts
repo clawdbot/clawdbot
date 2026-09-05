@@ -127,12 +127,10 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
 ]);
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
-  // Serialize one field through JSON.stringify so embedded values keep JSON
-  // escaping, then splice it into the shared per-client frame body.
+  // Keep the wrapper for toJSON's property key and reuse its serialized field.
+  // Only splice wrappers that still start with that field after inherited toJSON.
   const fieldJSON = JSON.stringify({ [name]: value });
-  const keyJSON = JSON.stringify(name);
-  const prefix = `{${keyJSON}:`;
-  return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
+  return fieldJSON.startsWith(`{"${name}":`) ? `,${fieldJSON.slice(1, -1)}` : "";
 }
 
 function resolveBroadcastSessionScope(
