@@ -1,5 +1,9 @@
 // Covers process respawn behavior across supervisors.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
+  WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE,
+} from "../daemon/windows-task-supervisor-contract.js";
 import { captureFullEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
@@ -266,6 +270,21 @@ describe("restartGatewayProcessWithFreshPid", () => {
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns the task-supervisor restart code without launching a detached handoff", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    process.argv = [...originalArgv, WINDOWS_TASK_SUPERVISOR_CHILD_FLAG];
+
+    expect(restartGatewayProcessWithFreshPid()).toEqual({
+      mode: "supervised",
+      exitCode: WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE,
+    });
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 

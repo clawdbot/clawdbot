@@ -73,6 +73,8 @@ const {
 } = await import("./schtasks.js");
 const { probeProcessState, resolveScheduledTaskOwnedGatewayPids } =
   await import("./schtasks-process.js");
+const { WINDOWS_TASK_SUPERVISOR_CHILD_FLAG } =
+  await import("./windows-task-supervisor-contract.js");
 const GATEWAY_PORT = 18789;
 const SUCCESS_RESPONSE = { code: 0, stdout: "", stderr: "" } as const;
 const INSTALLED_GATEWAY_COMMAND_LINE =
@@ -430,7 +432,9 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ["/Query", "/TN", "OpenClaw Gateway"],
         ["/End", "/TN", "OpenClaw Gateway"],
       ]);
-      expect(spawnSync).toHaveBeenCalledOnce();
+      // Native Windows cleanup adds a CIM ownership snapshot; portable lanes
+      // exercise only the locale-independent COM state probe here.
+      expect(spawnSync).toHaveBeenCalledTimes(process.platform === "win32" ? 2 : 1);
       expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
     });
   });
@@ -534,6 +538,34 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       expect(inspectPortUsageMock).not.toHaveBeenCalled();
       expect(gatewayServiceProbeHostsMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("prefers the supervised Gateway child over its task supervisor", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      spawnSync.mockImplementation(() => {
+        const output = JSON.stringify([
+          {
+            ProcessId: 4141,
+            CommandLine: `${INSTALLED_GATEWAY_COMMAND_LINE} --task-supervisor`,
+          },
+          {
+            ProcessId: 4242,
+            CommandLine: `${INSTALLED_GATEWAY_COMMAND_LINE} ${WINDOWS_TASK_SUPERVISOR_CHILD_FLAG}`,
+          },
+        ]);
+        return {
+          pid: 0,
+          output: [null, output, ""],
+          stdout: output,
+          stderr: "",
+          status: 0,
+          signal: null,
+        };
+      });
+
+      await expect(resolveScheduledTaskOwnedGatewayPids(env)).resolves.toEqual([4242]);
     });
   });
 
