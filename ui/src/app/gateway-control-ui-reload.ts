@@ -23,9 +23,11 @@ export function createGatewayControlUiReloadOptions(
     reload: () => {
       const url = new URL(window.location.href);
       if (connection.bootstrapToken) {
-        // No hello delivered a device grant yet. Reuse only this browser's
-        // pending handoff; startup strips the fragment again after reload.
+        // Another tab can change the saved Gateway during the probe. Keep this
+        // pending handoff bound to its destination through startup confirmation.
+        url.searchParams.delete("gatewayUrl");
         const fragment = new URLSearchParams(url.hash.slice(1));
+        fragment.set("gatewayUrl", connection.gatewayUrl);
         fragment.set("bootstrapToken", connection.bootstrapToken);
         if (connection.bootstrapProfile) {
           fragment.set(CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM, connection.bootstrapProfile);

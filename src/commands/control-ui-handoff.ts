@@ -138,7 +138,10 @@ export async function hasVerifiedControlUiLoopbackAlias(target: {
 }
 
 /** Mint the Control-UI-scoped one-time device grant immediately before actual delivery. */
-export async function issueControlUiBrowserHandoff(httpUrl: string): Promise<{
+export async function issueControlUiBrowserHandoff({
+  httpUrl,
+  wsUrl,
+}: ControlUiHandoffTarget["links"]): Promise<{
   browserUrl: string;
   expiresAtMs: number;
 }> {
@@ -148,6 +151,7 @@ export async function issueControlUiBrowserHandoff(httpUrl: string): Promise<{
   const fragment = new URLSearchParams({
     bootstrapToken: issued.token,
     [CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM]: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
+    gatewayUrl: wsUrl,
   });
   return {
     browserUrl: `${httpUrl}#${fragment.toString()}`,
