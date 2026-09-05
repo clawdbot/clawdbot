@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import type { JsonSchemaObject } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
+import { buildGoogleStaticCatalogProvider } from "./provider-catalog.js";
 
 type GoogleManifest = {
   setup?: {
@@ -246,5 +247,18 @@ describe("google manifest webSearch headers", () => {
       expect(ids.has(id)).toBe(true);
     }
     expect(models.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it("keeps the manifest static model ids in parity with the runtime catalog", () => {
+    // Catalog-parity guard (#139255 ClawSweeper P1): the static manifest
+    // rows are a second representation of the runtime GOOGLE_GEMINI_TEXT_MODEL_ROWS.
+    // Fail loudly if either side drifts so the doctor known-set and the live
+    // discovery catalog never disagree.
+    const runtimeIds = buildGoogleStaticCatalogProvider().models.map((m: { id: string }) => m.id);
+    const manifest = loadManifest();
+    const manifestIds = (manifest.modelCatalog?.providers?.google?.models ?? []).map(
+      (m: { id: string }) => m.id,
+    );
+    expect(new Set(manifestIds)).toEqual(new Set(runtimeIds));
   });
 });
