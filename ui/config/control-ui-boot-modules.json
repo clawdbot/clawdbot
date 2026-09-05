@@ -1903,7 +1903,6 @@
   "ui/src/pages/chat/split-layout.ts",
   "ui/src/pages/chat/system-notice-kinds.ts",
   "ui/src/pages/chat/terminal-reply-recovery.ts",
-  "ui/src/pages/chat/tool-titles.ts",
   "ui/src/pages/chat/workspace-conflict.ts",
   "ui/src/pages/plugins/icon-loader.ts",
   "ui/src/pages/skills/library-detail.ts",

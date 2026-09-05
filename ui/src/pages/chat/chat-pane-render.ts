@@ -32,7 +32,6 @@ import { showToast } from "../../lib/toast.ts";
 import { resolveComposerAvailability } from "./chat-composer-availability.ts";
 import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
-import { getChatHistoryVersion } from "./chat-history-state.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
@@ -70,7 +69,6 @@ import { hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts"
 import { scheduleChatScroll } from "./scroll.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
-import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
 export class ChatPane extends ChatPaneLayoutRender {
@@ -131,16 +129,6 @@ export class ChatPane extends ChatPaneLayoutRender {
     const inlineApproval =
       findInlineApproval(state.chatSessionApprovalQueue ?? [], state.sessionKey) ??
       findInlineApproval(overlays?.snapshot?.approvalQueue ?? [], state.sessionKey);
-    // Tool rows consult the global title store while rendering. Requests capture
-    // session + agent at schedule time, so another pane cannot re-route them.
-    configureToolTitleFetcher({
-      client: state.connected ? state.client : null,
-      sessionKey: catalogKey ? null : state.sessionKey || null,
-      agentId: currentAgentId || null,
-      schedulingEnabled: this.active && this.presented,
-      historyOwner: state,
-      historyVersion: getChatHistoryVersion(state),
-    });
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
     );
