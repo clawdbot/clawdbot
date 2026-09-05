@@ -165,7 +165,8 @@ Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-
     ```
 
     <Warning>
-    MiniMax-M2.x's Anthropic-compatible streaming endpoint emits `reasoning_content` in OpenAI-style delta chunks instead of native Anthropic thinking blocks, which leaks internal reasoning into visible output if thinking is left enabled implicitly. OpenClaw disables M2.x thinking by default unless you explicitly set `thinking` yourself. MiniMax-M3 (and forward-compatible M3.x) is exempt: M3 emits proper Anthropic thinking blocks and requires thinking active to produce visible content, so OpenClaw keeps M3 on the provider's adaptive thinking path. See the Thinking defaults section under Advanced configuration below.
+MiniMax-M2.x's Anthropic-compatible streaming endpoint emits `reasoning_content` in OpenAI-style delta chunks instead of native Anthropic thinking blocks. OpenClaw defaults the M2.x thinking level to `off` and sends `thinking: { type: "disabled" }` when no thinking setting is provided, but MiniMax M2.x accepts and ignores this setting, so thinking remains enabled upstream. OpenClaw's `off` setting therefore does not guarantee that MiniMax M2.x reasoning or `reasoning_content` output is disabled. MiniMax-M3 (and forward-compatible M3.x) is exempt: M3 emits proper Anthropic thinking blocks and supports disabling thinking, so OpenClaw keeps M3 on the provider's adaptive thinking path. See the Thinking defaults section under Advanced configuration below.
+
     </Warning>
 
     <Note>
