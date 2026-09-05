@@ -363,7 +363,7 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
   }
   const provider = getMediaUnderstandingProvider(
     params.provider,
-    buildMediaUnderstandingRegistry(undefined, params.cfg),
+    buildMediaUnderstandingRegistry(undefined, params.cfg, undefined, params.provider),
   );
   if (!provider?.extractStructured) {
     throw new Error(`Provider does not support structured extraction: ${params.provider}`);
