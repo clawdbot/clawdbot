@@ -234,6 +234,7 @@ function resolvedSessionRouteData(params: {
   return {
     kind: "session",
     sessionKey: params.row.key,
+    ...(params.row.agentId ? { agentId: params.row.agentId } : {}),
     ...sessionRouteHints(params.location),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),

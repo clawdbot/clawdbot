@@ -248,7 +248,12 @@ describe("gateway-backed session route resolution", () => {
         new AbortController().signal,
       );
 
-      expect(loaded).toMatchObject({ kind: "session", sessionKey: storedRow.key, face });
+      expect(loaded).toMatchObject({
+        kind: "session",
+        sessionKey: storedRow.key,
+        agentId: "roboclaw",
+        face,
+      });
       expect(loaded).not.toHaveProperty("canonicalLocation");
     }
   });
@@ -728,7 +733,11 @@ describe("gateway-backed session route resolution", () => {
   });
 
   it("resolves a cached literal without a gateway round-trip", async () => {
-    const literal = row({ key: "agent:roboclaw:standup", displayName: "Standup" });
+    const literal = row({
+      key: "agent:roboclaw:standup",
+      agentId: "roboclaw",
+      displayName: "Standup",
+    });
     const { context, list, request } = contextFor({ ok: false }, [literal]);
     const loaded = await loadChatRoute(
       context,
@@ -737,7 +746,11 @@ describe("gateway-backed session route resolution", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).toMatchObject({ kind: "session", sessionKey: literal.key });
+    expect(loaded).toMatchObject({
+      kind: "session",
+      sessionKey: literal.key,
+      agentId: "roboclaw",
+    });
     expect(request).not.toHaveBeenCalled();
     expect(list).not.toHaveBeenCalled();
   });
