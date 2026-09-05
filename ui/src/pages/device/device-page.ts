@@ -2,6 +2,7 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
+import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import type {
   NativeChromeExtensionSetupResult,
@@ -94,11 +95,14 @@ class DevicePage extends OpenClawLightDomElement {
 
   private toggle(
     key: SettingKey,
-    checked: boolean,
+    checked: boolean | undefined,
     label: string,
     description?: string,
     disabled = false,
   ) {
+    if (checked === undefined) {
+      return nothing;
+    }
     return renderSettingsToggleRow({
       title: t(`configPage.deviceSettings.${label}`),
       description,
@@ -147,7 +151,7 @@ class DevicePage extends OpenClawLightDomElement {
     }
     const domains =
       pendingCookieSyncEdits.get(capability)?.domains ??
-      capability.snapshot?.browser.cookieSync.domains;
+      capability.snapshot?.browser?.cookieSync.domains;
     if (!domains) {
       return;
     }
@@ -165,9 +169,9 @@ class DevicePage extends OpenClawLightDomElement {
     });
   }
 
-  private renderBrowser(snapshot: NativeDeviceSettingsSnapshot) {
+  private renderBrowser(browser: NonNullable<NativeDeviceSettingsSnapshot["browser"]>) {
     const capability = this.context.nativeDeviceSettings;
-    const sync = snapshot.browser.cookieSync;
+    const sync = browser.cookieSync;
     const pending = capability ? pendingCookieSyncEdits.get(capability) : undefined;
     const domains = pending?.domains ?? sync.domains;
     const addDomain = () => {
@@ -222,12 +226,12 @@ class DevicePage extends OpenClawLightDomElement {
         }),
       )}
       ${
-        snapshot.browser.importAvailable || !sync.available
+        browser.importAvailable || !sync.available
           ? renderSettingsSection(
               { title: t("configPage.deviceSettings.browser") },
               html`
                 ${
-                  snapshot.browser.importAvailable
+                  browser.importAvailable
                     ? renderSettingsRow({
                         title: t("configPage.deviceSettings.browserImport"),
                         description: t("configPage.deviceSettings.browserImportHint"),
@@ -258,11 +262,11 @@ class DevicePage extends OpenClawLightDomElement {
           ? renderSettingsSection(
               {
                 title: t(
-                  snapshot.browser.importAvailable
+                  browser.importAvailable
                     ? "configPage.deviceSettings.cookieSync"
                     : "configPage.deviceSettings.browser",
                 ),
-                description: snapshot.browser.importAvailable
+                description: browser.importAvailable
                   ? undefined
                   : t("configPage.deviceSettings.cookieSync"),
               },
@@ -370,104 +374,162 @@ class DevicePage extends OpenClawLightDomElement {
     const { app, capabilities } = snapshot;
     const capability = this.context.nativeDeviceSettings;
     return html`
-      ${renderSettingsSection(
-        { title: t("configPage.deviceSettings.app") },
-        html`
-          ${this.toggle("app.showDockIcon", app.showDockIcon, "showDockIcon", t("configPage.deviceSettings.showDockIconHint"))}
-          ${
-            app.iconStyle
-              ? renderSettingsRow({
-                  title: t("configPage.deviceSettings.iconStyle"),
-                  description: t("configPage.deviceSettings.iconStyleHint"),
-                  control: html`<select
-                    class="settings-select"
-                    aria-label=${t("configPage.deviceSettings.iconStyle")}
-                    .value=${live(app.iconStyle.selectedId)}
-                    ?disabled=${app.iconStyle.available.length === 0}
-                    @change=${(event: Event) => {
-                      // SAFETY: This handler is bound directly to the Dock icon select.
-                      const value = (event.currentTarget as HTMLSelectElement).value;
-                      capability?.set("app.iconStyle", value);
-                    }}
+      ${
+        app
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.app") },
+              html`
+                ${
+                  app.appearance !== undefined
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.appearance"),
+                        control: html`<select
+                          class="settings-select"
+                          aria-label=${t("configPage.deviceSettings.appearance")}
+                          .value=${live(app.appearance)}
+                          @change=${(event: Event) => {
+                            // SAFETY: This handler is bound directly to the appearance select.
+                            const value = (event.currentTarget as HTMLSelectElement).value;
+                            capability?.set("app.appearance", value);
+                          }}
+                        >
+                          ${["system", "light", "dark"].map((value) => html`<option value=${value} ?selected=${value === app.appearance}>${t(`configPage.deviceSettings.appearanceModes.${value}`)}</option>`)}
+                        </select>`,
+                      })
+                    : nothing
+                }
+                ${this.toggle("app.notificationsEnabled", app.notificationsEnabled, "notificationsEnabled", t("configPage.deviceSettings.notificationsEnabledHint"))}
+                ${this.toggle("app.showDockIcon", app.showDockIcon, "showDockIcon", t("configPage.deviceSettings.showDockIconHint"))}
+                ${
+                  app.iconStyle
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.iconStyle"),
+                        description: t("configPage.deviceSettings.iconStyleHint"),
+                        control: html`<select
+                          class="settings-select"
+                          aria-label=${t("configPage.deviceSettings.iconStyle")}
+                          .value=${live(app.iconStyle.selectedId)}
+                          ?disabled=${app.iconStyle.available.length === 0}
+                          @change=${(event: Event) => {
+                            // SAFETY: This handler is bound directly to the Dock icon select.
+                            const value = (event.currentTarget as HTMLSelectElement).value;
+                            capability?.set("app.iconStyle", value);
+                          }}
+                        >
+                          ${app.iconStyle.available.map(
+                            (style) => html`<option
+                              value=${style.id}
+                              ?selected=${style.id === app.iconStyle?.selectedId}
+                            >
+                              ${style.name}
+                            </option>`,
+                          )}
+                        </select>`,
+                      })
+                    : nothing
+                }
+                ${this.toggle("app.iconAnimationsEnabled", app.iconAnimationsEnabled, "iconAnimations", t("configPage.deviceSettings.iconAnimationsHint"))}
+                ${this.toggle("app.launchAtLogin", app.launchAtLogin, "launchAtLogin", app.launchAtLoginAvailable === false ? t("configPage.deviceSettings.launchAtLoginUnavailable") : undefined, app.launchAtLoginAvailable === false)}
+                ${this.toggle("app.quickChatEnabled", app.quickChatEnabled, "quickChat", t("configPage.deviceSettings.quickChatHint"))}
+                ${
+                  app.quickChatShortcut !== undefined
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.quickChatShortcut"),
+                        control: html`
+                          ${renderSettingsValue(app.quickChatShortcut ?? t("configPage.deviceSettings.notSet"))}
+                          <button
+                            type="button"
+                            class="btn"
+                            @click=${() => capability?.openPanel("quick-chat-shortcut")}
+                          >
+                            ${t("configPage.deviceSettings.changeShortcut")}
+                          </button>
+                        `,
+                      })
+                    : nothing
+                }
+              `,
+            )
+          : nothing
+      }
+      ${
+        capabilities
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.capabilities") },
+              html`
+                ${this.toggle("capabilities.canvasEnabled", capabilities.canvasEnabled, "canvas", t("configPage.deviceSettings.canvasHint"))}
+                ${this.toggle("capabilities.cameraEnabled", capabilities.cameraEnabled, "camera", t("configPage.deviceSettings.cameraHint"))}
+                ${this.toggle("capabilities.keepAwakeEnabled", capabilities.keepAwakeEnabled, "keepAwake", t("configPage.deviceSettings.keepAwakeHint"))}
+                ${capabilities.healthSummaryAvailable ? this.toggle("capabilities.healthSummaryEnabled", capabilities.healthSummaryEnabled, "healthSummary", t("configPage.deviceSettings.healthSummaryHint")) : nothing}
+                ${this.toggle("capabilities.computerControlEnabled", capabilities.computerControlEnabled, "computerControl", t("configPage.deviceSettings.computerControlHint"))}
+                ${
+                  capabilities.computerControlEnabled &&
+                  capabilities.computerControlProvider !== undefined
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.computerControlProvider"),
+                        control: html`<select
+                          class="settings-select"
+                          aria-label=${t("configPage.deviceSettings.computerControlProvider")}
+                          .value=${capabilities.computerControlProvider}
+                          @change=${(event: Event) => {
+                            // SAFETY: This handler is bound directly to the provider select.
+                            const value = (event.currentTarget as HTMLSelectElement).value;
+                            capability?.set("capabilities.computerControlProvider", value);
+                          }}
+                        >
+                          <option
+                            value="peekaboo"
+                            ?selected=${capabilities.computerControlProvider === "peekaboo"}
+                          >
+                            ${t("configPage.deviceSettings.peekaboo")}
+                          </option>
+                          <option
+                            value="cua"
+                            ?selected=${capabilities.computerControlProvider === "cua"}
+                            ?disabled=${!capabilities.cuaDriverBundled}
+                          >
+                            ${t(capabilities.cuaDriverBundled ? "configPage.deviceSettings.cua" : "configPage.deviceSettings.cuaUnavailable")}
+                          </option>
+                        </select>`,
+                      })
+                    : nothing
+                }
+                ${this.toggle("capabilities.peekabooBridgeEnabled", capabilities.peekabooBridgeEnabled, "peekabooBridge", t("configPage.deviceSettings.peekabooBridgeHint"), !capabilities.computerControlEnabled)}
+              `,
+            )
+          : nothing
+      }
+      ${snapshot.browser ? this.renderBrowser(snapshot.browser) : nothing}
+      ${
+        app?.debugPaneEnabled !== undefined
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.developer") },
+              html`
+                ${this.toggle("app.debugPaneEnabled", app.debugPaneEnabled, "debugTools")}
+                ${app.debugPaneEnabled ? renderSettingsRow({ title: t("configPage.deviceSettings.debugWindow"), control: html`<button type="button" class="btn" @click=${() => capability?.openPanel("debug")}>${t("configPage.deviceSettings.openDebug")}</button>` }) : nothing}
+              `,
+            )
+          : nothing
+      }
+      ${
+        snapshot.device.platform === "ios"
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.device") },
+              html`${(["diagnostics", "licenses", "about", "watch"] as const).map((panel) =>
+                renderSettingsRow({
+                  title: t(`configPage.deviceSettings.panels.${panel}`),
+                  control: html`<button
+                    type="button"
+                    class="btn"
+                    @click=${() => capability?.openPanel(panel)}
                   >
-                    ${app.iconStyle.available.map(
-                      (style) => html`<option
-                        value=${style.id}
-                        ?selected=${style.id === app.iconStyle?.selectedId}
-                      >
-                        ${style.name}
-                      </option>`,
-                    )}
-                  </select>`,
-                })
-              : nothing
-          }
-          ${this.toggle("app.iconAnimationsEnabled", app.iconAnimationsEnabled, "iconAnimations", t("configPage.deviceSettings.iconAnimationsHint"))}
-          ${this.toggle("app.launchAtLogin", app.launchAtLogin, "launchAtLogin", app.launchAtLoginAvailable ? undefined : t("configPage.deviceSettings.launchAtLoginUnavailable"), !app.launchAtLoginAvailable)}
-          ${this.toggle("app.quickChatEnabled", app.quickChatEnabled, "quickChat", t("configPage.deviceSettings.quickChatHint"))}
-          ${renderSettingsRow({
-            title: t("configPage.deviceSettings.quickChatShortcut"),
-            control: html`
-              ${renderSettingsValue(app.quickChatShortcut ?? t("configPage.deviceSettings.notSet"))}
-              <button
-                type="button"
-                class="btn"
-                @click=${() => capability?.openPanel("quick-chat-shortcut")}
-              >
-                ${t("configPage.deviceSettings.changeShortcut")}
-              </button>
-            `,
-          })}
-        `,
-      )}
-      ${renderSettingsSection(
-        { title: t("configPage.deviceSettings.capabilities") },
-        html`
-          ${this.toggle("capabilities.canvasEnabled", capabilities.canvasEnabled, "canvas", t("configPage.deviceSettings.canvasHint"))}
-          ${this.toggle("capabilities.cameraEnabled", capabilities.cameraEnabled, "camera", t("configPage.deviceSettings.cameraHint"))}
-          ${this.toggle("capabilities.computerControlEnabled", capabilities.computerControlEnabled, "computerControl", t("configPage.deviceSettings.computerControlHint"))}
-          ${
-            capabilities.computerControlEnabled
-              ? renderSettingsRow({
-                  title: t("configPage.deviceSettings.computerControlProvider"),
-                  control: html`<select
-                    class="settings-select"
-                    aria-label=${t("configPage.deviceSettings.computerControlProvider")}
-                    .value=${capabilities.computerControlProvider}
-                    @change=${(event: Event) => {
-                      // SAFETY: This handler is bound directly to the provider select.
-                      const value = (event.currentTarget as HTMLSelectElement).value;
-                      capability?.set("capabilities.computerControlProvider", value);
-                    }}
-                  >
-                    <option
-                      value="peekaboo"
-                      ?selected=${capabilities.computerControlProvider === "peekaboo"}
-                    >
-                      ${t("configPage.deviceSettings.peekaboo")}
-                    </option>
-                    <option
-                      value="cua"
-                      ?selected=${capabilities.computerControlProvider === "cua"}
-                      ?disabled=${!capabilities.cuaDriverBundled}
-                    >
-                      ${t(capabilities.cuaDriverBundled ? "configPage.deviceSettings.cua" : "configPage.deviceSettings.cuaUnavailable")}
-                    </option>
-                  </select>`,
-                })
-              : nothing
-          }
-          ${this.toggle("capabilities.peekabooBridgeEnabled", capabilities.peekabooBridgeEnabled, "peekabooBridge", t("configPage.deviceSettings.peekabooBridgeHint"), !capabilities.computerControlEnabled)}
-        `,
-      )}
-      ${this.renderBrowser(snapshot)}
-      ${renderSettingsSection(
-        { title: t("configPage.deviceSettings.developer") },
-        html`
-          ${this.toggle("app.debugPaneEnabled", app.debugPaneEnabled, "debugTools")}
-          ${app.debugPaneEnabled ? renderSettingsRow({ title: t("configPage.deviceSettings.debugWindow"), control: html`<button type="button" class="btn" @click=${() => capability?.openPanel("debug")}>${t("configPage.deviceSettings.openDebug")}</button>` }) : nothing}
-        `,
-      )}
+                    ${t("configPage.deviceSettings.openPanel")}
+                  </button>`,
+                }),
+              )}`,
+            )
+          : nothing
+      }
     `;
   }
 
@@ -481,13 +543,9 @@ class DevicePage extends OpenClawLightDomElement {
         : renderSettingsEmpty(t("configPage.deviceSettings.loading"));
     return html`
       ${renderSettingsPageHeader({
-        title: t(
-          snapshot?.device.platform === "macos"
-            ? "nav.settingsGroupDevice"
-            : "nav.settingsGroupThisDevice",
-        ),
-        subtitle: html`${t("configPage.deviceSettings.intro")}
-        ${renderLearnMoreLink("https://docs.openclaw.ai/platforms/macos")}`,
+        title: t(deviceSettingsGroupLabelKey(snapshot)),
+        subtitle: html`${t(snapshot?.device.platform === "ios" ? "configPage.deviceSettings.introIos" : "configPage.deviceSettings.intro")}
+        ${renderLearnMoreLink(snapshot?.device.platform === "ios" ? "https://docs.openclaw.ai/platforms/ios" : "https://docs.openclaw.ai/platforms/macos")}`,
       })}
       ${renderSettingsWorkspace(renderSettingsPage(body))}
     `;

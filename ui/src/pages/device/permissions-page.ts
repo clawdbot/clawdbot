@@ -71,24 +71,47 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
               onChange: (value) => capability?.set("permissions.location.mode", value),
             }),
           })}
-          ${renderSettingsToggleRow({
-            title: t("configPage.deviceSettings.preciseLocation"),
-            description: t("configPage.deviceSettings.preciseLocationHint"),
-            checked: permissions.location.precise,
-            disabled: permissions.location.mode === "off",
-            onChange: (value) => capability?.set("permissions.location.precise", value),
-          })}
+          ${
+            permissions.location.preciseEditable === false
+              ? renderSettingsRow({
+                  title: t("configPage.deviceSettings.preciseLocation"),
+                  description: t("configPage.deviceSettings.preciseLocationReadOnlyHint"),
+                  stackedOnNarrow: true,
+                  control: html`
+                    ${renderSettingsStatus({ kind: permissions.location.precise ? "ok" : "muted", label: t(permissions.location.precise ? "configPage.deviceSettings.preciseLocationStatuses.enabled" : "configPage.deviceSettings.preciseLocationStatuses.disabled") })}
+                    <button
+                      type="button"
+                      class="btn"
+                      @click=${() => capability?.openSystemSettings("location")}
+                    >
+                      ${t("configPage.deviceSettings.openSettings")}
+                    </button>
+                  `,
+                })
+              : renderSettingsToggleRow({
+                  title: t("configPage.deviceSettings.preciseLocation"),
+                  description: t("configPage.deviceSettings.preciseLocationHint"),
+                  checked: permissions.location.precise,
+                  disabled: permissions.location.mode === "off",
+                  onChange: (value) => capability?.set("permissions.location.precise", value),
+                })
+          }
         `,
       )}
-      ${renderSettingsSection(
-        { title: t("configPage.deviceSettings.privacy") },
-        renderSettingsToggleRow({
-          title: t("configPage.deviceSettings.activePresence"),
-          description: t("configPage.deviceSettings.activePresenceHint"),
-          checked: snapshot.capabilities.activeComputerPresenceEnabled,
-          onChange: (value) => capability?.set("capabilities.activeComputerPresenceEnabled", value),
-        }),
-      )}
+      ${
+        snapshot.capabilities?.activeComputerPresenceEnabled !== undefined
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.privacy") },
+              renderSettingsToggleRow({
+                title: t("configPage.deviceSettings.activePresence"),
+                description: t("configPage.deviceSettings.activePresenceHint"),
+                checked: snapshot.capabilities.activeComputerPresenceEnabled,
+                onChange: (value) =>
+                  capability?.set("capabilities.activeComputerPresenceEnabled", value),
+              }),
+            )
+          : nothing
+      }
     `;
   }
 
@@ -103,8 +126,8 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
     return html`
       ${renderSettingsPageHeader({
         title: titleForRoute("device-permissions"),
-        subtitle: html`${t("configPage.deviceSettings.permissionsIntro")}
-        ${renderLearnMoreLink("https://docs.openclaw.ai/platforms/macos")}`,
+        subtitle: html`${t(snapshot?.device.platform === "ios" ? "configPage.deviceSettings.permissionsIntroIos" : "configPage.deviceSettings.permissionsIntro")}
+        ${renderLearnMoreLink(snapshot?.device.platform === "ios" ? "https://docs.openclaw.ai/platforms/ios" : "https://docs.openclaw.ai/platforms/macos")}`,
       })}
       ${renderSettingsWorkspace(renderSettingsPage(body))}
     `;

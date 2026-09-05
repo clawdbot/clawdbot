@@ -208,7 +208,7 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
         >${icons[navigationIconForRoute(routeId)]}</span
       >
       <span class="settings-sidebar__item-label"
-        >${label ?? settingsNavigationLabelForRoute(routeId)}</span
+        >${label ?? settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span
       >
       ${props.presentation === "embed-list" ? html`<span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>` : nothing}
     </a>
@@ -270,7 +270,7 @@ function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
         : nothing
     }
     <h1 class="page-title">
-      ${props.presentation === "embed-list" ? t("nav.settings") : titleForRoute(props.activeRouteId)}
+      ${props.presentation === "embed-list" ? t("nav.settings") : settingsNavigationLabelForRoute(props.activeRouteId, props.nativeDeviceSettings?.snapshot)}
     </h1>
     ${
       connectionStatus

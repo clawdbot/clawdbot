@@ -17,7 +17,10 @@ import type { NativeDeviceSettingsCapability } from "./app/native-device-setting
 import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
-import { createNativeDeviceSettingsSnapshot } from "./test-helpers/native-device-settings.ts";
+import {
+  createIosNativeDeviceSettingsSnapshot,
+  createNativeDeviceSettingsSnapshot,
+} from "./test-helpers/native-device-settings.ts";
 
 const settingsGroups = visibleSettingsNavigationGroups(true);
 const settingsRoutes = settingsGroups.flatMap((group) => group.routes);
@@ -79,6 +82,31 @@ describe("sidebar entries", () => {
     expect(
       visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: null })[1]?.labelKey,
     ).toBe("nav.settingsGroupThisDevice");
+    const iosSnapshot = createIosNativeDeviceSettingsSnapshot();
+    for (const [formFactor, labelKey] of [
+      ["phone", "nav.settingsGroupThisIPhone"],
+      ["pad", "nav.settingsGroupThisIPad"],
+      ["desktop", "nav.settingsGroupThisDevice"],
+      [undefined, "nav.settingsGroupThisDevice"],
+    ] as const) {
+      iosSnapshot.device.formFactor = formFactor;
+      expect(
+        visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: iosSnapshot })[1]
+          ?.labelKey,
+      ).toBe(labelKey);
+    }
+    const iosCapability = { ...capability, snapshot: iosSnapshot };
+    for (const [query, routeId] of [
+      ["Health summaries", "device"],
+      ["Apple Watch", "device"],
+      ["Contacts", "device-permissions"],
+      ["Photos", "device-permissions"],
+      ["Use speakerphone", "talk"],
+      ["Talk in the background", "talk"],
+    ] as const) {
+      expect(search(query, iosCapability)).toContainEqual(expect.objectContaining({ routeId }));
+      expect(search(query, null)).toEqual([]);
+    }
     for (const route of ["device", "device-permissions"] as const) {
       expect(isSettingsNavigationRouteVisible(route, canAdmin)).toBe(false);
       expect(isSettingsNavigationRouteVisible(route, canAdmin, capability)).toBe(true);
