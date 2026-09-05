@@ -618,7 +618,8 @@ private class DeferredChatTranscriptCache(
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
-  ) = ready().transcriptCache.saveTranscript(gatewayId, agentId, sessionKey, messages)
+    sessionInfo: ChatSessionEntry?,
+  ) = ready().transcriptCache.saveTranscript(gatewayId, agentId, sessionKey, messages, sessionInfo)
 
   override suspend fun deleteSession(
     gatewayId: String,

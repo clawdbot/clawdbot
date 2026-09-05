@@ -88,6 +88,7 @@ interface ChatTranscriptCache {
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry? = null,
   )
 
   /** Removes one session and its transcript, so gateway-side deletes also purge offline copies. */
@@ -400,6 +401,7 @@ class RoomChatTranscriptCache internal constructor(
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry?,
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val agent = scopedAgentId(agentId) ?: return
@@ -481,11 +483,16 @@ class RoomChatTranscriptCache internal constructor(
       val currentSession = dao.session(gateway, agent, key)
       // REPLACE refreshes SQLite rowid, making the transcript's session the most recent gateway
       // row while preserving list metadata when that session was already cached.
+      // Persist the accepted history row with its transcript, including cleared usage.
+      // Otherwise a failed list refresh resurrects the previous run on offline reopen.
+      val session = sessionInfo ?: ChatSessionEntry(key = key, updatedAtMs = null)
       dao.insertSessions(
         listOf(
-          currentSession
-            ?: ChatSessionEntry(key = key, updatedAtMs = null)
-              .toCachedSession(gateway, agent, rowOrder = dao.nextSessionRowOrder(gateway, agent)),
+          if (sessionInfo != null || currentSession == null) {
+            session.toCachedSession(gateway, agent, rowOrder = currentSession?.rowOrder ?: dao.nextSessionRowOrder(gateway, agent))
+          } else {
+            currentSession
+          },
         ),
       )
       dao.evictSessionsBeyondKeeping(gateway, agent, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)

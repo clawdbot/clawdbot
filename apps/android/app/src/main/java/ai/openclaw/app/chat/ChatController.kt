@@ -4799,7 +4799,13 @@ class ChatController internal constructor(
               adoptInFlightRun(history, runIdsOwnedAfterRequest)
             }
             publishRunPresentation()
-            enqueueTranscriptCacheWrite(requestCacheScope, requestAgentId, sessionKey, history.messages)
+            enqueueTranscriptCacheWrite(
+              requestCacheScope,
+              requestAgentId,
+              sessionKey,
+              history.messages,
+              appliedHistoryEntry.takeIf { appliedPurpose == HistoryRefreshPurpose.RestoreSession && history.sessionInfo != null },
+            )
             HistoryRefreshResult.Applied(historyBranchState, appliedPurpose)
           }
         }
@@ -4947,6 +4953,7 @@ class ChatController internal constructor(
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry?,
   ) {
     val cache = transcriptCache ?: return
     val capturedScope = requestCacheScope ?: return
@@ -4955,7 +4962,7 @@ class ChatController internal constructor(
     scope.launch(start = CoroutineStart.UNDISPATCHED) {
       cacheMutationMutex.withLock {
         if (capturedScope != currentCacheScope()) return@withLock
-        runCatching { cache.saveTranscript(capturedScope.gatewayId, agentId, sessionKey, messages) }
+        runCatching { cache.saveTranscript(capturedScope.gatewayId, agentId, sessionKey, messages, sessionInfo) }
       }
     }
   }
@@ -6619,6 +6626,13 @@ class ChatController internal constructor(
       return
     }
     val phase = payload["phase"].asStringOrNull()
+    val reason = payload["reason"].asStringOrNull()
+    if (reason == "compact") {
+      // Compaction events omit cleared fields. Read the full owner snapshot rather
+      // than treating those omissions as a patch or inferring usage from the transcript.
+      if (eventKey == _sessionKey.value) refreshHistoryForRecovery() else refreshSessionsForCurrentWindow()
+      return
+    }
     // Durable transcript invalidations need no session snapshot or chat terminal event.
     if (eventKey == _sessionKey.value && (payload["message"] is JsonObject || phase == "message")) {
       refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.Transcript)
@@ -7961,8 +7975,10 @@ class ChatController internal constructor(
     preserveSessionSettings: Boolean = false,
   ): ChatSessionEntry? {
     val thinkingLevel = history.thinkingLevel?.trim()?.takeIf(String::isNotEmpty)
+    // Full sessionInfo is authoritative even when usage is absent after compaction.
+    // Thinking-only refreshes and partial events must retain their existing usage.
     val info =
-      history.sessionInfo.takeIf { includeSessionInfo }
+      history.sessionInfo.takeIf { includeSessionInfo }?.copy(hasSessionUsageMetadata = true)
         ?: thinkingLevel?.let { ChatSessionEntry(key = history.sessionKey, updatedAtMs = null, thinkingLevel = it) }
         ?: return null
     return upsertSessionEntry(

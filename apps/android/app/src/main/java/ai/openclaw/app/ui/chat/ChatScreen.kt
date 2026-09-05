@@ -362,7 +362,7 @@ fun ChatScreen(
       selection = thinkingLevelSelection,
       fallbackSupported = thinkingSupportedForSelection(selectedModelRef, modelCatalog),
     )
-  val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions, messages = messages)
+  val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
   val activeSession =
     sessions.firstOrNull {
       isActiveSessionChoice(
@@ -3918,7 +3918,6 @@ internal fun resolveChatContextUsage(
   sessionKey: String,
   mainSessionKey: String,
   sessions: List<ChatSessionEntry>,
-  messages: List<ChatMessage> = emptyList(),
 ): ChatContextUsage {
   val entry =
     sessions.firstOrNull {
@@ -3928,27 +3927,15 @@ internal fun resolveChatContextUsage(
         mainSessionKey = mainSessionKey,
       )
     }
-  val latestContextBoundary = messages.asReversed().firstOrNull(ChatMessage::isContextBoundary)
-  val boundaryTimestamp = latestContextBoundary?.timestampMs
-  // This helper stops at the boundary, so only a timestamped later model call can unlock totals.
-  val postBoundaryAssistantTimestamp = latestRealAssistantMessage(messages)?.timestampMs
-  val sessionTimestamp = entry?.updatedAtMs
-  val sessionUsageIsFresh =
-    latestContextBoundary == null ||
-      (
-        postBoundaryAssistantTimestamp != null &&
-          sessionTimestamp?.let { it >= postBoundaryAssistantTimestamp } == true &&
-          (boundaryTimestamp == null || sessionTimestamp > boundaryTimestamp)
-      )
   return ChatContextUsage(
     totalTokens = entry?.totalTokens,
     totalTokensFresh = entry?.totalTokensFresh,
     contextTokens = entry?.contextTokens,
     // sessions.list owns run-cumulative usage across model calls, tools, and retries.
     // Transcript message usage remains a separate latest-model-call detail below.
-    inputTokens = entry?.inputTokens.takeIf { sessionUsageIsFresh },
-    outputTokens = entry?.outputTokens.takeIf { sessionUsageIsFresh },
-    estimatedCostUsd = entry?.estimatedCostUsd.takeIf { sessionUsageIsFresh },
+    inputTokens = entry?.inputTokens,
+    outputTokens = entry?.outputTokens,
+    estimatedCostUsd = entry?.estimatedCostUsd,
   )
 }
 

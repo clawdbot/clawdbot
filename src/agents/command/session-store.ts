@@ -384,6 +384,7 @@ export async function recordCliCompactionInStore(params: {
   next.outputTokens = undefined;
   next.cacheRead = undefined;
   next.cacheWrite = undefined;
+  next.estimatedCostUsd = undefined;
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
     next.totalTokensFresh = true;

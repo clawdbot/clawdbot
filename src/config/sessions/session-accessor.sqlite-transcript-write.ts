@@ -278,6 +278,9 @@ export async function trimTranscriptForManualCompact(
       delete nextEntry.contextBudgetStatus;
       delete nextEntry.inputTokens;
       delete nextEntry.outputTokens;
+      delete nextEntry.cacheRead;
+      delete nextEntry.cacheWrite;
+      delete nextEntry.estimatedCostUsd;
       delete nextEntry.totalTokens;
       delete nextEntry.totalTokensFresh;
       delete nextEntry.totalTokensVersion;

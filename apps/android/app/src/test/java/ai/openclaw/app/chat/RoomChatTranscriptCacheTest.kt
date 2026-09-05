@@ -120,6 +120,56 @@ class RoomChatTranscriptCacheTest {
   }
 
   @Test
+  fun fullHistoryUsageClearSurvivesOfflineReopenWithoutAListResponse() =
+    runTest {
+      saveSessions(listOf(ChatSessionEntry(key = "main", updatedAtMs = 1L, outputTokens = 840L)))
+      saveTranscript(listOf(message("before", role = "assistant")))
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> {
+              """{"sessionId":"session-1","messages":[{"role":"system","content":[],"__openclaw":{"kind":"compaction"}}],"sessionInfo":{"key":"main","totalTokens":24700,"totalTokensFresh":true,"contextTokens":272000}}"""
+            }
+
+            "sessions.list" -> {
+              error("list unavailable")
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(
+        null,
+        controller.sessions.value
+          .single()
+          .outputTokens,
+      )
+
+      val reopened =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 2) }) { _, _ -> error("offline") }
+      reopened.load("main")
+      advanceUntilIdle()
+      assertTrue(reopened.messagesFromCache.value)
+      assertEquals(
+        "compaction",
+        reopened.messages.value
+          .single()
+          .transcriptMarker
+          ?.kind,
+      )
+      assertEquals(
+        null,
+        reopened.sessions.value
+          .single()
+          .outputTokens,
+      )
+    }
+
+  @Test
   fun oldHistoryPostPublicationHealthWaitCannotOverwriteNewerCachedTranscript() =
     runTest {
       val healthStarted = CompletableDeferred<Unit>()

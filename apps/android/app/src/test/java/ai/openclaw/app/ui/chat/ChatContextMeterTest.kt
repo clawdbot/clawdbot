@@ -166,121 +166,9 @@ class ChatContextMeterTest {
         "main",
         "main",
         listOf(ChatSessionEntry(key = "main", updatedAtMs = 1L)),
-        listOf(message(role = "assistant", cost = ChatMessageCost(total = 0.0225))),
       )
     assertNull(withoutSessionCost.estimatedCostUsd)
     assertEquals(0.0225, latestChatMessageCost(listOf(message(role = "assistant", cost = ChatMessageCost(total = 0.0225))))?.total)
-  }
-
-  @Test
-  fun contextBoundaryClearsLatestRunUntilAFreshSessionSnapshotRepopulatesIt() {
-    val session =
-      ChatSessionEntry(
-        key = "main",
-        updatedAtMs = 2L,
-        inputTokens = 18_420L,
-        outputTokens = 840L,
-        totalTokens = 24_700L,
-        totalTokensFresh = true,
-        contextTokens = 272_000L,
-        estimatedCostUsd = 0.022956,
-      )
-    for (boundaryKind in listOf("compaction", "reset")) {
-      val beforeBoundary = message(role = "assistant", cost = ChatMessageCost(input = 0.003))
-      val boundary = message(role = "system", marker = ChatTranscriptMarker(kind = boundaryKind)).copy(timestampMs = 2L)
-
-      val reset = resolveChatContextUsage("main", "main", listOf(session), listOf(beforeBoundary, boundary))
-      assertEquals(ChatContextUsage(totalTokens = 24_700L, totalTokensFresh = true, contextTokens = 272_000L), reset)
-      assertNull(latestChatMessageCost(listOf(beforeBoundary, boundary)))
-
-      val afterBoundary =
-        message(
-          role = "assistant",
-          usage = ChatMessageUsage(input = 2_100L, output = 160L),
-          cost = ChatMessageCost(output = 0.004, total = 0.0045),
-        ).copy(timestampMs = 3L)
-      val stale = resolveChatContextUsage("main", "main", listOf(session), listOf(beforeBoundary, boundary, afterBoundary))
-      assertNull(stale.inputTokens)
-      assertNull(stale.outputTokens)
-      assertNull(stale.estimatedCostUsd)
-      val freshSession = session.copy(updatedAtMs = 3L, inputTokens = 2_100L, outputTokens = 160L, estimatedCostUsd = 0.0045)
-      val repopulated = resolveChatContextUsage("main", "main", listOf(freshSession), listOf(beforeBoundary, boundary, afterBoundary))
-      assertEquals(2_100L, repopulated.inputTokens)
-      assertEquals(160L, repopulated.outputTokens)
-      assertEquals(0.0045, repopulated.estimatedCostUsd)
-      assertEquals(ChatMessageCost(output = 0.004, total = 0.0045), latestChatMessageCost(listOf(beforeBoundary, boundary, afterBoundary)))
-
-      val partialNextCall = message(role = "assistant", usage = ChatMessageUsage(output = 160L))
-      val partial = resolveChatContextUsage("main", "main", listOf(session), listOf(beforeBoundary, boundary, partialNextCall))
-      assertNull(partial.inputTokens)
-      assertNull(partial.outputTokens)
-      assertNull(partial.estimatedCostUsd)
-      assertEquals(ChatMessageUsage(output = 160L), latestChatMessageUsage(listOf(beforeBoundary, boundary, partialNextCall)))
-    }
-  }
-
-  @Test
-  fun timestampedBoundaryRejectsASessionSnapshotOlderThanTheLatestCall() {
-    val boundary = message(role = "system", marker = ChatTranscriptMarker(kind = "reset")).copy(timestampMs = 2L)
-    val postBoundaryAssistant = message(role = "assistant").copy(timestampMs = 4L)
-    val staleSession =
-      ChatSessionEntry(
-        key = "main",
-        updatedAtMs = 3L,
-        inputTokens = 18_420L,
-        outputTokens = 840L,
-        estimatedCostUsd = 0.022956,
-      )
-
-    val stale = resolveChatContextUsage("main", "main", listOf(staleSession), listOf(boundary, postBoundaryAssistant))
-    assertNull(stale.inputTokens)
-    assertNull(stale.outputTokens)
-    assertNull(stale.estimatedCostUsd)
-
-    val freshSession = staleSession.copy(updatedAtMs = 4L, inputTokens = 2_100L, outputTokens = 160L, estimatedCostUsd = 0.0045)
-    val fresh = resolveChatContextUsage("main", "main", listOf(freshSession), listOf(boundary, postBoundaryAssistant))
-    assertEquals(2_100L, fresh.inputTokens)
-    assertEquals(160L, fresh.outputTokens)
-    assertEquals(0.0045, fresh.estimatedCostUsd)
-
-    val unclockedAssistant = message(role = "assistant")
-    val unprovable = resolveChatContextUsage("main", "main", listOf(freshSession), listOf(boundary, unclockedAssistant))
-    assertNull(unprovable.inputTokens)
-    assertNull(unprovable.outputTokens)
-    assertNull(unprovable.estimatedCostUsd)
-  }
-
-  @Test
-  fun timestampLessBoundaryUsesThePostBoundaryAssistantAsItsFreshnessClock() {
-    val staleSession =
-      ChatSessionEntry(
-        key = "main",
-        updatedAtMs = 2L,
-        inputTokens = 18_420L,
-        outputTokens = 840L,
-        estimatedCostUsd = 0.022956,
-      )
-    val preBoundaryAssistant = message(role = "assistant").copy(timestampMs = 2L)
-    val boundary = message(role = "system", marker = ChatTranscriptMarker(kind = "compaction"))
-
-    val cleared = resolveChatContextUsage("main", "main", listOf(staleSession), listOf(preBoundaryAssistant, boundary))
-    assertNull(cleared.inputTokens)
-    assertNull(cleared.outputTokens)
-    assertNull(cleared.estimatedCostUsd)
-
-    val postBoundaryAssistant =
-      message(role = "assistant", usage = ChatMessageUsage(input = 2_100L, output = 160L)).copy(timestampMs = 3L)
-    val freshSession = staleSession.copy(updatedAtMs = 3L, inputTokens = 2_100L, outputTokens = 160L, estimatedCostUsd = 0.0045)
-    val refreshed = resolveChatContextUsage("main", "main", listOf(freshSession), listOf(preBoundaryAssistant, boundary, postBoundaryAssistant))
-    assertEquals(2_100L, refreshed.inputTokens)
-    assertEquals(160L, refreshed.outputTokens)
-    assertEquals(0.0045, refreshed.estimatedCostUsd)
-
-    val unclockedAssistant = message(role = "assistant")
-    val unprovable = resolveChatContextUsage("main", "main", listOf(freshSession), listOf(boundary, unclockedAssistant))
-    assertNull(unprovable.inputTokens)
-    assertNull(unprovable.outputTokens)
-    assertNull(unprovable.estimatedCostUsd)
   }
 
   @Test
@@ -303,7 +191,7 @@ class ChatContextMeterTest {
         outputTokens = 840L,
         estimatedCostUsd = 0.022956,
       ),
-      resolveChatContextUsage("main", "main", listOf(session), emptyList()),
+      resolveChatContextUsage("main", "main", listOf(session)),
     )
   }
 
@@ -324,7 +212,7 @@ class ChatContextMeterTest {
         cost = ChatMessageCost(input = 0.003, output = 0.004, cacheRead = 0.0015, total = 0.0085),
       )
 
-    val usage = resolveChatContextUsage("main", "main", listOf(session), listOf(finalModelCall))
+    val usage = resolveChatContextUsage("main", "main", listOf(session))
 
     assertEquals(18_420L, usage.inputTokens)
     assertEquals(840L, usage.outputTokens)
@@ -334,22 +222,17 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun partialModelCallDoesNotReplaceAggregateSessionTelemetry() {
-    val session =
-      ChatSessionEntry(
-        key = "main",
-        updatedAtMs = 2L,
-        inputTokens = 18_420L,
-        outputTokens = 1_000L,
-        estimatedCostUsd = 0.022956,
-      )
-    val latestRun = message(role = "assistant", usage = ChatMessageUsage(output = 160L))
-
-    val usage = resolveChatContextUsage("main", "main", listOf(session), listOf(latestRun))
-
-    assertEquals(18_420L, usage.inputTokens)
-    assertEquals(1_000L, usage.outputTokens)
-    assertEquals(0.022956, usage.estimatedCostUsd)
+  fun modelCallDetailsClearAtBoundariesWithoutInheritingOlderUsage() {
+    val old = message("assistant", usage = ChatMessageUsage(input = 1200L), cost = ChatMessageCost(total = 0.01))
+    for (kind in listOf("compaction", "reset")) {
+      val boundary = message("system").copy(transcriptMarker = ChatTranscriptMarker(kind = kind))
+      assertNull(latestChatMessageUsage(listOf(old, boundary)))
+      assertNull(latestChatMessageCost(listOf(old, boundary)))
+      val next = message("assistant", usage = ChatMessageUsage(output = 160L))
+      assertEquals(ChatMessageUsage(output = 160L), latestChatMessageUsage(listOf(old, boundary, next)))
+      assertNull(latestChatMessageCost(listOf(old, boundary, next)))
+      assertNull(latestChatMessageUsage(listOf(old, boundary, message("assistant"))))
+    }
   }
 
   private fun message(
@@ -358,7 +241,6 @@ class ChatContextMeterTest {
     model: String? = null,
     usage: ChatMessageUsage? = null,
     cost: ChatMessageCost? = null,
-    marker: ChatTranscriptMarker? = null,
   ) = ChatMessage(
     id = "$role-${provider.orEmpty()}-${model.orEmpty()}",
     role = role,
@@ -368,7 +250,6 @@ class ChatContextMeterTest {
     model = model,
     usage = usage,
     cost = cost,
-    transcriptMarker = marker,
   )
 
   @Test

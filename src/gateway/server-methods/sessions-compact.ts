@@ -439,6 +439,9 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   }
                   delete entryToUpdate.inputTokens;
                   delete entryToUpdate.outputTokens;
+                  delete entryToUpdate.cacheRead;
+                  delete entryToUpdate.cacheWrite;
+                  delete entryToUpdate.estimatedCostUsd;
                   delete entryToUpdate.contextBudgetStatus;
                   if (
                     typeof result.result?.tokensAfter === "number" &&
