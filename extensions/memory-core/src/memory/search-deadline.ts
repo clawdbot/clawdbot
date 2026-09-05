@@ -1,4 +1,4 @@
-export const DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 15_000;
+export const DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 30_000;
 export function resolveMemorySearchAbortError(signal: AbortSignal): Error {
   const { reason } = signal;
   if (reason instanceof Error) {
