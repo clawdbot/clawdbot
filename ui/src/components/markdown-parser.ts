@@ -369,7 +369,7 @@ export function createMarkdownParser(): MarkdownItParser {
             }
             if (!decodedHref.includes("://")) {
               const target =
-                parseMarkdownFileLinkTarget(decodedHref) ??
+                parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
                 (isHostLocalMarkdownFileHref(decodedHref)
                   ? splitMarkdownFileLineSuffix(decodedHref.trim())
                   : null);

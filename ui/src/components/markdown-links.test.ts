@@ -306,13 +306,17 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(link?.dataset.fileLine).toBe("26");
     });
 
-    it("does not link dotted version numbers", () => {
+    it("does not link dotted version numbers but keeps authored digit-led extensions", () => {
       const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4", {
-          fileLinks: true,
-        }),
+        toSanitizedMarkdownHtml(
+          "bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4 [part](assets/part.3mf)",
+          {
+            fileLinks: true,
+          },
+        ),
       );
-      expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a[data-file-path]")];
+      expect(links.map((link) => link.dataset.filePath)).toEqual(["assets/part.3mf"]);
     });
 
     it("links Windows absolute paths", () => {
