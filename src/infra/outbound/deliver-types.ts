@@ -133,7 +133,7 @@ export class OutboundDeliveryError extends Error {
   readonly payloadOutcomes: OutboundPayloadDeliveryOutcome[];
   readonly sentBeforeError: boolean;
   readonly stage: OutboundDeliveryFailureStage;
-  recoveryOwnedRetry?: true;
+  queueCustody?: "held" | "released";
 
   constructor(
     message: string,

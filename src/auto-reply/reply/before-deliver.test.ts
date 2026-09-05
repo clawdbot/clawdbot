@@ -4,9 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import { createDirectPendingFinalCustody } from "../../channels/turn/direct-delivery-custody.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -130,29 +132,38 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(skipped).toEqual(["channel_transform"]);
   });
 
-  it("delivers the attached fallback after a proven pre-transport failure", async () => {
-    const delivered: string[] = [];
-    const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
-    attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        if (payload.mediaUrl) {
-          throw Object.assign(new Error("connect failed"), {
-            code: "ECONNREFUSED",
-            syscall: "connect",
-          });
-        }
-        delivered.push(payload.text ?? "");
-      },
-    });
+  it.each([undefined, "held", "released"] as const)(
+    "retries a proven pre-transport failure only without held queue custody (%s)",
+    async (queueCustody) => {
+      const delivered: string[] = [];
+      const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
+      attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          if (payload.mediaUrl) {
+            const cause = Object.assign(new Error("connect failed"), {
+              code: "ECONNREFUSED",
+              syscall: "connect",
+            });
+            throw Object.assign(new OutboundDeliveryError(cause.message, { cause }), {
+              queueCustody,
+            });
+          }
+          delivered.push(payload.text ?? "");
+        },
+        propagateRetryableNoSendFailure: true,
+      });
 
-    dispatcher.sendFinalReply(primary);
-    dispatcher.markComplete();
-    const receipt = await dispatcher.waitForIdle();
+      dispatcher.sendFinalReply(primary);
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
 
-    expect(delivered).toEqual(["caption"]);
-    expect(receipt?.counts.final.failedBeforeSend).toBe(0);
-  });
+      expect(delivered).toEqual(queueCustody === "held" ? [] : ["caption"]);
+      expect(receipt?.counts.final.failedBeforeSend).toBe(queueCustody === "held" ? 1 : 0);
+      expect(receipt?.counts.final.failedAfterSend).toBe(0);
+      expect(receipt?.anyVisibleDelivered).toBe(queueCustody !== "held");
+    },
+  );
 
   it("does not duplicate text after an ambiguous transport failure", async () => {
     const delivered: string[] = [];
@@ -410,37 +421,82 @@ describe("beforeDeliver in reply dispatcher", () => {
       error: () =>
         Object.assign(new Error("connect failed"), { code: "ECONNREFUSED", syscall: "connect" }),
       expected: "prepared",
+      failedBeforeSend: true,
     },
     {
       label: "ambiguous provider failure",
       error: () => new Error("send outcome unknown"),
       expected: "unknown",
+      failedBeforeSend: false,
     },
-  ] as const)("records $label before reporting the error", async ({ error, expected }) => {
-    const fixture = await makePendingFinalFixture();
-    try {
-      const dispatcher = createReplyDispatcher({
-        deliver: async () => {
-          throw error();
-        },
-      });
+    {
+      label: "queue-owned pre-send failure",
+      error: () =>
+        Object.assign(
+          new OutboundDeliveryError("connect failed", {
+            cause: Object.assign(new Error("connect failed"), {
+              code: "ECONNREFUSED",
+              syscall: "connect",
+            }),
+          }),
+          { queueCustody: "held" },
+        ),
+      expected: "queued",
+      failedBeforeSend: true,
+    },
+    {
+      label: "queue-owned wrapped partial send",
+      error: () =>
+        createChannelPartialDeliveryError(
+          Object.assign(
+            new OutboundDeliveryError("remaining send failed", {
+              cause: new Error("remaining send failed"),
+              results: [{ channel: "matrix", messageId: "accepted-prefix" }],
+            }),
+            { queueCustody: "held" },
+          ),
+          { visibleReplySent: true, messageIds: ["accepted-prefix"] },
+        ),
+      expected: "queued",
+      failedBeforeSend: false,
+    },
+  ] as const)(
+    "records $label before reporting the error",
+    async ({ error, expected, failedBeforeSend }) => {
+      const fixture = await makePendingFinalFixture();
+      const failure = error();
+      const onError = vi.fn();
+      try {
+        const dispatcher = createReplyDispatcher({
+          deliver: async () => {
+            throw failure;
+          },
+          onError,
+        });
 
-      dispatcher.sendFinalReply(fixture.payload);
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
+        dispatcher.sendFinalReply(fixture.payload);
+        dispatcher.markComplete();
+        const receipt = await dispatcher.waitForIdle();
 
-      expect(
-        (
-          loadSessionEntry({
-            sessionKey: fixture.sessionKey,
-            storePath: fixture.storePath,
-          }) as InternalSessionEntry
-        )?.pendingFinalDelivery?.deliveries,
-      ).toEqual([{ id: "delivery-1", state: expected }]);
-    } finally {
-      await fs.rm(fixture.tmpDir, { recursive: true, force: true });
-    }
-  });
+        expect(onError.mock.calls[0]?.[0]).toBe(failure);
+        expect(receipt?.counts.final).toMatchObject({
+          failedBeforeSend: failedBeforeSend ? 1 : 0,
+          failedAfterSend: failedBeforeSend ? 0 : 1,
+        });
+
+        expect(
+          (
+            loadSessionEntry({
+              sessionKey: fixture.sessionKey,
+              storePath: fixture.storePath,
+            }) as InternalSessionEntry
+          )?.pendingFinalDelivery?.deliveries,
+        ).toEqual([{ id: "delivery-1", state: expected }]);
+      } finally {
+        await fs.rm(fixture.tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("restores prepared custody when a pre-I/O admitted send proves no-send", async () => {
     const fixture = await makePendingFinalFixture();

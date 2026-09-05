@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
+import type { QueuedDeliveryOwner } from "./deliver-queue-state.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type {
@@ -250,6 +251,7 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
   skipQueue?: boolean;
   /** @internal Fence recovery ownership at the same provider boundary as live sends. */
   deliveryProducerClaimId?: string;
+  deliveryQueueOwner?: QueuedDeliveryOwner;
   /** @internal Keep the exact live producer claim alive during platform preparation. */
   deliveryProducerLeaseRequired?: boolean;
   /** @internal Recovery already ran provider admission after its pending-row re-read. */

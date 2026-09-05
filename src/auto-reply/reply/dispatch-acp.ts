@@ -345,14 +345,16 @@ async function finalizeAcpTurnOutput(params: {
     await params.delivery.settleVisibleText();
   }
   let queuedFinal =
-    params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
+    params.delivery.hasPendingAnswerDelivery() ||
+    params.delivery.hasPendingFinalTtsMedia() ||
+    (params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery());
 
-  let finalMediaDelivered = params.delivery.hasDeliveredFinalTtsMedia();
   if (
     ttsMode === "final" &&
     hasAccumulatedBlockText &&
     canAttemptFinalTts &&
-    !finalMediaDelivered
+    !params.delivery.hasPendingFinalTtsMedia() &&
+    !params.delivery.hasDeliveredFinalTtsMedia()
   ) {
     try {
       const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
@@ -380,7 +382,6 @@ async function finalizeAcpTurnOutput(params: {
         );
         const delivered = await params.delivery.deliver("final", finalTtsPayload);
         queuedFinal = queuedFinal || delivered;
-        finalMediaDelivered = params.delivery.hasDeliveredFinalTtsMedia();
       } else if (shouldDeferVisibleTextForTts && ttsSyntheticReply.text?.trim()) {
         const delivered = await params.delivery.deliver(
           "final",
@@ -403,19 +404,11 @@ async function finalizeAcpTurnOutput(params: {
 
   // Some ACP parent surfaces only expose terminal replies, so block routing alone is not enough
   // to prove the final result was visible to the user.
-  const shouldDeliverTextFallback =
-    ttsMode !== "all" &&
-    accumulatedVisibleBlockText.trim().length > 0 &&
-    !finalMediaDelivered &&
-    (shouldDeferVisibleTextForTts
-      ? !params.delivery.hasDeliveredAnswerFinalToUser()
-      : !params.delivery.hasDeliveredFinalReply() &&
-        (!params.delivery.hasDeliveredVisibleText() ||
-          params.delivery.hasFailedVisibleTextDelivery()));
-  if (shouldDeliverTextFallback) {
+  const textFallback = params.delivery.getBlockTextForFallback();
+  if (ttsMode !== "all" && textFallback.trim()) {
     const delivered = await params.delivery.deliver(
       "final",
-      { text: accumulatedVisibleBlockText },
+      { text: textFallback },
       { skipTts: true },
     );
     queuedFinal = queuedFinal || delivered;
@@ -638,10 +631,10 @@ export async function tryDispatchAcpReplyCore(params: {
     return { queuedFinal: queuedNotice, counts };
   }
   const deliverDeferredTextFallback = async (): Promise<boolean> => {
-    if (!shouldDeferVisibleTextForTts || delivery.hasDeliveredAnswerFinalToUser()) {
+    if (!shouldDeferVisibleTextForTts) {
       return false;
     }
-    const text = delivery.getAccumulatedVisibleBlockText();
+    const text = delivery.getBlockTextForFallback();
     return text.trim() ? await delivery.deliver("final", { text }, { skipTts: true }) : false;
   };
   const projector = createAcpReplyProjector({
@@ -1016,7 +1009,11 @@ export async function tryDispatchAcpReplyCore(params: {
     if (runtimeTurnWasCancelled || params.abortSignal?.aborted) {
       queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;
       await persistTranscript(await delivery.resolveAccumulatedDeliveredTranscriptText());
-      queuedFinal = delivery.hasDeliveredFinalReply() || queuedFinal;
+      queuedFinal =
+        delivery.hasPendingAnswerDelivery() ||
+        delivery.hasPendingFinalTtsMedia() ||
+        delivery.hasDeliveredFinalReply() ||
+        queuedFinal;
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);
       params.recordProcessed("completed", { reason: "acp_aborted" });

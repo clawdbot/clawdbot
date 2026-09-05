@@ -1,6 +1,9 @@
 // Tests settled dispatcher outcome accounting for dispatch-from-config runs.
 import { describe, expect, it } from "vitest";
-import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import {
   attachReplyDispatchUndeliveredFallback,
@@ -113,4 +116,44 @@ describe("settled dispatcher final outcomes", () => {
       anyVisibleDelivered: true,
     });
   });
+
+  it.each([
+    { finalFirst: false, queueCustody: "held" },
+    { finalFirst: true, queueCustody: "held" },
+    { finalFirst: false, queueCustody: "released" },
+    { finalFirst: true, queueCustody: "released" },
+  ] as const)(
+    "does not retry a turn when siblings retain custody ($queueCustody, finalFirst=$finalFirst)",
+    async ({ finalFirst, queueCustody }) => {
+      const error = new PlatformMessageNotDispatchedError("offline before dispatch", {
+        cause: new Error("offline"),
+      });
+      const finalError = Object.assign(new OutboundDeliveryError(error.message, { cause: error }), {
+        queueCustody,
+      });
+      const dispatcher = createReplyDispatcher({
+        deliver: async (_payload, info) => {
+          throw info.kind === "final" ? finalError : error;
+        },
+        propagateRetryableNoSendFailure: true,
+      });
+      if (finalFirst) {
+        dispatcher.sendFinalReply({ text: "answer" });
+      }
+      dispatcher.sendBlockReply({ text: "progress" });
+      if (!finalFirst) {
+        dispatcher.sendFinalReply({ text: "answer" });
+      }
+      dispatcher.markComplete();
+
+      if (queueCustody === "held") {
+        await expect(dispatcher.waitForIdle()).resolves.toMatchObject({
+          anyVisibleDelivered: false,
+          counts: { block: { failedBeforeSend: 1 }, final: { failedBeforeSend: 1 } },
+        });
+      } else {
+        await expect(dispatcher.waitForIdle()).rejects.toBe(finalFirst ? finalError : error);
+      }
+    },
+  );
 });

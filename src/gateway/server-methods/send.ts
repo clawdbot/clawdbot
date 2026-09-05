@@ -854,13 +854,10 @@ function createGatewayInflightUnavailableFailure(params: {
   const partialDelivery = isChannelPartialDeliveryError(params.err)
     ? params.err.deliveryResult
     : undefined;
-  // A recovery-owned OutboundDeliveryError means the delivery was queued for
-  // retry by the recovery layer (not lost); surface that as a structured detail
-  // so the agent does not treat it as an ordinary retryable failure.
   const queuedDelivery =
     !partialDelivery &&
     params.err instanceof OutboundDeliveryError &&
-    params.err.recoveryOwnedRetry === true;
+    params.err.queueCustody === "held";
   const error = errorShape(
     ErrorCodes.UNAVAILABLE,
     String(params.err),

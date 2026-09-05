@@ -4,7 +4,8 @@ import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isRetryableDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
-import { toErrorObject } from "../../infra/errors.js";
+import { collectErrorGraphCandidates, toErrorObject } from "../../infra/errors.js";
+import { isOutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -269,6 +270,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     final: createReplyDispatchSettledCounts(),
   };
   let retryableNoSendError: Error | undefined;
+  let hasHeldQueueCustody = false;
   let sendChain: Promise<void> = Promise.resolve();
   let settlementChain: Promise<void> = Promise.resolve();
   let pendingFinalizations = 0;
@@ -439,12 +441,16 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       };
     } catch (error) {
       const retryableNoSend = isRetryableDeliveryNotSentError(error);
+      const queueHeld = collectErrorGraphCandidates(error, (current) => [current.cause]).some(
+        (candidate) => isOutboundDeliveryError(candidate) && candidate.queueCustody === "held",
+      );
+      hasHeldQueueCustody ||= queueHeld;
       if (retryableNoSend) {
         retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
       }
       const outcome: ReplyDispatchDeliveryOutcome =
         deliveryStarted && !retryableNoSend ? "failed-deliver" : "failed-before-deliver";
-      if (custody && deliveryStarted) {
+      if (custody && deliveryStarted && !queueHeld) {
         // Proven no-send keeps the marker replayable for restart recovery —
         // including after direct custody escalated queued→unknown pre-I/O,
         // since the error proves the send never crossed the wire. Anything
@@ -458,7 +464,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       try {
         await options.onError?.(error, info);
       } catch {}
-      return { settlement: Promise.resolve(outcome) };
+      return { settlement: Promise.resolve(outcome), queueHeld };
     }
   };
 
@@ -530,7 +536,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       try {
         const attempt = await delivery;
         deliveryOutcome = await attempt.settlement;
-        if (deliveryFallback && shouldRetryReplyDispatch(deliveryOutcome)) {
+        if (deliveryFallback && !attempt.queueHeld && shouldRetryReplyDispatch(deliveryOutcome)) {
           const fallbackAttempt = await startSerializedDelivery(
             deliveryFallback,
             dispatchInfo,
@@ -601,6 +607,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       const receipt = buildReceipt();
       if (
         options.propagateRetryableNoSendFailure === true &&
+        !hasHeldQueueCustody &&
         !receipt.anyVisibleDelivered &&
         retryableNoSendError !== undefined
       ) {

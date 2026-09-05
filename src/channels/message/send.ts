@@ -117,6 +117,13 @@ export function durableMessageBatchMayHaveReachedRecipient(
   if (result.status === "suppressed" && result.reason === "adapter_returned_no_identity") {
     return true;
   }
+  if (
+    result.status === "failed" &&
+    isOutboundDeliveryError(result.error) &&
+    result.error.sentBeforeError
+  ) {
+    return true;
+  }
   return (
     result.payloadOutcomes?.some((outcome) =>
       outcome.status === "failed"
