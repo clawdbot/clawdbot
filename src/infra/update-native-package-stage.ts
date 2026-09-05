@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { sha256Hex } from "./crypto-digest.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./path-guards.js";
@@ -40,7 +40,7 @@ async function nativeProjectFingerprint(
 ): Promise<Map<string, string>> {
   const fingerprint = new Map<string, string>();
   const record = (file: string, value: string) => {
-    fingerprint.set(path.relative(root, file), createHash("sha256").update(value).digest("hex"));
+    fingerprint.set(path.relative(root, file), sha256Hex(value));
   };
   const manifests = new Set([
     "package.json",

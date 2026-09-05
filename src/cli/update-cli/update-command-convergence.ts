@@ -64,18 +64,10 @@ export async function convergeUpdatePlugins(params: {
     params.requestedChannel &&
     params.configSnapshot.valid &&
     params.requestedChannel !== params.storedChannel &&
-    !shouldResumePostCoreInFreshProcess &&
     !params.opts.json
   ) {
-    defaultRuntime.log(theme.muted(`Update channel set to ${params.requestedChannel}.`));
-  } else if (
-    params.requestedChannel &&
-    params.configSnapshot.valid &&
-    params.requestedChannel !== params.storedChannel &&
-    shouldResumePostCoreInFreshProcess &&
-    !params.opts.json
-  ) {
-    defaultRuntime.log(theme.muted(`Update channel will be set to ${params.requestedChannel}.`));
+    const verb = shouldResumePostCoreInFreshProcess ? "will be set" : "set";
+    defaultRuntime.log(theme.muted(`Update channel ${verb} to ${params.requestedChannel}.`));
   }
 
   if (params.opts.run) {

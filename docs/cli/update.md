@@ -129,7 +129,7 @@ an agent. Add `--update-result <path>` to include a saved update-failure artifac
 
 Validation failures leave the serving Gateway untouched. After activation, a
 failed verification can [restore the previous package](/cli/update#validation-and-activation)
-when database schema versions are unchanged. Preserve migrated state and
+when configuration content and database schema versions are unchanged. Preserve migrated state and
 history; replacing the code alone cannot undo a migration. The original
 failed update still exits nonzero after the agent finishes, even if the repair
 succeeds.
@@ -425,16 +425,15 @@ after the core Gateway is serving. If convergence changes the plugin snapshot,
 the updater restarts and verifies that final snapshot before declaring success.
 
 The previous package tree remains available until the run is terminal. Automatic
-rollback requires that retained package and its pre-update verification. If
-post-activation verification fails and the shared and affected per-agent SQLite
-`user_version` values still match their pre-activation values, the updater stops
-the candidate, restores the previous package, refreshes service metadata, and
-starts and verifies that version with the same checks. The run finishes
-`rolled-back` and preserves the failing check as its reason. A failure alone
-does not authorize restarting the candidate; restarting the previous verified
-runtime is authorized only after this schema-neutral rollback check.
+rollback requires that retained package, its pre-update verification, unchanged
+configuration content, and unchanged shared and affected per-agent SQLite
+`user_version` values. The updater restores the previous generation and verifies
+it running before finishing `rolled-back`, preserving the failing check as its
+reason. See [Automatic rollback](/install/updating#automatic-schema-neutral-rollback)
+for the restoration and package-manager guards. A failure alone does not
+authorize restarting the candidate.
 
-If a schema version changed, automatic rollback is refused with
+If configuration content or a schema version changed, automatic rollback is refused with
 `state-migrated-no-rollback`. A reachable candidate stays running for diagnosis;
 an unreachable candidate stays stopped. Use the recorded diagnostics and
 [Triage](/cli/triage), preserving the migrated state. These temporary validation

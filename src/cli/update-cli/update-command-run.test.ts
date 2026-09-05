@@ -43,4 +43,3 @@ it.each([false, true])(
     }
   },
 );
-

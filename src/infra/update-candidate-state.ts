@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +8,7 @@ import { runCommandBuffered } from "../process/exec.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -18,7 +18,10 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
-export type UpdateStateSchemaVersion = { path: string; userVersion: number | null };
+export const UpdateStateSchemaVersionsSchema = z.array(
+  z.object({ path: z.string(), userVersion: z.number().nullable() }),
+);
+export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
 type StateInput = { stateDir: string; config: OpenClawConfig; env?: NodeJS.ProcessEnv };
 type Registry = Pick<DB, "agent_databases">;
 
@@ -154,9 +157,7 @@ export async function readUpdateStateSchemaVersions(
       `State schema inspection failed (${result.termination}): ${result.stderr.toString("utf8")}`,
     );
   }
-  return z
-    .array(z.object({ path: z.string(), userVersion: z.number().nullable() }))
-    .parse(JSON.parse(result.stdout.toString("utf8")));
+  return UpdateStateSchemaVersionsSchema.parse(JSON.parse(result.stdout.toString("utf8")));
 }
 
 /** Shared with config projection so custom agent directories use their copied database. */
@@ -170,7 +171,7 @@ export function resolveUpdateCandidateStatePath(
   const relative =
     path.normalize(source) === source && isPathInside(sourceRoot, source)
       ? path.relative(sourceRoot, source)
-      : path.join("candidate-external", createHash("sha256").update(source).digest("hex"));
+      : path.join("candidate-external", sha256Hex(source));
   return path.join(targetRoot, relative);
 }
 

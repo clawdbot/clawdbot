@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
@@ -23,7 +22,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import {
   resolveUpdateCandidateStatePath,
-  type UpdateStateSchemaVersion,
+  UpdateStateSchemaVersionsSchema,
 } from "./update-candidate-state.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
@@ -57,7 +56,6 @@ type CanaryResult = {
   phase: CanaryPhase;
   durationMs: number;
   logTail: string[];
-  schemaVersions: UpdateStateSchemaVersion[];
   steps: UpdateStepResult[];
 } & (
   | { status: "ok"; candidateSchemaVersions: OpenClawSchemaVersions }
@@ -199,7 +197,6 @@ export async function validateUpdateCandidateCanary(params: {
       : undefined;
   const logTail: string[] = [];
   const steps: UpdateStepResult[] = [];
-  let schemaVersions: UpdateStateSchemaVersion[] = [];
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
   let phase: CanaryPhase = "snapshot";
   const env: NodeJS.ProcessEnv = {
@@ -393,9 +390,7 @@ export async function validateUpdateCandidateCanary(params: {
       capture(snapshot.stderr);
       throw new Error(`Candidate state snapshot failed (${snapshot.termination})`);
     }
-    schemaVersions = z
-      .array(z.object({ path: z.string(), userVersion: z.number().nullable() }))
-      .parse(JSON.parse(snapshot.stdout.toString("utf8")));
+    UpdateStateSchemaVersionsSchema.parse(JSON.parse(snapshot.stdout.toString("utf8")));
     const port = await tryListenOnPort({
       port: 0,
       host: "127.0.0.1",
@@ -566,7 +561,6 @@ export async function validateUpdateCandidateCanary(params: {
       phase,
       durationMs: Date.now() - started,
       logTail,
-      schemaVersions,
       candidateSchemaVersions,
       steps,
     };
@@ -595,7 +589,6 @@ export async function validateUpdateCandidateCanary(params: {
       phase,
       durationMs: Date.now() - started,
       logTail,
-      schemaVersions,
       candidateSchemaVersions,
       steps,
     };

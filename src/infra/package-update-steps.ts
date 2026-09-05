@@ -14,7 +14,6 @@ import {
   readPackageVersionIfPresent,
   removePackageUpdatePath,
   swapStagedPackageInstall,
-  type PackageUpdateStepResult,
   type PackageUpdateTransaction,
   type StagedPackageInstall,
 } from "./package-update-swap.js";
@@ -47,7 +46,8 @@ import {
 } from "./update-global.js";
 import { prepareNativePackageStage } from "./update-native-package-stage.js";
 import type { UpdateRecovery } from "./update-recovery.js";
-export type { PackageUpdateStepResult, PackageUpdateTransaction } from "./package-update-swap.js";
+import type { UpdateStepResult } from "./update-runner-types.js";
+export type { PackageUpdateTransaction } from "./package-update-swap.js";
 
 type PackageUpdateStepRunner = (params: {
   name: string;
@@ -55,14 +55,14 @@ type PackageUpdateStepRunner = (params: {
   cwd?: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
-}) => Promise<PackageUpdateStepResult>;
+}) => Promise<UpdateStepResult>;
 
 type PackageUpdateStepsResult = {
   reason?: "already-current";
-  steps: PackageUpdateStepResult[];
+  steps: UpdateStepResult[];
   verifiedPackageRoot: string | null;
   afterVersion: string | null;
-  failedStep: PackageUpdateStepResult | null;
+  failedStep: UpdateStepResult | null;
   recovery: UpdateRecovery;
 };
 
@@ -72,7 +72,7 @@ async function resolveNpmUpdateLifecyclePolicy(params: {
   installTarget: ResolvedGlobalInstallTarget;
 }): Promise<{
   policy: ReturnType<typeof resolveNpmLifecyclePolicyGate>["policy"];
-  failedStep: PackageUpdateStepResult | null;
+  failedStep: UpdateStepResult | null;
 }> {
   const gate = resolveNpmLifecyclePolicyGate(params.installTarget);
   if (!gate.error) {
@@ -107,7 +107,7 @@ async function runPnpmPreflightProbe(params: {
   name?: string;
 }): Promise<{
   result: Awaited<ReturnType<CommandRunner>> | null;
-  failedStep: PackageUpdateStepResult | null;
+  failedStep: UpdateStepResult | null;
 }> {
   const startedAt = Date.now();
   const argv = [params.installTarget.command, ...params.args];
@@ -159,7 +159,7 @@ async function validatePnpmIsolatedUpdate(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<{
   globalBinDir: string | null;
-  failedStep: PackageUpdateStepResult | null;
+  failedStep: UpdateStepResult | null;
 }> {
   const owner = params.installTarget.pnpmIsolated;
   if (!owner) {
@@ -505,8 +505,8 @@ async function prepareNpmGitSourceInstallSpec(params: {
   installSpec: string;
   installCwd: string | null;
   packDir: string | null;
-  steps: PackageUpdateStepResult[];
-  failedStep: PackageUpdateStepResult | null;
+  steps: UpdateStepResult[];
+  failedStep: UpdateStepResult | null;
 }> {
   if (
     params.installTarget.manager !== "npm" ||
@@ -548,7 +548,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
 
   const tarball = await findPackedTarball(packDir);
   if (!tarball) {
-    const failedStep: PackageUpdateStepResult = {
+    const failedStep: UpdateStepResult = {
       name: "global update pack verify",
       command: `find packed tarball in ${packDir}`,
       cwd: packDir,
@@ -582,7 +582,7 @@ async function prepareStagedPackageInstall(
   requireStaging = false,
 ): Promise<{
   stagedInstall: StagedPackageInstall | null;
-  failedStep: PackageUpdateStepResult | null;
+  failedStep: UpdateStepResult | null;
 }> {
   const startedAt = Date.now();
   try {
@@ -664,8 +664,8 @@ export async function runGlobalPackageUpdateSteps(params: {
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
-  postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
-  validateCandidate?: (packageRoot: string) => Promise<PackageUpdateStepResult[]>;
+  postVerifyStep?: (packageRoot: string) => Promise<UpdateStepResult | null>;
+  validateCandidate?: (packageRoot: string) => Promise<UpdateStepResult[]>;
   beforeActivate?: () => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   expectedGitCheckout?: GitRuntimeIdentity;
@@ -686,9 +686,9 @@ export async function runGlobalPackageUpdateSteps(params: {
   const initialRecovery = await verifyPackageUpdateRecovery(originalPackageRoot);
   let liveTreeMutated = false;
   let packageRollbackVerified: boolean | undefined;
-  const steps: PackageUpdateStepResult[] = [];
+  const steps: UpdateStepResult[] = [];
   const packageUpdateFailure = async (
-    failedStep: PackageUpdateStepResult,
+    failedStep: UpdateStepResult,
     failureRoot: string | null,
     failedSteps = [failedStep],
   ): Promise<PackageUpdateStepsResult> => {
@@ -931,7 +931,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       });
       const candidate = activePackages.length === 1 ? activePackages[0] : undefined;
       if (!candidate) {
-        const failedStep: PackageUpdateStepResult = {
+        const failedStep: UpdateStepResult = {
           name: "global install verify",
           command: "resolve staged pnpm replacement",
           cwd: stagedInstall.native.projectRoot,
@@ -980,7 +980,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       params.installTarget.packageRoot !== null &&
       refreshedPnpmPackageRoot === null;
     if (pnpmReplacementMissing) {
-      const replacementStep: PackageUpdateStepResult = {
+      const replacementStep: UpdateStepResult = {
         name: "global install verify",
         command: `resolve pnpm replacement in ${params.installTarget.globalRoot ?? "unknown root"}`,
         cwd: params.installTarget.globalRoot ?? process.cwd(),
@@ -1007,7 +1007,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     const verificationPackageRoot = stagedInstall?.packageRoot ?? livePackageRoot;
     verifiedPackageRoot = livePackageRoot ?? verificationPackageRoot;
     if (finalInstallStep.exitCode === 0 && !verificationPackageRoot) {
-      const failedStep: PackageUpdateStepResult = {
+      const failedStep: UpdateStepResult = {
         name: "global install verify",
         command: "resolve installed package",
         cwd: updateCwd ?? process.cwd(),
@@ -1058,7 +1058,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           error !== `unexpected packaged dist file ${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
       );
       if (blockingVerificationErrors.length === 0) {
-        let failedLifecycleStep: PackageUpdateStepResult | null = null;
+        let failedLifecycleStep: UpdateStepResult | null = null;
         try {
           const completedLifecycle = await completePendingPackageLifecycle({
             packageRoot: verificationPackageRoot,
@@ -1089,7 +1089,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           if (failedLifecycleStep) {
             return await packageUpdateFailure(failedLifecycleStep, verifiedPackageRoot, steps);
           }
-          const lifecycleStep: PackageUpdateStepResult = {
+          const lifecycleStep: UpdateStepResult = {
             name: `${params.installTarget.manager} package lifecycle`,
             command: `complete ${verificationPackageRoot}`,
             cwd: verificationPackageRoot,
@@ -1213,7 +1213,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     if (error instanceof PackageUpdateActivationError) {
       throw error.cause;
     }
-    const failedStep: PackageUpdateStepResult = {
+    const failedStep: UpdateStepResult = {
       name: "package update",
       command: "update installed package",
       cwd: verifiedPackageRoot ?? params.installCwd ?? process.cwd(),

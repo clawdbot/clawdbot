@@ -285,7 +285,7 @@ export async function maybeRestartService(params: {
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
     expectedGatewayBuildId: string | undefined,
-    opts: { requireRunningService?: boolean } = {},
+    opts: { requireRunningService?: boolean; health?: GatewayRestartSnapshot } = {},
   ) => {
     recordPhase("verifying");
     const service = resolveGatewayService();
@@ -303,7 +303,7 @@ export async function maybeRestartService(params: {
           env: activation.serviceEnv,
         }),
       });
-    let health = await waitForHealthy();
+    let health = opts.health ?? (await waitForHealthy());
     if (!health.healthy && health.staleGatewayPids.length > 0) {
       if (!activation.opts.json) {
         defaultRuntime.log(
@@ -455,7 +455,7 @@ export async function maybeRestartService(params: {
         expectedGatewayVersion !== normalizeOptionalString(activation.result.before?.version);
       let restarted = false;
       let restartInitiated = false;
-      let refreshedGatewayAlreadyHealthy = false;
+      let refreshedGatewayHealth: GatewayRestartSnapshot | undefined;
       let updatedInstallRestartNeedsServiceRootProof = false;
       let restartScriptPath = preserveDefinition ? null : activation.restartScriptPath;
       if (activation.refreshServiceEnv && activation.serviceInstallEnv !== null) {
@@ -478,7 +478,7 @@ export async function maybeRestartService(params: {
                 env: activation.serviceEnv,
               }),
             });
-            refreshedGatewayAlreadyHealthy = health.healthy;
+            refreshedGatewayHealth = health.healthy ? health : undefined;
             recordHealth(health);
           }
         } catch (err) {
@@ -535,13 +535,13 @@ export async function maybeRestartService(params: {
           return await failed();
         }
       }
-      // Refresh already activated and verified this process. Complete root validation
-      // above before skipping the restart and its second readiness pass.
-      if (refreshedGatewayAlreadyHealthy) {
-        if (!activation.opts.json) {
-          defaultRuntime.log(theme.success("Gateway: restarted and verified."));
-        }
-        return true;
+      // Refresh already started and settled this process. Keep its health snapshot
+      // while completing HTTP readiness and inference without another restart.
+      if (refreshedGatewayHealth) {
+        return await verifyRestartedGateway(expectedGatewayVersion, expectedGatewayBuildId, {
+          requireRunningService: true,
+          health: refreshedGatewayHealth,
+        });
       }
       if (restartScriptPath) {
         if (!preserveDefinition) {

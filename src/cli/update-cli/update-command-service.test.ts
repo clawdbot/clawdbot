@@ -8,9 +8,13 @@ const mocks = vi.hoisted(() => ({
   runDaemonInstall: vi.fn<typeof import("../daemon-cli.js").runDaemonInstall>(),
   runDaemonRestart: vi.fn<typeof import("../daemon-cli.js").runDaemonRestart>(),
   runRestartScript: vi.fn(async () => undefined),
+  runUpdatedInstallGatewayCommand: vi.fn(async () => true),
   waitForGatewayHealthyRestart: vi.fn(),
   waitForGatewayHttpReadiness: vi.fn(),
   runUpdateInferenceProbe: vi.fn(),
+}));
+vi.mock("./update-command-service-command.js", () => ({
+  runUpdatedInstallGatewayCommand: mocks.runUpdatedInstallGatewayCommand,
 }));
 vi.mock("./update-command-inference.js", () => ({
   runUpdateInferenceProbe: mocks.runUpdateInferenceProbe,
@@ -142,12 +146,14 @@ describe("maybeRestartService", () => {
     ).resolves.toBe(false);
   });
 
-  it.each([
-    { readyz: 503, inference: true, accepted: false },
-    { readyz: 200, inference: false, accepted: true },
-  ])(
-    "requires readyz=$readyz while inference=$inference remains advisory",
-    async ({ readyz, inference, accepted }) => {
+  it.each(
+    [false, true].flatMap((refreshServiceEnv) => [
+      { refreshServiceEnv, readyz: 503, inference: true, accepted: false },
+      { refreshServiceEnv, readyz: 200, inference: false, accepted: true },
+    ]),
+  )(
+    "requires readyz=$readyz while inference=$inference remains advisory (refresh=$refreshServiceEnv)",
+    async ({ refreshServiceEnv, readyz, inference, accepted }) => {
       mocks.waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz });
       mocks.runUpdateInferenceProbe.mockResolvedValue(inference);
       const onVerified = vi.fn();
@@ -157,13 +163,13 @@ describe("maybeRestartService", () => {
         result: {
           status: "ok",
           mode: "git",
-          after: { buildId: "new-build" },
+          after: { version: "2026.9.1", buildId: "new-build" },
           steps: [],
           durationMs: 0,
         },
         channel: "dev",
         opts: { json: true },
-        refreshServiceEnv: false,
+        refreshServiceEnv,
         serviceEnv: { HOME: "/home/operator" },
         gatewayPort: 18789,
         restartScriptPath: "/tmp/openclaw-verification.sh",
@@ -172,6 +178,11 @@ describe("maybeRestartService", () => {
         onVerificationFailure,
       });
       expect(actual).toBe(accepted);
+      expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
+      expect(mocks.runRestartScript).toHaveBeenCalledTimes(refreshServiceEnv ? 0 : 1);
+      expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledTimes(
+        refreshServiceEnv ? 1 : 0,
+      );
       expect(onVerified).toHaveBeenCalledTimes(accepted ? 1 : 0);
       expect(mocks.runUpdateInferenceProbe).toHaveBeenCalledTimes(accepted ? 1 : 0);
       if (accepted) {

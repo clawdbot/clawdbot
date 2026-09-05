@@ -19,6 +19,7 @@ import {
   waitForHandoffResponse,
 } from "./update-managed-service-handoff-command.test-support.js";
 import {
+  createManagedServiceCancellationPreload,
   createManagedServiceLaunchdClockPreload,
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
@@ -68,6 +69,7 @@ export function createManagedServiceManagerBoundary({
       relativeInput?: boolean;
       validationResult?: "failed" | "skipped";
       cancelDuringValidation?: boolean;
+      cancelAtActivation?: "requester" | "inspection";
       runnerFallback?: boolean;
       revokeWhileValidating?: boolean;
       replaceLedgerWriter?: boolean;
@@ -91,6 +93,10 @@ export function createManagedServiceManagerBoundary({
     const updaterPath = path.join(root, "updater-ran");
     const validationStartedPath = path.join(root, "validation-started");
     const validationReleasePath = path.join(root, "validation-release");
+    const activationGatePath = path.join(root, "activation-gate");
+    const activationReleasePath = path.join(root, "activation-release");
+    const mutationPath = path.join(root, "cancelled-service-mutation");
+    const updaterPidPath = path.join(root, "updater-pid");
     const commandTimingsPath = path.join(root, "manager-command-timings.jsonl");
     const recoveryModulePath = path.join(root, "recovery-health.mjs");
     const stateDatabasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root });
@@ -132,6 +138,7 @@ export function createManagedServiceManagerBoundary({
     const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
+    const parentClosed = new Promise<void>((resolve) => parent.once("close", () => resolve()));
     const parentPid = parent.pid;
     const parentStartIdentity = parentPid ? getFileLockProcessStartTime(parentPid) : null;
     if (!parentPid || parentStartIdentity === null) {
@@ -193,14 +200,27 @@ export function createManagedServiceManagerBoundary({
         const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
         state.ownerChecked = true;
         fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
-        ${sourceRuntimeImport}
+        ${
+          options.cancelAtActivation === "requester"
+            ? `state.ownerChecks = (state.ownerChecks || 0) + 1;
+        fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
+        if (state.ownerChecks === 2) {
+          fs.writeFileSync(${JSON.stringify(activationGatePath)}, "requester");
+          while (!fs.existsSync(${JSON.stringify(activationReleasePath)})) {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+        }
+        return true;`
+            : `${sourceRuntimeImport}
         const runtime = await import(${JSON.stringify(new URL("../cli/daemon-cli/lifecycle-context.ts", import.meta.url).href)});
-        return runtime.isManagedUpdateRequesterOwner(requester);
+        return runtime.isManagedUpdateRequesterOwner(requester);`
+        }
       }
     `,
       );
     }
     let helper: import("node:child_process").ChildProcess | undefined;
+    let helperCompletion: Promise<number | null> | undefined;
     let helperLogPath: string | undefined;
     try {
       await startManagedServiceUpdateHandoff({
@@ -357,6 +377,21 @@ export function createManagedServiceManagerBoundary({
         await fs.writeFile(preloadPath, "process.execve = undefined;\n");
         helperEnv = { ...helperEnv, NODE_OPTIONS: `--require ${preloadPath}` };
       }
+      if (options?.cancelAtActivation) {
+        const preloadPath = path.join(root, "cancel-activation-preload.cjs");
+        await fs.writeFile(
+          preloadPath,
+          createManagedServiceCancellationPreload({
+            scriptPath,
+            updaterPidPath,
+            activationGatePath,
+            activationReleasePath,
+            mutationPath,
+            gateInspection: options.cancelAtActivation === "inspection",
+          }),
+        );
+        helperEnv = { ...helperEnv, NODE_OPTIONS: `--require ${preloadPath}` };
+      }
       const runningHelper = spawn(process.execPath, [scriptPath, paramsPath], {
         env: helperEnv,
         stdio: ["pipe", "pipe", "pipe"],
@@ -370,10 +405,15 @@ export function createManagedServiceManagerBoundary({
       runningHelper.stderr?.on("data", (chunk) => {
         stderr += chunk.toString();
       });
+      let helperCompleted = false;
       const completion = new Promise<number | null>((resolve, reject) => {
         runningHelper.once("error", reject);
-        runningHelper.once("close", resolve);
+        runningHelper.once("close", (code) => {
+          helperCompleted = true;
+          resolve(code);
+        });
       });
+      helperCompletion = completion;
       await waitForHandoffResponse(runningHelper.stdout, "OPENCLAW_UPDATE_HANDOFF_READY");
 
       const databasePath = String(generated.updateLeaseDatabasePath);
@@ -408,7 +448,7 @@ export function createManagedServiceManagerBoundary({
           parent.stdin?.end();
           await vi.waitFor(() => expect(parent.exitCode).toBe(0));
         }
-        if (!options.cancelDuringValidation) {
+        if (!options.cancelDuringValidation && !options.cancelAtActivation) {
           runningHelper.stdin?.end();
         }
         if (options.controlDisconnect === "transferred") {
@@ -433,12 +473,34 @@ export function createManagedServiceManagerBoundary({
               );
             }
             await fs.writeFile(validationReleasePath, "activate");
+            if (options.cancelAtActivation) {
+              await vi.waitFor(
+                async () => {
+                  await expect(pathExists(activationGatePath)).resolves.toBe(true);
+                },
+                { timeout: 5_000 },
+              );
+              const cancelled = waitForHandoffResponse(runningHelper.stdout, "cancelled");
+              runningHelper.stdin?.write("cancel\n");
+              await cancelled;
+              await fs.writeFile(activationReleasePath, "continue");
+              await vi.waitFor(
+                async () => {
+                  expect(helperCompleted || (await pathExists(mutationPath))).toBe(true);
+                },
+                { timeout: 5_000 },
+              );
+              await expect(pathExists(mutationPath)).resolves.toBe(false);
+              expect(parent.exitCode).toBeNull();
+              expect(parent.signalCode).toBeNull();
+            }
           }
         }
         const activated =
           options.controlDisconnect === "transferred" &&
           !options.validationResult &&
           !options.cancelDuringValidation &&
+          !options.cancelAtActivation &&
           !options.revokeWhileValidating;
         if (activated) {
           await vi.waitFor(
@@ -574,6 +636,19 @@ export function createManagedServiceManagerBoundary({
       throw new Error(`${String(error)}\n${helperLog.slice(-8192)}`, { cause: error });
     } finally {
       parent.stdin?.end();
+      if (options?.cancelAtActivation) {
+        await fs.writeFile(activationReleasePath, "continue");
+        const updaterPid = Number(await fs.readFile(updaterPidPath, "utf8").catch(() => ""));
+        if (updaterPid > 0) {
+          try {
+            process.kill(-updaterPid, "SIGKILL");
+          } catch {}
+        }
+        // Let the helper reap native commands after their parent exits; killing it
+        // first orphans manager fixtures that can write during directory cleanup.
+        await parentClosed;
+        await helperCompletion;
+      }
       if (helper && helper.exitCode === null && helper.signalCode === null) {
         helper.kill("SIGKILL");
       }

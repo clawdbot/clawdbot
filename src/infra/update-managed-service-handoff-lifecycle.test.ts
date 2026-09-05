@@ -239,6 +239,31 @@ describe("managed service update handoff", () => {
     expect(log).toContain("managed update helper completed code=0");
   });
 
+  itUnix.each([
+    ["systemd", "requester"],
+    ["systemd", "inspection"],
+    ["launchd", "requester"],
+    ["launchd", "inspection"],
+  ] as const)("cancels before %s activation completes its %s check", async (kind, boundary) => {
+    const { commands, parentSignal, state, sentinel } = await runManagedServiceManagerBoundary(
+      kind,
+      {
+        controlDisconnect: "transferred",
+        cancelAtActivation: boundary,
+        ...(boundary === "requester"
+          ? { requester: { channel: "synthetic", senderId: "owner" } }
+          : {}),
+      },
+    );
+    expect(commands.filter((command) => !/\b(?:show|print)\b/u.test(command))).toEqual([]);
+    expect(parentSignal).toBeNull();
+    expect(state.parked).toBeUndefined();
+    expect(state.disabled).toBeUndefined();
+    expect(sentinel).toMatchObject({
+      payload: { status: "skipped", stats: { reason: "managed-service-handoff-cancelled" } },
+    });
+  });
+
   itUnix.each(["unarmed", "dead-parent"] as const)(
     "does not stop or update the service after %s control disconnect",
     async (controlDisconnect) => {

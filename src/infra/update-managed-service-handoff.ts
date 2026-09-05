@@ -824,12 +824,17 @@ function recordServiceStop() {
   }
 }
 
+function assertGatewayParkOwner() {
+  if (updateCancelled || !ownsManagedUpdateLease() ||
+    readProcessStartIdentity(params.parentPid) !== params.parentStartIdentity) {
+    throw new Error("managed update activation no longer owns the serving gateway");
+  }
+}
+
 async function parkGatewayService() {
   const recovery = params.serviceRecovery;
   if (!recovery) return;
-  if (readProcessStartIdentity(params.parentPid) !== params.parentStartIdentity) {
-    throw new Error("managed update parent identity changed before parking");
-  }
+  assertGatewayParkOwner();
   if (recovery.kind === "schtasks") {
     pendingServiceStop = runServiceCommand("schtasks.exe", ["/End", "/TN", recovery.taskName], () => {
       restorationArmed = true;
@@ -843,10 +848,10 @@ async function parkGatewayService() {
     if (!current || current.Id !== recovery.unit || current.LoadState !== "loaded" ||
       current.ActiveState !== "active" || current.MainPID !== String(params.parentPid) ||
       !/^[1-9]\d*$/.test(current.ExecMainStartTimestampMonotonic || "") ||
-      !/^[a-f0-9]{32}$/i.test(current.InvocationID || "") || !ownsManagedUpdateLease() ||
-      readProcessStartIdentity(params.parentPid) !== params.parentStartIdentity) {
+      !/^[a-f0-9]{32}$/i.test(current.InvocationID || "")) {
       throw new Error("systemd service does not match the exact active gateway parent");
     }
+    assertGatewayParkOwner();
     parkedServiceGeneration = current.ExecMainStartTimestampMonotonic;
     parkedServiceInvocation = current.InvocationID;
     // Keep the exact stop job open across parent exit; its completion is the
@@ -873,18 +878,14 @@ async function parkGatewayService() {
   const target = "gui/" + recovery.uid + "/" + recovery.label;
   const inspection = await runServiceCommand("launchctl", ["print", target]);
   const parentMatch = /^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(inspection.stdout);
-  if (inspection.code !== 0 || Number(parentMatch?.[1]) !== params.parentPid ||
-    !ownsManagedUpdateLease() ||
-    readProcessStartIdentity(params.parentPid) !== params.parentStartIdentity) {
+  if (inspection.code !== 0 || Number(parentMatch?.[1]) !== params.parentPid) {
     throw new Error("launchd service does not match the exact active gateway parent");
   }
+  assertGatewayParkOwner();
   restorationArmed = true;
   const disabled = await runServiceCommand("launchctl", ["disable", target]);
   if (disabled.code !== 0) throw new Error("launchctl disable failed: " + disabled.stderr);
-  if (!ownsManagedUpdateLease() ||
-    readProcessStartIdentity(params.parentPid) !== params.parentStartIdentity) {
-    throw new Error("managed update owner changed before launchd bootout");
-  }
+  assertGatewayParkOwner();
   // bootout gets launchd's full teardown budget; its accepted spawn acknowledges parking.
   await new Promise((resolve, reject) => {
     pendingServiceStop = runServiceCommand("launchctl", ["bootout", target], () => { recordServiceStop(); resolve(); });
@@ -1447,18 +1448,14 @@ async function collectUpdateFailureTriage() {
     appendLog("starting managed update command: " + params.commandLabel);
     // Update inputs retain shell-relative paths; recovery keeps the durable helper cwd.
     const exit = await runOwnedUpdateCommand("update", params.commandArgv, undefined, params.invocationCwd);
-    if (updateCancelled) {
-      recordUpdateHandoffOutcome("managed-service-handoff-cancelled");
-      return;
-    }
-    if (activationRejected) {
-      // Without the parked acknowledgement no swap was authorized. The previous
-      // runtime's prior verification permits recovery; failure alone never permits
-      // starting an unverified candidate.
-      if (restorationArmed && !isPidAlive(params.parentPid)) {
-        await restoreGatewayService(activationRejected);
-      } else recordUpdateHandoffOutcome(activationRejected);
-      process.exitCode = 1;
+    if (updateCancelled || activationRejected) {
+      const reason = updateCancelled ? "managed-service-handoff-cancelled" : activationRejected;
+      // No parked acknowledgement authorized a swap. Recovery waits for any
+      // dispatched stop, even when cancellation overlaps the parent's drain.
+      if (restorationArmed) {
+        if (!(await restoreGatewayService(reason))) process.exitCode = 1;
+      } else recordUpdateHandoffOutcome(reason);
+      if (!updateCancelled) process.exitCode = 1;
       return;
     }
     const { updaterOutput, outputOverflow } = exit;

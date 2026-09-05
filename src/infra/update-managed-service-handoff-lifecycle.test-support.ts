@@ -423,6 +423,58 @@ export function createManagedServiceUpdaterFixtureScript(params: {
   ].join("");
 }
 
+export function createManagedServiceCancellationPreload(params: {
+  scriptPath: string;
+  updaterPidPath: string;
+  activationGatePath: string;
+  activationReleasePath: string;
+  mutationPath: string;
+  gateInspection: boolean;
+}): string {
+  return `
+  if (process.argv[1] === ${JSON.stringify(params.scriptPath)}) {
+    const fs = require("node:fs");
+    const children = require("node:child_process");
+    const spawn = children.spawn;
+    const kill = process.kill;
+    let updaterPid;
+    let inspectionHeld = false;
+    // Keep termination pending until activation observes accepted cancellation.
+    // The test process owns final cleanup of this exact synthetic updater group.
+    process.kill = (pid, signal) => signal === "SIGKILL" && pid === -updaterPid
+      ? true : kill.call(process, pid, signal);
+    children.spawn = (command, args, options) => {
+      const mutation = (command === "systemctl" && args.includes("stop")) ||
+        (command === "launchctl" && ["disable", "bootout"].includes(args[0]));
+      if (mutation) fs.writeFileSync(${JSON.stringify(params.mutationPath)}, args.join(" "));
+      const child = spawn(command, args, options);
+      if (command === process.execPath && args[0] === "-e" && !updaterPid) {
+        updaterPid = child.pid;
+        fs.writeFileSync(${JSON.stringify(params.updaterPidPath)}, String(updaterPid));
+        const killChild = child.kill.bind(child);
+        child.kill = (signal) => signal === "SIGKILL" ? true : killChild(signal);
+      }
+      const inspection = (command === "systemctl" && args.includes("show")) ||
+        (command === "launchctl" && args[0] === "print");
+      if (${params.gateInspection} && inspection && !inspectionHeld) {
+        inspectionHeld = true;
+        const emit = child.emit.bind(child);
+        child.emit = (event, ...values) => {
+          if (event !== "close") return emit(event, ...values);
+          fs.writeFileSync(${JSON.stringify(params.activationGatePath)}, "inspection");
+          const timer = setInterval(() => {
+            if (!fs.existsSync(${JSON.stringify(params.activationReleasePath)})) return;
+            clearInterval(timer);
+            emit(event, ...values);
+          }, 5);
+          return true;
+        };
+      }
+      return child;
+    };
+  }`;
+}
+
 export function createManagedServiceLaunchdClockPreload(params: {
   commandTimingsPath: string;
   clockEachCommandMs: number;

@@ -3,7 +3,6 @@ import path from "node:path";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
-import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   verifyPackageUpdateRecovery,
@@ -15,32 +14,15 @@ import {
   NativePackageRollbackError,
   type NativePackageStage,
 } from "./update-native-package-stage.js";
+import type { UpdateStepResult } from "./update-runner-types.js";
 
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
-
-/**
- * Captures one package-manager or filesystem step from the global update flow.
- * Callers surface these records directly in update diagnostics.
- */
-export type PackageUpdateStepResult = {
-  name: string;
-  command: string;
-  cwd: string;
-  durationMs: number;
-  exitCode: number | null;
-  stdoutTail?: string | null;
-  stderrTail?: string | null;
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-  advisory?: PackageUpdateStepAdvisory;
-};
 
 /** The orchestrator owns schema safety and service verification before confirming or restoring. */
 export type PackageUpdateTransaction = {
   backupRoot: string;
   assertRollbackSafe?: () => Promise<void>;
-  rollback: () => Promise<PackageUpdateStepResult & { reason?: "rollback-project-changed" }>;
+  rollback: () => Promise<UpdateStepResult & { reason?: "rollback-project-changed" }>;
   complete: () => Promise<void>;
 };
 
@@ -63,17 +45,17 @@ export type StagedPackageInstall = {
 type StagedPackageSwapResult =
   | {
       status: "committed";
-      step: PackageUpdateStepResult;
-      postVerifyStep: PackageUpdateStepResult | null;
+      step: UpdateStepResult;
+      postVerifyStep: UpdateStepResult | null;
     }
   | {
       status: "failed";
-      step: PackageUpdateStepResult;
-      postVerifyStep: PackageUpdateStepResult | null;
+      step: UpdateStepResult;
+      postVerifyStep: UpdateStepResult | null;
       packageRollbackVerified: boolean;
     };
 
-export function isBlockingPackageUpdateStep(step: PackageUpdateStepResult): boolean {
+export function isBlockingPackageUpdateStep(step: UpdateStepResult): boolean {
   return step.exitCode !== 0 && step.advisory === undefined;
 }
 
@@ -110,14 +92,7 @@ async function pathEntryExists(targetPath: string): Promise<boolean> {
 export async function readPackageVersionIfPresent(
   packageRoot: string | null,
 ): Promise<string | null> {
-  if (!packageRoot) {
-    return null;
-  }
-  try {
-    return await readPackageVersion(packageRoot);
-  } catch {
-    return null;
-  }
+  return packageRoot ? readPackageVersion(packageRoot) : null;
 }
 
 async function copyPathEntry(source: string, destination: string): Promise<void> {
@@ -189,7 +164,7 @@ export async function swapStagedPackageInstall(params: {
   stage: StagedPackageInstall;
   installTarget: ResolvedGlobalInstallTarget;
   packageName: string;
-  postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
+  postVerifyStep?: (packageRoot: string) => Promise<UpdateStepResult | null>;
   beforeActivate?: () => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
 }): Promise<StagedPackageSwapResult> {
@@ -213,7 +188,7 @@ export async function swapStagedPackageInstall(params: {
     exitCode: number,
     stdoutTail: string | null,
     stderrTail: string | null,
-  ): PackageUpdateStepResult => ({
+  ): UpdateStepResult => ({
     name: "global install swap",
     command: `swap ${params.stage.packageRoot} -> ${targetPackageRoot ?? "unknown root"}`,
     cwd: targetLayout?.globalRoot ?? params.stage.prefix,
@@ -481,7 +456,7 @@ export async function swapStagedPackageInstall(params: {
       });
       await copyPathEntry(shim.source, shim.destination);
     }
-    let postVerifyStep: PackageUpdateStepResult | null = null;
+    let postVerifyStep: UpdateStepResult | null = null;
     if (params.postVerifyStep) {
       try {
         postVerifyStep = await params.postVerifyStep(targetPackageRoot);
