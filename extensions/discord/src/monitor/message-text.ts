@@ -81,21 +81,23 @@ export function resolveDiscordMessageBatch(last: Message, preceding: readonly Me
     content: { value: content, enumerable: true, configurable: true },
     attachments: { value: [], enumerable: true, configurable: true },
     message_snapshots: {
+      // SAFETY: This optional transport field stays opaque until snapshot normalization.
       value: (last as { message_snapshots?: unknown }).message_snapshots,
       enumerable: true,
       configurable: true,
     },
     messageSnapshots: {
+      // SAFETY: This optional wrapper field stays opaque until snapshot normalization.
       value: (last as { messageSnapshots?: unknown }).messageSnapshots,
       enumerable: true,
       configurable: true,
     },
     rawData: {
-      value: { ...(last as { rawData?: Record<string, unknown> }).rawData },
+      value: { ...last.rawData },
       enumerable: true,
       configurable: true,
     },
-  }) as Message;
+  }) as Message; // SAFETY: The prototype and own fields retain the Message contract.
 }
 
 /** Adds native media text only for history surfaces that cannot carry structured facts. */

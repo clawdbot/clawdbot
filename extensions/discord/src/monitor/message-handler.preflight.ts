@@ -627,7 +627,7 @@ export async function preflightDiscordMessage(
     await resolveDiscordPreflightAudioMentionContext({
       message,
       isDirectMessage,
-      shouldRequireMention,
+      shouldRequireMention: shouldRequireMention || requiresActiveBotMention,
       mentionRegexes,
       cfg: params.cfg,
       abortSignal: params.abortSignal,

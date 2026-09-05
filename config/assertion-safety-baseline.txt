@@ -369,7 +369,7 @@ extensions/discord/src/monitor/inbound-job.ts	1
 extensions/discord/src/monitor/ingress.ts	6
 extensions/discord/src/monitor/listeners.ts	1
 extensions/discord/src/monitor/message-channel-info.ts	3
-extensions/discord/src/monitor/message-dispatcher.ts	5
+extensions/discord/src/monitor/message-dispatcher.ts	1
 extensions/discord/src/monitor/message-forwarded.ts	7
 extensions/discord/src/monitor/message-handler.batch-gate.ts	1
 extensions/discord/src/monitor/message-handler.hydration.ts	12

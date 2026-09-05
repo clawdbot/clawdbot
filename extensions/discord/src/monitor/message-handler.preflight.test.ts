@@ -1,5 +1,6 @@
 // Discord tests cover message handler.preflight plugin behavior.
 import { ComponentType, MessageReferenceType } from "discord-api-types/v10";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as discordMessagesApi from "../internal/api.messages.js";
 import { ChannelType, MessageType } from "../internal/discord.js";
@@ -1558,7 +1559,9 @@ describe("preflightDiscordMessage", () => {
       expectedText,
     }) => {
       vi.useFakeTimers();
-      onTestFinished(() => vi.useRealTimers());
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
       const channelId = "channel-bot-reply-batch";
       const guildId = "guild-bot-reply-batch";
       const client = createGuildTextClient(channelId);
@@ -1620,7 +1623,7 @@ describe("preflightDiscordMessage", () => {
         });
         return createGuildEvent({ channelId, guildId, author: message.author, message });
       });
-      const evaluated = Promise.withResolvers<DiscordPreflightResult | null>();
+      const evaluated = createDeferred<DiscordPreflightResult | null>();
       const dispatcher = createDiscordMessageDispatcher({
         ...createPreflightArgs({
           cfg: {
@@ -1663,48 +1666,69 @@ describe("preflightDiscordMessage", () => {
     },
   );
 
-  it("allows bot audio when its transcript matches a configured mention pattern", async () => {
-    transcribeFirstAudioMock.mockResolvedValue("hey openclaw");
-    const channelId = "channel-bot-audio-mention";
-    const guildId = "guild-bot-audio-mention";
-    const message = createDiscordMessage({
-      id: "m-bot-audio-mention",
-      channelId,
-      content: "",
-      attachments: [
-        {
-          id: "att-bot-audio-mention",
-          url: "https://cdn.discordapp.com/attachments/bot-voice.ogg",
-          content_type: "audio/ogg",
-          filename: "bot-voice.ogg",
-        },
-      ],
-      author: {
-        id: "relay-bot-1",
-        bot: true,
-        username: "Relay",
-      },
-    });
-
-    const result = await runMentionOnlyBotPreflight({
-      cfg: {
-        ...DEFAULT_PREFLIGHT_CFG,
-        messages: {
-          groupChat: {
-            mentionPatterns: ["openclaw"],
+  it.each([
+    { requireMention: true, transcript: "hey openclaw", accepted: true },
+    { requireMention: false, transcript: "hey openclaw", accepted: true },
+    { requireMention: false, transcript: "hello everyone", accepted: false },
+  ])(
+    "gates bot audio replies by transcript: $requireMention, $transcript",
+    async ({ requireMention, transcript, accepted }) => {
+      transcribeFirstAudioMock.mockResolvedValue(transcript);
+      const channelId = "channel-bot-audio-mention";
+      const guildId = "guild-bot-audio-mention";
+      const message = createDiscordMessage({
+        id: "m-bot-audio-mention",
+        channelId,
+        content: "",
+        type: MessageType.Reply,
+        mentionedUsers: [{ id: "openclaw-bot" }],
+        referencedMessage: createDiscordMessage({
+          id: "m-audio-parent",
+          channelId,
+          content: "audio handoff",
+          author: { id: "openclaw-bot", bot: true },
+        }),
+        attachments: [
+          {
+            id: "att-bot-audio-mention",
+            url: "https://cdn.discordapp.com/attachments/bot-voice.ogg",
+            content_type: "audio/ogg",
+            filename: "bot-voice.ogg",
           },
+        ],
+        author: {
+          id: "relay-bot-1",
+          bot: true,
+          username: "Relay",
         },
-      } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
-      channelId,
-      guildId,
-      message,
-    });
+      });
 
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    const preflight = expectPreflightResult(result);
-    expect(preflight.wasMentioned).toBe(true);
-    expect(preflight.preflightAudioTranscript).toBe("hey openclaw");
-  });
+      const result = await runGuildPreflight({
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          messages: {
+            groupChat: {
+              mentionPatterns: ["openclaw"],
+            },
+          },
+        } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+        channelId,
+        guildId,
+        message,
+        discordConfig: { allowBots: "mentions" },
+        guildEntries: { [guildId]: { requireMention } },
+      });
+
+      if (accepted) {
+        const preflight = expectPreflightResult(result);
+        expect(preflight.wasMentioned).toBe(true);
+        expect(preflight.preflightAudioTranscript).toBe(transcript);
+      } else {
+        expect(result).toBeNull();
+      }
+      expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("parses component mention tokens as independent Markdown documents", async () => {
     const channelId = "channel-bot-reply-component-documents";
