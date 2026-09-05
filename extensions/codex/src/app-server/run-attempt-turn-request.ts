@@ -127,7 +127,6 @@ export async function prepareCodexAttemptTurnRequest(
         ? {}
         : { model: resourceState.thread.model, modelProvider: resourceState.thread.modelProvider }),
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-      skillsCollaborationInstructions: context.skillsCollaborationInstructions,
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       preserveNativeTurnSettings: usesSupervisionConnection,
       sessionStatusAvailable: toolBridge.availableTools.some(

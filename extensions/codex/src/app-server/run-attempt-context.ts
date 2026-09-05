@@ -15,7 +15,7 @@ import {
   buildCodexWorkspaceBootstrapContext,
   getCodexWorkspaceMemoryToolNames,
   readMirroredSessionHistoryMessages,
-  renderCodexSkillsCollaborationInstructions,
+  renderCodexSkillsInstructions,
 } from "./attempt-context.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
@@ -173,11 +173,18 @@ export async function prepareCodexAttemptContext(
     ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
       workspaceBootstrapContext.threadDeveloperInstructions)
     : undefined;
+  const skillsInstructions = renderCodexSkillsInstructions({
+    attempt: runtimeParams,
+    skillsPrompt: params.skillsSnapshot?.prompt,
+  });
+  // Model catalog collaboration messages override caller collaboration instructions.
+  // Keep the eligible catalog in the ordinary thread developer carrier instead.
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
     }),
     agentWorkspaceDeveloperInstructions,
+    skillsInstructions,
   );
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params: runtimeParams,
@@ -188,10 +195,6 @@ export async function prepareCodexAttemptContext(
       sessionKey: contextSessionKey,
       sandboxed: sandbox?.enabled === true,
     }),
-  });
-  const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
-    attempt: runtimeParams,
-    skillsPrompt: params.skillsSnapshot?.prompt,
   });
   const promptState = {
     promptText: params.prompt,
@@ -229,7 +232,7 @@ export async function prepareCodexAttemptContext(
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
     openClawPromptContext,
-    skillsCollaborationInstructions,
+    skillsInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,
