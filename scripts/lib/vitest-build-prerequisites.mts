@@ -34,14 +34,22 @@ const runtimeConsumers = [
     mode: "private-qa",
     dir: "extensions",
   },
-  ...["src/cli/acp-cli-exit.process.test.ts", "src/cli/update-dry-run-state.process.test.ts"].map(
-    (file) => ({
-      file,
-      configs: ["test/vitest/vitest.cli-process.config.ts"],
-      mode: "runtime" as const,
-      dir: "",
-    }),
-  ),
+  ...[
+    "src/cli/acp-cli-exit.process.test.ts",
+    "src/cli/update-dry-run-state.process.test.ts",
+    "src/cli/update-cli/update-command-migrated.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.cli-process.config.ts"],
+    mode: "runtime" as const,
+    dir: "",
+  })),
+  {
+    file: "src/infra/update-candidate-canary.integration.test.ts",
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
   ...[
     "src/commands/doctor-config-preflight.process.test.ts",
     "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",

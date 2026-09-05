@@ -17,6 +17,7 @@ export const cliProcessTestFiles = [
   "src/cli/update-dry-run-state.process.test.ts",
   "src/cli/doctor-output.process.test.ts",
   "src/cli/update-cli/update-command-lease.test.ts",
+  "src/cli/update-cli/update-command-migrated.test.ts",
   "src/cli/one-shot-exit.test.ts",
   "src/cli/update-finalization-output.process.test.ts",
   "src/cli/cold-command-plugin-imports.process.test.ts",

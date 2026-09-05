@@ -1520,6 +1520,10 @@ describe("update-cli", () => {
   const mockPackageGatewayLifecycle = () => {
     serviceStop.mockImplementation(async () => {
       serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+      // macOS stop boots out the job; systemd enablement and task registration remain.
+      if (process.platform === "darwin") {
+        serviceLoaded.mockResolvedValue(false);
+      }
     });
     return async (argv: string[]) => {
       if (argv[2] !== "gateway" || (argv[3] !== "install" && argv[3] !== "restart")) {
@@ -6212,7 +6216,7 @@ describe("update-cli", () => {
         await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old shim\n");
       }
       expect(freshRestartCalls()).toEqual([]);
-      expect(serviceStop).toHaveBeenCalledTimes(failure === "shim swap" ? 2 : 0);
+      expect(serviceStop).toHaveBeenCalledTimes(failure === "shim swap" ? 1 : 0);
       expect(logs).not.toContain(
         "Recovered managed gateway service and verified readiness after failed update.",
       );

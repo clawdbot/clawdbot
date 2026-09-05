@@ -160,8 +160,9 @@ and protected or unknown artifacts remain. It is not a substitute for a
 [pre-update backup](#before-updating-create-a-verified-backup). See
 [Update cleanup](/cli/update#update-cleanup) for eligibility, JSON output, and
 resuming interrupted deletion.
-Backups retained by an update whose status is still `running` are protected
-from cleanup until verification or rollback finishes.
+Private package, command-shim, and Git runtime backups remain owned by the update
+transaction and are outside this migration cleanup. An interrupted entry in update
+history does not block cleanup of otherwise eligible migration archives.
 
 ## Switch between npm and git installs
 

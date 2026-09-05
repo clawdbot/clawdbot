@@ -6,7 +6,6 @@ import {
 } from "../../commands/doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "../../commands/doctor-session-sqlite-retirement.js";
 import { readSourceConfigBestEffort } from "../../config/io.js";
-import { findActiveUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
 
 function renderCleanup(report: RecoveryCleanupReport): void {
@@ -39,17 +38,6 @@ export async function updateCleanupCommand(options: {
 }): Promise<void> {
   let report: RecoveryCleanupReport | undefined;
   try {
-    const assertNoActiveUpdate = () => {
-      const active = findActiveUpdateRun();
-      if (active) {
-        throw new Error(
-          `Update ${active.runId} is still running; rollback originals are protected until it finishes.`,
-        );
-      }
-    };
-    if (!options.dryRun) {
-      assertNoActiveUpdate();
-    }
     const readConfig = () => readSourceConfigBestEffort();
     report = inspectSessionSqliteRecovery({ cfg: await readConfig(), env: process.env });
     if (!options.dryRun) {
@@ -63,7 +51,6 @@ export async function updateCleanupCommand(options: {
           preview: report,
           readConfig,
           confirm: async (verified) => {
-            assertNoActiveUpdate();
             if (options.yes || verified.artifacts.length === 0) {
               return true;
             }
@@ -73,7 +60,6 @@ export async function updateCleanupCommand(options: {
               initialValue: false,
               output: process.stderr,
             });
-            assertNoActiveUpdate();
             return !isCancel(answer) && answer;
           },
         });

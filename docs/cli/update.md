@@ -331,8 +331,9 @@ eligible. Unknown or unimported history, malformed inputs, trajectories,
 forensic corrupt databases, operator backups, and unmanifested artifacts stay
 protected. Old manifests are verified offline where possible; missing evidence
 is a reason to retain an artifact. Cleanup has no automatic expiration policy.
-Package backups belonging to a `running` update remain protected until that run
-is terminal, including while verification or rollback is in progress.
+Private package, command-shim, and Git runtime backups remain owned by the update
+transaction and are outside this migration cleanup. An interrupted entry in update
+history does not block cleanup of otherwise eligible migration archives.
 
 The JSON result contains `stateDir`, `status`, `artifacts`, and `totals`. Each
 artifact reports its path, run ids, logical bytes, outcome, and reason. Totals
