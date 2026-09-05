@@ -1256,6 +1256,7 @@
                   "install/cloudflare",
                   "install/daytona",
                   "install/digitalocean",
+                  "install/docker-sandboxes",
                   "install/docker-vm-runtime",
                   "install/exe-dev",
                   "install/fly",

@@ -622,6 +622,7 @@ Each agent can override sandbox + tools: `agents.entries.*.sandbox` and `agents.
 
 ## Related
 
+- [Docker Sandboxes](/install/docker-sandboxes) -- hosting OpenClaw on Docker Sandboxes, a separate axis from sandboxing tool calls
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [OpenShell](/gateway/openshell) -- managed sandbox backend setup, workspace modes, and config reference
 - [Sandbox configuration](/gateway/config-agents#agentsdefaultssandbox)

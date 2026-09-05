@@ -345,6 +345,7 @@
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
           - "docs/install/docker.md"
+          - "docs/install/docker-sandboxes.md"
           - "docs/tools/multi-agent-sandbox-tools.md"
 
 "deploy: cloudflare":
