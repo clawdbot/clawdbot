@@ -191,6 +191,7 @@ export function createRequestReceipt(
           ? [
               "One real Telegram Test Server DM with a deterministic mock provider; no production/personal traffic, live model, group, media, edit, reaction, or readiness claim.",
               "Canonical trusted TDLib recorder and provider capture are outside the isolated candidate; raw identities and credentials are not public observations.",
+              "A bounded wrong-text egress attempt is blocked before Telegram forwarding and reported as failure, not as a delivered reply; malformed or incomplete captures remain inconclusive.",
             ]
           : [
               "Black-box behavior of the served candidate UI during external browser input, with a mocked Gateway. No internal client/callsite provenance, live Gateway, provider, channel, delivery, or readiness claim.",

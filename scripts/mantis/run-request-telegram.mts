@@ -385,6 +385,8 @@ async function run() {
         "--tmpfs",
         "/tmp:rw,nosuid,nodev,size=512m",
         "--env",
+        "XDG_CACHE_HOME=/state/cache",
+        "--env",
         "OPENCLAW_STATE_DIR=/state",
         "--env",
         "OPENCLAW_CONFIG_PATH=/candidate-config.json",
@@ -508,6 +510,7 @@ async function run() {
       summary: JSON.parse(await boundedRead(summary, 1024 * 1024)),
       raw: await boundedRead(record, 8 * 1024 * 1024),
       provider,
+      rejectedReply: ingress.rejectedReplyCapture(),
       quiescent,
       leaseHealthy: true,
     });

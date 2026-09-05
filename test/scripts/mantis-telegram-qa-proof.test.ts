@@ -1,7 +1,47 @@
 import { describe, expect, it } from "vitest";
 import { createRequestReceipt, requestIdentitySchema } from "../../scripts/mantis/request-proof.ts";
 import { assertRequestWorkflowRef } from "../../scripts/mantis/request-workflow-admission.mjs";
-import { telegramQaScenario } from "../../scripts/mantis/telegram-qa-proof.ts";
+import { removeTelegramQaNetwork } from "../../scripts/mantis/telegram-qa-cleanup.ts";
+import {
+  isTelegramQaBotApiRequest,
+  telegramQaScenario,
+} from "../../scripts/mantis/telegram-qa-proof.ts";
+
+it("admits canonical read-only probes without opening arbitrary GET or Bot API methods", () => {
+  for (const method of ["getMe", "getWebhookInfo"]) {
+    expect(isTelegramQaBotApiRequest("GET", method)).toBe(true);
+    expect(isTelegramQaBotApiRequest("POST", method)).toBe(true);
+  }
+  expect(isTelegramQaBotApiRequest("POST", "sendMessage")).toBe(true);
+  for (const method of ["sendMessage", "getUpdates", "deleteWebhook"]) {
+    expect(isTelegramQaBotApiRequest("GET", method)).toBe(false);
+  }
+  for (const method of ["getMe?extra=1", "getMe/", "../getMe", "reset", "sendDocument", ""]) {
+    expect(isTelegramQaBotApiRequest("POST", method)).toBe(false);
+  }
+  for (const method of [undefined, "HEAD", "PUT", "DELETE"]) {
+    expect(isTelegramQaBotApiRequest(method, "getMe")).toBe(false);
+  }
+});
+
+describe("owned Telegram QA network cleanup", () => {
+  it("removes the created network with the supported Podman command", async () => {
+    const calls: string[][] = [];
+    await removeTelegramQaNetwork(async (args) => {
+      calls.push(args);
+      return "";
+    }, "mantis-qa-fixture");
+    expect(calls).toEqual([["network", "rm", "mantis-qa-fixture"]]);
+  });
+  it("skips only an uncreated network and preserves genuine removal failures", async () => {
+    const failure = new Error("network still in use");
+    const podman = async () => {
+      throw failure;
+    };
+    await expect(removeTelegramQaNetwork(podman, undefined)).resolves.toBeUndefined();
+    await expect(removeTelegramQaNetwork(podman, "mantis-qa-fixture")).rejects.toBe(failure);
+  });
+});
 
 const identity = requestIdentitySchema.parse({
   request_id: "a".repeat(64),

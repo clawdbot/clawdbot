@@ -49,13 +49,21 @@ export const telegramProviderObservationSchema = binding.extend({
   response_nonce: digest,
   response_sha256: digest,
 });
-export const telegramReplyObservationSchema = binding.extend({
+const deliveredReply = binding.extend({
   kind: z.literal("telegram-reply"),
   from_sut: z.literal(true),
   message_id: messageId,
   in_reply_to: messageId.nullable(),
   text_sha256: digest,
 });
+export const telegramReplyObservationSchema = z.union([
+  deliveredReply,
+  deliveredReply.extend({
+    delivery: z.literal("blocked_before_forward"),
+    message_id: z.null(),
+    in_reply_to: z.null(),
+  }),
+]);
 export const telegramObservationFiles = [
   "telegram-send.json",
   "provider-request.json",
@@ -126,6 +134,10 @@ export function verifyTelegramProofFiles(
     throw new Error("Invalid Telegram send/provider/reply correlation");
   }
   const matched = reply.text_sha256 === expectedReply;
+  const blocked = "delivery" in reply;
+  if (blocked && matched) {
+    throw new Error("Blocked Telegram reply is not a mismatch");
+  }
   const observations = [
     {
       id: "telegram-send",
@@ -145,7 +157,9 @@ export function verifyTelegramProofFiles(
       id: "telegram-reply",
       source_path: "telegram-reply.json",
       expected: expectedReply,
-      actual: reply.text_sha256,
+      actual: blocked
+        ? `Blocked before Telegram forwarding; SHA256 ${reply.text_sha256}`
+        : reply.text_sha256,
       sha256: telegramProofDigest(replyFile.bytes),
     },
   ].map((fact) => ({

@@ -45,6 +45,7 @@ export async function startTelegramProofIngress(options: {
   let requests = 0;
   let sendArmed = false;
   let outboundMessages = 0;
+  let rejectedReply: { textSha256: string } | undefined;
   let typingActions = 0;
   let webhookCleanupSimulations = 0;
   const commandCleanupSimulations = new Set<string>();
@@ -69,17 +70,36 @@ export async function startTelegramProofIngress(options: {
       controller.abort();
     }
   });
+  const refuse = (response: http.ServerResponse) => {
+    response.writeHead(403, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({ ok: false, description: "Request outside active Telegram proof scope" }),
+    );
+  };
   const server = http.createServer((request, response) => {
     void (async () => {
       assertHealthy();
-      if (++requests > 256 || request.method !== "POST" || !request.url?.startsWith("/")) {
+      if (rejectedReply) {
+        request.resume();
+        refuse(response);
+        return;
+      }
+      const probeRead =
+        request.method === "GET" &&
+        (request.url === `/telegram/bot${options.alias}/getMe` ||
+          request.url === `/telegram/bot${options.alias}/getWebhookInfo`);
+      if (
+        ++requests > 256 ||
+        (request.method !== "POST" && !probeRead) ||
+        !request.url?.startsWith("/")
+      ) {
         throw new Error("Unsupported ingress request");
       }
       const chunks: Buffer[] = [];
       let length = 0;
       for await (const chunk of request) {
         length += chunk.length;
-        if (length > 256 * 1024) {
+        if ((probeRead && length !== 0) || length > 256 * 1024) {
           throw new Error("Oversized ingress body");
         }
         chunks.push(Buffer.from(chunk));
@@ -87,6 +107,11 @@ export async function startTelegramProofIngress(options: {
       const body = Buffer.concat(chunks);
       const parsed: unknown = JSON.parse(body.toString("utf8") || "{}");
       const record = z.record(z.string(), z.unknown()).parse(parsed);
+      // A prior concurrent request may have completed the single bounded failure.
+      if (rejectedReply) {
+        refuse(response);
+        return;
+      }
       if (request.url === "/provider/v1/chat/completions") {
         if (request.headers.authorization !== `Bearer ${options.alias}`) {
           throw new Error("Wrong provider capability");
@@ -202,11 +227,19 @@ export async function startTelegramProofIngress(options: {
           method !== "sendMessage" ||
           outboundMessages !== 0 ||
           !provider ||
-          upstreamRecord.text !== telegramProofReply(provider.responseNonce)
+          provider.count !== 1
         ) {
           throw new Error("Telegram egress exceeds the single expected reply");
         }
+        assertHealthy();
         outboundMessages += 1;
+        if (upstreamRecord.text !== telegramProofReply(provider.responseNonce)) {
+          // Record the failed behavior at its trusted boundary, without sending
+          // arbitrary candidate content to Telegram. All later traffic is refused.
+          rejectedReply = { textSha256: telegramProofDigest(String(upstreamRecord.text)) };
+          refuse(response);
+          return;
+        }
       }
       if (
         method === "getUpdates" &&
@@ -263,11 +296,10 @@ export async function startTelegramProofIngress(options: {
         readers.delete(controller);
       }
     })().catch(() => {
-      invalid = true;
-      response.writeHead(403, { "Content-Type": "application/json" });
-      response.end(
-        JSON.stringify({ ok: false, description: "Request outside active Telegram proof scope" }),
-      );
+      if (!rejectedReply) {
+        invalid = true;
+      }
+      refuse(response);
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -288,10 +320,11 @@ export async function startTelegramProofIngress(options: {
     assertSingleSendComplete() {
       assertHealthy();
       if (!sendArmed || outboundMessages !== 1) {
-        throw new Error("Exactly one expected Telegram reply was not observed");
+        throw new Error("Exactly one bounded Telegram reply attempt was not observed");
       }
     },
     providerCapture: () => provider,
+    rejectedReplyCapture: () => rejectedReply,
     async close() {
       closed = true;
       for (const controller of readers) {

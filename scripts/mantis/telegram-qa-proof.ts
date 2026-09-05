@@ -2,6 +2,24 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 export const telegramQaScenario = "telegram-markdown-parser-fidelity" as const;
+const botApiMethods = new Set([
+  "getMe",
+  "getUpdates",
+  "getWebhookInfo",
+  "deleteWebhook",
+  "setMyCommands",
+  "deleteMyCommands",
+  "getMyCommands",
+  "sendMessage",
+  "sendChatAction",
+]);
+export function isTelegramQaBotApiRequest(httpMethod: string | undefined, method: string): boolean {
+  return (
+    botApiMethods.has(method) &&
+    (httpMethod === "POST" ||
+      (httpMethod === "GET" && (method === "getMe" || method === "getWebhookInfo")))
+  );
+}
 const sha = z.string().regex(/^[a-f0-9]{40}$/);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const id = z.string().regex(/^[1-9][0-9]{0,19}$/);

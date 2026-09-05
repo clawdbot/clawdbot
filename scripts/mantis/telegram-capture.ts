@@ -74,6 +74,7 @@ export function normalizeTelegramCapture(input: {
   };
   quiescent: boolean;
   leaseHealthy: boolean;
+  rejectedReply?: { textSha256: string };
 }) {
   if (
     !input.testDc ||
@@ -146,10 +147,20 @@ export function normalizeTelegramCapture(input: {
   // Streaming is disabled for this bounded scenario. More than one SUT message
   // is ambiguous, rather than permission to select whichever happens to pass.
   const reply = replies[0];
-  if (replies.length !== 1 || !reply) {
+  if (input.rejectedReply ? replies.length !== 0 : replies.length !== 1 || !reply) {
     throw new Error("Missing or ambiguous same-SUT DM reply");
   }
   const expectedResponse = telegramProofDigest(telegramProofReply(input.provider.responseNonce));
+  const rejectedReply =
+    input.rejectedReply &&
+    z
+      .strictObject({
+        textSha256: z.string().regex(/^[a-f0-9]{64}$/),
+      })
+      .parse(input.rejectedReply);
+  if (rejectedReply?.textSha256 === expectedResponse) {
+    throw new Error("Blocked reply must be a trusted observed mismatch");
+  }
   if (
     input.provider.inputNonce !== input.nonce ||
     input.provider.responseSha256 !== expectedResponse
@@ -182,7 +193,7 @@ export function normalizeTelegramCapture(input: {
     nonce: input.nonce,
     capture: "complete",
   };
-  const quote = reply.reply_to?.message_id ?? reply.reply_to_message_id;
+  const quote = reply?.reply_to?.message_id ?? reply?.reply_to_message_id;
   const replyTo = quote ? botMessageId(quote) : null;
   if (replyTo !== null && replyTo !== sendId) {
     throw new Error("Wrong Telegram reply target");
@@ -205,9 +216,11 @@ export function normalizeTelegramCapture(input: {
       ...common,
       kind: "telegram-reply",
       from_sut: true,
-      message_id: botMessageId(reply.id),
+      ...(rejectedReply
+        ? { delivery: "blocked_before_forward", message_id: null }
+        : { message_id: botMessageId(reply!.id) }),
       in_reply_to: replyTo,
-      text_sha256: telegramProofDigest(reply.content.text.text),
+      text_sha256: rejectedReply?.textSha256 ?? telegramProofDigest(reply!.content.text.text),
     }),
   };
 }

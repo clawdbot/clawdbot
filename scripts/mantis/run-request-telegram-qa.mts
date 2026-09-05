@@ -8,6 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { z } from "zod";
 import { requestIdentitySchema } from "./request-proof.ts";
+import { removeTelegramQaNetwork } from "./telegram-qa-cleanup.ts";
 import {
   telegramQaExecutionSchema,
   telegramQaObservationsSchema,
@@ -78,8 +79,10 @@ const restrictions = [
   "/tmp:rw,nosuid,nodev,size=1g",
 ];
 const errors: unknown[] = [];
+let createdNetwork: string | undefined;
 try {
   await podman(["network", "create", "--internal", network]);
+  createdNetwork = network;
   const networks = JSON.parse(await podman(["network", "inspect", network]));
   if (networks.length !== 1 || networks[0].internal !== true) {
     throw new Error("Candidate network is not internal");
@@ -92,6 +95,11 @@ try {
     ...restrictions,
     "--network-alias",
     "proof-observer",
+    // Crabline's canonical recorder locks use the trusted image's root account
+    // cache, not XDG_CACHE_HOME. Keep that owner-only scratch off the read-only
+    // image; neither this mount nor its lock files is shared with the candidate.
+    "--tmpfs",
+    "/root/.cache:rw,nosuid,nodev,noexec,notmpcopyup,size=16m,mode=0700",
     // Canonical GatewayClient requires this existing explicit opt-in for the
     // private container hostname. Only this observer gets it; the network is
     // internal and the Gateway token is synthetic and unique to this run.
@@ -135,15 +143,21 @@ try {
     "--env",
     "OPENCLAW_STATE_DIR=/state",
     "--env",
+    "XDG_CACHE_HOME=/state/cache",
+    "--env",
     "OPENCLAW_CONFIG_PATH=/candidate-config.json",
     info.Id,
-    "node",
-    "dist/entry.js",
-    "gateway",
-    "--port",
-    "19879",
+    "sh",
+    "-eu",
+    "-c",
+    "mkdir -p /state/state && cp /candidate-pairing.sqlite /state/state/openclaw.sqlite && exec node dist/entry.js gateway --port 19879",
   ]);
   await podman(["cp", configPath, `${sut}:/candidate-config.json`]);
+  await podman([
+    "cp",
+    path.join(scratch, "candidate-pairing.sqlite"),
+    `${sut}:/candidate-pairing.sqlite`,
+  ]);
   const metadata = JSON.parse(await podman(["inspect", sut]))[0];
   if (
     (metadata.Mounts ?? []).some((mount: { Type: string }) => mount.Type === "bind") ||
@@ -198,7 +212,7 @@ try {
     }
   }
   try {
-    await podman(["network", "rm", "--ignore", network]);
+    await removeTelegramQaNetwork(podman, createdNetwork);
   } catch (error) {
     errors.push(error);
   }

@@ -15,7 +15,9 @@ import { startQaGatewayRpcClient } from "../../extensions/qa-lab/src/gateway-rpc
 import { readQaScenarioById } from "../../extensions/qa-lab/src/scenario-catalog.ts";
 import { runScenarioFlow } from "../../extensions/qa-lab/src/scenario-flow-runner.ts";
 import { runQaSuiteScenarioSteps } from "../../extensions/qa-lab/src/suite-runtime-flow.ts";
+import { prepareTelegramQaDevice, telegramQaObserverScopes } from "./telegram-qa-device.ts";
 import {
+  isTelegramQaBotApiRequest,
   telegramQaObservationsSchema,
   telegramQaResultSchema,
   telegramQaScenario,
@@ -45,7 +47,8 @@ if (upstream.hostname !== "127.0.0.1" || upstream.protocol !== "http:") {
 }
 const token = randomUUID();
 const config = {
-  ...channelConfig,
+  // Take only the channel config. The adapter's transport bootstrap metadata
+  // (such as baseUrl) is not part of the candidate Gateway configuration.
   gateway: {
     mode: "local",
     bind: "lan",
@@ -62,31 +65,26 @@ const config = {
 };
 // Only Bot API methods cross the container boundary. The candidate cannot call
 // Crabline's admin/input/reset endpoints or write its recorder/evidence files.
-const methods = new Set([
-  "getMe",
-  "getUpdates",
-  "getWebhookInfo",
-  "deleteWebhook",
-  "setMyCommands",
-  "deleteMyCommands",
-  "getMyCommands",
-  "sendMessage",
-  "sendChatAction",
-]);
 let invalid = false,
   requests = 0;
 const bridge = http.createServer((request, response) => {
+  let stage = "admission";
   void (async () => {
     const prefix = `/bot${channel.botToken}/`;
-    if (
-      invalid ||
-      ++requests > 1024 ||
-      request.method !== "POST" ||
-      !request.url?.startsWith(prefix) ||
-      !methods.has(request.url.slice(prefix.length))
-    ) {
+    const requestUrl = request.url ?? "";
+    stage = invalid
+      ? "already-invalid"
+      : ++requests > 1024
+        ? "request-budget"
+        : !requestUrl.startsWith(prefix)
+          ? "bot-capability"
+          : !isTelegramQaBotApiRequest(request.method, requestUrl.slice(prefix.length))
+            ? "api-method"
+            : "admitted";
+    if (stage !== "admitted") {
       throw new Error("Unsupported Bot API request");
     }
+    stage = "request-body";
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const part of request) {
@@ -96,13 +94,18 @@ const bridge = http.createServer((request, response) => {
       }
       chunks.push(Buffer.from(part));
     }
-    const result = await fetch(new URL(request.url, upstream), {
-      method: "POST",
+    if (request.method === "GET" && size !== 0) {
+      throw new Error("Diagnostic GET must not contain a body");
+    }
+    stage = "upstream-fetch";
+    const result = await fetch(new URL(requestUrl, upstream), {
+      method: request.method,
       headers: { "content-type": request.headers["content-type"] ?? "application/json" },
-      body: Buffer.concat(chunks),
+      body: request.method === "POST" ? Buffer.concat(chunks) : undefined,
       redirect: "error",
       signal: AbortSignal.timeout(35_000),
     });
+    stage = "response-body";
     const bytes = Buffer.from(await result.arrayBuffer());
     if (bytes.length > 1024 * 1024) {
       throw new Error("Oversized Bot API response");
@@ -111,6 +114,8 @@ const bridge = http.createServer((request, response) => {
     response.end(bytes);
   })().catch(() => {
     invalid = true;
+    // Fixed categories only: no URL, token, request body or candidate text.
+    console.error(`Trusted QA Bot API bridge failed at ${stage}`);
     response.writeHead(403);
     response.end();
   });
@@ -121,6 +126,7 @@ try {
     bridge.once("error", reject);
     bridge.listen(18080, "0.0.0.0", resolve);
   });
+  const deviceIdentity = await prepareTelegramQaDevice(output);
   await fs.writeFile(path.join(output, "candidate-config.json"), JSON.stringify(config), {
     flag: "wx",
   });
@@ -152,6 +158,8 @@ try {
   rpc = await startQaGatewayRpcClient({
     wsUrl: "ws://proof-candidate:19879",
     token,
+    deviceIdentity,
+    scopes: [...telegramQaObserverScopes],
     logs: () => "",
   });
   const client = rpc;
