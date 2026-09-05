@@ -32,6 +32,9 @@ export type ChatSessionSharingProps = {
   visibilityDisabledReason?: string;
   memberAddDisabledReason?: string;
   memberRemoveDisabledReason?: string;
+  publicShareDisabledReason?: string;
+  onPublicShareChange?: (enabled: boolean) => void;
+  onCopyPublicLink?: () => void;
   ownerViewing?: boolean;
   personActivity?: PersonActivityRouting;
   showOwner?: boolean;
@@ -79,6 +82,30 @@ export function selectChatSessionSharingItem(
   props: ChatSessionSharingProps,
   value: string | undefined,
 ): void {
+  if (value?.startsWith("public:")) {
+    if (
+      !props.session ||
+      !canManageChatSessionSharing(props.session) ||
+      props.state?.loading ||
+      !props.state?.result
+    ) {
+      return;
+    }
+    if (
+      value === "public:copy" &&
+      props.state.result.publicShare &&
+      props.state.result.publicShare?.sessionId === props.session.sessionId
+    ) {
+      props.onCopyPublicLink?.();
+    } else if (!props.publicShareDisabledReason) {
+      if (value === "public:enable") {
+        props.onPublicShareChange?.(true);
+      } else if (value === "public:disable") {
+        props.onPublicShareChange?.(false);
+      }
+    }
+    return;
+  }
   const members = new Set(props.state?.result?.members.map((member) => member.identityId) ?? []);
   if (value?.startsWith("visibility:")) {
     const visibility = value.slice("visibility:".length) as SessionVisibility;
@@ -112,6 +139,8 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
   const visibility = session.visibility ?? "shared";
   const canManage = canManageChatSessionSharing(session);
   const result = props.state?.result;
+  const publicShare =
+    result?.publicShare?.sessionId === session.sessionId ? result?.publicShare : undefined;
   const owner = result?.owner ?? session.owner?.actor;
   const ownerActivity = personActivityLink(
     owner?.identity?.type === "profile" ? owner.identity.id : undefined,
@@ -187,6 +216,45 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
         </wa-dropdown-item>
       `;
     })}
+    ${
+      props.onPublicShareChange
+        ? html`
+            <div class="session-menu__separator" role="separator"></div>
+            <div class="chat-pane__sharing-title">${t("chat.sessionSharing.publicAccess")}</div>
+            <div class="chat-pane__sharing-status">
+              ${t(
+                props.state?.loading || !result
+                  ? "common.loading"
+                  : publicShare
+                    ? "chat.sessionSharing.worldReadable"
+                    : "chat.sessionSharing.notPublic",
+              )}
+            </div>
+            ${
+              publicShare
+                ? html`<wa-dropdown-item
+                    class="session-menu__item"
+                    value="public:copy"
+                    ?disabled=${Boolean(props.state?.loading)}
+                    >${t("chat.sessionSharing.copyPublicLink")}</wa-dropdown-item
+                  >`
+                : nothing
+            }
+            <wa-dropdown-item
+              class="session-menu__item"
+              value=${publicShare ? "public:disable" : "public:enable"}
+              ?disabled=${Boolean(props.publicShareDisabledReason || props.state?.loading || !result)}
+              title=${props.publicShareDisabledReason ?? nothing}
+            >
+              ${t(
+                publicShare
+                  ? "chat.sessionSharing.disablePublicAccess"
+                  : "chat.sessionSharing.enablePublicAccess",
+              )}
+            </wa-dropdown-item>
+          `
+        : nothing
+    }
     ${
       owner
         ? html`

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-sharing.test/"} */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -22,12 +22,25 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 
+const { confirmPublicShare, copyPublicShare } = vi.hoisted(() => ({
+  confirmPublicShare: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
+  copyPublicShare: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
+}));
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: confirmPublicShare }));
+vi.mock("../../lib/clipboard.ts", () => ({ copyToClipboard: copyPublicShare }));
+afterEach(() => {
+  confirmPublicShare.mockReset();
+  copyPublicShare.mockReset();
+});
+
 type SharingPane = TestChatPane & {
   loadSessionSharing: (row: GatewaySessionRow, force?: boolean) => Promise<void>;
   sessionSharingCacheKey: (sessionKey: string) => string;
   sessionSharingStates: Map<string, ChatSessionSharingState>;
   setSessionMember: (row: GatewaySessionRow, identityId: string, member: boolean) => Promise<void>;
   setSessionVisibility: (row: GatewaySessionRow, visibility: SessionVisibility) => Promise<void>;
+  setSessionPublicShare: (row: GatewaySessionRow, enabled: boolean) => Promise<void>;
+  copySessionPublicLink: (row: GatewaySessionRow) => Promise<void>;
 };
 
 const SHARING_METHODS = [
@@ -35,6 +48,7 @@ const SHARING_METHODS = [
   "session.members.listEvidence",
   "session.members.add",
   "session.members.remove",
+  "session.publicShare.set",
 ];
 
 function setSharingAuthorization(
@@ -151,6 +165,97 @@ const mutations = [
       pane.setSessionMember(row, "identity-alice", true),
   },
 ] as const;
+
+describe("public session sharing", () => {
+  it.each([true, false])(
+    "confirms publication, copies a mounted link (advertised=%s), and revokes independently of team visibility",
+    async (advertised) => {
+      const row = sessionRow();
+      const publicShare = { id: "a".repeat(48), sessionId: row.sessionId!, createdAt: 1 };
+      let enabled = false;
+      const request = vi.fn(async (method: string, params?: { enabled?: boolean }) => {
+        if (method === "session.publicShare.set") {
+          enabled = params?.enabled === true;
+          return { ok: true, sessionKey: row.key, ...(enabled ? { publicShare } : {}) };
+        }
+        if (method === "session.members.listEvidence") {
+          return { ...sharingResult(row), ...(enabled ? { publicShare } : {}) };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const { pane: testPane } = createSharingTestChatPane({
+        client: createGatewayBrowserClientFixture({ request, gatewayUrl: "wss://example.test" }),
+        sessions: createSessionCapabilityFixture(),
+      });
+      const pane = testPane as SharingPane;
+      const hello = pane.context.gateway.snapshot.hello!;
+      pane.context.basePath = "/control";
+      hello.controlUiUrl = advertised
+        ? "https://example.test/control/?token=never-copy"
+        : undefined;
+      confirmPublicShare.mockResolvedValue(true);
+      copyPublicShare.mockResolvedValue(true);
+      await pane.setSessionPublicShare(row, true);
+      expect(confirmPublicShare).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("existing and future conversation text"),
+        }),
+      );
+      expect(request).toHaveBeenCalledWith("session.publicShare.set", {
+        sessionKey: row.key,
+        agentId: "main",
+        expectedSessionId: "session-current",
+        enabled: true,
+      });
+      await pane.copySessionPublicLink(row);
+      expect(copyPublicShare).toHaveBeenCalledWith(
+        `https://example.test/control/share/session/main/session-current?key=agent%3Amain%3Acurrent&share=${publicShare.id}`,
+        expect.any(Function),
+      );
+      await pane.setSessionPublicShare(row, false);
+      expect(request).toHaveBeenCalledWith("session.publicShare.set", {
+        sessionKey: row.key,
+        agentId: "main",
+        expectedSessionId: "session-current",
+        enabled: false,
+      });
+      expect(confirmPublicShare).toHaveBeenCalledTimes(1);
+      expect(request.mock.calls.every(([method]) => method !== "session.visibility.set")).toBe(
+        true,
+      );
+      expect(
+        pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.result?.publicShare,
+      ).toBeUndefined();
+    },
+  );
+
+  it.each(["cancel", "session", "connection", "scope"] as const)(
+    "does not publish after %s invalidates confirmation",
+    async (change) => {
+      const confirmation = createDeferred<boolean>();
+      confirmPublicShare.mockReturnValue(confirmation.promise);
+      const request = vi.fn();
+      const { pane: testPane, state } = createSharingTestChatPane({
+        client: createGatewayBrowserClientFixture({ request }),
+        sessions: createSessionCapabilityFixture(),
+      });
+      const pane = testPane as SharingPane;
+      const row = sessionRow();
+      const pending = pane.setSessionPublicShare(row, true);
+      await vi.waitFor(() => expect(confirmPublicShare).toHaveBeenCalledOnce());
+      if (change === "session") {
+        state.sessionsResult = sharingSessionsResult({ ...row, sessionId: "replacement" });
+      } else if (change === "connection") {
+        pane.connectionGeneration += 1;
+      } else if (change === "scope") {
+        setSharingAuthorization(pane, { scopes: ["operator.read"] });
+      }
+      confirmation.resolve(change !== "cancel");
+      await pending;
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe("chat pane sharing authorization", () => {
   it.each(["draft", "shared"] as const)(

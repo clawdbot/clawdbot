@@ -1,4 +1,6 @@
+import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-contract/public-share";
 import type {
+  SessionPublicShareSetResult,
   SessionSuggestion,
   SessionSuggestionEvent,
   SessionSuggestionResolution,
@@ -13,6 +15,7 @@ import type {
   SessionVisibility,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { hasMultiplePresenceIdentities } from "../../lib/presence-users.ts";
@@ -23,6 +26,7 @@ import {
   parseAgentSessionKey,
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
@@ -173,6 +177,124 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     // Sharing errors stay with their session; the visible slot belongs only to the selected session.
     if (areUiSessionKeysEquivalent(this.state?.sessionKey, session)) {
       this.publishHeaderError(error, scope.headerOutcomeOwner);
+    }
+  }
+
+  protected async setSessionPublicShare(row: GatewaySessionRow, enabled: boolean): Promise<void> {
+    const scope = this.captureConnectionScope();
+    const currentRow = scope ? this.currentSessionSharingRow(scope, row) : null;
+    const expectedSessionId = currentRow?.sessionId;
+    if (!scope || !currentRow || !expectedSessionId) {
+      return;
+    }
+    const access = () =>
+      readSessionMethodAccess(scope.context.gateway.snapshot, {
+        method: "session.publicShare.set",
+        requiredScope: "operator.write",
+      }).allowed;
+    const isCurrent = () =>
+      this.ownsHeaderOutcomeScope(scope) &&
+      this.currentSessionSharingRow(scope, currentRow)?.sessionId === expectedSessionId &&
+      areUiSessionKeysEquivalent(scope.state.sessionKey, currentRow.key);
+    const cacheKey = this.sessionSharingCacheKey(currentRow.key);
+    const previous = this.sessionSharingStates.get(cacheKey);
+    if (!access() || !isCurrent() || previous?.loading) {
+      return;
+    }
+    const pending = { ...previous, loading: true, error: undefined };
+    this.setSessionSharingState(cacheKey, pending);
+    try {
+      if (enabled) {
+        const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
+        if (!isCurrent() || !access()) {
+          return;
+        }
+        const confirmed = await showConfirmDialog({
+          title: t("chat.sessionSharing.publicConfirmTitle"),
+          message: t("chat.sessionSharing.publicConfirmMessage"),
+          confirmLabel: t("chat.sessionSharing.publicConfirmEnable"),
+          danger: true,
+        });
+        if (!confirmed) {
+          return;
+        }
+      }
+      // Confirmation can outlive a route, connection, or exact session instance.
+      // Never publish a replacement session under the previous consent.
+      if (!isCurrent() || !access()) {
+        return;
+      }
+      const result = await scope.client.request<SessionPublicShareSetResult>(
+        "session.publicShare.set",
+        {
+          sessionKey: currentRow.key,
+          agentId: this.sessionSharingAgentId(currentRow.key),
+          expectedSessionId,
+          enabled,
+        },
+      );
+      if (!isCurrent()) {
+        return;
+      }
+      this.setSessionSharingState(cacheKey, {
+        loading: false,
+        ...(previous?.result
+          ? { result: { ...previous.result, publicShare: result.publicShare } }
+          : {}),
+      });
+      showToast({
+        message: t(
+          enabled ? "chat.sessionSharing.publicEnabled" : "chat.sessionSharing.publicDisabled",
+        ),
+      });
+      await this.loadSessionSharing(currentRow, true);
+    } catch (error) {
+      if (isCurrent()) {
+        this.failSharing(scope, cacheKey, currentRow.key, error);
+      }
+    } finally {
+      if (this.sessionSharingStates.get(cacheKey) === pending) {
+        this.setSessionSharingState(cacheKey, { ...previous, loading: false });
+      }
+    }
+  }
+
+  protected async copySessionPublicLink(row: GatewaySessionRow): Promise<void> {
+    const scope = this.captureConnectionScope();
+    const currentRow = scope ? this.currentSessionSharingRow(scope, row) : null;
+    if (!scope || !currentRow) {
+      return;
+    }
+    const share = this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))?.result
+      ?.publicShare;
+    const agentId = this.sessionSharingAgentId(row.key);
+    if (!share || share.sessionId !== currentRow.sessionId || !agentId) {
+      return;
+    }
+    const isCurrent = () =>
+      this.ownsHeaderOutcomeScope(scope) &&
+      this.currentSessionSharingRow(scope, currentRow)?.sessionId === share.sessionId;
+    try {
+      const gateway = scope.context.gateway;
+      const controlUiUrl = gateway.snapshot.hello?.controlUiUrl;
+      const linkBase = controlUiUrl ?? scope.client.gatewayUrl ?? gateway.connection.gatewayUrl;
+      const url = new URL(linkBase || window.location.href);
+      url.protocol = url.protocol.replace(/^ws/u, "http");
+      const path = buildControlUiPublicSessionSharePath({
+        basePath: controlUiUrl ? url.pathname : scope.context.basePath,
+        agentId,
+        sessionKey: currentRow.key,
+        sessionId: share.sessionId,
+        shareId: share.id,
+      });
+      const copied = await copyToClipboard(new URL(path, url.origin).href, isCurrent);
+      if (isCurrent()) {
+        showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.publishHeaderError(error);
+      }
     }
   }
 
