@@ -76,6 +76,8 @@ Principles:
   Ordinary revisits restore it. Gallery links with `?dashboard=expanded` explicitly
   make Dashboard main and focus it. Placement changes reuse the mounted content
   so widget frames, browser views, terminals, and chat drafts survive a swap.
+  The task toolbar and side-panel tab header align above their respective panes
+  in left/right layouts; stacked layouts keep each header above its own pane.
 - **Drag:** user drags widgets; grid auto-compacts (widgets float up, neighbors
   reflow). Resize by handle snaps to size steps. No pixel placement — for
   anyone.
