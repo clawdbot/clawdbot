@@ -95,7 +95,7 @@ describe("update run event scope guards", () => {
     const admin = makeClient("admin", "operator", ["operator.admin"]);
     const node = makeClient("node", "node", ["operator.admin"]);
     const { broadcast } = createGatewayBroadcaster({
-      clients: new Set([read.client, admin.client, node.client]),
+      clients: new GatewayClientRegistry([read.client, admin.client, node.client]),
     });
     broadcast("update.run.changed", {
       runId: "run",
