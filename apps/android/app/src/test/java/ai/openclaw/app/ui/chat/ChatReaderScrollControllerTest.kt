@@ -45,6 +45,31 @@ class ChatReaderScrollControllerTest {
     }
 
   @Test
+  fun volatileRowAtScrollEndPersistsLastStableAnchor() =
+    runTest {
+      val expectedWrite =
+        ChatReaderPositionWrite.Save(
+          ChatReaderPosition(messageId = "message-1", itemOffset = 37),
+        )
+      val positions =
+        flow {
+          emit(true to expectedWrite)
+          emit(false to ChatReaderPositionWrite.None)
+          awaitCancellation()
+        }
+      val saved = mutableListOf<ChatReaderPositionWrite>()
+      val collector =
+        launch(start = CoroutineStart.UNDISPATCHED) {
+          collectChatReaderPositionSaves(positions) { write -> saved += write }
+        }
+
+      yield()
+      collector.cancelAndJoin()
+
+      assertEquals(listOf(expectedWrite), saved)
+    }
+
+  @Test
   fun initialHistoryRestoresLatestContentAtLiveEdge() {
     val timeline = timeline(user("user-1"), assistant("assistant-1"))
 

@@ -286,13 +286,16 @@ internal suspend fun collectChatReaderPositionSaves(
 ) {
   var pendingWrite: ChatReaderPositionWrite? = null
   try {
-    positions.collectLatest { (scrolling, write) ->
-      if (write == ChatReaderPositionWrite.None) {
-        pendingWrite = null
-        return@collectLatest
+    positions.collectLatest { (scrolling, observedWrite) ->
+      val write =
+        if (observedWrite == ChatReaderPositionWrite.None) {
+          pendingWrite ?: return@collectLatest
+        } else {
+          observedWrite.also { pendingWrite = it }
+        }
+      if (scrolling) {
+        delay(250)
       }
-      pendingWrite = write
-      if (scrolling) delay(250)
       withContext(NonCancellable) {
         val saved = runCatching { persist(write) }.isSuccess
         if (saved && pendingWrite == write) pendingWrite = null
