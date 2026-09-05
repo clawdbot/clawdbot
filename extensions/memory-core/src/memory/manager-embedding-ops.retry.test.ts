@@ -132,6 +132,10 @@ describe("memory embedding batch retry boundary", () => {
         `Embeddings API input limit exceeded: max 10, got ${count}. Request id: fixture-000597000`,
     ],
     ["an explicit maximum input length", () => "embeddings max input length is 10"],
+    [
+      "an explicit maximum batch size",
+      () => "batch size is invalid, it should not be larger than 10",
+    ],
   ])(
     "splits provider errors with %s without retrying oversized requests",
     async (_label, error) => {

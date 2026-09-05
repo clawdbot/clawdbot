@@ -214,6 +214,7 @@ describe("memory embedding policy", () => {
     for (const message of [
       "Embeddings API input limit exceeded: max 10, got 33. Request id: fixture-000597000",
       "embeddings max input length is 16",
+      "batch size is invalid, it should not be larger than 20",
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(true);
       expect(isRetryableMemoryEmbeddingError(message)).toBe(false);
@@ -223,6 +224,9 @@ describe("memory embedding policy", () => {
       "embedding input exceeds maximum token length 4096",
       "embeddings max input length is unknown",
       "Embeddings API input limit exceeded",
+      "batch size is invalid, it should not be larger than unknown",
+      "batch size is invalid, it should not be smaller than 20",
+      "input size is invalid, it should not be larger than 20",
       'HTTP 400: {"code":"InvalidParameter","param":"input","message":"input must be a string"}',
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(false);
