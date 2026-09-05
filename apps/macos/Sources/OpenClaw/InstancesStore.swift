@@ -35,11 +35,46 @@ struct InstanceInfo: Identifiable, Codable {
 final class InstancesStore {
     static let shared = InstancesStore()
     let isPreview: Bool
+    private let control: ControlChannel
+    private var gateway: GatewayConnection {
+        self.control.gateway
+    }
 
-    var instances: [InstanceInfo] = []
-    var lastError: String?
-    var statusMessage: String?
-    var isLoading = false
+    private struct Output {
+        let revision: UInt64?
+        var lease: GatewayConnection.ServerLease?
+        var instances: [InstanceInfo] = []
+        var lastError: String?
+        var statusMessage: String?
+    }
+
+    private final class Refresh {
+        let revision: UInt64?
+        var lease: GatewayConnection.ServerLease?
+        var task: Task<Void, Never>?
+
+        init(revision: UInt64?) {
+            self.revision = revision
+        }
+    }
+
+    private var output: Output
+    private var activeRefresh: Refresh?
+    var instances: [InstanceInfo] {
+        self.sourceIsCurrent ? self.output.instances : []
+    }
+
+    var lastError: String? {
+        self.sourceIsCurrent ? self.output.lastError : nil
+    }
+
+    var statusMessage: String? {
+        self.sourceIsCurrent ? self.output.statusMessage : nil
+    }
+
+    var isLoading: Bool {
+        self.activeRefresh.map(self.refreshIsCurrent) == true
+    }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "instances")
     private var task: Task<Void, Never>?
@@ -51,8 +86,16 @@ final class InstancesStore {
         let presence: [PresenceEntry]
     }
 
-    init(isPreview: Bool = false) {
+    init(isPreview: Bool = false, control: ControlChannel = .shared) {
         self.isPreview = isPreview
+        self.control = control
+        self.output = Output(revision: control.gateway.selectedEndpointRevision)
+    }
+
+    isolated deinit {
+        self.task?.cancel()
+        self.eventTask?.cancel()
+        self.activeRefresh?.task?.cancel()
     }
 
     func start() {
@@ -60,9 +103,8 @@ final class InstancesStore {
         self.startCount += 1
         guard self.startCount == 1 else { return }
         guard self.task == nil else { return }
-        GatewayPushSubscription.restartTask(task: &self.eventTask) { [weak self] delivery in
-            guard let push = delivery.push else { return }
-            self?.handle(push: push)
+        GatewayPushSubscription.restartTask(task: &self.eventTask, connection: self.gateway) { [weak self] delivery in
+            self?.handle(delivery)
         }
         SimpleTaskSupport.startDetachedLoop(task: &self.task, interval: self.interval) { [weak self] in
             await self?.refresh()
@@ -78,17 +120,40 @@ final class InstancesStore {
         self.task = nil
         self.eventTask?.cancel()
         self.eventTask = nil
+        self.cancelRefresh()
     }
 
-    private func handle(push: GatewayPush) {
+    private func handle(_ delivery: GatewayConnection.PushDelivery) {
+        self.clearReplacedSource()
+        guard let push = delivery.push else {
+            if self.activeRefresh?.lease == delivery.serverLease { self.cancelRefresh() }
+            if case let .disconnected(reason) = delivery.event, delivery.isCurrent {
+                self.output.lastError = reason
+                self.output.statusMessage = nil
+            }
+            return
+        }
         switch push {
         case let .event(evt) where evt.event == "presence":
             if let payload = evt.payload {
+                self.output.lease = delivery.serverLease
                 self.handlePresenceEventPayload(payload)
             }
         case .seqGap:
-            Task { await self.refresh() }
+            self.cancelRefresh()
+            _ = self.beginRefresh()
         case let .snapshot(hello):
+            // Subscription replays are older than a read already admitted on this socket.
+            guard self.output.lease != delivery.serverLease else { return }
+            self.output.lease = delivery.serverLease
+            // The initial hello belongs to the acquisition that precedes the explicit read.
+            if let refresh = self.activeRefresh, refresh.lease == nil,
+               refresh.revision == self.output.revision
+            {
+                refresh.lease = delivery.serverLease
+            } else {
+                self.cancelRefresh()
+            }
             self.applyPresence(hello.snapshot.presence)
         default:
             break
@@ -96,45 +161,82 @@ final class InstancesStore {
     }
 
     func refresh() async {
-        if self.isLoading { return }
-        self.statusMessage = nil
-        self.isLoading = true
-        defer { self.isLoading = false }
+        guard !Task.isCancelled, let task = self.beginRefresh() else { return }
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+    }
+
+    private func beginRefresh() -> Task<Void, Never>? {
+        self.clearReplacedSource()
+        if let refresh = self.activeRefresh, self.refreshIsCurrent(refresh) { return nil }
+        self.cancelRefresh()
+        self.output.statusMessage = nil
+        let refresh = Refresh(revision: self.gateway.selectedEndpointRevision)
+        self.activeRefresh = refresh
+        let task = Task<Void, Never> { [weak self] in
+            await self?.performRefresh(refresh: refresh)
+        }
+        refresh.task = task
+        return task
+    }
+
+    private func cancelRefresh() {
+        self.activeRefresh?.task?.cancel()
+        self.activeRefresh = nil
+    }
+
+    private func refreshIsCurrent(_ refresh: Refresh) -> Bool {
+        self.activeRefresh === refresh && refresh.task?.isCancelled != true &&
+            refresh.revision == self.gateway.selectedEndpointRevision &&
+            refresh.lease.map(self.gateway.serverLeaseMatchesCurrentState) != false
+    }
+
+    private var sourceIsCurrent: Bool {
+        self.output.revision == self.gateway.selectedEndpointRevision &&
+            self.output.lease.map(self.gateway.serverLeaseMatchesCurrentRoute) != false
+    }
+
+    private func clearReplacedSource() {
+        if !self.sourceIsCurrent {
+            self.output = Output(revision: self.gateway.selectedEndpointRevision)
+        }
+    }
+
+    private func performRefresh(refresh: Refresh) async {
+        defer {
+            if self.activeRefresh === refresh { self.activeRefresh = nil }
+        }
+        guard self.refreshIsCurrent(refresh) else { return }
+        var payload: Data?
+        let reason: String
         do {
+            let lease = try await self.control.acquireServerLease()
+            guard self.refreshIsCurrent(refresh), self.gateway.serverLeaseMatchesCurrentState(lease) else { return }
+            refresh.lease = lease
+            self.output.lease = lease
             PresenceReporter.shared.sendImmediate(reason: "instances-refresh")
-            let data = try await ControlChannel.shared.request(method: "system-presence")
-            self.lastPayload = data
-            if data.isEmpty {
-                self.logger.error("instances fetch returned empty payload")
-                self.instances = [self.localFallbackInstance(reason: "no presence payload")]
-                self.lastError = nil
-                self.statusMessage = "No presence payload from gateway; showing local fallback + health probe."
-                await self.probeHealthIfNeeded(reason: "no payload")
+            let data = try await self.control.request(method: "system-presence", ifCurrentServerLease: lease)
+            guard self.refreshIsCurrent(refresh) else { return }
+            payload = data
+            let entries = data.isEmpty ? [] : try JSONDecoder().decode([PresenceEntry].self, from: data)
+            if !entries.isEmpty {
+                self.applyPresence(entries)
                 return
             }
-            let decoded = try JSONDecoder().decode([PresenceEntry].self, from: data)
-            let withIDs = self.normalizePresence(decoded)
-            if withIDs.isEmpty {
-                self.instances = [self.localFallbackInstance(reason: "no presence entries")]
-                self.lastError = nil
-                self.statusMessage = "Presence list was empty; showing local fallback + health probe."
-                await self.probeHealthIfNeeded(reason: "empty list")
-            } else {
-                self.instances = withIDs
-                self.lastError = nil
-                self.statusMessage = nil
-            }
+            reason = data.isEmpty ? "no presence payload" : "no presence entries"
         } catch {
+            guard !(error is CancellationError), self.refreshIsCurrent(refresh) else { return }
             self.logger.error(
                 """
                 instances fetch failed: \(error.localizedDescription, privacy: .public) \
-                len=\(self.lastPayload?.count ?? 0, privacy: .public) \
-                utf8=\(self.snippet(self.lastPayload), privacy: .public)
+                len=\(payload?.count ?? 0, privacy: .public) utf8=\(self.snippet(payload), privacy: .public)
                 """)
-            self.instances = [self.localFallbackInstance(reason: "presence decode failed")]
-            self.lastError = nil
-            self.statusMessage = "Presence data invalid; showing local fallback + health probe."
-            await self.probeHealthIfNeeded(reason: "decode failed")
+            reason = "presence decode failed"
+        }
+        self.output.instances = [self.localFallbackInstance(reason: reason)]
+        self.output.lastError = nil
+        self.output.statusMessage = "Presence unavailable (\(reason)); showing local fallback."
+        if let lease = refresh.lease {
+            await self.probeHealthIfNeeded(reason: reason, lease: lease, refresh: refresh)
         }
     }
 
@@ -163,9 +265,6 @@ final class InstancesStore {
 
     // MARK: - Helpers
 
-    /// Keep the last raw payload for logging.
-    private var lastPayload: Data?
-
     private func snippet(_ data: Data?, limit: Int = 256) -> String {
         guard let data else { return "<none>" }
         if data.isEmpty { return "<empty>" }
@@ -176,10 +275,10 @@ final class InstancesStore {
         return "<\(data.count) bytes non-utf8>"
     }
 
-    private func probeHealthIfNeeded(reason: String? = nil) async {
+    private func probeHealthIfNeeded(reason: String, lease: GatewayConnection.ServerLease, refresh: Refresh) async {
         do {
-            let data = try await ControlChannel.shared.health(timeout: 8)
-            guard let snap = decodeHealthSnapshot(from: data) else { return }
+            let data = try await self.control.health(timeout: 8, ifCurrentServerLease: lease)
+            guard self.refreshIsCurrent(refresh), let snap = decodeHealthSnapshot(from: data) else { return }
             let linkId = snap.channelOrder?.first(where: {
                 if let summary = snap.channels[$0] { return summary.linked != nil }
                 return false
@@ -206,27 +305,27 @@ final class InstancesStore {
                 text: "Health ok · \(linkLabel) linked=\(linked)",
                 ts: snap.ts)
             if !self.instances.contains(where: { $0.id == entry.id }) {
-                self.instances.insert(entry, at: 0)
+                self.output.instances.insert(entry, at: 0)
             }
-            self.lastError = nil
-            self.statusMessage =
-                "Presence unavailable (\(reason ?? "refresh")); showing health probe + local fallback."
+            self.output.lastError = nil
+            self.output.statusMessage =
+                "Presence unavailable (\(reason)); showing health probe + local fallback."
         } catch {
+            guard self.refreshIsCurrent(refresh) else { return }
             self.logger.error("instances health probe failed: \(error.localizedDescription, privacy: .public)")
-            if let reason {
-                self.statusMessage =
-                    "Presence unavailable (\(reason)), health probe failed: \(error.localizedDescription)"
-            }
+            self.output.statusMessage =
+                "Presence unavailable (\(reason)), health probe failed: \(error.localizedDescription)"
         }
     }
 
     func handlePresenceEventPayload(_ payload: OpenClawProtocol.AnyCodable) {
         do {
             let wrapper = try GatewayPayloadDecoding.decode(payload, as: PresenceEventPayload.self)
+            self.cancelRefresh()
             self.applyPresence(wrapper.presence)
         } catch {
             self.logger.error("presence event decode failed: \(error.localizedDescription, privacy: .public)")
-            self.lastError = error.localizedDescription
+            self.output.lastError = error.localizedDescription
         }
     }
 
@@ -251,9 +350,9 @@ final class InstancesStore {
 
     private func applyPresence(_ entries: [PresenceEntry]) {
         let withIDs = self.normalizePresence(entries)
-        self.instances = withIDs
-        self.statusMessage = nil
-        self.lastError = nil
+        self.output.instances = withIDs
+        self.output.statusMessage = nil
+        self.output.lastError = nil
     }
 }
 
@@ -287,8 +386,8 @@ extension InstancesStore {
             ts: Date().timeIntervalSince1970 * 1000 - 45000),
     ]) -> InstancesStore {
         let store = InstancesStore(isPreview: true)
-        store.instances = instances
-        store.statusMessage = "Preview data"
+        store.output.instances = instances
+        store.output.statusMessage = "Preview data"
         return store
     }
 }

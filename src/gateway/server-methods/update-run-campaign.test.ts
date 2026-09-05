@@ -1,6 +1,6 @@
 // update.run campaign tests cover failure release and concurrent campaign ownership.
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateScheduleState } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,6 +8,16 @@ import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateCampaignController } from "../../infra/update-campaign.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+
+let ledgerHome: TempHomeEnv | undefined;
+beforeEach(async () => {
+  ledgerHome = await createTempHomeEnv("openclaw-update-campaign-rpc-");
+});
+afterEach(async () => {
+  await ledgerHome?.restore();
+  ledgerHome = undefined;
+});
 
 let currentCampaignId: string | undefined;
 let updateSchedule: UpdateScheduleState | null;

@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 
 type ReleasePrepareMode = "check" | "shadow" | "write";
@@ -231,21 +233,21 @@ export function buildReleasePreparationManifest(params: {
   };
 }
 
-export function main(argv = process.argv.slice(2)): number {
+export async function main(argv = process.argv.slice(2)): Promise<number> {
   const args = parseReleasePrepareArgs(argv);
   if (args.help) {
     printUsage();
     return 0;
   }
   const steps = createReleasePrepareSteps(args);
-  const before = readWorktreeState(args.rootDir);
+  const before = await readWorktreeState(args.rootDir);
   const results = runReleasePrepareSteps({
     cwd: args.rootDir,
     json: args.json,
     mode: args.mode,
     steps,
   });
-  const after = readWorktreeState(args.rootDir);
+  const after = await readWorktreeState(args.rootDir);
   const manifest = buildReleasePreparationManifest({
     after,
     before,
@@ -290,10 +292,26 @@ export function runReleasePrepareStep(
   return result.status ?? 1;
 }
 
-export function readWorktreeState(rootDir: string): WorktreeState {
+export async function readWorktreeState(rootDir: string): Promise<WorktreeState> {
   const head = git(rootDir, ["rev-parse", "HEAD"]);
   const status = git(rootDir, ["status", "--porcelain=v1", "--untracked-files=all"]);
-  const diff = git(rootDir, ["diff", "--binary", "HEAD"]);
+  const fingerprint = crypto.createHash("sha256").update(`${head}\0${status}\0`);
+  // Generated locale diffs can exceed buffered child-output limits. Hash every
+  // byte as it arrives, and publish the digest only after Git closes successfully.
+  const diffExit = await runManagedCommand({
+    bin: "git",
+    args: ["diff", "--binary", "HEAD"],
+    cwd: rootDir,
+    stdio: ["ignore", "pipe", "inherit"],
+    onReady(child) {
+      expectDefined(child.stdout, "git diff output").on("data", (chunk: Buffer) => {
+        fingerprint.update(chunk);
+      });
+    },
+  });
+  if (diffExit !== 0) {
+    throw new Error(`git diff --binary HEAD failed (exit ${diffExit})`);
+  }
   const packageJson = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8")) as {
     version?: unknown;
   };
@@ -305,7 +323,7 @@ export function readWorktreeState(rootDir: string): WorktreeState {
     .toSorted();
   return {
     changedFiles,
-    fingerprint: crypto.createHash("sha256").update(`${head}\0${status}\0${diff}`).digest("hex"),
+    fingerprint: fingerprint.digest("hex"),
     head,
     packageVersion,
     status,
@@ -326,8 +344,7 @@ function git(cwd: string, args: string[]): string {
     cwd,
     encoding: "utf8",
     env: process.env,
-    // Version preparation can legitimately create multi-megabyte generated diffs.
-    // Keep the fingerprint capture bounded without inheriting Node's 1 MiB default.
+    // Bound metadata capture; the larger generated diff is streamed separately.
     maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -375,7 +392,7 @@ function printUsage(): void {
       "  --write    align versions and refresh version-owned generated metadata",
       "",
       "Options:",
-      "  --android         include the independently pinned Android release train",
+      "  --android         prepare shared mobile and Android release metadata",
       "  --jobs <count>    preflight concurrency, 1 through 16 (default: 4)",
       "  --manifest <path> override the git-local candidate manifest path",
       "  --json            emit machine-readable output",
@@ -386,7 +403,7 @@ function printUsage(): void {
 
 if (import.meta.main) {
   try {
-    process.exitCode = main();
+    process.exitCode = await main();
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

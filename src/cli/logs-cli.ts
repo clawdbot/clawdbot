@@ -114,7 +114,7 @@ const JOURNAL_MAX_LIMIT = 5000;
 const JOURNAL_MAX_BYTES = 1_000_000;
 
 function parsePositiveInt(value: string | undefined, fallback: number, flag: string): number {
-  if (!value) {
+  if (value === undefined) {
     return fallback;
   }
   const parsed = parseStrictPositiveInteger(value);

@@ -9,6 +9,7 @@ import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.GatewaySessionRouting
 import ai.openclaw.app.gateway.QuestionAnswers
 import ai.openclaw.app.gateway.QuestionGetResult
 import ai.openclaw.app.gateway.QuestionListResult
@@ -23,6 +24,7 @@ import ai.openclaw.app.parseGatewayModels
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.chat.chatModelSendBlocked
 import ai.openclaw.app.ui.chat.thinkingSupportedForSelection
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -179,6 +181,7 @@ class ChatController internal constructor(
   private val gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
   private val gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null },
   private val currentGatewayCatalogRevision: () -> Long = { 0L },
+  private val sessionRouting: () -> GatewaySessionRouting? = { null },
   private val captureRequestLease: (gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease? =
     { gatewayScope ->
       GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _, withEnqueue ->
@@ -240,6 +243,7 @@ class ChatController internal constructor(
     gatewayAdvertisesMethod = gatewayAdvertisesMethod,
     gatewayAdvertisesCapability = gatewayAdvertisesCapability,
     currentGatewayCatalogRevision = currentGatewayCatalogRevision,
+    sessionRouting = { session.sessionRouting },
     captureRequestLease = { gatewayScope ->
       session.captureRequestLease(gatewayScope?.gatewayId)
     },
@@ -392,6 +396,7 @@ class ChatController internal constructor(
     _pendingSessionSettingsKeys.asStateFlow()
   private val settingsMutationRevisions = mutableMapOf<ChatCacheScope?, Long>()
   private val activeSessionReads = mutableSetOf<SessionSettingsRead>()
+  private val progressCardUpgradeError = nativeText("Update the gateway to load progress cards for this agent.")
   private val sessionSettingsRefreshError = nativeText("Could not refresh session settings. Refresh before sending.")
 
   // Guarded by gatewayScopeApplyLock; stable gateway keys retain choices across reconnects.
@@ -979,6 +984,7 @@ class ChatController internal constructor(
   }
 
   private fun refreshConnectedGateway() {
+    refreshProgressCard()
     refreshQuestions()
     refreshHistoryForRecovery(forceHealth = true)
   }
@@ -7058,29 +7064,71 @@ class ChatController internal constructor(
   }
 
   private fun refreshProgressCard() {
+    val generation = progressCardFetchGeneration.incrementAndGet()
     if (gatewayAdvertisesMethod("progressCard.get") == false) return
     val sessionKey = normalizeRequestedSessionKey(_sessionKey.value)
+    val agentId = resolveAgentIdForSessionKey(sessionKey)
     val gatewayScope = currentCacheScope()
-    val generation = progressCardFetchGeneration.incrementAndGet()
+
+    fun isCurrent(): Boolean =
+      generation == progressCardFetchGeneration.get() &&
+        sameOutboxSession(sessionKey, _sessionKey.value) &&
+        agentId == resolveAgentIdForSessionKey(_sessionKey.value) &&
+        gatewayScope == currentCacheScope()
     scope.launch {
-      if (generation != progressCardFetchGeneration.get()) return@launch
+      if (!isCurrent()) return@launch
+      // Hello may arrive while queued. Capability and dispatch must belong to the same socket.
+      val lease = captureRequestLease(gatewayScope) ?: return@launch
+
+      fun publishIfCurrent(block: () -> Unit) {
+        lease.commitIfCurrent {
+          synchronized(gatewayScopeApplyLock) { if (isCurrent()) block() }
+        }
+      }
       try {
-        val params = buildJsonObject { put("sessionKey", JsonPrimitive(sessionKey)) }
-        val response = requestGatewayBound(gatewayScope?.gatewayId, "progressCard.get", params.toString())
-        val parsed = parseChatProgressCardGetResult(json.parseToJsonElement(response))
-        if (
-          generation != progressCardFetchGeneration.get() ||
-          !sameOutboxSession(sessionKey, _sessionKey.value) ||
-          gatewayScope != currentCacheScope()
-        ) {
+        val routing = sessionRouting()
+        val keyAgent = resolveAgentIdFromMainSessionKey(sessionKey)
+        val rest = if (keyAgent == null) sessionKey else sessionKey.split(":", limit = 3).last()
+        val isMain = rest == "main" || rest == routing?.mainKey
+        val requestKey =
+          when {
+            sessionKey == "global" || (routing?.mainSessionKey == "global" && isMain) -> "global"
+            agentId != null && !routing?.mainKey.isNullOrBlank() && isMain -> "agent:$agentId:${routing.mainKey}"
+            agentId != null && keyAgent == null -> "agent:$agentId:$sessionKey"
+            else -> sessionKey
+          }
+        if (requestKey == "global" && (agentId == null || gatewayAdvertisesCapability("progress-card-agent-scope-v1") != true)) {
+          publishIfCurrent {
+            if (_errorText.value == null) updateLocalizedErrorText(progressCardUpgradeError)
+          }
           return@launch
         }
-        parsed.sessionKey?.let { progressCardScopeKey = it }
-        _progressCard.value = parsed.card
+        val expectedKey = if (requestKey == "global") "agent:$agentId:global" else requestKey.takeIf { routing != null }
+        val params =
+          buildJsonObject {
+            put("sessionKey", JsonPrimitive(requestKey))
+            if (requestKey == "global") put("agentId", JsonPrimitive(agentId))
+          }
+        val response = lease.request("progressCard.get", params.toString())
+        val parsed = parseChatProgressCardGetResult(json.parseToJsonElement(response))
+        if (!isCurrent()) return@launch
+        parsed.sessionKey?.let { key ->
+          check(agentId == null || resolveAgentIdFromMainSessionKey(key) == agentId) { "Progress card response belongs to another agent" }
+          check(expectedKey == null || key == expectedKey) { "Progress card response belongs to another session" }
+        }
+        publishIfCurrent {
+          parsed.sessionKey?.let { progressCardScopeKey = it }
+          _progressCard.value = parsed.card
+          if (_errorText.value == progressCardUpgradeError) updateErrorText(null)
+        }
       } catch (err: CancellationException) {
         throw err
-      } catch (_: Throwable) {
-        // Older gateways and malformed responses quietly leave the last durable card intact.
+      } catch (err: Throwable) {
+        if (err is GatewayRequestRejected && err.gatewayError.details?.code == "SESSION_PARTICIPATION_REQUIRED") {
+          publishIfCurrent { _progressCard.value = null }
+        }
+        // Transient failures retain the last durable card.
+        Log.w("OpenClawChat", "Progress card refresh failed: ${err.message}")
       }
     }
   }
@@ -7099,20 +7147,7 @@ class ChatController internal constructor(
       if (progressCardScopeKey == null) refreshProgressCard()
       return
     }
-    val revisionElement = payload["revision"]
-    if (revisionElement is JsonNull) {
-      clearProgressCard(clearScopeKey = false)
-      return
-    }
-    val revision =
-      (revisionElement as? JsonPrimitive)
-        ?.takeUnless { it.isString }
-        ?.content
-        ?.toLongOrNull()
-        ?.takeIf { it in 1..Int.MAX_VALUE }
-        ?.toInt()
-        ?: return
-    if (_progressCard.value?.revision == revision) return
+    // A global and ordinary row can share this wire key; only get may clear the captured target.
     refreshProgressCard()
   }
 

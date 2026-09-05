@@ -245,6 +245,7 @@ export function readTranscriptSnapshot(
 export function readTranscriptEventRows(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
+  options: { afterSeq?: number } = {},
 ): SqliteTranscriptSnapshotRow[] {
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
@@ -253,6 +254,7 @@ export function readTranscriptEventRows(
       .selectFrom("transcript_events")
       .select(["event_json", "seq"])
       .where("session_id", "=", sessionId)
+      .$if(options.afterSeq !== undefined, (query) => query.where("seq", ">", options.afterSeq!))
       .orderBy("seq", "asc"),
   ).rows;
   return rows.map((row) => ({
@@ -461,6 +463,62 @@ function parseLatestAssistantMessageEvent(
   };
 }
 
+/** Checks physical message history without loading payloads covered by the identity index. */
+export async function hasSessionTranscriptMessage(
+  scope: SessionTranscriptReadScope,
+): Promise<boolean> {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  // Classification can change during a concurrent rewrite. Both probes must see
+  // the same snapshot or an always-present message can disappear between them.
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () => {
+      const message = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("transcript_event_identities")
+          .select("seq")
+          .where("session_id", "=", resolved.sessionId)
+          .where("event_type", "=", "message")
+          .limit(1),
+      );
+      if (message) {
+        return true;
+      }
+      // Exact imports, id-less records, and nullable types need raw inspection.
+      // Build the classified sequence set once; a type-selecting join can rescan
+      // the covering type index for every event in a metadata-only transcript.
+      const classified = db
+        .selectFrom("transcript_event_identities")
+        .select("seq")
+        .where("session_id", "=", resolved.sessionId)
+        .where("event_type", "is not", null);
+      const rows = iterateSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("transcript_events")
+          .select("event_json")
+          .where("session_id", "=", resolved.sessionId)
+          .where("seq", "not in", classified)
+          .orderBy("seq", "desc"),
+      );
+      return (
+        findTranscriptEventInRows(
+          rows,
+          (event) =>
+            typeof event === "object" &&
+            event !== null &&
+            "type" in event &&
+            event.type === "message",
+        ) !== undefined
+      );
+    },
+    { databaseLabel: database.path, operationLabel: "session transcript presence" },
+  );
+}
+
 /** Finds the newest transcript record accepted by the matcher without parsing older rows. */
 export async function findTranscriptEvent(
   scope: SessionTranscriptReadScope,
@@ -485,6 +543,13 @@ export function findTranscriptEventInDatabase(
       .where("session_id", "=", sessionId)
       .orderBy("seq", "desc"),
   );
+  return findTranscriptEventInRows(rows, match);
+}
+
+function findTranscriptEventInRows(
+  rows: Iterable<{ event_json: string }>,
+  match: (event: TranscriptEvent) => boolean,
+): { event: TranscriptEvent } | undefined {
   for (const row of rows) {
     try {
       const event = JSON.parse(row.event_json) as TranscriptEvent;

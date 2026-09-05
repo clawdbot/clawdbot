@@ -26,7 +26,6 @@ import { validateExplicitMessageAccountSelection } from "./message-account-selec
 import {
   resolveMessageSendOutcome,
   type MessageActionInput,
-  type MessageActionNormalization,
   type MessageActionResult,
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
@@ -42,6 +41,7 @@ import {
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
 import { prepareMessageRoute, resolveMessageTarget } from "./message-action-routing.js";
+import { withSendNormalization } from "./message-action-send-payload.js";
 import { buildMessagePayload, executeMessageSend } from "./message-action-send.js";
 import type { MessageSendResult } from "./message.js";
 import {
@@ -56,13 +56,6 @@ const loadInternalSourceReplyPersistence = createLazyRuntimeModule(
 
 export function getToolResult(result: MessageActionResult): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
-}
-
-function withSendNormalization(
-  result: MessageActionResult,
-  normalization?: MessageActionNormalization,
-): MessageActionResult {
-  return normalization && result.kind === "send" ? { ...result, normalization } : result;
 }
 
 async function handleBroadcastAction(

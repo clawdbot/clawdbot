@@ -14,8 +14,18 @@ This is not a perfect security boundary, but it materially limits filesystem and
 
 ## What gets sandboxed
 
-- Tool execution: `exec`, `read`, `write`, `edit`, `apply_patch`, `process`, etc.
+- Tool execution: `exec`, `ls`, `read`, `write`, `edit`, `apply_patch`, `process`, etc.
 - The optional sandboxed browser (`agents.defaults.sandbox.browser`).
+
+Directory discovery uses `ls` without granting shell execution. It returns
+whole, JSON-quoted names and a filename cursor when another page is available.
+Use the same directory and returned `after` value to continue. Each page fits
+the selected model's tool-result budget; no partial filename is returned.
+
+Custom backends can provide `SandboxFsBridge.readDirectory({ filePath, cwd,
+signal })`, returning `{ name, isDirectory }` entries from their permitted
+filesystem roots. The method is optional for older plugins: `ls` is hidden when
+it is absent, and OpenClaw does not fall back to reading the host filesystem.
 
 Not sandboxed:
 

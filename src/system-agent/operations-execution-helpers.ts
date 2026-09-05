@@ -75,13 +75,7 @@ export function formatGatewayStatusLine(overview: SystemAgentOverview): string {
 
 export async function runGatewayLifecycle(
   operation: "start" | "stop" | "restart",
-  surface?: "cli" | "gateway",
 ): Promise<void | boolean> {
-  if (operation === "restart" && surface === "gateway") {
-    const { scheduleSafeGatewayRestart } = await import("../infra/restart-coordinator.js");
-    // In-process ownership prevents remote URL/config overrides from restarting another Gateway.
-    return scheduleSafeGatewayRestart({ reason: "gateway.restart.safe", delayMs: 0 }).ok;
-  }
   const lifecycle = await import("../cli/daemon-cli/lifecycle.js");
   if (operation === "start") {
     await lifecycle.runDaemonStart();

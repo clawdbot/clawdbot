@@ -16,6 +16,9 @@ import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
+  getChangedCoreTestPaths,
+  hasConfigDocInput,
+  isConfigDocSchemaSourcePath,
   hasDeadcodeScannedSource,
   hasProtocolEventCoverageInput,
   listChangedPathsFromGit,
@@ -38,6 +41,7 @@ import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
 import type { createChangedCoreTestCheck } from "./run-tsgo-core-test-shards.mts";
+import { hasImportGraphImpactOnTargets } from "./test-projects.test-support.mts";
 
 type ChangedCheckCommand = {
   coreTestCheck?: "checkBoundary" | "checkTypes";
@@ -121,12 +125,12 @@ const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|ts)|public\/themes\/[^/]+\.css)$/u;
-const MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:docs\/|README\.md$|.*\.mdx?$)/u;
+// The assertion baseline is checked by its ratchet, not consumed by Oxlint.
+const LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:docs\/|README\.md$|.*\.mdx?$|config\/assertion-safety-baseline\.txt$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
-const EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
-const SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+const TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/CHANGELOG.md",
@@ -710,6 +714,22 @@ export function createChangedCheckPlan(
   if (result.lanes.all || result.lanes.bundledChannelConfigMetadata) {
     add("bundled channel config metadata", ["check:bundled-channel-config-metadata"]);
   }
+  // Select before docs-only returns; trace schema entries without expanding config IO/loaders.
+  if (
+    result.lanes.all ||
+    result.lanes.releaseMetadata ||
+    hasConfigDocInput(result.paths) ||
+    hasImportGraphImpactOnTargets(
+      result.paths.filter(
+        (file) => /\.[cm]?[jt]sx?$/u.test(file) && !getChangedPathFacts(file).isChangedLaneTest,
+      ),
+      isConfigDocSchemaSourcePath,
+      process.cwd(),
+      { tooling: true },
+    )
+  ) {
+    add("config docs baseline", ["config:docs:check"]);
+  }
   if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
   }
@@ -773,17 +793,7 @@ export function createChangedCheckPlan(
 
   // Typechecking alone accepts extension imports; the graph guard also covers
   // shared test/tooling dependencies that core tests can pull into their graph.
-  const changedTestPaths = result.paths.filter(
-    (file) => getChangedPathFacts(file).surface !== "docs",
-  );
-  const narrowCoreTests =
-    !runAll &&
-    !lanes.core &&
-    !lanes.ui &&
-    !lanes.tooling &&
-    !lanes.liveDockerTooling &&
-    changedTestPaths.length > 0 &&
-    changedTestPaths.every((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file));
+  const narrowCoreTests = getChangedCoreTestPaths(result) !== undefined;
   if (runAll || lanes.core || lanes.coreTests || lanes.ui || lanes.tooling) {
     add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
     if (narrowCoreTests) {
@@ -804,7 +814,6 @@ export function createChangedCheckPlan(
     ]);
     add("Android version sync", ["android:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
-    add("config docs baseline", ["config:docs:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);
     return finishPlan("release metadata");
   }
@@ -859,7 +868,7 @@ export function createChangedCheckPlan(
       return (
         (surface === "source" || surface === "package" || surface === "ui") &&
         !CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath) &&
-        !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath)
+        !LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath)
       );
     });
     addTargetedLint(
@@ -1020,7 +1029,7 @@ export function createTargetedExtensionLintCommand(
     env,
     label: "extension",
     lintablePathRe: LINTABLE_EXTENSION_PATH_RE,
-    neutralPathRe: EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: EXTENSIONS_OXLINT_TS_CONFIG,
     ...options,
@@ -1036,7 +1045,7 @@ export function createTargetedScriptLintCommand(
     env,
     label: "script",
     lintablePathRe: LINTABLE_SCRIPT_PATH_RE,
-    neutralPathRe: SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: SCRIPTS_OXLINT_TS_CONFIG,
     ...options,
@@ -1061,7 +1070,7 @@ function createTargetedOxlintCommand({
         !LINTABLE_SCRIPT_PATH_RE.test(changedPath) &&
         !getChangedPathFacts(changedPath).isRootTestSource &&
         !neutralPathRe.test(changedPath) &&
-        !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
+        !LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
     )
   ) {
     return null;
@@ -1104,7 +1113,7 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
 
   const coreTestCheck = plan.commands.some((command) => command.coreTestCheck)
     ? (await import("./run-tsgo-core-test-shards.mts")).createChangedCoreTestCheck(
-        result.paths.filter((file) => getChangedPathFacts(file).surface !== "docs"),
+        getChangedCoreTestPaths(result)!,
         createSparseTsgoSkipEnv(childEnv),
       )
     : undefined;

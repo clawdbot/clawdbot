@@ -12,7 +12,7 @@ import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-run
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -180,16 +180,16 @@ function generationFactsMatch(
 
 function resolveSessionProfiles(sessionEntry: ChatMetadataSessionEntry | undefined): {
   preferredProfileId?: string;
-  lockedProfileId?: string;
+  pinnedProfileId?: string;
 } {
   const profileId = sessionEntry?.authProfileOverride?.trim();
   if (!profileId) {
     return {};
   }
-  const profileSource = resolveSessionAuthProfileOverrideSource(sessionEntry);
+  const profileSource = resolveCollapsedSessionAuthPinSource(sessionEntry);
   return {
     preferredProfileId: profileId,
-    ...(profileSource === "user" ? { lockedProfileId: profileId } : {}),
+    ...(profileSource === "user" ? { pinnedProfileId: profileId } : {}),
   };
 }
 
@@ -200,7 +200,7 @@ function sessionProjectionKey(
   return [
     normalizeAgentId(agentId),
     profiles.preferredProfileId ?? "",
-    profiles.lockedProfileId ?? "",
+    profiles.pinnedProfileId ?? "",
   ].join("\0");
 }
 
@@ -288,7 +288,7 @@ export function createGatewayChatMetadataRuntime(params: {
     assertCurrent?.();
     const profiles = resolveSessionProfiles(sessionEntry);
     const neutral =
-      profiles.preferredProfileId === undefined && profiles.lockedProfileId === undefined;
+      profiles.preferredProfileId === undefined && profiles.pinnedProfileId === undefined;
     const defaultProfileId = useRequesterDefaults ? requesterProfileId : undefined;
     // Personal selections and credentials can change without publishing a shared auth
     // generation. Keep those projections request-local, including linked session pins.
@@ -407,15 +407,17 @@ export function createGatewayChatMetadataRuntime(params: {
   };
 
   const runRefresh = async (version: number) => {
-    assertOpen();
-    await params.beforeRefresh?.();
-    // Ownership can change during preparation; build completion checks it again after suspension.
     if (version !== refreshVersion) {
       return;
     }
-    for (;;) {
-      const epoch = invalidationEpoch;
-      try {
+    assertOpen();
+    try {
+      await params.beforeRefresh?.();
+      if (version !== refreshVersion) {
+        return;
+      }
+      for (;;) {
+        const epoch = invalidationEpoch;
         const facts = captureGenerationFacts(deps);
         if (current && generationFactsMatch(current.facts, facts)) {
           return;
@@ -432,15 +434,14 @@ export function createGatewayChatMetadataRuntime(params: {
           current = generation;
           return;
         }
-      } catch (error) {
-        // A superseded build may fail after replacement starts; only its current epoch may fail readers.
-        if (version !== refreshVersion) {
-          return;
-        }
-        if (epoch === invalidationEpoch) {
-          throw error;
-        }
       }
+    } catch (error) {
+      // Invalidation and stop revoke old preparation, including its failures.
+      // Only the current refresh may settle the replacement's readers.
+      if (version !== refreshVersion) {
+        return;
+      }
+      throw error;
     }
   };
 
@@ -460,8 +461,7 @@ export function createGatewayChatMetadataRuntime(params: {
             return;
           }
           pending = undefined;
-          // One worker can absorb later invalidations and publish their generation. Settle the
-          // replacement owned by what it actually committed, not by the epoch that scheduled it.
+          // Only the current generation may settle its replacement wait.
           if (current?.epoch !== invalidationEpoch) {
             return;
           }
@@ -693,6 +693,8 @@ export function createGatewayChatMetadataRuntime(params: {
       return;
     }
     invalidationEpoch += 1;
+    refreshVersion += 1;
+    pending = undefined;
     current = undefined;
     lastError = undefined;
     replacement ??= createMetadataReplacement();

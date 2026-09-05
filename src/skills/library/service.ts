@@ -39,9 +39,10 @@ import {
   recordSkillLibraryEvent,
   requireSkillLibraryEntry,
   requireSkillLibraryProfile,
-  requireSkillLibraryUpload,
+  requireSkillLibraryUploadMetadata,
   resolveSkillLibraryActor,
   selectSkillLibraryRevision,
+  selectSkillLibraryRevisionMetadata,
   selectSkillLibraryRow,
   skillLibraryDb,
   type SkillLibraryAuthority,
@@ -281,7 +282,7 @@ export async function saveSkillLibrary(
       ({ db }) => {
         const actor = requireSkillLibraryProfile(db, authority);
         if (uploadId) {
-          const upload = requireSkillLibraryUpload(db, uploadId, authority);
+          const upload = requireSkillLibraryUploadMetadata(db, uploadId, authority);
           if (upload.slug !== params.slug) {
             throw new SkillLibraryError(
               "NOT_FOUND",
@@ -422,7 +423,7 @@ export function mutateSkillLibrary(
         case "rollback":
           if (
             !params.revision ||
-            !selectSkillLibraryRevision(db, current.skillId, params.revision)
+            !selectSkillLibraryRevisionMetadata(db, current.skillId, params.revision)
           ) {
             throw new SkillLibraryError(
               "NOT_FOUND",

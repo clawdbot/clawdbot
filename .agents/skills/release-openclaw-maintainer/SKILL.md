@@ -331,7 +331,11 @@ This gate starts only after stable publication. It is a narrow shipped-state
 closeout, not permission to heal broader `main`. Stable publication is not
 complete until `main` carries the actual shipped release state.
 
-1. Start from fresh latest `main`. Audit `release/YYYY.M.PATCH` against it and
+1. Start from fresh latest `main`. Use a same-repository PR targeting `main`,
+   with branch `release/<version>-main-closeout` and exact title
+   `chore(release): close out <version> on main`. `<version>` is the published
+   stable `YYYY.M.PATCH` (or `YYYY.M.PATCH-N` correction), without the `v` prefix.
+   Audit `release/YYYY.M.PATCH` against it and
    forward-port real fixes that are absent from `main`. Do not blindly merge
    release-only compatibility, test, or validation adapters into newer `main`.
 2. Set `main` to the shipped stable version, not a speculative next train. Run
@@ -339,7 +343,12 @@ complete until `main` carries the actual shipped release state.
    `pnpm deps:npm-lock:check`.
 3. Make `CHANGELOG.md`'s `## YYYY.M.PATCH` section on `main` exactly match the
    tagged release branch. Include the stable `appcast.xml` update when the mac
-   release published one.
+   release published one. `scripts/pr prepare-run` permits this closeout without
+   an override when `v<version>` exists on origin and the changelog diff only adds
+   or replaces that version's section (or finalizes the existing unreleased
+   section); leave all other sections and the preamble unchanged.
+   `OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1` remains an explicit override
+   for release automation outside this convention.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
    section to `main` until the operator explicitly starts that release train.
 5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
@@ -375,6 +384,14 @@ Shadow mode is the default and never runs mutating commands. Write mode aligns
 the root and macOS versions, optionally Android with `--android`, then runs only
 the version-owned generated metadata DAG. Every mode writes an exact
 HEAD/worktree-bound manifest under git metadata for cutover review.
+
+The Android train is pinned independently in `apps/android/version.json`. A
+stable release that should ship the Android APK must pin it before tagging (the
+shared mobile cutter, `scripts/mobile-release-version.ts --prepare --version
+YYYY.M.PATCH --write`, or `--android` on `release:prepare`). Tags are immutable:
+when the pin still names an older train, `pnpm release:candidate` prints a
+WARNING and the publish parent records "Android APK: skipped" instead of
+qualifying native CI, and that release cannot ship Android at all.
 
 - Version locations include:
   - `package.json`
@@ -1133,9 +1150,14 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     Compare against earlier release evidence or clawgrit reports where
     available. Call out minor regressions in the release proof; block on major
     regressions unless waived or proven noisy.
-20. Start `.github/workflows/openclaw-release-publish.yml` from the exact pinned
-    trusted workflow source with the tag for the real beta or stable publish.
-    Choose `npm_dist_tag` (`beta` by default, `latest` for intentional direct
+20. Start `.github/workflows/openclaw-release-publish.yml` with `--ref` set to
+    the protected `release-publish/<tooling-sha12>-<epoch>` tag minted at the
+    pinned trusted Tooling SHA (the candidate helper prints that command). The
+    parent refuses `main` for any publish that dispatches npm, plugin, or
+    ClawHub children: children inherit the parent's ref as their approved
+    provenance, and a `main` parent with tag-published children fails ClawHub
+    postpublish verification after core npm is already out. Only Docker-only
+    recovery may run from `main`. Choose `npm_dist_tag` (`beta` by default, `latest` for intentional direct
     stable publication), matching preflight. Pass `preflight_run_id`,
     `full_release_validation_run_id`, and its exact successful
     `full_release_validation_run_attempt`. Pass the reviewed 8-character

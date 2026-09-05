@@ -274,14 +274,14 @@ function preparedMemoryPromptContextMatches(
   prepared: PreparedMemoryPromptSection,
   params: MemoryPromptSectionParams,
 ): boolean {
-  const current = snapshotMemoryPromptContext(params);
+  // The snapshot comes from a Set, so equal size and membership ignore insertion order.
   return (
-    prepared.context.citationsMode === current.citationsMode &&
-    prepared.context.agentId === current.agentId &&
-    prepared.context.agentSessionKey === current.agentSessionKey &&
-    prepared.context.sandboxed === current.sandboxed &&
-    prepared.context.availableTools.length === current.availableTools.length &&
-    prepared.context.availableTools.every((tool, index) => tool === current.availableTools[index])
+    prepared.context.citationsMode === params.citationsMode &&
+    prepared.context.agentId === params.agentId &&
+    prepared.context.agentSessionKey === params.agentSessionKey &&
+    prepared.context.sandboxed === (params.sandboxed === true) &&
+    prepared.context.availableTools.length === params.availableTools.size &&
+    prepared.context.availableTools.every((tool) => params.availableTools.has(tool))
   );
 }
 

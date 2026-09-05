@@ -166,7 +166,7 @@ export async function createCanonicalForkNativeFixture(
         return { requirements: null };
       }
       if (method === "config/read") {
-        return { config: {}, layers: [] };
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "app/installed" || method === "app/read") {
         if (typeof params.threadId === "string" && !loaded.has(params.threadId)) {

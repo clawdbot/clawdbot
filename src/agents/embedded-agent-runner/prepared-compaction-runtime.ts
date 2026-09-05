@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
   formatActiveNodeContextLabel,
   getCurrentActiveNodeContext,
@@ -338,6 +337,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           },
           sandbox,
           sessionPermissionPolicy,
+          requireWorkspaceOnly: params.requireWorkspaceOnly,
           messageProvider: resolvedMessageProvider,
           clientCaps: params.clientCaps,
           chatType: params.chatType,
@@ -598,12 +598,11 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       capabilityToolNames: promptAllowedToolNames,
     });
     const activeProjectKeys = params.preparedModelRuntime?.activeProjectKeys ?? [];
-    const buildSystemPromptText = (defaultThinkLevel: ThinkLevel) => {
+    const buildSystemPromptText = () => {
       const builtSystemPrompt = buildEmbeddedSystemPrompt({
         config: params.config,
         agentId: sessionAgentId,
         workspaceDir: effectiveWorkspace,
-        defaultThinkLevel,
         runtimeCwd: effectiveCwd,
         reasoningLevel: params.reasoningLevel ?? "off",
         extraSystemPrompt: params.extraSystemPrompt,

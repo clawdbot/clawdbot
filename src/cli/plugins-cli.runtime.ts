@@ -978,7 +978,7 @@ export async function runPluginMarketplaceRefreshCommand(
     requireSnapshotWrite: true,
   });
   const { clearManagedPluginOfficialCatalogCache } =
-    await import("../plugins/management-service.js");
+    await import("../plugins/management-catalog.js");
   clearManagedPluginOfficialCatalogCache();
   let gatewayRefreshed = true;
   // Reused snapshots can lose install authority as they age, so their Gateway projection is stale too.

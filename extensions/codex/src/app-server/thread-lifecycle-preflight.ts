@@ -7,6 +7,10 @@ import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { buildCodexUserMcpServersThreadConfigPatchForRun } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { getCodexAppServerClientInstanceId } from "./client.js";
+import {
+  CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
+  readCodexEffectiveConfig,
+} from "./config-layer-policy.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
 import {
   isMessageOnlyCodexSourceReply,
@@ -15,7 +19,7 @@ import {
 import { assertCodexNativeHookRelayAllowed } from "./native-hook-relay.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
-import { flattenCodexDynamicToolFunctions } from "./protocol.js";
+import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import { readScheduledCodexAppManagedRequirementsFingerprint } from "./scheduled-app-authority.js";
 import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
 import { buildContextEngineBinding } from "./thread-context-engine.js";
@@ -50,7 +54,7 @@ export function resolveCodexThreadAgentDir(params: CodexStartOrResumeThreadParam
 }
 
 export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrResumeThreadParams) {
-  await assertCodexModelBackedReviewerEffectiveConfig({
+  let effectiveConfig = await assertCodexModelBackedReviewerEffectiveConfig({
     client: params.client,
     approvalsReviewer: params.appServer.approvalsReviewer,
     cwd: params.cwd,
@@ -144,17 +148,23 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
     throw new Error("Codex restricted tool surfaces require native code mode to be disabled");
   }
+  if ((restrictedToolSurface || params.nativeCodeModeEnabled !== false) && !effectiveConfig) {
+    effectiveConfig = await lifecycleTiming.measure("tool-policy-config-read", () =>
+      readCodexEffectiveConfig(params.client, params.cwd, params.signal),
+    );
+  }
   const restrictedToolSurfaceInheritedMcpServerNames = restrictedToolSurface
-    ? await lifecycleTiming.measure("restricted-tool-surface-mcp-config-read", () =>
-        readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal),
+    ? await lifecycleTiming.measure("restricted-tool-surface-mcp-policy", () =>
+        readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal, effectiveConfig),
       )
     : [];
-  if (restrictedToolSurface || imageGenerationDenied) {
+  if (restrictedToolSurface || imageGenerationDenied || params.nativeCodeModeEnabled !== false) {
     await lifecycleTiming.measure("tool-policy-config-requirements-read", () =>
       assertCodexManagedRequirementsDoNotOverrideToolPolicy(
         params.client,
         {
           restrictedToolSurface,
+          requiredNativeShell: params.nativeCodeModeEnabled !== false,
           additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
           allowedManagedRequirementsFingerprint:
             readScheduledCodexAppManagedRequirementsFingerprint(
@@ -166,6 +176,21 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         },
         params.signal,
       ),
+    );
+  }
+  const features = effectiveConfig?.config.features;
+  // Legacy managed layers outrank session flags without appearing in requirements.
+  // Their effective shell denial must fence native capture before thread startup.
+  if (
+    params.nativeCodeModeEnabled !== false &&
+    isJsonObject(features) &&
+    features.shell_tool === false &&
+    !CODEX_SESSION_OVERRIDABLE_LAYER_TYPES.has(
+      effectiveConfig?.origins?.["features.shell_tool"]?.name.type ?? "",
+    )
+  ) {
+    throw new Error(
+      "Codex native code mode requires shell_tool, but the effective shell setting cannot be overridden. Ask your administrator to allow the shell, or select a tool policy that disables native code mode; no automation authority was captured.",
     );
   }
   const ringZeroConfigFingerprint = ringZeroActive

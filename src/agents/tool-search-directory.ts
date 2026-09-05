@@ -145,28 +145,6 @@ function formatToolDirectoryEntry(entry: ToolSearchCatalogEntry): string | undef
   return `- ${name}${owner}: ${description || "No description."}`;
 }
 
-function renderToolSearchCatalogDirectory(
-  lines: string[],
-  total: number,
-  mode: ToolSearchMode,
-): string {
-  const omitted = total - lines.length;
-  const guidance =
-    mode === "code"
-      ? "Use tool_search_code with openclaw.tools.search(query), openclaw.tools.describe(id), and openclaw.tools.call(id, args)."
-      : omitted > 0
-        ? "Use tool_search to find them, then tool_describe to load a full schema before tool_call."
-        : "Call tool_describe with a listed tool name to load its full schema before using tool_call.";
-  const footer = omitted > 0 ? `${omitted} additional tools omitted. ${guidance}` : guidance;
-  return [
-    "Available deferred-schema tools:",
-    ...lines,
-    "",
-    "Policy-approved MCP and client tools may also be discoverable through search.",
-    footer,
-  ].join("\n");
-}
-
 function formatToolSearchCatalogDirectory(
   entries: ToolSearchCatalogEntry[],
   mode: ToolSearchMode,
@@ -187,22 +165,41 @@ function formatToolSearchCatalogDirectory(
     )
     .map(formatToolDirectoryEntry)
     .filter((line): line is string => Boolean(line));
-  const fullDirectory = renderToolSearchCatalogDirectory(lines, entries.length, mode);
-  if (fullDirectory.length <= MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS) {
-    return fullDirectory;
-  }
-  let low = 0;
-  let high = lines.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (
-      renderToolSearchCatalogDirectory(lines.slice(0, middle), entries.length, mode).length <=
-      MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS
-    ) {
-      low = middle;
-    } else {
-      high = middle - 1;
+  const heading = "Available deferred-schema tools:";
+  const notice = "Policy-approved MCP and client tools may also be discoverable through search.";
+  const omittedLabel = " additional tools omitted. ";
+  // Each line includes its newline; three fixed separators remain outside the rows.
+  let lineChars = lines.reduce((chars, line) => chars + line.length + 1, 0);
+  let omitted = entries.length - lines.length;
+  let guidance: string;
+  for (;;) {
+    guidance =
+      mode === "code"
+        ? "Use tool_search_code with openclaw.tools.search(query), openclaw.tools.describe(id), and openclaw.tools.call(id, args)."
+        : omitted > 0
+          ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
+          : "Use tool_search for a compact input signature or tool_describe for a full schema.";
+    if (mode === "tools") {
+      guidance +=
+        " Deferred names are not directly callable. Call tool_call with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";
+    } else if (mode === "directory") {
+      guidance +=
+        " Call a unique deferred tool name directly, or use tool_call with its id and args.";
     }
+    const footerChars =
+      guidance.length + (omitted > 0 ? String(omitted).length + omittedLabel.length : 0);
+    if (
+      heading.length + lineChars + notice.length + footerChars + 3 <=
+        MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS ||
+      lines.length === 0
+    ) {
+      break;
+    }
+    // SAFETY: this renderer owns the nonempty, dense formatted-line array.
+    // Remove excluded rows before materializing the bounded directory.
+    lineChars -= lines.pop()!.length + 1;
+    omitted += 1;
   }
-  return renderToolSearchCatalogDirectory(lines.slice(0, low), entries.length, mode);
+  const footer = omitted > 0 ? `${omitted}${omittedLabel}${guidance}` : guidance;
+  return [heading, ...lines, "", notice, footer].join("\n");
 }

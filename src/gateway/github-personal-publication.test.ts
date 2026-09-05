@@ -297,7 +297,7 @@ describe("personal publication authority and recovery", () => {
       BEGIN SELECT stop_personal_admission(); END`);
     const stopped = preparePersonalGitHubSessionAction(
       { client, context, signal: controller.signal },
-      SESSION_KEY,
+      { sessionKey: SESSION_KEY },
     );
     await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toThrow(
       "current",
@@ -648,7 +648,7 @@ describe("personal publication authority and recovery", () => {
     ).toBe(false);
     expect((await rpc("sessions.github.publish", request()))[0]).toBe(false);
     client.authenticatedUserProfile = ownProfile;
-    action = preparePersonalGitHubSessionAction({ client, context }, SESSION_KEY);
+    action = preparePersonalGitHubSessionAction({ client, context }, { sessionKey: SESSION_KEY });
     const confirm = {
       sessionKey: SESSION_KEY,
       requestId: discovered[1].pendingPersonal.result.requestId,

@@ -235,33 +235,3 @@ export async function createInitialSubagentSession(params: {
     return { status: "error", error: `child session patch failed: ${message}` };
   }
 }
-
-export async function persistInitialChildSessionRuntimeModel(params: {
-  cfg: OpenClawConfig;
-  childSessionKey: string;
-  resolvedModel?: string;
-}): Promise<string | undefined> {
-  const { provider, model } = splitModelRef(params.resolvedModel);
-  if (!model) {
-    return undefined;
-  }
-  try {
-    const target = resolveGatewaySessionStoreTarget({
-      cfg: params.cfg,
-      key: params.childSessionKey,
-    });
-    await upsertSessionEntryCore(
-      {
-        storePath: target.storePath,
-        sessionKey: target.canonicalKey,
-      },
-      {
-        model,
-        ...(provider ? { modelProvider: provider } : {}),
-      },
-    );
-    return undefined;
-  } catch (err) {
-    return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-  }
-}

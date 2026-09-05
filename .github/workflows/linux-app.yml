@@ -5,6 +5,7 @@ on:
     paths:
       - "apps/linux/**"
       - ".github/workflows/linux-app.yml"
+      - ".github/workflows/linux-app-release.yml"
   workflow_dispatch:
 
 concurrency:
@@ -102,17 +103,32 @@ jobs:
             | tee "${RUNNER_TEMP}/openclaw-gstreamer-elements.tsv"
           echo "GSTREAMER_PLUGINS_DIR=$plugins" >> "$GITHUB_ENV"
 
+      - name: Prepare pinned AppImage tools
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
+        run: |
+          set -euo pipefail
+          apps/linux/scripts/tauri-appimage-tools.sh prepare
+          apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
+
       - name: Build Linux companion bundles
         working-directory: apps/linux/src-tauri
         env:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
+          LDAI_RUNTIME_FILE: ${{ runner.temp }}/openclaw-tauri-cache/tauri/.appimage-runtime-x86_64
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
         # PR builds have no TAURI_SIGNING_PRIVATE_KEY, and the configured updater
         # pubkey makes the bundler hard-require it. Skip updater artifacts here;
         # linux-app-release.yml builds the signed updater bundles.
-        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":false,"useLocalToolsDir":false}}'
 
-      - name: Test native first-run setup without a CLI
+      - name: Finalize AppImage
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
+        run: apps/linux/scripts/finalize-appimage.sh apps/linux/src-tauri/target/release/bundle/appimage
+
+      - name: Test native first-run setup and failed Gateway startup
         id: first-run
         shell: bash
         run: |
@@ -120,6 +136,10 @@ jobs:
             /usr/bin/python3 apps/linux/tests/first_run.py \
             apps/linux/src-tauri/target/release/openclaw-desktop \
             2>&1 | tee "${RUNNER_TEMP}/linux-first-run.log"
+          xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
+            /usr/bin/python3 apps/linux/tests/first_run.py \
+            apps/linux/src-tauri/target/release/openclaw-desktop --local-start-failure \
+            2>&1 | tee -a "${RUNNER_TEMP}/linux-first-run.log"
 
       - name: Upload first-run failure log
         if: failure() && steps.first-run.outcome == 'failure'

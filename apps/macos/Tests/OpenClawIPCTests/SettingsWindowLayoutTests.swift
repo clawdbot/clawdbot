@@ -64,6 +64,9 @@ final class SettingsWindowLayoutTests: XCTestCase {
         ] {
             state.remoteTransport = transport
             window.setContentSize(size)
+            try await Self.waitForLayout(hosting, stage: "resized detail at \(size)") {
+                Self.detailScrollView(in: hosting) != nil
+            }
             for tab in [SettingsTab.general, .connection, .permissions] {
                 let previous = try XCTUnwrap(Self.detailScrollView(in: hosting))
                 NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
@@ -91,11 +94,18 @@ final class SettingsWindowLayoutTests: XCTestCase {
         }
     }
 
-    private static func makeWindow(state: AppState) -> (NSHostingView<SettingsRootView>, NSWindow) {
+    private static func makeWindow(state: AppState) -> (NSView, NSWindow) {
+        let tailscale = TailscaleService(
+            isInstalled: false,
+            isRunning: false,
+            appInstallationProbe: { false },
+            cliInstallationProbe: { false },
+            statusDataLoader: { _ in throw URLError(.notConnectedToInternet) })
         let hosting = NSHostingView(rootView: SettingsRootView(
             state: state,
             updater: nil,
-            initialTab: .permissions))
+            initialTab: .permissions)
+            .environment(tailscale))
         hosting.frame = NSRect(
             x: 0, y: 0, width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         let window = NSWindow(

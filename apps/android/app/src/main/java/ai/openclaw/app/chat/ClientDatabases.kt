@@ -139,8 +139,8 @@ internal abstract class ClientStateDatabase : RoomDatabase() {
         override suspend fun migrate(connection: SQLiteConnection) {
           connection.execSQL(
             "CREATE TABLE IF NOT EXISTS `chat_reader_positions` " +
-              "(`gatewayId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, `messageId` TEXT, " +
-              "`itemIndex` INTEGER NOT NULL, `itemOffset` INTEGER NOT NULL, `messageVersion` TEXT, " +
+              "(`gatewayId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, `messageId` TEXT NOT NULL, " +
+              "`itemOffset` INTEGER NOT NULL, `messageVersion` TEXT, " +
               "PRIMARY KEY(`gatewayId`, `sessionKey`))",
           )
         }
@@ -347,14 +347,18 @@ private class OpenedAndroidClientDatabases private constructor(
   private val context: Context,
   val gatewayCache: GatewayCacheDatabase,
   val clientState: ClientStateDatabase,
+  readerPositionFence: ChatReaderPositionFence,
 ) : AutoCloseable {
   companion object {
-    suspend fun inMemory(context: Context): OpenedAndroidClientDatabases {
+    suspend fun inMemory(
+      context: Context,
+      readerPositionFence: ChatReaderPositionFence,
+    ): OpenedAndroidClientDatabases {
       val appContext = context.applicationContext
       val state = Room.inMemoryDatabaseBuilder(appContext, ClientStateDatabase::class.java).build().openValidated()
       return try {
         val cache = Room.inMemoryDatabaseBuilder(appContext, GatewayCacheDatabase::class.java).build().openValidated()
-        OpenedAndroidClientDatabases(appContext, cache, state)
+        OpenedAndroidClientDatabases(appContext, cache, state, readerPositionFence)
       } catch (error: Throwable) {
         state.close()
         throw error
@@ -367,13 +371,14 @@ private class OpenedAndroidClientDatabases private constructor(
       clientStateName: String = CLIENT_STATE_DB_NAME,
       legacyName: String = LEGACY_CHAT_DATABASE_NAME,
       registeredGatewayIds: Set<String>? = null,
+      readerPositionFence: ChatReaderPositionFence,
     ): OpenedAndroidClientDatabases {
       val appContext = context.applicationContext
       val state = ClientStateDatabase.open(appContext, clientStateName)
       var cache: GatewayCacheDatabase? = null
       return try {
         cache = GatewayCacheDatabase.open(appContext, gatewayCacheName)
-        OpenedAndroidClientDatabases(appContext, cache, state).also { databases ->
+        OpenedAndroidClientDatabases(appContext, cache, state, readerPositionFence).also { databases ->
           databases.importLegacyStateIfNeeded(legacyName)
           databases.resolvePendingGatewayRemovals(registeredGatewayIds)
         }
@@ -389,7 +394,7 @@ private class OpenedAndroidClientDatabases private constructor(
 
   val commandOutbox = RoomChatCommandOutbox(clientState)
 
-  val readerPositionStore = ChatReaderPositionStore { clientState }
+  val readerPositionStore = ChatReaderPositionStore({ clientState }, readerPositionFence)
 
   suspend fun stageGatewayRemoval(gatewayId: String) {
     val gateway = scopedGatewayId(gatewayId) ?: return
@@ -527,6 +532,7 @@ internal class AndroidClientDatabases private constructor(
   private val initialization: Deferred<OpenedAndroidClientDatabases>,
   private val openedReference: AtomicReference<OpenedAndroidClientDatabases?>,
   private val closed: AtomicBoolean,
+  readerPositionFence: ChatReaderPositionFence,
 ) : AutoCloseable {
   companion object {
     fun start(
@@ -536,25 +542,27 @@ internal class AndroidClientDatabases private constructor(
       legacyName: String = LEGACY_CHAT_DATABASE_NAME,
       registeredGatewayIds: Set<String>? = null,
     ): AndroidClientDatabases =
-      start {
+      start { readerPositionFence ->
         OpenedAndroidClientDatabases.open(
           context = context.applicationContext,
           gatewayCacheName = gatewayCacheName,
           clientStateName = clientStateName,
           legacyName = legacyName,
           registeredGatewayIds = registeredGatewayIds,
+          readerPositionFence = readerPositionFence,
         )
       }
 
-    fun inMemory(context: Context): AndroidClientDatabases = start { OpenedAndroidClientDatabases.inMemory(context) }
+    fun inMemory(context: Context): AndroidClientDatabases = start { readerPositionFence -> OpenedAndroidClientDatabases.inMemory(context, readerPositionFence) }
 
-    private fun start(open: suspend () -> OpenedAndroidClientDatabases): AndroidClientDatabases {
+    private fun start(open: suspend (ChatReaderPositionFence) -> OpenedAndroidClientDatabases): AndroidClientDatabases {
       val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val readerPositionFence = ChatReaderPositionFence()
       val openedReference = AtomicReference<OpenedAndroidClientDatabases?>()
       val closed = AtomicBoolean(false)
       val initialization =
         scope.async {
-          val opened = open()
+          val opened = open(readerPositionFence)
           if (closed.get()) {
             opened.close()
             throw CancellationException("Android client databases closed during initialization")
@@ -566,13 +574,13 @@ internal class AndroidClientDatabases private constructor(
           }
           opened
         }
-      return AndroidClientDatabases(scope, initialization, openedReference, closed)
+      return AndroidClientDatabases(scope, initialization, openedReference, closed, readerPositionFence)
     }
   }
 
   private val transcriptCache = DeferredChatTranscriptCache(::ready)
   private val commandOutbox = DeferredChatCommandOutbox(::ready)
-  private val readerPositionStore = ChatReaderPositionStore { ready().clientState }
+  private val readerPositionStore = ChatReaderPositionStore({ ready().clientState }, readerPositionFence)
 
   fun transcriptCache(): ChatTranscriptCache = transcriptCache
 

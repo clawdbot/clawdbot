@@ -264,6 +264,9 @@ supervision opt-outs remain untouched during inference setup.
 
 Interactive OpenClaw's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero OpenClaw authority tool, `openclaw`, that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so OpenClaw has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
 
+A failed or timed-out turn ends that setup conversation with a visible error.
+Retrying starts a fresh conversation and live-checks the inference route again.
+
 The host does not parse natural-language requests into operations. Free-form
 messages — including command-looking text and questions such as "why did my
 gateway stop?" — go to the AI, which can map the request to a typed operation

@@ -103,46 +103,52 @@ function harness() {
 }
 
 describe("occupancy-driven transcript lifecycle", () => {
-  it("retains one stopped candidate across failed starts and admits synchronous initial occupancy", async () => {
-    const h = harness();
-    const identities: Array<{ sessionId: string; startedAt: string }> = [];
-    const entered = Array.from({ length: 3 }, () => createDeferred());
-    h.provider.watchOccupancy = async (request) => {
-      request.onOccupied();
-      return { ok: true, value: { stop: h.unwatch } };
-    };
-    h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
-      identities.push(request.session);
-      entered[identities.length - 1]!.resolve();
-      if (identities.length < 3) {
-        return { ok: false, error: "not ready" };
-      }
-      h.requests.push(request);
-      return { ok: true, session: request.session };
-    });
-    await withPluginRuntimeRegistryScope(h.registry, async () => {
-      const service = h.service();
-      try {
-        service.start();
-        for (let count = 1; count < 3; count++) {
-          await entered[count - 1]!.promise;
-          expect(identities).toHaveLength(count);
-          await vi.waitFor(async () =>
-            expect((await h.store.listSessionEntries())[0]?.session.stoppedAt).toBeDefined(),
-          );
-          await vi.advanceTimersByTimeAsync(5_000);
+  it.each([false, true])(
+    "retains one capture identity across failed starts (whenOccupied=%s)",
+    async (whenOccupied) => {
+      const h = harness();
+      const identities: Array<{ sessionId: string; startedAt: string }> = [];
+      const entered = Array.from({ length: 3 }, () => createDeferred());
+      h.provider.watchOccupancy = async (request) => {
+        request.onOccupied();
+        return { ok: true, value: { stop: h.unwatch } };
+      };
+      h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
+        identities.push(request.session);
+        entered[identities.length - 1]!.resolve();
+        if (identities.length < 3) {
+          return { ok: false, error: "not ready" };
         }
-        await entered[2]!.promise;
-        await h.started(1);
-        expect(
-          new Set(identities.map(({ sessionId, startedAt }) => `${sessionId}/${startedAt}`)).size,
-        ).toBe(1);
-        expect(await h.store.listSessionEntries()).toHaveLength(1);
-      } finally {
-        await service.stop();
-      }
-    });
-  });
+        h.requests.push(request);
+        return { ok: true, session: request.session };
+      });
+      await withPluginRuntimeRegistryScope(h.registry, async () => {
+        const service = h.service([{ ...h.entry, whenOccupied, sessionId: undefined }]);
+        try {
+          service.start();
+          await entered[0]!.promise;
+          for (let count = 1; count < 3; count++) {
+            await vi.waitFor(() => expect(identities).toHaveLength(count));
+            expect(identities).toHaveLength(count);
+            if (whenOccupied) {
+              await vi.waitFor(async () =>
+                expect((await h.store.listSessionEntries())[0]?.session.stoppedAt).toBeDefined(),
+              );
+            }
+            await vi.advanceTimersByTimeAsync(5_000);
+          }
+          await entered[2]!.promise;
+          await h.started(1);
+          expect(
+            new Set(identities.map(({ sessionId, startedAt }) => `${sessionId}/${startedAt}`)).size,
+          ).toBe(1);
+          expect(await h.store.listSessionEntries()).toHaveLength(1);
+        } finally {
+          await service.stop();
+        }
+      });
+    },
+  );
 
   it("expires a failed-start candidate after an empty episode outside the reopen window", async () => {
     const h = harness();

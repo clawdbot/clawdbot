@@ -24,27 +24,87 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 class ClientDatabasesTest {
   @Test
+  fun sessionDeleteWinsAfterStartedReaderPositionSave() =
+    runTest {
+      val names = databaseNames()
+      withDatabases(names) { databases ->
+        val store = databases.readerPositionStore()
+        val binding = store.bind("gateway-a", "main")
+        store.save(binding, ChatReaderPosition("message-a", 37))
+
+        store.deleteSession("gateway-a", "main")
+
+        assertNull(store.bind("gateway-a", "main").position)
+      }
+    }
+
+  @Test
+  fun sessionDeleteFencesLateReaderPositionSave() =
+    runTest {
+      val names = databaseNames()
+      withDatabases(names) { databases ->
+        val store = databases.readerPositionStore()
+        val binding = store.bind("gateway-a", "main")
+        store.deleteSession("gateway-a", "main")
+
+        store.save(binding, ChatReaderPosition("message-a", 37))
+
+        assertNull(store.bind("gateway-a", "main").position)
+      }
+    }
+
+  @Test
+  fun gatewayDeleteWinsAfterStartedReaderPositionSave() =
+    runTest {
+      val names = databaseNames()
+      withDatabases(names) { databases ->
+        val store = databases.readerPositionStore()
+        val binding = store.bind("gateway-a", "main")
+        store.save(binding, ChatReaderPosition("message-a", 37))
+
+        databases.commitGatewayRemoval("gateway-a")
+
+        assertNull(store.bind("gateway-a", "main").position)
+      }
+    }
+
+  @Test
+  fun gatewayDeleteFencesLateReaderPositionSave() =
+    runTest {
+      val names = databaseNames()
+      withDatabases(names) { databases ->
+        val store = databases.readerPositionStore()
+        val binding = store.bind("gateway-a", "main")
+        databases.commitGatewayRemoval("gateway-a")
+
+        store.save(binding, ChatReaderPosition("message-a", 37))
+
+        assertNull(store.bind("gateway-a", "main").position)
+      }
+    }
+
+  @Test
   fun readerPositionPersistsPerGatewayAndSessionAcrossReopen() =
     runTest {
       val names = databaseNames()
       withDatabases(names, setOf("gateway-a", "gateway-b")) { databases ->
         val store = databases.readerPositionStore()
-        store.save("gateway-a", "main", ChatReaderPosition("message-a", 4, 37))
-        store.save("gateway-a", "agent:main:side", ChatReaderPosition("message-side", 8, 12))
-        store.save("gateway-b", "main", ChatReaderPosition("message-b", 2, 5))
+        store.save(store.bind("gateway-a", "main"), ChatReaderPosition("message-a", 37))
+        store.save(store.bind("gateway-a", "agent:main:side"), ChatReaderPosition("message-side", 12))
+        store.save(store.bind("gateway-b", "main"), ChatReaderPosition("message-b", 5))
       }
 
       withCleanDatabases(names, setOf("gateway-a", "gateway-b")) { reopened ->
         val store = reopened.readerPositionStore()
-        assertEquals(ChatReaderPosition("message-a", 4, 37), store.load("gateway-a", "main"))
+        assertEquals(ChatReaderPosition("message-a", 37), store.bind("gateway-a", "main").position)
         assertEquals(
-          ChatReaderPosition("message-side", 8, 12),
-          store.load("gateway-a", "agent:main:side"),
+          ChatReaderPosition("message-side", 12),
+          store.bind("gateway-a", "agent:main:side").position,
         )
-        assertEquals(ChatReaderPosition("message-b", 2, 5), store.load("gateway-b", "main"))
+        assertEquals(ChatReaderPosition("message-b", 5), store.bind("gateway-b", "main").position)
         store.deleteSession("gateway-a", "main")
-        assertNull(store.load("gateway-a", "main"))
-        assertEquals(ChatReaderPosition("message-b", 2, 5), store.load("gateway-b", "main"))
+        assertNull(store.bind("gateway-a", "main").position)
+        assertEquals(ChatReaderPosition("message-b", 5), store.bind("gateway-b", "main").position)
       }
     }
 
@@ -53,24 +113,21 @@ class ClientDatabasesTest {
     runTest {
       val names = databaseNames()
       val context = RuntimeEnvironment.getApplication()
-      val v1 = ClientStateDatabase.open(context, names.state)
-      v1.controlDao().upsertMetadata(ClientStateMetadataEntity("v1-proof", "preserved"))
-      v1.close()
+      createClientStateV1Fixture(context.getDatabasePath(names.state).path)
       SQLiteDatabase.openDatabase(context.getDatabasePath(names.state).path, null, SQLiteDatabase.OPEN_READWRITE).use {
-        it.execSQL("DROP TABLE chat_reader_positions")
         it.execSQL(
-          "UPDATE room_master_table SET identity_hash = ? WHERE id = 42",
-          arrayOf<Any>("924cec9afdb455dced2592399a08f5da"),
+          "INSERT INTO client_state_metadata (`key`, value) VALUES (?, ?)",
+          arrayOf<Any>("v1-proof", "preserved"),
         )
-        it.version = 1
       }
 
       withCleanDatabases(names) { migrated ->
         assertEquals(2, migrated.clientStateDatabase().userVersion())
         assertEquals("preserved", migrated.clientStateDatabase().controlDao().metadataValue("v1-proof"))
-        val position = ChatReaderPosition("message-1", 6, 19)
-        migrated.readerPositionStore().save("gateway-a", "main", position)
-        assertEquals(position, migrated.readerPositionStore().load("gateway-a", "main"))
+        val position = ChatReaderPosition("message-1", 19)
+        val store = migrated.readerPositionStore()
+        store.save(store.bind("gateway-a", "main"), position)
+        assertEquals(position, store.bind("gateway-a", "main").position)
       }
     }
 
@@ -319,18 +376,19 @@ class ClientDatabasesTest {
       withDatabases(names, setOf("gateway-a", "gateway-b")) { first ->
         seedGateway(first, "gateway-a", "remove")
         seedGateway(first, "gateway-b", "keep")
-        first.readerPositionStore().save("gateway-a", "main", ChatReaderPosition("remove", 2, 3))
-        first.readerPositionStore().save("gateway-b", "main", ChatReaderPosition("keep", 4, 5))
+        val readerStore = first.readerPositionStore()
+        readerStore.save(readerStore.bind("gateway-a", "main"), ChatReaderPosition("remove", 3))
+        readerStore.save(readerStore.bind("gateway-b", "main"), ChatReaderPosition("keep", 5))
         first.stageGatewayRemoval("gateway-a")
       }
 
       withCleanDatabases(names, setOf("gateway-b")) { reopened ->
         assertTrue(reopened.transcriptCache().loadTranscript("gateway-a", "main", "main").isEmpty())
         assertTrue(reopened.commandOutbox().load("gateway-a").isEmpty())
-        assertNull(reopened.readerPositionStore().load("gateway-a", "main"))
+        assertNull(reopened.readerPositionStore().bind("gateway-a", "main").position)
         assertEquals(listOf("keep"), reopened.transcriptCache().loadTranscript("gateway-b", "main", "main").map { it.content.single().text })
         assertEquals(listOf("keep"), reopened.commandOutbox().load("gateway-b").map { it.text })
-        assertEquals(ChatReaderPosition("keep", 4, 5), reopened.readerPositionStore().load("gateway-b", "main"))
+        assertEquals(ChatReaderPosition("keep", 5), reopened.readerPositionStore().bind("gateway-b", "main").position)
       }
     }
 
@@ -527,6 +585,26 @@ class ClientDatabasesTest {
     val state: String,
     val legacy: String,
   )
+
+  private fun createClientStateV1Fixture(path: String) {
+    SQLiteDatabase.openOrCreateDatabase(path, null).use { database ->
+      listOf(
+        "CREATE TABLE IF NOT EXISTS `outbox_commands` (`id` TEXT NOT NULL, `gatewayId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, `text` TEXT NOT NULL, `thinkingLevel` TEXT NOT NULL, `createdAtMs` INTEGER NOT NULL, `status` TEXT NOT NULL, `retryCount` INTEGER NOT NULL, `lastError` TEXT, `gatedEpoch` INTEGER, `ownerAgentId` TEXT, PRIMARY KEY(`id`))",
+        "CREATE TABLE IF NOT EXISTS `outbox_attachments` (`id` TEXT NOT NULL, `commandId` TEXT NOT NULL, `position` INTEGER NOT NULL, `type` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `fileName` TEXT NOT NULL, `durationMs` INTEGER, `byteLength` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "CREATE INDEX IF NOT EXISTS `index_outbox_attachments_commandId` ON `outbox_attachments` (`commandId`)",
+        "CREATE TABLE IF NOT EXISTS `outbox_attachment_chunks` (`attachmentId` TEXT NOT NULL, `chunkIndex` INTEGER NOT NULL, `bytes` BLOB NOT NULL, PRIMARY KEY(`attachmentId`, `chunkIndex`))",
+        "CREATE TABLE IF NOT EXISTS `composer_send_admissions` (`id` TEXT NOT NULL, `gatewayId` TEXT NOT NULL, `ownerAgentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "CREATE TABLE IF NOT EXISTS `client_state_metadata` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))",
+        "CREATE TABLE IF NOT EXISTS `gateway_removals` (`gatewayId` TEXT NOT NULL, `phase` TEXT NOT NULL, PRIMARY KEY(`gatewayId`))",
+        "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)",
+      ).forEach(database::execSQL)
+      database.execSQL(
+        "INSERT OR REPLACE INTO room_master_table (id, identity_hash) VALUES(42, ?)",
+        arrayOf<Any>("924cec9afdb455dced2592399a08f5da"),
+      )
+      database.version = 1
+    }
+  }
 
   private fun createV2Fixture(path: String) {
     SQLiteDatabase.openOrCreateDatabase(path, null).use { database ->

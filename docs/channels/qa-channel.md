@@ -18,6 +18,7 @@ read_when:
   - `thread:<room>/<thread>`
 - Shared `channel:` and `group:` conversations are surfaced to agents as group/channel room turns, so they exercise the same visible-reply and message-tool routing policy used by Discord, Slack, Telegram, and similar transports.
 - Message sends that omit `target` and `to` preserve the inbound conversation kind: direct, group, or channel.
+- Sends in a threaded inbound conversation inherit its thread, including sends to the same explicit root target. `topLevel: true` or `threadId: null` suppresses implicit thread and reply inheritance. Explicit thread targets, thread IDs, and `replyTo` values are preserved.
 - HTTP-backed synthetic bus for inbound message injection, outbound transcript capture, thread creation, reactions, edits, deletes, and search/read actions.
 - Media-bearing streamed replies deliver attachments and the current tool trace together. A later identical text-only final is suppressed only when its caption and tool trace were already delivered successfully.
 - Host-side self-check runner that writes a Markdown report to `.artifacts/qa-e2e/`.

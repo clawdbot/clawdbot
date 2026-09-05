@@ -17,13 +17,10 @@ export {
   finalizeReplyMessageInjectionAttempt,
   resolveReplyBackendQueueMessageMismatch,
 } from "./reply-run-registry.message-injection.js";
-export {
-  createReplyOperation,
-  expireStaleReplyOperation,
-  forceClearReplyOperation,
-} from "./reply-run-registry.operation.js";
+export { createReplyOperation, forceClearReplyOperation } from "./reply-run-registry.operation.js";
 export {
   abortActiveReplyRuns,
+  captureGatewayReplyRunRestartAbort,
   abortReplyRunBySessionId,
   clearReplyRunForResetBySessionId,
   expireStaleReplyRunBySessionId,
@@ -46,6 +43,8 @@ export {
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.registry.js";
 export {
+  expireStaleReplyOperation,
+  hasCommittedReplyOperationOutcome,
   hasReplyOperationExecutionStarted,
   isReplyRunAbortableForSignal,
   isReplyRunEvidenceStale,

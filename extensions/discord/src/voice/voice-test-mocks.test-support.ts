@@ -134,7 +134,10 @@ const {
         return undefined;
       },
     ),
-    createAudioResourceMock: vi.fn() as Mock,
+    createAudioResourceMock: vi.fn(() => ({
+      playbackDuration: 0,
+      read: vi.fn(() => null),
+    })) as Mock,
     createAudioPlayerMock: vi.fn(() => ({
       on: vi.fn() as Mock,
       off: vi.fn() as Mock,
@@ -414,7 +417,12 @@ vi.mock("./audio.js", async () => {
   const { PassThrough } = await import("node:stream");
   return {
     ...actual,
-    createDiscordOpusEncodeStream: vi.fn(() => new PassThrough()),
+    createDiscordOpusEncodeStream: vi.fn(() =>
+      Object.assign(new PassThrough(), {
+        flushPartialFrame: () => false,
+        takePcmBytes: (packet: Buffer) => packet.length,
+      }),
+    ),
     createDiscordOpusPlaybackStream: vi.fn(() => new PassThrough()),
     decodeOpusStream: (...args: Parameters<typeof actual.decodeOpusStream>) =>
       decodeOpusStreamMock.getMockImplementation()

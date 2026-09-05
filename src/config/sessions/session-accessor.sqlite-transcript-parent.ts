@@ -3,7 +3,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptMessageAppendOptions } from "./session-accessor.sqlite-contract.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
@@ -13,7 +12,10 @@ import {
   isSessionTranscriptLeafControl,
   parseSessionTranscriptTreeEntry,
 } from "./transcript-tree.js";
-import { resolveVisibleTranscriptAppendParentId } from "./transcript-visible-events.js";
+import {
+  isTranscriptEntryOnVisiblePath,
+  resolveVisibleTranscriptAppendParentId,
+} from "./transcript-visible-events.js";
 
 export function resolveTranscriptMessageAppendParent<TMessage>(
   database: OpenClawAgentDatabase,
@@ -24,43 +26,60 @@ export function resolveTranscriptMessageAppendParent<TMessage>(
   if (options.parentId === undefined) {
     return tailId;
   }
-  if (options.appendIntent !== "active-branch" || tailId === options.parentId) {
+  if (options.appendIntent !== "active-branch" || tailId === options.parentId || tailId === null) {
     return options.parentId;
   }
 
+  // Active appends rebase only along known ancestry; deliberate branches keep their parent.
+  return transcriptEntryIsAncestor(database, sessionId, tailId, options.parentId)
+    ? tailId
+    : options.parentId;
+}
+
+/** Checks the durable tree directly when the materialized active-path projection is dirty. */
+export function isTranscriptEntryOnActivePathInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  entryId: string,
+): boolean {
+  return isTranscriptEntryOnVisiblePath(
+    readTranscriptNavigationEvents(database, sessionId),
+    entryId,
+  );
+}
+
+function transcriptEntryIsAncestor(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  leafId: string,
+  candidateId: string | null,
+): boolean {
   const db = getSessionKysely(database.db);
-  const countRow = executeSqliteQueryTakeFirstSync(
+  // UNION visits each parent once, so cycles terminate without a transcript-wide count.
+  // Keep dangling and null parents in the walk: they can be the requested ancestor.
+  const ancestor = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("transcript_event_identities")
-      .select((expression) => expression.fn.countAll<number | bigint>().as("count"))
-      .where("session_id", "=", sessionId),
+      .withRecursive("transcript_ancestors", (query) =>
+        query
+          .selectFrom("transcript_event_identities")
+          .select("parent_id")
+          .where("session_id", "=", sessionId)
+          .where("event_id", "=", leafId)
+          .union(
+            query
+              .selectFrom("transcript_event_identities as ti")
+              .innerJoin("transcript_ancestors as ancestor", "ti.event_id", "ancestor.parent_id")
+              .select("ti.parent_id")
+              .where("ti.session_id", "=", sessionId),
+          ),
+      )
+      .selectFrom("transcript_ancestors")
+      .select("parent_id")
+      .where("parent_id", candidateId === null ? "is" : "=", candidateId)
+      .limit(1),
   );
-  const maxAncestors = sqliteNumber(countRow?.count ?? 0);
-  let ancestorId: string | null = tailId;
-  for (let depth = 0; depth <= maxAncestors; depth += 1) {
-    if (ancestorId === options.parentId) {
-      // Active appends extend the append-only tree even when their manager snapshot is stale.
-      // Rebase only along known ancestry so deliberate branches keep their explicit parent.
-      return tailId;
-    }
-    if (ancestorId === null) {
-      break;
-    }
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("transcript_event_identities")
-        .select("parent_id")
-        .where("session_id", "=", sessionId)
-        .where("event_id", "=", ancestorId),
-    );
-    if (!row) {
-      break;
-    }
-    ancestorId = row.parent_id;
-  }
-  return options.parentId;
+  return ancestor?.parent_id === candidateId;
 }
 
 function readActiveTranscriptAppendParentId(
@@ -87,19 +106,7 @@ function readActiveTranscriptAppendParentId(
     return null;
   }
   const resolveFromNavigation = () =>
-    resolveVisibleTranscriptAppendParentId(
-      Array.from(
-        iterateSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("transcript_events")
-            .select((eb) => projectTranscriptNavigationSql(eb.ref("event_json")).as("event_json"))
-            .where("session_id", "=", sessionId)
-            .orderBy("seq", "asc"),
-        ),
-        (row) => JSON.parse(row.event_json) as unknown,
-      ),
-    );
+    resolveVisibleTranscriptAppendParentId(readTranscriptNavigationEvents(database, sessionId));
   try {
     const event = JSON.parse(latest.event_json) as unknown;
     const treeEntry = parseSessionTranscriptTreeEntry(event);
@@ -120,6 +127,24 @@ function readActiveTranscriptAppendParentId(
     // Fall through to the tolerant full-tree resolver.
   }
   return resolveFromNavigation();
+}
+
+function readTranscriptNavigationEvents(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): unknown[] {
+  const db = getSessionKysely(database.db);
+  return Array.from(
+    iterateSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("transcript_events")
+        .select((eb) => projectTranscriptNavigationSql(eb.ref("event_json")).as("event_json"))
+        .where("session_id", "=", sessionId)
+        .orderBy("seq", "asc"),
+    ),
+    (row) => JSON.parse(row.event_json) as unknown,
+  );
 }
 
 function transcriptTreeReferenceExists(

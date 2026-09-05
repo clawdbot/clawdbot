@@ -564,13 +564,6 @@ type EmbeddingCreateResponse = {
 };
 
 export function normalizeEmbeddingVector(value: unknown): number[] {
-  if (Array.isArray(value)) {
-    if (!value.every((item) => typeof item === "number" && Number.isFinite(item))) {
-      throw new Error("Embedding response contains non-numeric values");
-    }
-    return value;
-  }
-
   if (typeof value === "string") {
     const canonicalEmbedding = canonicalizeBase64(value);
     if (!canonicalEmbedding) {
@@ -585,8 +578,14 @@ export function normalizeEmbeddingVector(value: unknown): number[] {
     for (let offset = 0; offset < bytes.byteLength; offset += Float32Array.BYTES_PER_ELEMENT) {
       floats.push(view.getFloat32(offset, true));
     }
-    return floats;
+    return normalizeEmbeddingVector(floats);
   }
 
-  throw new Error("Embedding response is missing a vector");
+  if (!Array.isArray(value)) {
+    throw new Error("Embedding response is missing a vector");
+  }
+  if (!value.every((item) => typeof item === "number" && Number.isFinite(item))) {
+    throw new Error("Embedding response contains non-numeric values");
+  }
+  return value;
 }

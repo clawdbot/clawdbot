@@ -12,6 +12,7 @@ import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatReaderPosition
+import ai.openclaw.app.chat.ChatReaderPositionBinding
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -671,13 +672,12 @@ class MainViewModel private constructor(
   internal suspend fun loadChatReaderPosition(
     gatewayId: String,
     sessionKey: String,
-  ): ChatReaderPosition? = ensureRuntime().loadChatReaderPosition(gatewayId, sessionKey)
+  ): ChatReaderPositionBinding = ensureRuntime().loadChatReaderPosition(gatewayId, sessionKey)
 
   internal suspend fun saveChatReaderPosition(
-    gatewayId: String,
-    sessionKey: String,
+    binding: ChatReaderPositionBinding,
     position: ChatReaderPosition,
-  ) = ensureRuntime().saveChatReaderPosition(gatewayId, sessionKey, position)
+  ) = ensureRuntime().saveChatReaderPosition(binding, position)
 
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
   val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }

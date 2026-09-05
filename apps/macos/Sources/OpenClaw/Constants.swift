@@ -21,6 +21,7 @@ let swabbleTriggersKey = "openclaw.swabbleTriggers"
 let voiceWakeTriggerChimeKey = "openclaw.voiceWakeTriggerChime"
 let voiceWakeSendChimeKey = "openclaw.voiceWakeSendChime"
 let showDockIconKey = "openclaw.showDockIcon"
+let appIconStyleKey = "openclaw.appIconStyle"
 let defaultVoiceWakeTriggers = ["openclaw"]
 let voiceWakeMaxWords = 32
 let voiceWakeMaxWordLength = 64

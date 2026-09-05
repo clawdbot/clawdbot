@@ -1,8 +1,9 @@
 // Control UI tests cover the routed Updates settings page through a mocked Gateway.
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -77,11 +78,12 @@ suite.define(() => {
         const status = page.locator("#config-section-update .settings-status");
         await expect.poll(() => status.textContent()).toMatch(/Applying update|Update held/);
         if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "01-automatic-applying.png"),
-          });
+          await writeFile(
+            path.join(artifactDir, "01-automatic-applying.png"),
+            await takeControlUiViewportScreenshot(page, page.locator("#config-section-update"), [
+              status,
+            ]),
+          );
         }
         expect(await status.textContent()).toContain("Applying update");
         expect(await policy.isDisabled()).toBe(true);
@@ -107,11 +109,12 @@ suite.define(() => {
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
         await status.scrollIntoViewIfNeeded();
         if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "02-automatic-recovery.png"),
-          });
+          await writeFile(
+            path.join(artifactDir, "02-automatic-recovery.png"),
+            await takeControlUiViewportScreenshot(page, page.locator("#config-section-update"), [
+              status,
+            ]),
+          );
         }
         const geometry = await status.evaluate((element) => {
           const row = element.closest(".settings-row");
@@ -190,15 +193,12 @@ suite.define(() => {
         const automatic = content.getByRole("switch", { name: "Automatic updates", exact: true });
         await expect.poll(() => automatic.isChecked()).toBe(true);
         if (captureProof) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
-              suite.artifactDir,
-              "updates-settings",
-              "00-updates-checks-disabled.png",
-            ),
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "updates-settings", "00-updates-checks-disabled.png"),
+            await takeControlUiViewportScreenshot(page, page.locator("#config-section-update"), [
+              automatic,
+            ]),
+          );
         }
         expect(await checks.isChecked()).toBe(false);
         expect(await automatic.isDisabled()).toBe(true);
@@ -245,14 +245,12 @@ suite.define(() => {
         await content.getByText("Control UI commit", { exact: true }).waitFor();
 
         if (captureProof) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
-              path.join(suite.artifactDir, "updates-settings"),
-              "01-updates-countdown.png",
-            ),
-          });
+          await writeFile(
+            path.join(path.join(suite.artifactDir, "updates-settings"), "01-updates-countdown.png"),
+            await takeControlUiViewportScreenshot(page, page.locator("#config-section-update"), [
+              timer,
+            ]),
+          );
         }
 
         const writesBeforeChannelChange = (await gateway.getRequests("config.set")).length;

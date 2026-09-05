@@ -824,11 +824,11 @@ describe("user profiles", () => {
     );
   });
 
-  it("bounds generated display names to the protocol limit", () => {
+  it("bounds generated display names to the protocol limit without splitting Unicode", () => {
     const options = stateOptions();
-    const profile = ensureProfileForEmail(`${"a".repeat(300)}@example.com`, options);
+    const profile = ensureProfileForEmail(`${"a".repeat(255)}😀@example.com`, options);
 
-    expect(profile.displayName).toHaveLength(256);
+    expect(profile.displayName).toBe("a".repeat(255));
   });
 
   it.each([

@@ -2,8 +2,8 @@ import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js
 import type { McpAppChannelView } from "../agents/mcp-ui-resource.js";
 import { getMcpAppViewLease } from "../agents/mcp-ui-resource.js";
 import type { MessagePresentation } from "../interactive/payload.js";
-import { getMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
 import { createMcpAppStandaloneTicket } from "./mcp-app-standalone.js";
+import { getTailscalePublishedOrigin } from "./tailscale-published-origin.js";
 
 /** Mint one short-lived launch action only after the final reply route is known. */
 export function materializeMcpAppChannelPresentation(params: {
@@ -11,7 +11,7 @@ export function materializeMcpAppChannelPresentation(params: {
   view: McpAppChannelView;
   nowMs?: number;
 }): MessagePresentation | undefined {
-  const origin = getMcpAppChannelOrigin();
+  const origin = getTailscalePublishedOrigin();
   if (!origin) {
     return undefined;
   }

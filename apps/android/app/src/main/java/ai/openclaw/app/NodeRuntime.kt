@@ -17,6 +17,7 @@ import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatReaderPosition
+import ai.openclaw.app.chat.ChatReaderPositionBinding
 import ai.openclaw.app.chat.ChatReaderPositionStore
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
@@ -2001,9 +2002,8 @@ class NodeRuntime private constructor(
     )
 
   /**
-   * Triggers an immediate gateway reconnect when Android reports a validated transport
-   * restore, instead of waiting for the time-based backoff slot in [GatewaySession].
-   * Each session keeps ownership of desired-connection and auth-pause decisions.
+   * Wakes gateway retries when Android attaches an app-visible network.
+   * Each session keeps ownership of desired-connection, auth-pause, and readiness decisions.
    */
   private val networkMonitor = NetworkMonitor(appContext, ::retryGatewaySessionsAfterNetworkRestore)
 
@@ -2011,6 +2011,7 @@ class NodeRuntime private constructor(
     launchGatewayLifecycle {
       operatorSession.retryAfterNetworkRestore()
       nodeSession.retryAfterNetworkRestore()
+      secondaryOperatorSessions.values.toList().forEach { it.session.retryAfterNetworkRestore() }
     }
   }
 
@@ -3073,13 +3074,12 @@ class NodeRuntime private constructor(
   internal suspend fun loadChatReaderPosition(
     gatewayId: String,
     sessionKey: String,
-  ): ChatReaderPosition? = chatReaderPositionStore.load(gatewayId, sessionKey)
+  ): ChatReaderPositionBinding = chatReaderPositionStore.bind(gatewayId, sessionKey)
 
   internal suspend fun saveChatReaderPosition(
-    gatewayId: String,
-    sessionKey: String,
+    binding: ChatReaderPositionBinding,
     position: ChatReaderPosition,
-  ) = chatReaderPositionStore.save(gatewayId, sessionKey, position)
+  ) = chatReaderPositionStore.save(binding, position)
 
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = chat.listBackgroundTasks(agentId)
 

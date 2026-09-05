@@ -196,6 +196,7 @@ describe("event-driven session list refresh", () => {
     const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
 
     try {
+      await sessions.refresh({ agentId: "writer", force: true });
       await sessions.refreshList({ ...allAgentsQuery, force: true });
       await sessions.refreshList({ ...allAgentsQuery, offset: 2, append: true, force: true });
       await sessions.refreshList({ ...writerQuery, force: true });
@@ -205,6 +206,7 @@ describe("event-driven session list refresh", () => {
       emitEvent(sessionChangedEvent("agent:research:changed"));
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
+      expect(request).toHaveBeenCalledTimes(1);
       const researchDashboardRequests = request.mock.calls.filter(
         ([, params]) => (params as { hasBoard?: unknown } | undefined)?.hasBoard === true,
       );
@@ -227,6 +229,7 @@ describe("event-driven session list refresh", () => {
       emitEvent(sessionChangedEvent("agent:writer:changed"));
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
+      expect(request).toHaveBeenCalledTimes(3);
       const writerDashboardRequests = request.mock.calls.filter(
         ([, params]) => (params as { hasBoard?: unknown } | undefined)?.hasBoard === true,
       );

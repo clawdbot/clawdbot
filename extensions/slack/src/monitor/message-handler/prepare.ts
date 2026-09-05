@@ -2,7 +2,6 @@
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
-  type AckReactionScope,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,
@@ -48,6 +47,7 @@ import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-ca
 import { formatSlackTarget } from "../../target-parsing.js";
 import type { SlackAttachment, SlackFile, SlackMessageEvent } from "../../types.js";
 import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
+import { readSlackAssistantThreadContext } from "../assistant-thread-context.js";
 import {
   authorizeSlackBotRoomMessage,
   resolveSlackCommandIngress,
@@ -63,7 +63,6 @@ import {
 import {
   buildSlackAssistantThreadMetadata,
   normalizeSlackChannelType,
-  parseSlackAssistantThreadMetadata,
   resolveSlackChatType,
   type SlackAssistantThreadContext,
   type SlackMonitorContext,
@@ -203,33 +202,12 @@ async function restoreSlackAssistantThreadContextFromMetadata(params: {
     return undefined;
   }
   try {
-    const response = (await (
-      params.eventScope?.client ?? params.ctx.app.client
-    ).conversations.replies({
-      channel: params.message.channel,
-      ts: threadTs,
-      oldest: threadTs,
-      include_all_metadata: true,
-      limit: 4,
-    })) as {
-      messages?: Array<{
-        metadata?: unknown;
-      }>;
-    };
-    for (const message of response.messages ?? []) {
-      const context = parseSlackAssistantThreadMetadata(message.metadata);
-      if (!context) {
-        continue;
-      }
-      return {
-        assistantChannelId: params.message.channel,
-        threadTs,
-        userId: params.message.user,
-        channelId: context.channelId,
-        teamId: context.teamId,
-        enterpriseId: context.enterpriseId,
-      };
-    }
+    return await readSlackAssistantThreadContext({
+      client: params.eventScope?.client ?? params.ctx.app.client,
+      channelId: params.message.channel,
+      threadTs,
+      userId: params.message.user,
+    });
   } catch (err) {
     logVerbose(
       `slack assistant context restore failed channel=${params.message.channel} ts=${threadTs}: ${formatErrorMessage(err)}`,
@@ -1437,7 +1415,7 @@ export async function prepareSlackMessage(params: {
     Boolean(
       ackReaction &&
       shouldAckReactionGate({
-        scope: ctx.ackReactionScope as AckReactionScope | undefined,
+        scope: cfg.messages?.ackReactionScope,
         inboundEventKind,
         isDirect: isDirectMessage,
         isGroup: isRoomish,

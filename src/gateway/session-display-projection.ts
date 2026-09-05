@@ -15,6 +15,7 @@ type SessionDisplayProjection = {
 
 type SessionDisplayProjectionOptions = {
   flattenMarkdown?: boolean;
+  view?: "display" | "model-context";
   maxChars?: number;
 };
 
@@ -40,13 +41,13 @@ function extractUserText(message: Record<string, unknown>): string | undefined {
   return typeof message.text === "string" ? message.text : undefined;
 }
 
-/** Projects one transcript row onto visible text within the shared display budget. */
+/** Projects text after model-context selection, or applies ordinary display visibility. */
 export function projectSessionDisplayMessage(
   message: unknown,
   options: SessionDisplayProjectionOptions = {},
 ): SessionDisplayProjection | null {
   const entry = readRecord(message);
-  if (!entry) {
+  if (!entry || (options.view !== "model-context" && entry.display === false)) {
     return null;
   }
   const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";

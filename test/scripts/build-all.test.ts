@@ -40,6 +40,17 @@ function getBuildAllStep(label: string) {
   return step;
 }
 
+function buildMemoryLimit(cgroupGiB: number) {
+  // A cgroup-only fixture still reads Linux MemAvailable. Pin the host facts so
+  // concurrent CI work cannot change the admission this scenario exercises.
+  return {
+    platform: "linux",
+    availableMemoryBytes: 16 * 1024 ** 3,
+    procMemTotalBytes: 16 * 1024 ** 3,
+    cgroupMemoryLimitBytes: cgroupGiB * 1024 ** 3,
+  };
+}
+
 function withBuildCacheFixture(
   run: (fixture: {
     rootDir: string;
@@ -418,7 +429,7 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
-  it.each(["full", "package", "ciArtifacts"])(
+  it.each(["full", "package", "ciArtifacts", "strictSmoke", "pluginSdkStrictSmoke"])(
     "refuses %s before any build step or cache work when memory is insufficient",
     async (profile) => {
       const runStep = vi.fn(() => ({ status: 0 }));
@@ -434,7 +445,7 @@ describe("resolveBuildAllSteps", () => {
       const result = await runBuildAllSteps(profile, {
         env: {},
         logger,
-        memoryLimit: { cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(4),
         resolveCacheState,
         restoreCache,
         finalizeCache,
@@ -467,7 +478,7 @@ describe("resolveBuildAllSteps", () => {
         env: {},
         finalizeCache: vi.fn(() => true),
         logger: { error: vi.fn(), warn: vi.fn() },
-        memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(5),
         now: () => 0,
         resolveCacheState(step) {
           executionOrder.push(`cache:${step.label}`);
@@ -520,7 +531,7 @@ describe("resolveBuildAllSteps", () => {
       const cacheDisabledRunner = vi.fn(() => ({ status: 0 }));
       await runBuildAllSteps("ciArtifacts", {
         env: { OPENCLAW_BUILD_CACHE: "0" },
-        memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(5),
         finalizeCache: vi.fn(() => true),
         logger: { error: vi.fn(), warn: vi.fn() },
         now: () => 0,
@@ -549,18 +560,17 @@ describe("resolveBuildAllSteps", () => {
     "skips heap admission for partial profile %s",
     async (profile) => {
       const partialEnv = { MARKER: "unchanged", NODE_OPTIONS: "--max-old-space-size=256" };
-      expect(
-        resolveBuildAllTsdownPlan(profile, partialEnv, {
-          cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
-        }),
-      ).toEqual({ env: partialEnv, heapShortfall: null });
+      expect(resolveBuildAllTsdownPlan(profile, partialEnv, buildMemoryLimit(4))).toEqual({
+        env: partialEnv,
+        heapShortfall: null,
+      });
       const runStep = vi.fn<
         (invocation: ReturnType<typeof resolveBuildAllStep>) => { status: number }
       >(() => ({ status: 0 }));
       const result = await runBuildAllSteps(profile, {
         env: partialEnv,
         logger: { error: vi.fn(), warn: vi.fn() },
-        memoryLimit: { cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(4),
         resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
         runStep,
       });
@@ -609,12 +619,7 @@ describe("resolveBuildAllSteps", () => {
       const result = await runBuildAllSteps("ciArtifacts", {
         env,
         logger,
-        memoryLimit: {
-          platform: "linux",
-          availableMemoryBytes: 16 * 1024 ** 3,
-          procMemTotalBytes: 16 * 1024 ** 3,
-          cgroupMemoryLimitBytes: cgroupGiB * 1024 ** 3,
-        },
+        memoryLimit: buildMemoryLimit(cgroupGiB),
         resolveCacheState: () => ({ cacheable: true, fresh: false, reason: "missing-inputs" }),
         finalizeCache: vi.fn(() => true),
         runStep(invocation) {
@@ -755,7 +760,7 @@ describe("resolveBuildAllSteps", () => {
     );
     expect(stage.env).toMatchObject({ OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" });
     expect(stage.cache).toBeUndefined();
-    for (const profile of ["full", "package"]) {
+    for (const profile of ["full", "package", "strictSmoke", "pluginSdkStrictSmoke"]) {
       const profileSteps = resolveBuildAllSteps(profile);
       expect(profileSteps.find((step) => step.label === stage.label)).toEqual(stage);
       const labels = profileSteps.map((step) => step.label);
@@ -763,6 +768,38 @@ describe("resolveBuildAllSteps", () => {
       expect(labels.indexOf(stage.label)).toBeLessThan(labels.indexOf("check-plugin-sdk-exports"));
     }
   });
+
+  it.each(["strictSmoke", "pluginSdkStrictSmoke"])(
+    "does not validate %s after declaration publication fails",
+    async (profile) => {
+      const result = await runBuildAllSteps(profile, {
+        env: {},
+        logger: { error: vi.fn(), warn: vi.fn() },
+        memoryLimit: buildMemoryLimit(5),
+        resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+        runStep: (invocation) => ({
+          status: invocation.args.includes("scripts/write-plugin-sdk-entry-dts.ts") ? 23 : 0,
+        }),
+      });
+      const labels = result.timings.map((timing) => timing.label);
+
+      expect(result.exitCode).toBe(23);
+      expect(labels).toEqual(
+        expect.arrayContaining([
+          "tsdown-ai",
+          "tsdown-packages",
+          "tsdown-unified",
+          "write-unified-entry-dts",
+          "runtime-postbuild",
+        ]),
+      );
+      expect(labels.at(-1)).toBe("write-plugin-sdk-entry-dts");
+      expect(labels).not.toContain("check-plugin-sdk-exports");
+      for (const step of ["write-build-info", "write-cli-startup-metadata"]) {
+        expect(resolveBuildAllSteps(profile).some(({ label }) => label === step)).toBe(false);
+      }
+    },
+  );
 
   it("preserves startup metadata only for profiles that regenerate it", () => {
     const fullTsdown = resolveBuildAllSteps("full").find((step) => step.label === "tsdown-unified");
@@ -967,7 +1004,7 @@ describe("resolveBuildAllSteps", () => {
           cacheEnabled: false,
           env,
           logger: { error: vi.fn(), warn: vi.fn() },
-          memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+          memoryLimit: buildMemoryLimit(5),
           now: () => 0,
           resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
           runStep(invocation) {
@@ -1079,9 +1116,16 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("copies generated plugin assets before runtime postbuild snapshots static outputs", () => {
-    for (const profile of ["full", "package", "ciArtifacts", "qaRuntime", "sourcePerformance"]) {
+    for (const profile of [
+      "full",
+      "package",
+      "ciArtifacts",
+      "qaRuntime",
+      "sourcePerformance",
+      "strictSmoke",
+    ]) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
-      const lastTsdown = profile === "full" || profile === "package" ? "tsdown-unified" : "tsdown";
+      const lastTsdown = labels.includes("tsdown-unified") ? "tsdown-unified" : "tsdown";
       expect(labels.indexOf("plugins:assets:copy")).toBeGreaterThan(labels.indexOf(lastTsdown));
       expect(labels.indexOf("runtime-postbuild")).toBeGreaterThan(
         labels.indexOf("plugins:assets:copy"),
@@ -1095,7 +1139,7 @@ describe("resolveBuildAllSteps", () => {
   it("builds isolated external plugin output after tsdown and before runtime postbuild", () => {
     for (const profile of Object.keys(BUILD_ALL_PROFILES)) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
-      const lastTsdown = profile === "full" || profile === "package" ? "tsdown-unified" : "tsdown";
+      const lastTsdown = labels.includes("tsdown-unified") ? "tsdown-unified" : "tsdown";
       expect(labels.indexOf("external-plugins:local-dist")).toBeGreaterThan(
         labels.indexOf(lastTsdown),
       );
@@ -1131,7 +1175,14 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("keeps ui:build out of minimal backend-only profiles", () => {
-    for (const profile of ["gatewayWatch", "qaRuntime", "sourcePerformance", "cliStartup"]) {
+    for (const profile of [
+      "gatewayWatch",
+      "qaRuntime",
+      "sourcePerformance",
+      "cliStartup",
+      "strictSmoke",
+      "pluginSdkStrictSmoke",
+    ]) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
       expect(labels).not.toContain("ui:build");
     }

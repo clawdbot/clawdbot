@@ -51,10 +51,10 @@ const framePayload = {
 };
 
 describe("LogbookService capture node selection", () => {
-  const cleanups: Array<() => void> = [];
-  afterEach(() => {
+  const cleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
     for (const cleanup of cleanups.splice(0)) {
-      cleanup();
+      await cleanup();
     }
   });
 
@@ -66,8 +66,8 @@ describe("LogbookService capture node selection", () => {
       ],
       invoke: async () => framePayload,
     });
-    cleanups.push(() => {
-      service.stop();
+    cleanups.push(async () => {
+      await service.stop();
       rmSync(dataDir, { recursive: true, force: true });
     });
 
@@ -89,8 +89,8 @@ describe("LogbookService capture node selection", () => {
         return framePayload;
       },
     });
-    cleanups.push(() => {
-      service.stop();
+    cleanups.push(async () => {
+      await service.stop();
       rmSync(dataDir, { recursive: true, force: true });
     });
 
@@ -109,8 +109,8 @@ describe("LogbookService capture node selection", () => {
       nodes: [{ nodeId: "capture-node", commands: ["logbook.snapshot"] }],
       invoke: async () => ({ payload: { format: "jpeg", base64 } }),
     });
-    cleanups.push(() => {
-      service.stop();
+    cleanups.push(async () => {
+      await service.stop();
       rmSync(dataDir, { recursive: true, force: true });
     });
 
@@ -124,10 +124,10 @@ describe("LogbookService capture node selection", () => {
 });
 
 describe("LogbookService vision model selection", () => {
-  const cleanups: Array<() => void> = [];
-  afterEach(() => {
+  const cleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
     for (const cleanup of cleanups.splice(0)) {
-      cleanup();
+      await cleanup();
     }
   });
 
@@ -146,8 +146,8 @@ describe("LogbookService vision model selection", () => {
         },
       },
     });
-    cleanups.push(() => {
-      service.stop();
+    cleanups.push(async () => {
+      await service.stop();
       rmSync(dataDir, { recursive: true, force: true });
     });
 
@@ -169,8 +169,8 @@ describe("LogbookService vision model selection", () => {
         },
       },
     });
-    cleanups.push(() => {
-      service.stop();
+    cleanups.push(async () => {
+      await service.stop();
       rmSync(dataDir, { recursive: true, force: true });
     });
 
@@ -182,7 +182,7 @@ describe("LogbookService vision model selection", () => {
 });
 
 describe("LogbookService status", () => {
-  it("returns the capture-host timezone without exposing the state path", () => {
+  it("returns the capture-host timezone without exposing the state path", async () => {
     const { service, dataDir } = makeService({
       nodes: [],
       invoke: async () => framePayload,
@@ -194,7 +194,7 @@ describe("LogbookService status", () => {
       });
       expect(service.status()).not.toHaveProperty("dataDir");
     } finally {
-      service.stop();
+      await service.stop();
       rmSync(dataDir, { recursive: true, force: true });
     }
   });

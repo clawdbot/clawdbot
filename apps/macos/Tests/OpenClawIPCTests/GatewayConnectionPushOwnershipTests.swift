@@ -54,18 +54,6 @@ extension GatewayConnectionControlTests {
             #expect(AppStateStore.shared.profileAccentHex == nil)
 
             let acknowledgement = UUID().uuidString
-            let acknowledged = LockIsolated(false)
-            let observer = NotificationCenter.default.addObserver(
-                forName: .controlHeartbeat, object: nil, queue: .main)
-            { notification in
-                guard let data = notification.object as? Data,
-                      let heartbeat = try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data),
-                      heartbeat.status == acknowledgement
-                else { return }
-                acknowledged.withValue { $0 = true }
-            }
-            defer { NotificationCenter.default.removeObserver(observer) }
-
             let buffered = await connection.subscribe()
             // Leave this real subscription unread while its owner advances. The
             // live Control consumer stays free to process work on the MainActor.
@@ -121,7 +109,7 @@ extension GatewayConnectionControlTests {
                 throw error
             }
             let deadline = ContinuousClock.now + .seconds(2)
-            while !acknowledged.value,
+            while control.lastHeartbeatEvent?.status != acknowledgement,
                   !(["unavailable", "adopted"].contains(replacement) && activity.current?.sessionKey == "a-main"),
                   ContinuousClock.now < deadline
             {
@@ -137,7 +125,7 @@ extension GatewayConnectionControlTests {
                 #expect(activity.mainSessionKey == "a-main")
                 #expect(activity.current == nil)
             } else {
-                #expect(acknowledged.value)
+                #expect(control.lastHeartbeatEvent?.status == acknowledgement)
                 #expect(activity.mainSessionKey == "b-main")
                 #expect(activity.current?.sessionKey == "b-main")
                 #expect(activity.iconState == .workingMain(.job))

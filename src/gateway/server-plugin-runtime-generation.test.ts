@@ -37,10 +37,41 @@ describe("Gateway plugin runtime generation", () => {
     expect(acceptedReplacement.claim.publish(published)).toBe(true);
     expect(published).toHaveBeenCalledTimes(2);
 
-    const winningServices: PluginServicesHandle = { stop: vi.fn(async () => {}) };
+    const winningServices: PluginServicesHandle = {
+      reload: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
     expect(owner.publishServices(startupClaim, winningServices)).toBe(false);
     expect(owner.publishServices(acceptedReplacement.claim, winningServices)).toBe(true);
     expect(owner.currentServices()).toBe(winningServices);
+  });
+
+  it("keeps retired claims invalid across rejection until a replacement commits", async () => {
+    let currentServices: PluginServicesHandle | null = null;
+    const owner = createGatewayPluginRuntimeGeneration({
+      getServices: () => currentServices,
+      setServices: (services) => {
+        currentServices = services;
+      },
+    });
+    const previous = owner.currentClaim();
+    const replacement = owner.reserve();
+    const previousUnblocked = previous.waitForUnblocked();
+    replacement.retirePrevious();
+    replacement.reject();
+    await expect(previousUnblocked).resolves.toBe(false);
+    const services = { reload: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+    expect(owner.publishServices(previous, services)).toBe(false);
+    const cancelledRetry = owner.reserve();
+    cancelledRetry.reject();
+    expect(previous.isCurrent()).toBe(false);
+    const committed = owner.reserve();
+    committed.commit();
+    replacement.retirePrevious();
+    expect(committed.claim.isCurrent()).toBe(true);
+    expect(owner.publishServices(committed.claim, services)).toBe(true);
+    expect(owner.currentServices()).toBe(services);
+    expect(previous.isCurrent()).toBe(false);
   });
 
   it.each([
@@ -60,7 +91,10 @@ describe("Gateway plugin runtime generation", () => {
       committed.commit();
       const pendingSuccessor = owner.reserve();
       const discoveryStop = vi.fn();
-      const services: PluginServicesHandle = { stop: vi.fn(async () => {}) };
+      const services: PluginServicesHandle = {
+        reload: vi.fn(async () => {}),
+        stop: vi.fn(async () => {}),
+      };
       let settled = false;
       const publication = committed.claim.waitForUnblocked().then((isCurrent) => {
         settled = true;

@@ -1,4 +1,6 @@
 // WebSocket frame helpers for gateway network E2E fixtures.
+import { formatCloseValue } from "../websocket-open.mjs";
+
 type FrameSocket = {
   off?: (event: string, listener: (...args: unknown[]) => void) => unknown;
   on: (event: "message", listener: (data: unknown) => void) => unknown;
@@ -17,22 +19,6 @@ function isFrameSocket(value: unknown): value is FrameSocket {
     "once" in value &&
     typeof value.once === "function"
   );
-}
-
-function formatCloseValue(value: unknown) {
-  if (value === undefined || value === null) {
-    return "";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return value.toString();
-  }
-  if (value instanceof Uint8Array) {
-    return Buffer.from(value).toString();
-  }
-  return JSON.stringify(value) ?? "";
 }
 
 export function onceFrame(

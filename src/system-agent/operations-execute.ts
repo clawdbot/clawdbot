@@ -351,6 +351,10 @@ export async function executeSystemAgentOperation(
       });
     case "plugin-install":
       return await executePluginInstall(operation, runtime, opts);
+    case "plugin-activate-artifact": {
+      const { executePluginArtifactActivation } = await import("./plugin-artifact.js");
+      return await executePluginArtifactActivation(operation, runtime, opts);
+    }
     case "plugin-uninstall": {
       if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
         const message = [
@@ -479,49 +483,56 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "gateway-start":
-      return await applyPersistentOperation({
-        auditOperation: "gateway.start",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const runGatewayStart = ctx.deps?.runGatewayStart ?? (() => runGatewayLifecycle("start"));
-          await ctx.commit(runGatewayStart);
-          return { summary: "Started Gateway" };
-        },
-      });
     case "gateway-stop":
-      return await applyPersistentOperation({
-        auditOperation: "gateway.stop",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const runGatewayStop = ctx.deps?.runGatewayStop ?? (() => runGatewayLifecycle("stop"));
-          await ctx.commit(runGatewayStop);
-          return { summary: "Stopped Gateway" };
-        },
-      });
     case "gateway-restart":
       return await applyPersistentOperation({
-        auditOperation: "gateway.restart",
+        auditOperation: operation.kind.replace("-", "."),
         operation,
         runtime,
         opts,
         run: async (ctx) => {
-          const gatewayHosted = ctx.deps?.setupSurface === "gateway";
-          const runGatewayRestart =
-            ctx.deps?.runGatewayRestart ??
-            (() => runGatewayLifecycle("restart", gatewayHosted ? "gateway" : undefined));
-          const restarted = await ctx.commit(runGatewayRestart);
-          if (restarted === false) {
+          const action =
+            operation.kind === "gateway-start"
+              ? "start"
+              : operation.kind === "gateway-stop"
+                ? "stop"
+                : "restart";
+          if (ctx.deps?.setupSurface === "gateway") {
+            const host = ctx.deps.gatewayHostLifecycle;
+            if (!host) {
+              throw new Error(
+                "Gateway host lifecycle is unavailable. Use the service manager on the Gateway host.",
+              );
+            }
+            const result = await host.request(action, () => ctx.assertPersistentApply?.());
+            if (!result.ok) {
+              throw new Error(result.error);
+            }
+            const summary =
+              result.value.outcome === "already-running"
+                ? "Gateway already running"
+                : `Scheduled Gateway ${action}`;
+            ctx.runtime.log(summary);
+            return { summary };
+          }
+          const run =
+            action === "start"
+              ? ctx.deps?.runGatewayStart
+              : action === "stop"
+                ? ctx.deps?.runGatewayStop
+                : ctx.deps?.runGatewayRestart;
+          const result = await ctx.commit(run ?? (() => runGatewayLifecycle(action)));
+          if (result === false) {
             throw new Error("Gateway restart did not complete");
           }
-          const summary = gatewayHosted ? "Scheduled Gateway restart" : "Restarted Gateway";
-          if (gatewayHosted) {
-            ctx.runtime.log(summary);
-          }
-          return { summary };
+          return {
+            summary:
+              action === "start"
+                ? "Started Gateway"
+                : action === "stop"
+                  ? "Stopped Gateway"
+                  : "Restarted Gateway",
+          };
         },
       });
     case "open-tui": {

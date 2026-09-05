@@ -113,7 +113,10 @@ describe("followup prompt metadata carrier", () => {
       sessionId: run.run.sessionId,
       resetTriggered: false,
     });
-    operation.bindToolAuthorityFingerprint("media-authority");
+    operation.bindToolAuthoritySnapshot({
+      fingerprint: () => "media-authority",
+      project: () => "media-authority",
+    });
     const reject = vi.fn(async () => {
       throw new Error("no active turn to steer");
     });
@@ -301,6 +304,62 @@ describe("followup prompt metadata carrier", () => {
       invoker: { state: "present", kind: "person" },
     });
   });
+
+  it.each([
+    { name: "trace", first: { traceLevelOverride: "off" }, second: { traceLevelOverride: "raw" } },
+    { name: "thinking", first: { thinkLevel: "low" }, second: { thinkLevel: "high" } },
+    {
+      name: "original thinking",
+      first: { thinkLevel: "off", thinkLevelOverride: "high" },
+      second: { thinkLevel: "off", thinkLevelOverride: "off" },
+    },
+    { name: "fast", first: { fastMode: false }, second: { fastMode: true } },
+    {
+      name: "fast preference source",
+      first: { fastMode: true, fastModeOverride: false },
+      second: { fastMode: true, fastModeOverride: true },
+    },
+    {
+      name: "fast auto duration source",
+      first: { fastMode: "auto", fastModeAutoOnSeconds: 30, fastModeAutoOnSecondsOverride: false },
+      second: { fastMode: "auto", fastModeAutoOnSeconds: 30, fastModeAutoOnSecondsOverride: true },
+    },
+    {
+      name: "fast auto duration",
+      first: { fastMode: "auto", fastModeAutoOnSeconds: 30, fastModeAutoOnSecondsOverride: true },
+      second: { fastMode: "auto", fastModeAutoOnSeconds: 120, fastModeAutoOnSecondsOverride: true },
+    },
+    { name: "verbose", first: { verboseLevel: "off" }, second: { verboseLevel: "on" } },
+    { name: "reasoning", first: { reasoningLevel: "off" }, second: { reasoningLevel: "on" } },
+  ] as const)(
+    "keeps conflicting turn $name choices in separate collected replies",
+    async ({ name, first, second }) => {
+      const key = `turn-choice-collect-${name}`;
+      queueKeys.add(key);
+      const done = createDeferred();
+      const calls: FollowupRun[] = [];
+      for (const [index, settings] of [first, second, second, first].entries()) {
+        const run = createQueueTestRun({ prompt: `task ${index}`, messageId: `choice-${index}` });
+        run.run = { ...run.run, traceAuthorized: true, ...settings };
+        enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
+      }
+      scheduleFollowupDrain(key, async (run) => {
+        calls.push(run);
+        if (run.prompt.includes("task 3")) {
+          done.resolve();
+        }
+      });
+      await done.promise;
+      expect(calls).toHaveLength(3);
+      expect(calls[0]?.run).toMatchObject(first);
+      expect(calls[1]?.run).toMatchObject(second);
+      expect(calls[2]?.run).toMatchObject(first);
+      expect(calls[0]?.prompt).toContain("task 0");
+      expect(calls[1]?.prompt).toContain("task 1");
+      expect(calls[1]?.prompt).toContain("task 2");
+      expect(calls[2]?.prompt).toContain("task 3");
+    },
+  );
 
   it("removes sender authority when collected evidence identifies mixed participants", async () => {
     const clearCollection = configureChannelAdmissionEvidenceCollection(true);

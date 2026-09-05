@@ -146,6 +146,9 @@ describe("process supervisor first cancellation reason", () => {
     startup.resolve(lateAdapter);
     await Promise.resolve();
     expect(lateAdapter.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(lateAdapter.disposeMock).not.toHaveBeenCalled();
+    lateAdapter.settle("SIGKILL");
+    await run.waitForExtinction?.();
     expect(lateAdapter.disposeMock).toHaveBeenCalled();
   });
 

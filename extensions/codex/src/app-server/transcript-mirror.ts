@@ -113,6 +113,7 @@ export async function importCodexThreadHistoryToTranscript(params: {
 }
 
 async function mirrorBestEffort(params: {
+  assertWriteCurrent?: () => void;
   params: EmbeddedRunAttemptParams;
   agentId?: string;
   notifyUserMessagePersisted: UserMessagePersistenceNotifier;
@@ -136,7 +137,9 @@ async function mirrorBestEffort(params: {
       messagesSnapshot: params.result.messagesSnapshot,
       turnId: params.turnId,
     });
+    params.assertWriteCurrent?.();
     const mirrorResult = await mirror({
+      assertWriteCurrent: params.assertWriteCurrent,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: params.params.sessionId,
@@ -267,7 +270,10 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
           params.upstreamUserText,
         ),
       });
-      if (params.params.userTurnTranscriptRecorder?.getAdmissionReceipt()) {
+      const recorder = params.params.userTurnTranscriptRecorder;
+      // Hidden admissions intentionally have no annotation authority. Use the host's
+      // persisted row, since hooks can change visibility after prompt preparation.
+      if (recorder?.getAdmissionReceipt() && recorder.getPersistedMessage?.()?.display !== false) {
         const annotate = params.params.hostCapabilities.annotateCurrentUserTurn;
         if (!annotate || userPromptMessage.role !== "user") {
           throw new Error("current host admission is unavailable for native prompt annotation");
@@ -328,6 +334,7 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
 
 async function mirror(params: {
   assertCurrent?: () => void;
+  assertWriteCurrent?: () => void;
   sessionId: string;
   cwd?: string;
   sessionKey?: string;
@@ -371,11 +378,17 @@ async function mirror(params: {
     idempotencyKey ? [idempotencyKey] : [],
   );
   const transcriptTarget = resolveCodexMirrorTranscriptTarget(params);
-  params.assertCurrent?.();
+  // A queued terminal must still match its prepared outcome before committing.
+  // Publication may trigger Stop afterward; that cannot erase a committed receipt.
+  const assertWritable = () => {
+    params.assertCurrent?.();
+    params.assertWriteCurrent?.();
+  };
+  assertWritable();
   const mirrorBatch = await withCodexSessionTranscriptMirrorWriteLock(
     { ...transcriptTarget, config: params.config },
     async (transcript) => {
-      params.assertCurrent?.();
+      assertWritable();
       const nextAppendedUpdates: Array<{
         messageId: string;
         message: AgentMessage;
@@ -389,7 +402,7 @@ async function mirror(params: {
       const mirrorFacts = await transcript.readMessageFacts({
         idempotencyKeys: candidateIdempotencyKeys,
       });
-      params.assertCurrent?.();
+      assertWritable();
       for (const { dedupeIdentity, idempotencyKey, message, sourceFingerprint } of candidates) {
         const mirrorIdentity = readMirrorIdentity(message);
         const ownsRun = Boolean(
@@ -430,6 +443,7 @@ async function mirror(params: {
           }
           continue;
         }
+        assertWritable();
         const preparedUserMessage =
           transcriptMessage.role === "user"
             ? {
@@ -494,13 +508,13 @@ async function mirror(params: {
           hidden: (message as { display?: boolean }).display === false,
           message: messageToAppend,
         });
-        params.assertCurrent?.();
+        assertWritable();
         const { messageSeq, result: appended } = await transcript.appendMessageWithMessageSequence({
           message: messageToAppend,
-          ...(params.assertCurrent
+          ...(params.assertCurrent || params.assertWriteCurrent
             ? {
                 prepareMessageAfterIdempotencyCheck: (preparedMessage: typeof messageToAppend) => {
-                  params.assertCurrent?.();
+                  assertWritable();
                   return preparedMessage;
                 },
               }

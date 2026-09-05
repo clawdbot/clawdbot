@@ -69,7 +69,10 @@ import {
 } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
-import { bindActiveCronCreatorAuthorityResolver } from "./cron-creator-authority-context.js";
+import {
+  bindActiveCronCreatorAuthorityResolver,
+  bindCronManagementGrant,
+} from "./cron-creator-authority-context.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
@@ -240,6 +243,8 @@ type OpenClawCodingToolsOptions = {
   /** Task working directory for coding tools. Defaults to workspaceDir. */
   cwd?: string;
   workspaceDir?: string;
+  /** Additional containment for a trusted scheduled workspace; never weakens configured policy. */
+  requireWorkspaceOnly?: true;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   /**
    * Workspace directory that spawned subagents should inherit.
@@ -586,18 +591,19 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const includeChannelTools = toolConstructionPlan.includeChannelTools;
   const includePluginTools = toolConstructionPlan.includePluginTools;
   const workspaceOnly =
-    isMemoryFlushRun || (sessionCoreToolPolicy?.workspaceOnly ?? fsConfig.workspaceOnly === true);
+    options?.requireWorkspaceOnly === true ||
+    isMemoryFlushRun ||
+    (sessionCoreToolPolicy?.workspaceOnly ?? fsConfig.workspaceOnly === true);
   const fsPolicy = {
     workspaceOnly,
     ...(sessionPermissionPolicy ? { root: sessionPermissionPolicy.root } : {}),
   };
   const readOnly = sessionCoreToolPolicy?.readOnly ?? false;
   const applyPatchConfig = execConfig.applyPatch;
-  // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
-  // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
+  // Required file roots still constrain patches after a full-mode change; shell policy is separate.
   const applyPatchWorkspaceOnly =
-    sessionCoreToolPolicy?.applyPatchWorkspaceOnly ??
-    (workspaceOnly || applyPatchConfig?.workspaceOnly !== false);
+    workspaceOnly ||
+    (sessionCoreToolPolicy?.applyPatchWorkspaceOnly ?? applyPatchConfig?.workspaceOnly !== false);
   const applyPatchEnabled =
     !readOnly &&
     applyPatchConfig?.enabled !== false &&
@@ -668,8 +674,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       notifySessionKey: options?.runSessionKey ?? options?.sessionKey,
       sessionId: options?.sessionId,
       sessionStore: options?.config?.session?.store,
-      mainKey: options?.config?.session?.mainKey,
-      sessionScope: options?.config?.session?.scope,
       eventRouting: resolveEventSessionRoutingPolicy({
         cfg: options?.config,
         sessionKey: options?.runSessionKey ?? options?.sessionKey,
@@ -698,12 +702,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     recordToolPrepStage: options?.recordToolPrepStage,
   });
   const cronCreatorAuthorityResolver = bindActiveCronCreatorAuthorityResolver(options?.runId);
-  // A fresh exact-run capability authorizes only automation creation. Keep every
+  const cronManagementGrant = bindCronManagementGrant(options?.runId);
+  // Exact-run capabilities authorize only their automation operations. Keep every
   // other owner-only control-plane tool denied for senderless operator turns.
   const ownerOnlyCoreToolDenylist =
     options?.senderIsOwner === false
       ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-          (toolName) => toolName !== AUTOMATIONS_TOOL_NAME || !cronCreatorAuthorityResolver,
+          (toolName) =>
+            toolName !== AUTOMATIONS_TOOL_NAME ||
+            !(cronCreatorAuthorityResolver || cronManagementGrant),
         )
       : [];
   const ownerOnlyCoreToolPolicy =

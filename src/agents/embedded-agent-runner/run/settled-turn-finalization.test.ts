@@ -13,6 +13,7 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
+import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
 import { createSettledFinalizationTestInput } from "./settled-turn-finalization.test-support.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
@@ -266,6 +267,16 @@ describe("resolveSettledTurnFinalizationRequest", () => {
     expect(request({ settledTurnFinalizationAvailable: false })).toBeNull();
     expect(
       request({ payloadsWithToolMedia: [{ text: "⚠️ 🛠️ Exec failed", isError: true }] }),
+    ).toBeNull();
+    expect(
+      request({
+        payloadsWithToolMedia: buildEmbeddedRunPayloads({
+          assistantTexts: [],
+          lastAssistant: assistant,
+          lastToolError: attempt.lastToolError,
+          sessionKey: "session:settled-policy",
+        }),
+      }),
     ).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
   });
 });

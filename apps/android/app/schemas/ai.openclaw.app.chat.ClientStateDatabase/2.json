@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 2,
-    "identityHash": "636fb408cef3dd110bf8fae805b8ae37",
+    "identityHash": "dde14cb513eef9c772e6a9d943f60e4d",
     "entities": [
       {
         "tableName": "outbox_commands",
@@ -266,7 +266,7 @@
       },
       {
         "tableName": "chat_reader_positions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`gatewayId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, `messageId` TEXT, `itemIndex` INTEGER NOT NULL, `itemOffset` INTEGER NOT NULL, `messageVersion` TEXT, PRIMARY KEY(`gatewayId`, `sessionKey`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`gatewayId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, `messageId` TEXT NOT NULL, `itemOffset` INTEGER NOT NULL, `messageVersion` TEXT, PRIMARY KEY(`gatewayId`, `sessionKey`))",
         "fields": [
           {
             "fieldPath": "gatewayId",
@@ -283,12 +283,7 @@
           {
             "fieldPath": "messageId",
             "columnName": "messageId",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "itemIndex",
-            "columnName": "itemIndex",
-            "affinity": "INTEGER",
+            "affinity": "TEXT",
             "notNull": true
           },
           {
@@ -314,7 +309,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '636fb408cef3dd110bf8fae805b8ae37')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'dde14cb513eef9c772e6a9d943f60e4d')"
     ]
   }
 }

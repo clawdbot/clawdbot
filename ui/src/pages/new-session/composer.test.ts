@@ -191,6 +191,55 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it.each(["keyboard", "pointer"])(
+    "submits a selected non-skill command argument with %s",
+    (selection) => {
+      replaceSlashCommands([
+        {
+          key: "mode",
+          name: "mode",
+          description: "Choose a mode.",
+          args: "<mode>",
+          argOptions: ["fast", "careful"],
+        },
+      ]);
+      const onInput = vi.fn();
+      const onSubmit = vi.fn();
+      const { composer } = renderComposer({ onInput, onSubmit });
+      const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+      if (!textarea) {
+        throw new Error("Expected composer textarea");
+      }
+
+      textarea.value = "/mode";
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      if (selection === "keyboard") {
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+        );
+      } else {
+        composer.querySelector<HTMLElement>(".slash-menu-item")?.click();
+      }
+
+      expect(onInput).toHaveBeenLastCalledWith("/mode ");
+      const fastOption = Array.from(
+        composer.querySelectorAll<HTMLElement>(".slash-menu-item"),
+      ).find((item) => item.querySelector(".slash-menu-name")?.textContent?.trim() === "fast");
+      expect(fastOption).toBeInstanceOf(HTMLElement);
+      if (selection === "keyboard") {
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+        );
+      } else {
+        fastOption?.click();
+      }
+
+      expect(onInput).toHaveBeenLastCalledWith("/mode fast");
+      expect(onSubmit).toHaveBeenCalledOnce();
+    },
+  );
+
   it("drops a pending skill completion when the selected agent changes", async () => {
     const response = createDeferred<CommandsListResult>();
     const request = vi.fn(() => response.promise);

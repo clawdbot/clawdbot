@@ -124,7 +124,7 @@ export function createAutoRecallHook(params: {
       }
 
       const cleanResults = cleanMemorySearchResults(recall.value)
-        .map(({ result, text }) => ({ category: result.entry.category, text }))
+        .map(({ entry }) => entry)
         .slice(0, AUTO_RECALL_RESULT_CAP);
       if (cleanResults.length === 0) {
         return undefined;

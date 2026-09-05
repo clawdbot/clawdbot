@@ -1,4 +1,5 @@
-import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { toUSVString } from "node:util";
+import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -78,6 +79,10 @@ export function readSessionMaintenanceCapCandidates(params: {
   excludedKeys: ReadonlySet<string>;
 }): Record<string, SessionEntry> {
   const db = getSessionKysely(params.database.db);
+  // Only push down keys unchanged by Node/SQLite text conversion; retain exact membership below.
+  const excludedKeys = [...params.excludedKeys].filter(
+    (key) => toUSVString(key) === key && !key.includes("\0") && !/[\uFFFE\uFFFF]/u.test(key),
+  );
   const store: Record<string, SessionEntry> = {};
   for (const row of iterateSqliteQuerySync(
     params.database.db,
@@ -85,6 +90,9 @@ export function readSessionMaintenanceCapCandidates(params: {
       .selectFrom("session_nodes")
       .select([sessionEntryMetadataJson, "current_session_id", "session_key", "updated_at"])
       .where("archived_at", "is", null)
+      .$if(excludedKeys.length > 0, (query) =>
+        query.where("session_key", "not in", sqliteStringSet(excludedKeys)),
+      )
       // Stable cap ties previously inherited full-store session-key order.
       .orderBy("session_key", "asc"),
   )) {

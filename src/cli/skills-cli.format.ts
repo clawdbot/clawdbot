@@ -150,16 +150,13 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
 
   const ready = skills.filter(isReadyForAgent);
   const tableWidth = getTerminalTableWidth();
-  const rows = skills.map((skill) => {
-    const missing = formatSkillMissingSummary(skill);
-    return {
-      Status: formatSkillStatus(skill),
-      Skill: formatSkillName(skill),
-      Description: theme.muted(skill.description),
-      Source: skill.source,
-      Missing: missing ? theme.warn(missing) : "",
-    };
-  });
+  const rows = skills.map((skill) => ({
+    Status: formatSkillStatus(skill),
+    Skill: formatSkillName(skill),
+    Description: theme.muted(skill.description),
+    Source: skill.source,
+    Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
+  }));
 
   const columns = [
     { key: "Status", header: "Status", minWidth: 10 },

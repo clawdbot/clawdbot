@@ -418,16 +418,11 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       return true;
     },
     recordOutputAudio(audio, activity = {}) {
-      const turnId = ensureTurn();
-      talk.startOutputAudio({
-        turnId,
-        payload: params.talkPayloads.outputAudioStarted(),
-      });
-      harness.emit({
-        type: "output.audio.delta",
-        turnId,
-        payload: params.talkPayloads.outputAudioDelta(audio),
-      });
+      if (closed) {
+        return;
+      }
+      const flushGeneration = outputFlushGeneration;
+      // Record admitted audio before observers can clear it and its echo window.
       let audioMs = activity.audioMs;
       if (params.echoSuppression) {
         const suppression = extendRealtimeVoiceOutputEchoSuppression({
@@ -448,6 +443,22 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
         sinkAudioBytes: activity.sinkAudioBytes ?? audio.byteLength,
       });
       lastOutputAt = new Date().toISOString();
+      const turnId = ensureTurn();
+      if (closed || flushGeneration !== outputFlushGeneration) {
+        return;
+      }
+      talk.startOutputAudio({
+        turnId,
+        payload: params.talkPayloads.outputAudioStarted(),
+      });
+      if (closed || flushGeneration !== outputFlushGeneration) {
+        return;
+      }
+      harness.emit({
+        type: "output.audio.delta",
+        turnId,
+        payload: params.talkPayloads.outputAudioDelta(audio),
+      });
     },
     recordTranscript: (role, text) => recordRealtimeVoiceTranscript(transcript, role, text),
   };

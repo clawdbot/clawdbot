@@ -84,7 +84,8 @@ function resolveMatrixPreviewToolProgress(streaming: MatrixStreamingInput): bool
     return true;
   }
   if (resolveMatrixStreamingMode(streaming) === "progress") {
-    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? true;
+    // Progress drafts are quiet unless the operator opts into the tool log.
+    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? false;
   }
   return streaming.preview?.toolProgress ?? true;
 }

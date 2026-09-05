@@ -13,6 +13,20 @@ becomes `/openclaw/chat/main` when the base path is `/openclaw`.
 
 ## Session and dashboard URLs
 
+**Copy → Session link** uses the connected Gateway's public Control UI address
+when `gateway.publicOrigin` is configured, including its
+`gateway.controlUi.basePath`. This keeps links shareable when the desktop app
+connects through a local SSH tunnel. Without a public origin, copied links use
+the connected Gateway's HTTP(S) address; a tunnel-only address remains local.
+Normal navigation and **Open in** continue using the current UI. Copied links
+contain no connection credentials, and recipients still need Gateway access.
+
+The Dashboards gallery adds `?dashboard=expanded` to the owning task's chat
+link, for example `/chat/main/deploy-monitor-6db92d48?dashboard=expanded`.
+This makes Dashboard the main view and focuses it. **Restore split** brings
+the side panel alongside the dashboard. Ordinary task navigation restores the browser's
+saved task arrangement instead of forcing a dashboard-only view.
+
 Chat and dashboard views are parallel route namespaces:
 
 ```text
@@ -56,7 +70,11 @@ When an otherwise literal one-segment rest could be mistaken for a short id,
 the builder inserts `~key` before it, for example
 `agent:main:release-deadbeef` becomes
 `/chat/main/~key/release-deadbeef`. The marker forces literal interpretation
-and appears only when the unescaped form would be ambiguous.
+when a reference could otherwise be ambiguous. Builders also use it for the
+ordinary key `agent:research:global`, producing `/chat/research/~key/global`
+to distinguish it from the raw `global` home-session key, which uses
+`/chat/research`. Existing `/chat/research/global` literal links still resolve
+to `agent:research:global`.
 
 The reserved single-segment literal rest names are `main`, `global`, `boot`,
 and `sessions`. Exactly one segment after the agent id is literal when it is

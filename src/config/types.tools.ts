@@ -211,7 +211,7 @@ export type CodeModeConfig =
 export type SwarmConfig =
   | boolean
   | {
-      /** Enable collector-mode subagents and agents_wait. Default: false. */
+      /** Enable collector-mode subagents and agents_wait. Default: true. */
       enabled?: boolean;
       /** Maximum concurrently running collector children per swarm group. */
       maxConcurrent?: number;

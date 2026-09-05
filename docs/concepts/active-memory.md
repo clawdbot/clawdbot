@@ -609,6 +609,13 @@ Blocking sub-agent runs keep their runtime transcript in the agent's SQLite
 store. By default, OpenClaw removes the temporary sub-agent session rows after
 the run finishes and does not create a JSONL file.
 
+If cleanup crosses the recall deadline, a completed summary grounded in memory
+results can still be recovered as `timeout_partial` after cleanup settles.
+This works with temporary transcripts; `persistTranscripts` only controls
+debugging exports. Failed runs, failed cleanup, and unavailable memory results
+remain ineligible for timeout recovery. Recovered summaries are not cached or
+stored in session debug lines.
+
 To export those transcripts as JSONL artifacts for debugging:
 
 ```json5
