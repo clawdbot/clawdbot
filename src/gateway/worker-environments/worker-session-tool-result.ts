@@ -6,6 +6,13 @@ import {
 import { jsonResult } from "../../agents/tools/tool-results.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 
+export class WorkerSessionToolOutcomeUnknownError extends Error {
+  constructor(cause: unknown) {
+    super("Worker session operation outcome is unknown; it was not replayed", { cause });
+    this.name = "WorkerSessionToolOutcomeUnknownError";
+  }
+}
+
 export function workerSessionToolErrorResult(error: unknown) {
   const message = redactSensitiveText(
     error instanceof Error ? error.message : "Worker session operation failed",

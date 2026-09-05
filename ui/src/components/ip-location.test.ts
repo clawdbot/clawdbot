@@ -47,6 +47,8 @@ describe("openclaw-ip-location", () => {
     await settleUntil(element, () => (element.textContent ?? "").includes("Vienna, Vienna"));
 
     expect(element.querySelector("a")?.getAttribute("href")).toBe("https://db-ip.com");
+    expect(element.querySelector("a")?.getAttribute("aria-label")).toBe("IP Geolocation by DB-IP");
+    expect(element.querySelector("a svg")).not.toBeNull();
   });
 
   it("renders nothing when the address cannot be placed", async () => {

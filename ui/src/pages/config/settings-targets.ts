@@ -13,6 +13,7 @@ export const COMMUNICATION_SETTINGS_TARGET_IDS = {
 
 export const PROFILE_SETTINGS_TARGET_IDS = {
   identity: "settings-profile-identity",
+  githubConnections: "settings-profile-github-connections",
 } as const;
 
 export type SettingsSearchTarget = {
@@ -28,6 +29,38 @@ export type SettingsSearchTarget = {
 // Keep destinations and translation keys together without importing page
 // renderers: settings search runs before the destination page is loaded.
 export const SETTINGS_SEARCH_TARGETS = {
+  device: {
+    routeId: "device",
+    labelKey: "tabs.device",
+    hash: "",
+    searchKeys: [
+      "configPage.deviceSettings.app",
+      "configPage.deviceSettings.showDockIcon",
+      "configPage.deviceSettings.launchAtLogin",
+      "configPage.deviceSettings.quickChat",
+      "configPage.deviceSettings.capabilities",
+      "configPage.deviceSettings.computerControl",
+      "configPage.deviceSettings.browser",
+      "configPage.deviceSettings.cookieSync",
+      "configPage.deviceSettings.developer",
+    ],
+  },
+  devicePermissions: {
+    routeId: "device-permissions",
+    labelKey: "tabs.devicePermissions",
+    hash: "",
+    searchKeys: [
+      "configPage.deviceSettings.systemAccess",
+      "configPage.deviceSettings.location",
+      "configPage.deviceSettings.activePresence",
+    ],
+  },
+  updates: {
+    routeId: "updates",
+    labelKey: "tabs.updates",
+    hash: "#config-section-update",
+    searchKeys: ["updates.page.checkForUpdates", "updates.page.automaticUpdates"],
+  },
   channels: {
     routeId: "channels",
     labelKey: "quickSettings.channels.title",
@@ -79,6 +112,18 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
     aliases: "profile avatar image email",
     requiresIdentity: true,
+  },
+  githubConnections: {
+    routeId: "profile",
+    labelKey: "githubConnections.title",
+    hash: `#${PROFILE_SETTINGS_TARGET_IDS.githubConnections}`,
+    searchKeys: [
+      "githubConnections.mine",
+      "githubConnections.system",
+      "githubConnections.forMe",
+      "githubConnections.forSystem",
+    ],
+    aliases: "github oauth account connection publication",
   },
   modelBehavior: {
     ...SETTINGS_ROUTE_TARGETS.modelBehavior,
@@ -176,6 +221,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configView.chatPrefs.messageWidth",
       "configView.chatPrefs.messageWidthHint",
+      "configView.chatPrefs.collapseTaskProgress",
+      "configView.chatPrefs.collapseTaskProgressHint",
       "chat.sendShortcut",
       "chat.sendShortcutEnter",
       "chat.sendShortcutModifierEnter",
@@ -198,7 +245,7 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.composer.holdToRecordSettingDescription",
     ],
     aliases:
-      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer camera dictation dictate width",
+      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer camera dictation dictate width task progress checklist collapse expand",
   },
   appearanceConnection: {
     routeId: "appearance",
@@ -217,7 +264,6 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.notifications.title",
     hash: `#${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}`,
     searchKeys: [
-      "configView.notifications.hint",
       "configView.notifications.browserSupport",
       "configView.notifications.permission",
       "configView.notifications.status",
@@ -225,7 +271,6 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.notifications.notSubscribed",
       "configView.notifications.enable",
       "configView.notifications.nativeTitle",
-      "configView.notifications.nativeHint",
       "configView.notifications.openSystemSettings",
     ],
     aliases: "vapid gateway",

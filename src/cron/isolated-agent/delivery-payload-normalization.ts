@@ -16,10 +16,10 @@ type CronChannelTransform = {
 function normalizeDirectPayload(payload: ReplyPayload): ReplyPayload {
   const normalized = payload.text ? normalizeSilentReplyText(payload.text) : undefined;
   return normalized
-    ? {
+    ? copyReplyPayloadMetadata(payload, {
         ...payload,
         text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-      }
+      })
     : payload;
 }
 

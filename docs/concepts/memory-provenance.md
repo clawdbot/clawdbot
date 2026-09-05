@@ -1,67 +1,117 @@
 ---
-summary: "Session-level memory provenance: how OpenClaw records where every durable memory came from, keeps configured sources out of memory by policy, and deletes everything derived from a session on request"
+summary: "Trace session-derived memories, control ingestion, and preview or delete tracked memory artifacts"
 title: "Memory provenance and deletion"
 sidebarTitle: "Provenance & deletion"
+doc-schema-version: 1
 read_when:
-  - You need to keep email, a channel, or another content source out of durable memory
-  - You need to purge every memory derived from a session, a person, or a source, e.g. for GDPR erasure or an employee exit
-  - You are reviewing OpenClaw memory for a security, privacy, or compliance assessment
+  - You want to exclude a source from automatic memory ingestion
+  - You need to remove memories derived from specific sessions or participants
+  - You are reviewing memory provenance, deletion coverage, or retained data
 ---
 
-Every durable memory OpenClaw creates through its pipeline records which
-sessions it came from, as queryable SQLite facts — not as prose the model
-could rewrite. That lineage supports two operator guarantees this page
-explains end to end: **admission** (configured sources never enter durable
-memory, deterministically) and **deletion** (`openclaw memory forget` purges
-everything the pipeline derived from a chosen set of sessions and permanently
-prevents its re-admission).
+OpenClaw records source-session lineage for memories staged by automatic
+session ingestion and historical session backfill. `openclaw memory forget` uses that lineage to remove
+tracked entries and related artifacts, and records the selected sessions as
+forgotten so later ingestion does not restore them.
 
-This page owns the policy story: what is recorded, what the guarantees cover,
-and where their boundaries are. The command contract lives in
-[`memory forget`](/cli/memory#memory-forget), the configuration keys in
-[Memory config](/reference/memory-config#memory-admission-policy), and the
-surrounding trust model in
-[Memory architecture](/concepts/memory-architecture).
+Two controls serve different purposes: **admission policy** excludes matching
+sessions from future dreaming ingestion and session backfill; **forget** removes
+identifiable artifacts from selected sessions. Neither is a general erasure
+of everything the agent has seen or written.
+
+These controls belong to the bundled `memory-core` plugin. Other memory
+plugins may expose different commands and deletion behavior.
+
+<Warning>
+`memory forget` deletes immediately unless you pass `--dry-run`. It does not
+delete original session transcripts, every freeform memory edit, or copies
+outside the memory stores it scans. Review the report and the
+[deletion boundaries](#what-deletion-does-not-cover) before applying it.
+</Warning>
+
+## Preview and forget a session
+
+Use an explicit agent so you know which store you are changing. List its
+sessions to find the full session key or ID. Session IDs are exact and
+case-sensitive; an abbreviation does not select a longer ID:
+
+```bash
+openclaw sessions --agent <agent-id> --limit all --json
+openclaw memory forget --agent <agent-id> --session <id-or-key> --dry-run --json
+```
+
+Check `sessionResolutions` for the intended sessions, `entryKeys` and
+`mixedLineageEntryKeys` for whole-entry removals, and `artifacts` for the
+affected stores. Review `curatedWrites` and `untargetableEntryKeys` separately;
+neither is a complete inventory of data that will remain.
+
+When the selection is correct, repeat the same command without `--dry-run`:
+
+```bash
+openclaw memory forget --agent <agent-id> --session <id-or-key> --json
+```
+
+There is no additional confirmation prompt or `--apply` flag. A preview is
+computed from current state, not saved as a deletion plan. Pause direct agent
+edits and external writers during a sensitive cleanup; they do not share the
+memory plugin's mutation lock. Run the preview again afterward to check for
+remaining attributable artifacts.
+
+If deletion fails, resolve the reported storage or filesystem error, rerun the
+same command, then repeat it with `--dry-run`. A failure can leave partial
+cleanup. The purge keeps corpus and origin evidence until dependent artifacts
+are cleaned; do not delete that evidence manually to clear an error.
+
+The full flags, selector semantics, and report fields are in
+[`memory forget`](/cli/memory#memory-forget).
 
 ## What lineage is recorded
 
-Three kinds of provenance exist, at different granularities:
+Three records serve different purposes:
 
-| Record                | Granularity   | Written by                                       | Used for                                              |
-| --------------------- | ------------- | ------------------------------------------------ | ----------------------------------------------------- |
-| Chunk provenance      | Index chunk   | Classification code at index time                | Trust gating: promotion eligibility, recall framing   |
-| Entry origins         | Durable entry | Ingestion and promotion, per source session      | Selective deletion; auditing where an entry came from |
-| Curated-write records | Memory file   | The memory write observer, per authoring session | Reporting agent-authored edits during a purge         |
+| Record                | Granularity   | Written by                                     | Used for                                        |
+| --------------------- | ------------- | ---------------------------------------------- | ----------------------------------------------- |
+| Chunk provenance      | Index chunk   | Classification code at index time              | Trust gating and recall framing                 |
+| Entry origins         | Tracked entry | Session ingestion, backfill, and consolidation | Finding entries derived from a selected session |
+| Curated-write records | Memory file   | The memory write observer                      | Identifying files to review during a purge      |
 
-Chunk provenance (origin class, session kind) is the trust model described in
-[Memory architecture](/concepts/memory-architecture#provenance-every-memory-knows-where-it-came-from).
-Entry origins are what make deletion possible: when the dreaming pipeline
-turns session content into a durable candidate, it records
-`(entry, agent, source session)` rows in the agent's SQLite database, and
-every pipeline-promoted `MEMORY.md` entry carries a stable marker that ties
-the file text back to those rows.
+[Chunk provenance](/concepts/memory-architecture#provenance-every-memory-knows-where-it-came-from)
+describes the origin class and session kind. Entry origins instead associate
+an entry key with an agent and source session in SQLite. Promotion markers in
+`MEMORY.md` connect the visible entry to those origin rows.
 
-Lineage survives [dreaming](/concepts/dreaming) consolidation. When
-consolidation merges two entries, the result's origin set is the union of its
-parents'; when a newer observation supersedes an older one, the origins move
-to the surviving entry. This bookkeeping is deterministic code wrapped around
-the consolidation model call — the model never carries or rewrites
-provenance. In a workspace shared by several agents, the same reconciliation
-runs against every participating agent's origins, so any agent's later
-deletion request still finds the live entry.
+When [dreaming](/concepts/dreaming) merges or supersedes tracked entries,
+reconciliation transfers the parents' origins to the surviving entry. It
+runs in code around the model call, including for participating agents that
+share a workspace; the model does not own the origin rows.
 
-Not every entry has origin rows. Operator-curated content and direct agent
-edits never receive entry lineage (their file-level authoring sessions are
-tracked separately — see
-[the admission boundary](#the-admission-boundary) below), and entries
-promoted before lineage recording existed have none either. All such entries
-remain searchable, are never deleted by an unrelated selector, and are
-listed as untargetable in a purge report rather than silently skipped.
+Origins for replaced entries remain while retained rewrite preimages still
+reference their promotion markers. Backup rotation prunes those origins only
+when live entries, retained preimages, diary excerpts, and indexed snapshots no longer reference them.
+
+New consolidation-history excerpts retain the replacement entry's lineage,
+including its merged or superseded parents. Their origin rows remain while
+those excerpts remain, even after backup rotation. Diary history has no
+automatic expiry; long revision histories can retain growing origin sets.
+
+When backfill coalesces the same claim from several sessions, it retains every
+source origin without counting the repeated claim as extra evidence.
+Session-backfill diary lines also carry markers tied to source origins before
+publication. This includes REM facts, reflections, and combined claims, even
+when displayed citations are shortened or a later apply step fails. Forgetting
+any contributing session removes the whole marked line, not unrelated diary
+lines. Earlier unmarked backfill diaries do not gain lineage retroactively.
+
+Coverage is not universal. Handwritten notes, direct agent edits, and entries
+staged before lineage tracking may lack entry origins. The report's
+`untargetableEntryKeys` lists **promotion markers with
+no origins in the selected agent's store**, not all untracked prose. Such
+entries cannot be selected by lineage alone, although explicit session
+references or exact corpus quotations may still match the file scrub.
 
 ## Admission: keeping sources out of memory
 
-If a source must never reach durable memory — email content is the classic
-case — exclude it by policy instead of prompting the model to be careful:
+To keep Gmail hook sessions out of **dreaming ingestion and session backfill**:
 
 ```json5
 {
@@ -72,8 +122,6 @@ case — exclude it by policy instead of prompting the model to be careful:
           memoryPolicy: {
             excludeSessions: {
               hookExternalContentSources: ["gmail"],
-              channels: ["email"],
-              chatTypes: ["group"],
             },
           },
         },
@@ -83,107 +131,152 @@ case — exclude it by policy instead of prompting the model to be careful:
 }
 ```
 
-A session matching any configured exclusion never enters the dreaming
-corpus, so it cannot produce candidates, survive consolidation, or promote
-into `MEMORY.md`. The exclusion is enforced before the transcript is read,
-and it is **recorded**, not silent: the ingestion checkpoint stores the
-exclusion reason, visible to a later audit. Removing the policy re-admits
-the session on the next sweep. Key semantics and matching rules are in
-[Memory config](/reference/memory-config#memory-admission-policy).
+IMAP uses the exact hook source `email`; Gmail hooks use `gmail`. Include both
+values to exclude both sources. Generic webhooks use `webhook`.
+
+You can also exclude channel/plugin identifiers (not room IDs) or chat types.
+Empty or omitted lists add no policy exclusions. A match in any list excludes
+the whole session; values
+match recorded session metadata, not words in the conversation.
+
+Both paths check the policy before reading the transcript. Automatic ingestion
+also records the exclusion reason in its ingestion checkpoint. Removing a matching
+rule makes a session eligible for a later sweep, subject to the other trust
+and ingestion gates. A session recorded as forgotten remains excluded.
+
+Policy is prospective: it does not erase an existing corpus, staged
+candidate, or promoted entry. Use `memory forget` for existing attributable
+data. See [Memory config](/reference/memory-config#memory-admission-policy)
+for exact matching rules and exclusion reasons.
 
 ### The admission boundary
 
-The policy governs the **memory pipeline**. An agent running inside an
-excluded session can still edit `MEMORY.md` or another memory file directly
-during its turn — "remember this" resolved by the agent writing the file is
-a workspace edit, governed by tool policy and the workspace trust boundary,
-not by memory admission. OpenClaw records those writes with their authoring
-session (the curated-write records above), so they are auditable and are
-surfaced by a later purge, but preventing them is a tool-policy decision,
-not a memory-policy one. If the requirement is "this session must not be
-able to write memory files at all," restrict the agent's file tools for that
-context rather than relying on admission policy.
+| Path                            | Configured admission exclusions          |
+| ------------------------------- | ---------------------------------------- |
+| Automatic dreaming ingestion    | Applied before transcript reads          |
+| Manual `session-backfill`       | Applied in preview, REM, and apply modes |
+| Raw transcript indexing         | Not applied                              |
+| Direct writes and session hooks | Not applied                              |
+
+Matching requires retained session metadata; missing fields do not match a
+rule. Both controls honor the configured `session.store`, including custom
+and shared stores, while keeping selection scoped to the chosen agent. Older
+retained records may have only a coarse `webhook` classification; without the
+original exact source, OpenClaw does not infer `email` or `webhook` for matching.
+Select those sessions explicitly by full ID.
+
+Automatic dreaming separately skips retained archives. To exclude an
+archived session from backfill and transcript indexing too, explicitly forget
+its full session ID. Those paths check forgotten-session records even when
+the former channel, chat type, or hook-source metadata is no longer available.
+
+An excluded session can still edit `MEMORY.md`, `USER.md`, or another
+workspace file if its tools permit it. Restrict the relevant file, shell, and
+external-harness capabilities when you need to prevent those writes, and
+review enabled memory-writing hooks. Admission policy is not a filesystem
+permission. Observed writes are reported for review, not given per-entry
+lineage.
 
 ## Deletion: purging what a session produced
 
-`openclaw memory forget` deletes everything the memory pipeline derived from
-a chosen session set. Sessions are selected by explicit ID or key, by their
-recorded external-content hook source, or by a participant's actor ID —
-"everything derived from Gmail" and "everything derived from sessions this
-person took part in" are both one command. Selection resolves against live
-session records **and** retained archived sessions, and an explicitly named
-session that matches neither is still purged and excluded as an exact ID: an
-operator-named session never produces a silent no-op. The report labels each
-selected session `live`, `archived`, or `unresolved`.
+Selectors identify **sessions**, not individual facts about a person.
+`--participant` selects sessions with that recorded actor ID; it does not
+search memory text for a name. `--hook-source` selects sessions with that
+recorded external-content source. Both require retained metadata. Explicit
+IDs and keys can also resolve retained archives.
 
-A purge is **whole-entry and deterministic**. An entry with any origin in the
-selected set is removed entirely — there is no model-mediated attempt to
-subtract one source's contribution from merged prose, because a deletion
-guarantee an LLM adjudicates is not one you can defend in an audit. Entries
-that also had unselected origins are reported as mixed-lineage removals;
-dreaming can regenerate what the surviving sessions still support.
+A tracked entry with any selected origin is removed whole, even when it also
+has unselected origins. These removals appear in `mixedLineageEntryKeys`.
+The purge does not ask a model to subtract one person's contribution from
+merged prose. Surviving sources may support a new entry later, but automatic
+reconstruction is not guaranteed.
 
-The sweep covers every derived artifact, not just the visible entry: memory
-files, verbatim quoted lines in dream diaries, session-corpus lines, index
-chunks with their full-text and vector records, embedding-cache entries,
-short-term recall state, ingestion dedup state, and dreaming's own pre-rewrite
-backups. A deletion that survives in a backup or an index is not a deletion.
-Always start with `--dry-run`, which computes the identical report without
-writing; the full artifact list and report shape are in the
-[command reference](/cli/memory#memory-forget).
+The cleanup covers matching promoted entries, session-corpus lines, memory
+index chunks and their full-text/vector rows, cached embeddings, short-term
+state, ingestion deduplication state, and dreaming rewrite preimages. It also
+removes whole lines containing exact selected corpus snippets from scanned
+memory files and dream diaries. The
+[command reference](/cli/memory#memory-forget) describes the counters and
+selection limits.
 
 ### Purged sessions stay purged
 
-Deleting derived data is not enough on its own: the memory pipeline
-continuously re-reads session history, so a purge that only removed artifacts
-would be silently undone by the next dreaming sweep or index rebuild. A real
-purge therefore records each selected session as **forgotten** in the agent's
-SQLite database. Dreaming ingestion, historical backfill, and transcript
-indexing — including `memory index --force` — all treat forgotten sessions
-exactly like policy-excluded ones, with the recorded reason `forgotten`.
-Re-running the purge is safe and changes nothing.
+A real purge records each selected session as forgotten in the selected
+agent's SQLite database before removing its artifacts. Automatic ingestion,
+historical session backfill, and transcript indexing, including
+`memory index --force`, check these records. Automatic ingestion records the
+reason `forgotten`.
 
-### What deletion does not cover
+The memory plugin coordinates purges with its staging and file mutations.
+A pending dream narrative is skipped if its tracked source entries or prior
+diary context were removed before publication. This does not retroactively
+identify untracked paraphrases in older diary entries. Historical consolidation
+highlights with quoted markers also lack reliable deletion boundaries. The
+report warns in `refusals` when it recognizes remaining highlights in that
+format; review them manually. The warning is not an inventory of all untracked
+history, and missing historical lineage is not reconstructed.
 
-The boundaries are deliberate, and each one is reported rather than silent:
+Indexing checks again before publishing chunks or cached embeddings, so a
+result prepared before the purge cannot restore forgotten session data or a
+stale memory-file snapshot. An affected index run reports that its source
+changed; rerun `openclaw memory index --agent <agent-id>` to index current data.
 
-- **Source transcripts.** The session transcript itself belongs to session
-  management, not memory. A purge removes its copies from the memory index
-  and permanently fences it out of the pipeline, then names the session in
-  the report so you can remove the transcript through its owning workflow.
-- **Agent-authored edits.** Freeform file edits cannot be attributed to
-  individual lines safely enough for automatic deletion. The purge reports
-  them as `curatedWrites` — file and timestamp, recovered from write-observer
-  records and from the selected sessions' transcripts across all agent
-  harnesses — and leaves the files for review.
-- **Paraphrased prose.** Dream-diary lines quoting a purged session verbatim
-  are removed; model-paraphrased prose that no longer contains the source
-  text cannot be reliably attributed and stays. Keeping the affected sessions
-  out of memory in the first place, via admission policy, is the stronger
-  tool when a source is sensitive.
+Repeating a purge does not lift that exclusion. It applies to those session
+IDs in that agent's store, not to future conversations with the same person
+or hook source. Keep an admission rule for future matching sessions, within
+[the admission boundary](#the-admission-boundary).
+
+## What deletion does not cover
+
+- **Original transcripts and archives.** Memory cleanup leaves them in the
+  session store. [Session deletion](/cli/sessions#delete-sessions) is a
+  separate lifecycle operation and ordinarily retains a deleted-transcript
+  archive. Do not treat either command as proof that all conversation copies
+  have been erased.
+- **Untracked older memories.** No origin row means no lineage-based deletion.
+  New session backfill preserves origins, but it does not retroactively supply
+  lineage for candidates or rewrite backups whose origins were lost in older
+  versions. Inspect those separately; a prior purge is not automatically repaired.
+- **Freeform edits.** `curatedWrites` reports recognized writes or write
+  attempts with a `relativePath` and `observedAt`. That record alone does
+  not delete a file or identify contributing lines. Supported write/edit/patch
+  transcript records supplement the latest file-level observer record, but
+  can include unsuccessful attempts. Arbitrary shell writes and external edits
+  are not fully tracked.
+- **Paraphrases and other copies.** Exact corpus quotations can be removed,
+  but untracked paraphrases, exports, external backups, other plugins' stores,
+  and independently copied files are outside this cleanup. A reported curated
+  file can still lose lines that match a tracked entry or exact quotation.
+- **Other agents.** Selection and forgotten-session records are per agent.
+  Repeat the review for each relevant agent, including agents sharing a
+  workspace; one agent's report does not establish that every index is clean.
+
+An empty preview means no more artifacts were found by those selectors and
+matching rules. It is not a certificate that no related information remains.
 
 ## Purging a person or a source end to end
 
-The employee-exit / GDPR-erasure workflow, using a departed teammate as the
-example:
+For a participant, start with a preview in each relevant agent:
 
 ```bash
-# 1. Preview everything derived from sessions they took part in.
-openclaw memory forget --participant <actor-id> --dry-run --json
-
-# 2. Review the report: entries, artifacts, mixed-lineage removals,
-#    curatedWrites, and each session's resolution source.
-
-# 3. Purge. Selected sessions are durably excluded from re-ingestion.
-openclaw memory forget --participant <actor-id>
-
-# 4. Review curatedWrites files by hand, and remove the source transcripts
-#    through session management if required.
+openclaw memory forget --agent <agent-id> --participant <actor-id> --dry-run --json
 ```
 
-For archived sessions that no longer carry participant metadata, select them
-explicitly with `--session <id-or-key>`. For a source-wide purge, use the
-recorded hook source instead: `openclaw memory forget --hook-source gmail`.
+Verify the resolved session IDs before removing `--dry-run`. This removes
+tracked entries derived from **any content in those sessions**, not only
+messages authored by that participant. If participant metadata is missing
+from an archive, add its explicit `--session <id-or-key>` selector.
+
+For a source, use its recorded hook identifier:
+
+```bash
+openclaw memory forget --agent <agent-id> --hook-source gmail --dry-run --json
+```
+
+After applying the reviewed selection, inspect retained files and untracked
+memories, handle transcript and archive retention separately, and rerun the
+preview. Add an admission rule if future sessions from that source should
+also stay out of dreaming ingestion and session backfill.
 
 ## Related
 

@@ -14,6 +14,7 @@ on:
       - scripts/control-ui-i18n.ts
       - scripts/control-ui-i18n-verify.ts
       - scripts/lib/control-ui-i18n-catalog.ts
+      - scripts/lib/control-ui-i18n-config.json
       - scripts/lib/control-ui-i18n-config.ts
       - scripts/lib/control-ui-i18n-raw-copy.ts
       - scripts/lib/control-ui-i18n-sync-plan.ts
@@ -27,6 +28,11 @@ on:
     - cron: "23 4 * * *"
   workflow_dispatch:
     inputs:
+      full_refresh:
+        description: Retranslate every source string, including existing translations.
+        required: false
+        default: false
+        type: boolean
       token_preflight_only:
         description: Verify generated PR App permissions without running locale generation.
         required: false
@@ -52,6 +58,7 @@ jobs:
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     outputs:
+      locales: ${{ steps.base.outputs.locales }}
       sha: ${{ steps.base.outputs.sha }}
     steps:
       - name: Resolve source commit
@@ -65,17 +72,28 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${TOKEN_PREFLIGHT_ONLY}" == "true" ]]; then
-            sha="${WORKFLOW_SHA}"
+            source_ref="${WORKFLOW_SHA}"
           else
-            sha="$(
-              timeout --signal=TERM --kill-after=10s 60s \
-                gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha
-            )"
+            source_ref="${DEFAULT_BRANCH}"
           fi
+          repository_owner="${REPOSITORY%%/*}"
+          repository_name="${REPOSITORY#*/}"
+          source="$(
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh api graphql \
+                -f query='query($owner: String!, $name: String!, $ref: String!, $configRef: String!) { repository(owner: $owner, name: $name) { revision: object(expression: $ref) { ... on Commit { oid } } config: object(expression: $configRef) { ... on Blob { text } } } }' \
+                -F owner="${repository_owner}" \
+                -F name="${repository_name}" \
+                -F ref="${source_ref}" \
+                -F configRef="${source_ref}:scripts/lib/control-ui-i18n-config.json"
+          )"
+          sha="$(jq -er '.data.repository.revision.oid' <<< "${source}")"
           if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Unable to resolve the locale refresh source to an exact commit." >&2
             exit 1
           fi
+          locales="$(jq -ce '.data.repository.config.text | fromjson | [.[].locale] | select(length > 0 and all(.[]; type == "string" and length > 0))' <<< "${source}")"
+          echo "locales=${locales}" >> "${GITHUB_OUTPUT}"
           echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
 
   publisher-preflight:
@@ -130,29 +148,7 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        locale:
-          [
-            zh-CN,
-            zh-TW,
-            pt-BR,
-            de,
-            es,
-            ja-JP,
-            ko,
-            fr,
-            hi,
-            ar,
-            it,
-            tr,
-            uk,
-            id,
-            pl,
-            th,
-            vi,
-            nl,
-            fa,
-            ru,
-          ]
+        locale: ${{ fromJSON(needs.resolve-base.outputs.locales) }}
     runs-on: ubuntu-latest
     name: Refresh ${{ matrix.locale }}
     steps:
@@ -169,83 +165,27 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
-      - name: Ensure translation provider secrets exist
+      - name: Refresh locale translations
         env:
-          OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            echo "Missing OPENCLAW_DOCS_I18N_OPENAI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY secret."
-            exit 1
-          fi
-
-      - name: Refresh control UI locale files
-        env:
-          OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ANTHROPIC_MODEL: claude-opus-4-8
-          OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE || 'gpt-5.6-sol' }}
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENCLAW_CONTROL_UI_I18N_PROVIDER: openai
+          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ secrets.OPENCLAW_I18N_MODEL }}
+          OPENCLAW_I18N_FALLBACK_MODEL: ${{ secrets.OPENCLAW_I18N_FALLBACK_MODEL }}
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
           OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
+          FULL_REFRESH: ${{ inputs.full_refresh || false }}
           LOCALE: ${{ matrix.locale }}
         run: |
           set -euo pipefail
-
-          run_refresh() {
-            local provider="$1"
-            local model="$2"
-            local openai_api_key="${3-}"
-            if [ "$provider" = "openai" ]; then
-              OPENAI_API_KEY="$openai_api_key" \
-                OPENCLAW_CONTROL_UI_I18N_PROVIDER="$provider" \
-                OPENCLAW_CONTROL_UI_I18N_MODEL="$model" \
-                node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write
-              return
-            fi
-            OPENCLAW_CONTROL_UI_I18N_PROVIDER="$provider" \
-              OPENCLAW_CONTROL_UI_I18N_MODEL="$model" \
-              node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write
-          }
-
-          run_openai_refresh() {
-            local status=1
-            if [ -n "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ]; then
-              set +e
-              run_refresh openai "${OPENAI_MODEL}" "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY}"
-              status="$?"
-              set -e
-              if [ "$status" -eq 0 ]; then
-                return 0
-              fi
-              if [ -z "${OPENAI_API_KEY:-}" ] || [ "${OPENAI_API_KEY}" = "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY}" ]; then
-                return "$status"
-              fi
-              echo "::warning::Docs OpenAI control UI locale refresh key failed for ${LOCALE}; retrying with repository OpenAI key."
-            fi
-            if [ -z "${OPENAI_API_KEY:-}" ]; then
-              return "$status"
-            fi
-            run_refresh openai "${OPENAI_MODEL}" "${OPENAI_API_KEY}"
-          }
-
-          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-            set +e
-            run_refresh anthropic "${ANTHROPIC_MODEL}"
-            status="$?"
-            set -e
-            if [ "$status" -eq 0 ]; then
-              exit 0
-            fi
-            if [ -z "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
-              exit "$status"
-            fi
-            echo "::warning::Anthropic control UI locale refresh failed for ${LOCALE}; retrying with OpenAI."
+          if [[ -z "${OPENAI_API_KEY}" || -z "${OPENCLAW_CONTROL_UI_I18N_MODEL}" || -z "${OPENCLAW_I18N_FALLBACK_MODEL}" ]]; then
+            echo "Translation API key and private primary/fallback model secrets are required." >&2
+            exit 1
           fi
-
-          run_openai_refresh
+          args=()
+          if [[ "${FULL_REFRESH}" == "true" ]]; then
+            args+=(--force)
+          fi
+          node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write "${args[@]}"
 
       - name: Prepare locale artifact
         env:
@@ -341,6 +281,7 @@ jobs:
             scripts/control-ui-i18n.ts
             scripts/control-ui-i18n-verify.ts
             scripts/lib/control-ui-i18n-catalog.ts
+            scripts/lib/control-ui-i18n-config.json
             scripts/lib/control-ui-i18n-config.ts
             scripts/lib/control-ui-i18n-raw-copy.ts
             scripts/lib/control-ui-i18n-sync-plan.ts

@@ -17,6 +17,7 @@ import type {
   OpenAIApiReasoningEffort,
   OpenAIReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import type { OpenAIResponsesCompactedWindow } from "./openai-responses-compaction-window.js";
 
 export const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 export const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -127,8 +128,9 @@ export type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> 
   id?: string;
   [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
-export type OpenAIResponsesCompactionReplayState = ProviderReplayState &
-  (
+export type OpenAIResponsesCompactionReplayState = ProviderReplayState & {
+  compactedWindow?: OpenAIResponsesCompactedWindow;
+} & (
     | { type: typeof OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE; baseUrlHash: string }
     | {
         type: typeof OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE;
@@ -192,6 +194,7 @@ export type OpenAIResponsesRequestParams = {
   instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
+  prompt_cache_options?: { ttl: "30m" };
   metadata?: Record<string, string>;
   previous_response_id?: string;
   store?: boolean;
@@ -200,7 +203,8 @@ export type OpenAIResponsesRequestParams = {
   top_p?: number;
   text?: ResponseCreateParamsStreaming["text"];
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
-  tools?: FunctionTool[];
+  tools?: Array<FunctionTool & { async?: boolean }>;
+  multi_agent?: { enabled?: boolean };
   tool_choice?: ResponseCreateParamsStreaming["tool_choice"];
   reasoning?:
     | { effort: OpenAIApiReasoningEffort }

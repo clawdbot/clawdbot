@@ -97,7 +97,7 @@ export function registerNodeCli(program: Command) {
         gatewayCandidates,
         gatewayBootstrapToken: pair?.bootstrapToken,
         preferGatewayBootstrapToken: pair !== undefined,
-        ...(opts.ephemeral === true ? { forceWorkerRuns: true } : {}),
+        ...(opts.ephemeral === true ? { forceWorkerRuns: true, ephemeral: true } : {}),
         nodeId: opts.nodeId,
         displayName: opts.displayName,
         installedAppsSharing: opts.shareInstalledApps,

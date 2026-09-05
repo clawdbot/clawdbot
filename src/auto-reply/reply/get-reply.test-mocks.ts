@@ -1,6 +1,7 @@
 /** Shared Vitest mocks for get-reply tests that need agent/session/runtime isolation. */
 import { vi } from "vitest";
 import { createMockTypingController } from "./reply.test-helpers.js";
+import type { StageSandboxMediaResult } from "./stage-sandbox-media.js";
 
 vi.mock("../../agents/agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
@@ -8,8 +9,6 @@ vi.mock("../../agents/agent-scope.js", async () => {
   );
   return {
     ...actual,
-    resolveAgentDir: vi.fn(() => "/tmp/agent"),
-    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
     resolveSessionAgentId: vi.fn(() => "main"),
     resolveAgentSkillsFilter: vi.fn(() => undefined),
   };
@@ -78,7 +77,7 @@ vi.mock("./session-reset-model.runtime.js", () => ({
 }));
 
 vi.mock("./stage-sandbox-media.runtime.js", () => ({
-  stageSandboxMedia: vi.fn(async () => undefined),
+  stageSandboxMedia: vi.fn(async (): Promise<StageSandboxMediaResult> => ({ staged: new Map() })),
 }));
 
 vi.mock("./typing.js", () => ({

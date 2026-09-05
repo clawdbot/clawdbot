@@ -82,6 +82,7 @@ function renderDailyChart(
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function directText(element: Element | null | undefined): string | undefined {
@@ -280,9 +281,11 @@ describe("renderUsageHeatmap", () => {
       "Token Activity",
     );
     expect(container.querySelectorAll(".usage-heatmap__cell")).toHaveLength(52 * 7);
-    expect(container.querySelector(".usage-heatmap__cell--l4 title")?.textContent).toContain(
-      "20 tokens",
-    );
+    expect(
+      container
+        .querySelector(".usage-heatmap__svg .usage-heatmap__cell--l4")
+        ?.getAttribute("data-tooltip"),
+    ).toContain("20 tokens");
   });
 
   it("keeps short ranges at their natural cell width", () => {
@@ -557,7 +560,16 @@ describe("renderCostWindowComparison", () => {
 describe("renderSessionsCard", () => {
   const noop = () => {};
 
-  it("renders named native session toggles while preserving shift selection and separate copy", () => {
+  it.each([
+    { copied: true, feedback: "Copied!" },
+    { copied: false, feedback: "Copy failed" },
+  ])("keeps session selection separate while showing $feedback", async ({ copied, feedback }) => {
+    const writeText = vi.fn(async () => {
+      if (!copied) {
+        throw new Error("Clipboard access denied");
+      }
+    });
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
     const container = document.createElement("div");
     document.body.append(container);
     const onSelectSession = vi.fn<(key: string, shiftKey: boolean) => void>();
@@ -616,7 +628,13 @@ describe("renderSessionsCard", () => {
       sessions.map((s) => s.key),
     );
 
-    rows[0]?.querySelector<HTMLButtonElement>(".session-bar-actions button")?.click();
+    const copyButton = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-actions button");
+    copyButton?.click();
+    await vi.waitFor(() => {
+      expect(copyButton?.textContent?.trim()).toBe(feedback);
+      expect(copyButton?.getAttribute("aria-label")).toBeNull();
+    });
+    expect(writeText).toHaveBeenCalledWith("Selected thread");
     expect(onSelectSession).toHaveBeenCalledOnce();
     rows[0]?.querySelector<HTMLElement>(".session-bar-value")?.click();
     expect(onSelectSession).toHaveBeenCalledWith(
@@ -637,7 +655,9 @@ describe("renderSessionsCard", () => {
           ...totals,
           totalCost: 100,
           totalTokens: 100,
-          dailyBreakdown: [{ date: "2026-02-05", cost: 1, tokens: 1 }],
+          dailyBreakdown: [
+            { ...totals, date: "2026-02-05", cost: 1, tokens: 1, totalCost: 1, totalTokens: 1 },
+          ],
         },
       } as UsageSessionEntry,
       {
@@ -648,7 +668,9 @@ describe("renderSessionsCard", () => {
           ...totals,
           totalCost: 50,
           totalTokens: 50,
-          dailyBreakdown: [{ date: "2026-02-05", cost: 10, tokens: 10 }],
+          dailyBreakdown: [
+            { ...totals, date: "2026-02-05", cost: 10, tokens: 10, totalCost: 10, totalTokens: 10 },
+          ],
         },
       } as UsageSessionEntry,
     ];

@@ -286,55 +286,63 @@ describe("renderSkills ClawHub", () => {
     expect(onClawHubDetailOpen).not.toHaveBeenCalled();
   });
 
-  it("renders an installed external result from its exact recorded reference", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    const onClawHubInstall = vi.fn();
+  it.each([false, true])(
+    "scopes an installed external result to its destination (personal=%s)",
+    async (personalImport) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      dialogRestores.push(() => container.remove());
+      const onClawHubInstall = vi.fn();
 
-    render(
-      renderSkills(
-        createProps({
-          clawhubQuery: "pdf",
-          clawhubResults: [
-            {
-              score: 1,
-              slug: "pdf",
-              installRef: "skills-sh:openai/skills/pdf",
-              installOnly: true,
-              displayName: "Pdf",
-            },
-          ],
-          report: {
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [
-              createSkill({
-                clawhub: {
-                  status: "linked",
-                  valid: true,
-                  registry: "https://clawhub.ai",
-                  slug: "pdf",
-                  requestedReference: "skills-sh:openai/skills/pdf",
-                  installedVersion: "0.0.0",
-                  installedAt: 1,
-                },
-              }),
+      render(
+        renderSkills(
+          createProps({
+            personalImport,
+            clawhubQuery: "pdf",
+            clawhubResults: [
+              {
+                score: 1,
+                slug: "pdf",
+                installRef: "skills-sh:openai/skills/pdf",
+                installOnly: true,
+                displayName: "Pdf",
+              },
             ],
-          },
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
+            report: {
+              workspaceDir: "/tmp/workspace",
+              managedSkillsDir: "/tmp/skills",
+              skills: [
+                createSkill({
+                  clawhub: {
+                    status: "linked",
+                    valid: true,
+                    registry: "https://clawhub.ai",
+                    slug: "pdf",
+                    requestedReference: "skills-sh:openai/skills/pdf",
+                    installedVersion: "0.0.0",
+                    installedAt: 1,
+                  },
+                }),
+              ],
+            },
+            onClawHubInstall,
+          }),
+        ),
+        container,
+      );
+      await Promise.resolve();
 
-    const button = container.querySelector<HTMLButtonElement>(".btn.btn--sm")!;
-    expect(button.textContent?.trim()).toBe("Installed");
-    expect(button.disabled).toBe(true);
-    button.click();
-    expect(onClawHubInstall).not.toHaveBeenCalled();
-  });
+      const button = container.querySelector<HTMLButtonElement>(".btn.btn--sm")!;
+      expect(button.textContent?.trim()).toBe(personalImport ? "Import skill" : "Installed");
+      expect(button.disabled).toBe(!personalImport);
+      button.click();
+      if (personalImport) {
+        expect(onClawHubInstall).toHaveBeenCalledWith("skills-sh:openai/skills/pdf");
+      } else {
+        expect(onClawHubInstall).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("keeps the review flow for results from a gateway that predates the install-only flag", async () => {
     const container = document.createElement("div");
@@ -388,38 +396,6 @@ describe("renderSkills ClawHub", () => {
     // Without this the panel keeps the tall reader height meant for skill documents, so a
     // two-line refusal renders in a mostly empty dialog and reads as broken.
     expect(container.querySelectorAll(".md-preview-dialog__panel--message-only")).toHaveLength(1);
-  });
-
-  it("renders ClawHub acknowledgement retry actions", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    const onClawHubInstall = vi.fn();
-
-    render(
-      renderSkills(
-        createProps({
-          clawhubInstallMessage: {
-            kind: "error",
-            text: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-            acknowledgeRef: "github",
-            acknowledgeVersion: "1.2.3",
-          },
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
-
-    const retryButton = container.querySelector<HTMLButtonElement>(".callout button");
-    expect(normalizeText(container.querySelector(".callout")!)).toBe(
-      "REVIEW REQUIRED - ClawHub found suspicious behavior. Acknowledge risk and install",
-    );
-    expect(retryButton).toBeInstanceOf(HTMLButtonElement);
-    retryButton!.click();
-
-    expect(onClawHubInstall).toHaveBeenCalledTimes(1);
-    expect(onClawHubInstall).toHaveBeenCalledWith("github", true, "1.2.3");
   });
 
   it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {

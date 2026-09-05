@@ -69,6 +69,12 @@ describe("file-transfer plugin entry", () => {
       "dir_fetch",
       "file_write",
     ]);
+    const directoryTool = registerTool.mock.calls.find(([tool]) => tool.name === "dir_fetch")?.[0];
+    expect(directoryTool?.parameters).toMatchObject({
+      type: "object",
+      required: ["node", "path"],
+    });
+    expect(directoryTool.parameters).not.toHaveProperty("properties.includeDotfiles");
   });
 
   it("fails closed if the lazy policy module cannot load", async () => {

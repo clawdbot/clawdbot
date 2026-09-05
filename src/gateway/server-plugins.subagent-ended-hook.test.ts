@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 type HandleGatewayRequestOptions = GatewayRequestOptions & {
@@ -24,15 +25,6 @@ const internalAgentTurnFacade = vi.hoisted(() => ({
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
 }));
-vi.mock("./agent-turn/internal-facade.runtime.js", () => ({
-  createInternalAgentTurnFacade: (options: InternalAgentTurnFacadeOptions) => {
-    internalAgentTurnFacade.create(options);
-    return {
-      dispatch: internalAgentTurnFacade.dispatch,
-      wait: internalAgentTurnFacade.wait,
-    };
-  },
-}));
 
 type ServerPluginsModule = typeof import("./server-plugins.js") & {
   clearFallbackGatewayContext: () => void;
@@ -51,7 +43,15 @@ function createTestCfg(): OpenClawConfig {
 function createTestContext(label: string, cfg: OpenClawConfig): GatewayRequestContext {
   return {
     label,
+    trackExecution: trackAsyncWork,
     getRuntimeConfig: () => cfg,
+    createAgentTurnFacade: (options: InternalAgentTurnFacadeOptions) => {
+      internalAgentTurnFacade.create(options);
+      return {
+        dispatch: internalAgentTurnFacade.dispatch,
+        wait: internalAgentTurnFacade.wait,
+      };
+    },
   } as unknown as GatewayRequestContext;
 }
 

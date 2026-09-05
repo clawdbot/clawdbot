@@ -73,7 +73,7 @@ describe("session sharing sandbox requirements", () => {
           sessionId: "maintainer-host-session",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: maintainerId },
+          createdActor: { type: "human", source: "profile", id: maintainerId },
         },
       );
       await upsertSessionEntryCore(
@@ -82,7 +82,7 @@ describe("session sharing sandbox requirements", () => {
           sessionId: "guest-sandbox-session",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: guestId },
+          createdActor: { type: "human", source: "profile", id: guestId },
           sandbox: "required",
         },
       );
@@ -120,6 +120,7 @@ describe("session sharing sandbox requirements", () => {
         "sessions.send",
         "sessions.steer",
         "talk.client.create",
+        "talk.client.toolCall",
         "talk.session.create",
         "tools.invoke",
         "wake",

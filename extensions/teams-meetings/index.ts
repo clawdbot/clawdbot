@@ -2,6 +2,7 @@ import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
+import { TEAMS_MEETINGS_CLI_METADATA } from "./src/cli-output-mode.js";
 import { teamsMeetingsConfig } from "./src/config.js";
 import { TeamsMeetingsInvalidRequestError, teamsMeetingsInvalidRequest } from "./src/errors.js";
 import { handleTeamsMeetingsNodeHostCommand } from "./src/node-host.js";
@@ -48,6 +49,7 @@ export default MeetingPlatformAdapter.createPluginShellEntry({
   createNodePolicy: createTeamsMeetingsNodeInvokePolicy,
   registerNodeWhen: () => true,
   cli: {
+    descriptor: TEAMS_MEETINGS_CLI_METADATA.descriptor,
     load: async () => (await import("./src/cli.js")).registerTeamsMeetingsCli,
   },
 });

@@ -16,6 +16,14 @@ describe("worker portal RPC authority", () => {
     );
     const request = { toolCallId: "portal-call", action: "open" as const, port: 3000 };
 
+    await expect(
+      workerService.executeSessionTool(identity, "portal", {
+        toolCallId: "wrong-family",
+        arguments: { action: "read", artifact_path: "scripts/helper.sh" },
+      }),
+    ).resolves.toEqual({ ok: false, closeReason: "invalid-frame" });
+    expect(executeSessionTool).not.toHaveBeenCalled();
+
     await expect(workerService.executeSessionTool(identity, "portal", request)).resolves.toEqual({
       ok: true,
       result,
@@ -39,4 +47,61 @@ describe("worker portal RPC authority", () => {
       closeReason: "placement-mismatch",
     });
   });
+
+  it("returns actionable portal failures to an authorized worker", async () => {
+    const executeSessionTool = vi
+      .fn<NonNullable<support.WorkerEnvironmentServiceOptions["executeSessionTool"]>>()
+      .mockRejectedValue(new Error("portal port required"));
+    const { identity, workerService } = support.placementHarness(
+      "worker-portal-error",
+      "session-portal-error",
+      { executeSessionTool },
+    );
+
+    const result = await workerService.executeSessionTool(identity, "portal", {
+      toolCallId: "portal-missing-port",
+      action: "open",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("Expected a worker tool result");
+    }
+    expect(JSON.parse(result.result.resultJson)).toEqual({
+      content: [{ type: "text", text: expect.stringContaining("portal port required") }],
+      details: { status: "error", error: "portal port required" },
+    });
+  });
+
+  it.each(["placement", "tool"] as const)(
+    "fences a failed portal operation after its %s authority is revoked",
+    async (authority) => {
+      const executeSessionTool =
+        vi.fn<NonNullable<support.WorkerEnvironmentServiceOptions["executeSessionTool"]>>();
+      const { identity, placementStore, workerService } = support.placementHarness(
+        `worker-portal-revoked-${authority}`,
+        `session-portal-revoked-${authority}`,
+        { executeSessionTool },
+      );
+      executeSessionTool.mockImplementationOnce(async () => {
+        if (authority === "placement") {
+          placementStore.validateWorkerTurn.mockReturnValue(false);
+        } else {
+          placementStore.isWorkerTurnToolAuthorized.mockReturnValue(false);
+        }
+        throw new Error("Portal operation failed after authority changed");
+      });
+
+      await expect(
+        workerService.executeSessionTool(identity, "portal", {
+          toolCallId: "revoked-portal-call",
+          action: "open",
+          port: 3000,
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        closeReason: authority === "placement" ? "placement-mismatch" : "method-not-allowed",
+      });
+    },
+  );
 });

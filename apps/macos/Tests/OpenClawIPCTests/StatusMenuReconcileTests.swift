@@ -5,24 +5,15 @@ import Testing
 @MainActor
 struct StatusMenuReconcileTests {
     @Test func `AppKit selection highlights only the selected hosted session row`() throws {
-        let state = AppState(preview: true)
-        let controller = StatusMenuController(state: state, updater: DisabledUpdaterController())
+        // Highlighting needs real hosted rows, not live session submenus that fetch previews.
         let menu = NSMenu()
-        menu.delegate = controller
-        let renderer = StatusMenuRenderer(menu: menu, state: state)
-        renderer.render(StatusMenuDescriptor(sections: [
-            .init(id: "sessions", entries: [
-                .init(.session(self.session("first"))),
-                .init(.session(self.session("second"))),
-            ]),
-            .init(id: "summaries", entries: [.init(.summary(.devices))]),
-        ]))
-
-        let first = try #require(menu.items.first)
-        let second = try #require(menu.items.first { $0.representedObject as? String == "session.second" })
+        menu.delegate = StatusMenuHighlightDelegate.shared
+        let first = self.hostedSessionItem("first")
+        let second = self.hostedSessionItem("second")
+        menu.addItem(first)
+        menu.addItem(second)
         let firstHosted = try #require(first.view as? HostedMenuRowView)
         let secondHosted = try #require(second.view as? HostedMenuRowView)
-        #expect(first.submenu?.delegate === StatusMenuHighlightDelegate.shared)
 
         menu.delegate?.menu?(menu, willHighlight: first)
         #expect(firstHosted.isHighlighted)
@@ -36,16 +27,17 @@ struct StatusMenuReconcileTests {
         #expect(!firstHosted.isHighlighted)
         #expect(!secondHosted.isHighlighted)
 
-        let devices = try #require(menu.items.first { $0.representedObject as? String == "summary.devices" })
-        let submenu = try #require(devices.submenu)
-        #expect(submenu.delegate === StatusMenuHighlightDelegate.shared)
-        let device = try #require(submenu.items.first { $0.view is HostedMenuRowView })
-        let hostedDevice = try #require(device.view as? HostedMenuRowView)
+        let submenu = NSMenu()
+        submenu.delegate = StatusMenuHighlightDelegate.shared
+        first.submenu = submenu
+        let nested = self.hostedSessionItem("nested")
+        submenu.addItem(nested)
+        let nestedHosted = try #require(nested.view as? HostedMenuRowView)
 
-        submenu.delegate?.menu?(submenu, willHighlight: device)
-        #expect(hostedDevice.isHighlighted)
-        submenu.delegate?.menu?(submenu, willHighlight: nil)
-        #expect(!hostedDevice.isHighlighted)
+        submenu.delegate?.menu?(submenu, willHighlight: nested)
+        #expect(nestedHosted.isHighlighted)
+        submenu.delegate?.menuDidClose?(submenu)
+        #expect(!nestedHosted.isHighlighted)
 
         menu.delegate?.menu?(menu, willHighlight: second)
         #expect(secondHosted.isHighlighted)
@@ -141,6 +133,15 @@ struct StatusMenuReconcileTests {
             .init(id: "actions", entries: actions.map(StatusMenuDescriptor.Entry.init)),
             .init(id: "footer", entries: footer.map(StatusMenuDescriptor.Entry.init)),
         ])
+    }
+
+    private func hostedSessionItem(_ key: String) -> NSMenuItem {
+        let item = NSMenuItem()
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: StatusSessionCard(row: self.session(key)),
+            highlights: true)
+        return item
     }
 
     private func session(_ key: String) -> SessionRow {

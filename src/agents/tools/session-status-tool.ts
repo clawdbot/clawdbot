@@ -64,10 +64,10 @@ import {
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
-  resolveThinkingDefaultWithRuntimeCatalog,
+  resolveThinkingDefaultWithRuntimeCatalogCore,
 } from "../model-selection.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
-import { loadPreparedModelCatalog } from "../prepared-model-catalog.js";
+import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../session-model-ref.js";
 import {
   describeSessionStatusTool,
@@ -500,7 +500,7 @@ async function resolveModelOverride(params: {
     agentId: params.agentId,
     defaultProvider: currentProvider,
   });
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await loadPublishedPreparedModelCatalog({
     config: params.cfg,
     agentId: params.agentId,
     agentDir: params.agentDir,
@@ -526,7 +526,7 @@ async function resolveModelOverride(params: {
           env: process.env,
         });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins,
+    manifestPlugins: manifestMetadataSnapshot,
   };
   const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
@@ -1125,7 +1125,7 @@ export function createSessionStatusTool(opts?: {
             config: cfg,
           });
           // Tool status may read persisted/configured facts, but must not start provider discovery.
-          const thinkingCatalog = await loadPreparedModelCatalog({
+          const thinkingCatalog = await loadPublishedPreparedModelCatalog({
             config: cfg,
             agentId,
             agentDir: selectedAgentDir,
@@ -1137,6 +1137,7 @@ export function createSessionStatusTool(opts?: {
           const { buildStatusText } = await loadCommandsStatusRuntime();
           const statusText = await buildStatusText({
             cfg,
+            agentId,
             sessionEntry: statusSessionEntry,
             sessionKey: scopedResolved.key,
             parentSessionKey: statusSessionEntry.parentSessionKey,
@@ -1153,12 +1154,12 @@ export function createSessionStatusTool(opts?: {
             resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
             resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
             resolveDefaultThinkingLevel: () =>
-              resolveThinkingDefaultWithRuntimeCatalog({
+              resolveThinkingDefaultWithRuntimeCatalogCore({
                 cfg,
                 provider: providerForCard,
                 model: defaultModelForCard,
                 loadRuntimeCatalog: () =>
-                  loadPreparedModelCatalog({
+                  loadPublishedPreparedModelCatalog({
                     config: cfg,
                     agentId,
                     agentDir: selectedAgentDir,

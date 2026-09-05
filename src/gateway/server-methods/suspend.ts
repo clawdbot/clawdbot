@@ -28,10 +28,7 @@ function schedulerRecoveryError(retryAfterMs: number) {
 
 export const suspendHandlers: GatewayRequestHandlers = {
   "gateway.suspend.prepare": async ({ respond, params, context }) => {
-    if (
-      !validateGatewaySuspendPrepareParams(params) ||
-      (params.drain === true && params.terminalPolicy === "terminate")
-    ) {
+    if (!validateGatewaySuspendPrepareParams(params)) {
       respond(false, undefined, invalidParams("gateway.suspend.prepare"));
       return;
     }

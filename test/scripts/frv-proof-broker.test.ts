@@ -9,7 +9,8 @@ import {
 } from "../../scripts/frv-proof-broker.mjs";
 
 const workflowSha = "a".repeat(40);
-const headSha = "b".repeat(40);
+const landedSha = "b".repeat(40);
+const pullHeadSha = "c".repeat(40);
 const repository = "openclaw/openclaw";
 
 type BrokerWorkflow = {
@@ -52,7 +53,7 @@ function brokerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 function brokerEvent(overrides: Record<string, unknown> = {}) {
   return {
     inputs: {
-      head_sha: headSha,
+      landed_sha: landedSha,
       pr_number: "128141",
       ...overrides,
     },
@@ -78,15 +79,30 @@ function fixtureRun(overrides: Record<string, unknown> = {}) {
 function pullRequest(overrides: Record<string, unknown> = {}) {
   return {
     base: { ref: "main", repo: { full_name: repository } },
-    head: { sha: headSha, repo: { full_name: repository } },
+    head: { sha: pullHeadSha, repo: { full_name: repository } },
+    merge_commit_sha: landedSha,
+    merged: true,
+    merged_at: "2026-08-28T11:35:11Z",
     number: 128141,
-    state: "open",
+    state: "closed",
+    ...overrides,
+  };
+}
+
+function landedAncestry(overrides: Record<string, unknown> = {}) {
+  return {
+    ahead_by: 1,
+    base_commit: { sha: landedSha },
+    behind_by: 0,
+    merge_base_commit: { sha: landedSha },
+    status: "ahead",
     ...overrides,
   };
 }
 
 function successfulApi(
   options: {
+    ancestries?: Array<Record<string, unknown>>;
     initialRun?: Record<string, unknown>;
     mainShas?: string[];
     permissions?: string[];
@@ -99,6 +115,7 @@ function successfulApi(
   let permissionRead = 0;
   let pullRead = 0;
   let mainRead = 0;
+  let ancestryRead = 0;
   const initialRun = options.initialRun ?? fixtureRun();
   const rerun =
     options.rerun ??
@@ -118,6 +135,11 @@ function successfulApi(
         const pull = options.pulls?.[pullRead] ?? pullRequest();
         pullRead += 1;
         return pull;
+      }
+      if (method === "GET" && path === `/compare/${landedSha}...${workflowSha}`) {
+        const ancestry = options.ancestries?.[ancestryRead] ?? landedAncestry();
+        ancestryRead += 1;
+        return ancestry;
       }
       if (method === "GET" && path === "/actions/workflows/frv-proof-fixture.yml") {
         return {
@@ -158,7 +180,7 @@ describe("FRV proof broker request validation", () => {
     const parsed = validateBrokerRequest(brokerEvent(), brokerEnv());
     expect(parsed).toMatchObject({
       correlation: "frv-proof-12345-1",
-      headSha,
+      landedSha,
       prNumber: 128141,
       workflowSha,
     });
@@ -179,7 +201,7 @@ describe("FRV proof broker request validation", () => {
 
   it("rejects malformed PR and SHA inputs", () => {
     expect(() => validateBrokerRequest(brokerEvent({ pr_number: "0" }), brokerEnv())).toThrow();
-    expect(() => validateBrokerRequest(brokerEvent({ head_sha: "ABC" }), brokerEnv())).toThrow();
+    expect(() => validateBrokerRequest(brokerEvent({ landed_sha: "ABC" }), brokerEnv())).toThrow();
     expect(() =>
       validateBrokerRequest(brokerEvent(), brokerEnv({ GITHUB_RUN_ATTEMPT: "0" })),
     ).toThrow(/GITHUB_RUN_ATTEMPT/u);
@@ -203,7 +225,7 @@ describe("FRV proof fixture identity", () => {
 
   it.each([
     ["repository", { repository: { full_name: "attacker/fork" } }],
-    ["SHA", { head_sha: headSha }],
+    ["SHA", { head_sha: landedSha }],
     ["workflow", { path: ".github/workflows/full-release-validation.yml" }],
     ["run", { id: 778 }],
     ["attempt", { run_attempt: 2 }],
@@ -227,6 +249,7 @@ describe("FRV proof broker mutation boundary", () => {
       "/actions/workflows/frv-proof-fixture.yml",
       "/collaborators/maintainer/permission",
       "/pulls/128141",
+      `/compare/${landedSha}...${workflowSha}`,
       "/git/ref/heads/main",
     ]);
   });
@@ -242,6 +265,7 @@ describe("FRV proof broker mutation boundary", () => {
     expect(receipt).toMatchObject({
       fixtureRunAttempt: 2,
       fixtureRunId: 777,
+      landedSha,
       operation: "noop",
       sourceRef: "refs/heads/main",
     });
@@ -262,13 +286,23 @@ describe("FRV proof broker mutation boundary", () => {
     ]);
   });
 
-  it("rejects a mismatched PR head before any mutation", async () => {
+  it.each([
+    ["open", { merged: false, merged_at: null, state: "open" }, /merged pull request/u],
+    ["unmerged", { merged: false, merged_at: null }, /merged pull request/u],
+    [
+      "wrong base",
+      { base: { ref: "release/2026.9.1", repo: { full_name: repository } } },
+      /base must be main/u,
+    ],
+    [
+      "wrong base repository",
+      { base: { ref: "main", repo: { full_name: "attacker/fork" } } },
+      /base repository/u,
+    ],
+    ["wrong merge SHA", { merge_commit_sha: "c".repeat(40) }, /merge commit/u],
+  ])("rejects a %s PR before any mutation", async (_label, overrides, message) => {
     const { api, calls } = successfulApi({
-      pulls: [
-        pullRequest({
-          head: { sha: "c".repeat(40), repo: { full_name: repository } },
-        }),
-      ],
+      pulls: [pullRequest(overrides)],
     });
     await expect(
       runProofBroker({
@@ -277,8 +311,83 @@ describe("FRV proof broker mutation boundary", () => {
         event: brokerEvent(),
         sleep: async () => {},
       }),
-    ).rejects.toThrow(/head SHA/u);
+    ).rejects.toThrow(message);
     expect(calls.some((call) => call.method !== "GET")).toBe(false);
+  });
+
+  it("binds a squash-merged PR to its landed commit instead of its former head", async () => {
+    const { api } = successfulApi();
+    const receipt = await runProofBroker({
+      api,
+      env: brokerEnv(),
+      event: brokerEvent(),
+      sleep: async () => {},
+    });
+    expect(pullHeadSha).not.toBe(landedSha);
+    expect(receipt.landedSha).toBe(landedSha);
+  });
+
+  it.each([
+    [
+      "non-ancestor",
+      {
+        ahead_by: 0,
+        base_commit: { sha: landedSha },
+        behind_by: 1,
+        merge_base_commit: { sha: "c".repeat(40) },
+        status: "behind",
+      },
+    ],
+    [
+      "wrong base",
+      {
+        base_commit: { sha: "c".repeat(40) },
+        merge_base_commit: { sha: "c".repeat(40) },
+      },
+    ],
+  ])("rejects %s landed ancestry before any mutation", async (_label, ancestry) => {
+    const { api, calls } = successfulApi({ ancestries: [landedAncestry(ancestry)] });
+    await expect(
+      runProofBroker({
+        api,
+        env: brokerEnv(),
+        event: brokerEvent(),
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/landed controller ancestry/u);
+    expect(calls.some((call) => call.method !== "GET")).toBe(false);
+  });
+
+  it("accepts a landed SHA identical to the trusted workflow SHA", async () => {
+    const identicalSha = workflowSha;
+    const { api } = successfulApi({
+      pulls: [
+        pullRequest({ merge_commit_sha: identicalSha }),
+        pullRequest({ merge_commit_sha: identicalSha }),
+      ],
+    });
+    let ancestryReads = 0;
+    await runProofBroker({
+      api: {
+        request: async (method, path, body) => {
+          if (method === "GET" && path === `/compare/${identicalSha}...${workflowSha}`) {
+            ancestryReads += 1;
+            return {
+              ahead_by: 0,
+              base_commit: { sha: identicalSha },
+              behind_by: 0,
+              merge_base_commit: { sha: identicalSha },
+              status: "identical",
+            };
+          }
+          return api.request(method, path, body);
+        },
+      },
+      env: brokerEnv(),
+      event: brokerEvent({ landed_sha: identicalSha }),
+      sleep: async () => {},
+    });
+    expect(ancestryReads).toBe(2);
   });
 
   it("rejects a moved main immediately before dispatch", async () => {
@@ -338,12 +447,12 @@ describe("FRV proof broker mutation boundary", () => {
     ]);
   });
 
-  it("rejects a replaced PR head before rerunning", async () => {
+  it("revalidates the merged PR immediately before rerunning", async () => {
     const { api, calls } = successfulApi({
       pulls: [
         pullRequest(),
         pullRequest({
-          head: { sha: "c".repeat(40), repo: { full_name: repository } },
+          merge_commit_sha: "c".repeat(40),
         }),
       ],
     });
@@ -354,7 +463,30 @@ describe("FRV proof broker mutation boundary", () => {
         event: brokerEvent(),
         sleep: async () => {},
       }),
-    ).rejects.toThrow(/head SHA/u);
+    ).rejects.toThrow(/merge commit/u);
+    expect(calls.some((call) => call.path.endsWith("/rerun-failed-jobs"))).toBe(false);
+  });
+
+  it("revalidates landed ancestry immediately before rerunning", async () => {
+    const { api, calls } = successfulApi({
+      ancestries: [
+        landedAncestry(),
+        landedAncestry({
+          ahead_by: 0,
+          behind_by: 1,
+          merge_base_commit: { sha: "c".repeat(40) },
+          status: "behind",
+        }),
+      ],
+    });
+    await expect(
+      runProofBroker({
+        api,
+        env: brokerEnv(),
+        event: brokerEvent(),
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/landed controller ancestry/u);
     expect(calls.some((call) => call.path.endsWith("/rerun-failed-jobs"))).toBe(false);
   });
 
@@ -411,9 +543,9 @@ describe("FRV proof workflows", () => {
   const broker = parseYaml(brokerSource) as BrokerWorkflow;
   const fixture = parseYaml(fixtureSource) as FixtureWorkflow;
 
-  it("exposes only PR number and exact head as broker inputs", () => {
+  it("exposes only PR number and exact landed commit as broker inputs", () => {
     expect(Object.keys(broker.on.workflow_dispatch.inputs).toSorted()).toEqual([
-      "head_sha",
+      "landed_sha",
       "pr_number",
     ]);
     expect(broker.concurrency).toEqual({
@@ -436,7 +568,7 @@ describe("FRV proof workflows", () => {
       "persist-credentials": false,
       ref: "${{ github.workflow_sha }}",
     });
-    expect(brokerSource).not.toContain("inputs.head_sha }}");
+    expect(brokerSource).not.toContain("inputs.landed_sha }}");
     expect(brokerSource).not.toContain("pull/");
     expect(brokerSource).not.toContain("contents: write");
   });

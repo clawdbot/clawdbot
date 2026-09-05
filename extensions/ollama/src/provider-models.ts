@@ -102,7 +102,8 @@ export const mergeOllamaModelShowInfo = (
   const incomplete =
     info.capabilities === undefined &&
     model.capabilities !== undefined &&
-    Boolean(model.remote_host || model.remote_model || isOllamaCloudModel(model.name));
+    isOllamaRemoteModel(model) &&
+    !isOllamaEmbeddingOnlyModel(model);
   return {
     ...model,
     ...info,
@@ -351,10 +352,10 @@ export async function enrichOllamaCompletionModels(
     for (const model of batch) {
       const canComplete = model.capabilities?.includes("completion");
       if (
-        !canComplete &&
-        (opts?.requireCompletionCapability ||
-          model.capabilities?.includes("embedding") ||
-          (model.capabilities && !model.capabilitiesFromList))
+        isOllamaEmbeddingOnlyModel(model) ||
+        (!canComplete &&
+          (opts?.requireCompletionCapability ||
+            (model.capabilities && !model.capabilitiesFromList)))
       ) {
         continue;
       }
@@ -369,6 +370,21 @@ export async function enrichOllamaCompletionModels(
 
 export function isOllamaCloudModel(modelName: string | undefined): boolean {
   return isCloudModelRef(modelName);
+}
+
+export function isOllamaEmbeddingOnlyModel(model: OllamaTagModel): boolean {
+  // Advertised tools do not turn an embedding-only row into a chat model.
+  return (
+    model.capabilities?.includes("embedding") === true && !model.capabilities.includes("completion")
+  );
+}
+
+export function isOllamaRemoteModel(model: OllamaTagModel): boolean {
+  // Remote stubs can identify only the upstream model, without a host or cloud suffix.
+  return (
+    Boolean(model.remote_host?.trim() || model.remote_model?.trim()) ||
+    isOllamaCloudModel(model.name)
+  );
 }
 
 /**

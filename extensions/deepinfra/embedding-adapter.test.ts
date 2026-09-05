@@ -20,8 +20,8 @@ const memoryProvider: MemoryEmbeddingProvider = {
   id: "deepinfra",
   model: "BAAI/bge-m3",
   maxInputTokens: 8192,
-  embedQuery: vi.fn(async () => [1, 0]),
-  embedBatch: vi.fn(async (texts) => texts.map(() => [0, 1])),
+  embed: vi.fn(async () => [1, 0]),
+  embedBatch: vi.fn(async (inputs) => inputs.map(() => [0, 1])),
   close: vi.fn(),
 };
 
@@ -108,7 +108,6 @@ describe("DeepInfra generic embedding adapter", () => {
       config: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "deepinfra",
-      fallback: "none",
       remote: {
         baseUrl: "https://api.deepinfra.com/v1/openai",
         apiKey: "fixture-key",
@@ -118,7 +117,7 @@ describe("DeepInfra generic embedding adapter", () => {
       inputType: "semantic",
       queryInputType: "query",
       documentInputType: "document",
-      outputDimensionality: 1024,
+      dimensions: 1024,
       taskType: "SEMANTIC_SIMILARITY",
       defaultModel: "BAAI/bge-m3",
     });
@@ -196,7 +195,7 @@ describe("DeepInfra generic embedding adapter", () => {
     expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain("fixture-");
   });
 
-  it("adapts generic query and batch calls without changing text or cancellation", async () => {
+  it("returns canonical query and batch calls without changing inputs or cancellation", async () => {
     const result = await deepinfraEmbeddingProviderAdapter.create({
       config: {},
       model: "BAAI/bge-m3",
@@ -231,12 +230,14 @@ describe("DeepInfra generic embedding adapter", () => {
     ]);
     await provider.close?.();
 
-    expect(memoryProvider.embedQuery).toHaveBeenCalledWith("query text", {
-      signal: abortController.signal,
-    });
-    expect(memoryProvider.embedBatch).toHaveBeenCalledWith(["document one", "document two"], {
-      signal: abortController.signal,
-    });
+    expect(memoryProvider.embed).toHaveBeenCalledWith(
+      { text: "query text" },
+      { signal: abortController.signal, inputType: "query" },
+    );
+    expect(memoryProvider.embedBatch).toHaveBeenCalledWith(
+      ["document one", { text: "document two" }],
+      { signal: abortController.signal, inputType: "document" },
+    );
     expect(memoryProvider.close).toHaveBeenCalledOnce();
   });
 });

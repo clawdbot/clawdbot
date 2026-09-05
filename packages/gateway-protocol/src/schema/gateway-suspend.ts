@@ -6,6 +6,17 @@ import { closedObject } from "./closed-object.js";
 const SuspensionTokenSchema = Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" });
 const CountSchema = Type.Integer({ minimum: 0 });
 
+/** Public admission state only; never includes the controller's suspension token. */
+export const GatewaySuspensionSchema = closedObject({
+  phase: Type.Union([
+    Type.Literal("accepting"),
+    Type.Literal("preparing"),
+    Type.Literal("draining"),
+    Type.Literal("prepared"),
+  ]),
+});
+export type GatewaySuspension = Static<typeof GatewaySuspensionSchema>;
+
 export const GatewaySuspendTaskBlockerSchema = closedObject({
   taskId: Type.String(),
   status: Type.Literal("running"),

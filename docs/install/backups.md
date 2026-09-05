@@ -114,13 +114,13 @@ openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 configured, so a fresh install cannot silently create a schedule whose pushes
 always fail.
 
-Pushed schedules redact credential-bearing tables by default: an unattended
-recurring push would otherwise retain credentials durably in remote Git
-history. Pass `--include-secrets` to schedule full-fidelity remote backups
-when you accept that tradeoff and the remote is private; restores from
-redacted history require re-pairing devices and re-authenticating providers
-afterward. Local (non-push) schedules keep full fidelity so restores are
-complete.
+Pushed schedules redact credential-bearing tables and secret-prefixed
+machine-state rows by default: an unattended recurring push would otherwise
+retain credentials durably in remote Git history. Pass `--include-secrets` to
+schedule full-fidelity remote backups when you accept that tradeoff and the
+remote is private; restores from redacted history require re-pairing devices
+and re-authenticating providers afterward. Local (non-push) schedules keep full
+fidelity so restores are complete.
 
 Use `--global-only` or `--agent <id>` to narrow the scope. Add
 `--exclude-secrets` for a redacted Git history. Re-running the command updates
@@ -195,8 +195,9 @@ confirm ownership and run `chmod 700 <repository>` to repair unsafe permissions.
 The repository is ordinary Git and can use any remote, including GitHub. Keep
 the remote private: the default dump includes auth profiles, tokens, and other
 credential-bearing state. `--exclude-secrets` omits the documented secret
-tables when a redacted history is more useful than a credential-complete
-backup; see [Backup CLI](/cli/backup#versioned-git-backups) for the exact list.
+tables and machine-state key prefixes when a redacted history is more useful
+than a credential-complete backup; see
+[Backup CLI](/cli/backup#versioned-git-backups) for the exact list.
 
 Verify or restore one database at any commit without overwriting a live file:
 

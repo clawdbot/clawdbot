@@ -204,7 +204,7 @@ describe("createAcpReplyProjector", () => {
   });
 
   it.each(["live", "final_only"] as const)(
-    "uses finalized owner context to redact split private prompts in %s mode",
+    "uses finalized and refreshed owner context to redact split private prompts in %s mode",
     async (deliveryMode) => {
       const marker = "[Current message - respond to this]";
       let conversationContext = "";
@@ -218,7 +218,8 @@ describe("createAcpReplyProjector", () => {
       conversationContext = `${marker}\nPrivate secret. Keep hidden.`;
 
       await emitText(projector, "Visible answer before. ");
-      await emitText(projector, `${marker}\nPrivate secret. `);
+      conversationContext = `${marker}\nPrivate updated context. Keep hidden.`;
+      await emitText(projector, `${marker}\nPrivate updated context. `);
       await emitText(projector, "Keep hidden. Visible answer after.");
       await projector.flush(true);
 

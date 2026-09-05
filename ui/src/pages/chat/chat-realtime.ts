@@ -3,6 +3,7 @@ import { loadSettings, patchSettings, type UiSettings } from "../../app/settings
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   createRealtimeTalkConversationState,
+  orderRealtimeTalkConversation,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
@@ -98,7 +99,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     state.requestUpdate();
   };
   const refreshCameraDevices = async (session: RealtimeTalkSession) => {
-    const result = await discoverRealtimeTalkCameras(false);
+    const result = await discoverRealtimeTalkCameras(() => false);
     if (state.realtimeTalkSession !== session) {
       return;
     }
@@ -226,6 +227,17 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
           state.realtimeTalkConversationState = updateRealtimeTalkConversation(
             state.realtimeTalkConversationState,
             entry,
+          );
+          state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
+          state.requestUpdate();
+        },
+        onTranscriptOrder: (orders) => {
+          if (state.realtimeTalkSession !== session) {
+            return;
+          }
+          state.realtimeTalkConversationState = orderRealtimeTalkConversation(
+            state.realtimeTalkConversationState,
+            orders,
           );
           state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
           state.requestUpdate();

@@ -118,12 +118,9 @@ const SESSION_LEVEL_DIRECTIVE_FIELDS = [
   ["hasElevatedDirective", "elevatedLevel"],
 ] as const satisfies ReadonlyArray<readonly [keyof InlineDirectives, keyof SessionEntry]>;
 
-const SESSION_EXEC_DIRECTIVE_FIELDS = [
-  "execHost",
-  "execSecurity",
-  "execAsk",
-  "execNode",
-] as const satisfies ReadonlyArray<keyof InlineDirectives & keyof SessionEntry>;
+const SESSION_EXEC_DIRECTIVE_FIELDS = ["execHost", "execNode"] as const satisfies ReadonlyArray<
+  keyof InlineDirectives & keyof SessionEntry
+>;
 
 const SESSION_QUEUE_DIRECTIVE_FIELDS = [
   ["queueMode", "queueMode"],
@@ -325,7 +322,11 @@ export async function persistSessionDirectiveSnapshot(params: {
   touchedFields: Array<keyof SessionEntry>;
   hasModelSelection: boolean;
   reassertLiveModelSwitchPending: boolean;
-}): Promise<{ status: "applied" | "conflict" | "model-selection-locked" }> {
+  validateCommit?: () => string | undefined;
+}): Promise<
+  | { status: "applied" | "conflict" | "model-selection-locked" }
+  | { status: "commit-rejected"; error: string }
+> {
   const { sessionEntry, sessionKey, sessionStore } = params;
   const persistence = await persistReplySessionEntry({
     storePath: params.storePath,
@@ -335,11 +336,15 @@ export async function persistSessionDirectiveSnapshot(params: {
     reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
     requireModelSelectionUnlocked: params.hasModelSelection,
     touchedFields: params.touchedFields,
+    validateCommit: params.validateCommit,
   });
   if (persistence.status !== "current") {
     if (persistence.entry) {
       sessionStore[sessionKey] = persistence.entry;
       adoptPersistedSessionSnapshot(sessionEntry, persistence.entry);
+    }
+    if (persistence.status === "commit-rejected") {
+      return persistence;
     }
     return {
       status: persistence.status === "model-selection-locked" ? persistence.status : "conflict",

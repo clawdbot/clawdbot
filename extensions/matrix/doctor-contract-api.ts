@@ -12,13 +12,7 @@ import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "./src/account-selection.js";
-import {
-  hasMatrixSyncCacheStateInStore,
-  openMatrixSyncCacheStoreOptions,
-  readLegacyMatrixSyncCacheState,
-  writeMatrixSyncCacheStateToStore,
-  type MatrixSyncCacheRecord,
-} from "./src/matrix/client/file-sync-store.js";
+import { matrixAccountStateSchemaMigration } from "./src/matrix/account-state-schema-doctor.js";
 import {
   hasMatrixStorageMetaStateInStore,
   normalizeMatrixStorageMetadata,
@@ -26,6 +20,13 @@ import {
   writeMatrixStorageMetaStateToStore,
   type MatrixStorageMetadata,
 } from "./src/matrix/client/storage.js";
+import {
+  hasMatrixSyncCacheStateInStore,
+  openMatrixSyncCacheStoreOptions,
+  readLegacyMatrixSyncCacheState,
+  writeMatrixSyncCacheStateToStore,
+  type MatrixSyncCacheRecord,
+} from "./src/matrix/client/sync-cache-state.js";
 import {
   MATRIX_CREDENTIALS_MAX_ENTRIES,
   MATRIX_CREDENTIALS_NAMESPACE,
@@ -35,7 +36,6 @@ import {
   type MatrixCredentialStateRecord,
   type MatrixStoredCredentialRecord,
 } from "./src/matrix/credentials-state.js";
-import { migrateLegacyMatrixIdbSnapshot } from "./src/matrix/crypto-snapshot-doctor.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
@@ -67,7 +67,7 @@ import {
 import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
 import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
 
-export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
+export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
 
 const MATRIX_SYNC_CACHE_FILENAME = "bot-storage.json";
 const MATRIX_STORAGE_META_FILENAME = "storage-meta.json";
@@ -164,8 +164,16 @@ async function collectLegacyMatrixStateRoots(
     .toSorted();
 }
 
-async function collectLegacySyncCacheRoots(stateDir: string): Promise<string[]> {
-  return collectLegacyMatrixStateRoots(stateDir, MATRIX_SYNC_CACHE_FILENAME);
+async function* readLegacyMatrixSyncCaches(stateDir: string) {
+  for (const storageRootDir of await collectLegacyMatrixStateRoots(
+    stateDir,
+    MATRIX_SYNC_CACHE_FILENAME,
+  )) {
+    const persisted = await readLegacyMatrixSyncCacheState(storageRootDir);
+    if (persisted) {
+      yield { storageRootDir, persisted };
+    }
+  }
 }
 
 async function readLegacyMatrixStorageMetadata(
@@ -218,6 +226,7 @@ async function archiveLegacyMatrixStateFile(params: {
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
+  matrixAccountStateSchemaMigration,
   {
     id: "matrix-credentials-json-to-plugin-state",
     label: "Matrix credentials",
@@ -505,11 +514,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "Matrix sync cache",
     async detectLegacyState(params) {
       const previews: string[] = [];
-      for (const storageRootDir of await collectLegacySyncCacheRoots(params.stateDir)) {
-        const persisted = await readLegacyMatrixSyncCacheState(storageRootDir);
-        if (!persisted) {
-          continue;
-        }
+      for await (const { storageRootDir } of readLegacyMatrixSyncCaches(params.stateDir)) {
         previews.push(`Matrix sync cache JSON can migrate to SQLite: ${storageRootDir}`);
       }
       return previews.length > 0 ? { preview: previews } : null;
@@ -518,11 +523,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const changes: string[] = [];
       const warnings: string[] = [];
       const notices: string[] = [];
-      for (const storageRootDir of await collectLegacySyncCacheRoots(params.stateDir)) {
-        const persisted = await readLegacyMatrixSyncCacheState(storageRootDir);
-        if (!persisted) {
-          continue;
-        }
+      for await (const { storageRootDir, persisted } of readLegacyMatrixSyncCaches(
+        params.stateDir,
+      )) {
         const store = params.context.openPluginStateKeyedStore<MatrixSyncCacheRecord>(
           openMatrixSyncCacheStoreOptions(storageRootDir),
         );
@@ -674,6 +677,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         MATRIX_IDB_SNAPSHOT_FILENAME,
         { includeMatrixRoot: true },
       )) {
+        // Keep empty-state Doctor scans from materializing the IndexedDB runtime.
+        const { migrateLegacyMatrixIdbSnapshot } =
+          await import("./src/matrix/crypto-snapshot-doctor.runtime.js");
         await migrateLegacyMatrixIdbSnapshot({
           storageRootDir,
           context: params.context,

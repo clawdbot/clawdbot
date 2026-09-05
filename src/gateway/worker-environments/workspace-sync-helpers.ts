@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { z } from "zod";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { WORKER_BUNDLE_RSYNC_RECEIVER_PATH } from "../../shared/worker-bundle-hash.js";
@@ -15,37 +14,16 @@ import {
 } from "./ssh.js";
 import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncRequest } from "./tunnel-contract.js";
 import {
+  parseRemoteWorkspaceManifestEnvelope,
   recordRemoteWorkspaceHashMetrics,
+  replaceWorkerWorkspaceHashMemoEntries,
   serializeRemoteWorkspaceHashMemo,
   type WorkspaceHashMemo,
   type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
-import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
-const WORKER_HASH_IDENTITY_PATTERN = /^worker:\d+:\d+:\d+:\d+:\d+$/u;
-const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
-const remoteWorkspaceManifestEnvelopeSchema = z
-  .object({
-    version: z.literal(1),
-    manifestRef: z.string().regex(MANIFEST_REF_PATTERN),
-    memo: z
-      .array(
-        z.tuple([z.string().regex(WORKER_HASH_IDENTITY_PATTERN), z.string().regex(SHA256_PATTERN)]),
-      )
-      .max(MAX_RECONCILIATION_ENTRIES),
-    metrics: z
-      .object({
-        contentHashCount: z.number().finite().nonnegative(),
-        contentHashDurationMs: z.number().finite().nonnegative(),
-        memoHitCount: z.number().finite().nonnegative(),
-        memoTruncatedCount: z.number().finite().nonnegative(),
-        totalDurationMs: z.number().finite().nonnegative(),
-      })
-      .strict(),
-  })
-  .strict();
 const INBOUND_QUOTA_INITIAL_POLL_MS = 25;
 const INBOUND_QUOTA_MAX_POLL_MS = 250;
 export const WORKER_WORKSPACE_RSYNC_DESTINATION = "openclaw-rsync-destination";
@@ -55,7 +33,9 @@ export type WorkerWorkspaceActionsOptions = {
   sharedHost?: boolean;
   ownerSignal: AbortSignal;
   waitForPrepared: () => Promise<PreparedWorkerSsh>;
-  runner: { run(argv: string[], options: CommandOptions): Promise<SpawnResult> };
+  runner: {
+    run(argv: string[], options: CommandOptions): Promise<SpawnResult>;
+  };
   tasks: Set<Promise<unknown>>;
   bundleHash: string;
 };
@@ -85,7 +65,9 @@ export function workerWorkspaceCommandSucceeded(result: SpawnResult): boolean {
 }
 
 export function workspaceSyncError(result: SpawnResult): Error {
-  const detail = redactSensitiveText(result.stderr || result.stdout, { mode: "tools" })
+  const detail = redactSensitiveText(result.stderr || result.stdout, {
+    mode: "tools",
+  })
     .replace(/\s+/gu, " ")
     .trim();
   return new Error(
@@ -265,20 +247,13 @@ export async function captureRemoteWorkspaceManifest(params: {
   }
   let response;
   try {
-    response = remoteWorkspaceManifestEnvelopeSchema.parse(JSON.parse(captured.stdout));
+    response = parseRemoteWorkspaceManifestEnvelope(captured.stdout);
   } catch (error) {
     throw new Error("Worker workspace manifest returned an invalid memo response", {
       cause: error,
     });
   }
-  for (const identity of params.hashMemo.keys()) {
-    if (identity.startsWith("worker:")) {
-      params.hashMemo.delete(identity);
-    }
-  }
-  for (const [identity, sha256] of response.memo) {
-    params.hashMemo.set(identity, sha256);
-  }
+  replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, response.memo);
   recordRemoteWorkspaceHashMetrics(params.metrics, response.metrics);
   return response.manifestRef;
 }
@@ -333,7 +308,10 @@ export async function resolveWorkerWorkspaceGitAuthor(
     return workerWorkspaceCommandSucceeded(result) ? result.stdout.trim() : "";
   };
   const [name, email] = await Promise.all([read("name"), read("email")]);
-  return { name: request.gitAuthor?.name ?? name, email: request.gitAuthor?.email ?? email };
+  return {
+    name: request.gitAuthor?.name ?? name,
+    email: request.gitAuthor?.email ?? email,
+  };
 }
 
 export function stableWorkerPathComponent(value: string, length: number): string {

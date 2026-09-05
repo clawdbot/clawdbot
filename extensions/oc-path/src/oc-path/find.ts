@@ -11,6 +11,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
 import type { JsoncValue } from "./jsonc/ast.js";
+import { resolveJsoncPositionalSegment } from "./jsonc/resolve-value.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
 import { pickJsonlLine } from "./jsonl/line.js";
 import type { OcPath, PredicateSpec } from "./oc-path.js";
@@ -303,11 +304,15 @@ const jsoncOps: WalkOps<JsoncValue> = {
     return null;
   },
   positional(node, seg) {
-    const concrete = positionalForJsoncNode(node, seg);
+    const concrete = resolveJsoncPositionalSegment(node, seg);
     if (concrete === null) {
       return null;
     }
-    return jsoncOps.lookup(node, concrete);
+    const match = jsoncOps.lookup(node, concrete);
+    if (match === null || node.kind !== "object") {
+      return match;
+    }
+    return { keySub: quoteSeg(concrete), child: match.child };
   },
   *predicate(node, pred) {
     if (node.kind === "object") {
@@ -326,17 +331,6 @@ const jsoncOps: WalkOps<JsoncValue> = {
   },
   walk: walkJsonc,
 };
-
-function positionalForJsoncNode(node: JsoncValue, seg: string): string | null {
-  if (node.kind === "object") {
-    const keys = node.entries.map((e) => e.key);
-    return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
-  }
-  if (node.kind === "array") {
-    return resolvePositionalSeg(seg, { indexable: true, size: node.items.length });
-  }
-  return null;
-}
 
 // ---------- JSONL walker ---------------------------------------------------
 

@@ -4,6 +4,7 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -35,19 +36,21 @@ const DEV_UPDATE_SCHEDULE = {
   },
 };
 
-const HANDOFF_STARTED_RESPONSE = {
-  ok: true,
-  handoff: { status: "started" },
-  result: { reason: "managed-service-handoff-started", status: "skipped" },
-} as const;
-
 const HANDOFF_PENDING_SENTINEL = {
   sentinel: {
     kind: "update",
     status: "skipped",
-    stats: { reason: "managed-service-handoff-started" },
+    ts: 1_000,
+    stats: { handoffId: "lifecycle-handoff", reason: "managed-service-handoff-started" },
   },
 };
+
+const HANDOFF_STARTED_RESPONSE = {
+  ok: true,
+  handoff: { status: "started" },
+  result: { reason: "managed-service-handoff-started", status: "skipped" },
+  sentinel: { payload: HANDOFF_PENDING_SENTINEL.sentinel },
+} as const;
 
 async function openUpdateConfirmation(page: Page): Promise<void> {
   await page.locator(".sidebar-issues-button").click();
@@ -62,11 +65,12 @@ suite.define(() => {
   it.each(["light", "dark"] as const)(
     "narrates a dev-channel update through to its recorded success (%s)",
     async (colorScheme) => {
-      const artifactDir = path.resolve(`.artifacts/control-ui-e2e/update-lifecycle-${colorScheme}`);
+      const artifactDir = createControlUiE2eArtifactDir(`update-lifecycle-${colorScheme}`);
       await suite.withPage(
         {
           colorScheme,
           locale: "en-US",
+          recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
           serviceWorkers: "block",
           viewport: { height: 720, width: 1280 },
         },
@@ -79,14 +83,17 @@ suite.define(() => {
               "update.run": HANDOFF_STARTED_RESPONSE,
               "update.status": {
                 sequence: [
+                  { sentinel: null },
                   HANDOFF_PENDING_SENTINEL,
                   {
                     sentinel: {
                       kind: "update",
                       status: "ok",
+                      ts: 2_000,
                       // A git install keeps its version and moves its commit;
                       // the post-restart finalizer stamps both.
                       stats: {
+                        handoffId: "lifecycle-handoff",
                         after: {
                           sha: "9f3c21a0000000000000000000000000000000aa",
                           version: "2026.8.1",
@@ -101,6 +108,7 @@ suite.define(() => {
 
           expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
           await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("update.status");
           await gateway.emitGatewayEvent("update.available", {
             schedule: DEV_UPDATE_SCHEDULE,
             updateAvailable: DEV_UPDATE_AVAILABLE,
@@ -129,7 +137,14 @@ suite.define(() => {
           await gateway.resolveDeferred("update.run", HANDOFF_STARTED_RESPONSE);
           await gateway.closeLatest(1012, "managed update handoff");
 
-          await page.getByText("The Gateway is restarting", { exact: false }).waitFor();
+          const dialog = page.locator("openclaw-modal-dialog");
+          await dialog
+            .getByText("The Gateway disconnected during the update", { exact: false })
+            .waitFor();
+          const restartText = await dialog.textContent();
+          expect(restartText).toContain("openclaw triage");
+          expect(restartText).toContain("on the Gateway host");
+          expect(restartText).toContain("local coding agent");
           await page.screenshot({ path: path.join(artifactDir, "3-restarting.png") });
 
           // The replacement Gateway reports the installed revision, so the
@@ -149,13 +164,12 @@ suite.define(() => {
   it.each(["light", "dark"] as const)(
     "names the recorded cause when the install fails (%s)",
     async (colorScheme) => {
-      const artifactDir = path.resolve(
-        `.artifacts/control-ui-e2e/update-failure-cause-${colorScheme}`,
-      );
+      const artifactDir = createControlUiE2eArtifactDir(`update-failure-cause-${colorScheme}`);
       await suite.withPage(
         {
           colorScheme,
           locale: "en-US",
+          recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
           serviceWorkers: "block",
           viewport: { height: 720, width: 1280 },
         },
@@ -167,12 +181,15 @@ suite.define(() => {
               "update.run": HANDOFF_STARTED_RESPONSE,
               "update.status": {
                 sequence: [
+                  { sentinel: null },
                   HANDOFF_PENDING_SENTINEL,
                   {
                     sentinel: {
                       kind: "update",
                       status: "error",
+                      ts: HANDOFF_PENDING_SENTINEL.sentinel.ts,
                       stats: {
+                        handoffId: "lifecycle-handoff",
                         reason: "deps-install-failed",
                         steps: [
                           { name: "fetch", log: { exitCode: 0, stderrTail: "" } },
@@ -195,6 +212,7 @@ suite.define(() => {
 
           expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
           await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("update.status");
           await gateway.emitGatewayEvent("update.available", {
             schedule: DEV_UPDATE_SCHEDULE,
             updateAvailable: DEV_UPDATE_AVAILABLE,
@@ -208,14 +226,19 @@ suite.define(() => {
           await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
           await gateway.closeLatest(1012, "managed update handoff");
 
-          // The initiating dialog owns the recorded outcome in place.
-          await page
-            .locator("openclaw-modal-dialog")
-            .getByText(
-              "The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry.",
-              { exact: true },
-            )
+          // Without Ask OpenClaw, the initiating dialog retains the cause and host recovery route.
+          const dialog = page.locator("openclaw-modal-dialog");
+          await dialog
+            .getByText("The update failed at install: ENOSPC: no space left on device, write.", {
+              exact: false,
+            })
             .waitFor({ timeout: 20_000 });
+          const failureText = await dialog.textContent();
+          expect(failureText).toContain("Dependency install failed.");
+          expect(failureText).toContain("openclaw triage");
+          expect(failureText).toContain("on the Gateway host");
+          expect(failureText).toContain("local coding agent");
+          expect(await gateway.getRequests("update.run")).toHaveLength(1);
           await page.waitForTimeout(300);
           await page.screenshot({ path: path.join(artifactDir, "5-failure-in-dialog.png") });
           expect(pageErrors).toEqual([]);

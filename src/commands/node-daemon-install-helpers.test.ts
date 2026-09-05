@@ -18,6 +18,7 @@ vi.mock("../daemon/runtime-paths.js", () => ({
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
+  OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
   resolveNodeProgramArguments: mocks.resolveNodeProgramArguments,
 }));
 
@@ -39,8 +40,8 @@ describe("buildNodeInstallPlan", () => {
     });
     mocks.resolveSystemNodeInfo.mockResolvedValue({
       path: "/opt/node/bin/node",
-      version: "22.0.0",
-      supported: true,
+      version: "26.8.1",
+      status: "supported",
     });
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
@@ -107,8 +108,8 @@ describe("buildNodeInstallPlan", () => {
     });
     mocks.resolveSystemNodeInfo.mockResolvedValue({
       path: "/usr/bin/node",
-      version: "22.0.0",
-      supported: true,
+      version: "26.8.1",
+      status: "supported",
     });
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
@@ -136,8 +137,8 @@ describe("buildNodeInstallPlan", () => {
     });
     mocks.resolveSystemNodeInfo.mockResolvedValue({
       path: "/usr/bin/node",
-      version: "22.0.0",
-      supported: true,
+      version: "26.8.1",
+      status: "supported",
     });
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({

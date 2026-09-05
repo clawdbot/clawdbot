@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/buzz",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "Connect OpenClaw agents to Buzz rooms",
   "repository": {
     "type": "git",
@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "nostr-tools": "2.24.2",
+    "nostr-tools": "2.25.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -16,7 +16,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.9.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -28,6 +28,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": "preserve-root"
+    },
     "channel": {
       "id": "buzz",
       "configuredState": {
@@ -71,7 +74,9 @@
               "flags": "--use-env",
               "description": "Use BUZZ_PRIVATE_KEY with the supplied relay URL"
             },
-            "envVars": ["BUZZ_PRIVATE_KEY"]
+            "envVars": [
+              "BUZZ_PRIVATE_KEY"
+            ]
           }
         ]
       }
@@ -83,10 +88,10 @@
       "minHostVersion": ">=2026.7.2"
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.9.1"
     },
     "build": {
-      "openclawVersion": "2026.8.1"
+      "openclawVersion": "2026.9.1"
     },
     "release": {
       "publishToClawHub": true,

@@ -1,8 +1,24 @@
 // Release Check tests cover release check script behavior.
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { create } from "tar";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
+import {
+  collectRootPackageExcludedExtensionDirs,
+  listBundledPluginPackArtifacts,
+} from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   createPackedTarballInstallArgs,
   prepareReleaseCheckLocalPackageTarballs,
@@ -20,12 +36,141 @@ function requirePluginEntries(config: { plugins?: { entries?: Record<string, unk
 }
 
 describe("release-check", () => {
-  it("installs the packed core and local sibling package tarballs together", () => {
+  it("loads sparse release tooling and checks the separate target SDK and worker inventories", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-target-"));
+    try {
+      const toolingRoot = join(root, "tooling");
+      const workflow = parse(readFileSync(".github/workflows/openclaw-npm-preflight.yml", "utf8"));
+      const checkout = workflow.jobs.check_contents_npm.steps.find(
+        (step: { name?: string }) => step.name === "Checkout trusted Plugin SDK API tooling",
+      );
+      const sparseRoots = checkout.with["sparse-checkout"].trim().split(/\s+/u) as string[];
+      const trackedPaths = execFileSync(
+        "git",
+        ["ls-files", "-z", "--", ":(top,glob)*", ...sparseRoots],
+        { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
+      )
+        .split("\0")
+        .filter(Boolean);
+      for (const relativePath of trackedPaths) {
+        const destination = join(toolingRoot, relativePath);
+        mkdirSync(dirname(destination), { recursive: true });
+        copyFileSync(relativePath, destination);
+      }
+      symlinkSync(resolve("node_modules"), join(toolingRoot, "node_modules"), "junction");
+      mkdirSync(join(root, "scripts", "lib"), { recursive: true });
+      mkdirSync(join(root, "extensions"));
+      const packageJson = JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        files: ["dist"],
+      });
+      writeFileSync(join(root, "package.json"), packageJson);
+      writeFileSync(
+        join(root, "scripts/lib/plugin-sdk-entrypoints.json"),
+        JSON.stringify(["target-private", "target-public"]),
+      );
+      writeFileSync(
+        join(root, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"),
+        JSON.stringify(["target-private"]),
+      );
+      mkdirSync(join(root, "scripts", "fixtures"));
+      writeFileSync(
+        join(root, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
+        "stale target fixture",
+      );
+      const moduleUrl = pathToFileURL(join(toolingRoot, "scripts/release-check.ts")).href;
+      const output = execFileSync(
+        process.execPath,
+        [
+          "--import",
+          join(toolingRoot, "scripts/tsx.mjs"),
+          "--input-type=module",
+          "--eval",
+          `import { readFileSync } from "node:fs";\n` +
+            `const { collectForbiddenPackPaths, collectMissingPackPaths, createPackedPluginSdkTypescriptSmokeProject } = await import(${JSON.stringify(moduleUrl)});\n` +
+            `createPackedPluginSdkTypescriptSmokeProject({ consumerDir: "consumer", packageSpec: "file:fixture.tgz" });\n` +
+            `console.log(JSON.stringify({ forbidden: collectForbiddenPackPaths(["dist/plugin-sdk/target-private.d.ts", "dist/plugin-sdk/target-public.d.ts"]), required: collectMissingPackPaths([]).filter(path => path.startsWith("dist/plugin-sdk/")), fixture: readFileSync("consumer/src/index.ts", "utf8") }));`,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...process.env, TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json") },
+        },
+      );
+      expect(JSON.parse(output)).toEqual({
+        fixture: readFileSync(
+          join(toolingRoot, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
+          "utf8",
+        ),
+        forbidden: ["dist/plugin-sdk/target-private.d.ts"],
+        required: [
+          "dist/plugin-sdk/target-private.js",
+          "dist/plugin-sdk/target-public.d.ts",
+          "dist/plugin-sdk/target-public.js",
+        ],
+      });
+
+      copyFileSync("appcast.xml", join(root, "appcast.xml"));
+      mkdirSync(join(root, "src/shared"), { recursive: true });
+      const packedRoot = join(root, "package");
+      const packedFiles = {
+        "package.json": packageJson,
+        "dist/entry.js": 'import "./cli/run-main.js";',
+        "dist/cli/run-main.js": "export {};",
+        "dist/run-gateway.js": "const GATEWAY_AUTH_MODES = []; function addGatewayRunCommand() {}",
+        "dist/worker/worker.mjs": "export {};",
+        "dist/worker/workspace-rsync-receiver.mjs": "export {};",
+      };
+      for (const [relativePath, source] of Object.entries(packedFiles)) {
+        const destination = join(packedRoot, relativePath);
+        mkdirSync(dirname(destination), { recursive: true });
+        writeFileSync(destination, source);
+      }
+      const tarball = join(root, "target.tgz");
+      create({ cwd: root, file: tarball, gzip: true, sync: true }, ["package"]);
+      for (const declaresLauncher of [false, true]) {
+        writeFileSync(
+          join(root, "src/shared/worker-bundle-hash.ts"),
+          'export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";\n' +
+            'export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";\n' +
+            (declaresLauncher
+              ? 'export const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";\n'
+              : ""),
+        );
+        const result = spawnSync(
+          process.execPath,
+          [
+            "--import",
+            join(toolingRoot, "scripts/tsx.mjs"),
+            join(toolingRoot, "scripts/release-check.ts"),
+            "--tarball",
+            tarball,
+          ],
+          {
+            cwd: root,
+            encoding: "utf8",
+            env: { ...process.env, TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json") },
+          },
+        );
+        expect(result.status).toBe(1);
+        // The two-artifact target reaches the next check; the fixture omits SDK output.
+        expect(result.stderr).toContain(
+          declaresLauncher
+            ? "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing."
+            : "release-check: packed dist/plugin-sdk directory not found.",
+        );
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("installs the prepared tarball with its real package lifecycle", () => {
     expect(createPackedTarballInstallArgs("/tmp/prefix")).toEqual([
       "install",
       "--prefix",
       "/tmp/prefix",
-      "--ignore-scripts",
       "--no-audit",
       "--no-fund",
     ]);
@@ -204,11 +349,20 @@ describe("release-check", () => {
         plugins?: { entries?: Record<string, unknown> };
       };
 
-      expect(config.channels).toHaveProperty("matrix");
       const pluginEntries = requirePluginEntries(config);
-      expect(pluginEntries).toHaveProperty("matrix");
-      expect(config.channels).not.toHaveProperty("feishu");
-      expect(pluginEntries).not.toHaveProperty("feishu");
+      const channels = Object.keys(config.channels ?? {});
+      expect(channels.length).toBeGreaterThan(0);
+      const excluded = collectRootPackageExcludedExtensionDirs();
+      const artifacts = listBundledPluginPackArtifacts();
+      for (const channel of channels) {
+        expect(pluginEntries).toHaveProperty(channel);
+        expect(excluded.has(channel)).toBe(false);
+        const manifest = JSON.parse(
+          readFileSync(join("extensions", channel, "openclaw.plugin.json"), "utf8"),
+        ) as { channels: string[] };
+        expect(manifest.channels).toContain(channel);
+        expect(artifacts).toContain(`dist/extensions/${channel}/openclaw.plugin.json`);
+      }
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }

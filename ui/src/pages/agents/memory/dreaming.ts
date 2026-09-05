@@ -63,6 +63,7 @@ export type WikiImportInsights = {
   totalItems: number;
   totalClusters: number;
   clusters: WikiImportInsightCluster[];
+  truncated: boolean;
 };
 
 type WikiOverviewItem = {
@@ -102,6 +103,7 @@ export type WikiOverview = {
   totalQuestions: number;
   totalContradictions: number;
   clusters: WikiOverviewCluster[];
+  truncated: boolean;
 };
 
 type DreamingResourceKey = "dreamingStatus" | "dreamDiary" | "wikiImportInsights" | "wikiOverview";

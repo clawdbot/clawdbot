@@ -1,8 +1,9 @@
 // Real-browser proof for inline and context-menu chat message actions.
-import { mkdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -16,7 +17,12 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-message-actions");
+let artifactDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    artifactDir = createControlUiE2eArtifactDir("chat-message-actions");
+  }
+});
 
 // Neutral filler line repeated to push the fixture past the transport
 // preview limit without embedding stale implementation narrative; the
@@ -154,9 +160,6 @@ describeControlUiE2e("Control UI chat message actions", () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
-    if (captureUiProof) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
@@ -164,6 +167,370 @@ describeControlUiE2e("Control UI chat message actions", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it.each([
+    { role: "assistant", kind: "document" },
+    { role: "assistant", kind: "image" },
+    { role: "user", kind: "document" },
+    { role: "user", kind: "image" },
+  ] as const)(
+    "replies to $role $kind-only messages with a linked source",
+    async ({ role, kind }) => {
+      const context = await browser.newContext({
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      });
+      try {
+        const page = await context.newPage();
+        await page.route("https://files.example.test/**", (route) => route.abort());
+        const sourceId = `attachment-only-${role}-${kind}`;
+        const runId = "attachment-reply-run";
+        const fileName = kind === "image" ? "openclaw-banner.png" : "report.pdf";
+        const imageUrl =
+          kind === "image"
+            ? `data:image/png;base64,${(
+                await readFile(path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"))
+              ).toString("base64")}`
+            : "";
+        const source = {
+          role,
+          content:
+            kind === "image"
+              ? [{ type: "image", url: imageUrl, fileName, alt: "OpenClaw banner" }]
+              : role === "user"
+                ? []
+                : [
+                    {
+                      type: "attachment",
+                      attachment: {
+                        kind: "document",
+                        url: "https://files.example.test/report.pdf",
+                        label: fileName,
+                        mimeType: "application/pdf",
+                      },
+                    },
+                  ],
+          timestamp: Date.now() - 2_000,
+          ...(role === "assistant" ? { phase: "final_answer", stopReason: "stop" } : {}),
+          __openclaw: {
+            id: sourceId,
+            seq: 2,
+            ...(role === "assistant" ? { runId } : {}),
+            ...(role === "user" && kind === "document"
+              ? {
+                  media: [
+                    {
+                      kind: "document",
+                      url: "https://files.example.test/report.pdf",
+                      contentType: "application/pdf",
+                      fileName,
+                    },
+                  ],
+                }
+              : {}),
+          },
+        };
+        const gateway = await installMockGateway(page, {
+          historyMessages:
+            role === "assistant"
+              ? [
+                  {
+                    role: "user",
+                    content: "Create the requested file.",
+                    timestamp: Date.now() - 3_000,
+                    __openclaw: {
+                      id: "attachment-request",
+                      seq: 1,
+                      idempotencyKey: `${runId}:user`,
+                    },
+                  },
+                  source,
+                ]
+              : [source],
+        });
+        await page.goto(`${server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        const bubble = page.locator(`.chat-bubble[data-entry-id="${sourceId}"]`);
+        await bubble.waitFor({ state: "visible" });
+        if (kind === "image") {
+          await expect
+            .poll(() =>
+              bubble
+                .locator(".chat-message-image")
+                .evaluate((image) =>
+                  image instanceof HTMLImageElement && image.complete ? image.naturalWidth : 0,
+                ),
+            )
+            .toBeGreaterThan(0);
+        } else {
+          await bubble.getByText(fileName, { exact: true }).waitFor({ state: "visible" });
+        }
+        expect(await bubble.locator(".chat-text").count()).toBe(0);
+        const group = bubble.locator(
+          "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-group ')]",
+        );
+        if (role === "assistant") {
+          expect(await group.getAttribute("data-chat-row-key")).toContain("agent-run:");
+        }
+        await group.hover();
+        await screenshot(page, `${sourceId}-01-rendered.png`);
+        const reply = group.getByRole("button", { name: "Reply to message", exact: true });
+        expect(await reply.count()).toBe(1);
+        expect(await group.getByRole("button", { name: "Copy as markdown" }).count()).toBe(0);
+        await reply.click();
+        const preview = page.locator(".chat-reply-preview").filter({
+          has: page.getByRole("button", { name: "Cancel reply" }),
+        });
+        await expect
+          .poll(() => preview.locator(".chat-reply-preview__text").textContent())
+          .toBe(fileName);
+        await preview.getByRole("button", { name: "Cancel reply" }).click();
+        await bubble.click({ button: "right", position: { x: 2, y: 2 } });
+        await page
+          .locator(".chat-reply-context-menu")
+          .getByRole("menuitem", { name: "Reply to message" })
+          .click();
+        await expect
+          .poll(() => preview.locator(".chat-reply-preview__text").textContent())
+          .toBe(fileName);
+        await screenshot(page, `${sourceId}-02-reply.png`);
+        const text = "Please explain this file.";
+        await page.locator(".agent-chat__composer-combobox textarea").fill(text);
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        const sent = await gateway.waitForRequest("chat.send");
+        expect(sent.params).toMatchObject({ message: text, replyToId: sourceId });
+        const sentPreview = page.locator(".chat-reply-preview--message");
+        await expect
+          .poll(() => sentPreview.locator(".chat-reply-preview__text").textContent())
+          .toBe(fileName);
+        await sentPreview.click();
+        await expect
+          .poll(() =>
+            bubble.evaluate((element) => element.classList.contains("chat-bubble--reply-target")),
+          )
+          .toBe(true);
+        expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
+  it("keeps assistant actions hidden when the user message is last", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: "Earlier assistant reply.",
+          timestamp: Date.now() - 4_000,
+          __openclaw: { id: "earlier-assistant", seq: 1 },
+        },
+        {
+          role: "user",
+          content: "A question between replies.",
+          timestamp: Date.now() - 3_000,
+          __openclaw: { id: "middle-user", seq: 2 },
+        },
+        {
+          role: "assistant",
+          content: "Latest assistant lead-in.",
+          timestamp: Date.now() - 2_000,
+          __openclaw: { id: "latest-assistant", seq: 3 },
+        },
+        {
+          role: "assistant",
+          content: "Latest assistant reply.",
+          timestamp: Date.now() - 1_500,
+          __openclaw: { id: "latest-assistant-final", seq: 4 },
+        },
+        {
+          role: "user",
+          content: "A newer user follow-up.",
+          timestamp: Date.now() - 1_000,
+          __openclaw: { id: "latest-user", seq: 5 },
+        },
+      ],
+    });
+
+    const presentation = (group: Locator) =>
+      group.evaluate((element) => {
+        const footer = element.querySelector<HTMLElement>(".chat-group-footer");
+        const action = element.querySelector<HTMLElement>(".chat-group-footer-actions button");
+        return {
+          actionOpacity: action ? getComputedStyle(action).opacity : null,
+          actionPointerEvents: action ? getComputedStyle(action).pointerEvents : null,
+          footerOpacity: footer ? getComputedStyle(footer).opacity : null,
+          footerPointerEvents: footer ? getComputedStyle(footer).pointerEvents : null,
+        };
+      });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.mouse.move(0, 0);
+      const assistantGroups = page.locator(".chat-group.assistant");
+      await expect.poll(() => assistantGroups.count()).toBe(2);
+      const earlierAssistant = assistantGroups.first();
+      const latestAssistant = assistantGroups.last();
+      await latestAssistant.getByText("Latest assistant reply.", { exact: true }).waitFor();
+      const inlineAction = latestAssistant.locator(".chat-message-actions-row button").first();
+      await expect.poll(() => inlineAction.count()).toBe(1);
+
+      await screenshot(page, "user-last-assistant-actions-hidden-desktop.png");
+      await expect
+        .poll(() => presentation(earlierAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await expect
+        .poll(() =>
+          inlineAction.evaluate((element) => ({
+            opacity: getComputedStyle(element).opacity,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+          })),
+        )
+        .toEqual({ opacity: "0", pointerEvents: "none" });
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await screenshot(page, "latest-assistant-actions-resting-mobile.png");
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await latestAssistant.locator(".chat-bubble").last().dispatchEvent("pointerup", {
+        button: 0,
+        pointerType: "touch",
+      });
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "1",
+          actionPointerEvents: "auto",
+          footerOpacity: "1",
+          footerPointerEvents: "auto",
+        });
+      await expect
+        .poll(() =>
+          inlineAction.evaluate((element) => ({
+            opacity: getComputedStyle(element).opacity,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+          })),
+        )
+        .toEqual({ opacity: "1", pointerEvents: "auto" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shares tooltip styling and dismissal across message metadata, actions, and file hints", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      hasTouch: true,
+      locale: "en-US",
+      recordVideo: captureUiProof
+        ? { dir: path.join(artifactDir, "tooltips-video"), size: { height: 900, width: 1440 } }
+        : undefined,
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Tooltip proof. See /workspace/tooltip-proof.txt." }],
+          timestamp: Date.now() - 5 * 60_000,
+          model: "openai/gpt-5.6-luna",
+          usage: { input: 12_000, output: 300, cost: { total: 0.12 } },
+          __openclaw: { id: "tooltip-proof", seq: 1 },
+        },
+      ],
+    });
+    const openTooltip = page.locator("wa-tooltip[open]");
+    const popupStyle = () =>
+      openTooltip.locator('[part="body"]').evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          background: style.backgroundColor,
+          border: style.border,
+          radius: style.borderRadius,
+          padding: style.padding,
+          fontSize: style.fontSize,
+        };
+      });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const group = page.locator(".chat-group.assistant").filter({ hasText: "Tooltip proof." });
+      await group
+        .locator(".chat-text")
+        .first()
+        .tap({ position: { x: 4, y: 4 } });
+      const timestamp = group.locator(".msg-meta__summary");
+      await timestamp.hover();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      await group.locator(".msg-meta__details").waitFor({ state: "visible" });
+      const metadataStyle = await popupStyle();
+      expect(await group.locator(".msg-meta__details").textContent()).toContain("gpt-5.6-luna");
+      expect(await group.locator(".msg-meta__cost").textContent()).toContain("$0.12");
+      await screenshot(page, "tooltip-metadata.png");
+
+      await timestamp.click();
+      await page.mouse.move(0, 0);
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      const reply = group.getByRole("button", { name: "Reply to message" });
+      await expectHoverTooltip(reply, "Reply");
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      expect(await popupStyle()).toEqual(metadataStyle);
+      await screenshot(page, "tooltip-reply.png");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => openTooltip.count()).toBe(0);
+
+      const file = group.locator("a").filter({ hasText: "tooltip-proof.txt" });
+      await file.hover();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      expect(await openTooltip.textContent()).toContain("/workspace/tooltip-proof.txt");
+      expect(await popupStyle()).toEqual(metadataStyle);
+      expect(await file.getAttribute("title")).toBe("");
+      await screenshot(page, "tooltip-file-hint.png");
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await timestamp.tap();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      await group.locator(".msg-meta__details").waitFor({ state: "visible" });
+      const bounds = await openTooltip.locator('[part="body"]').boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+      await screenshot(page, "tooltip-mobile.png");
+      await timestamp.tap();
+      await expect.poll(() => openTooltip.count()).toBe(0);
+    } finally {
+      await context.close();
+    }
   });
 
   it("keeps oversized history notices consistent through recovery and message actions", async () => {
@@ -261,7 +628,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const commandPaletteShortcut = applePlatform ? "⌘K" : "Ctrl+K";
       const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
       await expectHoverTooltip(
-        page.locator(".sidebar-brand").getByRole("button", { name: "New session" }),
+        page.locator(".sidebar-brand").getByRole("link", { name: "New session" }),
         "New session",
       );
       await expectHoverTooltip(
@@ -429,7 +796,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       );
       const fullMessageRequest = await gateway.waitForRequest("chat.message.get");
       expect(fullMessageRequest.params).toMatchObject({
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         messageId: "assistant-full-message",
         maxChars: 500_000,
       });

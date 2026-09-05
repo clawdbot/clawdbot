@@ -17,6 +17,7 @@ import type { TalkEvent } from "../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { TalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 import type { RelayToolCallLedger } from "./talk-realtime-relay-tool-call-ledger.js";
+import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
 export const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 export const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
@@ -29,6 +30,7 @@ export const noFallbackRelayOutputFlush = () => {};
 
 export type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
+  | { relaySessionId: string; type: "responseStarted"; turnId: string }
   | { relaySessionId: string; type: "inputAudio"; byteLength: number }
   | {
       relaySessionId: string;
@@ -180,14 +182,17 @@ export class TalkRealtimeRelayOutputOwnership {
 }
 
 export type RelaySession = {
+  getToolAuthorityOverlay?: (
+    authority?: TalkAgentConsultAuthority,
+    source?: "reply" | "attempt",
+  ) => import("../auto-reply/reply/reply-run-registry.contracts.js").ReplyToolAuthorityOverlay;
   id: string;
   connId: string;
   context: GatewayRequestContext;
   bridge: RealtimeVoiceBridgeSession;
   harness: RealtimeVoiceSessionHarness;
   outputOwnership: TalkRealtimeRelayOutputOwnership;
-  sessionKey?: string;
-  agentId?: string;
+  sessionTarget: PreparedTalkSessionTarget;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
   activeAgentRuns: Map<string, string>;
@@ -212,7 +217,6 @@ export type RelaySession = {
   voiceTranscriptQueue: BoundedSerialQueue;
   voiceSessionClose?: Promise<void>;
   failSession: (message: string) => void;
-  pendingVoiceTranscripts: Array<{ role: "user" | "assistant"; text: string }>;
 };
 
 export type CreateTalkRealtimeRelaySessionParams = {
@@ -222,10 +226,12 @@ export type CreateTalkRealtimeRelaySessionParams = {
   consultAuthority?: TalkAgentConsultAuthority;
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
+  controlSource: "delegation" | "transcript";
+  supportsToolCalls?: boolean;
   instructions: string;
   tools: RealtimeVoiceTool[];
   model?: string;
-  sessionKey?: string;
+  sessionTarget: PreparedTalkSessionTarget;
   voice?: string;
   language?: string;
   forceAgentConsultOnFinalTranscript?: boolean;

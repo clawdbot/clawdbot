@@ -114,16 +114,31 @@ beforeEach(() => {
 });
 
 describe("maybeRepairLegacyOAuthProfileIds", () => {
-  it("skips profile repair when config has no legacy OAuth profiles", async () => {
-    const cfg = { channels: { telegram: { enabled: true } } } as OpenClawConfig;
+  it.each([
+    { channels: { telegram: { enabled: true } } },
+    { auth: { profiles: {}, order: { anthropic: [] } } },
+    {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    },
+  ] satisfies OpenClawConfig[])(
+    "skips provider discovery without profile state (%#)",
+    async (cfg) => {
+      const result = await maybeRepairLegacyOAuthProfileIds(cfg, makePrompter(true));
 
-    const result = await maybeRepairLegacyOAuthProfileIds(cfg, makePrompter(true));
-
-    expect(result.config).toBe(cfg);
-    expect(result.retiredProfileCleanupPlans).toEqual([]);
-    expect(resolvePluginProvidersMock).toHaveBeenCalledOnce();
-    expect(repairMocks.repairOAuthProfileIdMismatch).not.toHaveBeenCalled();
-  });
+      expect(result.config).toBe(cfg);
+      expect(result.retiredProfileCleanupPlans).toEqual([]);
+      expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+      expect(repairMocks.repairOAuthProfileIdMismatch).not.toHaveBeenCalled();
+    },
+  );
 
   it("repairs provider-owned legacy OAuth profile ids", async () => {
     authProfileStoreMock.store = {
@@ -297,70 +312,90 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
     });
   });
 
-  it("removes a config-only provider entry reference to a retired profile", async () => {
-    resolvePluginProvidersMock.mockReturnValue([
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        auth: [],
-        deprecatedProfileIds: ["anthropic:claude-cli"],
-      },
-    ]);
-
-    const { config: next, retiredProfileCleanupPlans } = await maybeRepairLegacyOAuthProfileIds(
-      {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com",
-              apiKey: "anthropic:claude-cli",
-              models: [],
-            },
+  it.each([
+    { auth: { profiles: { "anthropic:claude-cli": { provider: "claude-cli", mode: "api_key" } } } },
+    { auth: { order: { anthropic: ["anthropic:claude-cli"] } } },
+    {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            apiKey: "anthropic:claude-cli",
+            models: [],
           },
         },
-      } as OpenClawConfig,
-      makePrompter(true),
-    );
-
-    expect(next.models?.providers?.anthropic?.apiKey).toBeUndefined();
-    expect(retiredProfileCleanupPlans).toEqual([]);
-    expect(providerPolicyMocks.applyConfigDefaults).not.toHaveBeenCalled();
-  });
-
-  it("removes a retired profile from a secondary agent store", async () => {
-    const secondaryAgentDir = "/tmp/state/agents/secondary/agent";
-    candidateMocks.candidates = [
-      { agentDir: undefined, authPath: "/tmp/shared/openclaw-agent.sqlite" },
-      { agentDir: secondaryAgentDir, authPath: `${secondaryAgentDir}/openclaw-agent.sqlite` },
-    ];
-    candidateMocks.stores.set(secondaryAgentDir, {
-      version: 1,
-      profiles: {
-        "anthropic:claude-cli": {
-          type: "oauth",
-          provider: "anthropic",
-          access: "copied-native-access",
-          refresh: "copied-native-refresh",
-          expires: Date.now() + 60_000,
+      },
+    },
+  ] satisfies OpenClawConfig[])(
+    "removes config-only retired profile references (%#)",
+    async (cfg) => {
+      resolvePluginProvidersMock.mockReturnValue([
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          auth: [],
+          deprecatedProfileIds: ["anthropic:claude-cli"],
         },
-      },
-    });
-    resolvePluginProvidersMock.mockReturnValue([
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        auth: [],
-        deprecatedProfileIds: ["anthropic:claude-cli"],
-      },
-    ]);
+      ]);
 
-    const result = await maybeRepairLegacyOAuthProfileIds({} as OpenClawConfig, makePrompter(true));
+      const prompter = makePrompter(true);
+      const { config: next, retiredProfileCleanupPlans } = await maybeRepairLegacyOAuthProfileIds(
+        cfg,
+        prompter,
+      );
 
-    expect(result.retiredProfileCleanupPlans).toContainEqual({
-      agentDir: secondaryAgentDir,
-      profileIds: ["anthropic:claude-cli"],
-    });
-  });
+      expect(prompter.confirm).toHaveBeenCalledOnce();
+      expect(next.auth?.profiles?.["anthropic:claude-cli"]).toBeUndefined();
+      expect(next.auth?.order?.anthropic).toBeUndefined();
+      expect(next.models?.providers?.anthropic?.apiKey).toBeUndefined();
+      expect(retiredProfileCleanupPlans).toEqual([]);
+      expect(providerPolicyMocks.applyConfigDefaults).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([true, false])(
+    "respects secondary agent cleanup confirmation (accept=%s)",
+    async (accepted) => {
+      const secondaryAgentDir = "/tmp/state/agents/secondary/agent";
+      candidateMocks.candidates = [
+        { agentDir: undefined, authPath: "/tmp/shared/openclaw-agent.sqlite" },
+        { agentDir: secondaryAgentDir, authPath: `${secondaryAgentDir}/openclaw-agent.sqlite` },
+      ];
+      candidateMocks.stores.set(secondaryAgentDir, {
+        version: 1,
+        profiles: {
+          "anthropic:claude-cli": {
+            type: "oauth",
+            provider: "anthropic",
+            access: "copied-native-access",
+            refresh: "copied-native-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+      resolvePluginProvidersMock.mockReturnValue([
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          auth: [],
+          deprecatedProfileIds: ["anthropic:claude-cli"],
+        },
+      ]);
+
+      const result = await maybeRepairLegacyOAuthProfileIds({}, makePrompter(accepted));
+
+      expect(result.retiredProfileCleanupPlans).toEqual(
+        accepted
+          ? [
+              {
+                agentDir: secondaryAgentDir,
+                profileIds: ["anthropic:claude-cli"],
+              },
+            ]
+          : [],
+      );
+    },
+  );
 
   it("repairs selected provider routing for a store-only retired profile", async () => {
     authProfileStoreMock.store = {

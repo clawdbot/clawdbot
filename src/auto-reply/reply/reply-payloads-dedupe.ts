@@ -32,6 +32,7 @@ type MessagingToolDedupeRouteParams = {
   originatingThreadId?: string | number;
   replyToId?: string;
   replyToIsExplicit?: boolean;
+  replyToCurrent?: boolean;
   replyDelivery?: ReplyDeliveryContext;
   accountId?: string;
 };
@@ -197,23 +198,23 @@ function resolveOriginThreadIdForPayload(params: {
   originatingThreadId?: string | number;
   replyToId?: string;
   replyToIsExplicit?: boolean;
+  replyToCurrent?: boolean;
   replyDelivery?: ReplyDeliveryContext;
 }): string | undefined {
   const originThreadId = normalizeThreadIdForComparison(params.originatingThreadId);
-  if (originThreadId && !params.replyToIsExplicit) {
-    return originThreadId;
-  }
   const replyToId = normalizeThreadIdForComparison(params.replyToId);
   const resolveReplyTransport = getChannelPlugin(params.provider)?.threading?.resolveReplyTransport;
-  if (!replyToId || !params.config || !resolveReplyTransport) {
+  if (!params.config || !resolveReplyTransport) {
     return originThreadId;
   }
+  // Implicit replies can leave the inbound thread; dedupe must use the same transport as delivery.
   const transport = resolveReplyTransport({
     cfg: params.config,
     accountId: params.accountId,
     threadId: originThreadId,
     replyToId,
     replyToIsExplicit: params.replyToIsExplicit,
+    replyToCurrent: params.replyToCurrent,
     replyDelivery: params.replyDelivery,
   });
   if (transport?.threadId != null) {
@@ -255,6 +256,7 @@ function getMatchingMessagingToolReplyTargets(
     originatingThreadId: params.originatingThreadId,
     replyToId: params.replyToId,
     replyToIsExplicit: params.replyToIsExplicit,
+    replyToCurrent: params.replyToCurrent,
     replyDelivery: params.replyDelivery,
   });
   return sentTargets.filter((target) => {
@@ -365,7 +367,7 @@ export function resolveMessagingToolPayloadDedupe(
 
 type FilterMessagingToolReplyPayloadParams = Omit<
   MessagingToolDedupeRouteParams,
-  "replyToId" | "replyToIsExplicit" | "replyDelivery"
+  "replyToId" | "replyToIsExplicit" | "replyToCurrent" | "replyDelivery"
 > & {
   payload: ReplyPayload;
   sentMediaUrls?: string[];
@@ -393,6 +395,7 @@ export function filterMessagingToolReplyPayload(
     replyToIsExplicit: Boolean(
       metadata?.replyToIdExplicit || params.payload.replyToTag || params.payload.replyToCurrent,
     ),
+    replyToCurrent: params.payload.replyToCurrent,
     replyDelivery: metadata?.replyDelivery,
   });
   if (!decision.shouldDedupePayloads) {
@@ -434,7 +437,7 @@ export function filterMessagingToolReplyPayload(
 export function hasSourceRoutedMessagingToolDelivery(
   params: Omit<
     MessagingToolDedupeRouteParams,
-    "replyToId" | "replyToIsExplicit" | "replyDelivery"
+    "replyToId" | "replyToIsExplicit" | "replyToCurrent" | "replyDelivery"
   > & {
     messagingToolSentTexts?: string[];
     messagingToolSentMediaUrls?: string[];

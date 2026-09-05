@@ -132,7 +132,7 @@ async function createLiveSession(
     compaction: { enabled: true, reserveTokens: 128, keepRecentTokens: 0 },
     retry: {
       enabled: false,
-      provider: { timeoutMs: PROVIDER_TIMEOUT_MS, maxRetries: 0, maxRetryDelayMs: 0 },
+      provider: { timeoutMs: PROVIDER_TIMEOUT_MS, maxRetryDelayMs: 0 },
     },
   });
   const { session } = await createAgentSession({

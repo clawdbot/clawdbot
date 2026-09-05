@@ -92,7 +92,7 @@ export async function describeBrowserScreenshot(
   const filePath = await resolveImageUnderstandingFilePath(ctx, deps);
   const agentId = ctx.agentDir
     ? undefined
-    : (await import("openclaw/plugin-sdk/agent-scope-runtime")).resolveSessionAgentId({
+    : (await import("openclaw/plugin-sdk/agent-scope-runtime")).resolveSessionAgentIdStrict({
         agentId: ctx.agentId,
         sessionKey: ctx.mediaScope?.sessionKey,
         config: ctx.cfg,

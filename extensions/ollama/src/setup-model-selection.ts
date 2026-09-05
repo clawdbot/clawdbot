@@ -6,6 +6,8 @@ import {
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
+  isOllamaEmbeddingOnlyModel,
+  isOllamaRemoteModel,
   isReasoningModelHeuristic,
   mergeOllamaModelShowInfo,
   readOllamaModelShowInfo,
@@ -105,6 +107,10 @@ function selectAppGuidedOllamaModelId(
   return orderPreferredOllamaModelIds(fastest.map((model) => model.id))[0];
 }
 
+function isOllamaToolsCapableModel(model: OllamaModelWithContext): boolean {
+  return !isOllamaEmbeddingOnlyModel(model) && model.capabilities?.includes("tools") === true;
+}
+
 export function selectAppGuidedOllamaModelFromDiscovery(
   models: Iterable<OllamaModelWithContext>,
 ): string | undefined {
@@ -112,7 +118,7 @@ export function selectAppGuidedOllamaModelFromDiscovery(
     [...models].map((model) => ({
       id: model.name,
       contextWindow: model.contextWindow,
-      supportsTools: model.capabilities?.includes("tools") === true,
+      supportsTools: isOllamaToolsCapableModel(model),
       reasoning: model.capabilities?.includes("thinking") ?? isReasoningModelHeuristic(model.name),
       size: model.size,
     })),
@@ -184,12 +190,18 @@ export async function inspectOllamaModelsForSetup(
 
 export async function discoverOllamaModelsForSetup(params: {
   baseUrl: string;
+  includeRemoteModels?: boolean;
   inspectTools?: boolean;
   signal?: AbortSignal;
 }) {
-  const { reachable, models } = await fetchOllamaModels(params.baseUrl, {
+  const { reachable, models: listedModels } = await fetchOllamaModels(params.baseUrl, {
     signal: params.signal,
   });
+  // Filter before probe caps so remote stubs cannot crowd out Local only models.
+  const models =
+    params.includeRemoteModels === false
+      ? listedModels.filter((model) => !isOllamaRemoteModel(model))
+      : listedModels;
   const firstModels = models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT);
   const inspection: { inspected: OllamaModelWithContext[]; inspectionFailures: string[] } =
     !reachable
@@ -204,7 +216,7 @@ export async function discoverOllamaModelsForSetup(params: {
           };
   if (
     params.inspectTools &&
-    !inspection.inspected.some((model) => model.capabilities?.includes("tools")) &&
+    !inspection.inspected.some(isOllamaToolsCapableModel) &&
     models.length > OLLAMA_CONTEXT_ENRICH_LIMIT
   ) {
     const remainingScan = await inspectOllamaModelsForSetup(
@@ -221,8 +233,6 @@ export async function discoverOllamaModelsForSetup(params: {
     inspectedModels: inspection.inspected,
     discoveredModelsByName: new Map(inspection.inspected.map((model) => [model.name, model])),
     inspectionFailures: inspection.inspectionFailures,
-    hasToolsCapableModel: inspection.inspected.some((model) =>
-      model.capabilities?.includes("tools"),
-    ),
+    hasToolsCapableModel: inspection.inspected.some(isOllamaToolsCapableModel),
   };
 }

@@ -9,6 +9,7 @@ import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { sendSlackMessage as sendSlackMessageThroughPublicOwner } from "./actions.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
+import type { SlackSendResult } from "./send.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 const originalSlackActionRuntime = { ...slackActionRuntime };
@@ -53,7 +54,11 @@ const resolveSlackConversationInfo = vi.fn(
     return { type: "channel", ...(channelName ? { name: channelName } : {}) };
   },
 );
-const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({ channelId: "C123" }));
+const sendSlackMessage = vi.fn(
+  async (..._args: unknown[]): Promise<Partial<SlackSendResult> & { channelId: string }> => ({
+    channelId: "C123",
+  }),
+);
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 
 describe("handleSlackAction", () => {
@@ -859,7 +864,9 @@ describe("handleSlackAction", () => {
     },
   ])("accepts $name and allows empty content", async ({ blocks, expectedBlocks }) => {
     const cfg = slackConfig();
-    await handleSlackAction(
+    const nativeResult = { channelId: "C123", messageId: "123.456", threadTs: "123.400" };
+    sendSlackMessage.mockResolvedValueOnce(nativeResult);
+    const result = await handleSlackAction(
       {
         action: "sendMessage",
         to: "channel:C123",
@@ -874,6 +881,7 @@ describe("handleSlackAction", () => {
       threadTs: undefined,
       blocks: expectedBlocks,
     });
+    expect(result.details).toEqual({ ok: true, result: nativeResult });
   });
 
   it.each([
@@ -1067,9 +1075,9 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/replyBroadcast is only supported for text or block thread replies/i);
   });
 
-  it("sends media before a separate blocks message", async () => {
-    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123" });
-    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123" });
+  it.each([false, true])("sends media before separate blocks (prepared=%s)", async (prepared) => {
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123", messageId: "F123" });
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123", messageId: "123.456" });
 
     const cfg = slackConfig();
     const result = await handleSlackAction(
@@ -1081,6 +1089,9 @@ describe("handleSlackAction", () => {
         blocks: JSON.stringify([{ type: "divider" }]),
       },
       cfg,
+      prepared
+        ? { preparedMessages: [{ text: "hello", blocks: [{ type: "divider" }] }] }
+        : undefined,
     );
 
     expect(sendSlackMessage).toHaveBeenCalledTimes(2);
@@ -1100,9 +1111,13 @@ describe("handleSlackAction", () => {
     expect(requireRecordArg(sendSlackMessage, "sendSlackMessage", 1, 2)).not.toHaveProperty(
       "mediaUrl",
     );
-    expect(result.details).toEqual({
+    expect(result.details).toMatchObject({
       ok: true,
-      result: { channelId: "C123" },
+      result: {
+        channelId: "C123",
+        messageId: "123.456",
+        receipt: { platformMessageIds: ["F123", "123.456"] },
+      },
     });
   });
 
@@ -1112,8 +1127,8 @@ describe("handleSlackAction", () => {
     const context = createReplyToFirstContext(hasRepliedRef);
     const content = "x".repeat(8001);
     const blocks = [{ type: "divider" }];
-    sendSlackMessage.mockResolvedValueOnce({ channelId: "controls" });
-    sendSlackMessage.mockResolvedValueOnce({ channelId: "content" });
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123", messageId: "123.456" });
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123", messageId: "123.457" });
 
     const result = await handleSlackAction(
       {
@@ -1143,9 +1158,13 @@ describe("handleSlackAction", () => {
     });
     expect(textOptions).not.toHaveProperty("blocks");
     expect(hasRepliedRef.value).toBe(true);
-    expect(result.details).toEqual({
+    expect(result.details).toMatchObject({
       ok: true,
-      result: { channelId: "content" },
+      result: {
+        channelId: "C123",
+        messageId: "123.457",
+        receipt: { platformMessageIds: ["123.456", "123.457"] },
+      },
     });
   });
 
@@ -1182,11 +1201,33 @@ describe("handleSlackAction", () => {
 
   it("delivers a prepared presentation plan in order on one resolved thread", async () => {
     const cfg = slackConfig();
-    const chartBlocks = [{ type: "data_visualization", title: "Revenue", chart: {} }];
+    const chartBlocks = [
+      { type: "data_visualization", title: "Revenue", chart: {} },
+      { type: "actions", elements: [{ type: "button", action_id: "question-choice" }] },
+    ];
     const controlBlocks = [{ type: "actions", elements: [] }];
     const hasRepliedRef = { value: false };
+    for (const [index, ids] of [["123.456"], ["123.457", "123.458"], ["123.459"]].entries()) {
+      sendSlackMessage.mockResolvedValueOnce({
+        channelId: "C123",
+        messageId: ids.at(-1),
+        ...(index === 0 ? { meta: { slackQuestionActionIds: ["question-choice"] } } : {}),
+        receipt: {
+          platformMessageIds: ids,
+          primaryPlatformMessageId: ids[0],
+          parts: ids.map((platformMessageId, partIndex) => ({
+            platformMessageId,
+            kind: index === 1 ? "text" : "card",
+            index: partIndex,
+            threadId: "1111111111.111111",
+          })),
+          threadId: "1111111111.111111",
+          sentAt: 123,
+        },
+      });
+    }
 
-    await handleSlackAction(
+    const result = await handleSlackAction(
       {
         action: "sendMessage",
         to: "channel:C123",
@@ -1227,6 +1268,29 @@ describe("handleSlackAction", () => {
       threadTs: "1111111111.111111",
     });
     expect(hasRepliedRef.value).toBe(true);
+    expect(result.details).toMatchObject({
+      ok: true,
+      result: {
+        channelId: "C123",
+        messageId: "123.459",
+        meta: {
+          slackQuestionActionIds: ["question-choice"],
+          slackQuestionMessageId: "123.456",
+        },
+        receipt: {
+          primaryPlatformMessageId: "123.456",
+          platformMessageIds: ["123.456", "123.457", "123.458", "123.459"],
+          parts: [
+            { platformMessageId: "123.456", kind: "card", index: 0 },
+            { platformMessageId: "123.457", kind: "text", index: 1 },
+            { platformMessageId: "123.458", kind: "text", index: 2 },
+            { platformMessageId: "123.459", kind: "card", index: 3 },
+          ],
+          threadId: "1111111111.111111",
+          sentAt: 123,
+        },
+      },
+    });
   });
 
   it.each([

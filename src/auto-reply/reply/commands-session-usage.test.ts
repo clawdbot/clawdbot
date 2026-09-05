@@ -106,7 +106,7 @@ function buildUsageParams(): HandleCommandsParams {
       to: "bot",
     },
     sessionKey: "agent:target:whatsapp:direct:12345",
-    agentId: "main",
+    agentId: "target",
     sessionEntry: {
       sessionId: "session-1",
       updatedAt: Date.now(),

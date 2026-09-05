@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
@@ -5,6 +6,7 @@ import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/ru
 import { FailoverError } from "../../agents/failover-error.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import type { TemplateContext } from "../templating.js";
@@ -20,11 +22,16 @@ import {
   expectMockCallArgFields,
   initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
+  makeTestSessionStorePath,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 afterEach(resetGeneratedMediaTaskActivityForTests);
+
+function rejectUnexpectedCompactionSuccessor(): never {
+  throw new Error("Unexpected compaction successor during CLI session routing test");
+}
 
 describe("executeAgentTurn: CLI session routing", () => {
   it("carries prepared model and thread context facts into CLI execution", async () => {
@@ -53,6 +60,7 @@ describe("executeAgentTurn: CLI session routing", () => {
         id: "claude-sonnet-4-6",
         contextWindow: 400_000,
         contextTokens: 321_000,
+        input: ["text", "image"],
       },
     ];
 
@@ -380,19 +388,22 @@ describe("executeAgentTurn: CLI session routing", () => {
       MediaTypes: ["image/png"],
     } as never;
     followupRun.userTurnTranscriptRecorder = createTestUserTurnRecorder(preparedUserTurnMessage);
+    const storePath = makeTestSessionStorePath();
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       updatedAt: 1,
     };
+    await replaceSessionEntry({ sessionKey: "agent:main:main", storePath }, sessionEntry);
     const activeSessionStore = { main: sessionEntry };
 
+    await replaceSessionEntry({ sessionKey: "main", storePath }, sessionEntry);
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       commandBody: "runtime prompt",
       transcriptCommandBody: "display prompt",
       activeSessionStore,
-      storePath: "/tmp/sessions.json",
+      storePath,
       getActiveSessionEntry: () => activeSessionStore.main,
     });
 
@@ -404,12 +415,12 @@ describe("executeAgentTurn: CLI session routing", () => {
       sessionId: "session",
       suppressNextUserMessagePersistence: false,
       persistAssistantTranscript: true,
-      storePath: "/tmp/sessions.json",
+      storePath,
       sessionTarget: {
         agentId: "main",
         sessionId: "session",
         sessionKey: "main",
-        storePath: "/tmp/sessions.json",
+        storePath,
       },
     });
     const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");
@@ -561,14 +572,31 @@ describe("executeAgentTurn: CLI session routing", () => {
       },
     } as unknown as SessionEntry;
     const activeSessionStore = { main: sessionEntry };
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      activeSessionStore,
-      getActiveSessionEntry: () => sessionEntry,
+    let cleanupObservedBeforePlacementRelease = false;
+    const restoreAdmission = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
+      executeLocalTurn: async (_claim, runLocal) => {
+        const resultLocal = await runLocal();
+        expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+        cleanupObservedBeforePlacementRelease = true;
+        return resultLocal;
+      },
+      executeTurn: async (_claim, _params, runLocal) => await runLocal(),
     });
 
+    let result: Awaited<ReturnType<typeof executeAgentTurn>>;
+    try {
+      result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+        activeSessionStore,
+        getActiveSessionEntry: () => sessionEntry,
+      });
+    } finally {
+      restoreAdmission();
+    }
+
     expect(result.kind).toBe("success");
+    expect(cleanupObservedBeforePlacementRelease).toBe(true);
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       currentInboundEventKind: "room_event",
       cliSessionId: "existing-cli-session",
@@ -802,6 +830,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       notifyAdmissionWait = resolve;
     });
     const restoreAdmission = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => {
         notifyAdmissionWait();
         await admissionGate;

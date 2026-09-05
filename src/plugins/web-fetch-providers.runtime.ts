@@ -15,10 +15,7 @@ import {
   mapRegistryProviders,
   resolveManifestDeclaredWebProviderCandidatePluginIds,
 } from "./web-provider-resolution-shared.js";
-import {
-  resolvePluginWebProviders,
-  resolveRuntimeWebProviders,
-} from "./web-provider-runtime-shared.js";
+import { resolvePluginWebProviders } from "./web-provider-runtime-shared.js";
 
 function resolveWebFetchCandidatePluginIds(params: {
   config?: PluginLoadOptions["config"];
@@ -85,7 +82,7 @@ export function resolveRuntimeWebFetchProviders(params: {
   origin?: PluginManifestRecord["origin"];
   manifestRecords?: readonly PluginManifestRecord[];
 }): PluginWebFetchProviderEntry[] {
-  return resolveRuntimeWebProviders(params, {
+  return resolvePluginWebProviders(params, {
     resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,
     resolveCandidatePluginIds: resolveWebFetchCandidatePluginIds,
     mapRegistryProviders: mapRegistryWebFetchProviders,

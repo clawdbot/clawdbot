@@ -190,6 +190,7 @@ function extractDirectErrorCodeField(value: unknown): string | undefined {
 }
 
 export function buildToolLifecycleErrorResult(error: unknown): {
+  content: { type: "text"; text: string }[];
   details: Record<string, unknown>;
 } {
   const errorRecord = readRecord(error);
@@ -199,6 +200,7 @@ export function buildToolLifecycleErrorResult(error: unknown): {
     readErrorCodeField(errorRecord?.gatewayCode) ?? readErrorCodeField(errorRecord?.code);
   const message = error instanceof Error ? error.message : String(error);
   return {
+    content: [{ type: "text", text: message }],
     details: {
       status: "error",
       error: message,
@@ -232,14 +234,14 @@ function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknow
       return "[Circular]";
     }
     seen.add(value);
-    const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      out[key] =
-        typeof child === "string"
-          ? redactSensitiveFieldValue(key, child)
-          : redactStringsDeep(child, seen);
+    const entries = Object.entries(value as Record<string, unknown>);
+    for (const entry of entries) {
+      entry[1] =
+        typeof entry[1] === "string"
+          ? redactSensitiveFieldValue(entry[0], entry[1])
+          : redactStringsDeep(entry[1], seen);
     }
-    return out;
+    return Object.fromEntries(entries);
   }
   return value;
 }
@@ -275,16 +277,15 @@ export function sanitizeToolResult(result: unknown): unknown {
         const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
         const cleaned = { ...entry };
         delete cleaned.data;
-        return Object.assign({}, cleaned, { bytes, omitted: true });
+        return Object.assign(cleaned, { bytes, omitted: true });
       }
       return entry;
     });
   }
   // Deep-redact the entire result so any top-level or nested string is
   // protected, not just `details` and text content blocks.
-  const baseline = redactModelVisibleSecrets(preCleaned);
-  const out: Record<string, unknown> = { ...baseline };
-  const content = Array.isArray(baseline.content) ? baseline.content : null;
+  const out = redactModelVisibleSecrets(preCleaned);
+  const content = Array.isArray(out.content) ? out.content : null;
   if (content) {
     out.content = content.map((item) => {
       if (!item || typeof item !== "object") {
@@ -292,7 +293,9 @@ export function sanitizeToolResult(result: unknown): unknown {
       }
       const entry = item as Record<string, unknown>;
       if (readStringValue(entry.type) === "text" && typeof entry.text === "string") {
-        return Object.assign({}, entry, { text: truncateToolText(entry.text) });
+        const text = truncateToolText(entry.text);
+        // Nonplain blocks can still be caller-owned; spread keeps JSON keys as own data.
+        return Object.assign({ ...entry }, { text });
       }
       return entry;
     });

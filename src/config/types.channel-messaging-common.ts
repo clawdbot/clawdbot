@@ -94,9 +94,6 @@ export type ChannelReadReceiptConfig = {
   sendReadReceipts?: boolean;
 };
 
-export type ChannelMentionPatternsConfig<TArraySugar extends boolean = false> =
-  TArraySugar extends true ? string[] : MentionPatternsPolicyConfig;
-
 export type ChannelReactionConfig<
   TNotification = never,
   TLevel = never,

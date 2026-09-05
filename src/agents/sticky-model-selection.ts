@@ -6,12 +6,21 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { setAgentEffectiveModelPrimary, type AgentModelPrimaryWriteTarget } from "./agent-scope.js";
+import {
+  resolveAgentModelPrimaryWriteTarget,
+  setAgentEffectiveModelPrimary,
+  type AgentModelPrimaryWriteTarget,
+} from "./agent-scope.js";
 
 const log = createSubsystemLogger("agents/sticky-model-selection");
 let warnedImmutableConfig = false;
 
 export type StickyModelSelectionDispatchOutcome = "requested" | "skipped-immutable";
+export type StickyModelSelectionTarget = ModelSelectionScope;
+export type StickyModelSelectionPolicy = {
+  scope: ModelSelectionScope | "effective";
+  target: StickyModelSelectionTarget;
+};
 
 /** Resolve preference only; callers must separately authorize config writes. */
 export function resolveStickyModelSelectionScope(params: {
@@ -20,6 +29,24 @@ export function resolveStickyModelSelectionScope(params: {
 }): ModelSelectionScope | "effective" {
   // Omission preserves the existing effective-config write target, not a new default.
   return params.scope ?? params.cfg.agents?.defaults?.modelSelectionScope ?? "effective";
+}
+
+/** Resolve the exact layer a selection may update before presenting or applying it. */
+export function resolveStickyModelSelectionPolicy(params: {
+  agentId: string;
+  canPersistConfig: boolean;
+  cfg: OpenClawConfig;
+  scope?: ModelSelectionScope;
+}): StickyModelSelectionPolicy {
+  const scope = resolveStickyModelSelectionScope(params);
+  if (!params.canPersistConfig || scope === "session") {
+    return { scope, target: "session" };
+  }
+  if (scope !== "effective") {
+    return { scope, target: scope };
+  }
+  const writeTarget = resolveAgentModelPrimaryWriteTarget(params.cfg, params.agentId);
+  return { scope, target: writeTarget === "agent" ? "agent" : "global" };
 }
 
 /** Persists a validated session model selection at the agent's effective config layer. */

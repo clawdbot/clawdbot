@@ -62,6 +62,7 @@ export type SessionListOptions = {
   agentId?: string;
   spawnedBy?: string;
   boardFace?: "chat" | "dashboard";
+  hasBoard?: boolean;
   activeMinutes?: number;
   search?: string;
   ownerId?: string;
@@ -161,9 +162,13 @@ export type SessionCapability = {
     scope: SessionListScope,
     listener: (snapshot: SessionListSnapshot) => void,
   ) => () => void;
+  /** Observes an independent query; refresh rejects after failure, retirement or disposal. */
+  observeList: (
+    scope: SessionListScope,
+    listener: (snapshot: SessionListSnapshot) => void,
+  ) => { refresh: () => Promise<void>; dispose: () => void };
   refreshList: (options?: SessionRefreshOptions) => Promise<void>;
-  setOwnerFilter: (ownerId: string | null) => Promise<void>;
-  setInvolvingMeFilter: (enabled: boolean) => Promise<void>;
+  /** Admits history through the deletion fence, even when outside the shared roster. */
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
@@ -172,7 +177,8 @@ export type SessionCapability = {
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  /** Forces the remembered roster query; null means the attempt retired or failed. */
+  refreshReplacement: (agentId?: string | null) => Promise<SessionsListResult | null>;
   createResult: (
     params?: SessionCreateParams,
     options?: { reconciliation?: SessionCreateReconciliation },
@@ -181,13 +187,14 @@ export type SessionCapability = {
   recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
   archiveVisibility: (key: string) => SessionArchiveVisibility | undefined;
-  setArchiveVisibility: (key: string, visibility: SessionArchiveVisibility | undefined) => void;
+  setArchivePending: (key: string, pending: boolean) => void;
   assignOwner: (
     key: string,
     owner: SessionsAssignOwnerParams["owner"],
     options?: { agentId?: string | null },
   ) => Promise<SessionOwner | null>;
   retireModelOverride: (key: string) => void;
+  think: (key: string, agentId?: string | null) => string | undefined;
   /** Keep optimistic row changes in the published snapshot through later publishes. */
   patchRowLocal: (key: string, patch: Partial<GatewaySessionRow>) => void;
   /** True while a just-created work session awaits its canonical placement row. */
@@ -199,6 +206,11 @@ export type SessionCapability = {
     summary: SessionCatalogPullRequestSummary | undefined,
     epoch?: object,
   ) => void;
+  deletionState: (
+    key: string,
+    agentId?: string | null,
+    sessionId?: string,
+  ) => "pending" | "confirmed" | undefined;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
   reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;

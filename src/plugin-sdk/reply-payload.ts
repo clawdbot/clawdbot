@@ -20,6 +20,55 @@ export type { MediaPayload } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 /** Plugin-facing reply payload without core-only trusted local media internals. */
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
+export type AskUserQuestionOptionIndices = ReadonlyMap<string, ReadonlyMap<string, number>>;
+
+/** Read bounded Gateway-owned option ordering for one native ask_user question. */
+export function resolveAskUserQuestionOptionIndices(
+  payload: Pick<ReplyPayload, "channelData">,
+): AskUserQuestionOptionIndices | undefined {
+  const askUser = payload.channelData?.askUser;
+  if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+    return undefined;
+  }
+  // SAFETY: channelData.askUser is an internal record after the object and array checks above.
+  const { questionId, optionValues } = askUser as {
+    questionId?: unknown;
+    optionValues?: unknown;
+  };
+  if (
+    typeof questionId !== "string" ||
+    !questionId ||
+    !Array.isArray(optionValues) ||
+    optionValues.length < 2 ||
+    optionValues.length > 4
+  ) {
+    return undefined;
+  }
+
+  const optionIndices = new Map<string, number>();
+  for (const [optionIndex, optionValue] of optionValues.entries()) {
+    if (typeof optionValue !== "string") {
+      return undefined;
+    }
+    const normalizedOptionValue = optionValue.trim().toLowerCase();
+    if (!normalizedOptionValue || optionIndices.has(normalizedOptionValue)) {
+      return undefined;
+    }
+    optionIndices.set(normalizedOptionValue, optionIndex);
+  }
+  return new Map([[questionId, optionIndices]]);
+}
+
+/** Match one presented choice to its Gateway-owned option index. */
+export function resolveAskUserQuestionOptionIndex(params: {
+  questionOptionIndices?: AskUserQuestionOptionIndices;
+  questionId: string;
+  optionValue: string;
+}): number | undefined {
+  return params.questionOptionIndices
+    ?.get(params.questionId)
+    ?.get(params.optionValue.trim().toLowerCase());
+}
 export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
 export {
   buildTtsSupplementMediaPayload,

@@ -38,9 +38,14 @@ private final class ScriptedChatTransport: @unchecked Sendable, OpenClawChatTran
     private let state: State
     private let stream: AsyncStream<OpenClawChatTransportEvent>
     private let continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation
+    private let beforeHistoryResponse: (@Sendable () async -> Void)?
 
-    init(history: OpenClawChatHistoryPayload) {
+    init(
+        history: OpenClawChatHistoryPayload,
+        beforeHistoryResponse: (@Sendable () async -> Void)? = nil)
+    {
         self.state = State(history: history)
+        self.beforeHistoryResponse = beforeHistoryResponse
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
         self.stream = AsyncStream { c in
             cont = c
@@ -74,7 +79,9 @@ private final class ScriptedChatTransport: @unchecked Sendable, OpenClawChatTran
     // MARK: OpenClawChatTransport
 
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
-        await self.state.recordHistoryRequest()
+        let payload = await self.state.recordHistoryRequest()
+        await self.beforeHistoryResponse?()
+        return payload
     }
 
     func sendMessage(
@@ -120,21 +127,38 @@ private func replayHistory(
         thinkingLevel: "off")
 }
 
-/// Raw history/event row shaped like the gateway JSON, including the persisted
-/// `__openclaw.idempotencyKey` metadata used for turn correlation.
+/// Raw gateway rows with current run metadata or the older idempotency-key contract.
 private func replayRawMessage(
     role: String,
     text: String,
     timestamp: Double,
-    idempotencyKey: String? = nil) -> AnyCodable
+    idempotencyKey: String? = nil,
+    runId: String? = nil,
+    messageId: String? = nil,
+    emptyThinking: Bool = false) -> AnyCodable
 {
+    var content: [[String: Any]] = []
+    if emptyThinking {
+        content.append(["type": "thinking", "thinking": ""])
+    }
+    content.append(["type": "text", "text": text])
     var message: [String: Any] = [
         "role": role,
-        "content": [["type": "text", "text": text]],
+        "content": content,
         "timestamp": timestamp,
     ]
+    var metadata: [String: String] = [:]
     if let idempotencyKey {
-        message["__openclaw"] = ["idempotencyKey": idempotencyKey]
+        metadata["idempotencyKey"] = idempotencyKey
+    }
+    if let runId {
+        metadata["runId"] = runId
+    }
+    if let messageId {
+        metadata["id"] = messageId
+    }
+    if !metadata.isEmpty {
+        message["__openclaw"] = metadata
     }
     return AnyCodable(message)
 }
@@ -143,20 +167,17 @@ private func replayDurableMessage(
     role: String,
     text: String,
     timestamp: Double,
-    idempotencyKey: String? = nil) -> OpenClawChatMessage
+    idempotencyKey: String? = nil,
+    runId: String? = nil,
+    emptyThinking: Bool = false) -> OpenClawChatMessage
 {
-    OpenClawChatMessage(
+    try! ChatPayloadDecoding.decode(replayRawMessage(
         role: role,
-        content: [
-            OpenClawChatMessageContent(
-                type: "text",
-                text: text,
-                mimeType: nil,
-                fileName: nil,
-                content: nil),
-        ],
+        text: text,
         timestamp: timestamp,
-        idempotencyKey: idempotencyKey)
+        idempotencyKey: idempotencyKey,
+        runId: runId,
+        emptyThinking: emptyThinking))
 }
 
 private func replaySessionMessageEvent(
@@ -164,6 +185,8 @@ private func replaySessionMessageEvent(
     timestamp: Double,
     role: String = "assistant",
     idempotencyKey: String? = nil,
+    runId: String? = nil,
+    emptyThinking: Bool = false,
     messageId: String) -> OpenClawChatTransportEvent
 {
     .sessionMessage(
@@ -173,7 +196,9 @@ private func replaySessionMessageEvent(
                 role: role,
                 text: text,
                 timestamp: timestamp,
-                idempotencyKey: idempotencyKey),
+                idempotencyKey: idempotencyKey,
+                runId: runId,
+                emptyThinking: emptyThinking),
             messageId: messageId,
             messageSeq: nil))
 }
@@ -191,8 +216,7 @@ private func replayFinalEvent(
             message: replayRawMessage(
                 role: "assistant",
                 text: text,
-                timestamp: timestamp,
-                idempotencyKey: runId),
+                timestamp: timestamp),
             errorMessage: nil))
 }
 
@@ -230,11 +254,12 @@ private struct StreamReplayHarness {
     let vm: OpenClawChatViewModel
 
     static func bootstrapped(
-        initialHistory: OpenClawChatHistoryPayload = replayHistory()) async throws -> StreamReplayHarness
+        initialHistory: OpenClawChatHistoryPayload = replayHistory(),
+        transcriptCache: (any OpenClawChatTranscriptCache)? = nil) async throws -> StreamReplayHarness
     {
         let transport = ScriptedChatTransport(history: initialHistory)
         let vm = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: transport)
+            OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: transcriptCache)
         }
         await MainActor.run { vm.load() }
         let harness = StreamReplayHarness(transport: transport, vm: vm)
@@ -463,7 +488,11 @@ struct ChatStreamReplayTests {
         }
     }
 
-    @Test func `provisional final is replaced by durable row without content loss`() async throws {
+    @Test(arguments: [false, true], [false, true])
+    func `provisional final is replaced by durable row without content loss`(
+        legacyRunKey: Bool,
+        emptyThinking: Bool) async throws
+    {
         let now = Date().timeIntervalSince1970 * 1000
         let replyText = "Considered answer with detail."
         let harness = try await StreamReplayHarness.bootstrapped()
@@ -481,11 +510,13 @@ struct ChatStreamReplayTests {
             replaySessionMessageEvent(
                 text: replyText,
                 timestamp: now + 2000,
-                idempotencyKey: runId,
+                idempotencyKey: legacyRunKey ? runId : nil,
+                runId: legacyRunKey ? nil : runId,
+                emptyThinking: emptyThinking,
                 messageId: "durable-final"))
 
-        try await harness.converge("durable row replaces provisional") { vm in
-            vm.replayAssistantRows(text: replyText).first?.timestamp == now + 2000
+        try await harness.converge("durable row arrives") { vm in
+            vm.replayAssistantRows(text: replyText).contains { $0.timestamp == now + 2000 }
         }
 
         await MainActor.run {
@@ -493,13 +524,17 @@ struct ChatStreamReplayTests {
             #expect(rows.count == 1)
             // Row identity survives adoption so SwiftUI does not re-animate the bubble.
             #expect(rows.first?.id == provisionalID)
-            #expect(rows.first?.idempotencyKey == runId)
+            #expect(rows.last?.idempotencyKey == (legacyRunKey ? runId : nil))
             let rowText = rows.first?.content.compactMap(\.text).joined() ?? ""
             #expect(Array(rowText.utf8) == Array(replyText.utf8))
         }
     }
 
-    @Test func `durable row arriving before run completion does not duplicate on final`() async throws {
+    @Test(arguments: [false, true], [false, true])
+    func `durable row arriving before run completion does not duplicate on final`(
+        legacyRunKey: Bool,
+        emptyThinking: Bool) async throws
+    {
         let now = Date().timeIntervalSince1970 * 1000
         let replyText = "Answer persisted before completion."
         let harness = try await StreamReplayHarness.bootstrapped()
@@ -510,7 +545,9 @@ struct ChatStreamReplayTests {
             replaySessionMessageEvent(
                 text: replyText,
                 timestamp: now + 5000,
-                idempotencyKey: runId,
+                idempotencyKey: legacyRunKey ? runId : nil,
+                runId: legacyRunKey ? nil : runId,
+                emptyThinking: emptyThinking,
                 messageId: "durable-early"))
         try await harness.converge("durable visible while run still pending") { vm in
             vm.replayAssistantRows(text: replyText).count == 1 && vm.pendingRunCount == 1
@@ -529,6 +566,217 @@ struct ChatStreamReplayTests {
             #expect(rows.first?.timestamp == now + 5000)
             #expect(harness.vm.streamingAssistantText == nil)
         }
+    }
+
+    @Test(arguments: [false, true])
+    func `intermediate tool rows cannot consume a final from the same run`(finalFirst: Bool) async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let text = "Final answer after the tool call."
+        let harness = try await StreamReplayHarness.bootstrapped()
+        let runId = try await harness.send("use a tool")
+        let final = replayFinalEvent(runId: runId, text: text, timestamp: now + 1000)
+        let toolMessage: OpenClawChatMessage = try ChatPayloadDecoding.decode(AnyCodable([
+            "role": "assistant",
+            "content": [
+                ["type": "text", "text": "Checking a tool."],
+                ["type": "toolCall", "id": "tool-1", "name": "read", "arguments": [:]],
+            ],
+            "timestamp": now + 2000,
+            "stopReason": "toolUse",
+            "__openclaw": ["runId": runId],
+        ] as [String: Any]))
+        let toolEvent = OpenClawChatTransportEvent.sessionMessage(OpenClawSessionMessageEventPayload(
+            sessionKey: "main",
+            message: toolMessage,
+            messageId: "intermediate-tool-row",
+            messageSeq: nil))
+
+        harness.transport.emit(finalFirst ? final : toolEvent)
+        harness.transport.emit(finalFirst ? toolEvent : final)
+        try await harness.converge("tool row and completion consumed") { vm in
+            vm.pendingRunCount == 0 && vm.messages.contains { $0.timestamp == now + 2000 }
+        }
+        await MainActor.run {
+            #expect(harness.vm.replayAssistantRows(text: text).count == 1)
+            #expect(harness.vm.replayAssistantRows.count == 2)
+        }
+
+        harness.transport.emit(replaySessionMessageEvent(
+            text: text,
+            timestamp: now + 3000,
+            runId: runId,
+            emptyThinking: true,
+            messageId: "terminal-tool-reply"))
+        try await harness.converge("terminal tool reply arrives") { vm in
+            vm.messages.contains { $0.timestamp == now + 3000 }
+        }
+        await MainActor.run {
+            #expect(harness.vm.replayAssistantRows.count == 2)
+            #expect(harness.vm.replayAssistantRows(text: text).map(\.timestamp) == [now + 3000])
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `another run cannot replace a same-text provisional final`(matchingLegacyKey: Bool) async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let text = "Same reply, distinct runs."
+        let harness = try await StreamReplayHarness.bootstrapped()
+        let runId = try await harness.send("first turn")
+        harness.transport.emit(replayFinalEvent(runId: runId, text: text, timestamp: now + 1000))
+        try await harness.converge("owned provisional final visible") { vm in
+            vm.pendingRunCount == 0 && vm.replayAssistantRows(text: text).count == 1
+        }
+
+        harness.transport.emit(replaySessionMessageEvent(
+            text: text,
+            timestamp: now + 2000,
+            idempotencyKey: matchingLegacyKey ? runId : nil,
+            runId: "different-run",
+            messageId: "different-durable-final"))
+        try await harness.converge("other run durable row arrives") { vm in
+            vm.replayAssistantRows(text: text).contains { $0.timestamp == now + 2000 }
+        }
+        await MainActor.run {
+            #expect(harness.vm.replayAssistantRows(text: text).map(\.timestamp) == [now + 1000, now + 2000])
+        }
+    }
+
+    @Test func `canonical history adopts a final with different content framing`() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let text = "The same final, with a persisted thinking block."
+        let harness = try await StreamReplayHarness.bootstrapped()
+        let runId = try await harness.send("history refresh")
+        harness.transport.emit(replayFinalEvent(runId: runId, text: text, timestamp: now + 1000))
+        try await harness.converge("provisional reply visible before history") { vm in
+            vm.pendingRunCount == 0 && vm.replayAssistantRows(text: text).count == 1
+        }
+        let provisionalID = try await MainActor.run {
+            try #require(harness.vm.replayAssistantRows(text: text).first?.id)
+        }
+
+        await harness.transport.setHistory(replayHistory(messages: [
+            replayRawMessage(
+                role: "user",
+                text: "history refresh",
+                timestamp: now,
+                idempotencyKey: "\(runId):user"),
+            replayRawMessage(
+                role: "assistant",
+                text: text,
+                timestamp: now + 2000,
+                runId: runId,
+                emptyThinking: true),
+        ]))
+        await MainActor.run { harness.vm.resumeFromForeground() }
+        try await harness.converge("canonical history applied") { vm in
+            vm.replayAssistantRows(text: text).contains { $0.timestamp == now + 2000 }
+        }
+        await MainActor.run {
+            #expect(harness.vm.replayAssistantRows(text: text).count == 1)
+            #expect(harness.vm.replayAssistantRows(text: text).first?.id == provisionalID)
+        }
+    }
+
+    @Test(arguments: [
+        (Optional("cold-canonical-final"), false),
+        (nil, false),
+        (Optional("cold-canonical-final"), true),
+    ])
+    func `cached final converges after lagging untagged history`(
+        transcriptMessageID: String?,
+        canonicalViaLiveEvent: Bool) async throws
+    {
+        let database = try ClientDatabaseTestSuite()
+        let harness = try await StreamReplayHarness.bootstrapped(transcriptCache: database.store)
+        let runId = try await harness.send("cache refresh")
+        let now = Date().timeIntervalSince1970 * 1000
+        let text = "One reply across the cache boundary."
+        let user = replayRawMessage(
+            role: "user",
+            text: "cache refresh",
+            timestamp: now,
+            idempotencyKey: "\(runId):user")
+        await harness.transport.setHistory(replayHistory(messages: [
+            user,
+            replayRawMessage(
+                role: "assistant", text: text, timestamp: now + 1000, messageId: transcriptMessageID),
+        ]))
+        harness.transport.emit(replayFinalEvent(runId: runId, text: text, timestamp: now + 500))
+        try await harness.converge("untagged history adopted the streamed final") { vm in
+            vm.pendingRunCount == 0 && vm.replayAssistantRows.map(\.timestamp) == [now + 1000]
+        }
+        let originalWrite = await MainActor.run { harness.vm.pendingCacheWriteTask }
+        await originalWrite?.value
+        #expect(await database.store.loadTranscript(sessionKey: "main").count == 2)
+        await database.store.retire()
+        try database.databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: database.directory)
+        defer { try? reopened.close() }
+        let reopenedStore = reopened.store(gatewayID: "gw-a")
+        let canonicalHistory = replayHistory(messages: [
+            user,
+            replayRawMessage(
+                role: "assistant",
+                text: text,
+                timestamp: now + 2000,
+                runId: runId,
+                messageId: transcriptMessageID,
+                emptyThinking: true),
+        ])
+        let (historyGate, releaseHistory) = AsyncStream<Void>.makeStream()
+        defer { releaseHistory.finish() }
+        let transport = ScriptedChatTransport(history: canonicalHistory, beforeHistoryResponse: {
+            for await _ in historyGate {}
+        })
+        let vm = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: reopenedStore)
+        }
+        let restored = StreamReplayHarness(transport: transport, vm: vm)
+        await MainActor.run { vm.load() }
+        try await restored.converge("reopened database prepainted before history") { vm in
+            vm.isShowingCachedTranscript && vm.replayAssistantRows.map(\.timestamp) == [now + 1000]
+        }
+        await MainActor.run {
+            #expect(vm.replayAssistantRows.map(\.transcriptMessageID) == [transcriptMessageID])
+        }
+
+        // Cold-open history replaces even an unkeyed cached row. Live Gateway
+        // events share the history entry ID and must pass through the wire codec.
+        if canonicalViaLiveEvent {
+            let messageID = try #require(transcriptMessageID)
+            let frame = EventFrame(type: "event", event: "session.message", payload: AnyCodable([
+                "sessionKey": AnyCodable("main"),
+                "messageId": AnyCodable(messageID),
+                "message": replayRawMessage(
+                    role: "assistant",
+                    text: text,
+                    timestamp: now + 2000,
+                    runId: runId,
+                    emptyThinking: true),
+            ]))
+            let priorMutation = await MainActor.run { vm.historyMutationGeneration }
+            try transport.emit(#require(OpenClawChatGatewayPayloadCodec.event(from: frame)))
+            // A deduped event leaves the visible row unchanged; wait for the
+            // handler's history fence before checking that no bubble was added.
+            try await restored.converge("canonical live reply was consumed") { vm in
+                vm.historyMutationGeneration > priorMutation
+            }
+            await MainActor.run { #expect(vm.replayAssistantRows.count == 1) }
+        }
+        releaseHistory.finish()
+        try await restored.converge("cold-open history completed") { vm in
+            vm.healthOK && !vm.isLoading && !vm.isShowingCachedTranscript
+        }
+        await MainActor.run {
+            #expect(vm.replayAssistantRows.map(\.timestamp) == [now + 2000])
+            #expect(vm.replayAssistantRows.map(\.transcriptRunID) == [runId])
+        }
+        let finalWrite = await MainActor.run { vm.pendingCacheWriteTask }
+        await finalWrite?.value
+        let cached = await reopenedStore.loadTranscript(sessionKey: "main")
+        #expect(cached.filter { $0.role == "assistant" }.map(\.timestamp) == [now + 2000])
+        await reopenedStore.retire()
     }
 
     @Test func `reconnect mid-run converges via history refetch and drains pending run`() async throws {

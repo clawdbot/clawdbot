@@ -34,33 +34,35 @@ function result(
 
 function contextFor(listResult: SessionsListResult | null, mainKey = "main") {
   const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-    if (method === "sessions.resolve") {
+    if (method === "sessions.resolve" || method === "chat.startup") {
       const shortId = typeof params.shortId === "string" ? params.shortId.toLowerCase() : "";
       const matches =
         listResult?.sessions.filter((session) =>
           session.key.toLowerCase().replaceAll("-", "").includes(shortId),
         ) ?? [];
-      return matches.length === 1 && matches[0]
-        ? {
-            ok: true,
-            key: matches[0].key,
-            agentId: matches[0].agentId ?? matches[0].key.split(":")[1],
-            displayName: matches[0].displayName,
-            boardFace: matches[0].boardFace,
-          }
-        : {
-            ok: false,
-            ...(matches.length > 1
-              ? {
-                  candidates: matches.map((session) => ({
-                    key: session.key,
-                    agentId: session.agentId ?? session.key.split(":")[1],
-                    displayName: session.displayName,
-                    boardFace: session.boardFace,
-                  })),
-                }
-              : {}),
-          };
+      const resolution =
+        matches.length === 1 && matches[0]
+          ? {
+              ok: true,
+              key: matches[0].key,
+              agentId: matches[0].agentId ?? matches[0].key.split(":")[1],
+              displayName: matches[0].displayName,
+              boardFace: matches[0].boardFace,
+            }
+          : {
+              ok: false,
+              ...(matches.length > 1
+                ? {
+                    candidates: matches.map((session) => ({
+                      key: session.key,
+                      agentId: session.agentId ?? session.key.split(":")[1],
+                      displayName: session.displayName,
+                      boardFace: session.boardFace,
+                    })),
+                  }
+                : {}),
+            };
+      return method === "chat.startup" ? { resolution, messages: [] } : resolution;
     }
     throw new Error(`Unexpected gateway request: ${method}`);
   });
@@ -68,9 +70,11 @@ function contextFor(listResult: SessionsListResult | null, mainKey = "main") {
   const list = vi.fn(async (_options?: { offset?: number; search?: string }) => listResult);
   const context = {
     basePath: "",
+    router: { getState: () => ({ matches: [], pendingMatches: [] }), subscribe: () => () => {} },
     gateway: {
       snapshot: { phase: "connected", client, hello: null },
       subscribe: vi.fn(() => () => undefined),
+      subscribeEvents: vi.fn(() => () => undefined),
     },
     agents: { state: { agentsList: { mainKey } } },
     sessions: { list },
@@ -88,24 +92,12 @@ describe("loadChatRoute", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({ type: "notFound", data: { routeId: "chat" } });
     expect(list).not.toHaveBeenCalled();
   });
 
   it("survives sessionId rotation and canonicalizes decorative short-form segments", async () => {
     const { context, list, request } = contextFor(result([row()]));
-    request.mockImplementation(async (method) => {
-      if (method === "sessions.resolve") {
-        return {
-          ok: true,
-          key: sessionKey,
-          agentId: "main",
-          displayName: "Deploy Monitor",
-          boardFace: undefined,
-        };
-      }
-      throw new Error(`Unexpected gateway request: ${method}`);
-    });
     const signal = new AbortController().signal;
     const redirected = await loadChatRoute(
       context,
@@ -184,11 +176,12 @@ describe("loadChatRoute", () => {
       shortId: "123456780a",
     });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", {
+    expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
       shortId: "123456780a",
       slugHint: "deploy-monitor",
       agentId: "main",
-      allowMissing: true,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
   });
 
@@ -261,6 +254,36 @@ describe("loadChatRoute", () => {
       face: "dashboard",
     });
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it("carries expanded dashboard presentation into route data", async () => {
+    const { context } = contextFor(result([]));
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/dashboard/work", search: "?dashboard=expanded", hash: "" },
+        "dashboard",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:work:main",
+      face: "dashboard",
+      dashboardExpanded: true,
+    });
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/work", search: "?dashboard=expanded", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:work:main",
+      face: "chat",
+      dashboardExpanded: true,
+    });
   });
 
   it("waits for configured session defaults before resolving an agent main route", async () => {
@@ -498,7 +521,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:main:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "main",
       draft: undefined,
       face: "chat",
@@ -521,7 +544,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toMatchObject({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "research",
     });
   });
@@ -541,7 +564,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "research",
       draft: undefined,
       face: "dashboard",

@@ -3,6 +3,8 @@ import type { AgentCompactionIdentifierPolicy } from "../../config/types.agent-d
 import type { Model } from "../../llm/types.js";
 import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-registry.js";
 
+export type CompactionSafeguardCancellation = { reason: string; error?: unknown };
+
 /** Runtime knobs consumed by the compaction safeguard extension. */
 type CompactionSafeguardRuntimeValue = {
   maxHistoryShare?: number;
@@ -27,12 +29,8 @@ type CompactionSafeguardRuntimeValue = {
    * `summarize()` is called instead of the built-in `summarizeInStages()`.
    */
   provider?: string;
-  /**
-   * Pending human-readable cancel reason from the current safeguard compaction
-   * attempt. OpenClaw consumes this to replace the upstream generic
-   * "Compaction cancelled" message.
-   */
-  cancelReason?: string;
+  /** Hook cancellation hides provider errors behind AgentSession's generic error. */
+  cancellation?: CompactionSafeguardCancellation;
 };
 
 const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();
@@ -41,36 +39,33 @@ export const setCompactionSafeguardRuntime = registry.set;
 
 export const getCompactionSafeguardRuntime = registry.get;
 
-/** Stores a human-readable compaction cancel reason on the session runtime state. */
-export function setCompactionSafeguardCancelReason(
+/** Records cancellation atomically; intentional declines carry no provider error. */
+export function setCompactionSafeguardCancellation(
   sessionManager: unknown,
   reason: string | undefined,
+  error?: unknown,
 ): void {
   const current = getCompactionSafeguardRuntime(sessionManager);
   const trimmed = reason?.trim();
-
   if (!current && !trimmed) {
     return;
   }
   const next = { ...current };
   if (trimmed) {
-    next.cancelReason = trimmed;
+    next.cancellation = { reason: trimmed, ...(error !== undefined ? { error } : {}) };
   } else {
-    delete next.cancelReason;
+    delete next.cancellation;
   }
-  setCompactionSafeguardRuntime(sessionManager, next);
+  setCompactionSafeguardRuntime(sessionManager, Object.keys(next).length > 0 ? next : null);
 }
 
-/** Reads and clears the pending compaction cancel reason for one session manager. */
-export function consumeCompactionSafeguardCancelReason(sessionManager: unknown): string | null {
-  const current = getCompactionSafeguardRuntime(sessionManager);
-  const reason = current?.cancelReason?.trim();
-  if (!reason) {
-    return null;
+/** Consumes this attempt's cancellation without clearing session configuration. */
+export function consumeCompactionSafeguardCancellation(
+  sessionManager: unknown,
+): CompactionSafeguardCancellation | null {
+  const cancellation = getCompactionSafeguardRuntime(sessionManager)?.cancellation;
+  if (cancellation) {
+    setCompactionSafeguardCancellation(sessionManager, undefined);
   }
-
-  const next = { ...current };
-  delete next.cancelReason;
-  setCompactionSafeguardRuntime(sessionManager, Object.keys(next).length > 0 ? next : null);
-  return reason;
+  return cancellation ?? null;
 }

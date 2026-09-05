@@ -320,7 +320,7 @@ describe("CodexAppServerTurnRouter", () => {
     ]);
   });
 
-  it("records receipt synchronously and drains accepted work after release", async () => {
+  it("records receipt synchronously and drains accepted work before release", async () => {
     const harness = createHarness();
     const events: string[] = [];
     let finishFirst!: () => void;
@@ -356,7 +356,6 @@ describe("CodexAppServerTurnRouter", () => {
       "item/started:start",
     ]);
 
-    route.release();
     finishFirst();
     await route.drain();
     expect(events).toEqual([
@@ -367,21 +366,16 @@ describe("CodexAppServerTurnRouter", () => {
       "item/completed:start",
       "item/completed:end",
     ]);
+    route.release();
   });
 
-  it("releases routing waiters without waiting for an async notification", async () => {
+  it("drain resolves after release while a handler is blocked and routing waiters are pending", async () => {
+    vi.useFakeTimers();
     const harness = createHarness();
-    let notificationStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      notificationStarted = resolve;
-    });
-    const neverFinishes = new Promise<void>(() => {});
+    const handler = vi.fn(() => new Promise<void>(() => {}));
     const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
       threadId: "thread-release-tail",
-      onNotification: async () => {
-        notificationStarted();
-        await neverFinishes;
-      },
+      onNotification: handler,
       onRequest: () => ({ decision: "accept" }),
     });
     route.armTurn();
@@ -398,12 +392,22 @@ describe("CodexAppServerTurnRouter", () => {
         itemId: "item-1",
       },
     });
-    const binding = route.bindTurn("turn-release-tail");
-    await started;
+    const binding = expect(route.bindTurn("turn-release-tail")).rejects.toThrow(
+      "thread route is released",
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler).toHaveBeenCalledOnce();
+    const result = Promise.race([
+      Promise.all([route.drain(), binding]).then(() => "drained"),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("still blocked"), 1);
+      }),
+    ]);
 
     route.release();
+    await vi.advanceTimersByTimeAsync(1);
 
-    await expect(binding).rejects.toThrow("thread route is released");
+    expect(await result).toBe("drained");
     expect(await waitForResponse(harness, "request-release-tail")).toEqual({
       id: "request-release-tail",
       result: { decision: "decline" },

@@ -21,7 +21,10 @@ vi.mock("../config/paths.js", () => ({
   resolveIsNixMode: () => mocks.isNixMode,
 }));
 
-import { persistStickyModelSelectionBestEffort } from "./sticky-model-selection.js";
+import {
+  persistStickyModelSelectionBestEffort,
+  resolveStickyModelSelectionPolicy,
+} from "./sticky-model-selection.js";
 
 beforeEach(() => {
   mocks.info.mockReset();
@@ -33,6 +36,54 @@ beforeEach(() => {
     mocks.cfg = draft;
     return { nextConfig: draft, result };
   });
+});
+
+describe("resolveStickyModelSelectionPolicy", () => {
+  const cfg = {
+    agents: {
+      defaults: { model: "anthropic/claude-opus-4-6" },
+      list: [
+        { id: "main", default: true },
+        { id: "work", model: "anthropic/claude-sonnet-4-6" },
+        { id: "inheriting" },
+      ],
+    },
+  } satisfies OpenClawConfig;
+
+  it.each([
+    { scope: undefined, agentId: "main", target: "global" },
+    { scope: undefined, agentId: "work", target: "agent" },
+    { scope: undefined, agentId: "inheriting", target: "global" },
+    { scope: "session", agentId: "main", target: "session" },
+    { scope: "session", agentId: "work", target: "session" },
+    { scope: "agent", agentId: "main", target: "agent" },
+    { scope: "agent", agentId: "work", target: "agent" },
+    { scope: "global", agentId: "main", target: "global" },
+    { scope: "global", agentId: "work", target: "global" },
+  ] as const)("resolves scope=$scope for $agentId to $target", ({ scope, agentId, target }) => {
+    expect(
+      resolveStickyModelSelectionPolicy({
+        agentId,
+        canPersistConfig: true,
+        cfg,
+        ...(scope ? { scope } : {}),
+      }),
+    ).toEqual({ scope: scope ?? "effective", target });
+  });
+
+  it.each([undefined, "session", "agent", "global"] as const)(
+    "discloses session-only selection without config-write authority for scope=%s",
+    (scope) => {
+      expect(
+        resolveStickyModelSelectionPolicy({
+          agentId: "work",
+          canPersistConfig: false,
+          cfg,
+          ...(scope ? { scope } : {}),
+        }).target,
+      ).toBe("session");
+    },
+  );
 });
 
 describe("persistStickyModelSelection", () => {

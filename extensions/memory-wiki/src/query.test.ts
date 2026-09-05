@@ -34,9 +34,12 @@ vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
 
 vi.mock("@openclaw/memory-core/api.js", { spy: true });
 
+vi.mock("openclaw/plugin-sdk/agent-scope-runtime", () => ({
+  resolveSessionAgentIdStrict: resolveSessionAgentIdMock,
+}));
+
 vi.mock("openclaw/plugin-sdk/memory-host-core", () => ({
   resolveDefaultAgentId: resolveDefaultAgentIdMock,
-  resolveSessionAgentId: resolveSessionAgentIdMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
@@ -1882,7 +1885,7 @@ describe("getMemoryWikiPage", () => {
       initialize: true,
     });
     await fs.writeFile(
-      path.join(rootDir, "sources", "unsafe-alpha.md"),
+      path.join(rootDir, "sources", "imported-source-alpha.md"),
       renderWikiMarkdown({
         frontmatter: {
           pageType: "source",
@@ -1902,12 +1905,12 @@ describe("getMemoryWikiPage", () => {
 
     const result = await getMemoryWikiPage({
       config,
-      lookup: "sources/unsafe-alpha.md",
+      lookup: "sources/imported-source-alpha.md",
     });
 
     expectFields(result, {
       corpus: "wiki",
-      path: "sources/unsafe-alpha.md",
+      path: "sources/imported-source-alpha.md",
       sourceType: "memory-unsafe-local",
       provenanceMode: "unsafe-local",
       sourcePath: "/tmp/private/alpha.md",

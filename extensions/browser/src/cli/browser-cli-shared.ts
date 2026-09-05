@@ -12,8 +12,13 @@ import {
 } from "../browser-gateway-contract.js";
 import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "../browser/act-policy.js";
 import { normalizeBrowserTimerDelayMs } from "../browser/timer-delay.js";
-import { danger, defaultRuntime, runCommandWithRuntime } from "../core-api.js";
-import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
+import {
+  callGatewayFromCli,
+  danger,
+  defaultRuntime,
+  runCommandWithRuntime,
+  type GatewayRpcOpts,
+} from "./core-api.js";
 
 /** Parent Browser CLI options inherited by subcommands. */
 export type BrowserParentOpts = GatewayRpcOpts & {

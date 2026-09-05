@@ -7,6 +7,7 @@ import {
   listSessionEntries,
   loadTranscriptEventsSync,
   resolveStorePath,
+  type SessionEntry,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -42,6 +43,12 @@ type QaSessionTranscriptSeedParams = {
   updatedAt: number;
 };
 
+type QaSessionEntrySeed = {
+  agentId: string;
+  entry: SessionEntry;
+  sessionKey: string;
+};
+
 const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 const MAX_COMPACTION_SUMMARIES = 16;
 const MAX_SUCCESSFUL_TOOL_CALL_EVENTS = 64;
@@ -52,6 +59,7 @@ type QaSessionTranscriptSummary = {
   assistantToolCallCounts: Record<string, number>;
   compactionSummaries: string[];
   completedToolCallCounts: Record<string, number>;
+  currentSourceToolDeliveries?: Array<{ toolName: string; threadId?: string }>;
   eventCursor: number;
   hasPendingCodeModeWait?: boolean;
   userMessageCount: number;
@@ -133,6 +141,7 @@ function summarizeSessionTranscriptEvents(
   const assistantToolCallCounts: Record<string, number> = {};
   const completedToolCallCounts: Record<string, number> = {};
   const compactionSummaries: string[] = [];
+  const currentSourceToolDeliveries: Array<{ toolName: string; threadId?: string }> = [];
   const successfulToolCallCounts: Record<string, number> = {};
   const successfulToolCallEvents: NonNullable<
     QaSessionTranscriptSummary["successfulToolCallEvents"]
@@ -174,6 +183,15 @@ function summarizeSessionTranscriptEvents(
     if (message.role === "toolResult") {
       const toolCallId = readNonEmptyString(message.toolCallId);
       const toolName = readNonEmptyString(message.toolName);
+      const details = isRecord(message.details) ? message.details : undefined;
+      if (toolName && details?.sourceReplyRoute === "current-source") {
+        const receipt = isRecord(details.receipt) ? details.receipt : undefined;
+        const threadId = readNonEmptyString(receipt?.threadId);
+        currentSourceToolDeliveries.push({
+          toolName,
+          ...(threadId ? { threadId } : {}),
+        });
+      }
       if (
         toolCallId &&
         toolName &&
@@ -271,6 +289,7 @@ function summarizeSessionTranscriptEvents(
     assistantToolCallCounts,
     compactionSummaries,
     completedToolCallCounts,
+    ...(currentSourceToolDeliveries.length > 0 ? { currentSourceToolDeliveries } : {}),
     eventCursor,
     ...(pendingCodeModeExecNeedle
       ? {
@@ -367,6 +386,27 @@ function qaSessionRuntimeEnv(tempRoot: string): NodeJS.ProcessEnv {
     ...process.env,
     OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
   };
+}
+
+async function seedQaSessionEntries(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  entries: readonly QaSessionEntrySeed[],
+): Promise<void> {
+  const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  for (const seed of entries) {
+    const agentId = seed.agentId.trim();
+    const sessionKey = seed.sessionKey.trim();
+    if (!agentId || !sessionKey) {
+      throw new Error("seedQaSessionEntries requires agentId and sessionKey");
+    }
+    await upsertSessionEntry({
+      agentId,
+      env: runtimeEnv,
+      sessionKey,
+      storePath: resolveStorePath(undefined, { agentId, env: runtimeEnv }),
+      entry: seed.entry,
+    });
+  }
 }
 
 async function seedQaSessionTranscript(
@@ -527,5 +567,6 @@ export {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
+  seedQaSessionEntries,
   seedQaSessionTranscript,
 };

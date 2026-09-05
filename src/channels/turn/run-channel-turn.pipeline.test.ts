@@ -1,5 +1,7 @@
 // Channel turn pipeline tests cover orchestration, dispatch, and completion behavior.
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { noteDispatchProcessedOutcome } from "../../auto-reply/reply/dispatch-processed-outcome.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
@@ -115,6 +117,8 @@ vi.mock("../../config/sessions/transcript.js", () => ({
 }));
 
 const cfg = {} as OpenClawConfig;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let storePath: string;
 const visibleFinalReceipt = {
   counts: {
     tool: {
@@ -186,7 +190,7 @@ function dispatchTestAssembledTurn(
   return dispatchAssembledChannelTurn({
     cfg,
     agentId: "main",
-    storePath: "/tmp/sessions.json",
+    storePath,
     ...overrides,
   });
 }
@@ -197,7 +201,7 @@ function runTestPreparedChannelTurn<TDispatchResult>(
   return runPreparedChannelTurn({
     channel: "test",
     routeSessionKey: "agent:main:test:peer",
-    storePath: "/tmp/sessions.json",
+    storePath,
     ctxPayload: createCtx(),
     recordInboundSession: createRecordInboundSession(),
     record: { onRecordError: vi.fn() },
@@ -238,6 +242,7 @@ function loggedEvents(log: ReturnType<typeof vi.fn>): TurnLogEvent[] {
 
 describe("channel turn pipeline", () => {
   beforeEach(() => {
+    storePath = path.join(tempDirs.make("openclaw-channel-turn-pipeline-"), "sessions.json");
     vi.clearAllMocks();
     recordInboundSessionCore.mockResolvedValue(undefined);
     dispatchReplyWithBufferedBlockDispatcherCore.mockImplementation(createDispatch());
@@ -708,7 +713,7 @@ describe("channel turn pipeline", () => {
     const [recordRequest] = (recordInboundSession as unknown as ReturnType<typeof vi.fn>).mock
       .calls[0] as unknown as [{ sessionKey?: string; storePath?: string }];
     expect(recordRequest.sessionKey).toBe("agent:main:test:peer");
-    expect(recordRequest.storePath).toBe("/tmp/sessions.json");
+    expect(recordRequest.storePath).toBe(storePath);
     expect(deliver).toHaveBeenCalledWith({ text: "reply" }, { kind: "final" });
   });
 
@@ -745,7 +750,7 @@ describe("channel turn pipeline", () => {
       expect.objectContaining({
         agentId: "main",
         sessionKey: targetSessionKey,
-        storePath: "/tmp/sessions.json",
+        storePath,
       }),
     );
     const recordEvents = log.mock.calls
@@ -811,7 +816,7 @@ describe("channel turn pipeline", () => {
     const result = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
+      storePath,
       ctxPayload: createCtx(),
       recordInboundSession,
       runDispatch,
@@ -915,7 +920,7 @@ describe("channel turn pipeline", () => {
       await runPreparedChannelTurn({
         channel: "slack",
         routeSessionKey: "agent:main:slack:channel:c1",
-        storePath: "/tmp/sessions.json",
+        storePath,
         ctxPayload: createCtx({ SessionKey: "agent:main:slack:channel:c1" }),
         recordInboundSession,
         runDispatch,

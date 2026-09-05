@@ -3,10 +3,11 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import { createSessionMcpRuntime } from "../../../../src/agents/agent-bundle-mcp-runtime.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   MCP_SERVERS,
@@ -65,6 +66,7 @@ describe("Gateway and node-host MCP live process parity", () => {
 
       let sessionHttpFixture: HttpFixture | undefined;
       let nodeHttpFixture: HttpFixture | undefined;
+      const gatewayOwner = createQaGatewayChild();
       let gateway: GatewayHandle | undefined;
       let node: CapturedChild | undefined;
       let sessionRuntime: ReturnType<typeof createSessionMcpRuntime> | undefined;
@@ -109,7 +111,7 @@ describe("Gateway and node-host MCP live process parity", () => {
         await fs.writeFile(nodeConfigPath, `${JSON.stringify(nodeConfig, null, 2)}\n`, "utf8");
 
         phase = "starting Gateway";
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot,
           command: {
             executablePath: process.execPath,
@@ -120,15 +122,14 @@ describe("Gateway and node-host MCP live process parity", () => {
           transportBaseUrl: "http://127.0.0.1",
           controlUiEnabled: false,
           runtimeEnvPatch: {
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
             OPENCLAW_SKIP_PROVIDERS: "1",
             OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           },
           mutateConfig: (cfg) => {
-            const { plugins: _plugins, ...withoutPlugins } = cfg;
             return {
-              ...withoutPlugins,
+              ...cfg,
+              plugins: { enabled: false },
               mcp: { servers: sessionMcpServers },
               agents: {
                 ...cfg.agents,
@@ -165,7 +166,6 @@ describe("Gateway and node-host MCP live process parity", () => {
             OPENCLAW_CONFIG_PATH: nodeConfigPath,
             OPENCLAW_GATEWAY_TOKEN: gateway.token,
             OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
             OPENCLAW_SKIP_PROVIDERS: "1",
           },
@@ -492,7 +492,7 @@ describe("Gateway and node-host MCP live process parity", () => {
             ...(node ? [stopChild(node)] : []),
           ])),
           ...(await Promise.allSettled([
-            ...(gateway ? [Promise.resolve(gateway.stop())] : []),
+            stopQaGatewayFixture(gatewayOwner),
             ...(sessionHttpFixture ? [stopChild(sessionHttpFixture)] : []),
             ...(nodeHttpFixture ? [stopChild(nodeHttpFixture)] : []),
           ])),

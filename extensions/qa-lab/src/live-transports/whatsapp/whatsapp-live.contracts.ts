@@ -4,7 +4,7 @@ import type {
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-import type { startQaGatewayChild } from "../../gateway-child.js";
+import type { QaGatewayChild } from "../../gateway-child.js";
 export { toQaError as toWhatsAppQaError } from "../../errors.js";
 
 export type WhatsAppQaRuntimeEnv = {
@@ -30,7 +30,7 @@ type WhatsAppQaMessageSendMode =
       mediaType: string;
     };
 
-export type WhatsAppQaGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
+export type WhatsAppQaGateway = QaGatewayChild;
 export type WhatsAppQaGatewayRuntime = Pick<
   WhatsAppQaGateway,
   "call" | "restart" | "workspaceDir"

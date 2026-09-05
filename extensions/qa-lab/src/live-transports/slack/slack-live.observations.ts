@@ -1,6 +1,5 @@
 // QA Lab Slack Web API and stored-message observations.
 import { isDeepStrictEqual } from "node:util";
-import { createSlackWebClient, sendSlackMessage } from "@openclaw/slack/api.js";
 import {
   asPlainRecord,
   countSlackNativeDataBlocks,
@@ -25,8 +24,10 @@ import {
   type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 export async function getSlackIdentity(token: string): Promise<SlackAuthIdentity> {
+  const { createSlackWebClient } = loadSlackQaRuntime();
   const client = createSlackWebClient(token, { timeout: SLACK_QA_WEB_API_TIMEOUT_MS });
   const auth = slackAuthTestSchema.parse(await client.auth.test());
   if (!auth.user_id) {
@@ -346,6 +347,7 @@ export function isExpectedSlackNativeTableMessage(
 export async function runSlackTableInvalidBlocksFallbackScenario(
   context: SlackQaDirectTransportScenarioContext,
 ): Promise<SlackQaDirectTransportScenarioResult> {
+  const { sendSlackMessage } = loadSlackQaRuntime();
   const probe = buildSlackInvalidBlocksTableProbe();
   const oldestTs = ((Date.now() - 5_000) / 1_000).toFixed(6);
   const originalPostMessage = context.sutWriteClient.chat.postMessage;

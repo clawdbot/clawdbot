@@ -6,6 +6,7 @@
 import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandHomePrefix, resolveOsHomeDir } from "../../../infra/home-dir.js";
+import { preserveAtPrefixedRelativePath } from "../../path-policy.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -55,8 +56,12 @@ export function resolveToCwd(filePath: string, cwd: string): string {
   return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
 
-/** Equivalent filename spellings worth probing after an exact read path misses. */
-export function getReadPathVariants(filePath: string): string[] {
+/** Resolve local file paths using the filesystem that owns literal @ names. */
+export function resolveLocalPathToCwd(filePath: string, cwd: string): string {
+  return resolveToCwd(preserveAtPrefixedRelativePath(filePath, cwd), cwd);
+}
+
+function collectReadPathVariants(filePath: string, includeNfd: boolean): string[] {
   const variants = new Set<string>();
   const fileName = basename(filePath);
   const parentPrefix = filePath.slice(0, filePath.length - fileName.length);
@@ -70,11 +75,21 @@ export function getReadPathVariants(filePath: string): string[] {
       variants.add(`${parentPrefix}${quoted.normalize("NFC")}`);
       // macOS filesystems resolve NFC/NFD spellings to the same entry; probing both
       // makes one file look ambiguous. Other platforms can store both distinctly.
-      if (process.platform !== "darwin") {
+      if (includeNfd) {
         variants.add(`${parentPrefix}${quoted.normalize("NFD")}`);
       }
     }
   }
   variants.delete(filePath);
   return [...variants];
+}
+
+/** Equivalent filename spellings worth probing after an exact read path misses. */
+export function getReadPathVariants(filePath: string): string[] {
+  return collectReadPathVariants(filePath, process.platform !== "darwin");
+}
+
+/** Every spelling an exact read or its fallback probes can accept. */
+export function getReadQueuePaths(filePath: string): string[] {
+  return [filePath, ...collectReadPathVariants(filePath, true)];
 }

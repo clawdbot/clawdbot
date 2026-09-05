@@ -13,8 +13,8 @@ import {
   ACT_MAX_WAIT_TIME_MS,
   normalizeActBoundedNonNegativeMs,
 } from "../act-policy.js";
-import type { BrowserActRequest, BrowserFormField } from "../client-actions.types.js";
-import { normalizeBrowserFormField } from "../form-fields.js";
+import type { BrowserActRequest } from "../client-actions.types.js";
+import { normalizeBrowserFormFields } from "../form-fields.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
 import { isActKind, parseClickButton, parseClickModifiers } from "./agent.act.shared.js";
 import {
@@ -24,6 +24,14 @@ import {
   readRouteTimerTimeoutMs,
 } from "./route-numeric.js";
 import { toBoolean, toStringArray, toStringOrEmpty } from "./utils.js";
+
+const KEY_ALIASES = new Map([
+  ["esc", "Escape"],
+  ["return", "Enter"],
+  ["del", "Delete"],
+  ["ctrl", "Control"],
+  ["cmd", "Meta"],
+]);
 
 function countBatchActions(actions: BrowserActRequest[]): number {
   let count = 0;
@@ -64,16 +72,8 @@ export function canonicalizeActTargetIds(
   return null;
 }
 
-function normalizeFields(rawFields: unknown): BrowserFormField[] {
-  const entries = Array.isArray(rawFields) ? rawFields : [];
-  return entries
-    .map((field) => {
-      if (!field || typeof field !== "object") {
-        return null;
-      }
-      return normalizeBrowserFormField(field as Record<string, unknown>);
-    })
-    .filter((field): field is BrowserFormField => field !== null);
+function normalizeFields(rawFields: unknown) {
+  return normalizeBrowserFormFields(Array.isArray(rawFields) ? rawFields : []);
 }
 
 function normalizeBatchAction(value: unknown, depth: number): BrowserActRequest {
@@ -224,7 +224,11 @@ export function normalizeActRequest(
       };
     }
     case "press": {
-      const key = toStringOrEmpty(body.key);
+      // Empty chord segments represent a literal plus key and must survive normalization.
+      const key = toStringOrEmpty(body.key)
+        .split("+")
+        .map((part) => KEY_ALIASES.get(part.toLowerCase()) ?? part)
+        .join("+");
       if (!key) {
         throw new Error("press requires key");
       }

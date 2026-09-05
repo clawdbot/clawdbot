@@ -1,5 +1,4 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clearPluginHostCleanupTarget,
   hasPluginHostCleanupTarget,
@@ -9,9 +8,7 @@ import {
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
 import {
-  resolveAccessStorePath,
   loadSessionEntry,
-  loadExactSessionEntry,
   listSessionEntriesCore,
   replaceSessionEntry,
   patchSessionEntryCore,
@@ -31,13 +28,11 @@ import {
   purgeDeletedAgentSessionEntries,
 } from "./session-accessor.sqlite-projection.js";
 import type {
-  SessionAccessScope,
   SessionCompactionCheckpointMutationResult,
   SessionCompactionCheckpointTranscriptForker,
   SessionCompactionCheckpointEntryBuilder,
   BranchSessionFromCompactionCheckpointParams,
   RestoreSessionFromCompactionCheckpointParams,
-  TemporarySessionMappingPreservationResult,
   SessionPatchProjectionSnapshot,
   SessionPatchProjectionTarget,
   SessionPatchProjectionContext,
@@ -64,37 +59,6 @@ export {
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
 };
-
-type TemporarySessionMappingSnapshot =
-  | {
-      canRestore: false;
-      sessionKey: string;
-      snapshotFailure: string;
-      storePath: string;
-    }
-  | {
-      canRestore: true;
-      hadEntry: false;
-      sessionKey: string;
-      storePath: string;
-    }
-  | {
-      canRestore: true;
-      entry: SessionEntry;
-      hadEntry: true;
-      sessionKey: string;
-      storePath: string;
-    };
-
-type TemporarySessionMappingOperationResult<T> =
-  | {
-      ok: true;
-      result: T;
-    }
-  | {
-      error: unknown;
-      ok: false;
-    };
 
 function findSessionCompactionCheckpoint(params: {
   checkpointId: string;
@@ -315,37 +279,6 @@ export async function applySessionPatchProjection<
 }
 
 /**
- * Runs an operation while preserving one temporary session mapping.
- * The storage backend snapshots exactly the named key before the operation and
- * restores that entry, or deletes it when it did not previously exist, after
- * the operation finishes. SQLite backends can implement the same named
- * preservation lifecycle without exposing mutable store access to callers.
- */
-export async function preserveTemporarySessionMapping<T>(
-  scope: SessionAccessScope,
-  operation: () => Promise<T> | T,
-): Promise<TemporarySessionMappingPreservationResult<T>> {
-  const snapshot = snapshotTemporarySessionMapping(scope);
-  let operationResult: TemporarySessionMappingOperationResult<T>;
-  try {
-    operationResult = { ok: true, result: await operation() };
-  } catch (err) {
-    operationResult = { error: err, ok: false };
-  }
-
-  const restoreFailure = await restoreTemporarySessionMapping(snapshot);
-  if (!operationResult.ok) {
-    throw operationResult.error;
-  }
-
-  return {
-    result: operationResult.result,
-    ...(snapshot.canRestore ? {} : { snapshotFailure: snapshot.snapshotFailure }),
-    ...(restoreFailure ? { restoreFailure } : {}),
-  };
-}
-
-/**
  * Clears plugin host-owned state inside one resolved session store.
  * This is an internal transaction-sized boundary for the storage backend, not
  * a Plugin SDK API.
@@ -397,55 +330,4 @@ export async function cleanupPluginHostSessionStore(
     }
   }
   return cleared;
-}
-
-function snapshotTemporarySessionMapping(
-  scope: SessionAccessScope,
-): TemporarySessionMappingSnapshot {
-  const storePath = resolveAccessStorePath(scope);
-  try {
-    const exact = loadExactSessionEntry({
-      ...scope,
-      storePath,
-    });
-    return {
-      canRestore: true,
-      ...(exact ? { entry: structuredClone(exact.entry), hadEntry: true } : { hadEntry: false }),
-      sessionKey: scope.sessionKey,
-      storePath,
-    };
-  } catch (err) {
-    return {
-      canRestore: false,
-      sessionKey: scope.sessionKey,
-      snapshotFailure: formatErrorMessage(err),
-      storePath,
-    };
-  }
-}
-
-async function restoreTemporarySessionMapping(
-  snapshot: TemporarySessionMappingSnapshot,
-): Promise<string | undefined> {
-  if (!snapshot.canRestore) {
-    return undefined;
-  }
-  try {
-    if (snapshot.hadEntry) {
-      await replaceSessionEntry(
-        { sessionKey: snapshot.sessionKey, storePath: snapshot.storePath },
-        structuredClone(snapshot.entry),
-      );
-    } else {
-      await applySessionEntryLifecycleMutation({
-        storePath: snapshot.storePath,
-        removals: [{ sessionKey: snapshot.sessionKey }],
-        activeSessionKey: snapshot.sessionKey,
-        skipMaintenance: true,
-      });
-    }
-    return undefined;
-  } catch (err) {
-    return formatErrorMessage(err);
-  }
 }

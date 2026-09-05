@@ -39,6 +39,9 @@ const NORMALIZED_STRING_FIELDS = [
   "marketplaceName",
   "marketplaceSource",
   "marketplacePlugin",
+  "acceptedSurfaceHash",
+  "acceptedSurfaceAt",
+  "acceptedSurfaceIntegrity",
 ] as const satisfies readonly (keyof PluginInstallRecord)[];
 
 export type PluginInstallRecordMapState =

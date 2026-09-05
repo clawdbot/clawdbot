@@ -1,6 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -10,14 +12,16 @@ const suite = createControlUiE2eSuite({
   trackBrowserContexts: true,
 });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts/control-ui-e2e/codex-guardian-review");
+let proofDir: string;
+beforeEach(() => {
+  if (captureProof) {
+    proofDir = createControlUiE2eArtifactDir("codex-guardian-review");
+  }
+});
 const viewport = { height: 900, width: 1280 };
 
 suite.define(() => {
   it("shows and settles a strict Guardian review in the active chat", async () => {
-    if (captureProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     await suite.withPage(
       {
         locale: "en-US",
@@ -43,10 +47,12 @@ suite.define(() => {
         const runId = requireString(requireRecord(request.params).idempotencyKey, "chat run id");
 
         if (captureProof) {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(proofDir, "01-before-review.png"),
-          });
+          await writeFile(
+            path.join(proofDir, "01-before-review.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator(".agent-chat__composer-combobox textarea"),
+            ]),
+          );
         }
 
         const correlation = {
@@ -74,10 +80,10 @@ suite.define(() => {
         );
 
         if (captureProof) {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(proofDir, "02-review-required.png"),
-          });
+          await writeFile(
+            path.join(proofDir, "02-review-required.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [notice]),
+          );
         }
 
         await gateway.emitGatewayEvent("agent", {
@@ -91,10 +97,12 @@ suite.define(() => {
         await expect.poll(() => notice.count()).toBe(0);
 
         if (captureProof) {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(proofDir, "03-review-approved.png"),
-          });
+          await writeFile(
+            path.join(proofDir, "03-review-approved.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator(".agent-chat__composer-combobox textarea"),
+            ]),
+          );
         }
       },
     );

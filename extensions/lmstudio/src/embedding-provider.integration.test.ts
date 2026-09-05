@@ -76,7 +76,9 @@ describe("LM Studio embedding request headers", () => {
         },
       });
 
-      await expect(provider.embedQuery("hello")).resolves.toEqual([0.25, 0.5, 0.75]);
+      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([
+        0.25, 0.5, 0.75,
+      ]);
       expect(observedRequests).toMatchObject([
         {
           url: `/v1/embeddings${remoteQuery}`,

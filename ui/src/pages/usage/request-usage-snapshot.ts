@@ -5,7 +5,7 @@ import {
   requestProviderUsage,
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
-import { buildSessionUsageDateParams, requestSessionUsage } from "../../lib/sessions/index.ts";
+import { buildSessionUsageDateParams, requestSessionUsage } from "../../lib/sessions/usage.ts";
 
 type UsageSnapshotValue = {
   result: Awaited<ReturnType<typeof requestSessionUsage>>;
@@ -53,7 +53,7 @@ export async function requestUsageSnapshot(
   );
   try {
     const [result, costSummary, providerUsage] = await Promise.all([
-      requestSessionUsage(client, query),
+      requestSessionUsage(client, query, { signal }),
       signal
         ? client.request<CostUsageSummary>("usage.cost", costParams, { signal })
         : client.request<CostUsageSummary>("usage.cost", costParams),

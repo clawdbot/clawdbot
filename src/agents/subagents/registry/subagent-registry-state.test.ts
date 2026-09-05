@@ -282,6 +282,28 @@ describe("subagent registry state read cache", () => {
     );
   });
 
+  it("filters before merging while keeping live identity changes authoritative", () => {
+    const selected = { ...createRun("selected"), swarmRunId: "collector" };
+    const unrelated = createRun("unrelated");
+    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
+      new Map([
+        [selected.runId, selected],
+        [unrelated.runId, unrelated],
+      ]),
+    );
+    const include = (entry: SubagentRunRecord) => entry.swarmRunId === "collector";
+    expect([...getSubagentRunsSnapshotForRead(new Map(), include).keys()]).toEqual(["selected"]);
+
+    const moved = { ...selected, swarmRunId: "replacement" };
+    expect(getSubagentRunsSnapshotForRead(new Map([[moved.runId, moved]]), include)).toEqual(
+      new Map(),
+    );
+    expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual([
+      "selected",
+      "unrelated",
+    ]);
+  });
+
   it("preserves the fresh authoritative write snapshot before returning to scoped SQL", () => {
     const controllerSessionKey = "agent:main:controller";
     const saved = createRun("saved");

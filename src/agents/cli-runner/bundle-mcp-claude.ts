@@ -63,6 +63,12 @@ function mergeClaudeDisallowedTools(args: string[], deniedTools: string[]): stri
   return next;
 }
 
+function normalizeClaudeMcpIdentifierPart(value: string): string {
+  // Claude Code replaces punctuation before registering MCP permission names.
+  // Match that wire identity so a raw-name collision cannot bypass a denial.
+  return value.replaceAll(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 export function injectClaudeWebSearchDisabledArgs(args: string[] | undefined): string[] {
   return mergeClaudeDisallowedTools(args ?? [], ["WebSearch"]);
 }
@@ -92,7 +98,10 @@ export function injectClaudeMcpConfigArgs(
   }
   next.push("--strict-mcp-config", "--mcp-config", mcpConfigPath);
   const deniedTools = Object.entries(mcpToolsDeny ?? {}).flatMap(([serverName, toolNames]) =>
-    toolNames.map((toolName) => `mcp__${serverName}__${toolName}`),
+    toolNames.map(
+      (toolName) =>
+        `mcp__${normalizeClaudeMcpIdentifierPart(serverName)}__${normalizeClaudeMcpIdentifierPart(toolName)}`,
+    ),
   );
   if (webSearchEnabled === false) {
     deniedTools.push("WebSearch");

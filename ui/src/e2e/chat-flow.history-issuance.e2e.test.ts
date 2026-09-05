@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
@@ -7,11 +6,12 @@ import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-sup
 const suite = createChatFlowE2eSuite();
 
 async function captureHistoryIssuanceProof(page: Page, name: string): Promise<void> {
-  const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+    ? suite.artifactDir
+    : undefined;
   if (!artifactDir) {
     return;
   }
-  await mkdir(artifactDir, { recursive: true });
   await page.screenshot({ fullPage: true, path: path.join(artifactDir, `${name}.png`) });
 }
 
@@ -54,7 +54,9 @@ suite.define(() => {
       await historyError.getByRole("button", { name: "Retry" }).click();
       await gateway.waitForRequest("chat.startup", { after: 1 });
       await historyError.waitFor({ state: "detached" });
-      await page.locator(".chat-thread .chat-loading-skeleton").waitFor({ state: "visible" });
+      await page
+        .locator('.chat-thread openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
+        .waitFor({ state: "visible" });
       await gateway.resolveDeferred("chat.startup");
       await page
         .locator(".chat-thread")

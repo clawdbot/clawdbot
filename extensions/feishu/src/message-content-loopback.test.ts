@@ -2,13 +2,16 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuMediaList } from "./bot-content.js";
+import { feishuPlugin } from "./channel.js";
 import { sendStickerFeishu } from "./media.js";
 import { getMessageFeishu } from "./send.js";
 
 const { mockLogVerbose } = vi.hoisted(() => ({ mockLogVerbose: vi.fn() }));
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
@@ -189,6 +192,10 @@ describe("Feishu message content over the real Lark SDK", () => {
             appId: "cli_feishu_content_107947",
             appSecret: "loopback-placeholder", // pragma: allowlist secret
             domain: "feishu",
+            actions: { sticker: true },
+            stickerSets: {
+              cli_feishu_content_107947: { file_sticker_received: ["赞👍"] },
+            },
           },
         },
       } as ClawdbotConfig;
@@ -268,15 +275,40 @@ describe("Feishu message content over the real Lark SDK", () => {
       ).resolves.toEqual([]);
       expect(requests).toHaveLength(requestCountBeforeSticker);
 
+      const searchResult = await feishuPlugin.actions!.handleAction!({
+        channel: "feishu",
+        action: "sticker-search",
+        cfg,
+        accountId: "default",
+        params: { query: "赞" },
+      });
+      expect(searchResult.details).toEqual({
+        stickers: [{ fileId: "file_sticker_received", keyword: "赞👍" }],
+        truncated: false,
+      });
+      expect(requests).toHaveLength(requestCountBeforeSticker);
+      const searchDetails = requireRecord(searchResult.details, "search details");
+      const stickers = searchDetails.stickers;
+      if (!Array.isArray(stickers)) {
+        throw new Error("Expected sticker search results");
+      }
+      const sticker = requireRecord(stickers[0], "sticker");
       for (const replyInThread of [false, true]) {
-        const result = await sendStickerFeishu({
+        const result = await feishuPlugin.actions!.handleAction!({
+          channel: "feishu",
+          action: "sticker",
           cfg,
-          to: "chat:oc_feishu_content_107947",
-          fileKey: "file_sticker_received",
-          ...(replyInThread ? { replyToMessageId: "om_received_sticker", replyInThread } : {}),
+          accountId: "default",
+          params: {
+            ...sticker,
+            to: "chat:oc_feishu_content_107947",
+            ...(replyInThread ? { threadId: "om_received_sticker" } : {}),
+          },
         });
-        expect(result.messageId).toBe(replyInThread ? "om_sticker_reply" : "om_sticker_sent");
-        expect(result.receipt.parts).toEqual([expect.objectContaining({ kind: "media" })]);
+        expect(result.details).toMatchObject({
+          messageId: replyInThread ? "om_sticker_reply" : "om_sticker_sent",
+          receipt: { parts: [expect.objectContaining({ kind: "media" })] },
+        });
       }
       expect(requests.filter((request) => request.messageType === "sticker")).toEqual([
         {

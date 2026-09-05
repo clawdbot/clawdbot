@@ -57,6 +57,7 @@ function resolveDiscordDeliveryOptions(
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
     onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
   };
 }
 
@@ -204,21 +205,21 @@ export async function sendDiscordOutboundPayload(params: {
     return completeDelivery(lastResult);
   }
 
+  const discordData =
+    payload.channelData?.discord &&
+    typeof payload.channelData.discord === "object" &&
+    !Array.isArray(payload.channelData.discord)
+      ? (payload.channelData.discord as Record<string, unknown>)
+      : {};
+  const filename = normalizeOptionalString(discordData.filename);
   const componentSpec = await resolveDiscordComponentSpec(payload);
   if (!componentSpec) {
-    const discordData =
-      payload.channelData?.discord &&
-      typeof payload.channelData.discord === "object" &&
-      !Array.isArray(payload.channelData.discord)
-        ? (payload.channelData.discord as Record<string, unknown>)
-        : {};
     const nativeComponents = Array.isArray(discordData.components)
       ? (discordData.components as DiscordSendComponents)
       : undefined;
     const embeds = Array.isArray(discordData.embeds)
       ? (discordData.embeds as DiscordSendEmbeds)
       : undefined;
-    const filename = normalizeOptionalString(discordData.filename);
     if (nativeComponents || embeds?.length || filename) {
       const result = await sendPayloadMediaSequenceOrFallback({
         text: payload.text ?? "",
@@ -260,6 +261,7 @@ export async function sendDiscordOutboundPayload(params: {
     sendNoMedia: async () => {
       return await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
         ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+        filename,
         onDeliveryResult,
       });
     },
@@ -267,6 +269,7 @@ export async function sendDiscordOutboundPayload(params: {
       if (isFirst) {
         return await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
           ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+          filename,
           onDeliveryResult,
         });
       }

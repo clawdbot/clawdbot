@@ -58,20 +58,6 @@ describe("gateway suspend handlers", () => {
     });
   });
 
-  it("rejects draining requests that would terminate preserved terminals", async () => {
-    const { respond } = await invoke("gateway.suspend.prepare", {
-      requestId: "request-terminate-drain",
-      terminalPolicy: "terminate",
-      drain: true,
-    });
-
-    expect(coordinator.prepare).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "INVALID_REQUEST",
-      message: "invalid gateway.suspend.prepare params",
-    });
-  });
-
   it("wires prepare to scheduler pause/resume and returns busy or ready", async () => {
     coordinator.prepare.mockReturnValueOnce({
       status: "busy",

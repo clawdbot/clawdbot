@@ -547,10 +547,8 @@ describe("default role materialization authored writes", () => {
       jobs: [makeCronJob({ id: "corrupt" })],
     });
     database
-      .prepare(
-        "UPDATE cron_jobs SET job_json = ?, schedule_kind = ? WHERE store_key = ? AND job_id = ?",
-      )
-      .run("not json", "broken", cronStoreKey(storePath), "corrupt");
+      .prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?")
+      .run("not json", cronStoreKey(storePath), "corrupt");
     const io = createConfigIO({
       configPath,
       env,

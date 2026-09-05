@@ -89,21 +89,39 @@ const DIFF_HOST_SURFACES = ["--bg", "--bg-muted", "--card"] as const;
 const CHAT_LINK_RULE = ".chat-text :where(a)";
 const CHAT_LINK_HOVER_RULE = ".chat-text :where(a:hover)";
 const USER_BUBBLE_RULE = ".chat-group.user .chat-bubble";
-const SENDER_TINT_BUBBLE_RULE = ".chat-group.user.chat-group--sender-tint .chat-bubble";
-// Light mode resets both bubble skins back to flat surfaces, and those rules win
-// on source order (see the order contract in chat/grouped.css). Asserting the
-// dark fills against light palettes would guard a surface nothing paints.
-const LIGHT_USER_BUBBLE_RULE = ':root[data-theme-mode="light"] .chat-group.user .chat-bubble';
+// User and forwarded (cross-session) bubbles share one tint rule via :is().
+const SENDER_TINT_BUBBLE_RULE =
+  ".chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble";
+// Theme selection changes the skin token without outranking the bare image shell.
+const LIGHT_USER_BUBBLE_RULE =
+  ':where(:root[data-theme-mode="light"]) .chat-group.user .chat-bubble';
+// Only user bubbles override the shared sender tint in light mode.
 const LIGHT_SENDER_TINT_BUBBLE_RULE =
-  ':root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble';
+  ':where(:root[data-theme-mode="light"]) .chat-group.user.chat-group--sender-tint .chat-bubble';
 
 type TokenMap = Map<string, string>;
 type RGB = readonly [red: number, green: number, blue: number];
 type Color = { rgb: RGB; alpha: number };
 
+/*
+ * Built-in palettes other than the default live in public/themes so they stay
+ * out of the startup stylesheet. Contrast guarantees still cover every theme,
+ * so the palette sources are read back together here.
+ */
+function readPaletteSources(stylesRoot: string): string {
+  const themesDir = path.join(stylesRoot, "..", "..", "public", "themes");
+  const palettes = fs
+    .readdirSync(themesDir)
+    .filter((entry) => entry.endsWith(".css"))
+    .toSorted()
+    .map((entry) => fs.readFileSync(path.join(themesDir, entry), "utf8"));
+  return [fs.readFileSync(path.join(stylesRoot, "base.css"), "utf8"), ...palettes].join("\n");
+}
+
 function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
   const blocks = new Map<string, TokenMap>();
-  const blockPattern = /(:root(?:\[data-theme(?:-mode)?="[^"]+"\])?)\s*\{([^}]*)\}/g;
+  const blockPattern =
+    /(:root(?::where\(\[data-theme-mode="light"\]\)|\[data-theme(?:-mode)?="[^"]+"\])?)\s*\{([^}]*)\}/g;
   for (const match of baseCss.matchAll(blockPattern)) {
     const selector = match[1] ?? "";
     const body = match[2] ?? "";
@@ -127,7 +145,7 @@ function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
 /** Compose each selectable theme the way theme.ts layers blocks over :root. */
 function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
   const root = blocks.get(":root") ?? new Map();
-  const light = blocks.get(':root[data-theme-mode="light"]') ?? new Map();
+  const light = blocks.get(':root:where([data-theme-mode="light"])') ?? new Map();
   const layer = (...overrides: (TokenMap | undefined)[]): TokenMap => {
     const merged: TokenMap = new Map(root);
     for (const override of overrides) {
@@ -152,6 +170,14 @@ function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
     ["beacon-light", layer(light, blocks.get(':root[data-theme="beacon-light"]'))],
     ["phosphor", layer(blocks.get(':root[data-theme="phosphor"]'))],
     ["phosphor-light", layer(light, blocks.get(':root[data-theme="phosphor-light"]'))],
+    ["crt", layer(blocks.get(':root[data-theme="crt"]'))],
+    ["crt-light", layer(light, blocks.get(':root[data-theme="crt-light"]'))],
+    ["manuscript", layer(blocks.get(':root[data-theme="manuscript"]'))],
+    ["manuscript-light", layer(light, blocks.get(':root[data-theme="manuscript-light"]'))],
+    ["rose", layer(blocks.get(':root[data-theme="rose"]'))],
+    ["rose-light", layer(light, blocks.get(':root[data-theme="rose-light"]'))],
+    ["miami", layer(blocks.get(':root[data-theme="miami"]'))],
+    ["miami-light", layer(light, blocks.get(':root[data-theme="miami-light"]'))],
   ]);
 }
 
@@ -384,9 +410,11 @@ function readBubbleBackgrounds(groupedCss: string): {
   lightSenderTint: string;
 } {
   const readBackground = (selector: string): string => {
-    const background = readRuleBody(groupedCss, selector).match(/background:\s*([^;]+);/u)?.[1];
+    const background = readRuleBody(groupedCss, selector).match(
+      /^\s*--chat-bubble-background:\s*([^;]+);/mu,
+    )?.[1];
     if (!background) {
-      throw new Error(`could not read bubble background from "${selector}"`);
+      throw new Error(`could not read bubble background token from "${selector}"`);
     }
     return background.trim();
   };
@@ -402,7 +430,7 @@ function readBubbleBackgrounds(groupedCss: string): {
 }
 
 describe("Control UI theme contrast", () => {
-  const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
+  const baseCss = readPaletteSources(stylesDir);
   const themes = resolveThemes(parseThemeBlocks(baseCss));
 
   it("keeps every text token at WCAG AA on every theme surface, AAA on themes that promise it", () => {

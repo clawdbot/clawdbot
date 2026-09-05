@@ -23,6 +23,7 @@ export function createGatewaySidecarStopOwner(params: {
     }
   };
   const stop = () => {
+    beginClose();
     if (activeStop) {
       return activeStop;
     }

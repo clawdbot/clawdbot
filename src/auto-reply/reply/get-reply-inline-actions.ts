@@ -8,6 +8,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -16,8 +17,10 @@ import {
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
   listReservedChatSlashCommandNames,
+  mergeExplicitSkillSelections as mergeSelections,
   resolveSkillCommandInvocation,
-} from "../../skills/discovery/chat-commands.js";
+  skillCommandsToExplicitSelections as toSelections,
+} from "../../skills/discovery/chat-command-invocation.js";
 import type { ExplicitSkillSelection, SkillCommandSpec } from "../../skills/types.js";
 import {
   copyReplyPayloadMetadata,
@@ -50,6 +53,7 @@ import { extractExplicitGroupId } from "./group-id.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand, getStandaloneSlashCommandName } from "./reply-inline.js";
+import { createSkillCommandLoaders } from "./skill-command-loaders.js";
 import type { TypingController } from "./typing.js";
 
 type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.runtime.js");
@@ -187,6 +191,8 @@ export async function handleInlineActions(params: {
   initialSessionEntry?: SessionEntry;
   allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
+  previousSessionMemory?: SessionMemoryTranscript;
+  previousSessionResetMessages?: unknown[];
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
@@ -234,6 +240,8 @@ export async function handleInlineActions(params: {
     initialSessionEntry,
     allowCreateSessionEntry,
     previousSessionEntry,
+    previousSessionMemory,
+    previousSessionResetMessages,
     sessionStore,
     sessionKey,
     storePath,
@@ -277,7 +285,7 @@ export async function handleInlineActions(params: {
 
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
-  let explicitSkillSelections: ExplicitSkillSelection[] | undefined;
+  let skillSelections: ExplicitSkillSelection[] | undefined;
   const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
   const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
@@ -532,10 +540,7 @@ export async function handleInlineActions(params: {
       };
     }
     if (referenced.skills.length > 0) {
-      const selections = referenced.skills.flatMap((skill) =>
-        skill.skillFile ? [{ name: skill.name, path: skill.skillFile }] : [],
-      );
-      explicitSkillSelections = selections.length > 0 ? selections : undefined;
+      skillSelections = mergeSelections(skillSelections, toSelections(referenced.skills));
       cleanedBody = referenced.body;
       ctx.Body = cleanedBody;
       ctx.agentText = cleanedBody;
@@ -564,6 +569,7 @@ export async function handleInlineActions(params: {
     const { buildStatusReply } = await loadCommandsRuntime();
     const inlineStatusReply = await buildStatusReply({
       cfg,
+      agentId,
       command,
       sessionEntry: targetSessionEntry,
       sessionKey,
@@ -610,6 +616,8 @@ export async function handleInlineActions(params: {
       initialSessionEntry,
       allowCreateSessionEntry,
       previousSessionEntry,
+      previousSessionMemory,
+      previousSessionResetMessages,
       sessionStore,
       sessionKey,
       storePath,
@@ -630,6 +638,15 @@ export async function handleInlineActions(params: {
       contextTokens,
       isGroup,
       skillCommands,
+      ...createSkillCommandLoaders(loadSkillCommandsRuntime, {
+        workspaceDir,
+        cfg,
+        agentId,
+        skillFilter,
+        sessionEntry: targetSessionEntry,
+        sessionKey,
+        execOverrides,
+      }),
       typing,
     });
   };
@@ -642,6 +659,7 @@ export async function handleInlineActions(params: {
     };
     const inlineResult = await runCommands(inlineCommandContext);
     queueModeOverride = inlineResult.queueModeOverride;
+    skillSelections = mergeSelections(skillSelections, inlineResult.explicitSkillSelections);
     notifyInlineCommandSessionMetadataChanges();
     if (inlineResult.reply) {
       if (!inlineCommand.cleaned) {
@@ -673,7 +691,7 @@ export async function handleInlineActions(params: {
       directives,
       abortedLastRun,
       cleanedBody,
-      ...(explicitSkillSelections ? { explicitSkillSelections } : {}),
+      ...(skillSelections ? { explicitSkillSelections: skillSelections } : {}),
     };
   }
   const remainingBodyAfterInlineStatus = (() => {
@@ -696,6 +714,7 @@ export async function handleInlineActions(params: {
   const bodyBeforeRun = sessionCtx.agentText;
   const commandResult = await runCommands(command);
   queueModeOverride = commandResult.queueModeOverride ?? queueModeOverride;
+  skillSelections = mergeSelections(skillSelections, commandResult.explicitSkillSelections);
   notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
     typing.cleanup();
@@ -716,6 +735,6 @@ export async function handleInlineActions(params: {
     abortedLastRun,
     cleanedBody,
     ...(queueModeOverride ? { queueModeOverride } : {}),
-    ...(explicitSkillSelections ? { explicitSkillSelections } : {}),
+    ...(skillSelections ? { explicitSkillSelections: skillSelections } : {}),
   };
 }

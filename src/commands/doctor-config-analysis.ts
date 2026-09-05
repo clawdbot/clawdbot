@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ZodIssue } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { INCLUDE_KEY } from "../config/includes.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -195,14 +196,12 @@ function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
     return [];
   }
   const warnings: string[] = [];
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    if (!agent || !isImplicitFallbackClobber(agent.model)) {
+  for (const agent of listAgentEntries(cfg)) {
+    if (!isImplicitFallbackClobber(agent.model)) {
       continue;
     }
-    const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
     const primary = resolvePrimaryStringValue(agent.model);
-    const location = `agents.list[${index}].model (id=${id})`;
+    const location = `agents.entries.${agent.id}.model`;
     const modelStr =
       typeof agent.model === "string" ? `"${agent.model}"` : `{ primary: "${primary}" }`;
     const shape =

@@ -96,6 +96,15 @@ describe("A2A task store", () => {
     expect(store.completeNext("ctx-alice", "active reply")?.id).toBe(active.id);
   });
 
+  it("does not split surrogate pairs when bounding status messages", () => {
+    const store = createTaskStore();
+    const task = store.create("ctx-alice");
+
+    expect(store.fail(task.id, new Error(`${"x".repeat(511)}😀tail`))).toMatchObject({
+      status: { message: { parts: [{ text: "x".repeat(511) }] } },
+    });
+  });
+
   it("returns working tasks after timeout and accepts the eventual final reply", async () => {
     const store = createTaskStore();
     const task = store.create("ctx-alice");

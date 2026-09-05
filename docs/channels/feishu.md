@@ -319,6 +319,11 @@ The official `lark-cli` VC agent skill currently marks meeting-bot actions as a 
 - `streaming.chunkMode` - `"length"` (default) splits at the limit; `"newline"` prefers newline boundaries
 - `mediaMaxMb` - media upload/download limit (default: `30` MB)
 
+Ordinary Markdown cards and rich-text posts are also split to fit Feishu's 30 KB
+serialized message limit. Headers, notes, mentions, JSON escaping, and UTF-8 text
+count toward that limit, so chunks may be shorter than `textChunkLimit`. Long
+media captions are sent as text/card chunks before the attachment.
+
 ### Streaming
 
 Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming API). When enabled, the bot updates the card in real time as it generates text.
@@ -336,7 +341,9 @@ Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming
 }
 ```
 
-Set `streaming.mode: "off"` to send the complete reply in one message; `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
+Set `streaming.mode: "off"` to send the completed reply without streaming updates; long replies still split at the message limits above. `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
+
+Replies with controls use native cards for command buttons and HTTP(S) links, including when streaming is off. The card carries the reply text; attachments remain separate messages. Unsupported controls and cards that exceed Feishu's size limits keep their full labels in a readable fallback. That fallback remains a separate message when a later reply streams. A final controls reply replaces an active streaming preview without sending the preview text again; error controls after a completed answer remain separate. If Feishu cannot delete or clear a replaced preview, delivery reports a failure and retains the original message receipt.
 
 ### Quota optimization
 
@@ -386,6 +393,12 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 | `tools.bitable` | `feishu_bitable_*` Bitable/Base operations    | `true`              |
 
 Per-account gates live under `accounts.<id>.tools`.
+
+Bitable operations use the application token from a `/base/` URL or returned
+`app_token`, not the node token in a `/wiki/` URL. If application creation succeeds
+but table metadata is not retrieved, keep the returned `app_token` and URL. Inspect
+that existing application rather than creating another one; a missing `table_id`
+does not mean creation failed.
 
 `feishu_doc` creates title-only documents. To add Markdown, pass the returned
 `document_id` as `doc_token` in a separate `write` action. A `create` request
@@ -663,7 +676,8 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.replyToMode`                            | Reply-reference mode (`off`, `first`, `all`, `batched`)                              | `all`                                |
 | `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
 | `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
-| `channels.feishu.actions.sticker`                        | Enable sending stickers previously received by the bot                               | `false`                              |
+| `channels.feishu.actions.sticker`                        | Enable received-sticker sending and configured sticker search                        | `false`                              |
+| `channels.feishu.stickerSets`                            | Searchable received-sticker keys and keywords, grouped by bot app ID                 | none                                 |
 | `channels.feishu.vcAutoJoin`                             | Join invited VC meetings after normal DM authorization                               | `false`                              |
 | `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation                                             | `false`                              |
 | `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces                                           | `~/.openclaw/workspace-{agentId}`    |
@@ -781,6 +795,56 @@ same `accountId` that received the sticker.
 Only stickers previously received by that bot can be sent. Uploading new
 stickers, downloading sticker resources, and searching the sticker store are
 not supported.
+
+### Sticker keyword search
+
+Add a curated sticker set to let the agent find a received sticker by keyword.
+First send each sticker to the bot and ask it for the received `file_key`.
+Then add keys and your own labels to the existing Feishu configuration:
+
+```json5
+{
+  channels: {
+    feishu: {
+      actions: { sticker: true },
+      stickerSets: {
+        cli_work: {
+          file_received_key: ["thumbs up", "赞", "👍"],
+        },
+      },
+    },
+  },
+}
+```
+
+Replace `cli_work` with the bot's actual app ID and `file_received_key` with
+the key received by that bot. `stickerSets` belongs directly under
+`channels.feishu`, not inside an account. The selected account can search only
+the set matching its app ID; changing an account to a different bot does not
+reuse the previous bot's set. Accounts using the same bot share its set.
+Keep any existing account-level action gates as described above.
+
+Ask the agent to “send a thumbs up sticker.” It can use the shared `message`
+tool with `action: "sticker-search"`, `query: "thumbs up"`, and the intended
+`accountId`, then send a returned `fileId` with `action: "sticker"` on that
+same account. Search is available only when stickers are enabled and the bot
+has a nonempty configured set.
+
+Search matches a case-insensitive substring of an explicit keyword, including
+Chinese labels and emoji, in sticker-key order. It does not infer a sticker's
+meaning, search Feishu's store, or automatically collect received stickers.
+Results include the matching `keyword` and reusable `fileId`. No matches
+produce an empty list; `truncated: true` means matching entries were omitted
+by the result limit or output budget. Narrow the query to find other matches.
+
+Limits: 32 bot sets, 256 stickers per set, and 1–8 keywords per sticker.
+Store keywords without leading or trailing whitespace; each must be nonempty
+and at most 64 Unicode characters. File keys must be canonical received keys,
+at most 512 Unicode characters. Each key appears only once in its bot's map.
+Queries are nonempty and at most 128 Unicode characters. `limit` defaults to 5
+and accepts integers from 1 through 10; search results are also capped at
+3 KiB of JSON output. Removing a set removes it from search; no separate
+sticker database or cache is created.
 
 ### Threads and replies
 

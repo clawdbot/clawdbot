@@ -1,5 +1,6 @@
 // Plugin Gateway Gauntlet tests cover plugin gateway gauntlet script behavior.
 import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -27,6 +28,9 @@ import {
   discoverBundledPluginManifests,
   selectPluginEntries,
 } from "../../scripts/lib/plugin-gateway-gauntlet.mts";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withTestTimeout } from "../helpers/promise.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 const tsxImport = import.meta.resolve("tsx");
 
@@ -169,15 +173,6 @@ describe("plugin gateway gauntlet helpers", () => {
         },
       ],
     };
-  }
-
-  function isProcessAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   async function waitFor(predicate: () => Promise<boolean> | boolean, timeoutMs = 5_000) {
@@ -989,7 +984,7 @@ await runMeasuredCommandLive({
       const scriptPath = path.join(repoRoot, "timeout-parent-termination-leader.mjs");
       const grandchildPidPath = path.join(repoRoot, "timeout-grandchild.pid");
       const grandchildReadyPath = path.join(repoRoot, "timeout-grandchild.ready");
-      const leaderExitedPath = path.join(repoRoot, "timeout-leader.exited");
+      const leaderPidPath = path.join(repoRoot, "timeout-leader.pid");
       let grandchildPid = 0;
 
       await fs.writeFile(
@@ -999,20 +994,17 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 
 const grandchildScript = [
-  "const fs = require('node:fs');",
   "process.on('SIGTERM', () => {});",
   "process.on('SIGHUP', () => {});",
-  "fs.writeFileSync(process.argv[2], 'ready');",
+  "process.send('ready');",
   "setInterval(() => {}, 1000);",
 ].join("\\n");
-const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[3]], {
-  stdio: "ignore",
+const grandchild = spawn(process.execPath, ["-e", grandchildScript], {
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
 });
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
-process.on("SIGTERM", () => {
-  fs.writeFileSync(process.argv[4], "exited");
-  process.exit(0);
-});
+process.on("SIGTERM", () => process.exit(0));
+grandchild.once("message", () => process.send("ready", () => process.disconnect()));
 setInterval(() => {}, 1000);
 `,
         "utf8",
@@ -1020,38 +1012,73 @@ setInterval(() => {}, 1000);
       await fs.writeFile(
         harnessPath,
         `
+import assert from "node:assert/strict";
+import { channel } from "node:diagnostics_channel";
+import { once } from "node:events";
 import fs from "node:fs";
+import { mock } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { runMeasuredCommandLive } from ${JSON.stringify(
           pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mts")).href,
         )};
 
+import { inspectManagedProcessGroup } from ${JSON.stringify(
+          pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href,
+        )};
+
+const realDelay = delay;
+// Mocked timers cannot keep Node alive while a native signal is in flight.
+const keepAlive = setInterval(() => {}, 1_000);
+const children = channel("child_process");
+let child, ready, closed;
+const observeChild = ({ process: owned }) => {
+  child = owned;
+  ready = once(child, "message");
+  closed = once(child, "close");
+};
+// Only the controller's policy clock is mocked; readiness, exit, and signals are native.
+mock.timers.enable({ apis: ["Date", "setTimeout"] });
+children.subscribe(observeChild);
 const promise = runMeasuredCommandLive({
   cwd: ${JSON.stringify(repoRoot)},
   env: process.env,
   logDir: ${JSON.stringify(logDir)},
   command: process.execPath,
-  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}, ${JSON.stringify(
-    grandchildReadyPath,
-  )}, ${JSON.stringify(leaderExitedPath)}],
+  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}],
   label: "timeout-parent-termination",
   phase: "probe",
   timeoutKillGraceMs: 150,
   timeoutMs: 200,
   timeMode: "none",
+  spawnOptions: { stdio: ["ignore", "pipe", "pipe", "ipc"] },
 });
-for (let attempt = 0; attempt < 200 && !fs.existsSync(${JSON.stringify(
-          leaderExitedPath,
-        )}); attempt += 1) {
-  await delay(10);
+children.unsubscribe(observeChild);
+fs.writeFileSync(${JSON.stringify(leaderPidPath)}, String(child.pid));
+try {
+  assert.equal((await ready)[0], "ready");
+  fs.writeFileSync(${JSON.stringify(grandchildReadyPath)}, "ready");
+  mock.timers.tick(200);
+  assert.deepEqual(await closed, [0, null]);
+  assert.equal(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }), "live");
+  const termination = once(process, "SIGTERM");
+  process.kill(process.pid, "SIGTERM");
+  await termination;
+  mock.timers.tick(150);
+  await new Promise(setImmediate);
+  const deadline = performance.now() + 5_000;
+  while (inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }) !== "dead") {
+    assert.ok(performance.now() < deadline, "process group survived SIGKILL");
+    await realDelay(5);
+  }
+  // Linux can retain a zombie group after native death. Drain the owner's existing
+  // 100 ms post-KILL fallback before expecting its original parent signal.
+  mock.timers.tick(100);
+  await promise;
+  process.exitCode = 7;
+} finally {
+  mock.timers.reset();
+  clearInterval(keepAlive);
 }
-if (!fs.existsSync(${JSON.stringify(leaderExitedPath)})) {
-  process.exit(2);
-}
-await delay(20);
-process.kill(process.pid, "SIGTERM");
-await promise;
-process.exit(7);
 `,
         "utf8",
       );
@@ -1060,27 +1087,62 @@ process.exit(7);
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });
-      try {
-        await waitFor(async () => {
-          try {
-            await fs.access(grandchildReadyPath);
-            return true;
-          } catch {
-            return false;
+      const closed = once(harness, "close");
+      void closed.catch(() => undefined);
+      let stderr = "";
+      harness.stdout.resume();
+      harness.stderr.on("data", (chunk) => {
+        stderr += String(chunk);
+      });
+      const reapPidFile = async (pidPath: string, group = false) => {
+        let pid: number;
+        try {
+          pid = Number(await fs.readFile(pidPath, "utf8"));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return;
           }
-        });
-        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+          throw error;
+        }
+        expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
+        try {
+          process.kill(group ? -pid : pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            throw error;
+          }
+        }
+        await waitFor(() => !isProcessAlive(pid));
+      };
+      await runQaGatewayFixture(
+        async () => {
+          await waitFor(async () => {
+            try {
+              await fs.access(grandchildReadyPath);
+              return true;
+            } catch {
+              return false;
+            }
+          }).catch((error: unknown) => {
+            throw new Error(`${String(error)}\n${stderr}`, { cause: error });
+          });
+          grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
 
-        await expect(waitForClose(harness)).resolves.toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(() => !isProcessAlive(grandchildPid));
-      } finally {
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
-          process.kill(grandchildPid, "SIGKILL");
-        }
-        if (harness.pid && isProcessAlive(harness.pid)) {
-          harness.kill("SIGKILL");
-        }
-      }
+          expect(
+            await withTestTimeout(closed, 5_000, "harness did not close after fixture readiness"),
+            stderr,
+          ).toEqual([null, "SIGTERM"]);
+          await waitFor(() => !isProcessAlive(grandchildPid));
+        },
+        () => reapPidFile(leaderPidPath, true),
+        () => reapPidFile(grandchildPidPath),
+        async () => {
+          if (harness.pid && isProcessAlive(harness.pid)) {
+            harness.kill("SIGKILL");
+          }
+          await withTestTimeout(closed, 5_000, "fixture cleanup did not join harness closure");
+        },
+      );
     },
   );
 

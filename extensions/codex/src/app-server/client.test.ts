@@ -1,5 +1,6 @@
 // Codex tests cover client plugin behavior.
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SemVer } from "semver";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
@@ -14,6 +15,7 @@ const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
+  const newerMinorVersion = new SemVer(CODEX_APP_SERVER_VERSION).inc("minor").version;
 
   function startInitialize() {
     const harness = createClientHarness();
@@ -279,6 +281,43 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
+  it("keeps the shared client when ownership expires after an overload rejection", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const releaseGuard = vi.fn();
+    harness.client.setThreadSessionRequestGuard(async () => releaseGuard);
+    let current = true;
+    const ownershipError = new Error("request owner expired");
+    const request = harness.client.request(
+      "thread/resume",
+      { threadId: "thread-1" },
+      {
+        timeoutMs: 5_000,
+        assertCurrent: () => {
+          if (!current) {
+            throw ownershipError;
+          }
+        },
+      },
+    );
+    const rejection = expect(request).rejects.toBe(ownershipError);
+    await vi.advanceTimersByTimeAsync(0);
+    const first = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({
+      id: first.id,
+      error: { code: -32_001, message: "Server overloaded; retry later." },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    current = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await rejection;
+    expect(harness.writes).toHaveLength(1);
+    expect(releaseGuard).toHaveBeenCalledOnce();
+    expect(harness.client.getCloseError()).toBeUndefined();
+  });
+
   it("surfaces relogin details from Codex app-server RPC errors", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
@@ -463,9 +502,11 @@ describe("CodexAppServerClient", () => {
 
   it.each([
     ["0.149.0", 0],
-    ["0.150.0-alpha.1", 1],
-    ["0.150.0", 1],
-    ["1.0.0", 1],
+    [`${CODEX_APP_SERVER_VERSION}-alpha.4`, 0],
+    [CODEX_APP_SERVER_VERSION, 0],
+    [`${newerMinorVersion}-alpha.4`, 1],
+    [newerMinorVersion, 1],
+    [new SemVer(CODEX_APP_SERVER_VERSION).inc("major").version, 1],
   ])("accepts app-server version %s for normal startup validation", async (version, warnings) => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const { harness, initializing, outbound } = startInitialize();
@@ -779,6 +820,56 @@ describe("CodexAppServerClient", () => {
       timeoutMs: CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
     });
   });
+
+  it.each([
+    { name: "default", timeoutSeconds: undefined, waitMs: 900_000 },
+    { name: "explicit", timeoutSeconds: 900, waitMs: 900_000 },
+    { name: "maximum", timeoutSeconds: 3600, waitMs: 3_600_000 },
+  ])(
+    "keeps the transport open for a $name credential wait and bounds a hung handler",
+    async ({ timeoutSeconds, waitMs }) => {
+      vi.useFakeTimers();
+      vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const harness = createClientHarness();
+      clients.push(harness.client);
+      let requestSignal: AbortSignal | undefined;
+      harness.client.addRequestHandler((_request, signal) => {
+        requestSignal = signal;
+        return new Promise<never>(() => {});
+      });
+      harness.send({
+        id: "credential-wait",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "credential-wait",
+          namespace: null,
+          tool: "secrets",
+          arguments: {
+            action: "request",
+            name: "TEST_API_KEY",
+            ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(waitMs + 30_000);
+      expect(harness.writes).toHaveLength(0);
+      expect(requestSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(harness.writes).toHaveLength(1);
+      expect(JSON.parse(harness.writes[0] ?? "{}")).toMatchObject({
+        id: "credential-wait",
+        result: {
+          success: false,
+          contentItems: [
+            { type: "inputText", text: expect.stringContaining(`${waitMs + 60_000}ms`) },
+          ],
+        },
+      });
+    },
+  );
 
   it("fails closed for unhandled native app-server approvals", async () => {
     const harness = createClientHarness();

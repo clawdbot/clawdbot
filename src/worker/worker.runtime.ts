@@ -5,10 +5,19 @@ import {
   WORKER_PORTAL_PROTOCOL_FEATURE,
   type WorkerHelloOk,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { waitForExecScope } from "../agents/bash-process-registry.js";
+import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  WorkerAdmissionDeadlineExceededError,
+  type WorkerAdmissionDeadlineResult,
+} from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
@@ -19,6 +28,7 @@ import {
 // Cross-process contract: serialized to stdout by runWorkerCommand and parsed by the
 // gateway worker turn launcher.
 export type WorkerRuntimeResult =
+  | WorkerAdmissionDeadlineResult
   | { status: "completed"; transcriptLeafId: string | null; transcriptNextSeq: number }
   | {
       status: "failed";
@@ -53,12 +63,53 @@ async function assertWorkerDirectory(pathname: string, label: string): Promise<s
   return resolved;
 }
 
+/** Holds process-local state until every command owned by this environment has exited. */
+export async function createWorkerRuntimeEnvironment(sessionId: string) {
+  const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
+  await chmod(stateDir, 0o700);
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+  let closing: Promise<void> | undefined;
+  return {
+    stateDir,
+    close: () =>
+      (closing ??= (async () => {
+        const supervisor = getProcessSupervisor();
+        const scopeKey = `worker:${sessionId}`;
+        supervisor.cancelScope(scopeKey, "manual-cancel");
+        await supervisor.waitForScope?.(scopeKey);
+        await waitForExecScope(scopeKey);
+        // Exec finalizers can open state; release its handle before Windows removes the file.
+        closeOpenClawStateDatabaseByPath(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        );
+        // Process completion writes its task outcome into this environment's state.
+        // Restore the ambient directory only after those callbacks have settled.
+        if (previousStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+        await rm(stateDir, { recursive: true, force: true });
+      })()),
+  };
+}
+
 export async function runWorkerDescriptor(
   descriptor: WorkerLaunchDescriptor,
   options: {
     signal?: AbortSignal;
     onConnectionFailure?: (cause: string | undefined) => void;
     browserRuntime?: WorkerBrowserRuntime;
+    /** Supplied by the managed process owner, which closes state after its final turn. */
+    environmentStateDir?: string;
   } = {},
 ): Promise<WorkerRuntimeResult> {
   if (
@@ -81,12 +132,10 @@ export async function runWorkerDescriptor(
       "worker workspace path escapes its assigned containment root; reprovision the worker workspace and retry",
     );
   }
-  const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
-  await chmod(stateDir, 0o700);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+  const environment = options.environmentStateDir
+    ? undefined
+    : await createWorkerRuntimeEnvironment(descriptor.admission.sessionId);
+  const stateDir = options.environmentStateDir ?? environment!.stateDir;
 
   const abortController = new AbortController();
   let turnStarted = false;
@@ -95,7 +144,9 @@ export async function runWorkerDescriptor(
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
-    onConnectionFailure: (error) => options.onConnectionFailure?.(error?.message),
+    onConnectionFailure: (error) => {
+      options.onConnectionFailure?.(error?.message);
+    },
   });
   const abortFromCaller = () => {
     abortController.abort(options.signal?.reason);
@@ -139,12 +190,22 @@ export async function runWorkerDescriptor(
       if (fenced) {
         return fenced;
       }
+      if (error instanceof WorkerAdmissionDeadlineExceededError && !options.signal?.aborted) {
+        return {
+          status: "not-started",
+          reason: "admission-deadline",
+          // The deadline error message already carries the formatted, redacted
+          // last-failure diagnosis (see WorkerConnection.failAdmissionDeadline).
+          errorText: error.message,
+        };
+      }
       throw error;
     }
     const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] = await Promise.all([
       import("./embedded-agent.runtime.js"),
       import("./inference-stream.runtime.js"),
     ]);
+    const computerContextEpoch: ComputerContextEpoch = { value: 0 };
     const stream = createWorkerInferenceStreamAdapter({
       client: inference,
       sessionId: descriptor.admission.sessionId,
@@ -152,7 +213,19 @@ export async function runWorkerDescriptor(
       runId: descriptor.assignment.runId,
       turnId: descriptor.assignment.turnId,
       modelRef: descriptor.assignment.modelRef,
+      computerContextEpoch,
     });
+    const github = descriptor.assignment.github
+      ? await import("./github-binding.runtime.js").then(({ prepareWorkerGitHubEnvironment }) =>
+          prepareWorkerGitHubEnvironment({
+            binding: descriptor.assignment.github!,
+            stateDir,
+            runId: descriptor.assignment.runId,
+            cwd: workspaceDir,
+            signal: abortController.signal,
+          }),
+        )
+      : undefined;
     try {
       turnStarted = true;
       await runWorkerEmbeddedTurn({
@@ -165,6 +238,7 @@ export async function runWorkerDescriptor(
           ? { permissionMode: descriptor.assignment.permissionMode }
           : {}),
         stateDir,
+        ...(github ? { github } : {}),
         sessionId: descriptor.admission.sessionId,
         sessionKey: `worker:${descriptor.admission.sessionId}`,
         runId: descriptor.assignment.runId,
@@ -172,6 +246,8 @@ export async function runWorkerDescriptor(
         suppressPromptTranscript: descriptor.assignment.suppressPromptTranscript,
         modelRef: descriptor.assignment.modelRef,
         initialMessages: descriptor.assignment.initialMessages,
+        skillResources: descriptor.assignment.skillResources,
+        skillAuthoring: descriptor.assignment.skillAuthoring,
         ...(descriptor.assignment.systemPrompt === undefined
           ? {}
           : { systemPrompt: descriptor.assignment.systemPrompt }),
@@ -181,6 +257,15 @@ export async function runWorkerDescriptor(
             name !== "portal" || hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE),
         ),
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
+        ...(descriptor.assignment.computer
+          ? {
+              computer: {
+                contextEpoch: computerContextEpoch,
+                descriptor: descriptor.assignment.computer,
+                requestComputer: (request) => connection.requestComputer(request),
+              },
+            }
+          : {}),
         ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
         inference: { stream },
         transcript: {
@@ -198,7 +283,7 @@ export async function runWorkerDescriptor(
         sessions: connection,
         signal: abortController.signal,
       });
-      if (options.signal?.aborted) {
+      if (options.signal?.aborted && !options.environmentStateDir) {
         throw toWorkerRuntimeError(options.signal.reason, "worker interrupted");
       }
     } catch (error) {
@@ -206,7 +291,7 @@ export async function runWorkerDescriptor(
       if (fenced) {
         return fenced;
       }
-      if (options.signal?.aborted) {
+      if (options.signal?.aborted && !options.environmentStateDir) {
         throw toWorkerRuntimeError(options.signal.reason, "worker interrupted");
       }
       if (resultFenceAcked && connection.state.kind === "ready") {
@@ -240,16 +325,6 @@ export async function runWorkerDescriptor(
     inference.dispose();
     live.dispose();
     await connection.stop();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousConfigPath === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    } else {
-      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-    }
-    await rm(stateDir, { recursive: true, force: true });
+    await environment?.close();
   }
 }

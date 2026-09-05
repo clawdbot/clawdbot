@@ -10,7 +10,6 @@ import {
   GATEWAY_READY_OUTPUT_MAX_CHARS,
   MEMORY_SEARCH_PROBE_QUERY,
   classifyMemorySearchInvokeResponse,
-  hasChildExited,
   invokeMemorySearch,
   parseArgs,
   stopGatewayWithRuntime,
@@ -263,34 +262,22 @@ describe("check-memory-fd-repro", () => {
     });
   });
 
-  it("treats signaled gateway children as exited", () => {
-    expect(hasChildExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
-    expect(hasChildExited({ exitCode: 0, signalCode: null })).toBe(true);
-    expect(hasChildExited({ exitCode: null, signalCode: null })).toBe(false);
-  });
-
-  it("fails gateway readiness immediately after signal exits", async () => {
+  it.each([
+    { exitCode: null, signalCode: "SIGTERM" },
+    { exitCode: 0, signalCode: null },
+  ])("rejects readiness and skips signaling for an exited child (%j)", async (exitState) => {
     const child = {
-      exitCode: null,
-      signalCode: "SIGTERM",
+      ...exitState,
+      kill: vi.fn(),
       stderr: new EventEmitter(),
       stdout: new EventEmitter(),
-    };
-
-    await expect(
-      waitForGatewayReady({ child, port: 9, logPath: "gateway.log", timeoutMs: 10_000 }),
-    ).rejects.toThrow("gateway exited before ready");
-  });
-
-  it("does not signal already exited children during gateway cleanup", async () => {
-    const child = {
-      exitCode: null,
-      kill: vi.fn(),
-      signalCode: "SIGTERM",
     };
     const findGatewayPidFn = vi.fn(() => null);
     const killProcess = vi.fn();
 
+    await expect(
+      waitForGatewayReady({ child, port: 9, logPath: "gateway.log", timeoutMs: 10_000 }),
+    ).rejects.toThrow("gateway exited before ready");
     await expect(
       stopGatewayWithRuntime({ child, findGatewayPidFn, killProcess, port: 9 }),
     ).resolves.toBeUndefined();

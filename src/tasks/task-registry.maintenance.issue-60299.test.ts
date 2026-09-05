@@ -319,6 +319,8 @@ describe("task-registry maintenance issue #60299", () => {
       acpEntry: { sessionId: childSessionKey, updatedAt: Date.now() },
     });
 
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
+    expectTaskStatus(currentTasks, task.taskId, "running");
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
     expectTaskStatus(currentTasks, task.taskId, "lost");
     expect(getInspectableActiveTaskRestartBlockers()).toHaveLength(0);
@@ -512,6 +514,8 @@ describe("task-registry maintenance issue #60299", () => {
       },
     });
 
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
+    expectTaskStatus(currentTasks, task.taskId, "running");
     const reconciledTasks = reconcileInspectableTasks();
     expect(reconciledTasks).toHaveLength(1);
     expect(reconciledTasks[0]?.taskId).toBe(task.taskId);

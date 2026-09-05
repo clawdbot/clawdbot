@@ -6,6 +6,11 @@ describe("truncate utilities", () => {
   it("does not count a trailing newline as an extra display line", () => {
     expect(truncateHead("alpha\nbeta\n").totalLines).toBe(2);
     expect(truncateTail("alpha\nbeta\n").totalLines).toBe(2);
+    expect(truncateTail("alpha\nbeta\ngamma\n", { maxLines: 2 })).toMatchObject({
+      content: "beta\ngamma",
+      truncatedBy: "lines",
+      outputLines: 2,
+    });
   });
 
   it("classifies trailing-newline truncation by the byte limit", () => {
@@ -32,32 +37,22 @@ describe("truncate utilities", () => {
       expect(result.text).toBe("this is a ... [truncated]");
     });
 
-    it("uses GREP_MAX_LINE_LENGTH as the default limit", () => {
-      const result = truncateLine("x");
-      expect(result.wasTruncated).toBe(false);
-      expect(result.text).toBe("x");
+    it("keeps 500 characters and truncates longer lines by default", () => {
+      const line = "x".repeat(500);
+      expect(truncateLine(line)).toEqual({ text: line, wasTruncated: false });
+      expect(truncateLine(`${line}y`)).toEqual({
+        text: `${line}... [truncated]`,
+        wasTruncated: true,
+      });
     });
 
     it("does not split a surrogate pair at the cut point", () => {
       // Emoji at boundary: "AB" + 🤖(surrogate pair) + "CD" — cut at 3 splits the emoji.
       expect(truncateLine("AB🤖CD", 3).text).toBe("AB... [truncated]");
-      // Three emoji, cut in the middle of the second emoji.
+      // Three emoji, cut in the middle of the third emoji.
       expect(truncateLine("🤖🤖🤖", 5).text).toBe("🤖🤖... [truncated]");
       // CJK Extension B (surrogate pair) at boundary stays intact.
       expect(truncateLine("AB𠮷CD", 5).text).toBe("AB𠮷C... [truncated]");
-    });
-
-    it("never produces unpaired surrogates in output", () => {
-      const results = [
-        truncateLine("AB🤖CD", 3).text,
-        truncateLine("🤖🤖🤖", 5).text,
-        truncateLine("AB𠮷CD", 5).text,
-      ];
-      for (const text of results) {
-        expect(text).not.toMatch(
-          /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
-        );
-      }
     });
   });
 });

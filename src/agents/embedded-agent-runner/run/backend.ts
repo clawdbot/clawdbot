@@ -6,32 +6,80 @@ import {
   runAgentHarnessSettledTurnFinalization,
 } from "../../harness/selection.js";
 import type { AgentHarness } from "../../harness/types.js";
-import { settleRequesterAfterSessionSpawns } from "../../subagents/registry/subagent-registry.js";
+import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
+import {
+  markRequesterTurnYielded,
+  settleRequesterAfterSessionSpawns,
+} from "../../subagents/registry/subagent-registry.js";
+import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-provenance.js";
+import { shouldContinueInteractiveAcceptedSessionSpawns } from "./attempt-terminal-evidence.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+/** Replaces backend-retained provenance with the exact prepared request fact. */
+export function resolveRuntimeModelAttempt(
+  runtimePlan: AgentRuntimePlan | undefined,
+): AgentRuntimeModelAttempt | undefined {
+  const credentialSource = runtimePlan?.auth.credentialSource;
+  return credentialSource
+    ? {
+        provider: runtimePlan.resolvedRef.provider,
+        model: runtimePlan.resolvedRef.modelId,
+        credentialSource,
+      }
+    : undefined;
+}
 
 /**
  * Backend bridge for executing one embedded-agent attempt through the selected harness.
  */
 export async function runEmbeddedAttemptWithBackend(
   params: EmbeddedRunAttemptParams,
+  nativeSessionRuntime?: Parameters<typeof runAgentHarnessAttempt>[1],
 ): Promise<EmbeddedRunAttemptResult> {
-  const result = await runAgentHarnessAttempt(params);
+  const result = await runAgentHarnessAttempt(params, nativeSessionRuntime);
   if (
     result.agentHarnessId !== "openclaw" &&
     params.sessionKey &&
     result.acceptedSessionSpawns?.length
   ) {
-    // Native harnesses return only after releasing active-run ownership.
-    // Settle before dispatch can replace the successful result with a late abort.
-    settleRequesterAfterSessionSpawns({
-      requesterSessionKey: params.sessionKey,
-      requesterAgentId: params.agentId,
-      requesterTurnRunId: params.runId,
-      requesterYielded: result.yieldDetected === true,
-      acceptedSessionSpawns: result.acceptedSessionSpawns,
+    const implicitContinuation = shouldContinueInteractiveAcceptedSessionSpawns({
+      attempt: result,
+      run: params,
     });
+    if (implicitContinuation) {
+      const marked = markRequesterTurnYielded({
+        requesterSessionKey: params.sessionKey,
+        requesterAgentId: params.agentId,
+        requesterTurnRunId: params.runId,
+      });
+      if (marked === 0) {
+        throw new Error("accepted continuation children were not durably registered");
+      }
+    } else {
+      settleRequesterAfterSessionSpawns({
+        requesterSessionKey: params.sessionKey,
+        requesterAgentId: params.agentId,
+        requesterTurnRunId: params.runId,
+        requesterYielded: result.yieldDetected === true,
+        acceptedSessionSpawns: result.acceptedSessionSpawns,
+      });
+    }
   }
-  return result;
+  const { modelAttempt: _backendModelAttempt, runtimeModelSelection, ...attempt } = result;
+  const modelAttempt = resolveRuntimeModelAttempt(params.runtimePlan);
+  return copyCoreTtsAttemptResultProvenance(result, {
+    ...attempt,
+    ...(modelAttempt ? { modelAttempt } : {}),
+    // Only private prepared ownership permits a runtime to select the session model.
+    ...(nativeSessionRuntime && runtimeModelSelection
+      ? {
+          runtimeModelSelection: {
+            provider: runtimeModelSelection.provider,
+            model: runtimeModelSelection.model,
+          },
+        }
+      : {}),
+  });
 }
 
 /** Runs one operation-specific settled-turn finalization through the selected harness. */

@@ -63,7 +63,7 @@ describe("resolveSandboxWorkspaceAuthority", () => {
         sessionId: "guest-worker",
         updatedAt: Date.now(),
         sandbox: "required",
-        createdActor: { type: "human", id: "guest-principal" },
+        createdActor: { type: "human", source: "unknown", id: "guest-principal" },
       },
     );
     const config = configWithSandbox({ mode: "off", scope: "session", workspaceAccess: "rw" });

@@ -6,7 +6,6 @@ const mocks = vi.hoisted(() => ({
   ensureGatewayReadyForOperation: vi.fn(),
   inspectPortUsage: vi.fn(),
   issueDeviceBootstrapToken: vi.fn(),
-  loadGatewayTlsRuntime: vi.fn(),
   openUrl: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveControlUiLinks: vi.fn(),
@@ -36,10 +35,6 @@ vi.mock("../../infra/device-bootstrap.js", () => ({
 
 vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: mocks.inspectPortUsage,
-}));
-
-vi.mock("../../infra/tls/gateway.js", () => ({
-  loadGatewayTlsRuntime: mocks.loadGatewayTlsRuntime,
 }));
 
 vi.mock("../gateway-readiness.js", () => ({
@@ -112,7 +107,6 @@ describe("dashboardCommand --json", () => {
       token: "browser-bootstrap",
       expiresAtMs: 123_456,
     });
-    mocks.loadGatewayTlsRuntime.mockResolvedValue({ enabled: false, required: false });
     mocks.waitForControlUiDocument.mockResolvedValue({ ready: true });
   });
 
@@ -139,7 +133,6 @@ describe("dashboardCommand --json", () => {
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
     expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789);
     expect(mocks.openUrl).not.toHaveBeenCalled();
-    expect(mocks.loadGatewayTlsRuntime).not.toHaveBeenCalled();
     expect(mocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
         roles: ["operator"],
@@ -170,11 +163,6 @@ describe("dashboardCommand --json", () => {
     mocks.resolveControlUiLinks.mockReturnValue({
       httpUrl: "https://127.0.0.1:18789/",
       wsUrl: "wss://127.0.0.1:18789",
-    });
-    mocks.loadGatewayTlsRuntime.mockResolvedValue({
-      enabled: true,
-      required: true,
-      fingerprintSha256: "ab".repeat(32),
     });
     mocks.waitForControlUiDocument.mockResolvedValue({
       ready: true,

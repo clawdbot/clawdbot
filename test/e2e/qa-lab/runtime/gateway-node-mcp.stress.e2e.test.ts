@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import { createSessionMcpRuntime } from "../../../../src/agents/agent-bundle-mcp-runtime.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   NODE_MCP_COMMAND,
@@ -78,6 +79,7 @@ describe("Gateway/node MCP real-process stress", () => {
       );
 
       let fixture: HttpFixture | undefined;
+      const gatewayOwner = createQaGatewayChild();
       let gateway: GatewayHandle | undefined;
       let node: CapturedChild | undefined;
       let sessionRuntime: ReturnType<typeof createSessionMcpRuntime> | undefined;
@@ -106,7 +108,7 @@ describe("Gateway/node MCP real-process stress", () => {
         };
         await fs.writeFile(nodeConfigPath, `${JSON.stringify(nodeConfig, null, 2)}\n`, "utf8");
 
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot,
           command: {
             executablePath: process.execPath,
@@ -117,15 +119,14 @@ describe("Gateway/node MCP real-process stress", () => {
           transportBaseUrl: "http://127.0.0.1",
           controlUiEnabled: false,
           runtimeEnvPatch: {
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
             OPENCLAW_SKIP_PROVIDERS: "1",
             OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           },
           mutateConfig: (cfg) => {
-            const { plugins: _plugins, ...withoutPlugins } = cfg;
             return {
-              ...withoutPlugins,
+              ...cfg,
+              plugins: { enabled: false },
               gateway: {
                 ...cfg.gateway,
                 nodes: {
@@ -146,7 +147,6 @@ describe("Gateway/node MCP real-process stress", () => {
             OPENCLAW_CONFIG_PATH: nodeConfigPath,
             OPENCLAW_GATEWAY_TOKEN: gateway.token,
             OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
             OPENCLAW_SKIP_PROVIDERS: "1",
           },
@@ -283,18 +283,19 @@ describe("Gateway/node MCP real-process stress", () => {
 
         descriptors = (await waitForNode(gateway, nodeId, 3)).nodePluginTools ?? [];
         const streamable = descriptorFor(descriptors, "streamableHttp");
+        // The fixture admits both HTTP requests before expiring their shared session.
         const expired = await Promise.allSettled([
           invokeNodeMcpPayload({
             gateway,
             nodeId,
             descriptor: streamable,
-            marker: "expire-session",
+            marker: "expire-concurrent-session",
           }),
           invokeNodeMcpPayload({
             gateway,
             nodeId,
             descriptor: streamable,
-            marker: "expire-session",
+            marker: "expire-concurrent-session",
           }),
         ]);
         expect(expired.every((result) => result.status === "rejected")).toBe(true);
@@ -316,7 +317,7 @@ describe("Gateway/node MCP real-process stress", () => {
           ...(node ? [stopChild(node)] : []),
         ]);
         await Promise.allSettled([
-          ...(gateway ? [Promise.resolve(gateway.stop())] : []),
+          stopQaGatewayFixture(gatewayOwner),
           ...(fixture ? [stopChild(fixture)] : []),
         ]);
         for (const eventPath of [nodeEvents, sessionEvents]) {

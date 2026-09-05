@@ -65,6 +65,13 @@ export async function saveBrowserDownload(
       opts.signal?.throwIfAborted();
       onReadyToPublish?.();
     },
+  }).catch((error: unknown) => {
+    // Admission failures can belong to a superseded waiter. Only failed saves
+    // cancel here; an aborted capture already owns its cancellation.
+    if (!opts.signal?.aborted) {
+      void download.cancel?.().catch(() => {});
+    }
+    throw error;
   });
   return { ...candidate, path: savedPath };
 }

@@ -6,6 +6,10 @@ import {
   browserArmDialog,
   browserArmFileChooser,
   browserConsoleMessages,
+  browserRequests,
+  browserErrors,
+  browserPageText,
+  browserEmulateSetting,
   browserNavigate,
   browserPdfSave,
   browserScreenshotAction,
@@ -108,6 +112,71 @@ describe("browser client", () => {
     const parsed = new URL(requireSnapshotCall(calls));
     expect(parsed.searchParams.get("labels")).toBe("1");
     expect(parsed.searchParams.get("mode")).toBe("efficient");
+  });
+
+  it("encodes observation filters and routes emulation through the selected profile", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        return jsonResponse({
+          ok: true,
+          targetId: "canonical",
+          requests: [],
+          text: "Prose",
+          truncated: false,
+        });
+      }),
+    );
+    const baseUrl = "http://127.0.0.1:18791";
+    const profile = "test profile";
+    await browserRequests(baseUrl, { targetId: "t1", filter: "/api?q=a&b", clear: false, profile });
+    await browserPageText(baseUrl, {
+      targetId: "t1",
+      selector: "article > p",
+      maxChars: 123,
+      profile,
+    });
+    await browserEmulateSetting(baseUrl, {
+      setting: "device",
+      body: { targetId: "t1", name: "iPhone 15" },
+      profile,
+    });
+    await browserErrors(baseUrl, { targetId: "tab & one", clear: false, profile });
+    expect(calls).toHaveLength(4);
+    const errorsUrl = new URL(calls[3]!.url);
+    expect(errorsUrl.pathname).toBe("/errors");
+    expect(Object.fromEntries(errorsUrl.searchParams)).toEqual({
+      targetId: "tab & one",
+      clear: "false",
+      profile,
+    });
+    const requestUrl = new URL(calls[0]!.url);
+    expect(requestUrl.pathname).toBe("/requests");
+    expect(Object.fromEntries(requestUrl.searchParams)).toEqual({
+      targetId: "t1",
+      filter: "/api?q=a&b",
+      clear: "false",
+      profile,
+    });
+    const textUrl = new URL(calls[1]!.url);
+    expect(textUrl.pathname).toBe("/text");
+    expect(Object.fromEntries(textUrl.searchParams)).toEqual({
+      targetId: "t1",
+      selector: "article > p",
+      maxChars: "123",
+      profile,
+    });
+    const deviceUrl = new URL(calls[2]!.url);
+    expect(deviceUrl.pathname).toBe("/set/device");
+    expect(deviceUrl.searchParams.get("profile")).toBe(profile);
+    expect(calls[2]!.init?.method).toBe("POST");
+    const deviceBody = calls[2]!.init?.body;
+    if (typeof deviceBody !== "string") {
+      throw new Error("expected a JSON request body");
+    }
+    expect(JSON.parse(deviceBody)).toEqual({ targetId: "t1", name: "iPhone 15" });
   });
 
   it("adds refs=aria to snapshots when requested", async () => {

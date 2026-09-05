@@ -7,14 +7,17 @@ import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-a
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
 import {
   clearActiveEmbeddedRun,
   formatEmbeddedAgentQueueFailureSummary,
   preemptAndDrainEmbeddedHeartbeatRun,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
+  queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
+  type EmbeddedAgentQueueMessageOptions,
 } from "./runs.js";
 import { createEmbeddedRunHandle, testing } from "./runs.test-support.js";
 
@@ -26,6 +29,35 @@ describe("embedded-agent active-run steering", () => {
     setDiagnosticsEnabledForProcess(false);
     vi.restoreAllMocks();
   });
+
+  it.each([false, true])(
+    "keeps V1 unscoped compatibility but refuses guarded injection: capability=%s",
+    async (capability) => {
+      const queueMessage = vi.fn(async () => {});
+      const claimPendingUserInputAnswer = vi.fn(async () => true);
+      const handle = createEmbeddedRunHandle({ queueMessage });
+      handle.claimPendingUserInputAnswer = claimPendingUserInputAnswer;
+      if (capability) {
+        handle.messageInjection = { isAvailable: () => true, queueMessage };
+      }
+      setActiveEmbeddedRun("legacy-sink", handle);
+
+      await expect(
+        queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
+          "legacy-sink",
+          "source-bound",
+          undefined,
+          () => true,
+        ),
+      ).resolves.toMatchObject({ queued: false, reason: "guarded_injection_unsupported" });
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(claimPendingUserInputAnswer).not.toHaveBeenCalled();
+      await expect(
+        queueEmbeddedAgentMessageWithOutcomeAsync("legacy-sink", "unscoped"),
+      ).resolves.toMatchObject({ queued: true });
+      expect(queueMessage).toHaveBeenCalledOnce();
+    },
+  );
 
   it("aborts and drains the exact heartbeat handle through session replacement", async () => {
     const heartbeatPreempt = vi.fn(() => true);
@@ -442,33 +474,46 @@ describe("embedded-agent active-run steering", () => {
     );
   });
 
-  it("atomically claims pending plain-text input across an authority mismatch", async () => {
-    const claimPendingUserInputAnswer = vi.fn(async () => true);
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-pending-question", {
-      ...createEmbeddedRunHandle(),
-      toolAuthorityFingerprint: "fallback-authority",
-      claimPendingUserInputAnswer,
-      queueMessage,
-    });
+  it.each([false, true])(
+    "keeps pending input non-replayable across an authority mismatch: unconfirmed=%s",
+    async (unconfirmed) => {
+      const error = new QuestionAnswerUnconfirmedError(new Error("answer receipt unavailable"));
+      const claimPendingUserInputAnswer = vi.fn(async () => {
+        if (unconfirmed) {
+          throw error;
+        }
+        return true;
+      });
+      const queueMessage = vi.fn(async () => {});
+      setActiveEmbeddedRun("session-pending-question", {
+        ...createEmbeddedRunHandle(),
+        toolAuthorityFingerprint: "fallback-authority",
+        claimPendingUserInputAnswer,
+        queueMessage,
+      });
 
-    const options = {
-      isInboundUserMessage: true,
-      onQueueAccepted: vi.fn(),
-      pendingInputAuthorityFingerprint: "fallback-authority",
-      toolAuthorityFingerprint: "default-authority",
-    } as const;
-    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-      "session-pending-question",
-      "2",
-      options,
-    );
-
-    expect(outcome).toMatchObject({ queued: true, target: "embedded_run" });
-    expect(claimPendingUserInputAnswer).toHaveBeenCalledWith("2", options);
-    expect(options.onQueueAccepted).toHaveBeenCalledWith(true);
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
+      const options = {
+        isInboundUserMessage: true,
+        onQueueAccepted: vi.fn(),
+        pendingInputAuthorityFingerprint: "fallback-authority",
+        toolAuthorityFingerprint: "default-authority",
+      } as const;
+      const outcome = queueEmbeddedAgentMessageWithOutcomeAsync(
+        "session-pending-question",
+        "2",
+        options,
+      );
+      if (unconfirmed) {
+        await expect(outcome).rejects.toBe(error);
+        expect(options.onQueueAccepted).not.toHaveBeenCalled();
+      } else {
+        await expect(outcome).resolves.toMatchObject({ queued: true, target: "embedded_run" });
+        expect(options.onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      }
+      expect(claimPendingUserInputAnswer).toHaveBeenCalledExactlyOnceWith("2", options);
+      expect(queueMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
@@ -578,30 +623,53 @@ describe("embedded-agent active-run steering", () => {
     expect(cancelPendingUserInput).toHaveBeenCalledWith("image-reply");
   });
 
-  it("reports accepted steering without transcript confirmation as non-replayable", async () => {
-    setActiveEmbeddedRun("session-unconfirmed", {
-      ...createEmbeddedRunHandle(),
-      queueMessage: async () => ({
-        transcriptCommit: "unconfirmed",
-        errorMessage: "receipt unavailable",
-      }),
-    });
+  it.each(["receipt-result", "question-error"] as const)(
+    "reports unconfirmed steering as non-replayable: %s",
+    async (source) => {
+      const error = new QuestionAnswerUnconfirmedError(new Error("answer receipt unavailable"));
+      const errorMessage = source === "question-error" ? error.message : "receipt unavailable";
+      const queueMessage = vi.fn(
+        async (_text: string, options?: EmbeddedAgentQueueMessageOptions) => {
+          if (source === "question-error") {
+            throw error;
+          }
+          options?.onQueueAccepted?.(true);
+          return { transcriptCommit: "unconfirmed" as const, errorMessage };
+        },
+      );
+      setActiveEmbeddedRun("session-unconfirmed", {
+        ...createEmbeddedRunHandle(),
+        toolAuthorityFingerprint: "same-authority",
+        supportsTranscriptCommitWait: true,
+        queueMessage,
+      });
+      const onQueueAccepted = vi.fn();
 
-    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-      "session-unconfirmed",
-      "continue",
-    );
+      const outcome = queueEmbeddedAgentMessageWithOutcomeAsync("session-unconfirmed", "continue", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "same-authority",
+        waitForTranscriptCommit: true,
+        onQueueAccepted,
+      });
 
-    expect(outcome).toEqual({
-      queued: true,
-      sessionId: "session-unconfirmed",
-      target: "embedded_run",
-      gatewayHealth: "live",
-      transcriptCommit: "unconfirmed",
-      errorMessage: "receipt unavailable",
-      enqueuedAtMs: expect.any(Number),
-    });
-  });
+      if (source === "question-error") {
+        await expect(outcome).rejects.toBe(error);
+        expect(onQueueAccepted).not.toHaveBeenCalled();
+      } else {
+        await expect(outcome).resolves.toEqual({
+          queued: true,
+          sessionId: "session-unconfirmed",
+          target: "embedded_run",
+          gatewayHealth: "live",
+          transcriptCommit: "unconfirmed",
+          errorMessage,
+          enqueuedAtMs: expect.any(Number),
+        });
+        expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      }
+      expect(queueMessage).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects transcript-commit waits for active handles without support", async () => {
     const queueMessage = vi.fn(async () => {});

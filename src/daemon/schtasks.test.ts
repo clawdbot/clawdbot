@@ -5,6 +5,11 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import {
+  isScheduledTaskDefinitelyNotRunning,
+  probeScheduledTaskExists,
+  waitForScheduledTaskRunningEvidence,
+} from "./schtasks-runtime.js";
+import {
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
   resolveTaskScriptPath,
@@ -14,9 +19,19 @@ const schtasksResponses = vi.hoisted(
   (): Array<{ code: number; stdout: string; stderr: string }> => [],
 );
 const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
+const spawnSync = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async () => ({
+  ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
+  spawnSync,
+}));
 
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: async () => schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" },
+}));
+
+vi.mock("./gateway-service-probe-hosts.js", () => ({
+  resolveGatewayServiceProbeHosts: async () => ["127.0.0.1"],
 }));
 
 vi.mock("../infra/windows-encoding.js", async () => {
@@ -32,6 +47,7 @@ vi.mock("../infra/windows-encoding.js", async () => {
 
 beforeEach(() => {
   schtasksResponses.length = 0;
+  spawnSync.mockReset();
   resolveWindowsOemEncodingMock.mockReset();
   resolveWindowsOemEncodingMock.mockReturnValue(null);
 });
@@ -48,110 +64,119 @@ describe("scheduled task runtime derivation", () => {
     });
   }
 
-  function taskQueryOutput(lines: string[]): string {
-    return [
-      "TaskName: \\OpenClaw Gateway",
-      "Last Run Time: 1/8/2026 1:23:45 AM",
-      ...lines,
-      "",
-    ].join("\r\n");
-  }
-
-  it.each(["Ready", "Running"])("parses %s status metadata", async (status) => {
+  it.each([
+    { state: 3, result: 0, expected: "stopped", label: "Bereit" },
+    { state: 4, result: 0, expected: "running", label: "Wird ausgeführt" },
+    { state: 2, result: 0, expected: "unknown", label: "In Warteschlange" },
+    { state: 0, result: 0, expected: "unknown", label: "Unbekannt" },
+  ])("uses numeric task state $state on a fully localized Windows host", async (task) => {
+    spawnSync.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({
+        state: task.state,
+        lastRunResult: task.result,
+        lastRunTime: "2026-08-02T12:00:00.0000000Z",
+      }),
+      stderr: "",
+    });
     const runtime = await readRuntimeFromQueryOutput(
       [
-        "TaskName: \\OpenClaw Gateway",
-        `Status: ${status}`,
-        "Last Run Time: 1/8/2026 1:23:45 AM",
-        "Last Run Result: 0x0",
+        "Aufgabenname: \\OpenClaw Gateway",
+        `Status: ${task.label}`,
+        "Letzte Laufzeit: 02.08.2026 14:00:00",
+        "Letztes Ergebnis: 0",
       ].join("\r\n"),
     );
-    expect(runtime).toMatchObject({
-      state: status,
-      lastRunTime: "1/8/2026 1:23:45 AM",
-      lastRunResult: "0x0",
-    });
+    expect(runtime.status).toBe(task.expected);
   });
 
-  it("parses 'Last Result' key variant (without 'Run') (#47726)", async () => {
-    const runtime = await readRuntimeFromQueryOutput(
-      [
-        "TaskName: \\OpenClaw Gateway",
-        "Status: Running",
-        "Last Run Time: 2026/3/16 8:34:15",
-        "Last Result: 267009",
-      ].join("\r\n"),
+  it.each([
+    { state: 1, result: 267009, expected: "stopped", name: "Disabled" },
+    { state: 3, result: 267009, expected: "stopped", name: "Ready" },
+    { state: 4, result: -2147024891, expected: "running", name: "Running" },
+    { state: 2, result: 0, expected: "unknown", name: "Queued" },
+    { state: 0, result: 267009, expected: "unknown", name: "Unknown" },
+  ])("uses $name rather than stale last-run result $result", async (task) => {
+    spawnSync.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({ state: task.state, lastRunResult: task.result }),
+    });
+    await expect(readRuntimeFromQueryOutput("")).resolves.toMatchObject({
+      status: task.expected,
+      state: task.name,
+      lastRunResult: String(task.result),
+    });
+    expect(probeScheduledTaskExists("OpenClaw Gateway")).toBe(true);
+    expect(isScheduledTaskDefinitelyNotRunning("OpenClaw Gateway")).toBe(
+      task.expected === "stopped",
     );
-    expect(runtime).toMatchObject({
-      status: "running",
-      state: "Running",
-      lastRunTime: "2026/3/16 8:34:15",
-      lastRunResult: "267009",
-    });
   });
 
-  it("treats Running + 0x41301 as running", async () => {
-    await expect(
-      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Running", "Last Run Result: 0x41301"])),
-    ).resolves.toMatchObject({ status: "running" });
-  });
-
-  it("treats Running + decimal 267009 as running", async () => {
-    await expect(
-      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Running", "Last Run Result: 267009"])),
-    ).resolves.toMatchObject({ status: "running" });
-  });
-
-  it("treats Running without numeric result as unknown", async () => {
-    await expect(
-      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Running"])),
-    ).resolves.toMatchObject({
-      status: "unknown",
-      detail: "Task status is locale-dependent and no numeric Last Run Result was available.",
-    });
-  });
-
-  it("treats non-running result codes as stopped", async () => {
-    await expect(
-      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Running", "Last Run Result: 0x0"])),
-    ).resolves.toMatchObject({
+  it.each([
+    { state: 3 },
+    { state: 3, lastRunResult: null, lastRunTime: null },
+    { state: 3, lastRunResult: "unavailable", lastRunTime: false },
+  ])("preserves task state and existence without optional history: %j", async (snapshot) => {
+    spawnSync.mockReturnValue({ status: 0, stdout: JSON.stringify(snapshot) });
+    await expect(readRuntimeFromQueryOutput("")).resolves.toMatchObject({
       status: "stopped",
-      detail: "Task Last Run Result=0x0; treating as not running.",
+      state: "Ready",
     });
+    expect(probeScheduledTaskExists("OpenClaw Gateway")).toBe(true);
+    expect(isScheduledTaskDefinitelyNotRunning("OpenClaw Gateway")).toBe(true);
   });
 
-  it("detects running via result code when status is localized (German)", async () => {
-    await expect(
-      readRuntimeFromQueryOutput(
-        taskQueryOutput(["Status: Wird ausgeführt", "Last Run Result: 0x41301"]),
-      ),
-    ).resolves.toMatchObject({ status: "running" });
-  });
+  it.each([null, "3", 5])(
+    "preserves existence but not offline proof for state %j",
+    async (state) => {
+      spawnSync.mockReturnValue({ status: 0, stdout: JSON.stringify({ state }) });
+      await expect(readRuntimeFromQueryOutput("")).resolves.toMatchObject({ status: "unknown" });
+      expect(probeScheduledTaskExists("OpenClaw Gateway")).toBe(true);
+      expect(isScheduledTaskDefinitelyNotRunning("OpenClaw Gateway")).toBe(false);
+    },
+  );
 
-  it("detects running via result code when status is localized (French)", async () => {
-    await expect(
-      readRuntimeFromQueryOutput(taskQueryOutput(["Status: En cours", "Last Run Result: 267009"])),
-    ).resolves.toMatchObject({ status: "running" });
-  });
+  it.each(["-2147024894", "-2147024893"])(
+    "recognizes lookup HRESULT %s as missing",
+    async (stdout) => {
+      spawnSync.mockReturnValue({ status: 1, stdout });
+      await expect(readRuntimeFromQueryOutput("")).resolves.toEqual({
+        status: "stopped",
+        missingUnit: true,
+      });
+      expect(probeScheduledTaskExists("OpenClaw Gateway")).toBe(false);
+      expect(isScheduledTaskDefinitelyNotRunning("OpenClaw Gateway")).toBe(false);
+    },
+  );
 
-  it("treats localized status as stopped when result code is not a running code", async () => {
-    await expect(
-      readRuntimeFromQueryOutput(
-        taskQueryOutput(["Status: Wird ausgeführt", "Last Run Result: 0x0"]),
-      ),
-    ).resolves.toMatchObject({
-      status: "stopped",
-      detail: "Task Last Run Result=0x0; treating as not running.",
-    });
-  });
-
-  it("treats localized status without result code as unknown", async () => {
-    await expect(
-      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Wird ausgeführt"])),
-    ).resolves.toMatchObject({
+  it.each([
+    { name: "access denied", status: 1, stdout: "-2147024891" },
+    { name: "COM activation missing", status: 2, stdout: "-2147221164" },
+    { name: "connection missing file", status: 2, stdout: "-2147024894" },
+    { name: "malformed HRESULT", status: 1, stdout: "-2147024894 trailing" },
+    { name: "invalid JSON", status: 0, stdout: "not JSON" },
+    { name: "non-object JSON", status: 0, stdout: "null" },
+    { name: "spawn failure", status: null, stdout: "", error: new Error("ENOENT") },
+    { name: "timeout", status: null, stdout: "", error: new Error("ETIMEDOUT") },
+  ])("keeps $name unavailable, not missing or stopped", async (response) => {
+    spawnSync.mockReturnValue(response);
+    await expect(readRuntimeFromQueryOutput("")).resolves.toMatchObject({
       status: "unknown",
-      detail: "Task status is locale-dependent and no numeric Last Run Result was available.",
+      missingUnit: false,
+      inspectionFailure: { code: "service-runtime-inspection-failed" },
     });
+    expect(probeScheduledTaskExists("OpenClaw Gateway")).toBeNull();
+  });
+
+  it("requires current Scheduler running state before retiring the Startup owner", async () => {
+    spawnSync
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: JSON.stringify({ state: 3, lastRunResult: 267009 }),
+      })
+      .mockReturnValueOnce({ status: 0, stdout: JSON.stringify({ state: 4, lastRunResult: 0 }) });
+    await expect(waitForScheduledTaskRunningEvidence({})).resolves.toBe(true);
+    expect(spawnSync).toHaveBeenCalledTimes(2);
   });
 });
 

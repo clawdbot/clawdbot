@@ -8,7 +8,7 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionStorePathCore,
-  type SessionEntry,
+  type InternalSessionEntry as SessionEntry,
 } from "../../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,

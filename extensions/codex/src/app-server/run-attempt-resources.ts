@@ -6,6 +6,7 @@ import {
 import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
@@ -44,7 +45,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     params,
     effectiveCwd,
     sessionAgentId,
-    sandboxSessionKey,
+    contextSessionKey,
     runAbortController,
     sandbox,
     options,
@@ -101,7 +102,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     emitCodexNativePreToolUseFailureDiagnostic({
       agentId: sessionAgentId,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       runId: params.runId,
       signal: runAbortController.signal,
       failure,
@@ -251,8 +252,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       events: nativeHookRelayEvents,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       config: params.config,
+      autoApproveMcpTools: shouldAutoApproveCodexAppServerApprovals(appServer),
+      projectedMcpServers: runtime.bundleMcpThreadConfig.configPatch?.mcp_servers,
       runId: params.runId,
       channelId: hookChannelId,
       ...(requester ? { requester } : {}),
@@ -270,6 +273,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
       hostCapabilities: params.hostCapabilities,
+      assertCurrent: connection.assertCurrent,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
         if (projector) {

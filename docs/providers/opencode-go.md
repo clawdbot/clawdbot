@@ -74,48 +74,28 @@ interactive onboarding or pass the shared OpenCode API key directly.
 ## Catalog
 
 Run `openclaw models list --provider opencode-go` for the current model list.
-OpenClaw combines the models available to your Go account with authoritative
-metadata from `https://models.opencode.ai/api.json`, so new upstream models
-appear without an OpenClaw update. The upstream catalog is downloaded and
+OpenClaw combines Go's advertised model IDs with authoritative metadata from
+`https://models.opencode.ai/api.json`, so new upstream models appear without an
+OpenClaw update when they use a supported transport on the trusted OpenCode
+endpoint. The upstream catalog is downloaded and
 cached only when OpenCode Zen or Go is configured or explicitly selected with
 OpenCode credentials; it is never fetched at startup or while using unrelated
 providers.
 
-Current active rows:
+Example refs include `opencode-go/deepseek-v4-flash`, `opencode-go/kimi-k3`, and
+`opencode-go/qwen3.8-max`. Use the CLI for the current lineup rather than treating
+these examples as an inventory. OpenClaw excludes deprecated rows from active
+discovery and applies refreshed lifecycle status to its offline fallback.
+Bundled preview rows stay hidden until accepted upstream metadata supplies them.
+Existing explicit refs in the bundled seed remain resolvable.
 
-| Model ref                       | Context   | Max output | Inputs      | Transport |
-| ------------------------------- | --------- | ---------- | ----------- | --------- |
-| `opencode-go/deepseek-v4-flash` | 1M        | 384K       | Text        | Chat      |
-| `opencode-go/deepseek-v4-pro`   | 1M        | 384K       | Text        | Chat      |
-| `opencode-go/glm-5.1`           | 202,752   | 32,768     | Text        | Chat      |
-| `opencode-go/glm-5.2`           | 1M        | 131,072    | Text        | Chat      |
-| `opencode-go/gpt-5.6-luna`      | 1.05M     | 128,000    | Text, image | Responses |
-| `opencode-go/grok-4.5`          | 500,000   | 500,000    | Text, image | Chat      |
-| `opencode-go/hy3`               | 256,000   | 64,000     | Text        | Chat      |
-| `opencode-go/kimi-k2.6`         | 262,144   | 65,536     | Text, image | Chat      |
-| `opencode-go/kimi-k2.7-code`    | 262,144   | 262,144    | Text, image | Chat      |
-| `opencode-go/kimi-k3`           | 1,048,576 | 131,072    | Text, image | Chat      |
-| `opencode-go/mimo-v2.5`         | 1M        | 128,000    | Text, image | Chat      |
-| `opencode-go/mimo-v2.5-pro`     | 1,048,576 | 128,000    | Text        | Chat      |
-| `opencode-go/minimax-m2.7`      | 204,800   | 131,072    | Text        | Messages  |
-| `opencode-go/minimax-m3`        | 1M        | 131,072    | Text, image | Messages  |
-| `opencode-go/ox-alpha-free`     | 1M        | 131,072    | Text, image | Chat      |
-| `opencode-go/qwen3.6-plus`      | 1M        | 65,536     | Text, image | Messages  |
-| `opencode-go/qwen3.7-max`       | 1M        | 65,536     | Text        | Messages  |
-| `opencode-go/qwen3.7-plus`      | 1M        | 65,536     | Text, image | Messages  |
-| `opencode-go/qwen3.8-max`       | 1M        | 131,072    | Text, image | Messages  |
-
-Current upstream preview models appear while available. Deprecated refs remain
-resolvable only for existing explicit configurations and are not recommended.
-
-Ox Alpha Free is free for a limited time, but accessing the Go catalog still
-requires a paid OpenCode Go subscription.
+The Go model-list endpoint is a general inventory, not an account-entitlement
+check. A successful listing does not grant access: inference still requires an
+active Go subscription, including for promotional models.
 
 ## Privacy
 
-OpenCode lists zero data retention and no model training for Ox Alpha Free.
-Privacy policies vary by model: some routes retain data for up to 30 days, and
-the Muse Spark 1.2 Contributor route permits model training. Review the current
+Retention and training policies vary by model. Review the current
 [OpenCode Go privacy table](https://opencode.ai/docs/go/#privacy) before using a
 model, because provider policy can change independently of OpenClaw.
 

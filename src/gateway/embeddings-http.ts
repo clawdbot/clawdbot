@@ -63,7 +63,7 @@ const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 type EmbeddingProviderRequest = string;
 type MemorySearchEmbeddingConfig = Pick<
   NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
-  "local" | "remote" | "outputDimensionality" | "inputType" | "queryInputType" | "documentInputType"
+  "local" | "remote" | "inputType" | "queryInputType" | "documentInputType"
 >;
 
 const EMBEDDING_PROVIDER_RETIREMENTS = new Map<string, Set<MemoryEmbeddingProvider>>();
@@ -246,6 +246,7 @@ async function createConfiguredEmbeddingProvider(params: {
   agentDir: string;
   provider: EmbeddingProviderRequest;
   model: string;
+  dimensions?: number;
   memorySearch?: MemorySearchEmbeddingConfig;
 }): Promise<MemoryEmbeddingProvider> {
   const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(() => params.cfg);
@@ -265,7 +266,8 @@ async function createConfiguredEmbeddingProvider(params: {
     inputType: params.memorySearch?.inputType,
     queryInputType: params.memorySearch?.queryInputType,
     documentInputType: params.memorySearch?.documentInputType,
-    outputDimensionality: params.memorySearch?.outputDimensionality,
+    dimensions: params.dimensions,
+    fallback: "none",
     acquireLocalService,
   };
   const { provider } = await adapter.create(createOptions);
@@ -407,19 +409,19 @@ export async function handleOpenAiEmbeddingsHttpRequest(
           agentDir,
           provider: target.provider,
           model: target.model,
-          memorySearch: memorySearch
-            ? {
-                ...memorySearch,
-                outputDimensionality: payload.dimensions ?? memorySearch.outputDimensionality,
-              }
-            : undefined,
+          // Request dimensions apply even when the agent has disabled memory search.
+          dimensions: payload.dimensions ?? memorySearch?.outputDimensionality,
+          memorySearch: memorySearch ?? undefined,
         }),
       (createdProvider) =>
         requestedProviderNeedsCleanup ||
         isLocalEmbeddingProvider({ cfg, provider: createdProvider.id }),
     );
     try {
-      const embeddings = await provider.embedBatch(texts, { signal: abortController.signal });
+      const embeddings = await provider.embedBatch(texts, {
+        signal: abortController.signal,
+        inputType: "document",
+      });
       if (abortController.signal.aborted) {
         return true;
       }

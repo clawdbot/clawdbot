@@ -7,8 +7,8 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 export type CoreToolFactoryFamily = "base-coding" | "shell" | "openclaw";
 
 type CoreToolFactoryDescriptor = {
-  name: string;
-  family: CoreToolFactoryFamily;
+  readonly name: string;
+  readonly family: CoreToolFactoryFamily;
 };
 
 const CORE_TOOL_FACTORY_DESCRIPTORS = [
@@ -83,6 +83,10 @@ export type OpenClawCodingToolConstructionPlan = {
 
 export function resolveCoreToolFactoryFamily(name: string): CoreToolFactoryFamily | undefined {
   return CORE_TOOL_FACTORY_FAMILY_BY_NAME.get(name);
+}
+
+export function listCoreToolFactoryDescriptors(): readonly CoreToolFactoryDescriptor[] {
+  return CORE_TOOL_FACTORY_DESCRIPTORS;
 }
 
 /**

@@ -1,8 +1,8 @@
 // Control UI tests keep build identity readable at UTF-16 truncation boundaries.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -25,12 +25,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "build-info-unicode",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("build-info-unicode");
+  }
+});
 
 const RAW_BRANCH = `${"a".repeat(12)}😀${"b".repeat(85)}😀suffix`;
 const NORMALIZED_BRANCH = `${"a".repeat(12)}😀${"b".repeat(85)}`;
@@ -128,7 +128,6 @@ suite.define(() => {
           });
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await identityCard.screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "00-footer-custom-build-identity.png"),

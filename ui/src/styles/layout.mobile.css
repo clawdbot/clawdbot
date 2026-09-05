@@ -76,51 +76,69 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .shell--mobile-nav .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed .shell-nav {
   position: fixed;
-  top: 0;
-  bottom: 0;
+  top: max(8px, var(--safe-area-top, 0px));
+  bottom: max(8px, var(--safe-area-bottom, 0px));
   left: 0;
   z-index: 70;
   width: min(86vw, 320px);
   min-width: 0;
+  min-height: 0;
   border-inline-end: none;
-  box-shadow: 0 30px 80px color-mix(in srgb, black 40%, transparent);
+  overflow: hidden;
+  overscroll-behavior: contain;
+  border-radius: 0 22px 22px 0;
+  box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
   transform: translateX(-100%);
   opacity: 0;
   pointer-events: none;
   transition:
-    transform var(--shell-focus-duration) var(--shell-focus-ease),
-    opacity var(--shell-focus-duration) var(--shell-focus-ease);
-}
-
-/* A session dashboard keeps the board primary on narrow shells. Every desktop
-   edge becomes one bounded bottom sheet; the stored tab preference is left
-   untouched and returns when the viewport widens. */
-.shell--mobile-nav .board-session-surface--dock-bottom {
-  flex-direction: column;
-}
-
-.shell--mobile-nav .board-session-surface__board {
-  order: 1;
-}
-
-.shell--mobile-nav .board-session-surface__divider {
-  display: none;
-}
-
-.shell--mobile-nav .board-session-surface__chat {
-  order: 2;
-  width: 100% !important;
-  height: min(42dvh, 360px) !important;
-  min-width: 0;
-  min-height: 180px;
-  max-width: none;
-  max-height: 48dvh;
-  border-top: 1px solid var(--border);
-  box-shadow: 0 -12px 32px color-mix(in srgb, black 16%, transparent);
+    transform 160ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 100ms ease-out;
 }
 
 .shell--mobile-nav .sidebar-resizer {
   display: none;
+}
+
+.shell--mobile-nav .shell-nav-backdrop {
+  position: fixed;
+  z-index: 65;
+  inset: 0;
+  display: block;
+  width: auto;
+  padding: 0;
+  pointer-events: none;
+  visibility: hidden;
+  border: 0;
+  border-radius: 0;
+  background: rgb(0 0 0 / 44%);
+  opacity: 0;
+  transition:
+    opacity 160ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s linear 160ms;
+  touch-action: none;
+}
+
+.shell--mobile-nav .shell-nav:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
+  will-change: transform;
+}
+
+.shell--mobile-nav .shell-nav-backdrop:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
+  will-change: opacity;
+}
+
+.shell--mobile-nav .shell-nav[data-nav-drawer-dragging],
+.shell--mobile-nav .shell-nav-backdrop[data-nav-drawer-dragging] {
+  transition: none;
+}
+
+.shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
+  pointer-events: auto;
+  visibility: visible;
+  opacity: 1;
+  transition:
+    opacity 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s;
 }
 
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav,
@@ -128,6 +146,20 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   transform: translateX(0);
   opacity: 1;
   pointer-events: auto;
+  transition-duration: 200ms, 140ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell--mobile-nav .shell-nav,
+  .shell--mobile-nav.shell--nav-collapsed .shell-nav,
+  .shell--mobile-nav.shell--nav-drawer-open .shell-nav {
+    transition-duration: 0.01ms, 100ms;
+  }
+
+  .shell--mobile-nav .shell-nav-backdrop,
+  .shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
+    transition-duration: 100ms, 0s;
+  }
 }
 
 /* Inside the drawer there is no Escape key to hint at. */
@@ -186,8 +218,14 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 
 .shell--mobile-nav .sidebar-shell {
   --sidebar-pad-x: 16px;
-  padding: 18px var(--sidebar-pad-x) 14px;
+  --sidebar-pad-bottom: 14px;
+  padding: 18px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
   border-radius: 0;
+}
+
+/* Drawer navigation keeps toggle and search in the mobile topbar. */
+.shell--mobile-nav .sidebar-brand__desktop-control {
+  display: none;
 }
 
 .shell--mobile-nav .nav-item {
@@ -285,12 +323,14 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
 
   .shell--mobile-nav .shell-nav,
   .shell--mobile-nav.shell--nav-collapsed .shell-nav {
-    width: min(92vw, 320px);
+    width: min(86vw, 320px);
+    box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
   }
 
   .shell--mobile-nav .sidebar-shell {
     --sidebar-pad-x: 14px;
-    padding: 16px var(--sidebar-pad-x) 12px;
+    --sidebar-pad-bottom: 10px;
+    padding: 8px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
   }
 
   .shell--mobile-nav .nav-item {
@@ -310,8 +350,16 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     padding-bottom: 0;
   }
 
+  /* Custodian owns its page inset and vertical rhythm. Keep the generic mobile
+     content rule below from stacking shell spacing onto that owner. */
+  main.content--custodian {
+    gap: 0;
+    padding: 0;
+  }
+
   .content {
-    padding: 4px 4px 16px;
+    --content-inline-padding: 4px;
+    padding: 4px var(--content-inline-padding) 16px;
     gap: 12px;
   }
 
@@ -484,7 +532,7 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   .content {
-    padding: 4px 4px 12px;
+    padding: 4px var(--content-inline-padding) 12px;
     gap: 10px;
   }
 
@@ -532,6 +580,15 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
 
 /* ≤768px: hide Tokens (col 6); tighten padding; stack pagination */
 @media (max-width: 768px) {
+  wa-dropdown.session-menu {
+    --menu-item-height: 40px;
+    --menu-padding: 3px;
+  }
+
+  .session-menu .session-menu__separator {
+    margin-block: 2px;
+  }
+
   .data-table.sessions-table {
     min-width: 500px;
   }

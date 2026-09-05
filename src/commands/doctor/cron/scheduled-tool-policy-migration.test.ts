@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { formatScheduledToolPolicyAdvisory } from "./repair-plan.js";
+import {
+  formatLegacyGatewayExecAdvisory,
+  formatScheduledToolPolicyAdvisory,
+} from "./repair-plan.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
 
 function job(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -123,5 +126,20 @@ describe("migrateScheduledToolPolicy", () => {
         invalidJobs: result.invalidScheduledToolPolicyJobs,
       }),
     ).toContain("openclaw cron edit <id> --tools");
+  });
+
+  it("reports alias-only Gateway exec jobs without converting their authority", () => {
+    const raw = job({
+      payload: { kind: "agentTurn", message: "run", toolsAllow: ["read", "gateway_exec"] },
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+    });
+
+    const result = normalizeStoredCronJobs([raw]);
+
+    expect(result.legacyGatewayExecJobs).toEqual(["Legacy"]);
+    expect((raw.payload as { toolsAllow: string[] }).toolsAllow).toEqual(["read", "gateway_exec"]);
+    expect(formatLegacyGatewayExecAdvisory(result.legacyGatewayExecJobs)).toContain(
+      "will not convert this alias",
+    );
   });
 });

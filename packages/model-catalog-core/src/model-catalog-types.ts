@@ -43,6 +43,8 @@ export type ModelCatalogCompatConfig = {
   supportsReasoningEffort?: boolean;
   /** Whether the model accepts the temperature parameter (GPT-5.6 family rejects it). */
   supportsTemperature?: boolean;
+  /** Whether the provider honors top-level `instructions` on Responses requests. */
+  supportsInstructions?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
   supportsJsonSchemaResponseFormat?: boolean;
@@ -292,6 +294,8 @@ export type ModelCatalogSuppression = {
 
 /** Raw model catalog manifest shape. */
 export type ModelCatalog = {
+  /** Publication-time opt-in: owned OpenClaw provider id -> models.dev provider id. */
+  modelsDev?: Record<string, string>;
   providers?: Record<string, ModelCatalogProvider>;
   aliases?: Record<string, ModelCatalogAlias>;
   suppressions?: ModelCatalogSuppression[];

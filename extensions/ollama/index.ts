@@ -4,10 +4,7 @@ import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import {
-  adaptMemoryEmbeddingProviderAdapter,
-  type MemoryEmbeddingProviderAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
@@ -86,16 +83,9 @@ import { createLazyConfiguredOllamaStreamFn } from "./src/stream-registration.js
 import { createLazyOllamaWebSearchProvider } from "./src/web-search-provider-registration.js";
 
 const loadOllamaSetup = createLazyRuntimeModule(() => import("./src/setup.runtime.js"));
-const loadOllamaEmbeddingProvider = createLazyRuntimeModule(
-  () => import("./src/embedding-provider.runtime.js"),
-);
 const loadOllamaMemoryEmbeddingProviderAdapter = createLazyRuntimeModule(
   async () =>
     (await import("./src/memory-embedding-adapter.js")).ollamaMemoryEmbeddingProviderAdapter,
-);
-const loadOllamaMediaUnderstandingProvider = createLazyRuntimeModule(
-  async () =>
-    (await import("./src/media-understanding-provider.js")).ollamaMediaUnderstandingProvider,
 );
 
 const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
@@ -107,23 +97,11 @@ const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter =
     await (await loadOllamaMemoryEmbeddingProviderAdapter()).create(options),
 };
 
-const lazyOllamaMediaUnderstandingProvider: MediaUnderstandingProvider = {
+const ollamaMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: OLLAMA_PROVIDER_ID,
   capabilities: ["image"],
-  describeImage: async (request) => {
-    const provider = await loadOllamaMediaUnderstandingProvider();
-    if (!provider.describeImage) {
-      throw new Error("Ollama media understanding provider missing describeImage");
-    }
-    return await provider.describeImage(request);
-  },
-  describeImages: async (request) => {
-    const provider = await loadOllamaMediaUnderstandingProvider();
-    if (!provider.describeImages) {
-      throw new Error("Ollama media understanding provider missing describeImages");
-    }
-    return await provider.describeImages(request);
-  },
+  describeImage: undefined,
+  describeImages: undefined,
 };
 
 async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<void> {
@@ -775,10 +753,8 @@ export default definePluginEntry({
     if (api.registrationMode === "full") {
       void checkWsl2CrashLoopRiskLazily(api);
     }
-    api.registerEmbeddingProvider(
-      adaptMemoryEmbeddingProviderAdapter(lazyOllamaMemoryEmbeddingProviderAdapter),
-    );
-    api.registerMediaUnderstandingProvider(lazyOllamaMediaUnderstandingProvider);
+    api.registerEmbeddingProvider(lazyOllamaMemoryEmbeddingProviderAdapter);
+    api.registerMediaUnderstandingProvider(ollamaMediaUnderstandingProvider);
     if (startupPluginConfig.nodeInference?.enabled !== false) {
       for (const command of createLazyOllamaNodeHostCommands()) {
         api.registerNodeHostCommand(command);
@@ -1025,19 +1001,6 @@ export default definePluginEntry({
           resolveProviderApiKey: ctx.resolveProviderApiKey,
           capContextTokens: true,
         }),
-      createEmbeddingProvider: async ({ config, model, provider: embeddingProvider, remote }) => {
-        const { createOllamaEmbeddingProvider } = await loadOllamaEmbeddingProvider();
-        const { provider, client } = await createOllamaEmbeddingProvider({
-          config,
-          remote,
-          model: model || DEFAULT_OLLAMA_EMBEDDING_MODEL,
-          provider: embeddingProvider || OLLAMA_PROVIDER_ID,
-        });
-        return {
-          ...provider,
-          client,
-        };
-      },
       resolveSyntheticAuth: ({ provider, providerConfig }) => {
         if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
           return undefined;

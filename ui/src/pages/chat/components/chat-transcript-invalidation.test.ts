@@ -20,6 +20,7 @@ import {
   observeChatMediaResource,
   releaseChatMediaResourceSubscriber,
 } from "./chat-message-media.ts";
+import * as chatMessage from "./chat-message.ts";
 import { resetTranscriptSession } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
@@ -34,25 +35,120 @@ describe("chat transcript invalidation", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("does not normalize historical messages again when their transcript is projected", () => {
-    const messages = Array.from({ length: 30 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `Historical message ${index}`,
-      timestamp: index + 1,
-      __openclaw: { id: `message-${index}` },
-    }));
-    const transcript = {
-      setContentReady: vi.fn(),
-      syncMessageRows: vi.fn(),
-    } as unknown as Parameters<typeof projectChatTranscript>[1];
-    const props = threadProps("pane-offscreen-history", "agent:main:main", messages);
-    projectChatTranscript(props, transcript);
+  it.each(["agent:main:main", "agent:main:dashboard:history"])(
+    "does not normalize historical messages again when their transcript is projected in %s",
+    (sessionKey) => {
+      const messages = Array.from({ length: 30 }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `Historical message ${index}`,
+        timestamp: index + 1,
+        __openclaw: { id: `message-${index}` },
+      }));
+      const transcript = {
+        expandedAssistantMessages: new Map(),
+        setContentReady: vi.fn(),
+        syncMessageRows: vi.fn(),
+      } as unknown as Parameters<typeof projectChatTranscript>[1];
+      const props = threadProps("pane-offscreen-history", sessionKey, messages);
+      projectChatTranscript(props, transcript);
 
-    const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
-    projectChatTranscript(props, transcript);
+      const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
+      projectChatTranscript(props, transcript);
 
-    expect(normalizeSpy.mock.calls.some(([message]) => message === messages[0])).toBe(false);
-  });
+      const historicalMessages = new Set<unknown>(messages);
+      expect(normalizeSpy.mock.calls.some(([message]) => historicalMessages.has(message))).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each(["unchanged", "stream-only"] as const)(
+    "keeps settled run frames idle during %s updates",
+    async (update) => {
+      vi.spyOn(Date, "now").mockReturnValue(60_000);
+      const completedRunId = "settled-run";
+      const activeRunId = "active-run";
+      const props = {
+        ...threadProps(`pane-settled-${update}`, "agent:main:dashboard:settled", [
+          {
+            role: "user",
+            content: "Inspect the workspace",
+            timestamp: 1_000,
+            __openclaw: { id: "settled-user", idempotencyKey: `${completedRunId}:user` },
+          },
+          {
+            role: "toolResult",
+            toolCallId: "settled-read",
+            toolName: "read",
+            content: "Read complete",
+            timestamp: 2_000,
+            runId: completedRunId,
+          },
+          {
+            role: "assistant",
+            content: "Workspace checked",
+            phase: "final_answer",
+            stopReason: "stop",
+            timestamp: 3_000,
+            runId: completedRunId,
+            __openclaw: { id: "settled-final" },
+          },
+          {
+            role: "user",
+            content: "Continue with the next task",
+            timestamp: 4_000,
+            __openclaw: { id: "active-user", idempotencyKey: `${activeRunId}:user` },
+          },
+        ]),
+        showToolCalls: true,
+        runId: activeRunId,
+        runActive: true,
+        runWorking: true,
+        stream: "Draft next reply",
+        streamStartedAt: 5_000,
+      };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostUpdated();
+      };
+      try {
+        rerender();
+        transcript.hostConnected();
+        await flushDeferredRowPrune();
+        const finalBubble = expectDefined(
+          container.querySelector('[data-entry-id="settled-final"]'),
+          "settled final reply",
+        );
+        const workToggle = expectDefined(
+          finalBubble.closest(".chat-group")?.querySelector(".chat-work-group button"),
+          "completed work disclosure",
+        );
+        expect(workToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
+          props.stream,
+        );
+        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+        if (update === "stream-only") {
+          props.stream = "Advanced next reply";
+        }
+        rerender();
+
+        expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
+          props.stream,
+        );
+        expect(container.querySelector('[data-entry-id="settled-final"]')).toBe(finalBubble);
+        expect(finalBubble.textContent).toContain("Workspace checked");
+        expect(workToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(renderGroup.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual(
+          [],
+        );
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
 
   it("keeps built row identities across an A to B to A presentation reset", () => {
     const paneId = "pane-session-items";
@@ -90,6 +186,28 @@ describe("chat transcript invalidation", () => {
     expect(buildSpy).toHaveBeenCalledTimes(2);
     expect(restoredItemsA).toBe(itemsA);
     expect(restoredItemsA.every((item, index) => item === itemsA[index])).toBe(true);
+  });
+
+  it("keeps settled rows idle across session metadata updates but refreshes their identity gutter", () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
+    const props = threadProps("pane-session-metadata");
+    props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => render(renderChatThread(props, transcript), container);
+    rerender();
+    const userRow = expectDefined(container.querySelector(".chat-group.user"), "user row");
+    expect(userRow.querySelector(".chat-avatar")).toBeNull();
+    const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+
+    props.selectedSession = { ...props.selectedSession, updatedAt: 2, label: "Renamed chat" };
+    rerender();
+    expect(renderGroup).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-group.user")).toBe(userRow);
+
+    props.selectedSession = { ...props.selectedSession, kind: "group" };
+    rerender();
+    expect(userRow.querySelector(".chat-avatar")).not.toBeNull();
   });
 
   it("rebinds guarded transcript images when the gateway rotates its auth token", async () => {

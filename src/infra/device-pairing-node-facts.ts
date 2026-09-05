@@ -8,10 +8,10 @@ import {
 
 type NodeSurface = NonNullable<PairedDevice["nodeSurface"]>;
 
-async function updatePairedNodeGenerationSurface(params: {
+export async function updatePairedNodeGenerationSurface(params: {
   nodeId: string;
   expectedPairingGeneration: NodePairingGeneration;
-  isCurrent?: () => boolean;
+  isCurrent?: (surface: NodeSurface) => boolean;
   update: (surface: NodeSurface) => NodeSurface;
   baseDir?: string;
 }): Promise<boolean> {
@@ -20,12 +20,11 @@ async function updatePairedNodeGenerationSurface(params: {
       params.nodeId,
       params.baseDir,
       (device) => {
-        const generation = resolveNodePairingGeneration(device);
         if (
           !device?.nodeSurface ||
-          params.isCurrent?.() === false ||
+          params.isCurrent?.(device.nodeSurface) === false ||
           params.expectedPairingGeneration.nodeId !== device.deviceId ||
-          generation?.key !== params.expectedPairingGeneration.key
+          resolveNodePairingGeneration(device)?.key !== params.expectedPairingGeneration.key
         ) {
           return { value: false, persist: false };
         }

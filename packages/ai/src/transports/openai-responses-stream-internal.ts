@@ -56,6 +56,7 @@ export async function processResponsesStream<TApi extends Api>(
   model: Model<TApi>,
   options?: ResponsesStreamOptions,
 ) {
+  type CompletedToolCall = Extract<ResponseOutputItem, { type: "function_call" }>;
   type StreamingToolCallBlock = ToolCall & { partialJson: string };
   type StreamingToolCallState = ResponsesToolCallState & {
     block: StreamingToolCallBlock;
@@ -67,6 +68,8 @@ export async function processResponsesStream<TApi extends Api>(
     ResponsesStreamOutputMessage,
     StreamingToolCallState
   >;
+  type ThinkingOutputSlot = Extract<ResponsesOutputSlot, { type: "thinking" }>;
+  type TextOutputSlot = Extract<ResponsesOutputSlot, { type: "text" }>;
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
   const outputSlots = createResponsesOutputSlotTracker<ResponsesOutputSlot>();
   const outputs = createResponsesOutputTracker();
@@ -176,19 +179,126 @@ export async function processResponsesStream<TApi extends Api>(
       }
     }
   };
-  const { finalizeResponse, finalizeFailedResponse, recoverTerminalOutput } =
-    createResponsesTerminalController({
-      output,
-      stream,
-      model,
-      options,
-      outputs,
-      getLastTextBlock: () => lastTextBlock,
-      setLastTextBlock: (block) => {
-        lastTextBlock = block;
-      },
-      markFinalized: () => undefined,
+  const appendThinkingDelta = (slot: ThinkingOutputSlot, delta: string): void => {
+    slot.block.thinking += delta;
+    stream.push({
+      type: "thinking_delta",
+      contentIndex: slot.contentIndex,
+      delta,
+      partial: output,
     });
+  };
+  const projectTextDelta = (slot: TextOutputSlot, delta: string): void => {
+    if (slot.pendingText !== null) {
+      appendResponsesPendingTextDelta(slot, delta, materializeDeferredTextSlot);
+    } else if (slot.block && slot.contentIndex !== undefined) {
+      slot.block.text += delta;
+      // llm-core makes text_delta.partial optional to avoid retaining a full snapshot per token.
+      stream.push({
+        type: "text_delta",
+        contentIndex: slot.contentIndex,
+        delta,
+      });
+    }
+  };
+  const terminal = createResponsesTerminalController({
+    output,
+    stream,
+    model,
+    options,
+    outputs,
+    getLastTextBlock: () => lastTextBlock,
+    setLastTextBlock: (block) => {
+      lastTextBlock = block;
+    },
+  });
+
+  const finalizeToolCall = (
+    item: CompletedToolCall,
+    outputIndex: number | undefined,
+    streamingToolCall: StreamingToolCallState | undefined,
+    validated: Pick<ToolCall, "name" | "arguments">,
+  ): void => {
+    const identity = {
+      type: item.type,
+      id: item.id || streamingToolCall?.itemId,
+      call_id: item.call_id || streamingToolCall?.callId,
+    };
+    const finalOutputIndex = outputIndex ?? streamingToolCall?.outputIndex;
+    // A wholly anonymous, unindexed done event cannot be deduplicated. Keep
+    // its active owner until the terminal snapshot supplies an output position.
+    if (finalOutputIndex === undefined && !identity.id && !identity.call_id) {
+      if (!streamingToolCall) {
+        throw new Error("Responses stream completed tool call without an output identity");
+      }
+      return;
+    }
+    if (streamingToolCall) {
+      streamingToolCalls.forget(streamingToolCall);
+      for (const slot of outputSlots.values()) {
+        if (slot.type === "toolCall" && slot.toolCall === streamingToolCall) {
+          outputSlots.forget(slot);
+        }
+      }
+    }
+    terminal.emitToolCallCompletion(identity, finalOutputIndex, streamingToolCall, {
+      ...validated,
+      ...(options?.asyncToolExecution && isRecord(item) && item.async === true
+        ? { async: true as const }
+        : {}),
+    });
+  };
+  const prepareTerminalToolCalls = (items: ResponseOutputItem[]) => {
+    const prepared = new Map<number, () => void>();
+    const recovered: StreamingToolCallState[] = [];
+    const callIds = new Set<string>();
+    const allowUnmatchedIdentity =
+      items.filter(
+        (item, index) => item.type === "function_call" && !outputs.get(item, index)?.completed,
+      ).length === 1;
+    for (const [outputIndex, item] of items.entries()) {
+      const tracked = outputs.get(item, outputIndex);
+      if (item.type !== "function_call") {
+        continue;
+      }
+      if (item.call_id && callIds.has(item.call_id)) {
+        throw new Error("Responses stream repeated a terminal tool-call identity");
+      }
+      if (item.call_id) {
+        callIds.add(item.call_id);
+      }
+      // Completed positions must be skipped before resolve can adopt an
+      // unindexed active call. The positional tracker still checks identity.
+      if (tracked?.completed) {
+        continue;
+      }
+      const state = streamingToolCalls.resolve(
+        { output_index: outputIndex },
+        readResponsesToolCallItemIdentity(item),
+        allowUnmatchedIdentity,
+      );
+      if (tracked && !state) {
+        throw new Error("Responses stream completed with unresolved tool calls");
+      }
+      const validated = resolveCompletedResponsesToolCall(item, { name: state?.block.name });
+      if (state) {
+        recovered.push(state);
+      }
+      prepared.set(outputIndex, () => finalizeToolCall(item, outputIndex, state, validated));
+    }
+    if (!streamingToolCalls.hasExactlyActive(recovered)) {
+      throw new Error("Responses stream completed with unresolved tool calls");
+    }
+    // All terminal calls and active-call coverage are validated before any
+    // toolcall_end can authorize execution; terminal ordering is checked next.
+    return (outputIndex: number) => {
+      const complete = prepared.get(outputIndex);
+      if (!complete) {
+        throw new Error("Responses stream completed with unresolved tool calls");
+      }
+      complete();
+    };
+  };
 
   const guardedStream = adaptResponsesStream(
     withFirstStreamEventTimeout(openaiStream, {
@@ -263,14 +373,8 @@ export async function processResponsesStream<TApi extends Api>(
         if (!lastPart) {
           continue;
         }
-        slot.block.thinking += event.delta;
         lastPart.text += event.delta;
-        stream.push({
-          type: "thinking_delta",
-          contentIndex: slot.contentIndex,
-          delta: event.delta,
-          partial: output,
-        });
+        appendThinkingDelta(slot, event.delta);
       } else if (event.type === "response.reasoning_summary_part.done") {
         const slot = outputSlots.resolve(event, "thinking");
         if (!slot) {
@@ -281,26 +385,14 @@ export async function processResponsesStream<TApi extends Api>(
         if (!lastPart) {
           continue;
         }
-        slot.block.thinking += "\n\n";
         lastPart.text += "\n\n";
-        stream.push({
-          type: "thinking_delta",
-          contentIndex: slot.contentIndex,
-          delta: "\n\n",
-          partial: output,
-        });
+        appendThinkingDelta(slot, "\n\n");
       } else if (event.type === "response.reasoning_text.delta") {
         const slot = outputSlots.resolve(event, "thinking");
         if (!slot) {
           continue;
         }
-        slot.block.thinking += event.delta;
-        stream.push({
-          type: "thinking_delta",
-          contentIndex: slot.contentIndex,
-          delta: event.delta,
-          partial: output,
-        });
+        appendThinkingDelta(slot, event.delta);
       } else if (event.type === "response.content_part.added") {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -326,17 +418,7 @@ export async function processResponsesStream<TApi extends Api>(
           slot.item.content.push(lastPart);
         }
         lastPart.text += event.delta;
-        if (slot.pendingText !== null) {
-          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
-        } else if (slot.block && slot.contentIndex !== undefined) {
-          slot.block.text += event.delta;
-          // llm-core deliberately makes text_delta.partial optional to avoid a full snapshot per token.
-          stream.push({
-            type: "text_delta",
-            contentIndex: slot.contentIndex,
-            delta: event.delta,
-          });
-        }
+        projectTextDelta(slot, event.delta);
       } else if (isAzureResponsesTextDeltaEvent(event)) {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -349,16 +431,7 @@ export async function processResponsesStream<TApi extends Api>(
           slot.item.content.push(lastPart);
         }
         lastPart.text += event.delta;
-        if (slot.pendingText !== null) {
-          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
-        } else if (slot.block && slot.contentIndex !== undefined) {
-          slot.block.text += event.delta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: slot.contentIndex,
-            delta: event.delta,
-          });
-        }
+        projectTextDelta(slot, event.delta);
       } else if (event.type === "response.refusal.delta") {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -371,16 +444,7 @@ export async function processResponsesStream<TApi extends Api>(
           slot.item.content.push(lastPart);
         }
         lastPart.refusal += event.delta;
-        if (slot.pendingText !== null) {
-          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
-        } else if (slot.block && slot.contentIndex !== undefined) {
-          slot.block.text += event.delta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: slot.contentIndex,
-            delta: event.delta,
-          });
-        }
+        projectTextDelta(slot, event.delta);
       } else if (event.type === "response.function_call_arguments.delta") {
         const toolCall = streamingToolCalls.resolve(event);
         if (toolCall) {
@@ -548,6 +612,9 @@ export async function processResponsesStream<TApi extends Api>(
           }
           outputSlots.forget(outputSlot);
         } else if (item.type === "function_call") {
+          if (outputs.get(item, readResponsesOutputIndex(event))?.completed) {
+            continue;
+          }
           const streamingToolCall = streamingToolCalls.resolve(
             event,
             readResponsesToolCallItemIdentity(item),
@@ -557,7 +624,6 @@ export async function processResponsesStream<TApi extends Api>(
           if (!streamingToolCall && streamingToolCalls.hasActive()) {
             continue;
           }
-          const streamedArguments = streamingToolCall?.block.partialJson ?? "";
           const completedArguments =
             typeof item.arguments === "string" ? item.arguments : undefined;
           if (
@@ -567,68 +633,23 @@ export async function processResponsesStream<TApi extends Api>(
           ) {
             continue;
           }
-          const finalArguments =
-            completedArguments !== undefined &&
-            (completedArguments.length > 0 || !streamedArguments)
-              ? completedArguments
-              : streamedArguments;
           const validated = resolveCompletedResponsesToolCall(item, {
             name: streamingToolCall?.block.name,
-            arguments: finalArguments,
+            arguments: completedArguments || streamingToolCall?.block.partialJson || "",
           });
 
-          let toolCall: ToolCall;
-          let contentIndex: number;
-          if (streamingToolCall) {
-            const block = streamingToolCall.block;
-            // The SDK permits the added item to omit its item id, then supplies
-            // the canonical id on completion. Upgrade the same public block so
-            // replay and its function_call_output retain both identities.
-            block.id = resolveResponsesToolCallId(item, block.id);
-            block.name = validated.name;
-            // Finalize in-place and strip the scratch buffer so replay only
-            // carries parsed arguments.
-            block.arguments = validated.arguments;
-            delete (block as { partialJson?: string }).partialJson;
-            toolCall = block;
-            contentIndex = streamingToolCall.contentIndex;
-          } else {
-            toolCall = {
-              type: "toolCall",
-              id: resolveResponsesToolCallId(item),
-              name: validated.name,
-              arguments: validated.arguments,
-            };
-            // Some compatible streams only send the completed item. Preserve
-            // the normal balanced lifecycle and persist the call for replay.
-            blocks.push(toolCall);
-            contentIndex = blocks.length - 1;
-            stream.push({ type: "toolcall_start", contentIndex, partial: output });
-          }
-
-          if (streamingToolCall) {
-            streamingToolCalls.forget(streamingToolCall);
-            for (const slot of outputSlots.values()) {
-              if (slot.type === "toolCall" && slot.toolCall === streamingToolCall) {
-                outputSlots.forget(slot);
-              }
-            }
-          }
-          stream.push({
-            type: "toolcall_end",
-            contentIndex,
-            toolCall,
-            partial: output,
-          });
-          outputs.set(item, contentIndex, readResponsesOutputIndex(event), true);
+          finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
-        if (streamingToolCalls.hasActive()) {
+        if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
           throw new Error("Responses stream completed with unresolved tool calls");
         }
-        finalizeResponse(event.response, event.type);
+        terminal.finalizeResponse(event.response, event.type);
         if (event.type === "response.completed" || output.stopReason === "length") {
-          recoverTerminalOutput(event.response.output ?? [], event.type === "response.completed");
+          const items = event.response.output ?? [];
+          const completeToolCall =
+            event.type === "response.completed" ? prepareTerminalToolCalls(items) : undefined;
+          terminal.recoverTerminalOutput(items, completeToolCall);
         }
         terminalResponse = event.type === "response.completed" ? event.response : null;
         if (
@@ -644,7 +665,7 @@ export async function processResponsesStream<TApi extends Api>(
         );
       } else if (event.type === "response.failed") {
         const failure = normalizeResponsesFailedEvent(isRecord(event) ? event : {}, model);
-        finalizeFailedResponse(event.response, failure.responseId);
+        terminal.finalizeFailedResponse(event.response, failure.responseId);
         throw new ResponsesStreamFailure(failure, event.response);
       }
     }

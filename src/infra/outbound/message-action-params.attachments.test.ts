@@ -29,6 +29,7 @@ const onePixelPng = Buffer.from(
 const onePixelPngBase64 = onePixelPng.toString("base64");
 const wrappedOnePixelPngBase64 = onePixelPngBase64.match(/.{1,24}/g)?.join("\r\n") ?? "";
 const parameterizedPngDataUrl = `data:image/png;charset=utf-8;name=../../ignored.svg;base64,${wrappedOnePixelPngBase64}`;
+const csvBase64 = Buffer.from("name,value\nexample,1\n").toString("base64");
 
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
@@ -106,10 +107,29 @@ describe("runMessageAction media behavior", () => {
     await resetMessageActionMediaMocks();
   });
 
-  it.each(["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const)(
-    "normalizes parameterized, line-wrapped image data URLs for %s",
-    async (action) => {
-      const args: Record<string, unknown> = { buffer: parameterizedPngDataUrl };
+  it.each(
+    (["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const).flatMap(
+      (action) => [
+        {
+          action,
+          buffer: parameterizedPngDataUrl,
+          base64: onePixelPngBase64,
+          contentType: "image/png",
+          filename: "attachment.png",
+        },
+        {
+          action,
+          buffer: `data:text/csv;base64,${csvBase64}`,
+          base64: csvBase64,
+          contentType: "text/csv",
+          filename: "attachment.csv",
+        },
+      ],
+    ),
+  )(
+    "normalizes $contentType data URLs and infers filenames for $action",
+    async ({ action, buffer, base64, contentType, filename }) => {
+      const args: Record<string, unknown> = { buffer };
 
       await hydrateAttachmentParamsForAction({
         cfg: {},
@@ -120,38 +140,46 @@ describe("runMessageAction media behavior", () => {
         mediaPolicy: { mode: "host" },
       });
 
-      expect(args.contentType).toBe("image/png");
+      expect(args.contentType).toBe(contentType);
+      expect(args.filename).toBe(filename);
       if (action === "send") {
         expect(args.media).toBe("buffer://message-send/attachment");
-        expect(args.filename).toBe("attachment.png");
       } else {
-        expect(canonicalizeBase64(String(args.buffer))).toBe(onePixelPngBase64);
+        expect(canonicalizeBase64(String(args.buffer))).toBe(base64);
       }
-      expect(args.filename).not.toBe("../../ignored.svg");
     },
   );
 
-  it.each(["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const)(
-    "keeps explicit content type authoritative for %s data URLs",
-    async (action) => {
-      const args: Record<string, unknown> = {
-        buffer: parameterizedPngDataUrl,
-        contentType: "image/jpeg",
-      };
+  it.each(
+    (["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const).flatMap(
+      (action) => [
+        { action, name: "contentType", metadata: { contentType: "image/jpeg" } },
+        { action, name: "mimeType", metadata: { mimeType: "image/jpeg" } },
+        {
+          action,
+          name: "both aliases",
+          metadata: { contentType: "image/jpeg", mimeType: "image/webp" },
+        },
+      ],
+    ),
+  )("keeps $name authoritative for $action data URLs", async ({ action, metadata }) => {
+    const args: Record<string, unknown> = {
+      buffer: parameterizedPngDataUrl,
+      ...metadata,
+    };
 
-      await hydrateAttachmentParamsForAction({
-        cfg: {},
-        channel: "imessage",
-        args,
-        action,
-        dryRun: true,
-        mediaPolicy: { mode: "host" },
-      });
+    await hydrateAttachmentParamsForAction({
+      cfg: {},
+      channel: "imessage",
+      args,
+      action,
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
 
-      expect(args.contentType).toBe("image/jpeg");
-      expect(args.filename).toBe("attachment.jpg");
-    },
-  );
+    expect(args.contentType).toBe("image/jpeg");
+    expect(args.filename).toBe("attachment.jpg");
+  });
 
   it.each([
     ["duplicate marker", "image/png;base64;base64"],
@@ -329,6 +357,7 @@ describe("runMessageAction media behavior", () => {
 
         const payload = requireActionPayload(result);
         expect(payload.contentType).toBe("image/png");
+        expect(payload.filename).toBe("attachment.png");
         expect(canonicalizeBase64(String(payload.buffer))).toBe(onePixelPngBase64);
       },
     );
@@ -617,36 +646,60 @@ describe("runMessageAction media behavior", () => {
 
       const handlerParams = firstMockArg(handleActionMock, "handleAction");
       expect(handlerParams.contentType).toBe("image/png");
+      expect(handlerParams.filename).toBe("attachment.png");
       expect(canonicalizeBase64(String(handlerParams.buffer))).toBe(onePixelPngBase64);
     });
 
-    it("hydrates buffer and metadata from attachments[] before the reply handler runs", async () => {
-      const result = await runMessageAction({
-        cfg,
-        action: "reply",
-        params: {
-          channel: "replychat",
-          target: "+15551234567",
-          messageId: "parent-id",
-          text: "look at this",
-          attachments: [
-            {
-              url: "https://example.com/pic.png",
-              name: "reply.png",
-              mimeType: "image/png",
-            },
-          ],
+    it.each([
+      { name: "nested MIME", metadata: {}, contentType: "image/png" },
+      {
+        name: "explicit MIME alias",
+        metadata: { mimeType: "text/plain" },
+        contentType: "text/plain",
+      },
+      {
+        name: "contentType before mimeType",
+        metadata: {
+          contentType: "text/plain",
+          mimeType: "application/json",
+          filename: "explicit.txt",
         },
-      });
+        contentType: "text/plain",
+      },
+    ])(
+      "passes $name from attachments[] to the reply handler",
+      async ({ metadata, contentType }) => {
+        const result = await runMessageAction({
+          cfg,
+          action: "reply",
+          params: {
+            channel: "replychat",
+            target: "+15551234567",
+            messageId: "parent-id",
+            text: "look at this",
+            ...metadata,
+            attachments: [
+              {
+                url: "https://example.com/pic.png",
+                name: "reply.png",
+                mimeType: "image/png",
+              },
+            ],
+          },
+        });
 
-      expect(result.kind).toBe("action");
-      expect(loadWebMedia).toHaveBeenCalledWith("https://example.com/pic.png", expect.any(Object));
-      expect(handleActionMock).toHaveBeenCalledTimes(1);
-      const handlerParams = firstMockArg(handleActionMock, "handleAction");
-      expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
-      expect(handlerParams.filename).toBe("reply.png");
-      expect(handlerParams.contentType).toBe("image/png");
-    });
+        expect(result.kind).toBe("action");
+        expect(loadWebMedia).toHaveBeenCalledWith(
+          "https://example.com/pic.png",
+          expect.any(Object),
+        );
+        expect(handleActionMock).toHaveBeenCalledTimes(1);
+        const handlerParams = firstMockArg(handleActionMock, "handleAction");
+        expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
+        expect(handlerParams.filename).toBe(metadata.filename ?? "reply.png");
+        expect(handlerParams.contentType).toBe(contentType);
+      },
+    );
 
     it("does not copy metadata from attachments[] when top-level media wins", async () => {
       await runMessageAction({

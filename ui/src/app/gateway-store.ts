@@ -1,8 +1,10 @@
 import {
+  gatewayCredentialScope,
   isRetryableGatewayStartupUnavailableError,
   readControlUiBuildMismatchId,
   resolveSafeTimeoutDelayMs,
 } from "@openclaw/gateway-client/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayRestartUnavailableError } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 // Control UI module owns the application gateway store: the reactive
@@ -18,9 +20,11 @@ import {
 import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
+import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
+import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import type {
@@ -29,8 +33,14 @@ import type {
   ApplicationGatewayConnection,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
-import { loadSettings, patchSettings, persistSessionToken } from "./settings.ts";
+import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import {
+  loadGatewaySessionSelection,
+  loadSettings,
+  patchSettings,
+  persistSessionToken,
+  resolveGatewayCredentialsForUrlEdit,
+} from "./settings.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts";
 
@@ -41,6 +51,16 @@ type CanvasSurfaceLease = ReturnType<CanvasSurfaceLeaseModule["createCanvasSurfa
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
 // Grace window before offline presentation appears; reconnects never wait.
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
+
+function readSuspensionPhase(payload: unknown): ApplicationGatewaySnapshot["suspensionPhase"] {
+  const phase = asOptionalRecord(payload)?.phase;
+  return phase === "accepting" ||
+    phase === "preparing" ||
+    phase === "draining" ||
+    phase === "prepared"
+    ? phase
+    : undefined;
+}
 
 function notifyGatewayObservers<T>(
   listeners: ReadonlySet<(value: T) => void>,
@@ -67,6 +87,7 @@ function sameSelfUser(
 ): boolean {
   return (
     left?.id === right?.id &&
+    left?.identity?.id === right?.identity?.id &&
     left?.email === right?.email &&
     left?.name === right?.name &&
     left?.avatarUrl === right?.avatarUrl
@@ -82,6 +103,10 @@ export function createApplicationGateway(
     persistDefaultConnectionSettings?: boolean;
     resourceBasePath?: string;
     bootstrapProfile?: ControlUiBootstrapProfileHint;
+    clientOptions?: Pick<
+      GatewayBrowserClientOptions,
+      "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
+    >;
   } = {},
 ): ApplicationGateway {
   let settings = initialSettings;
@@ -104,6 +129,7 @@ export function createApplicationGateway(
     sessionKey: settings.sessionKey,
     lastError: null,
     lastErrorCode: null,
+    lastErrorAuthReason: null,
     selfUser: null,
   };
   let client: GatewayBrowserClient | null = null;
@@ -173,7 +199,8 @@ export function createApplicationGateway(
       clearOfflineIndicatorTimer();
       snapshot = next.offlineStable ? { ...next, offlineStable: false } : next;
     } else {
-      snapshot = next;
+      // A disconnected transport cannot vouch for admission; the next hello replaces it.
+      snapshot = { ...next, suspensionPhase: undefined };
       scheduleOfflineIndicator();
     }
     notifyGatewayObservers(listeners, snapshot, "snapshot", (current) => current === snapshot);
@@ -275,7 +302,15 @@ export function createApplicationGateway(
   };
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
     const eventClient = client;
-    if (event.event === "shutdown") {
+    if (event.event === "gateway.suspension") {
+      const suspensionPhase = readSuspensionPhase(event.payload);
+      if (suspensionPhase) {
+        setSnapshot({ ...snapshot, suspensionPhase });
+        if (!isCurrentClient(eventClient)) {
+          return;
+        }
+      }
+    } else if (event.event === "shutdown") {
       // Only a restart-bearing shutdown arms the amber state; an ordinary stop
       // (restartExpectedMs absent) flows through the normal offline pill so the
       // retry action stays reachable. Hostile values fall to the timer clamp.
@@ -318,9 +353,26 @@ export function createApplicationGateway(
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
     stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
+    const nextGatewayUrl = connectionOverrides.gatewayUrl ?? connection.gatewayUrl;
+    const logicalGatewayChanged =
+      gatewayCredentialScope(nextGatewayUrl) !== gatewayCredentialScope(connection.gatewayUrl);
+    const scopedCredentials = resolveGatewayCredentialsForUrlEdit(
+      connection.gatewayUrl,
+      nextGatewayUrl,
+      connection,
+    );
     const nextConnection = {
       ...connection,
       ...connectionOverrides,
+      ...(logicalGatewayChanged && connectionOverrides.token === undefined
+        ? { token: scopedCredentials.token }
+        : {}),
+      ...(logicalGatewayChanged && connectionOverrides.password === undefined
+        ? { password: scopedCredentials.password }
+        : {}),
+      ...(logicalGatewayChanged && connectionOverrides.bootstrapToken === undefined
+        ? { bootstrapToken: "", bootstrapProfile: undefined }
+        : {}),
       ...(connectionOverrides.bootstrapToken !== undefined &&
       connectionOverrides.bootstrapProfile === undefined
         ? { bootstrapProfile: undefined }
@@ -336,10 +388,6 @@ export function createApplicationGateway(
       connectionRevision += 1;
       void clearStoredChatSnapshots();
     }
-    const hasRequestedSessionKey = requestedSessionKey !== undefined;
-    const nextSessionKey = hasRequestedSessionKey
-      ? requestedSessionKey.trim()
-      : snapshot.sessionKey;
     // Only a gateway URL that differs from the current connection counts as an
     // explicit selection. The login gate always resubmits its prefilled URL, so
     // treating any override as a selection would let an ephemeral approval
@@ -347,6 +395,13 @@ export function createApplicationGateway(
     const gatewayUrlChanged =
       connectionOverrides.gatewayUrl !== undefined &&
       connectionOverrides.gatewayUrl !== connection.gatewayUrl;
+    const targetSelection = gatewayUrlChanged
+      ? loadGatewaySessionSelection(nextConnection.gatewayUrl)
+      : null;
+    const hasRequestedSessionKey = requestedSessionKey !== undefined;
+    const nextSessionKey = hasRequestedSessionKey
+      ? requestedSessionKey.trim()
+      : (targetSelection?.sessionKey ?? snapshot.sessionKey);
     // A different Gateway has no established session to keep mounted on failure.
     // Accepted tradeoff: a restart pill armed for the previous gateway may
     // linger across a mid-restart gateway switch until the next hello or the
@@ -355,16 +410,19 @@ export function createApplicationGateway(
       everConnected = false;
     }
     connection = nextConnection;
-    // Trust the connected gateway's origin for avatar route resolution so
-    // split-origin Control UI deployments load uploaded/proxied avatars.
-    setAvatarGatewayOrigin(
-      nextConnection.gatewayUrl,
-      resolveControlUiAuthHeader({
-        settings: { token: nextConnection.token },
-        password: nextConnection.password,
-      }),
-      options.resourceBasePath,
-    );
+    // Both connection setup and hello bind resources to this connection's credentials.
+    const updateAvatarContext = (hello?: GatewayHelloOk) => {
+      setAvatarGatewayOrigin(
+        nextConnection.gatewayUrl,
+        resolveControlUiAuthCandidates({
+          hello,
+          settings: nextConnection,
+          password: nextConnection.password,
+        }),
+        options.resourceBasePath,
+      );
+    };
+    updateAvatarContext();
     updateSettings(
       {
         gatewayUrl: nextConnection.gatewayUrl,
@@ -374,7 +432,8 @@ export function createApplicationGateway(
               sessionKey: nextSessionKey,
               lastActiveSessionKey: nextSessionKey,
             }
-          : {}),
+          : (targetSelection ?? {})),
+        ...(targetSelection ? { selectedAgentId: targetSelection.selectedAgentId } : {}),
       },
       persistConnectionSettings || gatewayUrlChanged,
     );
@@ -389,11 +448,14 @@ export function createApplicationGateway(
         : undefined,
       bootstrapProfile: nextConnection.bootstrapProfile,
       password: nextConnection.password.trim() ? nextConnection.password : undefined,
-      clientName: "openclaw-control-ui",
+      clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
       clientBuildId: CONTROL_UI_BUILD_INFO.buildId,
-      mode: "webchat",
-      instanceId: generateUUID(),
+      platform: options.clientOptions?.platform,
+      deviceFamily: options.clientOptions?.deviceFamily,
+      mode: options.clientOptions?.mode ?? "webchat",
+      instanceId: options.clientOptions?.instanceId ?? generateUUID(),
+      scopes: options.clientOptions?.scopes,
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
           return;
@@ -420,6 +482,7 @@ export function createApplicationGateway(
             selfUser: null,
             lastError: null,
             lastErrorCode: null,
+            lastErrorAuthReason: null,
           });
           const targetBuildId = hello.server?.buildId?.trim() || hello.server?.version?.trim();
           if (targetBuildId) {
@@ -427,20 +490,12 @@ export function createApplicationGateway(
           }
           return;
         }
-        setAvatarGatewayOrigin(
-          nextConnection.gatewayUrl,
-          resolveControlUiAuthHeader({
-            hello,
-            settings: { token: nextConnection.token },
-            password: nextConnection.password,
-          }),
-          options.resourceBasePath,
-        );
+        updateAvatarContext(hello);
         connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
         if (persistConnectionSettings) {
           settings = loadSettings();
         }
-        const sessionDefaults = readSessionDefaults(hello);
+        const sessionDefaults = readSessionDefaults({ hello });
         const sessionKey = resolveSessionKey(snapshot.sessionKey, hello);
         const lastActiveSessionKey = resolveSessionKey(settings.lastActiveSessionKey, hello);
         if (
@@ -463,6 +518,7 @@ export function createApplicationGateway(
           client: nextClient,
           phase: "connected",
           restartPending: false,
+          suspensionPhase: readSuspensionPhase(asOptionalRecord(hello.snapshot)?.suspension),
           hello,
           canvasPluginSurfaceUrl,
           // Trim guards a whitespace-only defaultId from becoming a truthy selection.
@@ -470,6 +526,7 @@ export function createApplicationGateway(
           sessionKey,
           lastError: null,
           lastErrorCode: null,
+          lastErrorAuthReason: null,
           selfUser: resolveSelfPresenceUser(
             readPresenceEntries(hello.snapshot) ?? [],
             nextClient.instanceId,
@@ -536,6 +593,7 @@ export function createApplicationGateway(
               ? formatUiError(error.message)
               : `disconnected (${code}): ${formatUiExternalText(reason, t("common.unknown"))}`,
           lastErrorCode: startupPending ? null : lastErrorCode,
+          lastErrorAuthReason: startupPending ? null : readConnectionAuthReason(error?.details),
         });
       },
       onGap: ({ expected, received }) => {
@@ -546,6 +604,7 @@ export function createApplicationGateway(
           ...snapshot,
           lastError: `event gap detected (expected seq ${expected}, got ${received}); reconnecting`,
           lastErrorCode: null,
+          lastErrorAuthReason: null,
         });
         if (isCurrentClient(nextClient)) {
           connect();
@@ -582,6 +641,7 @@ export function createApplicationGateway(
       sessionKey: nextSessionKey,
       lastError: null,
       lastErrorCode: null,
+      lastErrorAuthReason: null,
     });
     if (isCurrentClient(nextClient)) {
       nextClient.start();
@@ -634,6 +694,7 @@ export function createApplicationGateway(
         selfUser: null,
         lastError: null,
         lastErrorCode: null,
+        lastErrorAuthReason: null,
       });
     },
     subscribe: (listener) => {
@@ -669,17 +730,4 @@ function isSameOriginGateway(gatewayUrl: string): boolean {
 function normalizeCanvasPluginSurfaceUrl(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
-}
-
-export function readSessionDefaults(
-  hello: GatewayHelloOk,
-): { defaultAgentId?: string | null; modelConfigured?: boolean } | undefined {
-  const snapshot = hello.snapshot;
-  if (!snapshot || typeof snapshot !== "object" || !("sessionDefaults" in snapshot)) {
-    return undefined;
-  }
-  const defaults = snapshot.sessionDefaults;
-  return defaults && typeof defaults === "object"
-    ? (defaults as { defaultAgentId?: string | null; modelConfigured?: boolean })
-    : undefined;
 }

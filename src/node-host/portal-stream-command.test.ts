@@ -7,12 +7,20 @@ import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
 const TICKET = "a".repeat(48);
 const cleanups: Array<() => Promise<void>> = [];
 
-async function listenGateway(onConnection: (ws: WebSocket, request: http.IncomingMessage) => void) {
+async function listenGateway(
+  onConnection: (ws: WebSocket, request: http.IncomingMessage) => void,
+  contextPath = "",
+) {
   const server = http.createServer();
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({
+    server,
+    path: `${contextPath.replace(/\/$/u, "")}/node-portal/attach`,
+  });
   wss.on("connection", onConnection);
   await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
+    // Reserve both families so this HTTP peer cannot take the IPv6 target's
+    // numeric port on IPv4 and win localhost connection selection.
+    server.listen({ port: 0, host: "::", ipv6Only: false }, resolve);
   });
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -27,7 +35,7 @@ async function listenGateway(onConnection: (ws: WebSocket, request: http.Incomin
         wss.close(() => server.close(() => resolve()));
       }),
   );
-  return `ws://127.0.0.1:${address.port}`;
+  return `ws://127.0.0.1:${address.port}${contextPath}`;
 }
 
 function portalCommand(port: number) {
@@ -65,78 +73,102 @@ describe("node worker portal stream command", () => {
     ).rejects.toThrow("INVALID_REQUEST");
   });
 
-  it("attaches an enrolled loopback socket, exchanges binary data, and closes on cancellation", async () => {
-    const peers = new Set<net.Socket>();
-    const local = net.createServer((socket) => {
-      peers.add(socket);
-      socket.once("close", () => peers.delete(socket));
-      socket.on("data", (chunk) =>
-        socket.write(Buffer.concat([Buffer.from("echo:"), Buffer.from(chunk)])),
-      );
-    });
-    await new Promise<void>((resolve) => {
-      local.listen(0, "127.0.0.1", resolve);
-    });
-    const address = local.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected portal loopback test address");
-    }
-    cleanups.push(
-      async () =>
-        await new Promise<void>((resolve) => {
-          for (const peer of peers) {
-            peer.destroy();
-          }
-          local.close(() => resolve());
-        }),
-    );
-
-    const frames: Buffer[] = [];
-    let attached: WebSocket | undefined;
-    let accessHeaders: [string | undefined, string | undefined] | undefined;
-    let closed = false;
-    const gatewayUrl = await listenGateway((ws, request) => {
-      attached = ws;
-      accessHeaders = [
-        request.headers["cf-access-client-id"]?.toString(),
-        request.headers["cf-access-client-secret"]?.toString(),
-      ];
-      ws.on("message", (data, isBinary) => {
-        expect(isBinary).toBe(true);
-        if (!Buffer.isBuffer(data)) {
-          throw new Error("expected binary portal stream frame");
-        }
-        frames.push(data);
+  it.each([
+    ["127.0.0.1", ""],
+    ["::1", ""],
+    ["127.0.0.1", "/openclaw-gw"],
+    ["127.0.0.1", "/openclaw-gw/"],
+  ])(
+    "attaches %s loopback through Gateway context %j and closes on cancellation",
+    async (host, contextPath) => {
+      const peers = new Set<net.Socket>();
+      const local = net.createServer((socket) => {
+        peers.add(socket);
+        socket.once("close", () => peers.delete(socket));
+        socket.on("data", (chunk) =>
+          socket.write(Buffer.concat([Buffer.from("echo:"), Buffer.from(chunk)])),
+        );
       });
+      await new Promise<void>((resolve) => {
+        local.listen(0, host, resolve);
+      });
+      const address = local.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected portal loopback test address");
+      }
+      cleanups.push(
+        async () =>
+          await new Promise<void>((resolve) => {
+            for (const peer of peers) {
+              peer.destroy();
+            }
+            local.close(() => resolve());
+          }),
+      );
+
+      const frames: Buffer[] = [];
+      let attached: WebSocket | undefined;
+      let accessHeaders: [string | undefined, string | undefined] | undefined;
+      let closed = false;
+      const gatewayUrl = await listenGateway((ws, request) => {
+        attached = ws;
+        accessHeaders = [
+          request.headers["cf-access-client-id"]?.toString(),
+          request.headers["cf-access-client-secret"]?.toString(),
+        ];
+        ws.on("message", (data, isBinary) => {
+          expect(isBinary).toBe(true);
+          if (!Buffer.isBuffer(data)) {
+            throw new Error("expected binary portal stream frame");
+          }
+          frames.push(data);
+        });
+        ws.once("close", () => {
+          closed = true;
+        });
+      }, contextPath);
+      const controller = new AbortController();
+      const running = invokeNodeWorkerPortalStream({
+        paramsJSON: portalCommand(address.port),
+        gatewayUrl,
+        gatewayCloudflareAccess: {
+          clientId: "portal-client-id",
+          clientSecret: "portal-client-secret",
+        },
+        signal: controller.signal,
+      });
+      cleanups.push(async () => {
+        controller.abort();
+        await running.catch(() => undefined);
+      });
+      void running.catch(() => undefined);
+
+      await vi.waitFor(() => expect(frames).toHaveLength(1));
+      expect(frames[0]?.toString("utf8")).toBe(JSON.stringify({ ok: true }));
+      expect(accessHeaders).toEqual(["portal-client-id", "portal-client-secret"]);
+      attached?.send(Buffer.from("hello"), { binary: true });
+      await vi.waitFor(() => expect(frames[1]?.toString("utf8")).toBe("echo:hello"));
+
+      controller.abort();
+
+      await expect(running).resolves.toBeUndefined();
+      await vi.waitFor(() => expect(closed).toBe(true));
+      await vi.waitFor(() => expect(peers.size).toBe(0));
+    },
+  );
+
+  it("closes an attached Gateway socket without a readiness frame when loopback refuses", async () => {
+    let attached = false;
+    let closed = false;
+    const frames: unknown[] = [];
+    // Allocate the Gateway first so it cannot reuse the released target port.
+    const gatewayUrl = await listenGateway((ws) => {
+      attached = true;
+      ws.on("message", (data) => frames.push(data));
       ws.once("close", () => {
         closed = true;
       });
     });
-    const controller = new AbortController();
-    const running = invokeNodeWorkerPortalStream({
-      paramsJSON: portalCommand(address.port),
-      gatewayUrl,
-      gatewayCloudflareAccess: {
-        clientId: "portal-client-id",
-        clientSecret: "portal-client-secret",
-      },
-      signal: controller.signal,
-    });
-
-    await vi.waitFor(() => expect(frames).toHaveLength(1));
-    expect(frames[0]?.toString("utf8")).toBe(JSON.stringify({ ok: true }));
-    expect(accessHeaders).toEqual(["portal-client-id", "portal-client-secret"]);
-    attached?.send(Buffer.from("hello"), { binary: true });
-    await vi.waitFor(() => expect(frames[1]?.toString("utf8")).toBe("echo:hello"));
-
-    controller.abort();
-
-    await expect(running).resolves.toBeUndefined();
-    await vi.waitFor(() => expect(closed).toBe(true));
-    await vi.waitFor(() => expect(peers.size).toBe(0));
-  });
-
-  it("closes an attached Gateway socket without a readiness frame when loopback refuses", async () => {
     const unavailable = net.createServer();
     await new Promise<void>((resolve) => {
       unavailable.listen(0, "127.0.0.1", resolve);
@@ -155,24 +187,13 @@ describe("node worker portal stream command", () => {
       });
     });
 
-    let attached = false;
-    let closed = false;
-    const frames: unknown[] = [];
-    const gatewayUrl = await listenGateway((ws) => {
-      attached = true;
-      ws.on("message", (data) => frames.push(data));
-      ws.once("close", () => {
-        closed = true;
-      });
-    });
-
     await expect(
       invokeNodeWorkerPortalStream({
         paramsJSON: portalCommand(address.port),
         gatewayUrl,
         signal: new AbortController().signal,
       }),
-    ).rejects.toThrow("ECONNREFUSED");
+    ).rejects.toMatchObject({ code: "ECONNREFUSED" });
 
     expect(attached).toBe(true);
     await vi.waitFor(() => expect(closed).toBe(true));

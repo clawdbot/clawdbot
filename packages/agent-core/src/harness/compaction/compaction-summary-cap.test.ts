@@ -48,7 +48,19 @@ describe("split-turn compaction summary cap", () => {
       maxTokens: 8_000,
     };
     let prefixSummary = "prefix summary";
-    const streamFn = vi.fn<StreamFn>(() => {
+    const prompts: string[] = [];
+    const streamFn = vi.fn<StreamFn>((_model, context) => {
+      const promptMessage = context.messages[0];
+      if (!promptMessage || promptMessage.role !== "user") {
+        throw new Error("expected a user message containing the split-turn prompt");
+      }
+      prompts.push(
+        typeof promptMessage.content === "string"
+          ? promptMessage.content
+          : promptMessage.content
+              .map((block) => (block.type === "text" ? block.text : ""))
+              .join(""),
+      );
       const stream = createAssistantMessageEventStream();
       setTimeout(() => {
         stream.push({
@@ -73,7 +85,21 @@ describe("split-turn compaction summary cap", () => {
         {
           firstKeptEntryId: "kept-entry",
           messagesToSummarize: [],
-          turnPrefixMessages: [{ role: "user", content: "prefix", timestamp: 2 }],
+          turnPrefixMessages: [
+            {
+              ...createAssistant("visible prefix", createUsage(1)),
+              content: [
+                { type: "thinking", thinking: "PRIVATE_PREFIX_REASONING" },
+                { type: "text", text: "visible prefix" },
+                {
+                  type: "toolCall",
+                  id: "prefix-call",
+                  name: "read",
+                  arguments: { path: "prefix.ts" },
+                },
+              ],
+            },
+          ],
           isSplitTurn: true,
           tokensBefore: 100,
           previousSummary,
@@ -101,6 +127,9 @@ describe("split-turn compaction summary cap", () => {
     expect(normalResult.value.summary).toBe(
       "previous summary\n\n---\n\n**Turn Context (split turn):**\n\nprefix summary\n\n<read-files>\nsrc/read.ts\n</read-files>\n\n<modified-files>\nsrc/write.ts\n</modified-files>",
     );
+    expect(prompts[0]).toContain("[Assistant]: visible prefix");
+    expect(prompts[0]).toContain('[Assistant tool calls]: read(path="prefix.ts")');
+    expect(prompts[0]).not.toContain("PRIVATE_PREFIX_REASONING");
 
     const nearCapResult = await runCompaction();
     expect(nearCapResult.ok).toBe(true);

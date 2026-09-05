@@ -1,4 +1,4 @@
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -93,6 +93,7 @@ export async function listPairedNode(params: {
   node: CatalogNode;
   query: CodexSessionCatalogParams;
   adoptedSessions: ReadonlyMap<string, AdoptedSessionEntry>;
+  terminalCapabilities: Pick<CodexSessionCatalogHost, "canOpenTerminalCodex" | "canStartTerminal">;
   onHost?: (host: CodexSessionCatalogHost) => void;
 }): Promise<CodexSessionCatalogHost> {
   const hostId = `node:${params.node.nodeId}`;
@@ -102,6 +103,7 @@ export async function listPairedNode(params: {
     kind: "node" as const,
     nodeId: params.node.nodeId,
     canContinueCodex: canContinueCodexOnNode(params.node),
+    ...params.terminalCapabilities,
   };
   if (params.node.connected !== true) {
     const host = {
@@ -110,6 +112,11 @@ export async function listPairedNode(params: {
       sessions: [],
       error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
     };
+    params.onHost?.(host);
+    return host;
+  }
+  if (!params.node.commands?.includes(CODEX_APP_SERVER_THREADS_LIST_COMMAND)) {
+    const host = { ...common, connected: true, sessions: [] };
     params.onHost?.(host);
     return host;
   }
@@ -382,7 +389,7 @@ export async function continueNodeCodexSession(params: {
   if (!nodeId || params.hostId !== `node:${nodeId}`) {
     throw new CatalogParamsError("Codex session catalog hostId is invalid");
   }
-  const agentId = resolveSessionAgentIds({
+  const agentId = resolveSessionAgentIdsStrict({
     config: params.config,
     agentId: params.agentId,
   }).sessionAgentId;

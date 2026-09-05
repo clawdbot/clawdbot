@@ -10,12 +10,15 @@ export function projectSidebarArchiveVisibility(input: {
   >;
   selectedAgentId: string;
   statusFilter: SidebarSessionStatusFilter;
+  deletionState: SessionCapability["deletionState"];
   archiveVisibility: SessionCapability["archiveVisibility"];
 }) {
   const isSessionHidden = (key: string) => {
     const visibility = input.archiveVisibility(key);
     return (
-      visibility === "pending" || (input.statusFilter === "active" && visibility === "archived")
+      input.deletionState(key, input.selectedAgentId) ||
+      visibility === "pending" ||
+      (input.statusFilter === "active" && visibility === "archived")
     );
   };
   const selectedAgentId = normalizeAgentId(input.selectedAgentId);

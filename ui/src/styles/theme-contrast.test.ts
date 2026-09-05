@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -95,9 +95,17 @@ function readOpacity(ruleBody: string): number {
 }
 
 describe("Control UI theme contrast", () => {
-  const baseCss = readFileSync(path.join(here, "base.css"), "utf8");
+  const themesDir = path.join(here, "..", "..", "public", "themes");
+  // Palettes moved out of the startup stylesheet; read them back for coverage.
+  const baseCss = [
+    readFileSync(path.join(here, "base.css"), "utf8"),
+    ...readdirSync(themesDir)
+      .filter((entry) => entry.endsWith(".css"))
+      .toSorted()
+      .map((entry) => readFileSync(path.join(themesDir, entry), "utf8")),
+  ].join("\n");
   const groupedCss = readFileSync(path.join(here, "chat", "grouped.css"), "utf8");
-  const chatLayoutCss = readFileSync(path.join(here, "chat", "layout.css"), "utf8");
+  const chatComposerCss = readFileSync(path.join(here, "chat", "composer.css"), "utf8");
   const layoutCss = readFileSync(path.join(here, "layout.css"), "utf8");
 
   it("keeps chat timestamps and slash-arg hints AA without opacity dimming", () => {
@@ -110,7 +118,7 @@ describe("Control UI theme contrast", () => {
       requireCssColor(dark, "card"),
     ];
     const timestampRule = readRuleBody(groupedCss, ".chat-group-timestamp");
-    const slashArgsRule = readRuleBody(chatLayoutCss, ".slash-menu-args,\n.slash-menu-desc");
+    const slashArgsRule = readRuleBody(chatComposerCss, ".slash-menu-args,\n.slash-menu-desc");
 
     expect(timestampRule).toMatch(/color:\s*var\(--muted\)/);
     expect(slashArgsRule).toMatch(/color:\s*var\(--muted\)/);
@@ -141,7 +149,7 @@ describe("Control UI theme contrast", () => {
     expect(sessionLabelRule).toMatch(/color:\s*var\(--muted\)/);
     expect(readOpacity(sessionLabelRule)).toBe(1);
 
-    const light = readCssVarBlock(baseCss, ':root[data-theme-mode="light"]');
+    const light = readCssVarBlock(baseCss, ':root:where([data-theme-mode="light"])');
     for (const selector of [
       null,
       ':root[data-theme="openknot-light"]',
@@ -150,6 +158,10 @@ describe("Control UI theme contrast", () => {
       ':root[data-theme="tide-light"]',
       ':root[data-theme="beacon-light"]',
       ':root[data-theme="phosphor-light"]',
+      ':root[data-theme="crt-light"]',
+      ':root[data-theme="manuscript-light"]',
+      ':root[data-theme="rose-light"]',
+      ':root[data-theme="miami-light"]',
     ]) {
       const theme = selector ? { ...light, ...readCssVarBlock(baseCss, selector) } : light;
       const muted = requireCssColor(theme, "muted");

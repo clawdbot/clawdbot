@@ -26,6 +26,12 @@ read stored conversation state. A provider can reconnect and show healthy channe
 status before any new session row is materialized. Use the channel status and
 health commands above for live connectivity checks.
 
+Per-agent session counts and recent activity include only that agent's sessions,
+even when agents share a SQLite session store. Status counts each physical store
+once in its aggregate. The top-level health session summary represents the
+default agent, or the first configured agent when there is no default; it is not
+a fleet total.
+
 ## Deep diagnostics
 
 - Creds on disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime should be recent).
@@ -92,6 +98,8 @@ When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/c
 `openclaw health` asks the running gateway for its health snapshot (no direct channel
 sockets from the CLI). By default it returns a fresh cached gateway snapshot and the
 gateway refreshes that cache in the background; `--verbose` forces a live probe instead.
+Snapshots describe loaded and configured channels. Stored credentials alone do not
+activate a channel or add it to Gateway health; use channel setup to enable it.
 The command reports linked creds/auth age when available, per-channel probe summaries,
 session-store summary, and probe duration. Live probes use bounded account concurrency
 and a Gateway-owned deadline, so one slow account returns a structured timeout while

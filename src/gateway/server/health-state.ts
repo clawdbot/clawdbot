@@ -7,6 +7,7 @@ import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
+import { getGatewaySuspendAdmissionPhase } from "../../process/gateway-work-admission.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAgentSelectionState } from "../agent-list.js";
 import { resolveGatewayAuth } from "../auth.js";
@@ -15,7 +16,9 @@ import type { GatewayConfigRevisionProjector } from "../config-revision-token.js
 import { projectUpdateAvailable } from "../events.js";
 import { collectGatewayHealthSnapshot } from "../health/collector.js";
 import type { HealthSummary } from "../health/types.js";
+import { createPresenceRecipientProjection } from "../presence-projection.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type { GatewayClient } from "../server-methods/types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 let presenceVersion = 1;
@@ -49,6 +52,7 @@ const healthRefreshStates: Record<HealthAudience, HealthRefreshState> = {
 };
 
 export function buildGatewaySnapshot(opts: {
+  client: GatewayClient | null;
   includeSensitive?: boolean;
   includeUpdateDetails?: boolean;
   revisionProjector: GatewayConfigRevisionProjector;
@@ -60,7 +64,9 @@ export function buildGatewaySnapshot(opts: {
   const scope = cfg.session?.scope ?? "per-sender";
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
-  const presence = listSystemPresence();
+  const presence = createPresenceRecipientProjection({ cfg, presence: listSystemPresence() })(
+    opts.client,
+  );
   const uptimeMs = Math.round(process.uptime() * 1000);
   const includeUpdateDetails = opts?.includeUpdateDetails === true;
   const updateAvailable =
@@ -70,6 +76,7 @@ export function buildGatewaySnapshot(opts: {
   // Health is async; the caller replaces this with the collected snapshot.
   const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
+    suspension: { phase: getGatewaySuspendAdmissionPhase() },
     presence,
     health: emptyHealth,
     stateVersion: { presence: presenceVersion, health: healthVersion },

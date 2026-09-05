@@ -1,6 +1,5 @@
 // Gateway-owned GPT-Live WebRTC bridge: werift media peer plus OpenAI sideband control.
 import { randomUUID } from "node:crypto";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeVoiceBridge,
@@ -8,7 +7,9 @@ import type {
   RealtimeVoiceCloseDisposition,
   RealtimeVoiceCloseOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { toErrorObject } from "openclaw/plugin-sdk/realtime-voice-provider";
 import WebSocket, { type RawData } from "ws";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import type {
@@ -35,18 +36,6 @@ const RELAY_SAMPLE_RATE = 24_000;
 const QUICKSILVER_SESSION_TTL_MS = 30 * 60_000;
 const QUICKSILVER_CONNECT_TIMEOUT_MS = 30_000;
 const WEBSOCKET_OPEN = 1;
-
-function isAbortLikeError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const value = error as { code?: unknown; message?: unknown; name?: unknown };
-  return (
-    value.name === "AbortError" ||
-    value.code === "ABORT_ERR" ||
-    value.message === "This operation was aborted"
-  );
-}
 
 type OpenAIQuicksilverBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   model: string;
@@ -122,34 +111,41 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private sideband: ActiveSideband | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
-  constructor(private readonly config: OpenAIQuicksilverBridgeConfig) {
+  constructor(
+    private readonly config: OpenAIQuicksilverBridgeConfig,
+    private readonly runtime: OpenAIRealtimeHost,
+  ) {
     if (config.runAgentConsult) {
-      this.delegations = new OpenAIQuicksilverDelegationController({
-        getSocket: () => this.sideband?.socket,
-        isCanceledError: isAbortLikeError,
-        logger: config.logger,
-        onFatalError: (error) => this.fail(error),
-        onSessionStarted: (expiresAt) => {
-          if (expiresAt !== undefined) {
-            this.scheduleExpiry(
-              Math.min(QUICKSILVER_SESSION_TTL_MS, Math.max(0, expiresAt * 1000 - Date.now())),
-            );
-          }
-          if (!this.ready) {
-            this.ready = true;
-            this.config.onReady?.();
-          }
+      this.delegations = new OpenAIQuicksilverDelegationController(
+        {
+          getSocket: () => this.sideband?.socket,
+          handleDelegationInput: config.handleDelegationInput,
+          logger: config.logger,
+          onError: config.onError,
+          onFatalError: (error) => this.fail(error),
+          onSessionStarted: (expiresAt) => {
+            if (expiresAt !== undefined) {
+              this.scheduleExpiry(
+                Math.min(QUICKSILVER_SESSION_TTL_MS, Math.max(0, expiresAt * 1000 - Date.now())),
+              );
+            }
+            if (!this.ready) {
+              this.ready = true;
+              this.config.onReady?.();
+            }
+          },
+          onTranscript: (role, text, done) => this.config.onTranscript?.(role, text, done),
+          onWireEventType: (eventType) => {
+            this.config.onEvent?.({ direction: "server", type: eventType });
+            if (eventType === "output_audio_buffer.cleared") {
+              this.config.onClearAudio("barge-in");
+            }
+          },
+          runAgentConsult: config.runAgentConsult,
+          signal: this.abortController.signal,
         },
-        onTranscript: (role, text, done) => this.config.onTranscript?.(role, text, done),
-        onWireEventType: (eventType) => {
-          this.config.onEvent?.({ direction: "server", type: eventType });
-          if (eventType === "output_audio_buffer.cleared") {
-            this.config.onClearAudio("barge-in");
-          }
-        },
-        runAgentConsult: config.runAgentConsult,
-        signal: this.abortController.signal,
-      });
+        this.runtime.formatErrorMessage,
+      );
     }
   }
 
@@ -173,7 +169,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   setMediaTimestamp(_ts: number): void {}
 
   sendUserMessage(text: string): void {
-    this.delegations?.sendToActiveDelegation(text, "speakable");
+    this.delegations?.sendSessionContext(text, "speakable");
   }
 
   submitToolResult(): void {
@@ -251,18 +247,22 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         threadId: randomUUID(),
       };
       const call = await waitForConnectStep(
-        createOpenAIQuicksilverCall({
-          auth,
-          requestIds,
-          sdp: offerSdp,
-          session: buildOpenAIQuicksilverSession({
-            model: this.config.model,
-            instructions: this.config.instructions,
-            voice: this.config.voice,
-          }),
-          signal: connectSignal,
-          fetchImpl: this.config.fetchImpl,
-        }),
+        createOpenAIQuicksilverCall(
+          {
+            auth,
+            requestIds,
+            sdp: offerSdp,
+            session: buildOpenAIQuicksilverSession({
+              model: this.config.model,
+              hostControlsInput: Boolean(this.config.handleDelegationInput),
+              instructions: this.config.instructions,
+              voice: this.config.voice,
+            }),
+            signal: connectSignal,
+            fetchImpl: this.config.fetchImpl,
+          },
+          this.runtime,
+        ),
         connectSignal,
       );
       if (call.kind !== "gpt-live") {
@@ -273,13 +273,16 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         this.config.webSocketFactory ??
         ((url: string, options: Parameters<OpenAIQuicksilverSocketFactory>[1]) =>
           new WebSocket(url, options));
-      const connected = await connectOpenAIQuicksilverSideband({
-        auth,
-        createSocket,
-        requestIds,
-        signal: connectSignal,
-        url: call.sidebandUrl,
-      });
+      const connected = await connectOpenAIQuicksilverSideband(
+        {
+          auth,
+          createSocket,
+          requestIds,
+          signal: connectSignal,
+          url: call.sidebandUrl,
+        },
+        this.runtime,
+      );
       if (connectSignal.aborted) {
         connected.socket.close(1000, "session stopped");
         throw connectSignal.reason;

@@ -643,6 +643,27 @@ describe("setAccountAllowFromForChannel", () => {
 });
 
 describe("patchChannelConfigForAccount", () => {
+  it("preserves a plugin-owned root while patching the first named account policy", () => {
+    const root = { name: "Root", groupPolicy: "allowlist" as const, groupAllowFrom: [] };
+    const cfg: OpenClawConfig = { channels: { demo: root } };
+    const next = patchChannelConfigForAccount({
+      cfg,
+      channel: "demo",
+      accountId: "ada",
+      patch: { groupPolicy: "disabled" },
+      setupSurface: {
+        configPromotion: "preserve-root",
+        applyAccountConfig: ({ cfg: nextConfig }) => nextConfig,
+      },
+    });
+    expect(next.channels?.demo).toEqual({
+      ...root,
+      enabled: true,
+      accounts: { ada: { enabled: true, groupPolicy: "disabled" } },
+    });
+    expect(cfg.channels?.demo).toEqual(root);
+  });
+
   it("patches root channel config for default account", () => {
     const cfg: OpenClawConfig = {
       channels: {

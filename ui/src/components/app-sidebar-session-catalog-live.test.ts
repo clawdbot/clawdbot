@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
+import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 function catalog(id: string, hostCount: number): SessionCatalog {
   return {
@@ -28,6 +29,30 @@ function catalog(id: string, hostCount: number): SessionCatalog {
 }
 
 describe("SessionCatalogLiveState", () => {
+  it("clears unavailable native readiness without losing another host or expanded rows", () => {
+    const live = new SessionCatalogLiveState();
+    const { progressId } = live.beginRequest(1);
+    const current = catalog("codex", 2);
+    current.capabilities.startTerminal = true;
+    current.hosts.forEach((host) => {
+      host.canStartTerminal = true;
+    });
+    const changed = {
+      ...current.hosts[0]!,
+      canStartTerminal: false,
+      sessions: [],
+      error: { code: "offline", message: "Offline" },
+    };
+    const result = live.applyHost({
+      payload: { progressId, agentId: "main", catalog: { ...current, hosts: [changed] } },
+      agentId: "main",
+      catalogs: [current],
+      pageDepths: new Map([[sessionCatalogHostKey("codex", changed.hostId), 1]]),
+    });
+    expect(result?.catalogs[0]?.hosts.map((host) => host.canStartTerminal)).toEqual([false, true]);
+    expect(result?.catalogs[0]?.hosts[1]).toEqual(current.hosts[1]);
+    expect(result?.catalogs[0]?.hosts[0]?.sessions).toEqual(current.hosts[0]?.sessions);
+  });
   it("compares a host event only with the catalog and host it can replace", () => {
     const live = new SessionCatalogLiveState();
     const { progressId } = live.beginRequest(1);
@@ -92,5 +117,21 @@ describe("SessionCatalogLiveState", () => {
     expect(result?.catalogs[0]).toEqual(update(current));
     expect(result?.materialChange).toBe(false);
     expect(live.sawChange).toBe(false);
+  });
+
+  it.each([
+    ["mode-less client", { deviceId: "legacy-client" }, false],
+    ["browser with a node role", { deviceId: "browser", mode: "webchat", roles: ["node"] }, false],
+    [
+      "operator with a node role",
+      { deviceId: "operator", mode: "operator", roles: ["node"] },
+      false,
+    ],
+    ["node with an operator role", { deviceId: "node", mode: "node", roles: ["operator"] }, true],
+    ["legacy node role", { deviceId: "legacy-node", roles: ["node"] }, true],
+  ] as const)("classifies %s presence for catalog refreshes", (_name, entry, expected) => {
+    const live = new SessionCatalogLiveState();
+
+    expect(live.observePresence({ presence: [entry] })).toBe(expected);
   });
 });

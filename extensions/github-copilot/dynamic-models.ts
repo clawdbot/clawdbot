@@ -15,6 +15,7 @@ import {
   isCopilotCatalogModelVisible,
   resolveCopilotForwardCompatModel,
 } from "./models.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 type GithubCopilotCatalogContext = {
   agentDir?: string;
@@ -87,10 +88,17 @@ export function createGithubCopilotDynamicModelHooks(params: {
     // manifest models remain the visible fallback when exchange or discovery fails.
     let discoveredModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>> = [];
     if (copilotApiToken) {
+      const headers = buildCopilotRuntimeHeaders({ config: ctx.config });
       try {
         discoveredModels = await getCachedLiveCatalogValue({
-          keyParts: [PROVIDER_ID, "models", baseUrl, copilotApiToken],
-          load: async () => await fetchCopilotModelCatalog({ copilotApiToken, baseUrl }),
+          keyParts: [
+            PROVIDER_ID,
+            "models",
+            baseUrl,
+            copilotApiToken,
+            headers["Copilot-Integration-Id"],
+          ],
+          load: async () => await fetchCopilotModelCatalog({ copilotApiToken, baseUrl, headers }),
         });
       } catch {
         discoveredModels = [];

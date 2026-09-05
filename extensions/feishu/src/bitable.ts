@@ -5,7 +5,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
 
@@ -431,7 +430,7 @@ async function createApp(
     cleaned_default_fields: cleanedFields,
     hint: tableId
       ? `Table created. Use app_token="${appToken}" and table_id="${tableId}" for other bitable tools.`
-      : "Table created. Use feishu_bitable_get_meta to get table_id and field details.",
+      : "Application created, but table metadata was not retrieved. Inspect the existing application using the returned app_token or URL; do not create it again.",
   };
 }
 
@@ -486,6 +485,11 @@ async function updateRecord(
 
 // ============ Schemas ============
 
+const BITABLE_APP_TOKEN_DESCRIPTION =
+  "Bitable application token (the /base/ URL identifier, or app_token from metadata). Not the node token in a /wiki/ URL.";
+const BITABLE_RECORD_FIELDS_DESCRIPTION =
+  "Field values keyed by field name. Format by type: Text='string', Number=123, SingleSelect='Option', MultiSelect=['A','B'], DateTime=timestamp_ms, User=[{id:'ou_xxx'}], URL={text:'Display',link:'https://...'}";
+
 const GetMetaSchema = Type.Object({
   url: Type.String({
     description: "Bitable URL. Supports both formats: /base/XXX?table=YYY or /wiki/XXX?table=YYY",
@@ -493,16 +497,12 @@ const GetMetaSchema = Type.Object({
 });
 
 const ListFieldsSchema = Type.Object({
-  app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
-  }),
+  app_token: Type.String({ description: BITABLE_APP_TOKEN_DESCRIPTION }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
 });
 
 const ListRecordsSchema = Type.Object({
-  app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
-  }),
+  app_token: Type.String({ description: BITABLE_APP_TOKEN_DESCRIPTION }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   page_size: optionalPositiveIntegerSchema({
     description: "Number of records per page (1-500, default 100)",
@@ -514,9 +514,7 @@ const ListRecordsSchema = Type.Object({
 });
 
 const GetRecordSchema = Type.Object({
-  app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
-  }),
+  app_token: Type.String({ description: BITABLE_APP_TOKEN_DESCRIPTION }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   record_id: Type.String({ description: "Record ID to retrieve" }),
 });
@@ -528,13 +526,10 @@ const BitableFieldValueSchema = Type.Unsafe<unknown>({
 });
 
 const CreateRecordSchema = Type.Object({
-  app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
-  }),
+  app_token: Type.String({ description: BITABLE_APP_TOKEN_DESCRIPTION }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   fields: Type.Record(Type.String(), BitableFieldValueSchema, {
-    description:
-      "Field values keyed by field name. Format by type: Text='string', Number=123, SingleSelect='Option', MultiSelect=['A','B'], DateTime=timestamp_ms, User=[{id:'ou_xxx'}], URL={text:'Display',link:'https://...'}",
+    description: BITABLE_RECORD_FIELDS_DESCRIPTION,
   }),
 });
 
@@ -550,10 +545,7 @@ const CreateAppSchema = Type.Object({
 });
 
 const CreateFieldSchema = Type.Object({
-  app_token: Type.String({
-    description:
-      "Bitable app token (use feishu_bitable_get_meta to get from URL, or feishu_bitable_create_app to create new)",
-  }),
+  app_token: Type.String({ description: BITABLE_APP_TOKEN_DESCRIPTION }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   field_name: Type.String({ description: "Name for the new field" }),
   field_type: Type.Number({
@@ -569,13 +561,11 @@ const CreateFieldSchema = Type.Object({
 });
 
 const UpdateRecordSchema = Type.Object({
-  app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
-  }),
+  app_token: Type.String({ description: BITABLE_APP_TOKEN_DESCRIPTION }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   record_id: Type.String({ description: "Record ID to update" }),
   fields: Type.Record(Type.String(), BitableFieldValueSchema, {
-    description: "Field values to update (same format as create_record)",
+    description: BITABLE_RECORD_FIELDS_DESCRIPTION,
   }),
 });
 
@@ -586,12 +576,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
-    return;
-  }
-
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(api.config);
   if (!toolsCfg.bitable) {
     return;
   }

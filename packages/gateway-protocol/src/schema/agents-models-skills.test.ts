@@ -7,6 +7,7 @@ import {
   AgentsListResultSchema,
   AgentsUpdateParamsSchema,
   ModelsAuthLogoutParamsSchema,
+  ModelsAuthOrderSetParamsSchema,
   ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
@@ -140,6 +141,23 @@ function toolsEffectiveResult() {
 }
 
 describe("AgentsListResultSchema", () => {
+  it.each([undefined, "read-only", "guarded", "workspace", "full"])(
+    "accepts optional configured permission label %s but rejects non-session modes",
+    (defaultPermissionMode) => {
+      const result = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main", ...(defaultPermissionMode ? { defaultPermissionMode } : {}) }],
+      };
+      expectAccepted(AgentsListResultSchema, result);
+      expectRejected(AgentsListResultSchema, {
+        ...result,
+        agents: [{ id: "main", defaultPermissionMode: "allowlist" }],
+      });
+    },
+  );
+
   it("accepts resolved per-agent thinking metadata", () => {
     const result = {
       defaultId: "main",
@@ -258,10 +276,39 @@ describe("Models auth params schemas", () => {
       { provider: "openai", agentId: "" },
     );
     expectRejected(ModelsAuthLogoutParamsSchema, { provider: "openai", profileIds: [] });
+    expectAccepted(
+      ModelsAuthOrderSetParamsSchema,
+      { provider: "openai", profileIds: ["openai:writer"] },
+      { provider: "openai", agentId: "writer" },
+    );
+    expectRejected(
+      ModelsAuthOrderSetParamsSchema,
+      { provider: "openai", profileIds: [] },
+      { provider: "openai", profileIds: null },
+      { provider: "openai", profileIds: ["openai:writer", "openai:writer"] },
+    );
   });
 });
 
 describe("ModelsListResultSchema", () => {
+  it("accepts closed unavailability reasons and epoch-millisecond retry times", () => {
+    const model = { id: "test-model", name: "Test Model", provider: "custom", available: false };
+    for (const unavailableReason of ["missing-auth", "auth-failed", "cooldown"]) {
+      expectAccepted(ModelsListResultSchema, { models: [{ ...model, unavailableReason }] });
+    }
+    expectAccepted(ModelsListResultSchema, {
+      models: [{ ...model, unavailableReason: "cooldown", unavailableUntil: 2_000_000_000_000 }],
+    });
+    expectRejected(ModelsListResultSchema, {
+      models: [{ ...model, unavailableReason: "unknown" }],
+    });
+    for (const unavailableUntil of [-1, 1.5, "2033-05-18T03:33:20.000Z"]) {
+      expectRejected(ModelsListResultSchema, {
+        models: [{ ...model, unavailableReason: "cooldown", unavailableUntil }],
+      });
+    }
+  });
+
   it("accepts stable public input capabilities", () => {
     const model = {
       id: "gpt-image",

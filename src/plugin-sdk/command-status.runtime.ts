@@ -127,6 +127,7 @@ export async function resolveDirectStatusReplyForSessionCore(
 
   return await buildStatusReply({
     cfg: statusCfg,
+    agentId: statusAgentId,
     command,
     sessionEntry: statusEntry,
     sessionKey: statusSessionKey,

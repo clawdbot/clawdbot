@@ -1,5 +1,4 @@
 // Discord message processing coverage split by cohesive behavior.
-import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import { describe, expect, it, vi } from "vitest";
 import {
   BASE_CHANNEL_ROUTE,
@@ -499,9 +498,6 @@ describe("processDiscordMessage session routing", () => {
     await runPromise;
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    const emojis = getReactionEmojis();
-    expect(emojis).toContain("👀");
-    expect(emojis).toContain(DEFAULT_EMOJIS.thinking);
-    expect(emojis).toContain(DEFAULT_EMOJIS.done);
+    expect(getReactionEmojis()).toEqual(["👀"]);
   });
 });

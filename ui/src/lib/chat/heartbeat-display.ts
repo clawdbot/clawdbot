@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -16,10 +17,6 @@ export function stripHeartbeatTokenForDisplay(
   };
 }
 
-function isHiddenDisplayBlockType(type: unknown): boolean {
-  return type === "thinking" || type === "reasoning";
-}
-
 function resolveDisplayContent(content: unknown): {
   text: string;
   hasVisibleNonTextContent: boolean;
@@ -31,34 +28,23 @@ function resolveDisplayContent(content: unknown): {
     return { text: "", hasVisibleNonTextContent: content != null };
   }
   let hasVisibleNonTextContent = false;
-  const text = content
-    .filter((block): block is { type: "text"; text: string } => {
-      if (!block || typeof block !== "object" || !("type" in block)) {
-        hasVisibleNonTextContent = true;
-        return false;
-      }
-      if ((block as { type?: unknown }).type !== "text") {
-        if (!isHiddenDisplayBlockType((block as { type?: unknown }).type)) {
-          hasVisibleNonTextContent = true;
-        }
-        return false;
-      }
-      if (typeof (block as { text?: unknown }).text !== "string") {
-        hasVisibleNonTextContent = true;
-        return false;
-      }
-      return true;
-    })
-    .map((block) => block.text)
-    .join("");
-  return { text, hasVisibleNonTextContent };
+  const text: string[] = [];
+  content.forEach((block) => {
+    const entry = asOptionalObjectRecord(block);
+    if (entry?.type === "text" && typeof entry.text === "string") {
+      text.push(entry.text);
+    } else if (entry?.type !== "thinking" && entry?.type !== "reasoning") {
+      hasVisibleNonTextContent = true;
+    }
+  });
+  return { text: text.join(""), hasVisibleNonTextContent };
 }
 
 export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
+  const entry = asOptionalObjectRecord(message);
+  if (!entry) {
     return false;
   }
-  const entry = message as Record<string, unknown>;
   const role = normalizeLowercaseStringOrEmpty(entry.role);
   if (role !== "assistant") {
     return false;
@@ -73,5 +59,6 @@ export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
   if (hasVisibleNonTextContent) {
     return false;
   }
-  return stripHeartbeatTokenForDisplay(text).shouldSkip;
+  // Reasoning-only rows have no answer text, but that is not a heartbeat acknowledgement.
+  return text.trim().length > 0 && stripHeartbeatTokenForDisplay(text).shouldSkip;
 }

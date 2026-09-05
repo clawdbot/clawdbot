@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { commitBackgroundResultToSession } from "./background-session-result.js";
 import {
   beginSessionWorkAdmission,
@@ -10,7 +11,12 @@ import {
 import { onSessionTranscriptUpdate } from "./transcript-events.js";
 
 describe("commitBackgroundResultToSession", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(() => {
+      closeOpenClawAgentDatabasesForTest();
+      cleanup();
+    }),
+  );
 
   async function createTarget() {
     const dir = tempDirs.make("openclaw-background-result-");
@@ -23,6 +29,7 @@ describe("commitBackgroundResultToSession", () => {
     );
     return {
       config: { session: { store: storePath } },
+      generation: { sessionId, lifecycleRevision: "source-revision" },
       sessionId,
       sessionKey,
       storePath,
@@ -42,6 +49,7 @@ describe("commitBackgroundResultToSession", () => {
     const commit = commitBackgroundResultToSession({
       agentId: "main",
       sessionKey: target.sessionKey,
+      expectedGeneration: target.generation,
       text: "Automation finished while the chat was active.",
       idempotencyKey: "cron-current-completion:cron:job-1:1000",
       provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
@@ -72,6 +80,7 @@ describe("commitBackgroundResultToSession", () => {
     const retry = await commitBackgroundResultToSession({
       agentId: "main",
       sessionKey: target.sessionKey,
+      expectedGeneration: target.generation,
       text: "Automation finished while the chat was active.",
       idempotencyKey: "cron-current-completion:cron:job-1:1000",
       provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
@@ -122,11 +131,93 @@ describe("commitBackgroundResultToSession", () => {
       commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
+        expectedGeneration: target.generation,
         text: "Do not append this.",
         idempotencyKey: "cron-current-completion:cron:job-2:2000",
         provenance: { kind: "cron", jobId: "job-2", runId: "cron:job-2:2000" },
         config: target.config,
       }),
     ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("archived") });
+  });
+
+  it.each([
+    {
+      name: "session-id replacement",
+      sessionId: "replacement-session",
+      lifecycleRevision: "replacement-revision",
+    },
+    {
+      name: "same-id lifecycle replacement",
+      sessionId: "source-session",
+      lifecycleRevision: "replacement-revision",
+    },
+  ])("refuses a result captured before $name", async (replacement) => {
+    const target = await createTarget();
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: target.sessionKey, storePath: target.storePath },
+      {
+        sessionId: replacement.sessionId,
+        lifecycleRevision: replacement.lifecycleRevision,
+        updatedAt: 2,
+      },
+    );
+
+    await expect(
+      commitBackgroundResultToSession({
+        agentId: "main",
+        sessionKey: target.sessionKey,
+        expectedGeneration: target.generation,
+        text: "Do not append this stale cron result.",
+        idempotencyKey: "cron-current-completion:cron:job-stale:3000",
+        provenance: { kind: "cron", jobId: "job-stale", runId: "cron:job-stale:3000" },
+        config: target.config,
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("session rebound") });
+
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: replacement.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("treats a missing lifecycle revision as exact generation state", async () => {
+    const target = await createTarget();
+    const generation = { sessionId: target.sessionId, lifecycleRevision: undefined };
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: target.sessionKey, storePath: target.storePath },
+      { sessionId: target.sessionId, updatedAt: 2 },
+    );
+
+    await expect(
+      commitBackgroundResultToSession({
+        agentId: "main",
+        sessionKey: target.sessionKey,
+        expectedGeneration: generation,
+        text: "This still belongs to the revision-less session.",
+        idempotencyKey: "cron-current-completion:cron:job-legacy:4000",
+        provenance: { kind: "cron", jobId: "job-legacy", runId: "cron:job-legacy:4000" },
+        config: target.config,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: target.sessionKey, storePath: target.storePath },
+      { sessionId: target.sessionId, lifecycleRevision: "materialized-revision", updatedAt: 3 },
+    );
+    await expect(
+      commitBackgroundResultToSession({
+        agentId: "main",
+        sessionKey: target.sessionKey,
+        expectedGeneration: generation,
+        text: "Do not append after the generation changes.",
+        idempotencyKey: "cron-current-completion:cron:job-legacy:5000",
+        provenance: { kind: "cron", jobId: "job-legacy", runId: "cron:job-legacy:5000" },
+        config: target.config,
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("session rebound") });
   });
 });

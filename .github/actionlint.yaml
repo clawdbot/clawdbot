@@ -33,7 +33,7 @@ paths:
   .github/workflows/qa-live-transports-convex.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
-  .github/workflows/mantis-telegram-desktop-proof.yml:
+  .github/workflows/full-release-candidate.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/docker-release.yml:

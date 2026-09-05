@@ -8,97 +8,27 @@ import type {
   SessionsListParams,
   SessionsResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import type {
-  readChatHistoryPage,
-  resolveChatHistoryNextOffset,
-  shouldReplayOldestChatHistoryRecord,
-} from "../../gateway/server-methods/chat-history-pages.js";
-import type { SessionsListResult } from "../../gateway/session-utils.types.js";
-import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { readNonNegativeIntegerParam, readPositiveIntegerParam } from "./common.js";
+import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { parseAgentSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readToolStringParam,
+} from "./common.js";
 
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
 
 const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 
-interface EmbeddedGatewayRuntime {
-  resolveSessionAgentId: (opts: {
-    sessionKey: string;
-    config: OpenClawConfig;
-    agentId?: string;
-  }) => string;
-  getRuntimeConfig: () => OpenClawConfig;
-  resolveDefaultAgentId: (config: OpenClawConfig) => string;
-  resolveSessionStoreKey: (params: { cfg: OpenClawConfig; sessionKey: string }) => string;
-  resolveStoredSessionKeyForAgentStore: (params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    sessionKey: string;
-  }) => string;
-  searchSessionTranscripts: (params: {
-    agentId: string;
-    limit?: number;
-    query: string;
-    sessionKeys?: string[];
-  }) => {
-    hits: unknown[];
-    indexing: boolean;
-    truncated: boolean;
-  };
-  getMaxChatHistoryMessagesBytes: () => number;
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: number;
-  replaceOversizedChatHistoryMessages: (opts: {
-    messages: unknown[];
-    maxSingleMessageBytes: number;
-  }) => { messages: unknown[] };
-  resolveEffectiveChatHistoryMaxChars: (cfg: OpenClawConfig) => number;
-  capArrayByJsonBytes: (items: unknown[], maxBytes: number) => { items: unknown[] };
-  listSessionsFromStoreAsync: (opts: {
-    cfg: OpenClawConfig;
-    storePath: string;
-    store: unknown;
-    opts: SessionsListParams;
-  }) => Promise<SessionsListResult>;
-  loadCombinedSessionStoreForGatewayCore: (
-    cfg: OpenClawConfig,
-    opts?: { agentId?: string; projection?: "full" | "list" },
-  ) => {
-    storePath: string;
-    store: unknown;
-  };
-  resolveSessionKeyFromResolveParams: (opts: {
-    cfg: OpenClawConfig;
-    client: null;
-    p: SessionsResolveParams;
-  }) => Promise<SessionsResolveResult>;
-  loadSessionEntry: (
-    sessionKey: string,
-    opts?: { agentId?: string },
-  ) => {
-    cfg: OpenClawConfig;
-    storePath: string | undefined;
-    entry: Parameters<typeof readChatHistoryPage>[0]["entry"];
-    canonicalKey: string;
-  };
-  readChatHistoryPage: typeof readChatHistoryPage;
-  resolveChatHistoryNextOffset: typeof resolveChatHistoryNextOffset;
-  shouldReplayOldestChatHistoryRecord: typeof shouldReplayOldestChatHistoryRecord;
-  resolveSessionModelRef: (
-    cfg: OpenClawConfig,
-    entry: unknown,
-    sessionAgentId: string,
-  ) => { provider: string | undefined };
-}
+type EmbeddedGatewayRuntime = typeof import("./embedded-gateway-stub.runtime.js");
 
 let runtimeMod: EmbeddedGatewayRuntime | undefined;
 
 async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
   if (!runtimeMod) {
     // Lazy import keeps embedded tools cheap and gives tests a single mock boundary.
-    runtimeMod = (await import("./embedded-gateway-stub.runtime.js")) as EmbeddedGatewayRuntime;
+    runtimeMod = await import("./embedded-gateway-stub.runtime.js");
   }
   return runtimeMod;
 }
@@ -193,12 +123,15 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
     throw new Error("sessions.search supports one agent per call");
   }
   const agentId =
-    requestedAgentId ?? agentIds.values().next().value ?? rt.resolveDefaultAgentId(cfg);
+    requestedAgentId ??
+    agentIds.values().next().value ??
+    rt.resolveSessionAgentId({ sessionKey: "main", config: cfg });
   const result = rt.searchSessionTranscripts({
     agentId,
+    storePath: rt.resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     query,
     limit: readPositiveIntegerParam(params, "limit"),
-    ...(sessionKeys ? { sessionKeys } : {}),
+    sessionKeys,
   });
   return {
     results: result.hits,
@@ -227,18 +160,49 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const requestedAgentId = agentId ?? parsedAgentId;
   const limit = readPositiveIntegerParam(params, "limit");
   const offset = readOffsetParam(params) ?? 0;
+  const messageId = readToolStringParam(params, "messageId", {
+    required: params.messageId !== undefined,
+  });
+  const requestedSessionId = readToolStringParam(params, "sessionId", {
+    required: params.sessionId !== undefined,
+  });
+  if (params.offset !== undefined && messageId !== undefined) {
+    throw new Error("offset and messageId cannot be used together");
+  }
+  if (requestedSessionId !== undefined && messageId === undefined) {
+    throw new Error("sessionId requires messageId");
+  }
 
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
   const { cfg, storePath, entry, canonicalKey } = rt.loadSessionEntry(
     sessionKey,
     sessionLoadOptions,
   );
-  const sessionId = entry?.sessionId;
   const sessionAgentId = rt.resolveSessionAgentId({
     sessionKey,
     config: cfg,
     agentId: requestedAgentId,
   });
+  if (requestedSessionId) {
+    const transcriptSessionKey = rt.resolveTranscriptSessionKeyBySessionId({
+      agentId: sessionAgentId,
+      sessionId: requestedSessionId,
+      storePath,
+    });
+    if (
+      !transcriptSessionKey ||
+      scopeLegacySessionKeyToAgent({
+        sessionKey: transcriptSessionKey,
+        agentId: sessionAgentId,
+      }) !== scopeLegacySessionKeyToAgent({ sessionKey: canonicalKey, agentId: sessionAgentId })
+    ) {
+      throw new Error("sessionId does not belong to sessionKey");
+    }
+  }
+  const sessionId = requestedSessionId ?? entry?.sessionId;
+  // Reset archives share a logical key, but not the replacement's start boundary or CLI binding.
+  const historyEntry =
+    requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
   const resolvedSessionModel = rt.resolveSessionModelRef(cfg, entry, sessionAgentId);
   const hardMax = 1000;
   const defaultLimit = 200;
@@ -247,7 +211,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
   const page = await rt.readChatHistoryPage({
-    entry,
+    entry: historyEntry,
     provider: resolvedSessionModel.provider,
     sessionId,
     storePath,
@@ -257,7 +221,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     maxHistoryBytes,
     effectiveMaxChars,
     offset: params.offset === undefined ? undefined : offset,
-    messageId: undefined,
+    messageId,
   });
 
   // Keep transport-level byte limits identical after the shared reader projects the page.
@@ -266,7 +230,15 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     messages: page.messages,
     maxSingleMessageBytes: perMessageHardCap,
   });
-  const capped = rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
+  const capped = messageId
+    ? (rt.capChatHistoryAroundMessage({
+        messages: replaced.messages,
+        messageId,
+        // Reserve array framing and separators without evicting the requested anchor.
+        maxCost: maxHistoryBytes - 1,
+        messageCost: (message) => jsonUtf8Bytes(message) + 1,
+      }) ?? rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items)
+    : rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
   const pagination = params.offset === undefined ? undefined : page.pagination;
   const nextOffset =
     pagination !== undefined

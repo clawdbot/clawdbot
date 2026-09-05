@@ -20,6 +20,13 @@ CLI commands: `openclaw file-transfer`; contracts: `tools`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
+## Directory archives
+
+`dir_fetch` fetches the whole directory tree, including dotfiles and hidden
+directories. File-transfer policy checks every descendant; a denied entry
+rejects the whole transfer instead of being filtered out. Path identity,
+symlink, archive-size, and extraction limits still apply.
+
 ## Migrate existing permissions
 
 After upgrading, older positive file-transfer permissions remain inactive until

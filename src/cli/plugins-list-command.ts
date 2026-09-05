@@ -169,7 +169,7 @@ export async function runPluginsListCommand(
 
   const lines: string[] = [];
   for (const plugin of list) {
-    lines.push(formatPluginLine(plugin, true));
+    lines.push(formatPluginLine(plugin));
     lines.push("");
   }
   runtime.log(lines.join("\n").trim());

@@ -32,12 +32,16 @@ export type CompactEmbeddedAgentSessionParams = {
   agentId?: string;
   /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
+  /** Owner captured with the sandbox policy before execution identity changes. */
+  sandboxAgentId?: string;
   messageChannel?: string;
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
   chatType?: ChatType;
   agentAccountId?: string;
+  /** Raw peer observed by the inbound routing owner, before identity linking. */
+  conversationRoutePeerId?: string;
   conversationToolPolicy?: GroupToolPolicyConfig;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -96,7 +100,7 @@ export type CompactEmbeddedAgentSessionParams = {
   contextTokenBudget?: number;
   /** Optional caller-resolved runtime context for harness-owned context-engine compaction. */
   contextEngineRuntimeContext?: ContextEngineRuntimeContext;
-  /** Session-pinned embedded harness id. Prevents compaction hot-switching. */
+  /** Transcript/runtime hint; durable native ownership is resolved from the session entry. */
   agentHarnessId?: string;
   /** Resumable native CLI session targeted by an explicit manual compaction. */
   cliSessionId?: string;
@@ -104,7 +108,7 @@ export type CompactEmbeddedAgentSessionParams = {
   cliSessionBinding?: CliSessionBinding;
   /** Owning session facts required for placement and runtime preparation. */
   sessionEntry?: SessionEntry;
-  /** Prevent compaction from changing the persisted session runtime or model. */
+  /** Keep the concrete model fixed; native runtime ownership is a separate session fact. */
   modelSelectionLocked?: boolean;
   /** OpenClaw-owned runtime policy prepared for this compaction path. */
   runtimePlan?: AgentRuntimePlan;
@@ -138,6 +142,8 @@ export type CompactEmbeddedAgentSessionParams = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
+  /** @internal Refreshes the host watchdog when delegated native compaction makes progress. */
+  compactionTimeoutReset?: () => void;
   onCompactionHookMessages?: (payload: {
     phase: "before" | "after";
     messages: string[];

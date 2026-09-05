@@ -19,6 +19,7 @@ export type DiagnosticRecoveryTool = DiagnosticRecoveryMarker & {
   toolCallId?: string;
   startedAt: number;
   lastProgressAt: number;
+  deadlineAtMs?: number;
 };
 
 export type DiagnosticRecoveryModelCall = DiagnosticRecoveryMarker & {

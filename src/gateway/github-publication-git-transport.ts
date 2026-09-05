@@ -40,6 +40,24 @@ export async function requirePublicationCommand(
   return result.stdout.toString("utf8").trim();
 }
 
+// Guard ordinary steps on both sides of the await. Effects whose observations
+// must survive revocation use the raw transport and record before rechecking.
+export function createGitHubPublicationCommandRunner(assertCurrent?: () => void) {
+  const step = async <T>(operation: () => Promise<T>): Promise<T> => {
+    assertCurrent?.();
+    const result = await operation();
+    assertCurrent?.();
+    return result;
+  };
+  return {
+    step,
+    run: (...args: Parameters<typeof runPublicationCommand>) =>
+      step(() => runPublicationCommand(...args)),
+    require: (...args: Parameters<typeof requirePublicationCommand>) =>
+      step(() => requirePublicationCommand(...args)),
+  };
+}
+
 // A recursive tree listing scales with repository size (openclaw itself is
 // ~3.3MB), far past the default per-command cap above. Without this explicit
 // bound the attribute scan dies as an output-limit "verification" failure on
@@ -186,26 +204,17 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   cwd: string;
   assertCurrent?: () => void;
 }): Promise<{ sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string }> {
-  const step = async <T>(operation: () => Promise<T>): Promise<T> => {
-    params.assertCurrent?.();
-    const result = await operation();
-    params.assertCurrent?.();
-    return result;
-  };
+  const { step, require: command } = createGitHubPublicationCommandRunner(params.assertCurrent);
+  const git = (args: string[], env?: NodeJS.ProcessEnv) =>
+    command(["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args], {
+      cwd: params.cwd,
+      env,
+    });
   await step(() => assertSafeGitPublicationWorkspace(params.cwd, runPublicationCommand));
-  const sourceHeadCommit = await step(
-    async () =>
-      await requirePublicationCommand(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
-        cwd: params.cwd,
-      }),
-  );
-  const sourceIndexTree = await step(
-    async () =>
-      await requirePublicationCommand(
-        ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
-        { cwd: params.cwd },
-      ),
-  );
+  const sourceHeadCommit = await command(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
+    cwd: params.cwd,
+  });
+  const sourceIndexTree = await git(["write-tree"]);
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-snapshot-"));
   try {
     const env: NodeJS.ProcessEnv = {
@@ -214,43 +223,9 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
       GIT_CONFIG_SYSTEM: os.devNull,
       GIT_INDEX_FILE: path.join(tempDir, "index"),
     };
-    await step(async () => {
-      await requirePublicationCommand(
-        [
-          "git",
-          "-c",
-          `core.hooksPath=${os.devNull}`,
-          "-c",
-          "core.fsmonitor=false",
-          "read-tree",
-          sourceHeadCommit,
-        ],
-        { cwd: params.cwd, env },
-      );
-    });
-    await step(async () => {
-      await requirePublicationCommand(
-        [
-          "git",
-          "-c",
-          `core.attributesFile=${os.devNull}`,
-          "-c",
-          `core.hooksPath=${os.devNull}`,
-          "-c",
-          "core.fsmonitor=false",
-          "add",
-          "-A",
-        ],
-        { cwd: params.cwd, env },
-      );
-    });
-    const workspaceTree = await step(
-      async () =>
-        await requirePublicationCommand(
-          ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
-          { cwd: params.cwd, env },
-        ),
-    );
+    await git(["read-tree", sourceHeadCommit], env);
+    await git(["-c", `core.attributesFile=${os.devNull}`, "add", "-A"], env);
+    const workspaceTree = await git(["write-tree"], env);
     await step(() =>
       assertGitHubPublicationTreeHasNoFilters(params.cwd, workspaceTree, runPublicationCommand),
     );

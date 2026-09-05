@@ -229,48 +229,78 @@ private fun cronScheduleLabel(schedule: JsonObject): NativeText =
 
 private fun cronScheduleDetail(schedule: JsonObject): NativeText =
   when (schedule.string("kind")) {
-    "at" -> schedule.string("at")?.let(::verbatimText) ?: nativeText("One time")
+    "at" -> {
+      schedule.string("at")?.let(::verbatimText) ?: nativeText("One time")
+    }
+
     "every" -> {
       val every = schedule.long("everyMs")?.let(::formatCronInterval) ?: nativeText("Repeating")
       val anchor = schedule.long("anchorMs")?.let { nativeText("Anchor \$it", it) }
       joinedNativeText(" · ", listOfNotNull(every, anchor))
     }
+
     "cron" -> {
       val expression = schedule.string("expr")?.let(::verbatimText) ?: nativeText("Cron")
       val timezone = schedule.string("tz")?.let(::verbatimText)
       val stagger = schedule.long("staggerMs")?.takeIf { it > 0L }?.let { nativeText("Stagger \${formatCronInterval(it)}", formatCronInterval(it)) }
       joinedNativeText(" · ", listOfNotNull(expression, timezone, stagger))
     }
-    else -> nativeText("Scheduled")
+
+    else -> {
+      nativeText("Scheduled")
+    }
   }
 
 private fun cronPayloadText(payload: JsonObject): String? =
   when (payload.string("kind")) {
-    "systemEvent" -> payload.string("text")
-    "agentTurn" -> payload.string("message")
-    "command" ->
+    "systemEvent" -> {
+      payload.string("text")
+    }
+
+    "agentTurn" -> {
+      payload.string("message")
+    }
+
+    "command" -> {
       (payload["argv"] as? JsonArray)
         ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { value -> value.isNotEmpty() } }
         ?.joinToString(" ")
-    "script" -> payload["script"].asStringOrNull()
-    else -> null
+    }
+
+    "script" -> {
+      payload["script"].asStringOrNull()
+    }
+
+    else -> {
+      null
+    }
   }
 
 private fun cronPayloadLabel(payload: JsonObject): NativeText =
   when (payload.string("kind")) {
-    "systemEvent" -> nativeText("System event")
+    "systemEvent" -> {
+      nativeText("System event")
+    }
+
     "agentTurn" -> {
       val model = payload.string("model")?.let(::verbatimText)
       val thinking = payload.string("thinking")?.let { nativeText("Thinking \$it", it) }
       joinedNativeText(" · ", listOfNotNull(nativeText("Agent turn"), model, thinking))
     }
-    "command" -> nativeText("Command")
+
+    "command" -> {
+      nativeText("Command")
+    }
+
     "script" -> {
       val timeout = payload.long("timeoutSeconds")?.let { nativeText("Timeout \${it}s", it) }
       val budget = payload.long("toolBudget")?.let { nativeText("\$it tools", it) }
       joinedNativeText(" · ", listOfNotNull(nativeText("Script"), timeout, budget))
     }
-    else -> nativeText("Payload")
+
+    else -> {
+      nativeText("Payload")
+    }
   }
 
 private fun cronDeliveryLabel(delivery: JsonObject?): NativeText {

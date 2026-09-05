@@ -9,9 +9,6 @@ import {
 import { resolveRepoRoot } from "./repo-root.mjs";
 import { resolveVitestProcessEnv } from "./vitest-process-env.mts";
 
-const repoRoot = resolveRepoRoot(import.meta.url);
-const testProjectsRunnerPath = path.join(repoRoot, "scripts", "test-projects.mts");
-
 /** Builds env for the delegated test-projects runner. */
 export function resolveTestProjectsRunnerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return resolveVitestProcessEnv(env);
@@ -30,24 +27,20 @@ export function resolveTestProjectsRunnerSpawnParams(
 }
 
 export function spawnTestProjectsRunner(argv: string[], env: NodeJS.ProcessEnv) {
-  let forwardedSignal: NodeJS.Signals | null = null;
+  const repoRoot = resolveRepoRoot(import.meta.url);
+  const testProjectsRunnerPath = path.join(repoRoot, "scripts", "test-projects-child.mts");
   const spawnParams = resolveTestProjectsRunnerSpawnParams(env);
   const child = spawn(
     process.execPath,
     ["--import", "tsx", testProjectsRunnerPath, ...argv],
     spawnParams,
   );
-  const teardown = installVitestProcessGroupCleanup({
-    child,
-    forceSignal: "SIGKILL",
-    forceSignalDelayMs: 100,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
-  });
+  // The orchestrator must join its bounded native children and record their outcomes.
+  // A competing leaf-sized force timer kills it before that cleanup can complete.
+  const cleanup = installVitestProcessGroupCleanup({ child });
   const completion = createVitestProcessCompletion({
     child,
     detached: spawnParams.detached,
-  }).finally(teardown);
-  return { child, completion, getForwardedSignal: () => forwardedSignal };
+  }).finally(cleanup.teardown);
+  return { child, completion, getForwardedSignal: cleanup.getForwardedSignal };
 }

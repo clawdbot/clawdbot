@@ -10,7 +10,14 @@ import {
 } from "../gateway/server-methods/agents-config-mutations.js";
 import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import {
+  completeAgentDeletionJournalInDatabase,
+  readAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
+import type {
+  OpenClawStateDatabase,
+  OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db-contract.js";
 import { digestClawAgentConfig } from "./agent-config-digest.js";
 import {
   deletionEffects,
@@ -28,6 +35,7 @@ type ClawAgentConfigRemovalParams = {
   fallbackWorkspace: string;
   config?: OpenClawConfig;
   commitConfig?: ConfigCommit;
+  stateDatabase?: OpenClawStateDatabaseOptions;
   trashPath?: ClawTrashPath;
   onModified: () => Error;
 };
@@ -157,25 +165,40 @@ export async function claimClawAgentConfigRemoval(params: ClawAgentConfigRemoval
   const effects = deletionEffects(config, params.agentId, params.fallbackWorkspace);
   // beginAgentDeletion takes over an existing journal row instead of refusing it, so rolling back
   // a row this call did not open would erase another deletion's record.
-  const existingJournal = readAgentDeletionJournal(params.agentId);
-  const deletion = beginAgentDeletion({
-    agentId: params.agentId,
-    workspaceDir: effects.workspace,
-    agentDir: effects.agentDir,
-    sessionsDir: effects.sessionsDir,
-    // Claw removal owns selective cleanup and may retain modified or untracked workspace entries,
-    // so the journal must not claim authority to trash them.
-    deleteFiles: existingJournal?.deleteFiles ?? false,
-  });
+  const existingJournal = readAgentDeletionJournal(params.agentId, params.stateDatabase);
+  const deletion = beginAgentDeletion(
+    {
+      agentId: params.agentId,
+      workspaceDir: effects.workspace,
+      agentDir: effects.agentDir,
+      sessionsDir: effects.sessionsDir,
+      // Claw removal owns selective cleanup and may retain modified or untracked workspace entries,
+      // so the journal must not claim authority to trash them.
+      deleteFiles: existingJournal?.deleteFiles ?? false,
+    },
+    params.stateDatabase,
+  );
   try {
-    const result = await withAgentExecApprovalsRemoved(params.agentId, async () =>
-      commitClawAgentConfigRemoval({ ...params, config }),
+    const result = await withAgentExecApprovalsRemoved(
+      params.agentId,
+      async () => commitClawAgentConfigRemoval({ ...params, config }),
+      params.stateDatabase,
     );
     deletion.commit();
-    // The journal fences only the roster and approvals commit here; Claw's own filesystem cleanup
-    // runs afterwards and may legitimately end partial, so completion is recorded now.
-    deletion.finish();
-    return result;
+    return {
+      ...result,
+      completeDeletion: (database: OpenClawStateDatabase) => {
+        if (
+          !completeAgentDeletionJournalInDatabase(
+            database,
+            params.agentId,
+            deletion.entry.operationId,
+          )
+        ) {
+          throw new Error(`Failed to complete deletion journal for agent ${params.agentId}.`);
+        }
+      },
+    };
   } catch (error) {
     if (!existingJournal) {
       deletion.rollback();

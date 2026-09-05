@@ -4,7 +4,7 @@ Provider plugin for the **Copilot Proxy** VS Code extension.
 
 ## Enable
 
-Bundled plugins are disabled by default. Enable this one:
+This bundled plugin is enabled by default. If you previously disabled it, re-enable it:
 
 ```bash
 openclaw plugins enable copilot-proxy

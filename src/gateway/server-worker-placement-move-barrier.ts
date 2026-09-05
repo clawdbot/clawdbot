@@ -23,7 +23,15 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
     runId: string;
   }) => Promise<void>;
 }): WorkerPlacementMoveBarrier {
-  return async ({ sessionId, sessionKey, agentId, sourceDisposition, authorize, begin }) => {
+  return async ({
+    sessionId,
+    sessionKey,
+    agentId,
+    sourceDisposition,
+    authorize,
+    signal,
+    begin,
+  }) => {
     const sessionRuntime = await params.loadSessionRuntime();
     const target = sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
       cfg: getRuntimeConfig(),
@@ -36,6 +44,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
     await runExclusiveSessionLifecycleMutation({
       scope: target.storePath,
       identities: lifecycleIdentities,
+      signal,
       prepare: async () => {
         resolveWorkerPlacementSessionTarget({
           sessionRuntime,

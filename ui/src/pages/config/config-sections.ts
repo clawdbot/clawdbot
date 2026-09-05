@@ -18,7 +18,7 @@ const COMMUNICATION_SECTION_KEYS = ["messages", "tts"] as const;
 // the talk schema section (talk.ts / talk-page.ts).
 const TALK_SECTION_KEYS = ["talk"] as const;
 
-const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
+const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui"] as const;
 
 const NOTIFICATION_SECTION_KEYS = ["__notifications__"] as const;
 

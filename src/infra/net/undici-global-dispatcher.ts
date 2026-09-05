@@ -2,7 +2,7 @@
 // enforcement, and long stream timeouts aligned across root fetch imports.
 import { isProxylineDispatcher } from "@openclaw/proxyline/dispatcher-brand";
 import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
-import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
+import { resolveActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import {
   createUndiciAutoSelectFamilyConnectOptions,
   resolveUndiciAutoSelectFamily,
@@ -164,7 +164,7 @@ function resolveEnvProxyDispatcherOptions(): ConstructorParameters<
   UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]
 >[0] {
   return {
-    ...addActiveManagedProxyTlsOptions(resolveEnvHttpProxyAgentOptions()),
+    ...resolveEnvHttpProxyAgentOptions(),
     ...HTTP1_ONLY_DISPATCHER_OPTIONS,
   } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
 }
@@ -172,10 +172,14 @@ function resolveEnvProxyDispatcherOptions(): ConstructorParameters<
 function resolveEnvProxyBootstrapKey(
   options: ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0],
 ): string {
-  const entries = Object.entries((options ?? {}) as Record<string, unknown>)
+  const entries = Object.entries(options ?? {})
     .filter(([, value]) => value !== undefined)
     .toSorted(([a], [b]) => a.localeCompare(b));
-  return JSON.stringify(entries);
+  // Either hop can own managed trust; rotating one must replace the pooled dispatcher.
+  const proxyTls = [...new Set([options?.httpProxy, options?.httpsProxy])].map((proxyUrl) =>
+    proxyUrl ? resolveActiveManagedProxyTlsOptions({ proxyUrl }) : undefined,
+  );
+  return JSON.stringify([entries, proxyTls]);
 }
 
 function resolveStreamTimeoutMs(opts?: { timeoutMs?: number }): number | null {
@@ -272,7 +276,7 @@ function applyGlobalDispatcherStreamTimeouts(params: {
       );
     } else if (kind === "env-proxy") {
       const proxyOptions = {
-        ...addActiveManagedProxyTlsOptions(resolveEnvHttpProxyAgentOptions()),
+        ...resolveEnvHttpProxyAgentOptions(),
         bodyTimeout: timeoutMs,
         headersTimeout: timeoutMs,
         ...(connect ? { connect } : {}),

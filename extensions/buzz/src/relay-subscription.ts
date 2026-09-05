@@ -23,6 +23,7 @@ export function openBuzzRelaySubscription(
   relay: Relay,
   filters: Filter[],
   params: BuzzRelaySubscriptionParams,
+  requestFilters: Filter[] = filters,
 ): ReturnType<Relay["prepareSubscription"]> {
   // Relay.subscribe() synthesizes EOSE after 4.4 seconds. Buzz needs the relay's
   // real EOSE before replacing or closing subscriptions, otherwise an async REQ
@@ -42,7 +43,10 @@ export function openBuzzRelaySubscription(
     throw error;
   }
 
-  const frame = JSON.stringify(["REQ", subscription.id, ...filters]);
+  // Buzz can route on stored channel metadata absent from signed event tags.
+  // Gateway owns reconnects; nostr-tools automatic refires must stay disabled
+  // so fresh sessions keep these wire filters separate from client validation.
+  const frame = JSON.stringify(["REQ", subscription.id, ...requestFilters]);
   void relay.send(frame).catch((error: unknown) => {
     if (subscription.closed || relay.openSubs.get(subscription.id) !== subscription) {
       return;

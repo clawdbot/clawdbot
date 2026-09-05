@@ -3,13 +3,16 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { Client } from "../internal/discord.js";
-import { decodeOpusStream, decodeOpusStreamChunks, writeVoiceWavFile } from "./audio.js";
+import {
+  decodeOpusStream,
+  decodeOpusStreamChunks,
+  VOICE_WAV_HEADER_BYTES,
+  writeVoiceWavFile,
+} from "./audio.js";
 import {
   beginVoiceCapture,
   clearVoiceCaptureFinalizeTimer,
   finishVoiceCapture,
-  getActiveVoiceCapture,
-  isVoiceCaptureActive,
   scheduleVoiceCaptureFinalize,
 } from "./capture-state.js";
 import { type DiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
@@ -109,11 +112,9 @@ export class DiscordVoiceReceive {
       return;
     }
     this.params.membership.notePresent(entry, userId);
-    if (isVoiceCaptureActive(entry.capture, userId)) {
-      const activeCapture = getActiveVoiceCapture(entry.capture, userId);
-      const extended = activeCapture
-        ? clearVoiceCaptureFinalizeTimer(entry.capture, userId, activeCapture.generation)
-        : false;
+    const activeCapture = entry.capture.get(userId);
+    if (activeCapture) {
+      const extended = clearVoiceCaptureFinalizeTimer(activeCapture);
       logVoiceVerbose(
         `capture start ignored (already active): guild ${entry.guildId} channel ${entry.channelId} user ${userId}${extended ? " (finalize canceled)" : ""}`,
       );
@@ -124,6 +125,8 @@ export class DiscordVoiceReceive {
       `capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
     const voiceSdk = loadDiscordVoiceSdk();
+    // Queued STT belongs to the subscription that received the audio.
+    const transcripts = entry.transcripts;
     const voiceMode = resolveDiscordVoiceMode(this.params.discordConfig.voice);
     const realtime =
       entry.realtimeLifecycle.status === "active" && isDiscordRealtimeVoiceMode(voiceMode)
@@ -135,44 +138,8 @@ export class DiscordVoiceReceive {
       );
       return;
     }
-    const realtimeIngress = realtime
-      ? await this.resolveDiscordVoiceIngressContext(entry, userId)
-      : undefined;
-    if (realtime && !realtimeIngress) {
-      logVoiceVerbose(
-        `realtime capture unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
-      );
-      return;
-    }
-    if (!this.params.isEntryCurrent(entry)) {
-      return;
-    }
-    if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing && realtime) {
-      if (!realtime.isBargeInEnabled()) {
-        logger.info(
-          `discord voice: realtime capture ignored during playback (barge-in disabled): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
-        );
-        return;
-      }
-      logVoiceVerbose(
-        `realtime barge-in: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
-      );
-      logger.info(
-        `discord voice: realtime barge-in detected source=speaker-start guild=${entry.guildId} channel=${entry.channelId} user=${userId} playerStatus=${entry.player.state.status}`,
-      );
-      realtime.handleBargeIn("speaker-start");
-    }
-    this.enableDaveReceivePassthrough(
-      entry,
-      `speaker ${userId} start`,
-      DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
-    );
-    const stream = entry.connection.receiver.subscribe(userId, {
-      end: {
-        behavior: voiceSdk.EndBehaviorType.Manual,
-      },
-    });
-    const generation = beginVoiceCapture(entry.capture, userId, stream);
+    // Own start/end events while admission awaits; subscribing still requires authorization.
+    const capture = beginVoiceCapture(entry.capture, userId);
     let streamAborted = false;
     let receiveFailureHandled = false;
     let receiveStreamEndHandled = false;
@@ -193,9 +160,45 @@ export class DiscordVoiceReceive {
       receiveFailureHandled = true;
       this.handleReceiveError(entry, err);
     };
-    stream.on("error", handleStreamError);
-
     try {
+      const realtimeIngress = realtime
+        ? await this.resolveDiscordVoiceIngressContext(entry, userId)
+        : undefined;
+      if (realtime && !realtimeIngress) {
+        logVoiceVerbose(
+          `realtime capture unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+        );
+        return;
+      }
+      if (!this.params.isEntryCurrent(entry) || entry.capture.get(userId) !== capture) {
+        return;
+      }
+      if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing && realtime) {
+        if (!realtime.isBargeInEnabled()) {
+          logger.info(
+            `discord voice: realtime capture ignored during playback (barge-in disabled): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+          );
+          return;
+        }
+        logVoiceVerbose(
+          `realtime barge-in: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+        );
+        logger.info(
+          `discord voice: realtime barge-in detected source=speaker-start guild=${entry.guildId} channel=${entry.channelId} user=${userId} playerStatus=${entry.player.state.status}`,
+        );
+        realtime.handleBargeIn("speaker-start");
+      }
+      this.enableDaveReceivePassthrough(
+        entry,
+        `speaker ${userId} start`,
+        DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
+      );
+      const stream = (capture.stream = entry.connection.receiver.subscribe(userId, {
+        end: {
+          behavior: voiceSdk.EndBehaviorType.Manual,
+        },
+      }));
+      stream.on("error", handleStreamError);
       if (realtime && realtimeIngress) {
         const turn = realtime.beginSpeakerTurn(realtimeIngress, userId);
         try {
@@ -210,7 +213,14 @@ export class DiscordVoiceReceive {
         }
         return;
       }
+      if (!entry.audioInputBudget.enabled) {
+        logger.warn(
+          "discord voice: capture skipped: audio understanding is disabled; enable tools.media.audio.enabled to transcribe voice.",
+        );
+        return;
+      }
       const pcm = await decodeOpusStream(stream, {
+        maxBytes: Math.max(0, entry.audioInputBudget.maxBytes - VOICE_WAV_HEADER_BYTES),
         onError: handleStreamError,
         onVerbose: logVoiceVerbose,
         onWarn: (message) => logger.warn(message),
@@ -247,6 +257,9 @@ export class DiscordVoiceReceive {
           if (!this.params.isEntryCurrent(entry)) {
             return;
           }
+          if (entry.transcripts !== transcripts) {
+            return;
+          }
           await this.processSegment({ entry, wavPath, userId, durationSeconds });
         })
         .catch((err: unknown) =>
@@ -258,9 +271,10 @@ export class DiscordVoiceReceive {
       }
       throw err;
     } finally {
-      stream.off?.("error", handleStreamError);
-      const finishedActiveCapture = finishVoiceCapture(entry.capture, userId, generation);
-      if (finishedActiveCapture && !stream.destroyed) {
+      const stream = capture.stream;
+      stream?.off?.("error", handleStreamError);
+      const finishedActiveCapture = finishVoiceCapture(entry.capture, userId, capture);
+      if (finishedActiveCapture && stream && !stream.destroyed) {
         stream.destroy();
       }
     }

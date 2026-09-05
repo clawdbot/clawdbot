@@ -183,7 +183,7 @@ export class WorkerLiveEventClient {
         return;
       }
       fenceForOwnershipError(this.connection, response.error);
-      throw new Error(response.error.message);
+      throw new Error(`${response.error.message}: ${response.error.details.reason}`);
     } catch (error) {
       if (
         error instanceof WorkerConnectionInterruptedError &&

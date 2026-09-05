@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OpenClawKit
 import UserNotifications
 import WatchKit
 
@@ -82,6 +83,7 @@ import WatchKit
         var promptId: String?
         var sessionKey: String?
         var gatewayStableID: String?
+        var promptChatDeliveryContext: OpenClawWatchChatDeliveryContext?
         var kind: String?
         var details: String?
         var expiresAtMs: Int64?
@@ -117,6 +119,11 @@ import WatchKit
     private static let defaultTitle = "OpenClaw"
     private static let defaultBody = "Waiting for messages from your iPhone."
     private let defaults: UserDefaults
+    let chatDeliveryJournal: OpenClawWatchChatDeliveryStore
+    var chatDeliveryEntries: [OpenClawWatchChatDeliveryStore.Entry] = []
+    var promptChatDeliveryEntries: [OpenClawWatchChatDeliveryStore.Entry] = []
+    var chatDeliveryReloadID: UUID?
+    var chatDeliveryMaintenanceID: UUID?
 
     var title = WatchInboxStore.defaultTitle
     var body = WatchInboxStore.defaultBody
@@ -125,6 +132,7 @@ import WatchKit
     var promptId: String?
     var sessionKey: String?
     var gatewayStableID: String?
+    var promptChatDeliveryContext: OpenClawWatchChatDeliveryContext?
     var kind: String?
     var details: String?
     var expiresAtMs: Int64?
@@ -153,7 +161,7 @@ import WatchKit
     private var lastDeliveryKey: String?
     // Transport completions can outlive their prompt, snapshot, or gateway owner.
     // Keep attempt identities volatile so stale results never replace persisted state.
-    private var activeReplyAttemptID: UUID?
+    private var activeReplyAttempt: (id: UUID, commandId: String)?
     private var activeAppSnapshotAttemptID: UUID?
     private var activeAppCommandAttemptID: UUID?
     var voiceTurnState = WatchVoiceTurnState()
@@ -188,10 +196,13 @@ import WatchKit
 
     init(
         defaults: UserDefaults = .standard,
-        requestNotificationAuthorization: Bool = true)
+        requestNotificationAuthorization: Bool = true,
+        chatDeliveryJournal: OpenClawWatchChatDeliveryStore = OpenClawWatchChatDeliveryStore())
     {
         self.defaults = defaults
+        self.chatDeliveryJournal = chatDeliveryJournal
         self.restorePersistedState()
+        self.expireVoiceTurnIfNeeded(nowMs: Self.nowMs())
         if [self.replyStatus?.code, self.appSnapshotStatus?.code, self.appCommandStatus?.code].contains(.sending) {
             // Attempt ownership never survives app restoration, so interrupted sends must be retryable.
             if self.replyStatus?.code == .sending {
@@ -288,13 +299,11 @@ import WatchKit
     }
 
     var gatewaySummaryText: String {
-        guard let appSnapshot else { return String(localized: "Waiting for iPhone") }
-        return appSnapshot.gatewayStatus.localizedText()
+        self.appSnapshot?.gatewayStatus.localizedText() ?? String(localized: "Waiting for iPhone")
     }
 
     var talkSummaryText: String {
-        guard let appSnapshot else { return String(localized: "Not synced") }
-        return appSnapshot.talkStatus.localizedText()
+        self.appSnapshot?.talkStatus.localizedText() ?? String(localized: "Not synced")
     }
 
     func beginExecApprovalReviewLoading() {
@@ -343,13 +352,17 @@ import WatchKit
         self.promptId = message.promptId
         self.sessionKey = message.sessionKey
         self.gatewayStableID = message.gatewayStableID
+        self.promptChatDeliveryContext = message.chatDeliveryContext
+        self.promptChatDeliveryEntries = []
+        self.chatDeliveryReloadID = nil
+        self.chatDeliveryMaintenanceID = nil
         self.kind = message.kind
         self.details = message.details
         self.expiresAtMs = message.expiresAtMs
         self.risk = message.risk
         self.actions = message.actions
         self.lastDeliveryKey = deliveryKey
-        self.activeReplyAttemptID = nil
+        self.activeReplyAttempt = nil
         self.replyStatus = nil
         self.replyStatusAt = nil
         self.isReplySending = false
@@ -594,8 +607,9 @@ import WatchKit
         let hasExistingAppSnapshot = self.appSnapshot != nil
         let previousGatewayID = Self.normalizedGatewayID(self.appSnapshot?.gatewayStableID)
         let nextGatewayID = Self.normalizedGatewayID(message.gatewayStableID)
+        let hasSameChatSession = self.appSnapshot?.chatSessionIdentity == message.chatSessionIdentity
         var merged = message
-        if hasExistingAppSnapshot, Self.gatewayIDsMatch(previousGatewayID, nextGatewayID) {
+        if hasSameChatSession {
             if merged.chatItems == nil {
                 merged.chatItems = self.appSnapshot?.chatItems
             }
@@ -607,11 +621,19 @@ import WatchKit
         self.appSnapshotUpdatedAt = Date()
         self.activeAppSnapshotAttemptID = nil
         self.appSnapshotStatus = nil
-        if !hasExistingAppSnapshot || !Self.gatewayIDsMatch(previousGatewayID, nextGatewayID) {
+        if !hasSameChatSession {
+            self.chatDeliveryEntries = []
+            self.chatDeliveryReloadID = nil
+            self.chatDeliveryMaintenanceID = nil
+            // A reply belongs to the chat that submitted it, even when only the
+            // session changes on the same gateway. Retire it before accepting more deliveries.
+            self.voiceTurnState.cancel()
             if hasExistingAppSnapshot {
                 self.activeAppCommandAttemptID = nil
                 self.appCommandStatus = nil
             }
+        }
+        if !hasExistingAppSnapshot || !Self.gatewayIDsMatch(previousGatewayID, nextGatewayID) {
             self.hasCompletedExecApprovalSnapshotRefreshInSession = false
             if !Self.gatewayIDsMatch(self.gatewayStableID, nextGatewayID) {
                 self.clearMessagePrompt()
@@ -671,10 +693,6 @@ import WatchKit
             sentAtMs: Self.nowMs())
     }
 
-    var hasGatewayTaggedAppSnapshot: Bool {
-        WatchGatewayID.exact(self.appSnapshot?.gatewayStableID) != nil
-    }
-
     func markAppCommandSending(_ command: WatchAppCommand) -> UUID {
         let attemptID = UUID()
         self.activeAppCommandAttemptID = attemptID
@@ -685,35 +703,29 @@ import WatchKit
 
     func markAppCommandBlocked(_ command: WatchAppCommand, reason: String) {
         self.activeAppCommandAttemptID = nil
-        self.appCommandStatus = WatchAppCommandStatus(
-            command: command,
-            code: .blocked,
-            detail: reason)
+        self.appCommandStatus = WatchAppCommandStatus(command: command, code: .blocked, detail: reason)
         self.persistState()
     }
 
     @discardableResult
     func markAppCommandResult(_ result: WatchReplySendResult, command: WatchAppCommand, attemptID: UUID) -> Bool {
         guard self.activeAppCommandAttemptID == attemptID else { return false }
-        if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
+        switch result.delivery {
+        case .notSent:
             self.appCommandStatus = WatchAppCommandStatus(
                 command: command,
                 code: .failed,
-                detail: errorMessage)
-        } else if result.deliveredImmediately {
+                detail: result.errorMessage)
+            if command == .sendChat {
+                self.voiceTurnState.cancel()
+            }
+        case .delivered:
             self.appCommandStatus = WatchAppCommandStatus(command: command, code: .sent)
-        } else if result.queuedForDelivery {
+        case .queued:
             self.appCommandStatus = WatchAppCommandStatus(command: command, code: .queued)
-        } else {
-            self.appCommandStatus = WatchAppCommandStatus(command: command, code: .sent)
         }
         self.persistState()
         return true
-    }
-
-    func isCurrentAppCommandAttempt(_ attemptID: UUID, gatewayStableID: String?) -> Bool {
-        self.activeAppCommandAttemptID == attemptID
-            && WatchGatewayID.key(self.appSnapshot?.gatewayStableID) == WatchGatewayID.key(gatewayStableID)
     }
 }
 
@@ -1157,12 +1169,15 @@ extension WatchInboxStore {
         self.promptId = nil
         self.sessionKey = nil
         self.gatewayStableID = nil
+        self.promptChatDeliveryContext = nil
+        self.promptChatDeliveryEntries = []
+        self.chatDeliveryMaintenanceID = nil
         self.kind = nil
         self.details = nil
         self.expiresAtMs = nil
         self.risk = nil
         self.actions = []
-        self.activeReplyAttemptID = nil
+        self.activeReplyAttempt = nil
         self.replyStatus = nil
         self.replyStatusAt = nil
         self.isReplySending = false
@@ -1362,6 +1377,7 @@ extension WatchInboxStore {
         self.promptId = state.promptId
         self.sessionKey = state.sessionKey
         self.gatewayStableID = state.gatewayStableID
+        self.promptChatDeliveryContext = state.promptChatDeliveryContext
         self.kind = state.kind
         self.details = state.details
         self.expiresAtMs = state.expiresAtMs
@@ -1412,7 +1428,6 @@ extension WatchInboxStore {
             ?? state.appCommandStatusText.flatMap(
                 WatchAppCommandStatus.decodeLegacyLocalizedText)
         self.voiceTurnState = state.voiceTurnState ?? WatchVoiceTurnState()
-        self.voiceTurnState.expireIfNeeded(nowMs: Self.nowMs())
         self.deferredGatewayPayloads = Array(
             (state.deferredGatewayPayloads ?? []).suffix(Self.maxDeferredGatewayPayloads))
         self.execApprovalTerminalTombstones = state.execApprovalTerminalTombstones ?? []
@@ -1456,7 +1471,7 @@ extension WatchInboxStore {
         })
     }
 
-    private func persistState() {
+    func persistState() {
         self.pruneExecApprovalTerminalTombstones(now: Date())
         let updatedAt = self.updatedAt ?? self.lastExecApprovalOutcomeAt ?? Date()
         let state = PersistedState(
@@ -1468,6 +1483,7 @@ extension WatchInboxStore {
             promptId: promptId,
             sessionKey: sessionKey,
             gatewayStableID: gatewayStableID,
+            promptChatDeliveryContext: promptChatDeliveryContext,
             kind: kind,
             details: details,
             expiresAtMs: expiresAtMs,
@@ -1527,28 +1543,12 @@ extension WatchInboxStore {
         }
     }
 
-    func makeReplyDraft(action: WatchPromptAction) -> WatchReplyDraft {
-        let prompt = self.promptId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return WatchReplyDraft(
-            replyId: UUID().uuidString,
-            promptId: (prompt?.isEmpty == false) ? prompt! : "unknown",
-            actionId: action.id,
-            actionLabel: action.label,
-            sessionKey: self.sessionKey,
-            gatewayStableID: self.gatewayStableID,
-            note: nil,
-            sentAtMs: Self.nowMs())
-    }
-
-    func markReplySending(actionLabel: String) -> UUID? {
+    func markReplySending(actionLabel: String, commandId: String) -> UUID? {
         guard !self.isReplySending else { return nil }
         let attemptID = UUID()
-        self.activeReplyAttemptID = attemptID
+        self.activeReplyAttempt = (attemptID, commandId)
         self.isReplySending = true
-        self.replyStatus = WatchReplyStatus(
-            code: .sending,
-            actionLabel: actionLabel,
-            detail: nil)
+        self.replyStatus = WatchReplyStatus(code: .sending, actionLabel: actionLabel, detail: nil)
         self.replyStatusAt = Date()
         self.persistState()
         return attemptID
@@ -1556,33 +1556,38 @@ extension WatchInboxStore {
 
     @discardableResult
     func markReplyResult(_ result: WatchReplySendResult, actionLabel: String, attemptID: UUID) -> Bool {
-        guard self.activeReplyAttemptID == attemptID else { return false }
-        self.activeReplyAttemptID = nil
+        guard self.isReplySending, self.activeReplyAttempt?.id == attemptID else { return false }
         self.isReplySending = false
-        if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
-            self.replyStatus = WatchReplyStatus(
-                code: .failed,
-                actionLabel: actionLabel,
-                detail: errorMessage)
-        } else if result.deliveredImmediately {
-            self.replyStatus = WatchReplyStatus(
-                code: .sent,
-                actionLabel: actionLabel,
-                detail: nil)
-        } else if result.queuedForDelivery {
-            self.replyStatus = WatchReplyStatus(
-                code: .queued,
-                actionLabel: actionLabel,
-                detail: nil)
-        } else {
-            self.replyStatus = WatchReplyStatus(
-                code: .sent,
-                actionLabel: actionLabel,
-                detail: nil)
-        }
+        let detail = result.errorMessage.flatMap { $0.isEmpty ? nil : $0 }
+        let code: WatchDeliveryStatusCode = detail != nil ? .failed : (result.queuedForDelivery ? .queued : .sent)
+        self.replyStatus = WatchReplyStatus(code: code, actionLabel: actionLabel, detail: detail)
         self.replyStatusAt = Date()
         self.persistState()
         return true
+    }
+
+    func canPresentChatDelivery(commandId: String?) -> Bool {
+        guard self.appCommandStatus?.code != .sending,
+              self.appCommandStatus == nil || self.appCommandStatus?.command == .sendChat
+        else { return false }
+        return self.activeAppCommandAttemptID.map {
+            $0.uuidString.utf8.elementsEqual((commandId ?? "").utf8)
+        } ?? true
+    }
+
+    func chatDeliveryPresentationEntry(
+        _ entries: [OpenClawWatchChatDeliveryStore.Entry], kind: OpenClawWatchChatDeliveryKind)
+        -> OpenClawWatchChatDeliveryStore.Entry?
+    {
+        if kind == .quickReply, self.isReplySending { return nil }
+        // A newer unsaved attempt has no row. Keep its failure; reopening has no live attempt.
+        return entries.last { entry in
+            guard entry.command.kind == kind else { return false }
+            if kind == .chat { return self.canPresentChatDelivery(commandId: entry.command.commandId) }
+            return self.activeReplyAttempt.map {
+                entry.command.commandId.utf8.elementsEqual($0.commandId.utf8)
+            } ?? true
+        }
     }
 
     private func postLocalNotification(

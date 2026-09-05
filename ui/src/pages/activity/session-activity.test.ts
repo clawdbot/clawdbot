@@ -1,174 +1,114 @@
 import { describe, expect, it } from "vitest";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { activityPersonFromPath } from "../../app-route-paths.ts";
 import {
   parseSessionActivityFilters,
+  canonicalSessionActivityLocation,
   projectSessionActivity,
-  resolveActivityIdentity,
-  resolveViewingNow,
-  sessionActivitySearch,
+  sessionActivityLocation,
 } from "./session-activity.ts";
 
-function session(
-  key: string,
-  title: string,
-  updatedAt: number,
-  owner: { id: string; label: string },
-  participants: Array<{ id: string; label: string }> = [],
-): GatewaySessionRow {
+const people: NonNullable<SessionsListResult["people"]> = [
+  { identity: { type: "profile", id: "alice" }, label: "Alice", sessionCount: 12 },
+  { identity: { type: "profile", id: "bob" }, label: "Bob", sessionCount: 3 },
+];
+function result(sessions: GatewaySessionRow[]): SessionsListResult {
   return {
-    key,
-    kind: "direct",
-    displayName: title,
-    updatedAt,
-    createdActor: { type: "human", ...owner },
-    owner: { actor: { type: "human", ...owner } },
-    participants: participants.map((actor) => ({ type: "human" as const, ...actor })),
+    ts: 1,
+    path: "",
+    count: sessions.length,
+    totalCount: 12,
+    peopleSessionCount: 15,
+    people,
+    defaults: { model: null, modelProvider: null, contextTokens: null },
+    sessions,
   };
 }
 
 describe("session activity projection", () => {
-  const now = new Date(2026, 7, 17, 12).getTime();
-  const rows = [
-    session(
-      "agent:main:release",
-      "Release readiness",
-      now - 60_000,
-      { id: "alice", label: "Alice" },
-      [{ id: "bob", label: "Bob" }],
-    ),
-    session(
-      "agent:main:design",
-      "Design review",
-      now - 2 * 60 * 60_000,
-      { id: "bob", label: "Bob" },
-      [{ id: "alice", label: "Alice" }],
-    ),
-    session("agent:main:handoff", "Handoff notes", now - 26 * 60 * 60_000, {
-      id: "carol",
-      label: "Carol",
-    }),
-    session("agent:main:old", "Old planning", now - 10 * 24 * 60 * 60_000, {
-      id: "dave",
-      label: "Dave",
-    }),
-  ];
-
-  it("counts people in the time window, filters titles and people, and groups days", () => {
-    const all = projectSessionActivity(rows, { personId: null, query: "", time: "7d" }, now);
-    expect(all.people.map(({ id, count }) => ({ id, count }))).toEqual([
-      { id: "alice", count: 2 },
-      { id: "bob", count: 2 },
-      { id: "carol", count: 1 },
-    ]);
-    expect(all.days.map((day) => day.sessions.map((row) => row.key))).toEqual([
-      ["agent:main:release", "agent:main:design"],
-      ["agent:main:handoff"],
-    ]);
-
-    const filtered = projectSessionActivity(
-      rows,
-      { personId: "alice", query: "release", time: "7d" },
-      now,
-    );
-    expect(filtered.sessions.map((row) => row.key)).toEqual(["agent:main:release"]);
-    expect(filtered.matchedCount).toBe(1);
-    expect(filtered.timeCount).toBe(3);
-  });
-
-  it("orders people by their latest activity instead of session count or online state", () => {
-    const activity = projectSessionActivity(
-      [
-        session("agent:main:older-1", "Older one", now - 3_000, {
-          id: "frequent",
-          label: "Frequent",
-        }),
-        session("agent:main:older-2", "Older two", now - 2_000, {
-          id: "frequent",
-          label: "Frequent",
-        }),
-        session("agent:main:newest", "Newest", now - 1_000, {
-          id: "recent",
-          label: "Recent",
-        }),
-      ],
-      { personId: null, query: "", time: "7d" },
-      now,
-    );
-
+  it("refreshes decorative names while retaining exact references, longer prefixes, filters and anchors", () => {
+    const personId = "12345678-abcd-4123-8123-123456789abc";
+    const legacy = {
+      pathname: "/ui/activity",
+      search: `?person=${personId}&time=30d&q=release`,
+      hash: "#sessions",
+    };
+    expect(canonicalSessionActivityLocation(legacy, personId, "Ada Lovelace", "/ui")).toEqual({
+      pathname: "/ui/activity/ada-lovelace-12345678abcd41238123123456789abc",
+      search: "?time=30d&q=release",
+      hash: "#sessions",
+    });
+    for (const reference of [
+      "12345678",
+      "12345678abcd4123",
+      personId,
+      personId.replaceAll("-", ""),
+    ]) {
+      const location = { ...legacy, pathname: `/ui/activity/${reference}`, search: "?q=none" };
+      expect(canonicalSessionActivityLocation(location, personId, "Ada", "/ui")?.pathname).toBe(
+        `/ui/activity/ada-${reference.replaceAll("-", "")}`,
+      );
+    }
+    const empty = { pathname: "/ui/activity/ada-12345678abcd", search: "?q=none", hash: "" };
+    expect(canonicalSessionActivityLocation(empty, "12345678abcd", undefined, "/ui")).toBeNull();
     expect(
-      activity.people.map(({ id, count, lastActiveAt }) => ({ id, count, lastActiveAt })),
-    ).toEqual([
-      { id: "recent", count: 1, lastActiveAt: now - 1_000 },
-      { id: "frequent", count: 2, lastActiveAt: now - 2_000 },
-    ]);
+      canonicalSessionActivityLocation(legacy, "abcdef12-1234-4123-8123-123456789abc", "Ada", "/ui")
+        ?.pathname,
+    ).toBe("/ui/activity/ada-abcdef12123441238123123456789abc");
   });
 
-  it("round-trips linkable filters in a stable query order", () => {
-    const search = sessionActivitySearch({
-      personId: "profile/a",
-      query: "release notes",
-      time: "30d",
-    });
-    expect(search).toBe("?time=30d&person=profile%2Fa&q=release+notes");
-    expect(parseSessionActivityFilters(search)).toEqual({
-      personId: "profile/a",
-      query: "release notes",
-      time: "30d",
-    });
-  });
-});
-
-describe("per-person activity projection", () => {
-  const rows = [
-    session("agent:main:first", "First", 10, { id: "alice", label: "Alice" }),
-    session("agent:main:second", "Second", 20, { id: "bob", label: "Bob" }, [
-      { id: "alice", label: "Alice" },
-    ]),
-  ];
-
-  it("keeps presence details and resolves only known watched sessions", () => {
-    const identity = resolveActivityIdentity(
-      "alice",
+  it("groups the server page without treating its preview or session clock as personal history", () => {
+    const now = new Date(2026, 7, 17, 12).getTime();
+    const rows: GatewaySessionRow[] = [
       {
-        presence: [
-          {
-            instanceId: "alice-laptop",
-            host: "Alice's Mac",
-            lastInputSeconds: 30,
-            ts: 10,
-            user: { id: "alice", name: "Alice", email: "alice@example.test" },
-            watchedSessions: ["agent:main:first", "missing"],
-          },
-          {
-            instanceId: "alice-phone",
-            host: "Alice's phone",
-            ts: 20,
-            user: { id: "alice", name: "Alice" },
-            watchedSessions: ["agent:main:second"],
-          },
+        key: "agent:main:first",
+        kind: "direct",
+        updatedAt: now,
+        participants: [{ identity: { type: "agent", id: "bob" } }],
+      },
+      { key: "agent:main:second", kind: "direct", updatedAt: now - 60_000 },
+      { key: "agent:main:older", kind: "direct", updatedAt: now - 26 * 60 * 60_000 },
+    ];
+    const activity = projectSessionActivity(result(rows));
+    expect(activity.people.map(({ id, count }) => ({ id, count }))).toEqual([
+      { id: "alice", count: 12 },
+      { id: "bob", count: 3 },
+    ]);
+    expect(activity.people.every((person) => !("lastActiveAt" in person))).toBe(true);
+    expect(activity.days.map((day) => day.sessions.map((row) => row.key))).toEqual([
+      ["agent:main:first", "agent:main:second"],
+      ["agent:main:older"],
+    ]);
+    expect(activity.matchedCount).toBe(12);
+    expect(activity.timeCount).toBe(15);
+  });
+
+  it("does not infer people from unqualified owner or participant IDs", () => {
+    const page = result([
+      {
+        key: "agent:main:channel",
+        kind: "direct",
+        createdActor: { type: "human", id: "alice" },
+        participants: [
+          { identity: { type: "legacy", actorType: "human", source: "channel", id: "bob" } },
         ],
       },
-      rows,
-    );
-
-    expect(identity).toMatchObject({
-      id: "alice",
-      email: "alice@example.test",
-      watchedSessions: ["agent:main:first", "agent:main:second", "missing"],
-    });
-    expect(identity?.entries?.map((entry) => entry.host)).toEqual(["Alice's Mac", "Alice's phone"]);
-    expect(resolveViewingNow(identity!, rows).map((row) => row.key)).toEqual([
-      "agent:main:second",
-      "agent:main:first",
     ]);
+    page.people = [];
+    expect(projectSessionActivity(page).people).toEqual([]);
+    expect(projectSessionActivity(undefined).sessions).toEqual([]);
   });
 
-  it("falls back to session actors for offline identities and rejects unknown ids", () => {
-    expect(resolveActivityIdentity("alice", { presence: [] }, rows)).toMatchObject({
-      id: "alice",
-      name: "Alice",
-      watchedSessions: [],
-    });
-    expect(resolveActivityIdentity("unknown", { presence: [] }, rows)).toBeNull();
+  it("round-trips person paths and query filters under a mounted base path", () => {
+    const filters = { personId: "profile/a", query: "release notes", time: "30d" as const };
+    const { pathname, search } = sessionActivityLocation(filters, "/ui");
+    expect(pathname).toBe("/ui/activity/profile%2Fa");
+    expect(search).toBe("?time=30d&q=release+notes");
+    expect(parseSessionActivityFilters(search, activityPersonFromPath(pathname, "/ui"))).toEqual(
+      filters,
+    );
+    expect(sessionActivityLocation({ ...filters, personId: null }, "/ui").pathname).toBe(
+      "/ui/activity",
+    );
   });
 });

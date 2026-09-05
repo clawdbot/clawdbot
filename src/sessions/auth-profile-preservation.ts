@@ -10,6 +10,7 @@ import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
 
 type ModelOverrideSelection = {
@@ -67,7 +68,8 @@ export function shouldPreserveSessionAuthProfileOverride(params: {
     return resolvesToTargetProvider(recordedProvider);
   }
   const delimiterIndex = profileOverride.indexOf(":");
-  if (delimiterIndex < 0) {
+  // Missing personal IDs carry no provider; admission must report the unavailable account, not replace it.
+  if (delimiterIndex < 0 || isUserModelAuthProfileId(profileOverride)) {
     return resolvesToTargetProvider(params.currentProvider);
   }
   return resolvesToTargetProvider(profileOverride.slice(0, delimiterIndex));

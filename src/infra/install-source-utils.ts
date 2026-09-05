@@ -3,13 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   gt as gtSemver,
   satisfies as satisfiesSemver,
   validRange as validSemverRange,
 } from "semver";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
@@ -17,6 +16,24 @@ import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./
 import { resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+
+export function formatNpmCommandFailureOutput(result: SpawnResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  if (detail) {
+    return detail;
+  }
+  // Timeouts normalize to exit code 124; retain the owner-recorded cause.
+  if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+    return `termination ${result.termination} (no output from npm)`;
+  }
+  if (result.termination === "exit" && result.code !== null) {
+    return `exit code ${result.code} (no output from npm)`;
+  }
+  if (result.signal) {
+    return `signal ${result.signal} (no output from npm)`;
+  }
+  return `termination ${result.termination} (no output from npm)`;
+}
 
 /** Metadata npm reports when resolving a registry spec or packed archive. */
 export type NpmSpecResolution = {
@@ -157,7 +174,7 @@ export async function resolveNpmSpecMetadata(params: {
     },
   );
   if (res.code !== 0) {
-    const raw = res.stderr.trim() || res.stdout.trim();
+    const raw = formatNpmCommandFailureOutput(res);
     if (/E404|is not in this registry/i.test(raw)) {
       return {
         ok: false,
@@ -312,37 +329,11 @@ function parseNpmPackJsonOutput(
   return null;
 }
 
-function parsePackedArchiveFromStdout(stdout: string): string | undefined {
-  const lines = normalizeStringEntries(stdout.split(/\r?\n/));
-
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
-    const match = line?.match(/([^\s"']+\.tgz)/);
-    if (match?.[1]) {
-      return match[1];
-    }
-  }
-  return undefined;
-}
-
 async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> {
   const entries = await fs.readdir(cwd, { withFileTypes: true }).catch(() => []);
   const archives = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"));
-  if (archives.length === 0) {
-    return undefined;
-  }
-  if (archives.length === 1) {
-    return archives[0]?.name;
-  }
-
-  const sortedByMtime = await Promise.all(
-    archives.map(async (entry) => ({
-      name: entry.name,
-      mtimeMs: (await fs.stat(path.join(cwd, entry.name))).mtimeMs,
-    })),
-  );
-  sortedByMtime.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return sortedByMtime[0]?.name;
+  // Callers give one spec a fresh workspace; empty npm stdout still leaves one owned artifact.
+  return archives.length === 1 ? archives[0]?.name : undefined;
 }
 
 /** Packs an npm spec into a tarball in `cwd` and returns archive metadata. */
@@ -363,7 +354,15 @@ export async function packNpmSpecToArchive(params: {
     }
 > {
   const res = await runCommandWithTimeout(
-    ["npm", "pack", params.spec, "--ignore-scripts", "--json"],
+    [
+      "npm",
+      "pack",
+      params.spec,
+      "--ignore-scripts",
+      "--json",
+      "--dry-run=false",
+      `--pack-destination=${params.cwd}`,
+    ],
     {
       timeoutMs: Math.max(params.timeoutMs, 300_000),
       signal: params.signal,
@@ -373,7 +372,7 @@ export async function packNpmSpecToArchive(params: {
     },
   );
   if (res.code !== 0) {
-    const raw = res.stderr.trim() || res.stdout.trim();
+    const raw = formatNpmCommandFailureOutput(res);
     if (/E404|is not in this registry/i.test(raw)) {
       return {
         ok: false,
@@ -385,21 +384,14 @@ export async function packNpmSpecToArchive(params: {
 
   const parsedJson = parseNpmPackJsonOutput(res.stdout || "");
 
-  let packed = parsedJson?.filename ?? parsePackedArchiveFromStdout(res.stdout || "");
-  if (!packed) {
-    packed = await findPackedArchiveInDir(params.cwd);
-  }
+  const packed = parsedJson?.filename ?? (await findPackedArchiveInDir(params.cwd));
   if (!packed) {
     return { ok: false, error: "npm pack produced no archive" };
   }
 
-  let archivePath = path.isAbsolute(packed) ? packed : path.join(params.cwd, packed);
+  const archivePath = path.isAbsolute(packed) ? packed : path.join(params.cwd, packed);
   if (!(await pathExists(archivePath))) {
-    const fallbackPacked = await findPackedArchiveInDir(params.cwd);
-    if (!fallbackPacked) {
-      return { ok: false, error: "npm pack produced no archive" };
-    }
-    archivePath = path.join(params.cwd, fallbackPacked);
+    return { ok: false, error: "npm pack produced no archive" };
   }
 
   return {
@@ -449,7 +441,7 @@ export async function resolveNpmPackArchiveMetadata(params: {
   if (res.code !== 0) {
     return {
       ok: false,
-      error: `npm pack metadata read failed: ${res.stderr.trim() || res.stdout.trim()}`,
+      error: `npm pack metadata read failed: ${formatNpmCommandFailureOutput(res)}`,
     };
   }
 

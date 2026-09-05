@@ -47,5 +47,6 @@ export function resolveReadOnlyEnvSecretRef(params: {
     return { status: "blocked" };
   }
   const envValue = params.normalizeValue(process.env[envId]);
-  return envValue ? { status: "available", value: envValue } : { status: "missing" };
+  // An absent selected value does not release the configured ref's credential ownership.
+  return envValue ? { status: "available", value: envValue } : { status: "blocked" };
 }

@@ -31,6 +31,8 @@ export function asRuntimeConfig(config: OpenClawConfig): RuntimeConfig {
 export function materializeRuntimeConfig(
   config: OpenClawConfig,
   options: {
+    env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
     loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
   } = {},
@@ -40,14 +42,14 @@ export function materializeRuntimeConfig(
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
   next = applyCronDefaults(next);
-  next = applyContextPruningDefaults(next, { manifestRegistry: options.manifestRegistry });
+  next = applyContextPruningDefaults(next, options);
   next = applyCompactionDefaults(next);
   next = applyModelDefaults(next, {
     manifestRegistry: options.manifestRegistry,
     loadManifestRegistry: options.loadManifestRegistry,
   });
   next = applyTalkConfigNormalization(next);
-  normalizeConfigPaths(next);
+  normalizeConfigPaths(next, options);
   normalizeExecSafeBinProfilesInConfig(next);
   return asRuntimeConfig(inheritLegacyDefaultAgentId(config, next));
 }

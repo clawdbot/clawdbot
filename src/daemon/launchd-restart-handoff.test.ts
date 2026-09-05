@@ -56,8 +56,12 @@ async function executeHandoff(
   const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "launchd-stub-"));
   try {
     const home = path.join(stubDir, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const systemDaemonsDir = path.join(stubDir, "LaunchDaemons");
+    const handoffEnv = { HOME: home, OPENCLAW_PROFILE: "default", OPENCLAW_STATE_DIR: stateDir };
     const callsPath = path.join(stubDir, "launchctl.calls");
-    fs.mkdirSync(path.join(home, ".openclaw", "logs"), { recursive: true });
+    fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
+    fs.mkdirSync(systemDaemonsDir);
     fs.writeFileSync(
       path.join(stubDir, "launchctl"),
       `#!/bin/sh
@@ -75,18 +79,21 @@ ${launchctlStub}
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
     if (mode === "park") {
       scheduleDetachedLaunchdMaintenancePark({
-        env: { HOME: home, OPENCLAW_PROFILE: "default" },
+        env: handoffEnv,
         waitForPid: noWaitPid,
       });
     } else {
       scheduleDetachedLaunchdRestartHandoff({
-        env: { HOME: home, OPENCLAW_PROFILE: "default" },
+        env: handoffEnv,
         mode,
         waitForPid: noWaitPid,
       });
     }
     const [, args] = requireSpawnCall();
-    const script = args[1];
+    const script = args[1]?.replaceAll(
+      "/Library/LaunchDaemons",
+      `'${systemDaemonsDir.replaceAll("'", "'\\''")}'`,
+    );
     if (!script) {
       throw new Error("expected generated restart script");
     }
@@ -101,15 +108,16 @@ ${launchctlStub}
           "handoff-test",
           "gui/501/test.label",
           "gui/501",
-          "/tmp/test.plist",
+          path.join(stubDir, "test.plist"),
           String(noWaitPid),
         ],
         {
           env: {
-            ...process.env,
+            ...handoffEnv,
+            TMPDIR: stubDir,
             LAUNCHCTL_CALLS_PATH: callsPath,
             LAUNCHCTL_STUB_DIR: stubDir,
-            PATH: `${stubDir}:${process.env.PATH}`,
+            PATH: `${stubDir}:/usr/bin:/bin`,
           },
         },
       );
@@ -126,10 +134,7 @@ ${launchctlStub}
       .trim()
       .split("\n")
       .filter((call) => call !== "print system/ai.openclaw.gateway");
-    const log = fs.readFileSync(
-      path.join(home, ".openclaw", "logs", "gateway-restart.log"),
-      "utf8",
-    );
+    const log = fs.readFileSync(path.join(stateDir, "logs", "gateway-restart.log"), "utf8");
     return { calls, exitCode, log };
   } finally {
     fs.rmSync(stubDir, { recursive: true, force: true });

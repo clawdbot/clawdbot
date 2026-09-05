@@ -1,3 +1,4 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
@@ -10,9 +11,18 @@ export type GatewayCloseOptions = {
   drainTimeoutMs?: number | null;
 };
 
+/** A capability for one host iteration; native completion belongs to the host. */
+export type GatewayHostLifecycle = {
+  request(
+    action: "start" | "stop" | "restart",
+    assertCaller: () => void,
+  ): Promise<Result<{ outcome: "already-running" | "scheduled" }, string>>;
+};
+
 export type GatewayServer = {
   /** Process-local endpoint used by OpenClaw-managed Tailscale proxying. */
   getTailscaleIngressEndpoint: () => GatewayTailscaleIngressEndpoint | undefined;
+  /** Fences WebSocket ingress and joins received work and connection cleanup before disposal. */
   close: (opts?: GatewayCloseOptions) => Promise<void>;
   /**
    * Resolves when this generation finishes mandatory sidecar startup and rejects on failure.
@@ -22,6 +32,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Internal, closure-bound host authority. Direct servers have no native lifecycle owner. */
+  hostLifecycle?: GatewayHostLifecycle;
   /** Exact lifecycle generation projected to connected clients. */
   bootId?: string;
   /**
@@ -65,6 +77,8 @@ export type GatewayServerOptions = {
   /** Internal lifecycle callback that re-proves and records crash-loop recovery. */
   tryRecoverChannelAutostartSuppression?: () => boolean;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  /** Internal Node process-origin timestamp used only for initial startup tracing. */
+  processStartedAt?: number;
   /** Optional startup timestamp used for concise readiness logging. */
   startupStartedAt?: number;
   /**

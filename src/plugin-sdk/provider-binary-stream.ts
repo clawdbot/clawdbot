@@ -1,17 +1,17 @@
-/** Create a byte-limited stream while retaining direct ownership of the source reader. */
+/** Create a byte-limited stream that owns its source reader and request cleanup. */
 export function createBoundedProviderBinaryStream(
   source: ReadableStream<Uint8Array>,
   options: {
     maxBytes: number;
     createOverflowError: (params: { size: number; maxBytes: number }) => Error;
     createReleaseError: () => Error;
+    cleanup: () => Promise<void>;
   },
 ): { stream: ReadableStream<Uint8Array>; release: () => Promise<void> } {
   // Keep direct reader ownership: transform writer rejection can leak when
   // playback cancellation races overflow.
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined = source.getReader();
-  let cancelPromise: Promise<void> | undefined;
-  let releasePromise: Promise<void> | undefined;
+  let completion: Promise<PromiseSettledResult<void>> | undefined;
   let pendingError: Error | undefined;
   let totalBytes = 0;
 
@@ -23,19 +23,28 @@ export function createBoundedProviderBinaryStream(
     activeReader.releaseLock();
   };
 
-  const cancelReader = (reason?: unknown): Promise<void> => {
-    const activeReader = reader;
-    if (!activeReader) {
-      return Promise.resolve();
-    }
-    cancelPromise ??= (async () => {
-      try {
-        await activeReader.cancel(reason).catch(() => undefined);
-      } finally {
-        releaseReader(activeReader);
+  const finalize = (reason?: unknown) => {
+    // Memoize before callbacks can reenter. Start cancellation before request
+    // cleanup, but await both so cleanup can abort a retained capture tee.
+    return (completion ??= Promise.resolve().then(async () => {
+      const activeReader = reader;
+      const [cancellation, cleanup] = await Promise.allSettled([
+        activeReader?.cancel(reason),
+        (async () => {
+          try {
+            if (activeReader) {
+              releaseReader(activeReader);
+            }
+          } finally {
+            await options.cleanup();
+          }
+        })(),
+      ]);
+      if (cleanup.status === "rejected") {
+        throw cleanup.reason;
       }
-    })();
-    return cancelPromise;
+      return cancellation;
+    }));
   };
 
   const stream = new ReadableStream<Uint8Array>({
@@ -69,7 +78,8 @@ export function createBoundedProviderBinaryStream(
             controller.enqueue(chunk.value.subarray(0, remainingBytes));
             pendingError = error;
           }
-          await cancelReader(error);
+          // Preserve the overflow outcome even if request cleanup is delayed or fails.
+          void finalize(error).catch(() => undefined);
           if (remainingBytes <= 0) {
             controller.error(error);
           }
@@ -83,12 +93,17 @@ export function createBoundedProviderBinaryStream(
       }
     },
     async cancel(reason) {
-      await cancelReader(reason);
+      const cancellation = await finalize(reason);
+      if (cancellation.status === "rejected") {
+        throw cancellation.reason;
+      }
     },
   });
 
   return {
     stream,
-    release: () => (releasePromise ??= cancelReader(options.createReleaseError())),
+    release: async () => {
+      await finalize(options.createReleaseError());
+    },
   };
 }

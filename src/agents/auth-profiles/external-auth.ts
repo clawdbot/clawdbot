@@ -4,8 +4,8 @@
  * and decides which runtime profiles may be persisted back to the store.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-external-auth.js";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
-import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { MINIMAX_CLI_PROFILE_ID } from "./constants.js";

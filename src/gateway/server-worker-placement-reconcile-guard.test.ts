@@ -84,15 +84,18 @@ describe("worker placement reconciliation teardown authority", () => {
       activeOwnerEpoch: null,
       destroyRequestedAtMs: null,
     },
-  ])("keeps failed-placement cleanup fenced with $reason", async ({ reason: _, ...params }) => {
-    const { guard, resumeProvisioning } = createFailedPlacementGuard(params);
-    const reconcileCore = vi.fn(async () => {});
+  ])(
+    "keeps failed-placement cleanup fenced with $reason",
+    async ({ reason: _reason, ...params }) => {
+      const { guard, resumeProvisioning } = createFailedPlacementGuard(params);
+      const reconcileCore = vi.fn(async () => {});
 
-    await expect(guard("worker-cleanup", reconcileCore)).rejects.toThrow(
-      "provisioning owner is failed",
-    );
+      await expect(guard("worker-cleanup", reconcileCore)).rejects.toThrow(
+        "provisioning owner is failed",
+      );
 
-    expect(reconcileCore).not.toHaveBeenCalled();
-    expect(resumeProvisioning).not.toHaveBeenCalled();
-  });
+      expect(reconcileCore).not.toHaveBeenCalled();
+      expect(resumeProvisioning).not.toHaveBeenCalled();
+    },
+  );
 });

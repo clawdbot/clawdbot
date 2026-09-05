@@ -3,6 +3,7 @@
  */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isRuntimeCompactionDelegate } from "../../context-engine/delegate.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { runAbortableTimeout } from "../../node-host/with-timeout.js";
@@ -17,6 +18,33 @@ function abortErrorFromSignal(signal: AbortSignal): Error {
   return createAbortError("aborted", reason ? { cause: reason } : undefined);
 }
 
+async function raceCompactionWithAbortSignal<T>(
+  compact: () => Promise<T>,
+  abortSignal?: AbortSignal,
+  onAbort?: () => void,
+): Promise<T> {
+  if (!abortSignal) {
+    return await compact();
+  }
+  if (abortSignal.aborted) {
+    onAbort?.();
+    throw abortErrorFromSignal(abortSignal);
+  }
+  let abortListener!: () => void;
+  const abortPromise = new Promise<never>((_, reject) => {
+    abortListener = () => {
+      onAbort?.();
+      reject(abortErrorFromSignal(abortSignal));
+    };
+    abortSignal.addEventListener("abort", abortListener, { once: true });
+  });
+  try {
+    return await Promise.race([compact(), abortPromise]);
+  } finally {
+    abortSignal.removeEventListener("abort", abortListener);
+  }
+}
+
 export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
   return (
     finiteSecondsToTimerSafeMilliseconds(cfg?.agents?.defaults?.compaction?.timeoutSeconds, {
@@ -26,7 +54,7 @@ export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
 }
 
 export async function compactWithSafetyTimeout<T>(
-  compact: (abortSignal?: AbortSignal) => Promise<T>,
+  compact: (abortSignal: AbortSignal | undefined, resetTimeout: () => void) => Promise<T>,
   timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
   opts?: {
     abortSignal?: AbortSignal;
@@ -48,10 +76,8 @@ export async function compactWithSafetyTimeout<T>(
   };
 
   return await runAbortableTimeout(
-    async (timeoutSignal) => {
+    async (timeoutSignal, resetTimeout) => {
       let timeoutListener: (() => void) | undefined;
-      let externalAbortListener: (() => void) | undefined;
-      let externalAbortPromise: Promise<never> | undefined;
       const abortSignal = opts?.abortSignal;
       const composedAbortSignal =
         timeoutSignal && abortSignal
@@ -65,32 +91,15 @@ export async function compactWithSafetyTimeout<T>(
         timeoutSignal.addEventListener("abort", timeoutListener, { once: true });
       }
 
-      if (abortSignal) {
-        if (abortSignal.aborted) {
-          cancel();
-          throw abortErrorFromSignal(abortSignal);
-        }
-        externalAbortPromise = new Promise((_, reject) => {
-          externalAbortListener = () => {
-            cancel();
-            reject(abortErrorFromSignal(abortSignal));
-          };
-          abortSignal.addEventListener("abort", externalAbortListener, { once: true });
-        });
-      }
-
       try {
-        const compactPromise = compact(composedAbortSignal);
-        if (externalAbortPromise) {
-          return await Promise.race([compactPromise, externalAbortPromise]);
-        }
-        return await compactPromise;
+        return await raceCompactionWithAbortSignal(
+          () => compact(composedAbortSignal, resetTimeout),
+          abortSignal,
+          cancel,
+        );
       } finally {
         if (timeoutListener) {
           timeoutSignal?.removeEventListener("abort", timeoutListener);
-        }
-        if (externalAbortListener) {
-          abortSignal?.removeEventListener("abort", externalAbortListener);
         }
       }
     },
@@ -103,8 +112,7 @@ export async function compactWithSafetyTimeout<T>(
 type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
 
 /**
- * Invoke a plugin-owned {@link ContextEngine.compact} bounded by the same
- * finite safety timeout that protects native runtime compaction.
+ * Invoke {@link ContextEngine.compact} at its timeout ownership boundary.
  *
  * Plugin context engines that advertise `ownsCompaction` previously had their
  * `compact()` awaited with no timeout, no watchdog, and no abort signal — a
@@ -119,15 +127,33 @@ type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
  *    `compact()` params (so cooperating engines can cancel their own in-flight
  *    work).
  *
- * Callers keep their existing try/catch — a timeout or abort surfaces as a
- * thrown error, never a silent hang.
+ * The canonical built-in delegate keeps the native runtime's progress-aware
+ * watchdog while still racing the caller's abort signal. Every other engine
+ * stays host-bounded, including wrappers that do not advertise
+ * `ownsCompaction`, so an incomplete or hung implementation cannot silently
+ * disable the timeout.
  */
 export function compactContextEngineWithSafetyTimeout(
-  contextEngine: Pick<ContextEngine, "compact">,
+  contextEngine: Pick<ContextEngine, "compact" | "info">,
   params: ContextEngineCompactParams,
   timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
   abortSignal?: AbortSignal,
 ): Promise<CompactResult> {
+  if (isRuntimeCompactionDelegate(contextEngine.compact)) {
+    return compactWithSafetyTimeout(
+      (compactionAbortSignal, resetTimeout) =>
+        contextEngine.compact({
+          ...params,
+          ...(compactionAbortSignal ? { abortSignal: compactionAbortSignal } : {}),
+          runtimeContext: {
+            ...params.runtimeContext,
+            compactionTimeoutReset: resetTimeout,
+          },
+        }),
+      timeoutMs,
+      abortSignal ? { abortSignal } : undefined,
+    );
+  }
   return compactWithSafetyTimeout(
     (compactAbortSignal) =>
       contextEngine.compact(

@@ -58,7 +58,7 @@ function upstreamModel(id: string, overrides: Record<string, unknown> = {}) {
 
 function createCatalogFetchGuard(params: {
   upstreamModels: Record<string, unknown>;
-  liveModelIds: string[];
+  liveModelIds: string[] | (() => string[]);
 }) {
   return vi.fn(async ({ url }: { url: string }) => ({
     response: new Response(
@@ -72,7 +72,12 @@ function createCatalogFetchGuard(params: {
                 models: params.upstreamModels,
               },
             }
-          : { data: params.liveModelIds.map((id) => ({ id, object: "model" })) },
+          : {
+              data: (typeof params.liveModelIds === "function"
+                ? params.liveModelIds()
+                : params.liveModelIds
+              ).map((id) => ({ id, object: "model" })),
+            },
       ),
     ),
     finalUrl: url,
@@ -112,8 +117,6 @@ describe("opencode-go provider plugin", () => {
     }
     expect(mediaProvider.capabilities).toEqual(["image"]);
     expect(mediaProvider.defaultModels).toEqual({ image: "kimi-k2.6" });
-    expect(typeof mediaProvider.describeImage).toBe("function");
-    expect(typeof mediaProvider.describeImages).toBe("function");
   });
 
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
@@ -533,10 +536,122 @@ describe("opencode-go provider plugin", () => {
     );
   });
 
+  it.each([
+    ["retired seed", "failed"],
+    ["retired seed", "filtered"],
+    ["activated preview", "failed"],
+  ] as const)(
+    "uses refreshed %s lifecycle on the first fallback after %s model advertising",
+    async (lifecycle, advertising) => {
+      const retired = lifecycle === "retired seed";
+      const modelId = retired ? "deepseek-v4-pro" : "hy3-preview";
+      const provider = await registerSingleProviderPlugin(plugin);
+      const fetchGuard = createCatalogFetchGuard({
+        upstreamModels: {
+          [modelId]: upstreamModel(modelId, retired ? { status: "deprecated" } : {}),
+        },
+        liveModelIds: () => {
+          if (advertising === "failed") {
+            throw new Error("model advertising unavailable");
+          }
+          return [modelId];
+        },
+      });
+
+      try {
+        expect(buildStaticOpencodeGoProviderConfig().models.map((model) => model.id)).toEqual(
+          ACTIVE_MODEL_IDS,
+        );
+        const fallback = await buildOpencodeGoLiveProviderConfig({
+          apiKey: "runtime-key",
+          discoveryApiKey: "discovery-key",
+          fetchGuard,
+        });
+
+        expect(fallback.apiKey).toBe("runtime-key");
+        expect(fallback.models.map((model) => model.id).toSorted()).toEqual(
+          (retired
+            ? ACTIVE_MODEL_IDS.filter((id) => id !== modelId)
+            : [...ACTIVE_MODEL_IDS, modelId]
+          ).toSorted(),
+        );
+        expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({
+          id: modelId,
+        });
+      } finally {
+        clearLiveCatalogCacheForTests();
+        await buildOpencodeGoLiveProviderConfig({
+          discoveryApiKey: "discovery-key",
+          fetchGuard: createCatalogFetchGuard({ upstreamModels: {}, liveModelIds: [] }),
+        });
+        clearLiveCatalogCacheForTests();
+      }
+    },
+  );
+
   it("does not synthesize a stream when the runtime provides none", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(provider.wrapStreamFn?.({ streamFn: undefined } as never)).toBeUndefined();
+  });
+
+  it("identifies native Anthropic stream and simple requests without tagging proxies", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    for (const testCase of [
+      {
+        wrap: provider.wrapStreamFn,
+        runtimeApi: "anthropic-messages",
+        sourceApi: undefined,
+      },
+      {
+        wrap: provider.wrapSimpleCompletionStreamFn,
+        runtimeApi: "openclaw-provider-simple:opencode-go:qwen3.8-max",
+        sourceApi: "anthropic-messages",
+      },
+    ] as const) {
+      const capturedHeaders: Array<Record<string, string> | undefined> = [];
+      const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+        capturedHeaders.push((options as { headers?: Record<string, string> })?.headers);
+        return {} as never;
+      };
+      const streamFn = testCase.wrap?.({
+        streamFn: baseStreamFn as never,
+        providerId: "opencode-go",
+        modelId: "qwen3.8-max",
+        thinkingLevel: "high",
+        sourceApi: testCase.sourceApi,
+      } as never);
+
+      expect(streamFn).toBeTypeOf("function");
+      await streamFn?.(
+        {
+          provider: "opencode-go",
+          id: "qwen3.8-max",
+          api: testCase.runtimeApi,
+          baseUrl: "https://opencode.ai/zen/go",
+        } as never,
+        {} as never,
+        { headers: { "User-Agent": "configured-client/1.0", "X-Custom": "1" } },
+      );
+      await streamFn?.(
+        {
+          provider: "opencode-go",
+          id: "qwen3.8-max",
+          api: testCase.runtimeApi,
+          baseUrl: "https://proxy.example.com",
+        } as never,
+        {} as never,
+        { headers: { "User-Agent": "configured-client/2.0", "X-Custom": "2" } },
+      );
+
+      expect(capturedHeaders).toEqual([
+        {
+          "User-Agent": expect.stringMatching(/^openclaw\//),
+          "X-Custom": "1",
+        },
+        { "User-Agent": "configured-client/2.0", "X-Custom": "2" },
+      ]);
+    }
   });
 
   it.each(["deepseek-v4-pro", "deepseek-v4-flash"] as const)(

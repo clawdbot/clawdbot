@@ -25,11 +25,13 @@ export function createRemoteEmbeddingProvider(params: {
   client: RemoteEmbeddingClient;
   errorPrefix: string;
   maxInputTokens?: number;
+  /** Keep query arrays in one request when the provider has no query/document wire distinction. */
+  batchQueryInputs?: boolean;
 }): EmbeddingProvider {
   const { client } = params;
   const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
 
-  const embed = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
+  const embedMany = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -48,11 +50,20 @@ export function createRemoteEmbeddingProvider(params: {
     id: params.id,
     model: client.model,
     ...(typeof params.maxInputTokens === "number" ? { maxInputTokens: params.maxInputTokens } : {}),
-    embedQuery: async (text, options) => {
-      const [vec] = await embed([text], options?.signal);
+    embed: async (input, options) => {
+      const text = typeof input === "string" ? input : input.text;
+      const [vec] = await embedMany([text], options?.signal);
       return vec ?? [];
     },
-    embedBatch: async (texts, options) => await embed(texts, options?.signal),
+    embedBatch: async (inputs, options) => {
+      const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+      if (options?.inputType === "query" && params.batchQueryInputs !== true) {
+        return await Promise.all(
+          texts.map(async (text) => (await embedMany([text], options.signal))[0] ?? []),
+        );
+      }
+      return await embedMany(texts, options?.signal);
+    },
   };
 }
 

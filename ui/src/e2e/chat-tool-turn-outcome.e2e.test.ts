@@ -1,7 +1,20 @@
 // Control UI E2E tests cover autonomous tool-turn outcome rendering.
-import fs from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
+
+let artifactDir: string | undefined;
+beforeEach(() => {
+  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  artifactDir = parent
+    ? createControlUiE2eArtifactDir("chat-tool-turn-outcome", parent)
+    : undefined;
+});
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -21,12 +34,15 @@ function failedTool(timestamp: number) {
 }
 
 async function captureToolActivityProof(page: import("playwright").Page, name: string) {
-  const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
   if (!artifactDir) {
     return;
   }
-  await fs.mkdir(artifactDir, { recursive: true });
-  await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
+  await writeFile(
+    path.join(artifactDir, `${name}.png`),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+      page.locator(".chat-main"),
+    ]),
+  );
 }
 
 async function captureFactrowProof(
@@ -34,12 +50,10 @@ async function captureFactrowProof(
   activity: import("playwright").Locator,
   theme: "dark" | "light",
 ) {
-  const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
   if (!artifactDir) {
     return;
   }
   const state = process.env.OPENCLAW_FACTROW_PROOF_STATE?.trim() || "after";
-  await fs.mkdir(artifactDir, { recursive: true });
   await page.locator(".chat-main").screenshot({
     path: path.join(artifactDir, `factrow-${state}-${theme}-context.png`),
   });
@@ -67,10 +81,6 @@ suite.define(() => {
   ])(
     "keeps narrated tool details in one contained hierarchy ($name)",
     async ({ colorScheme, height, name, width }) => {
-      const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
-      }
       const context = await suite.browser.newContext({
         colorScheme,
         locale: "en-US",
@@ -214,9 +224,12 @@ suite.define(() => {
       expect(await rawPanel.isHidden()).toBe(true);
 
       if (artifactDir) {
-        await page.locator(".chat-main").screenshot({
-          path: path.join(artifactDir, `tool-detail-layout-${name}.png`),
-        });
+        await writeFile(
+          path.join(artifactDir, `tool-detail-layout-${name}.png`),
+          await takeControlUiElementScreenshot(page, page.locator(".chat-main"), [
+            toolRows.first(),
+          ]),
+        );
         const video = page.video();
         await context.close();
         await video?.saveAs(path.join(artifactDir, `tool-detail-layout-${name}.webm`));
@@ -274,10 +287,6 @@ suite.define(() => {
   });
 
   it("pairs a canonical parallel batch and renders per-file patch sections", async () => {
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       locale: "en-US",
       viewport: { height: 900, width: 1200 },
@@ -671,7 +680,7 @@ suite.define(() => {
         color: style.color,
       };
     });
-    expect(wave.animationName).toBe("chatToolRowTextWave");
+    expect(wave.animationName).toBe("text-shimmer");
     expect(wave.backgroundClip).toBe("text");
     expect(wave.color).toBe("rgba(0, 0, 0, 0)");
     await captureToolActivityProof(page, "tool-row-running-text-wave");
@@ -780,10 +789,6 @@ suite.define(() => {
       riskLevel,
       userAuthorization,
     }) => {
-      const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
-      }
       const context = await suite.browser.newContext({
         colorScheme: "dark",
         locale: "en-US",

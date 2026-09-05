@@ -12,22 +12,38 @@
  * byte-identical to Node's default resolution.
  */
 import Module from "node:module";
+import process from "node:process";
+import { parseNodeOptionsEnvVar } from "./infra/node-options.js";
 
-type SyncResolveResult = { url: string; format?: string | null; shortCircuit?: boolean };
-type SyncResolveContext = { parentURL?: string; conditions?: readonly string[] };
-type SyncResolveHook = (
-  specifier: string,
-  context: SyncResolveContext,
-  nextResolve: (specifier: string, context?: SyncResolveContext) => SyncResolveResult,
-) => SyncResolveResult;
-type RegisterModuleHooks = (options: { resolve?: SyncResolveHook }) => { deregister: () => void };
-
-// SAFETY: Module.registerHooks ships in every supported Node runtime but is missing from the bundled type declarations; the optional member keeps callers probing before use (Bun lacks it).
-const moduleWithHooks = Module as typeof Module & {
-  registerHooks?: RegisterModuleHooks;
-};
+// Bun lacks registerHooks, so keep the runtime probe despite supported Node types.
+const moduleWithHooks: { registerHooks?: typeof Module.registerHooks } = Module;
 
 const installedDistRootUrls = new Set<string>();
+const NODE_RESOLVER_HOOK_OPTIONS = new Set([
+  "--import",
+  "--require",
+  "-r",
+  "--loader",
+  "--experimental-loader",
+  "--experimental-config-file",
+  "--experimental-default-config-file",
+]);
+
+const normalizeNodeOptionName = (token: string) =>
+  (token.split("=", 1)[0] ?? "").replaceAll("_", "-");
+
+function hasNodeResolverHookOption(
+  execArgv: readonly string[],
+  nodeOptions: string | undefined,
+): boolean {
+  const envOptions = parseNodeOptionsEnvVar(nodeOptions);
+  return (
+    envOptions === null ||
+    [...execArgv, ...envOptions].some((token) =>
+      NODE_RESOLVER_HOOK_OPTIONS.has(normalizeNodeOptionName(token)),
+    )
+  );
+}
 
 /**
  * Resolves a dist-internal relative ESM specifier to its final file URL, or
@@ -73,7 +89,11 @@ function resolveDistEsmFastPathUrl(params: {
  */
 export function installDistEsmResolveFastPath(
   entryFileUrl: string,
-  deps: { registerHooks?: RegisterModuleHooks | undefined } = {},
+  deps: {
+    registerHooks?: typeof Module.registerHooks | undefined;
+    execArgv?: readonly string[];
+    nodeOptions?: string | undefined;
+  } = {},
 ): boolean {
   const registerHooks =
     "registerHooks" in deps ? deps.registerHooks : moduleWithHooks.registerHooks;
@@ -82,6 +102,11 @@ export function installDistEsmResolveFastPath(
   }
   const distRootUrl = new URL("./", entryFileUrl).href;
   if (!distRootUrl.endsWith("/dist/")) {
+    return false;
+  }
+  const nodeOptions = "nodeOptions" in deps ? deps.nodeOptions : process.env.NODE_OPTIONS;
+  // A later short circuit would bypass preload and loader hooks registered before startup.
+  if (hasNodeResolverHookOption(deps.execArgv ?? process.execArgv, nodeOptions)) {
     return false;
   }
   if (installedDistRootUrls.has(distRootUrl)) {

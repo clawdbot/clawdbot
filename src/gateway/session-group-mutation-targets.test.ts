@@ -13,7 +13,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { setStateDirEnv, withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { resolveSessionGroupMutationTargetsByName } from "./session-sharing-target-input.js";
+import { resolveSessionGroupMutationTargetsByName } from "./session-groups.js";
 
 test("discovers groups across more than the handle cap without writable database maintenance", async () => {
   await withStateDirEnv("openclaw-session-group-readonly-", async ({ stateDir }) => {

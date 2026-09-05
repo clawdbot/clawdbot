@@ -68,8 +68,9 @@ exceeds the limit.
 Bundled channels spell these overrides as
 `channels.<id>.streaming.{chunkMode,block.enabled,block.coalesce}`. The flat
 `*.chunkMode` / `*.blockStreaming` / `*.blockStreamingCoalesce` spellings are
-rejected everywhere. `openclaw doctor --fix` migrates legacy configs into the
-nested shape.
+rejected by validation. `openclaw doctor --fix` migrates legacy configs into the
+nested shape; Gateway startup applies the same migration automatically when the
+single-file config meets the [startup migration conditions](/gateway/doctor#detailed-behavior-and-rationale).
 
 **Boundary semantics** for `blockStreamingBreak`:
 
@@ -79,6 +80,10 @@ nested shape.
   can emit multiple chunks at the end.
 
 ### Media delivery with block streaming
+
+With block streaming off, media-bearing assistant messages can still be sent at
+message boundaries, with their captions attached. Preview updates do not count
+as separately delivered captions.
 
 Streaming media must use structured payload fields such as `mediaUrl` or
 `mediaUrls`; streamed text is not parsed as an attachment command. When block
@@ -143,7 +148,8 @@ replies**, not final replies or tool summaries.
   `*.streaming.block.enabled: true`.
 - **Stream everything at end:** `blockStreamingBreak: "message_end"` (flush
   once, possibly multiple chunks if very long).
-- **No block streaming:** `blockStreamingDefault: "off"` (only final reply).
+- **No block streaming:** `blockStreamingDefault: "off"` (final text replies;
+  media-bearing messages can still be sent at message boundaries).
 
 Block streaming follows `agents.defaults.blockStreamingDefault` unless a
 channel or account sets `*.streaming.block.enabled` explicitly. QQ Bot has no
@@ -257,6 +263,10 @@ Slack-only:
 - `block` mode uses draft chunking (`draftChunk`).
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
+- `progress` is quiet by default: headline, authored commentary and reasoning,
+  plan milestones, and approval or failure lines. The same default applies on
+  every progress-draft channel; `streaming.progress.toolProgress: true` adds
+  the rolling tool log with its icons.
 - `progress` mode deletes the status draft once the final answer is delivered,
   so busy channels keep no orphaned tool log above the reply. Error finals keep
   the draft as the record of the failed turn.
@@ -269,8 +279,11 @@ Slack-only:
   when available.
 - `block` uses append-style draft previews.
 - `progress` streams Slack's native agent card by default: one message carries
-  narration, the live plan/task card, and the final answer. The card appears
-  only for turns that do real work, so plain questions are answered without one.
+  narration, the live plan card (authored milestones, or one work-summary row
+  until `streaming.progress.toolProgress: true` gives each tool call a row),
+  and the final answer. Routine progress updates coalesce at one-second
+  intervals; attention and completion flush immediately. The card appears only
+  for turns that do real work, so plain questions are answered without one.
   `streaming.progress.nativeTaskCards: false` falls back to the Block Kit
   session card, which finalizes to success or error and posts the assistant's
   final text as a separate message.
@@ -314,6 +327,9 @@ editable draft without becoming part of the final answer. This keeps
 multi-step tool turns visually alive instead of silent between the first
 thinking preview and the final answer.
 
+Responses commentary keeps each message item's identity through tool handoffs.
+Later tool updates do not replay earlier commentary as an extra combined preamble.
+
 Long-running tools may emit typed progress before they return. For example,
 `web_fetch` arms a five-second timer when it starts: if the fetch is still
 pending, the preview shows `Fetching page content...`; if the fetch finishes or
@@ -337,10 +353,10 @@ Supported surfaces:
   progress chatter is also suppressed instead of delivered as standalone status
   messages, while approval prompts, media payloads, and errors still route
   normally.
-- To keep preview streaming but hide tool-progress lines, set
-  `streaming.preview.toolProgress` or `streaming.progress.toolProgress` to
-  `false` for that channel (both default `true`, and both are honored in every
-  mode). To keep tool-progress lines visible while hiding command/exec text,
+- `streaming.preview.toolProgress` (default `true`) controls tool-progress
+  lines in `partial` and `block` previews; `streaming.progress.toolProgress`
+  (default `false`) opts the `progress` draft into the rolling tool log. To
+  keep tool-progress lines visible while hiding command/exec text,
   set `streaming.preview.commandText` or `streaming.progress.commandText` to
   `"status"` (the default). Set either option to `"raw"` to opt into command
   text. This policy is shared by draft/progress channels
@@ -426,7 +442,7 @@ the same policy under `streaming.progress`:
 
 ## Related
 
-- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target shared preview, edit, stream, and finalization design
+- [Channel outbound API](/plugins/sdk-channel-outbound) - shared preview, durable send, and finalization APIs
 - [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
 - [Messages](/concepts/messages) - message lifecycle and delivery
 - [Retry](/concepts/retry) - retry behavior on delivery failure

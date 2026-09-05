@@ -44,13 +44,13 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
       {
         id: "local",
         label: LLAMA_CPP_PROVIDER_LABEL,
-        hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
+        hint: "Choose a Qwen, Gemma, or Muse model for this Gateway’s hardware and install llama.cpp",
         kind: "custom",
         wizard: {
           choiceId: LLAMA_CPP_PROVIDER_ID,
           choiceLabel: "Managed local server",
           choiceHint:
-            "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
+            "Choose a Qwen, Gemma, or Muse model for this Gateway’s hardware and install llama.cpp",
           groupId: LLAMA_CPP_PROVIDER_ID,
           groupLabel: "Local llama.cpp",
           groupHint: "Managed or external llama.cpp server",
@@ -91,7 +91,12 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
       run: async (ctx) => {
         const configured = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
         return configured?.localService
-          ? { provider: buildLlamaCppProviderConfig(configured) }
+          ? {
+              provider: buildLlamaCppProviderConfig({
+                existing: configured,
+                modelInventory: configured.models,
+              }),
+            }
           : await discoverLlamaServerProvider(ctx);
       },
     },
@@ -124,12 +129,12 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
         : await prepareLlamaServerDynamicModel(ctx),
     wrapStreamFn: (ctx) => {
       const providerConfig = ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+      const inner = wrapLlamaServerStream(ctx);
       if (!providerConfig?.localService) {
-        return wrapLlamaServerStream(ctx);
+        return inner;
       }
-      const inner = ctx.streamFn;
       const selectedModel = ctx.model;
-      if (!inner || !selectedModel) {
+      if (!selectedModel) {
         return undefined;
       }
       return async (model, context, options) => {

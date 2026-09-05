@@ -5,6 +5,9 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 (() => {
   const output = [];
   const pending = new Map();
+  const queued = [];
+  const maxPending = globalThis.__openclawMaxPendingToolCalls;
+  delete globalThis.__openclawMaxPendingToolCalls;
   const catalogBindings = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
   const apiFiles = Array.isArray(globalThis.__openclawApiFiles) ? globalThis.__openclawApiFiles : [];
   const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
@@ -17,6 +20,9 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   delete globalThis.__openclawNamespaces;
   const bridgeSequences = new Map();
   const timers = new Map();
+  // Keep rejection ownership in the snapshot so a handler attached after wait
+  // can clear it; an unawaited failure must not become a successful cell.
+  const unhandledRejections = new Map();
   let nextTimerId = 0;
 
   function safe(value) {
@@ -40,20 +46,31 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     return typeof encoded === "string" ? encoded : String(value);
   }
 
-  function beginRequest(method, args) {
+  function beginRequest(method, args, { queue = false } = {}) {
     const methodName = String(method);
     const sequence = (bridgeSequences.get(methodName) ?? 0) + 1;
     bridgeSequences.set(methodName, sequence);
-    const bridgeId = "bridge:" + methodName + ":" + String(sequence);
-    const id = String(hostRequest(methodName, JSON.stringify(safe(args ?? [])), bridgeId));
-    const promise = new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-    });
+    const id = "bridge:" + methodName + ":" + String(sequence);
+    const argsJson = JSON.stringify(safe(args ?? []));
+    let callbacks;
+    const promise = new Promise((resolve, reject) => { callbacks = { resolve, reject }; });
+    const admit = () => {
+      hostRequest(methodName, argsJson, id);
+      pending.set(id, callbacks);
+    };
+    if (queue && pending.size >= maxPending) queued.push(admit);
+    else admit();
     return { id, promise };
   }
 
-  function request(method, args) {
-    return beginRequest(method, args).promise;
+  // Swarm queues before admission; raw tools retain all-or-nothing overflow rejection.
+  // Closures and stable IDs live in the bounded VM snapshot, never a second host queue.
+  function drainQueuedRequests() {
+    while (queued.length > 0 && pending.size < maxPending) queued.shift()();
+  }
+
+  function request(method, args, options) {
+    return beginRequest(method, args, options).promise;
   }
 
   function scheduleTimer(callback, delay, args) {
@@ -81,6 +98,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     if (!entry) return;
     pending.delete(requestId);
     entry.resolve(null);
+    drainQueuedRequests();
   }
 
   ${CODE_MODE_SWARM_CONTROLLER_SOURCE}
@@ -129,6 +147,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       const error = new Error(typeof parsed === "string" ? parsed : parsed?.message ?? "nested tool failed");
       entry.reject(error);
     }
+    drainQueuedRequests();
     return true;
   }
 
@@ -246,16 +265,30 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     callableMetadata.set(frozen, metadata);
     return frozen;
   }
-  function serializeCatalogHandles(value) {
+  // Final values may nest handles (Promise.all of searches, keyed maps); an
+  // unserialized handle dumps as null and the model never learns the tool name.
+  function serializeCatalogHandles(value, seen = new Set()) {
     const metadata = callableMetadata.get(value);
     if (metadata) return metadata;
-    if (!Array.isArray(value)) return value;
-    return value.map((entry) => callableMetadata.get(entry) ?? entry);
+    if (value === null || typeof value !== "object" || seen.has(value)) return value;
+    const proto = Object.getPrototypeOf(value);
+    if (!Array.isArray(value) && proto !== Object.prototype && proto !== null) return value;
+    seen.add(value);
+    try {
+      if (Array.isArray(value)) return value.map((entry) => serializeCatalogHandles(entry, seen));
+      const plain = {};
+      for (const [key, entry] of Object.entries(value)) {
+        plain[key] = serializeCatalogHandles(entry, seen);
+      }
+      return plain;
+    } finally {
+      seen.delete(value);
+    }
   }
   const catalog = Object.freeze({
     search: async (query, options) => {
       const matches = await request("search", [query, options]);
-      return Object.freeze((Array.isArray(matches) ? matches : []).map((name) =>
+      return Object.freeze(matches.map((name) =>
         callableHandles.get(String(name))
       ).filter(Boolean));
     },
@@ -306,6 +339,13 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     __openclawSettleBridge: { value: settle },
     __openclawSerializeCatalogHandles: { value: serializeCatalogHandles },
     __openclawTakeOutput: { value: () => output.splice(0) },
+    __openclawTrackRejection: {
+      value: (promise, reason, handled) => {
+        if (handled) unhandledRejections.delete(promise);
+        else unhandledRejections.set(promise, reason);
+      },
+    },
+    __openclawUnhandledRejection: { value: () => unhandledRejections.keys().next().value },
   });
 })();
 `;

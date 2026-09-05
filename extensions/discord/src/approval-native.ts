@@ -184,7 +184,7 @@ function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalCon
     resolveApproverDmTargets: createDiscordApproverDmTargetResolver(configOverride),
     notifyOriginWhenDmOnly: true,
     nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
-      eventKinds: ["exec", "plugin"],
+      eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId }) =>
         isDiscordExecApprovalClientEnabled({ cfg, accountId, configOverride }),
       shouldHandle: ({ cfg, accountId, request }) =>

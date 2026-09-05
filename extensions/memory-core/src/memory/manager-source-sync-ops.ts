@@ -71,12 +71,11 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
-    const existingState = loadMemorySourceFileState({
+    const existingRows = loadMemorySourceFileState({
       db: this.db,
       source: "memory",
     });
-    const existingRows = existingState.rows;
-    const existingHashes = existingState.hashes;
+    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
     const activePaths = new Set(fileEntries.map((entry) => entry.path));
     if (params.progress) {
       params.progress.total += fileEntries.length;
@@ -112,9 +111,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         }
         dirtyEntries.push(entry);
       }
-      const indexItems = dirtyEntries.map(
-        (entry): MemoryIndexWorkItem => ({ entry, source: "memory" }),
-      );
+      const indexItems = dirtyEntries.map((entry): MemoryIndexWorkItem => ({
+        entry,
+        source: "memory",
+      }));
       if (params.deferIndex) {
         return { indexItems, finalize: deleteStaleRows };
       }
@@ -203,7 +203,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         : loadMemorySourceFileState({
             db: this.db,
             source: "sessions",
-          }).rows,
+          }),
       sessionPathForFile: (file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file)),
     });
     const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
@@ -266,7 +266,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         loadMemorySourceFileState({
           db: this.db,
           source: "sessions",
-        }).rows.map((row) => row.path),
+        }).map((row) => row.path),
       );
       for (const file of targetArchiveFiles) {
         const corpusEntry = corpusEntryForPath(file);
@@ -313,7 +313,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         this.advanceSyncProgress(params.progress);
         return null;
       }
-      return entry;
+      return { ...entry, sessionId: corpusEntryForPath(absPath).sessionId };
     };
 
     if (params.deferIndex) {
@@ -348,12 +348,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           )
         ).filter((entry): entry is MemoryIndexEntry => entry !== null);
         pendingIndexItems.push(
-          ...dirtyEntries.map(
-            (entry): MemoryIndexWorkItem => ({
-              entry,
-              source: "sessions",
-            }),
-          ),
+          ...dirtyEntries.map((entry): MemoryIndexWorkItem => ({
+            entry,
+            source: "sessions",
+          })),
         );
         if (pendingIndexItems.length >= SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES) {
           await flushPendingIndexItems();

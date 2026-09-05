@@ -304,6 +304,54 @@ describe("imessage message actions", () => {
     expect(result).toMatchObject({ details: { ok: true, messageId: "poll-guid" } });
   });
 
+  it("dispatches a current-conversation poll without a model-supplied target", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { pollPayloadMessage: true },
+    });
+    runtimeMock.sendPoll.mockResolvedValue({ messageId: "poll-guid" });
+
+    await imessageMessageActions.handleAction?.({
+      action: "poll",
+      cfg: cfg(),
+      params: {
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      toolContext: { currentChannelId: "chat_guid:iMessage;+;chat0000" },
+    } as never);
+
+    expect(runtimeMock.sendPoll).toHaveBeenCalledWith(
+      expect.objectContaining({ chatGuid: "iMessage;+;chat0000" }),
+    );
+  });
+
+  it.each(["target", "to", "chatGuid", "chatIdentifier"])(
+    "rejects a redacted %s with current-conversation remediation",
+    async (targetAlias) => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: { pollPayloadMessage: true },
+      });
+
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action: "poll",
+          cfg: cfg(),
+          params: {
+            [targetAlias]: "***",
+            pollQuestion: "Lunch?",
+            pollOption: ["Pizza", "Sushi"],
+          },
+          toolContext: { currentChannelId: "chat_guid:iMessage;+;chat0000" },
+        } as never),
+      ).rejects.toThrow("Omit the target to use the current conversation");
+      expect(runtimeMock.sendPoll).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects a poll send when the bridge lacks the poll payload selector", async () => {
     const staleStatus = {
       available: true,

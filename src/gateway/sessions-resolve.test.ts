@@ -1,11 +1,11 @@
 // Session resolve tests cover canonical/legacy key lookup, store migration,
 // agent scoping, listed-session selection, and protocol error mapping.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import * as sessionRows from "./session-utils-row.js";
 
 const hoisted = vi.hoisted(() => ({
-  listSessionsFromStoreMock: vi.fn(),
   resolveGatewaySessionStoreTargetWithStoreMock: vi.fn(),
   loadCombinedSessionStoreForGatewayMock: vi.fn(),
   listAgentIdsMock: vi.fn(),
@@ -25,7 +25,6 @@ vi.mock("./session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
   return {
     ...actual,
-    listSessionsFromStore: hoisted.listSessionsFromStoreMock,
     resolveGatewaySessionStoreTargetWithStore:
       hoisted.resolveGatewaySessionStoreTargetWithStoreMock,
     loadCombinedSessionStoreForGatewayCore: hoisted.loadCombinedSessionStoreForGatewayMock,
@@ -60,11 +59,9 @@ describe("resolveSessionKeyFromResolveParams", () => {
       key: canonicalKey,
       agentId: "main",
     });
-    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   };
 
   beforeEach(() => {
-    hoisted.listSessionsFromStoreMock.mockReset();
     hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockReset();
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
@@ -83,7 +80,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
     targetStore = {
       [canonicalKey]: { sessionId: "sess-1", updatedAt: 1 },
     };
-    hoisted.listSessionsFromStoreMock.mockReturnValue({ sessions: [] });
 
     await expect(
       resolveSessionKeyFromResolveParams({
@@ -246,29 +242,32 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
   });
 
-  it("resolves sessionId matches from raw store metadata without hydrating session rows", async () => {
+  it.each([
+    { sessionId: "sess-target", agentId: "main" },
+    { label: "target-label", agentId: "main" },
+  ])("resolves %j from raw metadata without hydrating session rows", async (p) => {
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath,
       store: {
-        "agent:main:noisy": { sessionId: "sess-noisy", updatedAt: 2 },
-        "agent:main:target": { sessionId: "sess-target", updatedAt: 1 },
+        "agent:main:noisy": {
+          sessionId: "sess-noisy",
+          label: "target-label extra",
+          updatedAt: 2,
+        },
+        "agent:main:target": { sessionId: "sess-target", label: "target-label", updatedAt: 1 },
       },
     });
-    hoisted.listSessionsFromStoreMock.mockImplementation(() => {
-      throw new Error("session rows should not be materialized for exact sessionId lookup");
-    });
+    const rowSpy = vi.spyOn(sessionRows, "buildGatewaySessionRow");
+    onTestFinished(() => rowSpy.mockRestore());
 
     const cfg = {};
-    const result = await resolveSessionKeyFromResolveParams({
-      cfg,
-      p: { sessionId: "sess-target", agentId: "main" },
-    });
+    const result = await resolveSessionKeyFromResolveParams({ cfg, p });
 
     expect(result).toEqual({ ok: true, key: "agent:main:target", agentId: "main" });
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
       agentId: "main",
     });
-    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
+    expect(rowSpy).not.toHaveBeenCalled();
   });
 
   it("resolves an archived session by its trailing UUID prefix", async () => {
@@ -459,23 +458,17 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: { [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1, label: "my-label" } },
     });
-    hoisted.listSessionsFromStoreMock.mockReturnValue({
-      sessions: [{ key: deletedAgentKey, sessionId: "sess-orphan", label: "my-label" }],
-    });
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
 
     const cfg = {};
     const result = await resolveSessionKeyFromResolveParams({
       cfg,
-      p: { label: "my-label", agentId: "main" },
+      p: { label: "my-label" },
     });
 
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
+      agentId: undefined,
     });
-    expect(hoisted.listSessionsFromStoreMock).toHaveBeenCalledWith(
-      expect.objectContaining({ lightweightListRows: true }),
-    );
     expect(result).toEqual({
       ok: false,
       error: {

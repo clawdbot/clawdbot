@@ -164,6 +164,33 @@ describe("plugin runtime state proxy", () => {
     });
   });
 
+  it("keeps blob and keyed namespace option policies independent", async () => {
+    await withOpenClawTestState({ label: "plugin-state-policy-independence" }, async () => {
+      const registry = createTestPluginRegistry();
+      const record = createPluginRecord("diffs", "bundled");
+      registry.registry.plugins.push(record);
+      const state = registry.createApi(record, { config: {} }).runtime.state;
+
+      const blob = state.openBlobStore({
+        namespace: "shared-policy",
+        maxEntries: 2,
+        maxBytesPerEntry: 8,
+        maxBytesPerNamespace: 16,
+        overflowPolicy: "reject-new",
+        defaultTtlMs: 100,
+      });
+      const keyed = state.openKeyedStore({
+        namespace: "shared-policy",
+        maxEntries: 3,
+        overflowPolicy: "evict-oldest",
+        defaultTtlMs: 200,
+      });
+
+      await expect(blob.register("blob", new Uint8Array([1]), {})).resolves.toBeUndefined();
+      await expect(keyed.register("keyed", { ok: true })).resolves.toBeUndefined();
+    });
+  });
+
   it("ignores plugin-supplied state directory overrides", async () => {
     await withOpenClawTestState({ label: "plugin-blob-runtime-env" }, async (state) => {
       const registry = createTestPluginRegistry();

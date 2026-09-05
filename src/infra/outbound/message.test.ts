@@ -139,6 +139,7 @@ describe("sendMessage", () => {
     mocks.resolveRuntimePluginRegistry.mockClear();
 
     mocks.getChannelPlugin.mockReturnValue({
+      id: "forum",
       outbound: { deliveryMode: "direct", sendText: vi.fn() },
     });
     mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));

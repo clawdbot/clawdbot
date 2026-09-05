@@ -30,15 +30,10 @@ extension OnboardingView {
                 .frame(maxWidth: 540)
                 .fixedSize(horizontal: false, vertical: true)
 
-            ScrollView {
-                OnboardingAISetupView(
-                    model: self.aiSetup,
-                    returnToGatewayAuthentication: { self.returnToGatewayAuthentication() },
-                    retryConfiguredGatewayProbe: { self.retryConfiguredGatewayProbe() })
-                    .padding(.vertical, 4)
-                    .padding(.trailing, 12)
-            }
-            .scrollIndicators(.automatic)
+            OnboardingAISetupView(
+                model: self.aiSetup,
+                returnToGatewayAuthentication: { self.returnToGatewayAuthentication() },
+                retryConfiguredGatewayProbe: { self.retryConfiguredGatewayProbe() })
         }
         .padding(.horizontal, 28)
         .padding(.top, 48)

@@ -17,6 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   LegacyMigrationSourceClaim,
@@ -52,17 +53,6 @@ export function detectLegacyNodeHostConfig(params: {
   };
 }
 
-function assertOnlyKeys(
-  value: Record<string, unknown>,
-  allowed: ReadonlySet<string>,
-  label: string,
-): void {
-  const unexpected = Object.keys(value).find((key) => !allowed.has(key));
-  if (unexpected) {
-    throw new Error(`${label} has unexpected field ${unexpected}`);
-  }
-}
-
 function optionalLegacyString(value: unknown, label: string): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -90,7 +80,7 @@ function parseLegacyGateway(value: unknown): NodeHostGatewayConfig | undefined {
   if (!isRecord(value)) {
     throw new Error("legacy node-host gateway must be an object");
   }
-  assertOnlyKeys(value, GATEWAY_KEYS, "legacy node-host gateway");
+  assertAllowedJsonFields(value, GATEWAY_KEYS, "legacy node-host gateway");
   const port = value.port;
   if (
     port !== undefined &&
@@ -120,7 +110,7 @@ function parseLegacyNodeHostConfig(snapshot: LegacySourceSnapshot): CanonicalNod
   if (!isRecord(parsed)) {
     throw new Error("legacy node-host config must be an object");
   }
-  assertOnlyKeys(parsed, CONFIG_KEYS, "legacy node-host config");
+  assertAllowedJsonFields(parsed, CONFIG_KEYS, "legacy node-host config");
   if (parsed.version !== 1) {
     throw new Error("legacy node-host config version must be 1");
   }

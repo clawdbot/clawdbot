@@ -66,7 +66,6 @@ vi.mock("../sent-message-cache.js", async (importOriginal) => {
 
 vi.resetModules();
 const { deliverReplies } = await import("./delivery.js");
-const { sendTelegramText } = await import("./delivery.send.js");
 const { PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime");
 
 vi.mock("grammy", () => ({
@@ -1954,7 +1953,7 @@ describe("deliverReplies", () => {
 
     let observed: unknown;
     try {
-      await sendTelegramText(createBot({ sendMessage }), "123", "hello", runtime);
+      await deliverWith({ bot: createBot({ sendMessage }), replies: [{ text: "hello" }], runtime });
     } catch (error) {
       observed = error;
     }
@@ -1978,12 +1977,13 @@ describe("deliverReplies", () => {
     );
     const sendMessage = vi.fn().mockRejectedValue(terminal);
 
-    const observed = await sendTelegramText(
-      createBot({ sendMessage }),
+    const observed = await deliverReplies({
+      ...baseDeliveryParams,
       chatId,
-      "hello",
-      createRuntime(),
-    ).catch((error: unknown) => error);
+      bot: createBot({ sendMessage }),
+      replies: [{ text: "hello" }],
+      runtime: createRuntime(),
+    }).catch((error: unknown) => error);
 
     expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(observed).toMatchObject({ cause: terminal, retryable: false });
@@ -1997,7 +1997,11 @@ describe("deliverReplies", () => {
     const sendMessage = vi.fn().mockRejectedValue(edgeError);
 
     await expect(
-      sendTelegramText(createBot({ sendMessage }), "123", "hello", createRuntime()),
+      deliverWith({
+        bot: createBot({ sendMessage }),
+        replies: [{ text: "hello" }],
+        runtime: createRuntime(),
+      }),
     ).rejects.toBe(edgeError);
     expect(sendMessage).toHaveBeenCalledOnce();
   });
@@ -2399,7 +2403,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
     expect(firstMockCallArg(sendMessage, 1)).toBe(text);
-    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
+    expect(mockCallArg(sendMessage, 0, 2)?.parse_mode).toBeUndefined();
   });
 
   it("preserves accepted rich plain-fallback chunks when a later chunk is rejected", async () => {
@@ -2459,17 +2463,26 @@ describe("deliverReplies", () => {
     });
     const replyMarkup = { inline_keyboard: [[{ text: "Allow", callback_data: "allow" }]] };
 
-    const messageId = await sendTelegramText(bot, "123", "A".repeat(4500), runtime, {
+    recordSentMessage.mockImplementation((_chatId, acceptedId: number) => {
+      acceptedMessageIds.push(acceptedId);
+    });
+    const outcome = await deliverWith({
+      bot,
+      runtime,
+      replies: [
+        {
+          text: "A".repeat(4500),
+          replyToId: "17",
+          channelData: { telegram: { buttons: replyMarkup.inline_keyboard } },
+        },
+      ],
+      replyToMode: "all",
+      textLimit: 32_768,
       richMessages: true,
-      replyToMessageId: 17,
-      replyMarkup,
       thread: { id: 42, scope: "forum" },
-      onAcceptedMessage: (acceptedId) => {
-        acceptedMessageIds.push(acceptedId);
-      },
     });
 
-    expect(messageId).toBe(51);
+    expect(outcome.delivered).toBe(true);
     expect(acceptedMessageIds).toEqual([51, 52]);
     expect(sendMessage).toHaveBeenCalledTimes(2);
     expect(mockCallArg(sendMessage, 0, 2)).toEqual(
@@ -2503,7 +2516,11 @@ describe("deliverReplies", () => {
 
     let observed: unknown;
     try {
-      await sendTelegramText(bot, "123", "A".repeat(4500), runtime, {
+      await deliverWith({
+        bot,
+        runtime,
+        replies: [{ text: "A".repeat(4500) }],
+        textLimit: 32_768,
         richMessages: true,
         thread: { id: 42, scope: "forum" },
       });
@@ -2536,15 +2553,16 @@ describe("deliverReplies", () => {
       const sendRichMessage = vi.fn().mockResolvedValue({ message_id: 72, chat: { id: "123" } });
       Object.assign(bot.api.raw, { sendRichMessage });
       const bookkeepingFailure = new Error(error);
+      recordSentMessage.mockImplementationOnce(() => {
+        throw bookkeepingFailure;
+      });
 
       await expect(
-        sendTelegramText(bot, "123", text, createRuntime(), {
-          ...options,
-          onAcceptedMessage: () => {
-            throw bookkeepingFailure;
-          },
-        }),
-      ).rejects.toBe(bookkeepingFailure);
+        deliverWith({ bot, runtime: createRuntime(), replies: [{ text }], ...options }),
+      ).rejects.toMatchObject({
+        cause: bookkeepingFailure,
+        deliveryResult: { messageIds: [kind === "rich" ? "72" : "71"] },
+      });
 
       expect(sendRichMessage).toHaveBeenCalledTimes(kind === "rich" ? 1 : 0);
       expect(sendMessage).toHaveBeenCalledTimes(kind === "rich" ? 0 : 1);
@@ -2564,7 +2582,10 @@ describe("deliverReplies", () => {
 
     let observed: unknown;
     try {
-      await sendTelegramText(bot, "123", "Rich reply", runtime, {
+      await deliverWith({
+        bot,
+        runtime,
+        replies: [{ text: "Rich reply" }],
         richMessages: true,
         thread: { id: 42, scope: "forum" },
       });
@@ -2599,7 +2620,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
     expect(firstMockCallArg(sendMessage, 1)).toBe(text);
-    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
+    expect(mockCallArg(sendMessage, 0, 2)?.parse_mode).toBeUndefined();
   });
 
   it("falls back to plain text before raw rich send when rich markdown renders empty", async () => {
@@ -2612,17 +2633,19 @@ describe("deliverReplies", () => {
     const bot = createBot({ sendMessage });
     Object.assign(bot.api.raw, { sendRichMessage });
 
-    const messageId = await sendTelegramText(bot, "123", "#", runtime, {
+    const outcome = await deliverWith({
+      bot,
+      runtime,
+      replies: [{ text: "#" }],
       richMessages: true,
-      textMode: "markdown",
     });
 
-    expect(messageId).toBe(16);
+    expect(outcome.delivered).toBe(true);
     expect(sendRichMessage).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
     expect(firstMockCallArg(sendMessage, 1)).toBe("#");
-    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
+    expect(mockCallArg(sendMessage, 0, 2)?.parse_mode).toBeUndefined();
   });
 
   it("uses table-aware plain text when rich reply fallback sends", async () => {

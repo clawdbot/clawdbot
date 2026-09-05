@@ -325,7 +325,7 @@ function resolvePairingSetupAuthLabel(
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 
-async function resolveGatewayUrl(
+export async function resolvePairingGatewayUrl(
   cfg: OpenClawConfig,
   opts: {
     env: NodeJS.ProcessEnv;
@@ -500,7 +500,7 @@ export async function resolvePairingSetupFromConfig(
   if (authLabel.error) {
     return { ok: false, error: authLabel.error };
   }
-  const urlResult = await resolveGatewayUrl(cfgForAuth, {
+  const urlResult = await resolvePairingGatewayUrl(cfgForAuth, {
     env,
     publicUrl: options.publicUrl,
     preferRemoteUrl: options.preferRemoteUrl,

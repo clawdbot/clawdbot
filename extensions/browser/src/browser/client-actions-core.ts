@@ -88,14 +88,12 @@ export async function browserNavigate(
   },
 ): Promise<BrowserActionTabResult> {
   const q = buildProfileQuery(opts.profile);
-  const timeoutMs =
-    opts.timeoutMs === undefined ? undefined : resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
+  const timeoutMs = resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   return await fetchBrowserJson<BrowserActionTabResult>(withBaseUrl(baseUrl, `/navigate${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url: opts.url, targetId: opts.targetId, timeoutMs }),
-    timeoutMs:
-      timeoutMs === undefined ? 20_000 : resolveBrowserOperationRequestTimeoutMs(timeoutMs),
+    timeoutMs: resolveBrowserOperationRequestTimeoutMs(timeoutMs),
     signal: opts.signal,
   });
 }

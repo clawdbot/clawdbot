@@ -1,8 +1,8 @@
 // Control UI tests cover the first-run model-to-channel onboarding handoff.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -16,12 +16,10 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "custodian-channel-onboarding",
-);
+let artifactDir: string;
+beforeEach(() => {
+  artifactDir = createControlUiE2eArtifactDir("custodian-channel-onboarding");
+});
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -57,7 +55,6 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
-    await mkdir(artifactDir, { recursive: true });
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
@@ -83,7 +80,8 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
         "channels.pairing.list",
         "channels.status",
         "openclaw.setup.detect",
-        "openclaw.setup.activate",
+        "openclaw.setup.activate.start",
+        "wizard.next",
         "openclaw.chat",
       ],
       methodResponses: {
@@ -110,11 +108,15 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
           workspace: "/tmp/openclaw-e2e",
           setupComplete: false,
         },
-        "openclaw.setup.activate": {
-          ok: true,
-          modelRef: "openai/gpt-5",
-          latencyMs: 73,
-          lines: ["Model ready"],
+        "openclaw.setup.activate.start": {
+          sessionId: "activation-session",
+          done: false,
+          status: "running",
+        },
+        "wizard.next": {
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: "openai/gpt-5" },
         },
         "openclaw.chat": {
           sessionId: "e2e-channel-onboarding",
@@ -209,7 +211,6 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
         search: "",
       });
       await page.getByText("No channels connected yet. Pick one below to get started.").waitFor();
-      await page.getByText("No configured channel accounts use DM sender pairing.").waitFor();
       await page.getByRole("heading", { name: "Add a channel" }).waitFor();
       expect(new URL(page.url()).searchParams.has("onboarding")).toBe(false);
       await page.screenshot({

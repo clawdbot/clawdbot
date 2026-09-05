@@ -1,12 +1,13 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   disposeSelectedSessionMessageSubscription,
   syncSelectedSessionMessageSubscription,
-  type ChatState,
-} from "./chat-history.ts";
+} from "./chat-history-subscription.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 
 const subscription = { key: "agent:main:main", agentId: null };
 
@@ -49,31 +50,38 @@ describe("disposed chat message subscriptions", () => {
     const state = createSubscriptionState(unsubscribeMessages);
     state.chatSessionMessageSubscriptionRequestedKey = subscription.key;
     state.chatSessionMessageSubscription = subscription;
+    state.chatSessionApprovalQueue = [
+      {
+        id: "approval-1",
+        kind: "plugin",
+        request: { command: "Approve", sessionKey: subscription.key },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      },
+    ];
 
     disposeSelectedSessionMessageSubscription(state);
 
     expect(unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(subscription);
     expect(state.chatSessionMessageSubscriptionRequestedKey).toBeNull();
     expect(state.chatSessionMessageSubscription).toBeNull();
+    expect(state.chatSessionApprovalQueue).toEqual([]);
   });
 
   it("releases a subscription that resolves after its pane is disposed", async () => {
-    let resolveSubscription: (value: typeof subscription) => void = () => undefined;
-    const pendingSubscription = new Promise<typeof subscription>((resolve) => {
-      resolveSubscription = resolve;
-    });
+    const pendingSubscription = createDeferred<typeof subscription>();
     const unsubscribeMessages = vi
       .fn<SessionCapability["unsubscribeMessages"]>()
       .mockResolvedValue(undefined);
     const state = createSubscriptionState(
       unsubscribeMessages,
-      vi.fn<SessionCapability["subscribeMessages"]>().mockReturnValue(pendingSubscription),
+      vi.fn<SessionCapability["subscribeMessages"]>().mockReturnValue(pendingSubscription.promise),
     );
 
     const sync = syncSelectedSessionMessageSubscription(state as never);
     await Promise.resolve();
     disposeSelectedSessionMessageSubscription(state);
-    resolveSubscription(subscription);
+    pendingSubscription.resolve(subscription);
     await sync;
 
     expect(unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(subscription);

@@ -28,12 +28,6 @@ export type ResolvedGatewayAuth = {
   trustedProxy?: GatewayTrustedProxyConfig;
 };
 
-/** Shared-secret auth shape exposed to Gateway clients that support a single bearer secret. */
-type EffectiveSharedGatewayAuth = {
-  mode: "token" | "password";
-  secret: string | undefined;
-};
-
 function mergeGatewayAuthConfig(
   base: GatewayAuthConfig | null | undefined,
   override: GatewayAuthConfig | null | undefined,
@@ -128,6 +122,29 @@ export function resolveGatewayAuth(params: {
   });
 }
 
+/** Credential edits may reload only while their resolved authentication mode stays fixed. */
+export function canHotReloadGatewayAuthCredentials(
+  previousConfig: OpenClawConfig | undefined,
+  candidateConfig: OpenClawConfig | undefined,
+): boolean {
+  if (!previousConfig || !candidateConfig) {
+    return false;
+  }
+  const modes = [previousConfig, candidateConfig].map((config) => {
+    const authConfig = config.gateway?.auth;
+    // Raw SecretRefs cannot establish an inferred mode before secret preparation.
+    if (
+      !authConfig?.mode &&
+      (resolveSecretInputRef({ value: authConfig?.token }).ref ||
+        resolveSecretInputRef({ value: authConfig?.password }).ref)
+    ) {
+      return undefined;
+    }
+    return resolveGatewayAuth({ authConfig, tailscaleMode: config.gateway?.tailscale?.mode }).mode;
+  });
+  return (modes[0] === "token" || modes[0] === "password") && modes[0] === modes[1];
+}
+
 /** Resolve auth from an env-substituted config while retaining its resolution facts. */
 export function resolveGatewayAuthForConfig(params: {
   config: OpenClawConfig;
@@ -162,27 +179,4 @@ export function resolveGatewayAuthForConfig(params: {
     password,
     tailscaleMode: params.tailscaleMode,
   });
-}
-
-/** Return the effective token/password secret for clients that cannot model every auth mode. */
-export function resolveEffectiveSharedGatewayAuth(params: {
-  authConfig?: GatewayAuthConfig | null;
-  authOverride?: GatewayAuthConfig | null;
-  env?: NodeJS.ProcessEnv;
-  tailscaleMode?: GatewayTailscaleMode;
-}): EffectiveSharedGatewayAuth | null {
-  const resolvedAuth = resolveGatewayAuth(params);
-  if (resolvedAuth.mode === "token") {
-    return {
-      mode: "token",
-      secret: resolvedAuth.token,
-    };
-  }
-  if (resolvedAuth.mode === "password") {
-    return {
-      mode: "password",
-      secret: resolvedAuth.password,
-    };
-  }
-  return null;
 }

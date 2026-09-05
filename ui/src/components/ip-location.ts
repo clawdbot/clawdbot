@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { lookupClientGeolocation, type ClientGeolocation } from "../lib/geolocation-lookup.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { icons } from "./icons.ts";
 
 // The first lookup on a fresh Gateway waits on a database download that can take
 // a minute, so an unavailable answer is retried on a widening delay instead of
@@ -81,16 +82,19 @@ class OpenClawIpLocation extends OpenClawLightDomContentsElement {
     }
     const attribution = this.location?.attribution;
     return html`<span class="activity-feed__device-location"
-      >${label}${attribution
-        ? html`<a
-            class="activity-feed__device-attribution"
-            href=${attribution.url}
-            target="_blank"
-            rel="noreferrer noopener"
-            title=${attribution.text}
-            >ⓘ</a
-          >`
-        : nothing}</span
+      >${label}${
+        attribution
+          ? html`<a
+              class="activity-feed__device-attribution"
+              href=${attribution.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              aria-label=${attribution.text}
+              title=${attribution.text}
+              >${icons.info}</a
+            >`
+          : nothing
+      }</span
     >`;
   }
 }

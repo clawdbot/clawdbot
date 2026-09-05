@@ -1,11 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import {
   copyReplyPayloadMetadata,
   setReplyPayloadMetadata,
+  type ReplyMediaAttachment,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
@@ -31,7 +31,6 @@ import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { throwIfAborted } from "./abort.js";
 import type {
   MessageActionInput,
-  MessageActionNormalization,
   MessageActionResult,
   ResolvedActionContext,
 } from "./message-action-contracts.js";
@@ -40,11 +39,15 @@ import {
   applyMessageCrossContextMarker,
   executeGatewayAction,
 } from "./message-action-execution.js";
+import { stageGatewayWorkspaceMedia } from "./message-action-gateway-media.js";
+import { collectAttachmentSources, normalizeSandboxMediaList } from "./message-action-params.js";
 import {
-  collectActionMediaSourceHints,
-  collectAttachmentSources,
-  normalizeSandboxMediaList,
-} from "./message-action-params.js";
+  applySendLocationToActionParams,
+  applySendPayloadPartsToActionParams,
+  type SendPayloadParts,
+  updateSendPayloadPartsFromReplyPayload,
+  withSendNormalization,
+} from "./message-action-send-payload.js";
 import {
   prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
@@ -57,71 +60,10 @@ import {
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 
-type SendPayloadParts = {
-  message: string;
-  payload: ReplyPayload;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  asVoice: boolean;
-  gifPlayback: boolean;
-  forceDocument: boolean;
-  bestEffort?: boolean;
-  silent?: boolean;
-  normalization?: MessageActionNormalization;
-};
-
-function updateSendPayloadPartsFromReplyPayload(
-  parts: SendPayloadParts,
-  payload: ReplyPayload,
-): SendPayloadParts {
-  const sendable = resolveSendableOutboundReplyParts(payload);
-  const mediaUrls = sendable.mediaUrls.length > 0 ? sendable.mediaUrls : undefined;
-  return {
-    ...parts,
-    message: payload.text ?? "",
-    payload,
-    mediaUrl: mediaUrls?.[0],
-    mediaUrls,
-    asVoice: payload.audioAsVoice === true,
-  };
-}
-
-function applySendLocationToActionParams(
-  actionParams: Record<string, unknown>,
-  location: ReplyPayload["location"],
-) {
-  if (location) {
-    actionParams.location = location;
-  } else {
-    delete actionParams.location;
-  }
-}
-
-function applySendPayloadPartsToActionParams(
-  actionParams: Record<string, unknown>,
-  parts: SendPayloadParts,
-) {
-  if (parts.message || !parts.payload.presentation) {
-    actionParams.message = parts.message;
-  } else {
-    // Presentation-only gateway handlers distinguish an omitted body from an
-    // explicit empty body when deciding whether to render semantic fallback.
-    delete actionParams.message;
-  }
-  actionParams.media = parts.mediaUrl;
-  actionParams.mediaUrl = parts.mediaUrl;
-  actionParams.mediaUrls = parts.mediaUrls;
-  actionParams.asVoice = parts.asVoice || undefined;
-  actionParams.audioAsVoice = parts.asVoice || undefined;
-  actionParams.asVideoNote = parts.payload.videoAsNote || undefined;
-  applySendLocationToActionParams(actionParams, parts.payload.location);
-}
-
-function withSendNormalization(
-  result: MessageActionResult,
-  normalization?: MessageActionNormalization,
-): MessageActionResult {
-  return normalization && result.kind === "send" ? { ...result, normalization } : result;
+function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["type"] {
+  return value === "image" || value === "audio" || value === "video" || value === "file"
+    ? value
+    : undefined;
 }
 
 export async function buildMessagePayload(params: {
@@ -156,10 +98,10 @@ export async function buildMessagePayload(params: {
     readToolStringParam(actionParams, "fileUrl", { trim: false }) ??
     readToolStringParam(actionParams, "image", { trim: false });
   const mediaUrlHints = readStringArrayParam(actionParams, "mediaUrls") ?? [];
-  const attachmentMediaHints = collectAttachmentSources(actionParams).map((source) => source.value);
+  const attachmentSources = collectAttachmentSources(actionParams);
   const hasBuffer = Boolean(readToolStringParam(actionParams, "buffer", { trim: false }));
   const hasMediaHint =
-    hasBuffer || Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
+    hasBuffer || Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentSources.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasLegacyInteractiveReplyBlocks(actionParams.interactive);
   const rawLocation = actionParams.location;
@@ -189,31 +131,80 @@ export async function buildMessagePayload(params: {
     stripAudioTag: true,
     stripReplyTags: true,
   });
-  const mergedMediaUrls: string[] = [];
-  const seenMedia = new Set<string>();
-  const pushMedia = (value?: string | null) => {
+  const topLevelFilename = readToolStringParam(actionParams, "filename");
+  const topLevelMimeType = readToolStringParam(actionParams, "contentType");
+  const attachmentByUrl = new Map(
+    attachmentSources.map((source) => [
+      normalizeOptionalString(source.value),
+      {
+        filename: source.filename,
+        mimeType: source.contentType,
+        type: resolveReplyMediaAttachmentType(source.attachment.type),
+      },
+    ]),
+  );
+  const mediaEntries: Array<{
+    url: string;
+    filename?: string;
+    mimeType?: string;
+    type?: ReplyMediaAttachment["type"];
+  }> = [];
+  const pushMedia = (
+    value?: string | null,
+    metadata?: { filename?: string; mimeType?: string; type?: ReplyMediaAttachment["type"] },
+  ) => {
     const trimmed = normalizeOptionalString(value);
-    if (!trimmed || seenMedia.has(trimmed)) {
+    if (!trimmed) {
       return;
     }
-    seenMedia.add(trimmed);
-    mergedMediaUrls.push(trimmed);
+    mediaEntries.push({ url: trimmed, ...metadata });
   };
-  pushMedia(mediaHint);
+  pushMedia(mediaHint, {
+    ...attachmentByUrl.get(normalizeOptionalString(mediaHint)),
+    filename: topLevelFilename ?? attachmentByUrl.get(normalizeOptionalString(mediaHint))?.filename,
+    mimeType: topLevelMimeType ?? attachmentByUrl.get(normalizeOptionalString(mediaHint))?.mimeType,
+  });
   for (const mediaUrlHint of mediaUrlHints) {
-    pushMedia(mediaUrlHint);
+    pushMedia(mediaUrlHint, attachmentByUrl.get(normalizeOptionalString(mediaUrlHint)));
   }
-  for (const attachmentMediaHint of attachmentMediaHints) {
-    pushMedia(attachmentMediaHint);
+  for (const attachmentSource of attachmentSources) {
+    pushMedia(attachmentSource.value, {
+      filename: attachmentSource.filename,
+      mimeType: attachmentSource.contentType,
+      type: resolveReplyMediaAttachmentType(attachmentSource.attachment.type),
+    });
   }
 
-  const normalizedMediaUrls = await normalizeSandboxMediaList({
-    values: mergedMediaUrls,
-    sandboxRoot: input.sandboxRoot,
-    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
+  const normalizedMedia = await Promise.all(
+    mediaEntries.map(async (entry) => {
+      const normalizedUrl = (
+        await normalizeSandboxMediaList({
+          values: [entry.url],
+          sandboxRoot: input.sandboxRoot,
+          sandboxContainerWorkdir: input.sandboxContainerWorkdir,
+        })
+      )[0];
+      entry.url = normalizedUrl ?? entry.url;
+      return entry;
+    }),
+  );
+  const seenMedia = new Set<string>();
+  const preparedMedia = normalizedMedia.filter((entry) => {
+    if (seenMedia.has(entry.url)) {
+      return false;
+    }
+    seenMedia.add(entry.url);
+    return true;
   });
-  mergedMediaUrls.length = 0;
-  mergedMediaUrls.push(...normalizedMediaUrls);
+  const mergedMediaUrls = preparedMedia.map((entry) => entry.url);
+  const mediaAttachments = preparedMedia.map((entry) =>
+    Object.assign(
+      { path: entry.url },
+      entry.type ? { type: entry.type } : {},
+      entry.filename ? { name: entry.filename } : {},
+      entry.mimeType ? { mimeType: entry.mimeType } : {},
+    ),
+  );
 
   message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text), {
     resolveProtectedRanges: findCodeRegions,
@@ -320,6 +311,9 @@ export async function buildMessagePayload(params: {
     text: message,
     ...(mediaUrl ? { mediaUrl } : {}),
     ...(mergedMediaUrls.length ? { mediaUrls: mergedMediaUrls } : {}),
+    ...(mediaAttachments.some((attachment) => Object.keys(attachment).length > 1)
+      ? { attachments: mediaAttachments }
+      : {}),
     ...(asVoice ? { audioAsVoice: true } : {}),
     ...(asVideoNote ? { videoAsNote: true } : {}),
     ...(location ? { location } : {}),
@@ -462,7 +456,13 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       return;
     }
     outboundRoutePersisted = true;
-    await ensureOutboundSessionEntry({ cfg, channel, accountId, route: outboundRoute });
+    await ensureOutboundSessionEntry({
+      cfg,
+      channel,
+      accountId,
+      route: outboundRoute,
+      sourceSessionKey: input.sessionKey,
+    });
   };
   throwIfAborted(abortSignal);
 
@@ -484,14 +484,15 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   delete params.voiceProvider;
   delete params.voiceId;
   throwIfAborted(abortSignal);
+  // Send payload construction performs the final media-list normalization, so
+  // bind access to those canonical sources instead of the earlier action hints.
   const mediaAccess =
     input.mediaAccess ??
     resolveAgentScopedOutboundMediaAccess({
       cfg,
       agentId,
-      mediaSources: collectActionMediaSourceHints(params, ctx.extraActionMediaSourceParamKeys, {
-        structuredAttachments: "all",
-      }),
+      mediaSources: sendPayload.mediaUrls,
+      workspaceMediaAccess: input.workspaceMediaAccess,
       sessionKey: input.sessionKey,
       messageProvider: input.sessionKey ? undefined : channel,
       accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
@@ -505,6 +506,24 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   // remote gateway action nor a provider-native action may bypass core queueing.
   const requiresCoreDelivery =
     input.forceCoreDelivery === true || input.requireQueuePersistence === true;
+  const usesGatewayAction =
+    !requiresCoreDelivery &&
+    Boolean(gateway) &&
+    (channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway" ||
+      channelPlugin?.outbound?.deliveryMode === "gateway");
+  if (usesGatewayAction && !dryRun) {
+    const stagedPayload = await stageGatewayWorkspaceMedia({
+      cfg,
+      channel,
+      accountId,
+      payload: sendPayload.payload,
+      mediaUrls: sendPayload.mediaUrls,
+      mediaAccess,
+      workspaceMediaAccess: input.workspaceMediaAccess,
+    });
+    sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, stagedPayload);
+    applySendPayloadPartsToActionParams(params, sendPayload);
+  }
 
   // Gateway action ownership wins even when this process has a render-capable
   // outbound adapter; credentials and account selection may exist only remotely.

@@ -18,6 +18,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import { locked } from "./locked.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { enqueueRun, run } from "./ops-run.js";
@@ -39,14 +40,14 @@ function observeCronJobWrites(
   const suffix = ++cronJobWriteObserverId;
   const functionName = `observe_cron_job_write_${suffix}`;
   const triggerName = `observe_cron_job_write_${suffix}`;
-  database.function(functionName, (writtenJobId, stateJson, runningAtMs) => {
+  database.function(functionName, (writtenJobId, stateJson) => {
     if (writtenJobId !== jobId || typeof stateJson !== "string") {
       return 0;
     }
-    const state = JSON.parse(stateJson) as { queuedAtMs?: number };
+    const state = JSON.parse(stateJson) as { queuedAtMs?: number; runningAtMs?: number };
     observer({
       ...(typeof state.queuedAtMs === "number" ? { queuedAtMs: state.queuedAtMs } : {}),
-      ...(typeof runningAtMs === "number" ? { runningAtMs } : {}),
+      ...(typeof state.runningAtMs === "number" ? { runningAtMs: state.runningAtMs } : {}),
     });
     return 0;
   });
@@ -54,7 +55,7 @@ function observeCronJobWrites(
     CREATE TEMP TRIGGER ${triggerName}
     AFTER UPDATE ON cron_jobs
     BEGIN
-      SELECT ${functionName}(NEW.job_id, NEW.state_json, NEW.running_at_ms);
+      SELECT ${functionName}(NEW.job_id, NEW.state_json);
     END;
   `);
   return () => database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
@@ -148,6 +149,69 @@ describe("cron service run admission cleanup", () => {
       .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
     expect(receipt?.status).toBe("superseded");
   });
+
+  it.each([
+    { entry: "enqueue", invalid: true },
+    { entry: "enqueue", invalid: false },
+    { entry: "run", invalid: true },
+    { entry: "run", invalid: false },
+  ] as const)(
+    "rejects $entry preflight effects after authority closes (invalid: $invalid)",
+    async ({ entry, invalid }) => {
+      const store = opsRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
+      const job = createDueIsolatedJob({
+        id: "revoked-preflight",
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      if (invalid) {
+        job.sessionTarget = "main";
+      } else {
+        delete job.state.nextRunAtMs;
+      }
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+      const before = await loadCronStore(store.storePath);
+      const onEvent = vi.fn();
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => dueAt,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+        onEvent,
+      });
+      const lockEntered = createDeferred();
+      const releaseLock = createDeferred();
+      const blocker = locked(state, async () => {
+        lockEntered.resolve();
+        await releaseLock.promise;
+      });
+      await lockEntered.promise;
+      let authorityActive = true;
+      const operation = (entry === "enqueue" ? enqueueRun : run)(state, job.id, "force", {
+        commitGuard: () => {
+          if (!authorityActive) {
+            throw new TypeError("authority closed");
+          }
+        },
+      });
+      authorityActive = false;
+      releaseLock.resolve();
+      await blocker;
+      try {
+        await expect.soft(operation).rejects.toThrow("authority closed");
+        expect.soft(await loadCronStore(store.storePath)).toEqual(before);
+        expect.soft(onEvent).not.toHaveBeenCalled();
+        expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      } finally {
+        stop(state);
+      }
+    },
+  );
 
   it("rejects queued manual reservation after caller authority closes", async () => {
     vi.useRealTimers();

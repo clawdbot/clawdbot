@@ -261,6 +261,7 @@ function applyApprovalDecision<TPayload>(params: {
   forceMalformedDeny: boolean;
   resolver: OperatorApprovalResolver;
   localResolvedBy: string | null;
+  grantExpiresAtMs?: number;
 }): ApplyApprovalDecisionResult<TPayload> {
   const result = params.forceMalformedDeny
     ? params.manager.forceDenyDetailed(
@@ -277,6 +278,8 @@ function applyApprovalDecision<TPayload>(params: {
         params.decision as ExecApprovalDecision,
         params.resolver,
         params.localResolvedBy,
+        "operator",
+        params.grantExpiresAtMs !== undefined ? { grantExpiresAtMs: params.grantExpiresAtMs } : {},
       );
   if (result.outcome === "decision-not-allowed") {
     return applyApprovalDecision({ ...params, forceMalformedDeny: true });
@@ -426,7 +429,7 @@ export function createApprovalHandlers(
       const custody = resolveParams?.reviewer
         ? prepareApprovalChannelCustody({
             cfg: context.getRuntimeConfig(),
-            approvalKind: record.kind === "plugin" ? "plugin" : "exec",
+            approvalKind: record.kind,
             reviewer: resolveParams.reviewer,
           })
         : null;
@@ -435,7 +438,7 @@ export function createApprovalHandlers(
           ? params.execApprovalManager.getLiveSnapshot(record.id)
           : record.kind === "plugin"
             ? params.pluginApprovalManager.getLiveSnapshot(record.id)
-            : undefined;
+            : params.systemAgentApprovalManager?.getLiveSnapshot(record.id);
       if (resolveParams?.reviewer && (!custody || !liveRecord || !custody.authorizes(liveRecord))) {
         respondApprovalNotFound(respond);
         return;
@@ -481,6 +484,15 @@ export function createApprovalHandlers(
                 forceMalformedDeny,
                 resolver,
                 localResolvedBy,
+                // Grant terms freeze at resolve; an explicit per-resolve
+                // override (custom operator UIs, CLI) beats the config default.
+                ...(requestedDecision === "allow-always" &&
+                typeof resolveParams?.grantExpiresInDays === "number"
+                  ? {
+                      grantExpiresAtMs:
+                        Date.now() + Math.floor(resolveParams.grantExpiresInDays) * 86_400_000,
+                    }
+                  : {}),
               })
             : record.kind === "plugin"
               ? applyApprovalDecision({

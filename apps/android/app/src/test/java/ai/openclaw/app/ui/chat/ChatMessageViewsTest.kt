@@ -4,6 +4,11 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.parseChatMessageContent
+import android.graphics.Rect
+import android.view.View
+import android.view.ViewGroup
+import android.view.inspector.WindowInspector
+import android.widget.TextView
 import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
@@ -95,8 +100,15 @@ class ChatMessageViewsTest {
       composeRule.onNode(hasText(label) and hasClickAction()).assertExists()
     }
     composeRule.onNodeWithText("Select text").performClick()
-    composeRule.onAllNodesWithText("user body").assertCountEquals(2)
+    composeRule.onAllNodesWithText("user body").assertCountEquals(1)
+    composeRule.runOnIdle {
+      val reader = nativeReaders().single()
+      assertEquals("user body", reader.text.toString())
+      assertTrue(reader.isShown && reader.width > 0 && reader.height > 0)
+      assertTrue(reader.getGlobalVisibleRect(Rect()))
+    }
     composeRule.onNode(hasText("Done") and hasClickAction()).performClick()
+    composeRule.runOnIdle { assertTrue(nativeReaders().isEmpty()) }
 
     assistantBubble.performSemanticsAction(SemanticsActions.OnLongClick) { action -> action() }
     composeRule.onNode(hasText("Listen") and hasClickAction()).assertExists()
@@ -413,5 +425,22 @@ class ChatMessageViewsTest {
       .assertIsDisplayed()
     composeRule.onNodeWithText("Compacted history").assertIsDisplayed()
     composeRule.onNodeWithText("saved 875.3k tokens").assertIsDisplayed()
+  }
+
+  private fun nativeReaders(): List<TextView> {
+    fun descendants(view: View): Sequence<View> =
+      sequence {
+        yield(view)
+        if (view is ViewGroup) {
+          for (index in 0 until view.childCount) yieldAll(descendants(view.getChildAt(index)))
+        }
+      }
+    return WindowInspector
+      .getGlobalWindowViews()
+      .asSequence()
+      .flatMap(::descendants)
+      .filterIsInstance<TextView>()
+      .filter { it.isTextSelectable && !it.onCheckIsTextEditor() }
+      .toList()
   }
 }

@@ -5,6 +5,7 @@ import {
   readBoundedResponseText as readBoundedResponseTextWithLimit,
 } from "../lib/bounded-response.mjs";
 import { escapeRegExp } from "../lib/regexp.mjs";
+import { createTimeoutError } from "../lib/timeout-error.mjs";
 
 const baseUrl = process.env.OPENWEBUI_BASE_URL ?? "";
 const email = process.env.OPENWEBUI_ADMIN_EMAIL ?? "";
@@ -82,12 +83,6 @@ function readPositiveTimerMs(name, fallback) {
 
 function readNonNegativeTimerMs(name, fallback) {
   return clampOpenWebUiTimerTimeoutMs(readNonNegativeInt(name, fallback), 0);
-}
-
-function createTimeoutError(label, timeoutMs) {
-  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
-  error.code = "ETIMEDOUT";
-  return error;
 }
 
 async function withRequestTimeout(label, timeoutMs, run) {

@@ -276,6 +276,31 @@ describe("memory index", () => {
     expect((replacement as unknown as { closed: boolean }).closed).toBe(true);
   });
 
+  it("declines a maintenance manager that arrives during global teardown", async () => {
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    trackManager(manager);
+    await manager.probeEmbeddingAvailability();
+    let releaseProviderClose: () => void = () => {};
+    providerFixture.providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+
+    const globalClose = closeAllMemoryIndexManagers();
+    try {
+      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
+      await expect(
+        RuntimeMemoryIndexManager.get({ cfg, agentId: "main", purpose: "maintenance" }),
+      ).resolves.toBeNull();
+    } finally {
+      releaseProviderClose();
+      providerFixture.providerCloseGate = null;
+    }
+    await globalClose;
+  });
+
   it("retains a failed scoped close owner until provider retirement succeeds", async () => {
     const cfg = createCfg({
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },

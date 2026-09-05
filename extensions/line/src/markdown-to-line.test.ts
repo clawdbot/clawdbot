@@ -220,6 +220,25 @@ describe("processLineMessage", () => {
     ).toEqual(["Before", "Code", "Between", "Table", "After"]);
   });
 
+  it("delivers a code block the card cannot hold as text instead of cutting it", () => {
+    // The card shows 2000 characters. Nothing in LINE caps a Flex text there, so
+    // a longer block belongs to the reader in full, the way an oversized table
+    // already reaches them as text.
+    const code = Array.from({ length: 120 }, (_, i) => `const line${i} = ${i}; // padding`).join(
+      "\n",
+    );
+    expect(code.length).toBeGreaterThan(2000);
+
+    const result = processLineMessage(`Header\n\n\`\`\`ts\n${code}\n\`\`\`\n\nFooter`);
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("const line0 = 0;");
+    expect(result.text).toContain("const line119 = 119;");
+    expect(result.text).not.toContain("\n...");
+    expect(result.text.indexOf("Header")).toBeLessThan(result.text.indexOf("const line0"));
+    expect(result.text.indexOf("const line119")).toBeLessThan(result.text.indexOf("Footer"));
+  });
+
   it("processes text with code blocks", () => {
     const text = `Check this code:
 
@@ -481,5 +500,36 @@ describe("hasMarkdownToConvert", () => {
 
   it("returns false for plain text", () => {
     expect(hasMarkdownToConvert("Just plain text.")).toBe(false);
+  });
+});
+
+describe("empty code fences", () => {
+  // LINE rejects the whole push when a Flex text is blank, so a fence with no
+  // code has to drop out rather than cost the reply it was part of.
+  it.each([
+    ["no language", "Here:\n\n```\n```\n\ndone"],
+    ["with a language", "Here:\n\n```js\n```\n\ndone"],
+    ["whitespace only", "Here:\n\n```\n   \n```\n\ndone"],
+  ])("renders no card for a fence with %s, keeping the surrounding text", (_label, markdown) => {
+    const processed = processLineMessage(markdown);
+
+    expect(processed.flexMessages).toEqual([]);
+    expect(processed.text).toContain("Here:");
+    expect(processed.text).toContain("done");
+  });
+
+  it("still renders a card for a fence that has code", () => {
+    const processed = processLineMessage("Here:\n\n```js\nconst a = 1;\n```\n\ndone");
+
+    expect(processed.flexMessages).toHaveLength(1);
+  });
+
+  it("keeps the surviving card when one fence of two is empty", () => {
+    const processed = processLineMessage("A\n\n```js\nx\n```\n\nB\n\n```\n```\n\nC");
+
+    expect(processed.flexMessages).toHaveLength(1);
+    expect(processed.text).toContain("A");
+    expect(processed.text).toContain("B");
+    expect(processed.text).toContain("C");
   });
 });

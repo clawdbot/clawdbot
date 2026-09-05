@@ -1,12 +1,12 @@
 import { vi } from "vitest";
-import { handleAgentEvent, type FallbackStatus, type ToolStreamEntry } from "./tool-stream.ts";
+import type { FallbackStatus, ToolStreamEntry } from "./tool-stream-contract.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
 type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;
 type MutableHost = ToolStreamHost & {
   sessions: {
     state: { modelOverrides: Record<string, string | null> };
-    refreshReplacement: (agentId?: string | null) => Promise<void>;
   };
   compactionStatus?: unknown;
   compactionClearTimer?: number | null;
@@ -33,7 +33,7 @@ export function createHost(overrides?: Partial<MutableHost>): MutableHost {
     toolStreamSyncTimer: null,
     sessions: {
       state: { modelOverrides },
-      refreshReplacement: vi.fn(async () => undefined),
+      refreshReplacement: vi.fn(async () => null),
     },
     compactionStatus: null,
     compactionClearTimer: null,

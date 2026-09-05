@@ -13,29 +13,9 @@ import {
 import { listAuthProfileRepairCandidates } from "./doctor-auth-legacy-paths.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-async function loadProviderRuntime() {
-  return import("../plugins/providers.runtime.js");
-}
-
-async function loadNoteRuntime() {
-  return import("../../packages/terminal-core/src/note.js");
-}
-
-function hasConfigOAuthProfiles(cfg: OpenClawConfig): boolean {
-  return Object.values(cfg.auth?.profiles ?? {}).some((profile) => profile?.mode === "oauth");
-}
-
 function sanitizePromptLabel(label: string | undefined): string | undefined {
   const sanitized = label ? sanitizeForLog(label).trim() : undefined;
   return sanitized || undefined;
-}
-
-function configSelectsProvider(cfg: OpenClawConfig, providerIds: readonly string[]): boolean {
-  const selectedProviders = new Set(providerIds);
-  return collectConfiguredModelRefs(cfg).some(({ value }) => {
-    const separator = value.indexOf("/");
-    return separator > 0 && selectedProviders.has(value.slice(0, separator));
-  });
 }
 
 /**
@@ -50,28 +30,40 @@ export async function maybeRepairLegacyOAuthProfileIds(
 ): Promise<LegacyOAuthProfileRepairResult> {
   let nextCfg = cfg;
   const retiredProfileCleanupPlans: RetiredAuthProfileCleanupPlan[] = [];
-  const { resolvePluginProvidersCore } = await loadProviderRuntime();
+  const repairCandidates = listAuthProfileRepairCandidates(cfg, process.env).map(
+    ({ agentDir }) => ({
+      agentDir,
+      profiles: loadPersistedAuthProfileStore(agentDir)?.profiles ?? {},
+    }),
+  );
+  // runAuthProfileHealth migrates stores before this step. Without profiles or
+  // config references, loading provider runtimes cannot produce a repair.
+  if (
+    Object.keys(cfg.auth?.profiles ?? {}).length === 0 &&
+    !Object.values(cfg.auth?.order ?? {}).some((order) => order.length > 0) &&
+    !Object.values(cfg.models?.providers ?? {}).some(
+      (provider) => typeof provider.apiKey === "string",
+    ) &&
+    repairCandidates.every(({ profiles }) => Object.keys(profiles).length === 0)
+  ) {
+    return { config: nextCfg, retiredProfileCleanupPlans };
+  }
+  const { resolvePluginProvidersCore } = await import("../plugins/providers.runtime.js");
   const providers = resolvePluginProvidersCore({
     config: cfg,
     env: process.env,
     mode: "setup",
   });
-  const repairCandidates = listAuthProfileRepairCandidates(nextCfg, process.env);
   for (const provider of providers) {
     for (const profileId of provider.deprecatedProfileIds ?? []) {
-      const storedProfileProviders = new Set<string>();
-      const profileStores = repairCandidates.filter((candidate) => {
-        const profile = loadPersistedAuthProfileStore(candidate.agentDir)?.profiles[profileId];
-        if (!profile) {
-          return false;
-        }
-        storedProfileProviders.add(profile.provider);
-        return true;
+      const profileStores = repairCandidates.flatMap(({ agentDir, profiles }) => {
+        const profile = profiles[profileId];
+        return profile ? [{ agentDir, provider: profile.provider }] : [];
       });
       if (profileStores.length === 0 && !configReferencesAuthProfile(nextCfg, profileId)) {
         continue;
       }
-      const { note } = await loadNoteRuntime();
+      const { note } = await import("../../packages/terminal-core/src/note.js");
       note(
         `- Remove retired auth profile ${profileId}. The provider's native login remains unchanged.`,
         "Auth profiles",
@@ -85,11 +77,19 @@ export async function maybeRepairLegacyOAuthProfileIds(
         continue;
       }
       const configuredProfileProvider = nextCfg.auth?.profiles?.[profileId]?.provider;
-      const selectedProviderIds = new Set([provider.id, ...storedProfileProviders]);
+      const selectedProviderIds = new Set([
+        provider.id,
+        ...profileStores.map((store) => store.provider),
+      ]);
       if (configuredProfileProvider) {
         selectedProviderIds.add(configuredProfileProvider);
       }
-      if (configSelectsProvider(nextCfg, [...selectedProviderIds])) {
+      if (
+        collectConfiguredModelRefs(nextCfg).some(({ value }) => {
+          const separator = value.indexOf("/");
+          return separator > 0 && selectedProviderIds.has(value.slice(0, separator));
+        })
+      ) {
         // Preserve a selected provider's runtime routing before removing the
         // retired profile that still identifies its native CLI migration.
         nextCfg = applyProviderConfigDefaultsForConfig({
@@ -107,7 +107,7 @@ export async function maybeRepairLegacyOAuthProfileIds(
       }
     }
   }
-  if (!hasConfigOAuthProfiles(nextCfg)) {
+  if (!Object.values(nextCfg.auth?.profiles ?? {}).some((profile) => profile?.mode === "oauth")) {
     return { config: nextCfg, retiredProfileCleanupPlans };
   }
   const store = ensureAuthProfileStoreWithoutExternalProfiles();
@@ -126,7 +126,7 @@ export async function maybeRepairLegacyOAuthProfileIds(
         continue;
       }
 
-      const { note } = await loadNoteRuntime();
+      const { note } = await import("../../packages/terminal-core/src/note.js");
       note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
       const label =
         sanitizePromptLabel(repairSpec.promptLabel) ??

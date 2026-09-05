@@ -17,7 +17,7 @@ type ZalouserDirectoryDeps = {
   >;
 };
 
-function mapUser(params: {
+export function mapZalouserDirectoryUser(params: {
   id: string;
   name?: string | null;
   avatarUrl?: string | null;
@@ -45,7 +45,7 @@ export async function listZalouserDirectoryGroupMembers(
   const normalizedGroupId = parseZalouserDirectoryGroupId(params.groupId);
   const members = await deps.listZaloGroupMembers(account.profile, normalizedGroupId);
   const rows = members.map((member) =>
-    mapUser({
+    mapZalouserDirectoryUser({
       id: member.userId,
       name: member.displayName,
       avatarUrl: member.avatar ?? null,

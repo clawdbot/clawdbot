@@ -74,11 +74,13 @@ export async function installGatewayDaemonNonInteractive(params: {
     runtime.exit(1);
     return { installed: false };
   }
+  const existingCommand = await service.readCommand(process.env).catch(() => null);
   const { programArguments, workingDirectory, environment, environmentValueSources } =
     await buildGatewayInstallPlan({
       env: process.env,
       port,
       runtime: daemonRuntimeRaw,
+      existingCommand,
       warn: (message) => runtime.log(message),
       config: params.nextConfig,
     });

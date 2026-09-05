@@ -23,7 +23,7 @@ working.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.149.1`; newer custom, remote, and macOS desktop-owned
+  `@openai/codex` `0.153.4`; newer custom, remote, and macOS desktop-owned
   binaries continue with a compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
@@ -270,12 +270,10 @@ mutation path. Missing or ambiguous ownership fails closed instead of granting
 account-wide access.
 
 Runtime app inventory is the target-session accessibility check for both
-migrated curated plugins and manually configured workspace plugins. Codex
-harness session setup computes a restrictive thread app config from the enabled
-and accessible plugin apps; it is not recomputed on every turn, so
-`/codex plugins enable`/`disable` only affect
-new Codex conversations. Use `/new` or `/reset` to pick up the change in the
-current conversation.
+migrated curated plugins and manually configured workspace plugins. Before
+enabled-policy turns, including warm reuse and cold resume, the Codex harness
+rebuilds the restrictive thread app policy from current native settings while
+reusing its app inventory and plugin metadata caches.
 
 ## Support boundary
 
@@ -328,7 +326,10 @@ entries asynchronously. The cache is process-local; restarting the CLI or
 gateway drops it.
 
 Missing inventory methods, authentication errors, transport failures, and
-connector refresh failures fail closed.
+connector refresh failures do not admit app tools. Ordinary turns, including
+those using `allow_destructive_actions: "ask"`, can continue with native apps
+disabled when inventory exceeds its startup budget. Scheduled runs stop if
+their captured app policy cannot be revalidated within that budget.
 
 Migration and runtime use separate cache keys:
 
@@ -400,12 +401,16 @@ An app can be installed and authenticated but non-callable in the account-wide
 snapshot while `_default` is disabled. OpenClaw provisionally admits only
 ownership-proven, policy-allowed apps, creates the restrictive thread, and then
 rereads `app/installed` once with the resulting thread ID and
-`forceRefresh: false`. Codex must confirm each admitted app is enabled and
-callable under the thread's effective app, managed, workspace, and tool
-policies before the turn proceeds. If that attestation fails, the provisional
-thread is never bound or used. OpenClaw deletes a failed persistent provisional
-thread, unsubscribes a failed ephemeral thread, and retires the app-server
-connection if safe cleanup cannot be confirmed.
+`forceRefresh: false`. If the snapshot reports an app missing, disabled, or
+non-callable, OpenClaw logs one warning listing the unavailable apps and
+continues with the remaining tools. Codex still enforces the thread's effective
+app, managed, workspace, and tool policies. An unavailable optional app does
+not block unrelated chat or heartbeat runs.
+
+If the snapshot request itself fails, the provisional thread is never bound
+or used. OpenClaw deletes a failed persistent provisional thread, unsubscribes
+a failed ephemeral thread, and retires the app-server connection if safe
+cleanup cannot be confirmed.
 
 `destructive_enabled` on each app comes from the effective global or
 per-plugin `allow_destructive_actions` policy; `true`, `"auto"`, and `"ask"`
@@ -435,15 +440,26 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
   turns ownership-proven MCP approval elicitations into OpenClaw plugin
   approvals before returning the Codex approval response.
 - `"ask"`: OpenClaw uses the same Codex write/destructive gating as
-  `"auto"`, clears durable Codex per-tool approval overrides for the app
-  before the thread starts, and offers only one-shot approval or denial so
-  durable approvals cannot suppress later write-action prompts. For each
-  admitted app using `"ask"`, OpenClaw selects Codex's human approvals
+  `"auto"`, overrides saved per-tool and per-account approvals in the native
+  thread's configuration, and offers only one-shot approval or denial. Saved
+  native settings stay unchanged, and user-config reloads preserve the thread's
+  approval policy. These checks also run before reusing a thread or answering a
+  `/btw` side question. Changed override keys rebuild the thread with current policy.
+  For each admitted app using `"ask"`, OpenClaw selects Codex's human approvals
   reviewer for that app so Codex sends its approval elicitations to
   OpenClaw; other apps and non-app thread approvals keep their configured
   reviewer and policy.
 - Missing plugin identity, ambiguous ownership, a missing or mismatched
   turn id, or an unsafe elicitation schema declines instead of prompting.
+
+Apps outside the admitted policy stay disabled even if native Codex settings
+enable them. Native settings must be verified before an enabled policy can admit
+app tools. When no app can be admitted, Codex's app tool surface is disabled
+without reading native app settings. Disabling plugin apps also skips app
+inventory discovery. Active legacy managed app settings outrank native thread
+configuration and prevent app admission; move those app settings to a supported
+user or project configuration layer. Native administrative requirements remain
+authoritative.
 
 ## Troubleshooting
 

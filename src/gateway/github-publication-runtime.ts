@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { requirePersonalGitHubPublicationConfirmation } from "./github-personal-publication-store.js";
 import { createGitHubPublicationTranscriptReporter } from "./github-publication-transcript.js";
 import { createGitHubPublicationCoordinator } from "./github-publication.js";
 import type {
@@ -12,6 +13,7 @@ export function createGitHubPublicationRuntime(params: {
   warn: (message: string) => void;
 }) {
   const coordinator = createGitHubPublicationCoordinator({ placements: params.placements });
+  requirePersonalGitHubPublicationConfirmation(params.placements.workspaceResultInstanceId());
   const report = createGitHubPublicationTranscriptReporter(params.loadSessionRuntime, coordinator);
   const reportDeferred = async (publication: {
     sessionId: string;

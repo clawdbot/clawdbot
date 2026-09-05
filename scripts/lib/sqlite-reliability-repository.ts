@@ -10,6 +10,7 @@ import {
 } from "../../src/snapshot/snapshot-provider.js";
 import {
   assertSameCompactionPayload,
+  formatReliabilityStderr,
   type CompactionPayloadProof,
   type ReliabilityReport,
   type ReliabilityStateProof,
@@ -50,11 +51,6 @@ function assertSameState(
   }
 }
 
-function formatWorkerStderr(stderr: string): string {
-  const text = stderr.trim();
-  return text ? ` stderr=${JSON.stringify(text)}` : "";
-}
-
 async function waitForCrashPoint(params: {
   child: ChildProcess;
   crashPoint: RepositoryCrashPoint;
@@ -65,7 +61,7 @@ async function waitForCrashPoint(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite repository worker did not reach ${params.crashPoint}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite repository worker did not reach ${params.crashPoint}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     }, REPOSITORY_TIMEOUT_MS);
@@ -84,7 +80,7 @@ async function waitForCrashPoint(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite repository worker exited before ${params.crashPoint}: code=${String(code)} signal=${String(signal)}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite repository worker exited before ${params.crashPoint}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     };

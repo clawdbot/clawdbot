@@ -69,6 +69,13 @@ const qaEvidenceTimingSchema = z.strictObject({
   failedSamples: z.number().int().nonnegative().optional(),
 });
 
+const qaEvidenceRttMeasurementSchema = z.strictObject({
+  finalMatchedReplyRttMs: z.number().finite().positive(),
+  requestStartedAt: nonEmptyStringSchema,
+  responseObservedAt: nonEmptyStringSchema,
+  source: nonEmptyStringSchema,
+});
+
 const qaEvidenceTestSchema = z.strictObject({
   kind: nonEmptyStringSchema,
   id: nonEmptyStringSchema,
@@ -145,6 +152,7 @@ const qaEvidenceResultSchema = z.strictObject({
   status: qaEvidenceStatusSchema,
   failure: qaEvidenceFailureSchema.optional(),
   timing: qaEvidenceTimingSchema.optional(),
+  rttMeasurement: qaEvidenceRttMeasurementSchema.optional(),
 });
 
 const qaEvidencePostureSchema = z.enum(["direct-gateway", "native-approval", "user-path"]);
@@ -173,6 +181,7 @@ const qaEvidenceSummarySchema = z.strictObject({
 type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceTiming = z.infer<typeof qaEvidenceTimingSchema>;
+export type QaEvidenceRttMeasurement = z.infer<typeof qaEvidenceRttMeasurementSchema>;
 export type QaEvidencePackageSource = z.infer<typeof qaEvidencePackageSourceSchema>;
 export type QaEvidenceScorecardJson = z.infer<typeof qaEvidenceScorecardSchema>;
 export type QaEvidenceSummaryEntry = z.infer<typeof qaEvidenceSummaryEntrySchema>;
@@ -204,6 +213,9 @@ type QaEvidenceScenarioResultInput = {
   rttMs?: number;
   rttMeasurement?: {
     finalMatchedReplyRttMs?: number;
+    requestStartedAt?: string;
+    responseObservedAt?: string;
+    source?: string;
   };
 };
 
@@ -254,16 +266,9 @@ function buildQaEvidenceRefs(params: {
   docsRefs?: readonly string[];
   codeRefs?: readonly string[];
 }) {
-  const buildRef = (kind: "docs" | "code", refPath: string) => {
-    const ref = {
-      kind,
-      path: refPath,
-    };
-    return ref;
-  };
   const refs = [
-    ...(params.docsRefs ?? []).map((path) => buildRef("docs", path)),
-    ...(params.codeRefs ?? []).map((path) => buildRef("code", path)),
+    ...(params.docsRefs ?? []).map((path) => ({ kind: "docs" as const, path })),
+    ...(params.codeRefs ?? []).map((path) => ({ kind: "code" as const, path })),
   ];
   return [...new Map(refs.map((ref) => [`${ref.kind}:${ref.path}`, ref])).values()];
 }
@@ -272,17 +277,15 @@ function buildQaEvidenceCoverage(params: {
   primaryCoverageIds?: readonly string[];
   secondaryCoverageIds?: readonly string[];
 }) {
-  const buildCoverage = (id: string, role: "primary" | "secondary") => ({
-    id,
-    role,
-  });
   return [
-    ...normalizeSortedUniqueTrimmedStringList(params.primaryCoverageIds ?? []).map((id) =>
-      buildCoverage(id, "primary"),
-    ),
-    ...normalizeSortedUniqueTrimmedStringList(params.secondaryCoverageIds ?? []).map((id) =>
-      buildCoverage(id, "secondary"),
-    ),
+    ...normalizeSortedUniqueTrimmedStringList(params.primaryCoverageIds ?? []).map((id) => ({
+      id,
+      role: "primary" as const,
+    })),
+    ...normalizeSortedUniqueTrimmedStringList(params.secondaryCoverageIds ?? []).map((id) => ({
+      id,
+      role: "secondary" as const,
+    })),
   ];
 }
 
@@ -321,10 +324,6 @@ export function resolveQaEvidenceProfile(params: {
   return undefined;
 }
 
-function resolveQaEvidenceRunner(params: { env?: NodeJS.ProcessEnv; fallback?: string }) {
-  return params.env?.OPENCLAW_QA_RUNNER?.trim() || params.fallback || "host";
-}
-
 function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {
   const spec = env?.OPENCLAW_QA_PACKAGE_SOURCE?.trim() || undefined;
   const sha = env?.OPENCLAW_QA_PACKAGE_SOURCE_SHA?.trim() || undefined;
@@ -337,10 +336,6 @@ function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {
     spec,
     sha,
   };
-}
-
-function resolveQaEvidenceBuildPackageSource(params: QaEvidenceBuildBase) {
-  return params.packageSource ?? resolveQaEvidencePackageSource(params.env);
 }
 
 function buildQaEvidenceProvider(params: { providerMode: QaProviderMode; primaryModel: string }) {
@@ -374,6 +369,18 @@ function buildQaEvidenceProvider(params: { providerMode: QaProviderMode; primary
   };
 }
 
+function resolveQaEvidenceBuildContext(params: QaEvidenceBuildBase, defaultRunner?: string) {
+  return {
+    profile: resolveQaEvidenceProfile({ env: params.env, explicit: params.profile }),
+    executionBase: {
+      runner: params.env?.OPENCLAW_QA_RUNNER?.trim() || (params.runner ?? defaultRunner) || "host",
+      environment: resolveQaEvidenceEnvironment({ env: params.env, repoRoot: params.repoRoot }),
+      provider: buildQaEvidenceProvider(params),
+    },
+    packageSource: params.packageSource ?? resolveQaEvidencePackageSource(params.env),
+  };
+}
+
 function normalizeQaEvidenceStatus(status: QaEvidenceStatusInput): QaEvidenceStatus {
   return status === "skip" ? "skipped" : status;
 }
@@ -392,18 +399,25 @@ function failureForResult(result: {
   };
 }
 
-function timingForRttResult(check: QaEvidenceRttInput) {
+function evidenceForRttResult(check: QaEvidenceRttInput) {
   const timing: QaEvidenceTiming = { ...check.timing };
-  const rttMs = check.rttMeasurement?.finalMatchedReplyRttMs ?? check.rttMs;
-  if (
+  const parsedMeasurement = qaEvidenceRttMeasurementSchema.safeParse(check.rttMeasurement);
+  const rttMeasurement = parsedMeasurement.success ? parsedMeasurement.data : undefined;
+  const fallbackRttMs = check.rttMeasurement?.finalMatchedReplyRttMs ?? check.rttMs;
+  if (rttMeasurement) {
+    timing.rttMs = rttMeasurement.finalMatchedReplyRttMs;
+  } else if (
     timing.rttMs === undefined &&
-    typeof rttMs === "number" &&
-    Number.isFinite(rttMs) &&
-    rttMs > 0
+    typeof fallbackRttMs === "number" &&
+    Number.isFinite(fallbackRttMs) &&
+    fallbackRttMs > 0
   ) {
-    timing.rttMs = rttMs;
+    timing.rttMs = fallbackRttMs;
   }
-  return Object.keys(timing).length > 0 ? timing : undefined;
+  return {
+    timing: Object.keys(timing).length > 0 ? timing : undefined,
+    rttMeasurement,
+  };
 }
 
 function timingForTestResult(result: QaEvidenceTestResultInput) {
@@ -417,11 +431,13 @@ function timingForTestResult(result: QaEvidenceTestResultInput) {
 function resultForEvidence(
   result: { details?: string; failureMessage?: string; status: QaEvidenceStatusInput },
   timing?: QaEvidenceTiming,
+  rttMeasurement?: QaEvidenceRttMeasurement,
 ) {
   return {
     status: normalizeQaEvidenceStatus(result.status),
     failure: failureForResult(result),
     timing,
+    rttMeasurement,
   };
 }
 
@@ -507,17 +523,7 @@ export function buildQaSuiteEvidenceSummary(
     scenarioResults: readonly QaEvidenceScenarioResultInput[];
   },
 ): QaEvidenceSummaryJson {
-  const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment({
-    env: params.env,
-    repoRoot: params.repoRoot,
-  });
-  const packageSource = resolveQaEvidenceBuildPackageSource(params);
-  const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
-  const profile = resolveQaEvidenceProfile({
-    env: params.env,
-    explicit: params.profile,
-  });
+  const { executionBase, packageSource, profile } = resolveQaEvidenceBuildContext(params);
   const channelDriver = params.channelDriver?.trim() || undefined;
   const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
     const scenario = params.scenarioDefinitions[index];
@@ -534,7 +540,7 @@ export function buildQaSuiteEvidenceSummary(
       docsRefs: scenario?.docsRefs,
       codeRefs: scenario?.codeRefs,
     });
-    const timing = timingForRttResult(result);
+    const { timing, rttMeasurement } = evidenceForRttResult(result);
     return {
       test: {
         kind: "qa-scenario",
@@ -551,9 +557,7 @@ export function buildQaSuiteEvidenceSummary(
       refs: refs.length > 0 ? refs : undefined,
       runtimePairLane,
       execution: {
-        runner,
-        environment,
-        provider,
+        ...executionBase,
         channel: {
           id: params.channelId,
           live: channelDriver === "live",
@@ -562,7 +566,7 @@ export function buildQaSuiteEvidenceSummary(
         packageSource,
         artifacts: buildQaEvidenceArtifacts(params.artifactPaths, "qa-suite"),
       },
-      result: resultForEvidence(result, timing),
+      result: resultForEvidence(result, timing, rttMeasurement),
     };
   });
   return buildQaEvidenceSummary({
@@ -575,26 +579,16 @@ export function buildQaSuiteEvidenceSummary(
 
 function buildTestRunnerEvidenceSummary(
   params: QaEvidenceBuildBase & {
-    defaultRunner: string;
-    testKind: string;
     targets: readonly QaEvidenceTestTargetInput[];
     results: readonly QaEvidenceTestResultInput[];
   },
+  defaultRunner: string,
+  testKind: string,
 ): QaEvidenceSummaryJson {
-  const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment({
-    env: params.env,
-    repoRoot: params.repoRoot,
-  });
-  const packageSource = resolveQaEvidenceBuildPackageSource(params);
-  const runner = resolveQaEvidenceRunner({
-    env: params.env,
-    fallback: params.runner ?? params.defaultRunner,
-  });
-  const profile = resolveQaEvidenceProfile({
-    env: params.env,
-    explicit: params.profile,
-  });
+  const { executionBase, packageSource, profile } = resolveQaEvidenceBuildContext(
+    params,
+    defaultRunner,
+  );
   const targetById = new Map(params.targets.map((target) => [target.id, target]));
   const targetByPath = new Map(params.targets.map((target) => [target.sourcePath, target]));
   const entries = params.results.map((result, index): QaEvidenceSummaryEntry => {
@@ -612,7 +606,7 @@ function buildTestRunnerEvidenceSummary(
     const timing = timingForTestResult(result);
     return {
       test: {
-        kind: params.testKind,
+        kind: testKind,
         id: target?.id ?? fallbackId,
         title: target?.title ?? result.title ?? fallbackId,
         source: sourcePath ? { path: sourcePath } : undefined,
@@ -623,11 +617,9 @@ function buildTestRunnerEvidenceSummary(
       }),
       refs: refs.length > 0 ? refs : undefined,
       execution: {
-        runner,
-        environment,
-        provider,
+        ...executionBase,
         packageSource,
-        artifacts: buildQaEvidenceArtifacts(params.artifactPaths, runner),
+        artifacts: buildQaEvidenceArtifacts(params.artifactPaths, executionBase.runner),
       },
       result: resultForEvidence(result, timing),
     };
@@ -646,12 +638,7 @@ export function buildVitestEvidenceSummary(
     results: readonly QaEvidenceTestResultInput[];
   },
 ): QaEvidenceSummaryJson {
-  return buildTestRunnerEvidenceSummary({
-    ...params,
-    defaultRunner: "vitest",
-    testKind: "vitest-test",
-    runner: params.runner ?? "vitest",
-  });
+  return buildTestRunnerEvidenceSummary(params, "vitest", "vitest-test");
 }
 
 export function buildPlaywrightEvidenceSummary(
@@ -660,12 +647,7 @@ export function buildPlaywrightEvidenceSummary(
     results: readonly QaEvidenceTestResultInput[];
   },
 ): QaEvidenceSummaryJson {
-  return buildTestRunnerEvidenceSummary({
-    ...params,
-    defaultRunner: "playwright",
-    testKind: "playwright-test",
-    runner: params.runner ?? "playwright",
-  });
+  return buildTestRunnerEvidenceSummary(params, "playwright", "playwright-test");
 }
 
 export function buildScriptEvidenceSummary(
@@ -674,10 +656,5 @@ export function buildScriptEvidenceSummary(
     results: readonly QaEvidenceTestResultInput[];
   },
 ): QaEvidenceSummaryJson {
-  return buildTestRunnerEvidenceSummary({
-    ...params,
-    defaultRunner: "script",
-    testKind: "script-test",
-    runner: params.runner ?? "script",
-  });
+  return buildTestRunnerEvidenceSummary(params, "script", "script-test");
 }

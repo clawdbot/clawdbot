@@ -1,4 +1,4 @@
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { openTaskDetailId } from "./components/chat-detail-slot.ts";
@@ -27,8 +27,7 @@ export function createChatPaneRails(params: {
   updateSidebarLayout: ChatPageHost["updateSidebarLayout"];
 }) {
   const { state, sidebarLayout } = params;
-  const hasPanelSlot = (slot: SidebarSlotId) =>
-    sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
+  const isPanelVisible = (slot: SidebarSlotId) => isSidebarSlotVisible(sidebarLayout, slot);
   const openPanelSlot = (slot: SidebarSlotId) => {
     params.updateSidebarLayout(openSlot(sidebarLayout, slot));
     if (slot === "companion") {
@@ -43,7 +42,7 @@ export function createChatPaneRails(params: {
     params.updateSidebarLayout(closeSlot(sidebarLayout, slot));
   };
   const togglePanelSlot = (slot: SidebarSlotId) =>
-    hasPanelSlot(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
+    isPanelVisible(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
   const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
     draftScope: params.presentationId,
     expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
@@ -52,7 +51,7 @@ export function createChatPaneRails(params: {
   });
   const sessionWorkspace = {
     ...sessionWorkspaceBase,
-    collapsed: !hasPanelSlot("workspace"),
+    collapsed: !isPanelVisible("workspace"),
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("workspace"),
     onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,
@@ -69,7 +68,7 @@ export function createChatPaneRails(params: {
   });
   const backgroundTasks = {
     ...backgroundTasksBase,
-    collapsed: !hasPanelSlot("tasks"),
+    collapsed: !isPanelVisible("tasks"),
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("tasks"),
   };

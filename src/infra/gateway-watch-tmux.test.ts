@@ -91,6 +91,7 @@ describe("gateway-watch tmux wrapper", () => {
       args: ["gateway", "--force", "--raw-stream-path", "a b.jsonl"],
       cwd: "/repo with spaces/openclaw",
       env: {
+        OPENCLAW_DEV_SOURCE_ROOT: "/selected checkout",
         OPENCLAW_GATEWAY_PORT: "19001",
         OPENCLAW_GATEWAY_RESTART_TRACE: "1",
         OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
@@ -109,6 +110,7 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("'OPENCLAW_GATEWAY_WATCH_SESSION=openclaw-gateway-watch-main'");
     expect(command).toContain("'\\''-u'\\'' '\\''NO_COLOR'\\''");
     expect(command).toContain("'FORCE_COLOR=1'");
+    expect(command).toContain("'OPENCLAW_DEV_SOURCE_ROOT=/selected checkout'");
     expect(command).toContain("'OPENCLAW_GATEWAY_PORT=19001'");
     expect(command).toContain("'OPENCLAW_GATEWAY_RESTART_TRACE=1'");
     expect(command).toContain("'OPENCLAW_GATEWAY_STARTUP_TRACE=1'");
@@ -126,7 +128,7 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("--handoff-managed-service");
   });
 
-  it("runs managed service handoff before watching", () => {
+  it("runs managed service handoff before watching and clears an omitted development selector", () => {
     const command = buildGatewayWatchTmuxCommand({
       args: ["gateway", "--force"],
       cwd: "/repo",
@@ -136,6 +138,8 @@ describe("gateway-watch tmux wrapper", () => {
     });
 
     expect(command).toContain("scripts/gateway-watch-tmux.mts");
+    expect(command).toContain("'\\''-u'\\'' '\\''OPENCLAW_DEV_SOURCE_ROOT'\\''");
+    expect(command).not.toContain("OPENCLAW_DEV_SOURCE_ROOT=");
     expect(command).toMatch(
       /gateway-watch-tmux\.mts.*handoff-managed-service.*&& exec.*scripts\/watch-node\.mjs/,
     );

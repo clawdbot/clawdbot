@@ -12,15 +12,22 @@ import {
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import { loadPreparedModelCatalogSnapshotForBrowse } from "../../agents/model-catalog-browse.js";
+import {
+  modelCatalogBrowseRequiresFullDiscovery,
+  MODEL_CATALOG_BROWSE_TIMEOUT_MS,
+} from "../../agents/model-catalog-browse.js";
 import {
   resolveLogicalModelCatalogEntryState,
   resolveLogicalVisibleModelCatalog,
   type ModelCatalogAuthChecker,
 } from "../../agents/model-catalog-visibility.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
 import { isRetiredModelPickerProvider } from "../../agents/model-runtime-aliases.js";
-import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
+import {
+  dedupeModelCatalogEntries,
+  modelCatalogLogicalKey,
+} from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
   normalizeProviderId,
@@ -31,12 +38,17 @@ import {
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
-import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
+import { PreparedModelCatalogConfigReplacedError } from "../../agents/prepared-model-catalog.errors.js";
+import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
+import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -58,6 +70,17 @@ export type ModelsProviderData = {
   modelNames: Map<string, string>;
   runtimeChoicesByProvider?: Map<string, ModelsRuntimeChoice[]>;
 };
+
+type PreparedModelsProviderData = ModelsProviderData & {
+  modelCatalog: ModelCatalogEntry[];
+};
+
+type ModelsBrowseOptions = {
+  view?: "default" | "all";
+  workspaceDir?: string;
+};
+
+type ModelsBrowseContext = ModelsBrowseOptions & { agentDir?: string };
 
 export type ModelsRuntimeChoice = {
   id: string;
@@ -148,18 +171,132 @@ function addRuntimeChoice(
   return choices;
 }
 
-export async function buildModelsProviderData(
+export function buildPreparedModelsProviderData(
   cfg: OpenClawConfig,
   agentId?: string,
-  options: { view?: "default" | "all"; workspaceDir?: string } = {},
-): Promise<ModelsProviderData> {
+  options: ModelsBrowseOptions = {},
+): Promise<PreparedModelsProviderData> {
+  return buildPreparedModelsProviderDataWithContext(cfg, agentId, options);
+}
+
+async function buildPreparedModelsProviderDataWithContext(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+  options: ModelsBrowseOptions,
+  agentDir?: string,
+): Promise<PreparedModelsProviderData> {
+  const deadlineMs =
+    options.view === "all" ? undefined : Date.now() + MODEL_CATALOG_BROWSE_TIMEOUT_MS;
+  let currentAgentDir = agentDir;
+  let currentConfig = cfg;
+  const buildCurrentData = (control: { catalogFallback?: boolean; deadlineMs?: number }) =>
+    buildPreparedDataForConfig(
+      currentConfig,
+      agentId,
+      { ...options, agentDir: currentAgentDir },
+      control,
+    );
+  for (;;) {
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+      return buildCurrentData({ catalogFallback: true, deadlineMs });
+    }
+    try {
+      return await buildCurrentData({ deadlineMs });
+    } catch (error) {
+      if (!isPreparedModelCatalogOwnerReplacement(error)) {
+        throw error;
+      }
+    }
+    const owner = await loadPublishedModelsOwner({
+      agentId,
+      deadlineMs,
+      workspaceDir: options.workspaceDir,
+    });
+    if (!owner) {
+      return buildCurrentData({ catalogFallback: true, deadlineMs });
+    }
+    currentConfig = owner.config;
+    currentAgentDir = owner.agentDir;
+  }
+}
+
+function isPreparedModelCatalogOwnerReplacement(error: unknown): boolean {
+  return (
+    error instanceof PreparedModelCatalogConfigReplacedError ||
+    error instanceof PreparedModelRuntimePublicationSupersededError
+  );
+}
+
+async function loadPublishedModelsOwner(params: {
+  agentId?: string;
+  deadlineMs?: number;
+  workspaceDir?: string;
+}): Promise<PreparedModelRuntimeSnapshot | undefined> {
+  for (;;) {
+    try {
+      const owner = await awaitWithinDeadline(
+        () =>
+          preparedModelCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot({
+            readOnly: true,
+            agentId: params.agentId,
+            workspaceDir: params.workspaceDir,
+          }),
+        params.deadlineMs,
+      );
+      if (owner === ABSOLUTE_DEADLINE_EXPIRED) {
+        return undefined;
+      }
+      return owner;
+    } catch (error) {
+      if (!isPreparedModelCatalogOwnerReplacement(error)) {
+        throw error;
+      }
+    }
+  }
+}
+
+async function buildPreparedDataForConfig(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+  options: ModelsBrowseContext,
+  control: { catalogFallback?: boolean; deadlineMs?: number },
+): Promise<PreparedModelsProviderData> {
+  const project = (owner?: PreparedModelRuntimeSnapshot) =>
+    projectPreparedModelsProviderData(cfg, agentId, options, owner);
+  if (control.catalogFallback) {
+    return project();
+  }
+  const agentDir = options.agentDir ?? (agentId ? resolveAgentDir(cfg, agentId) : undefined);
+  const result = await awaitWithinDeadline(
+    () =>
+      preparedModelCatalog.withPreparedModelCatalogOwner(
+        {
+          config: cfg,
+          readOnly: !modelCatalogBrowseRequiresFullDiscovery({ cfg, agentId, view: options.view }),
+          refreshFullCatalog: "stale",
+          ...(agentId ? { agentId } : {}),
+          ...(agentDir ? { agentDir } : {}),
+          ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+        },
+        project,
+      ),
+    control.deadlineMs,
+  );
+  return result === ABSOLUTE_DEADLINE_EXPIRED ? project() : result;
+}
+
+async function projectPreparedModelsProviderData(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+  options: ModelsBrowseOptions,
+  owner?: PreparedModelRuntimeSnapshot,
+): Promise<PreparedModelsProviderData> {
   const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
     agentId,
     ...runtimeNormalization,
   });
-  const catalogWorkspaceDir = options.workspaceDir;
   const workspaceDir =
     options.workspaceDir ??
     (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
@@ -167,19 +304,8 @@ export async function buildModelsProviderData(
   const cliRuntimeProviders = new Set(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
-
-  const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
-    cfg,
-    agentId,
-    view: options.view ?? "default",
-    loadCatalog: ({ readOnly }) =>
-      loadPreparedModelCatalogSnapshot({
-        config: cfg,
-        readOnly,
-        ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
-        ...(catalogWorkspaceDir ? { workspaceDir: catalogWorkspaceDir } : {}),
-      }),
-  });
+  const snapshot = owner?.modelCatalog ?? { entries: [], routeVariants: [] };
+  const authStore = owner && getPreparedModelRuntimeAuthStore(owner);
   const catalog = snapshot.entries;
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
@@ -196,6 +322,12 @@ export async function buildModelsProviderData(
     allowPluginSyntheticAuth: false,
     discoverExternalCliAuth: false,
     allowPreparedRuntimeAuth: true,
+    ...(authStore && owner
+      ? {
+          preparedAuth: { authStore, authModes: owner.authModes },
+          metadataSnapshot: owner.metadataSnapshot,
+        }
+      : {}),
   });
   const logicalModelKey = (entry: { provider: string; id: string }) =>
     openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ?? modelCatalogLogicalKey(entry);
@@ -227,7 +359,6 @@ export async function buildModelsProviderData(
         incompatibleModelKeys.add(logicalModelKey(entry));
       }
       return resolveLogicalModelCatalogEntryState({
-        entry,
         evaluation,
         authBacked: options.view === "all" || evaluation.availability === true,
         routePolicy: openAIModelCatalogRoutePolicy,
@@ -398,7 +529,21 @@ export async function buildModelsProviderData(
     runtimeChoicesByProvider.set(provider, choices);
   }
 
-  return { byProvider, providers, resolvedDefault, modelNames, runtimeChoicesByProvider };
+  // Auth and visibility cross awaits. Retired owners must restart the whole projection.
+  if (owner && !owner.isCurrent()) {
+    throw new PreparedModelRuntimePublicationSupersededError("model browse owner was superseded");
+  }
+
+  return {
+    byProvider,
+    providers,
+    resolvedDefault,
+    modelNames,
+    // Selection needs the prepared capabilities, with selected physical routes
+    // ahead of other inventory rows for the same logical model.
+    modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
+    runtimeChoicesByProvider,
+  };
 }
 
 function formatProviderLine(params: { provider: string; count: number }): string {
@@ -572,13 +717,14 @@ export async function resolveModelsCommandReply(params: {
   const argText = body.replace(/^\/models\b/i, "").trim();
   const parsed = parseModelsArgs(argText);
 
-  const { byProvider, providers, modelNames } = await buildModelsProviderData(
+  const { byProvider, providers, modelNames } = await buildPreparedModelsProviderDataWithContext(
     params.cfg,
     params.agentId,
     {
       ...(parsed.action === "list" && parsed.all ? { view: "all" as const } : {}),
       workspaceDir: params.workspaceDir,
     },
+    params.agentDir,
   );
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
   const providerInfos = buildProviderInfos({ providers, byProvider });

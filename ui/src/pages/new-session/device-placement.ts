@@ -1,16 +1,21 @@
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { DraftEnvironment } from "./discovery.ts";
-import { environmentMenuFacts } from "./place-facts.ts";
+import { environmentMenuFacts, MAX_PLACE_MENU_FACTS } from "./place-facts.ts";
 import { disambiguate } from "./place-labels.ts";
 
-export type DevicePlacementOption = Readonly<{
-  deviceId: string;
-  label: string;
-  subtitle?: string;
-  facts: readonly string[];
-  selectable: boolean;
-  disabledReason?: string;
-}>;
+registerNewSessionSetupEnglish();
+
+export type DevicePlacementOption = Readonly<
+  {
+    deviceId: string;
+    label: string;
+    subtitle?: string;
+    facts: readonly string[];
+    selectable: boolean;
+    disabledReason?: string;
+  } & Pick<DraftEnvironment, "workerSlots" | "capabilities" | "invocableCommands">
+>;
 
 export type DevicePlacementRequirement = Readonly<{
   requiredNodeCommands: readonly string[];
@@ -39,11 +44,20 @@ function unavailableReason(
   if (environment.sessionHost !== true) {
     return t("newSession.sessionHostingDisabled");
   }
-  const unavailableCommand = requirement.requiredNodeCommands.find(
-    (command) => !environment.invocableCommands?.includes(command),
-  );
-  if (unavailableCommand) {
-    return `${t("pluginsPage.enableAction")} ${unavailableCommand}: gateway.nodes.commands.allow.`;
+  if (requirement.requiredNodeCommands.length > 0) {
+    const requiredCommand = environment.requiredNodeCommand;
+    if (!requiredCommand) {
+      return t("newSession.placementNotReady");
+    }
+    if (requiredCommand.state === "pending-approval") {
+      return t("newSession.nodeCommandPendingApproval", { command: requiredCommand.command });
+    }
+    if (requiredCommand.state === "undeclared") {
+      return t("newSession.nodeCommandUndeclared", { command: requiredCommand.command });
+    }
+    if (requiredCommand.state === "unauthorized") {
+      return t("newSession.nodeCommandUnauthorized", { command: requiredCommand.command });
+    }
   }
   if (!requirement.consumesWorkerSlot) {
     return undefined;
@@ -75,17 +89,21 @@ export function projectDevicePlacements(
       });
       const priorityFacts =
         (environment.issues?.length ?? 0) > 0 || environment.status !== "available" ? 1 : 0;
-      const slotFacts = environment.workerSlots ? 1 : 0;
-      const insertion = priorityFacts + slotFacts;
       const visibleFacts =
         disabledReason && !facts.includes(disabledReason)
-          ? [...facts.slice(0, insertion), disabledReason, ...facts.slice(insertion)].slice(0, 4)
+          ? [...facts.slice(0, priorityFacts), disabledReason, ...facts.slice(priorityFacts)].slice(
+              0,
+              MAX_PLACE_MENU_FACTS,
+            )
           : facts;
       return [
         {
           deviceId,
           label: environment.label ?? deviceId,
           facts: placementDisabledReason ? [placementDisabledReason] : visibleFacts,
+          workerSlots: environment.workerSlots,
+          capabilities: environment.capabilities,
+          invocableCommands: environment.invocableCommands,
           selectable: disabledReason === undefined,
           ...(disabledReason ? { disabledReason } : {}),
         },

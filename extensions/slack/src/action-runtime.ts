@@ -32,6 +32,8 @@ import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
 import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
 import { hasSlackNativeDataBlock } from "./native-data-blocks.js";
 import type { SlackReplyDeliveryMessage } from "./reply-blocks.js";
+import { mergeSlackSendResults } from "./send-results.js";
+import type { SlackSendResult } from "./send.js";
 import { formatSlackTarget } from "./target-parsing.js";
 import { parseSlackTarget, resolveSlackChannelId, slackContextTargetsMatch } from "./targets.js";
 
@@ -40,6 +42,7 @@ type ConversationReadInvocationOrigin = NonNullable<
 >;
 
 const messagingActions = new Set([
+  "openConversation",
   "sendMessage",
   "uploadFile",
   "editMessage",
@@ -77,6 +80,7 @@ export const slackActionRuntime = {
   listSlackEmojis: createLazySlackAction("listSlackEmojis"),
   listSlackPins: createLazySlackAction("listSlackPins"),
   listSlackReactions: createLazySlackAction("listSlackReactions"),
+  openSlackConversation: createLazySlackAction("openSlackConversation"),
   parseSlackBlocksInput,
   pinSlackMessage: createLazySlackAction("pinSlackMessage"),
   reactSlackMessage: createLazySlackAction("reactSlackMessage"),
@@ -633,6 +637,7 @@ export async function handleSlackAction(
     if (!isActionEnabled("messages")) {
       throw new Error("Slack messages are disabled.");
     }
+    const sentResults: SlackSendResult[] = [];
     const sendSlackMessage = async (
       target: string,
       content: string,
@@ -656,9 +661,21 @@ export async function handleSlackAction(
       if (replyReference) {
         replyReference.value = true;
       }
+      sentResults.push(result);
       return result;
     };
     switch (action) {
+      case "openConversation": {
+        const teamId =
+          readStringParam(params, "teamId") ??
+          resolveTrustedCurrentSlackTeamId({ account, context });
+        assertSlackDetachedTargetAllowed(account.accountId, teamId);
+        const result = await slackActionRuntime.openSlackConversation(
+          params.userIds,
+          buildActionOpts("write", teamId),
+        );
+        return jsonResult({ ok: true, ...result });
+      }
       case "sendMessage": {
         const to = readStringParam(params, "to", { required: true });
         const target = resolveSlackActionTarget(account, to, context);
@@ -739,53 +756,38 @@ export async function handleSlackAction(
             blocks,
           });
         };
-        const result = preparedMessages?.length
-          ? await (async () => {
-              let lastResult:
-                | Awaited<ReturnType<typeof slackActionRuntime.sendSlackMessage>>
-                | undefined;
-              if (mediaUrl) {
-                lastResult = await sendSlackMessage(destination, "", {
-                  ...baseSendOpts,
-                  mediaUrl,
-                });
-              }
-              for (const [index, message] of preparedMessages.entries()) {
-                lastResult = await sendSlackMessage(destination, message.text, {
-                  ...baseSendOpts,
-                  ...(index === 0 && replyBroadcast ? { replyBroadcast: true } : {}),
-                  ...(message.blocks ? { blocks: message.blocks } : {}),
-                  ...(message.authoredTextPlacement
-                    ? { authoredTextPlacement: message.authoredTextPlacement }
-                    : {}),
-                  ...(Object.hasOwn(message, "nativeDataFallbackBaseText")
-                    ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
-                    : {}),
-                  ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
-                });
-              }
-              if (!lastResult) {
-                throw new Error("Slack prepared message plan produced no delivery.");
-              }
-              return lastResult;
-            })()
-          : blocks
-            ? await (async () => {
-                if (mediaUrl) {
-                  await sendSlackMessage(destination, "", {
-                    ...sendOpts,
-                    mediaUrl,
-                  });
-                }
-                return await sendContentAndBlocks();
-              })()
-            : await sendSlackMessage(destination, content ?? "", {
-                ...sendOpts,
-                mediaUrl: mediaUrl ?? undefined,
-                blocks,
-              });
+        if (mediaUrl && (preparedMessages?.length || blocks)) {
+          await sendSlackMessage(destination, "", {
+            ...(preparedMessages?.length ? baseSendOpts : sendOpts),
+            mediaUrl,
+          });
+        }
+        if (preparedMessages?.length) {
+          for (const [index, message] of preparedMessages.entries()) {
+            await sendSlackMessage(destination, message.text, {
+              ...baseSendOpts,
+              ...(index === 0 && replyBroadcast ? { replyBroadcast: true } : {}),
+              ...(message.blocks ? { blocks: message.blocks } : {}),
+              ...(message.authoredTextPlacement
+                ? { authoredTextPlacement: message.authoredTextPlacement }
+                : {}),
+              ...(Object.hasOwn(message, "nativeDataFallbackBaseText")
+                ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
+                : {}),
+              ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+            });
+          }
+        } else if (blocks) {
+          await sendContentAndBlocks();
+        } else {
+          await sendSlackMessage(destination, content ?? "", {
+            ...sendOpts,
+            mediaUrl: mediaUrl ?? undefined,
+            blocks,
+          });
+        }
 
-        return jsonResult({ ok: true, result });
+        return jsonResult({ ok: true, result: mergeSlackSendResults(sentResults) });
       }
       case "uploadFile": {
         const to = readStringParam(params, "to", { required: true });
@@ -953,6 +955,7 @@ export async function handleSlackAction(
             ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
             media: { outbound: false },
           },
+          imageSanitization: { maxDimensionPx: cfg.agents?.defaults?.imageMaxDimensionPx },
         });
       }
       default:

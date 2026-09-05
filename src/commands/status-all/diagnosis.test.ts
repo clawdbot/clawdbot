@@ -106,6 +106,56 @@ describe("status-all diagnosis port checks", () => {
     gatewayMocks.summarizeLogTail.mockImplementation((lines: string[]) => lines);
   });
 
+  it("retains queue warnings from a successful gateway health snapshot", async () => {
+    const params = createBaseParams([]);
+    params.health = {
+      ok: true,
+      ts: 0,
+      durationMs: 42,
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      deliveryQueues: {
+        failed: [{ queueName: "outbound", count: 2 }],
+        ingressPressure: [
+          {
+            channelId: "telegram",
+            accountId: "ops",
+            laneCount: 1,
+            pendingCount: 2,
+            claimedCount: 0,
+            blockedCount: 1,
+            oldestReceivedAt: Date.now(),
+          },
+        ],
+      },
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("Delivery queue: warning");
+    expect(output).toContain("outbound: 2");
+    expect(output).toContain(
+      "inbound telegram/ops: 1 pressured lane, 2 pending, 0 claimed, 1 blocked",
+    );
+  });
+
+  it("keeps a failed health request visible in the complete report", async () => {
+    const params = createBaseParams([]);
+    params.health = { error: "health request timed out" };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("Gateway health:\n  health request timed out");
+    expect(output).toContain("Pasteable debug report. Auth tokens redacted.");
+  });
+
   it("labels OpenClaw Tailscale exposure separately from daemon state", async () => {
     const params = createBaseParams([]);
     params.tailscale.backendState = "Running";

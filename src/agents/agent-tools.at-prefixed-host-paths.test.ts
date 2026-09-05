@@ -124,4 +124,38 @@ describe("leading-@ host and mounted sandbox paths", () => {
       );
     });
   });
+
+  it.each([
+    { sibling: false, label: "without an unprefixed sibling" },
+    { sibling: true, label: "with an unprefixed sibling" },
+  ])("keeps literal replacement paths stable $label", async ({ sibling }) => {
+    await withWorkspace(async (workspaceDir) => {
+      await fs.writeFile(path.join(workspaceDir, "@replace.md"), "old literal\n", "utf8");
+      if (sibling) {
+        await fs.writeFile(path.join(workspaceDir, "replace.md"), "sibling\n", "utf8");
+      }
+      await createApplyPatchTool({ cwd: workspaceDir }).execute("at-patch-replace", {
+        input: [
+          "*** Begin Patch",
+          "*** Delete File: @replace.md",
+          "*** Add File: @replace.md",
+          "+new literal",
+          "*** End Patch",
+        ].join("\n"),
+      });
+
+      await expect(fs.readFile(path.join(workspaceDir, "@replace.md"), "utf8")).resolves.toBe(
+        "new literal\n",
+      );
+      if (sibling) {
+        await expect(fs.readFile(path.join(workspaceDir, "replace.md"), "utf8")).resolves.toBe(
+          "sibling\n",
+        );
+      } else {
+        await expect(fs.stat(path.join(workspaceDir, "replace.md"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+    });
+  });
 });

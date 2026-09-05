@@ -225,16 +225,19 @@ function recordSkillUsage(
 
 /** Listener failures must never propagate into the tool execution that emitted usage. */
 export function registerSkillUsageTracking(options: OpenClawStateDatabaseOptions = {}): () => void {
-  return onTrustedInternalDiagnosticEvent((event, metadata, privateData) => {
-    if (!metadata.trusted || event.type !== "skill.used") {
-      return;
-    }
-    try {
-      recordSkillUsage({ ...event, skillFile: privateData.skillUsage?.skillFile }, options);
-    } catch (error) {
-      log.warn(`failed to record skill usage: ${String(error)}`);
-    }
-  });
+  return onTrustedInternalDiagnosticEvent(
+    (event, metadata, privateData) => {
+      if (!metadata.trusted || event.type !== "skill.used") {
+        return;
+      }
+      try {
+        recordSkillUsage({ ...event, skillFile: privateData.skillUsage?.skillFile }, options);
+      } catch (error) {
+        log.warn(`failed to record skill usage: ${String(error)}`);
+      }
+    },
+    { include: ["skill.used"] },
+  );
 }
 
 export function clearSkillUsageForRemovedSkills(

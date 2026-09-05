@@ -1,23 +1,6 @@
 /** Parses cron schedule timestamps from user-facing absolute time strings. */
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { hasValidIsoCalendarComponents } from "../shared/iso-time.js";
-
-const ISO_TZ_RE = /(Z|[+-]\d{2}:?\d{2})$/i;
-const ISO_DATE_RE = /^(?:[+-]\d{6}|\d{4})-\d{2}-\d{2}$/;
-const ISO_DATE_TIME_RE = /^(?:[+-]\d{6}|\d{4})-\d{2}-\d{2}[Tt]/;
-
-function normalizeUtcIso(raw: string) {
-  if (ISO_TZ_RE.test(raw)) {
-    return raw;
-  }
-  if (ISO_DATE_RE.test(raw)) {
-    return `${raw}T00:00:00Z`;
-  }
-  if (ISO_DATE_TIME_RE.test(raw)) {
-    return `${raw}Z`;
-  }
-  return raw;
-}
+import { hasValidIsoCalendarComponents, normalizeUtcIso } from "../shared/iso-time.js";
 
 /** Parses absolute cron timestamps from epoch milliseconds or ISO-like strings normalized to UTC. */
 export function parseAbsoluteTimeMs(input: string): number | null {

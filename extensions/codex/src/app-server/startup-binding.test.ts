@@ -26,6 +26,12 @@ async function rotateOversizedCodexAppServerStartupBinding(
   return (await resolveCodexAppServerStartupBinding(params)).binding;
 }
 
+function byteLimitConfig(
+  maxActiveTranscriptBytes: number | string,
+): NonNullable<Parameters<typeof rotateStartupBindingImpl>[0]["config"]> {
+  return { agents: { defaults: { compaction: { maxActiveTranscriptBytes } } } };
+}
+
 describe("Codex app-server startup binding", () => {
   let tempDir: string;
 
@@ -95,6 +101,62 @@ describe("Codex app-server startup binding", () => {
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
 
+  it.each(
+    ["bytes", "tokens"].flatMap((pressure) =>
+      ["expected", "ordinary", "revoked"].map((authority) => ({ pressure, authority })),
+    ),
+  )(
+    "handles preserve-only $pressure pressure with $authority authority",
+    async ({ pressure, authority }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const agentDir = path.join(tempDir, "agent");
+      await writeExistingBinding(sessionFile, workspaceDir, { preserveNativeModel: true });
+      const before = await readCodexAppServerBinding(sessionFile);
+      const rolloutDir = path.join(agentDir, "codex-home", "sessions");
+      await fs.mkdir(rolloutDir, { recursive: true });
+      await fs.writeFile(
+        path.join(rolloutDir, "rollout-thread-existing.jsonl"),
+        JSON.stringify({
+          payload: {
+            type: "token_count",
+            info: { last_token_usage: { total_tokens: 120_000 }, model_context_window: 128_000 },
+          },
+        }) + "\n",
+      );
+      const operation = rotateOversizedCodexAppServerStartupBinding({
+        binding: before,
+        sessionFile,
+        agentDir,
+        config:
+          pressure === "bytes"
+            ? { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "1b" } } } }
+            : undefined,
+        expectedSessionRuntimeOwnership:
+          authority === "expected" ? { model: "native", auth: "host" } : undefined,
+        ...(authority === "revoked"
+          ? {
+              assertCurrent: () => {
+                throw new Error("startup generation is no longer current");
+              },
+            }
+          : {}),
+      });
+
+      if (authority !== "ordinary") {
+        await expect(operation).rejects.toMatchObject(
+          authority === "expected"
+            ? { name: "AgentHarnessPreflightError" }
+            : { message: "startup generation is no longer current" },
+        );
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+      } else {
+        await expect(operation).resolves.toBeUndefined();
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+      }
+    },
+  );
+
   it("never rotates a provisional supervision source binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -121,15 +183,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: "1k",
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig("1k"),
     });
 
     expect(binding).toMatchObject({
@@ -519,15 +573,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: "1k",
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig("1k"),
     });
 
     expect(binding).toBeUndefined();
@@ -550,15 +596,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: "1k",
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig("1k"),
     });
 
     expect(binding).toBeUndefined();
@@ -586,15 +624,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: "1k",
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig("1k"),
     });
 
     expect(binding).toBeUndefined();
@@ -623,15 +653,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: "1k",
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig("1k"),
     });
 
     expect(binding).toBeUndefined();
@@ -660,15 +682,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: "1k",
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig("1k"),
     });
 
     expect(binding).toBeUndefined();
@@ -691,15 +705,7 @@ describe("Codex app-server startup binding", () => {
       sessionFile,
       agentDir,
       codexHome,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: 1_000,
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig(1_000),
     });
 
     expect(binding).toBeUndefined();
@@ -736,15 +742,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: "1mb",
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig("1mb"),
     });
 
     expect(binding?.threadId).toBe("thread-existing");
@@ -791,15 +789,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: "1mb",
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig("1mb"),
     });
 
     expect(binding?.threadId).toBe("thread-existing");
@@ -843,15 +833,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: "1mb",
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig("1mb"),
     });
 
     expect(binding).toBeUndefined();
@@ -886,15 +868,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: "1mb",
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig("1mb"),
     });
 
     expect(resolution.binding?.threadId).toBe("thread-existing");
@@ -989,15 +963,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: 1_000,
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig(1_000),
     });
 
     expect(binding).toBeUndefined();
@@ -1020,15 +986,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: 1_000,
-            },
-          },
-        },
-      } as never,
+      config: byteLimitConfig(1_000),
     });
 
     expect(binding).toBeUndefined();

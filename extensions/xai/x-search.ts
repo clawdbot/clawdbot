@@ -189,7 +189,8 @@ export function createXSearchTool(options?: {
         enableVideoUnderstanding: xSearchOptions.enableVideoUnderstanding,
       },
     });
-    const cached = readCache(X_SEARCH_CACHE, cacheKey);
+    const cacheTtlMs = resolveCacheTtlMs(xSearchConfig?.cacheTtlMinutes, 15);
+    const cached = readCache(X_SEARCH_CACHE, cacheKey, cacheTtlMs);
     if (cached) {
       return jsonResult({ ...cached.value, cached: true });
     }
@@ -216,12 +217,7 @@ export function createXSearchTool(options?: {
       truncated: result.truncated,
       options: xSearchOptions,
     });
-    writeCache(
-      X_SEARCH_CACHE,
-      cacheKey,
-      payload,
-      resolveCacheTtlMs(xSearchConfig?.cacheTtlMinutes, 15),
-    );
+    writeCache(X_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
     return jsonResult(payload);
   });
 }

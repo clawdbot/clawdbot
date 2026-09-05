@@ -146,21 +146,15 @@ describe("diagnostic log events", () => {
     unsubscribe();
 
     expect(received).toHaveLength(1);
-    const [event] = received;
-    expect(expectDefined(event, "event test invariant").message).not.toContain(secret);
-    expect(expectDefined(event, "event test invariant").message.length).toBeLessThanOrEqual(4200);
-    expect(expectDefined(event, "event test invariant").attributes?.token).not.toBe(secret);
-    expect(String(expectDefined(event, "event test invariant").attributes?.token)).toContain("…");
-    expect(
-      String(expectDefined(event, "event test invariant").attributes?.longValue).length,
-    ).toBeLessThanOrEqual(2100);
-    expect(
-      Object.hasOwn(expectDefined(event, "event test invariant").attributes ?? {}, "nested"),
-    ).toBe(false);
-    expect(
-      Object.hasOwn(expectDefined(event, "event test invariant").attributes ?? {}, "bad key"),
-    ).toBe(false);
-    expect(Object.hasOwn(expectDefined(event, "event test invariant"), "argsJson")).toBe(false);
+    const event = expectDefined(received[0], "event test invariant");
+    expect(event.message).not.toContain(secret);
+    expect(event.message.length).toBeLessThanOrEqual(4200);
+    expect(event.attributes?.token).not.toBe(secret);
+    expect(String(event.attributes?.token)).toContain("…");
+    expect(String(event.attributes?.longValue).length).toBeLessThanOrEqual(2100);
+    expect(Object.hasOwn(event.attributes ?? {}, "nested")).toBe(false);
+    expect(Object.hasOwn(event.attributes ?? {}, "bad key")).toBe(false);
+    expect(Object.hasOwn(event, "argsJson")).toBe(false);
   });
 
   it("keeps bounded diagnostic messages UTF-16 safe", async () => {
@@ -207,11 +201,9 @@ describe("diagnostic log events", () => {
     unsubscribe();
 
     expect(received).toHaveLength(1);
-    expect(expectDefined(received[0], "received[0] test invariant").attributes?.safe).toBe("ok");
-    expect(
-      Object.keys(expectDefined(received[0], "received[0] test invariant").attributes ?? {}),
-    ).toHaveLength(32);
     const attributes = expectDefined(received[0], "received[0] test invariant").attributes ?? {};
+    expect(attributes.safe).toBe("ok");
+    expect(Object.keys(attributes)).toHaveLength(32);
     expect(Object.hasOwn(attributes, PROTO_KEY)).toBe(false);
     expect(Object.hasOwn(attributes, "constructor")).toBe(false);
     expect(Object.hasOwn(attributes, "prototype")).toBe(false);

@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 struct ExecAllowAlwaysPattern: Sendable, Hashable {
@@ -22,15 +23,21 @@ struct ExecCommandResolution {
         "SYSTEM_RUN_DENIED: approval cwd changed before execution"
 
     static func canonicalApprovalCwd(_ cwd: String?) -> String {
-        URL(fileURLWithPath: cwd ?? FileManager.default.currentDirectoryPath)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-            .path
+        // Policy hashes also accept missing paths; execution requires the fallible snapshot below.
+        self.existingApprovalCwd(cwd) ?? URL(fileURLWithPath: cwd ?? FileManager.default.currentDirectoryPath)
+            .standardizedFileURL.path
+    }
+
+    private static func existingApprovalCwd(_ cwd: String?) -> String? {
+        let requestedPath = cwd ?? FileManager.default.currentDirectoryPath
+        // Foundation can fold /private/tmp back to the /tmp symlink. Identity needs POSIX realpath.
+        guard !requestedPath.utf8.contains(0), let resolved = realpath(requestedPath, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     static func captureApprovalCwdSnapshot(_ cwd: String?) -> ExecApprovalCwdSnapshot? {
-        let canonicalPath = self.canonicalApprovalCwd(cwd)
-        guard self.canonicalApprovalCwd(canonicalPath) == canonicalPath,
+        guard let canonicalPath = self.existingApprovalCwd(cwd),
               let attributes = try? FileManager.default.attributesOfItem(atPath: canonicalPath),
               attributes[.type] as? FileAttributeType == .typeDirectory,
               let device = attributes[.systemNumber] as? NSNumber,

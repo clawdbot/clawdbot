@@ -141,11 +141,11 @@ function resolveHooksAgentOption(command: Command | undefined): string | undefin
   return resolveOptionFromCommand<string>(command, "agent");
 }
 
-function resolveHookForToggle(
+function resolveHookSelection(
   report: HookStatusReport,
   hookName: string,
-  opts?: { requireEligible?: boolean },
-): HookStatusEntry {
+): HookStatusEntry | undefined {
+  // A metadata key may alias another hook's name; exact names always win.
   const nameMatches = report.hooks.filter((hook) => hook.name === hookName);
   const matches =
     nameMatches.length > 0 ? nameMatches : report.hooks.filter((hook) => hook.hookKey === hookName);
@@ -158,30 +158,7 @@ function resolveHookForToggle(
       `Hook "${hookName}" is ambiguous; matches: ${candidates}. Use a unique hook name or hook key.`,
     );
   }
-  const hook = matches[0];
-  if (!hook) {
-    throw new Error(
-      `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
-    );
-  }
-  if (hook.managedByPlugin) {
-    throw new Error(
-      `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
-    );
-  }
-  if (opts?.requireEligible && !hook.requirementsSatisfied) {
-    const missing = formatHookMissingSummary(hook, 3);
-    const installHint = hook.install.length
-      ? ` Install options: ${summarizeStringEntries({
-          entries: hook.install.map((option) => option.label),
-          limit: 3,
-        })}.`
-      : "";
-    throw new Error(
-      `Hook "${hookName}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${hookName}`)}\` for details.`,
-    );
-  }
-  return hook;
+  return matches[0];
 }
 
 function writeHooksOutput(value: string, json: boolean | undefined): void {
@@ -215,11 +192,32 @@ async function runOneShotHooksCliAction(
 async function setHookEnabled(hookName: string, enabled: boolean, agentId?: string): Promise<void> {
   const snapshot = await readConfigFileSnapshot();
   const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const hook = resolveHookForToggle(
+  const hook = resolveHookSelection(
     buildHooksReport(config, resolveHooksReportTarget(config, agentId)),
     hookName,
-    { requireEligible: enabled },
   );
+  if (!hook) {
+    throw new Error(
+      `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
+    );
+  }
+  if (hook.managedByPlugin) {
+    throw new Error(
+      `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
+    );
+  }
+  if (enabled && !hook.requirementsSatisfied) {
+    const missing = formatHookMissingSummary(hook, 3);
+    const installHint = hook.install.length
+      ? ` Install options: ${summarizeStringEntries({
+          entries: hook.install.map((option) => option.label),
+          limit: 3,
+        })}.`
+      : "";
+    throw new Error(
+      `Hook "${hookName}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${hookName}`)}\` for details.`,
+    );
+  }
   const entries = { ...config.hooks?.internal?.entries };
   entries[hook.hookKey] = { ...entries[hook.hookKey], enabled };
   const nextConfig: OpenClawConfig = {
@@ -300,8 +298,9 @@ export function registerHooksCli(program: Command): void {
       runOneShotHooksCliAction(async () => {
         const report = await loadHooksReport(resolveHooksAgentOption(command));
         const json = hasJsonOutput(opts);
-        writeHooksOutput(formatHookInfo(report, name, { ...opts, json }), json);
-        return report.hooks.some((hook) => hook.name === name || hook.hookKey === name) ? 0 : 1;
+        const hook = resolveHookSelection(report, name);
+        writeHooksOutput(formatHookInfo(hook, name, { ...opts, json }), json);
+        return hook ? 0 : 1;
       }, "root"),
     );
 

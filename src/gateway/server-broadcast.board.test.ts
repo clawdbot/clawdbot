@@ -15,6 +15,7 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
 import {
@@ -58,24 +59,34 @@ function makeClient(
   };
 }
 
-describe("skills event scope guards", () => {
-  it("delivers skill invalidations only to read-capable operators", () => {
-    const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
-    const node = makeClient("node", "node", ["operator.read"]);
-    const read = makeClient("read", "operator", ["operator.read"]);
-    const write = makeClient("write", "operator", ["operator.write"]);
-    const admin = makeClient("admin", "operator", ["operator.admin"]);
-    const clients = new Set([pairing, node, read, write, admin].map((entry) => entry.client));
-    const { broadcast } = createGatewayBroadcaster({ clients });
+describe("read-capable operator event scope guards", () => {
+  it.each(["skills.changed", "users.prefs.changed"] as const)(
+    "delivers %s only to read-capable operators",
+    (event) => {
+      const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
+      const node = makeClient("node", "node", ["operator.read"]);
+      const read = makeClient("read", "operator", ["operator.read"]);
+      const write = makeClient("write", "operator", ["operator.write"]);
+      const admin = makeClient("admin", "operator", ["operator.admin"]);
+      const clients = new GatewayClientRegistry(
+        [pairing, node, read, write, admin].map((entry) => entry.client),
+      );
+      const { broadcast } = createGatewayBroadcaster({ clients });
 
-    broadcast("skills.changed", { reason: "remote-node" });
+      broadcast(
+        event,
+        event === "users.prefs.changed"
+          ? { profileId: "profile-1", keys: ["ui.accent"] }
+          : { reason: "remote-node" },
+      );
 
-    expect(pairing.socket.events).toEqual([]);
-    expect(node.socket.events).toEqual([]);
-    expect(read.socket.events).toEqual(["skills.changed"]);
-    expect(write.socket.events).toEqual(["skills.changed"]);
-    expect(admin.socket.events).toEqual(["skills.changed"]);
-  });
+      expect(pairing.socket.events).toEqual([]);
+      expect(node.socket.events).toEqual([]);
+      expect(read.socket.events).toEqual([event]);
+      expect(write.socket.events).toEqual([event]);
+      expect(admin.socket.events).toEqual([event]);
+    },
+  );
 });
 
 describe("device setup event scope guards", () => {
@@ -84,7 +95,9 @@ describe("device setup event scope guards", () => {
     const node = makeClient("node", "node", ["operator.read"]);
     const read = makeClient("read", "operator", ["operator.read"]);
     const admin = makeClient("admin", "operator", ["operator.admin"]);
-    const clients = new Set([pairing, node, read, admin].map((entry) => entry.client));
+    const clients = new GatewayClientRegistry(
+      [pairing, node, read, admin].map((entry) => entry.client),
+    );
     const { broadcast } = createGatewayBroadcaster({ clients });
 
     broadcast("device.pair.setup.completed", {
@@ -108,7 +121,9 @@ describe("board event scope guards", () => {
     const read = makeClient("read", "operator", ["operator.read"]);
     const write = makeClient("write", "operator", ["operator.write"]);
     const admin = makeClient("admin", "operator", ["operator.admin"]);
-    const clients = new Set([pairing, node, read, write, admin].map((entry) => entry.client));
+    const clients = new GatewayClientRegistry(
+      [pairing, node, read, write, admin].map((entry) => entry.client),
+    );
     const { broadcast } = createGatewayBroadcaster({ clients });
 
     broadcast("board.changed", { sessionKey: "agent:main:main", revision: 1 });
@@ -135,7 +150,7 @@ describe("board event scope guards", () => {
       },
     );
     const { broadcast } = createGatewayBroadcaster({
-      clients: new Set([hidden.client, visible.client]),
+      clients: new GatewayClientRegistry([hidden.client, visible.client]),
       canReceiveSessionEvent,
     });
 
@@ -154,8 +169,16 @@ describe("collaboration event scope guards", () => {
   it("revalidates an authoritative session-generation creator replacement before socket I/O", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:draft-owner-filter";
-      const ownerActor = { type: "human" as const, id: "profile-owner" };
-      const successorActor = { type: "human" as const, id: "profile-successor" };
+      const ownerActor = {
+        type: "human" as const,
+        source: "profile" as const,
+        id: "profile-owner",
+      };
+      const successorActor = {
+        type: "human" as const,
+        source: "profile" as const,
+        id: "profile-successor",
+      };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
@@ -191,7 +214,7 @@ describe("collaboration event scope guards", () => {
         ) => canReceiveSessionEventForClient({ cfg, client, sessionKeys, agentId, event, payload }),
       );
       const { broadcastToConnIds } = createGatewayBroadcaster({
-        clients: new Set([owner.client, successor.client]),
+        clients: new GatewayClientRegistry([owner.client, successor.client]),
         canReceiveSessionEvent: filter,
       });
       const broadcast = () =>
@@ -268,7 +291,11 @@ describe("collaboration event scope guards", () => {
     sessionMessageSubscribers.subscribe(subscribed.client.connId, "agent:main:main");
     sessionMessageSubscribers.subscribe(otherSession.client.connId, "agent:main:other");
     const { broadcast } = createGatewayBroadcaster({
-      clients: new Set([subscribed.client, otherSession.client, unsubscribed.client]),
+      clients: new GatewayClientRegistry([
+        subscribed.client,
+        otherSession.client,
+        unsubscribed.client,
+      ]),
       sessionMessageSubscribers,
     });
 
@@ -296,7 +323,12 @@ describe("collaboration event scope guards", () => {
     subscribers.subscribe(second.client.connId, "session-a");
     const getSubscribers = vi.spyOn(subscribers, "get");
     const { broadcast } = createGatewayBroadcaster({
-      clients: new Set([first.client, second.client, unrelated.client, legacy.client]),
+      clients: new GatewayClientRegistry([
+        first.client,
+        second.client,
+        unrelated.client,
+        legacy.client,
+      ]),
       sessionMessageSubscribers: subscribers,
     });
 
@@ -320,7 +352,7 @@ describe("collaboration event scope guards", () => {
     sessionMessageSubscribers.subscribe(subscribed.client.connId, "agent:main:main");
     sessionMessageSubscribers.subscribe(otherSession.client.connId, "agent:main:other");
     const { broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new Set([subscribed.client, otherSession.client, unscoped.client]),
+      clients: new GatewayClientRegistry([subscribed.client, otherSession.client, unscoped.client]),
       sessionMessageSubscribers,
     });
 
@@ -364,7 +396,13 @@ describe("collaboration event scope guards", () => {
         ({ agents: { list: [{ id: "main", default: true }, { id: "work" }] } }) as OpenClawConfig,
     });
     const { broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new Set([main.client, legacy.client, both.client, work.client, workRaw.client]),
+      clients: new GatewayClientRegistry([
+        main.client,
+        legacy.client,
+        both.client,
+        work.client,
+        workRaw.client,
+      ]),
       sessionMessageSubscribers: subscribers,
     });
 
@@ -403,7 +441,7 @@ describe("collaboration event scope guards", () => {
         ({ agents: { list: [{ id: "main", default: true }, { id: "work" }] } }) as OpenClawConfig,
     });
     const { broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new Set([message.client, eventOnly.client, unrelated.client]),
+      clients: new GatewayClientRegistry([message.client, eventOnly.client, unrelated.client]),
       sessionMessageSubscribers: subscribers,
     });
 
@@ -434,7 +472,7 @@ describe("collaboration event scope guards", () => {
       subscribers.subscribe(main.client.connId, "agent:main:global");
       subscribers.subscribe(bareGlobal.client.connId, "global");
       const { broadcast } = createGatewayBroadcaster({
-        clients: new Set([work.client, main.client, bareGlobal.client]),
+        clients: new GatewayClientRegistry([work.client, main.client, bareGlobal.client]),
         sessionMessageSubscribers: subscribers,
       });
 
@@ -464,7 +502,7 @@ describe("collaboration event scope guards", () => {
     subscribers.subscribe(subscribed.client.connId, "agent:work:global");
     subscribers.subscribe(unrelated.client.connId, "agent:other:global");
     const { broadcast } = createGatewayBroadcaster({
-      clients: new Set([subscribed.client, unrelated.client]),
+      clients: new GatewayClientRegistry([subscribed.client, unrelated.client]),
       sessionMessageSubscribers: subscribers,
     });
 
@@ -494,7 +532,7 @@ describe("collaboration event scope guards", () => {
     subscribers.subscribe(subscribed.client.connId, sessionKey);
     subscribers.subscribe(unrelated.client.connId, "agent:other:global");
     const { broadcast } = createGatewayBroadcaster({
-      clients: new Set([subscribed.client, unrelated.client]),
+      clients: new GatewayClientRegistry([subscribed.client, unrelated.client]),
       sessionMessageSubscribers: subscribers,
     });
 
@@ -525,7 +563,7 @@ describe("collaboration event scope guards", () => {
       },
     );
     const { broadcast } = createGatewayBroadcaster({
-      clients: new Set([pairing.client, reader.client, unrelated.client]),
+      clients: new GatewayClientRegistry([pairing.client, reader.client, unrelated.client]),
       canReceiveSessionEvent,
       sessionMessageSubscribers,
     });

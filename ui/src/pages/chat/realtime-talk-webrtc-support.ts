@@ -1,7 +1,10 @@
 // Control UI chat module owns low-level WebRTC offer and media-message helpers.
 import { normalizeRealtimeVoiceResponseOutcome } from "../../../../src/talk/provider-types.js";
 import { readResponseTextWithLimit } from "../../lib/response-body.ts";
-import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
+import type {
+  RealtimeTalkTranscriptItem,
+  RealtimeTalkWebRtcSdpSessionResult,
+} from "./realtime-talk-shared.ts";
 import type { RealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 
 const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
@@ -11,6 +14,7 @@ const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 export type RealtimeServerEvent = {
   type?: string;
   item_id?: string;
+  previous_item_id?: string | null;
   call_id?: string;
   name?: string;
   delta?: string;
@@ -28,6 +32,8 @@ export type RealtimeServerEvent = {
     id?: string;
     type?: string;
     text?: string;
+    role?: string;
+    content?: Array<{ type?: string }>;
   };
   turn?: {
     id?: string;
@@ -35,6 +41,49 @@ export type RealtimeServerEvent = {
     transcript?: string;
   };
 };
+
+export function realtimeTalkTranscriptItem(
+  event: RealtimeServerEvent,
+): RealtimeTalkTranscriptItem | undefined {
+  switch (event.type) {
+    case "input_audio_buffer.committed":
+      return event.item_id
+        ? {
+            type: "created",
+            itemId: event.item_id,
+            previousItemId: event.previous_item_id,
+            role: "user",
+          }
+        : undefined;
+    case "conversation.item.added":
+    case "conversation.item.created": {
+      const item = event.item;
+      if (!item?.id) {
+        return undefined;
+      }
+      const role =
+        item.type !== "message"
+          ? null
+          : item.role === "assistant"
+            ? "assistant"
+            : item.role === "user" && item.content?.some((part) => part.type === "input_audio")
+              ? "user"
+              : null;
+      return { type: "created", itemId: item.id, previousItemId: event.previous_item_id, role };
+    }
+    case "conversation.item.done":
+    case "response.output_item.done":
+      // Interrupted responses may finish an empty assistant item without text.
+      // User item completion does not complete its asynchronous ASR.
+      return event.item?.id && event.item.type === "message" && event.item.role === "assistant"
+        ? { type: "settled", itemId: event.item.id }
+        : undefined;
+    case "conversation.item.input_audio_transcription.failed":
+      return event.item_id ? { type: "settled", itemId: event.item_id } : undefined;
+    default:
+      return undefined;
+  }
+}
 
 export class RealtimeTalkResponseOutcomeOwner {
   private activeResponseId: string | undefined;
