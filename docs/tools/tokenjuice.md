@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Compact noisy exec and bash tool results with the optional Tokenjuice plugin"
 title: "Tokenjuice"
 read_when:
@@ -14,8 +15,10 @@ It changes the returned `tool_result`, not the command itself. Tokenjuice does
 not rewrite shell input, rerun commands, or change exit codes.
 
 Today this applies to OpenClaw embedded runs and OpenClaw dynamic tools in the Codex
-app-server harness. Tokenjuice hooks OpenClaw's tool-result middleware and
-trims the output before it goes back into the active harness session.
+app-server harness. Native codex-rs `bash`/`exec` results mirrored from the Codex
+app-server harness are not compacted: they pass through the middleware, but the
+codex-rs protocol has no hook to replace the tool response, so the trimmed output
+is discarded and the original result is returned to the session.
 
 ## Enable the plugin
 
@@ -61,9 +64,12 @@ If you prefer editing config directly:
 ## Verify it is working
 
 1. Enable the plugin.
-2. Start a session that can call `exec`.
+2. Start a session that can call `exec` on the OpenClaw-embedded path.
 3. Run a noisy command such as `git status`.
 4. Check that the returned tool result is shorter and more structured than the raw shell output.
+
+This check only applies to OpenClaw-embedded or OpenClaw dynamic tools. Native
+codex-rs `bash`/`exec` results in the Codex app-server harness are not compacted.
 
 ## Disable the plugin
 
