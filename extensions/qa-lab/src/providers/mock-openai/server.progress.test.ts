@@ -12,67 +12,106 @@ async function completeProgress(params: {
   route: string;
   prompt: string;
   tool: string;
+  args: Record<string, unknown>;
   output: string | unknown[];
   isError?: boolean;
+  context?: string;
 }) {
   const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
-  const callId = "toolu_progress";
-  const args =
-    params.tool === "exec"
-      ? { command: "true" }
-      : { path: params.prompt === ERROR_PROMPT ? "denied.txt" : "empty.txt" };
-  const body =
-    params.route === "responses"
-      ? {
-          input: [
-            { role: "user", content: [{ type: "input_text", text: params.prompt }] },
-            {
-              type: "function_call",
-              name: params.tool,
-              call_id: callId,
-              arguments: JSON.stringify(args),
-            },
-            { type: "function_call_output", call_id: callId, output: params.output },
-          ],
-        }
-      : {
-          messages: [
-            { role: "user", content: params.prompt },
-            {
-              role: "assistant",
-              content: [{ type: "tool_use", name: params.tool, id: callId, input: args }],
-            },
+  const input = [params.prompt, ...(params.context ? [params.context] : [])].map((text) => ({
+    role: "user",
+    content: params.route === "responses" ? [{ type: "input_text", text }] : text,
+  }));
+  const request = async (items: unknown[]) => {
+    const response = await fetch(`${server.baseUrl}/v1/${params.route}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "qa-model",
+        stream: false,
+        max_tokens: 256,
+        ...(params.route === "responses" ? { input: items } : { messages: items }),
+      }),
+    });
+    expect(response.status).toBe(200);
+    return response.json();
+  };
+  try {
+    const plan = await request(input);
+    const call = params.route === "responses" ? plan.output[0] : plan.content[0];
+    expect(call).toMatchObject(
+      params.route === "responses"
+        ? { type: "function_call", name: params.tool, arguments: JSON.stringify(params.args) }
+        : { type: "tool_use", name: params.tool, input: params.args },
+    );
+    return await request(
+      params.route === "responses"
+        ? [
+            ...input,
+            call,
+            { type: "function_call_output", call_id: call.call_id, output: params.output },
+          ]
+        : [
+            ...input,
+            { role: "assistant", content: [call] },
             {
               role: "user",
               content: [
                 {
                   type: "tool_result",
-                  tool_use_id: callId,
+                  tool_use_id: call.id,
                   content: params.output,
                   is_error: params.isError,
                 },
               ],
             },
           ],
-        };
-  try {
-    const response = await fetch(`${server.baseUrl}/v1/${params.route}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "qa-model", stream: false, max_tokens: 256, ...body }),
-    });
-    expect(response.status).toBe(200);
-    return await response.json();
+    );
   } finally {
     await server.stop();
   }
 }
 
 describe.each(["responses", "messages"])("%s tool progress", (route) => {
+  const target = "repo/資料🙂/missing.txt";
+  const prompt = [
+    "Conversation info:",
+    "```json",
+    '{"sender":{"id":"fixture-user"}}',
+    "```",
+    "",
+    `Tool progress error QA check: read "${target}" before answering. After the read fails, reply exactly \`PROGRESS_OK\`.`,
+  ].join("\n");
+  const carrier = [
+    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+    "Runtime: synthetic metadata.",
+    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+  ].join("\n");
   it.each([
-    { tool: "read", prompt: READ_PROMPT, output: "" },
-    { tool: "exec", prompt: EXEC_PROMPT, output: [] },
-  ])("finishes after an empty $tool result", async (fixture) => {
+    {
+      name: "empty read",
+      tool: "read",
+      prompt: READ_PROMPT,
+      args: { path: "empty.txt" },
+      output: "",
+    },
+    {
+      name: "empty exec",
+      tool: "exec",
+      prompt: EXEC_PROMPT,
+      args: { command: "true" },
+      output: [],
+    },
+    {
+      name: "fenced read with runtime context",
+      tool: "read",
+      prompt,
+      args: { path: target },
+      context: carrier,
+      output: JSON.stringify({ status: "error", tool: "read", error: `File not found: ${target}` }),
+      isError: true,
+    },
+  ])("plans and finishes $name", async (fixture) => {
     const response = await completeProgress({ route, ...fixture });
     expect(response).toMatchObject(
       route === "responses"
@@ -108,6 +147,7 @@ it.each([
     route: "messages",
     prompt: ERROR_PROMPT,
     tool: "read",
+    args: { path: "denied.txt" },
     ...fixture,
   });
   expect(response).toMatchObject({
