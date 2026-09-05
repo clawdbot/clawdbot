@@ -85,6 +85,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     description: "Generate raster images with configured image providers.",
     transports: ["local"],
     flags: [
+      "--file",
       "--prompt",
       "--model",
       "--count",
