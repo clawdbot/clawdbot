@@ -71,4 +71,18 @@ describe("node gateway options", () => {
       "Invalid TLS fingerprint",
     );
   });
+
+  it("treats an empty --tls-fingerprint as unset instead of disabling pinning", () => {
+    const config = {
+      gateway: { tlsFingerprint: TLS_FINGERPRINT },
+    } as Parameters<typeof resolveNodeGatewayOptions>[1];
+    expect(resolveNodeGatewayOptions({ tlsFingerprint: "" }, config)).toMatchObject({
+      tls: true,
+      tlsFingerprint: TLS_FINGERPRINT,
+    });
+    expect(resolveNodeGatewayOptions({ tlsFingerprint: "   " }, config)).toMatchObject({
+      tls: true,
+      tlsFingerprint: TLS_FINGERPRINT,
+    });
+  });
 });
