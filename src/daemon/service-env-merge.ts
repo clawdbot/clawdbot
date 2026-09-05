@@ -1,14 +1,5 @@
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
 
-export function resolveServiceInspectionEnv(): GatewayServiceEnv {
-  // Runtime path overrides select the CLI store, not the installed service definition.
-  const serviceEnv = { ...process.env };
-  delete serviceEnv.OPENCLAW_STATE_DIR;
-  delete serviceEnv.OPENCLAW_CONFIG_PATH;
-  delete serviceEnv.OPENCLAW_HOME;
-  return serviceEnv;
-}
-
 export function mergeGatewayServiceEnv(
   baseEnv: GatewayServiceEnv,
   command: GatewayServiceCommandConfig | null,
