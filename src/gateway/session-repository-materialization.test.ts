@@ -111,7 +111,9 @@ describe("explicit repository move to Gateway", () => {
               if (scenario === "revoked") {
                 current = false;
               } else if (scenario === "reset") {
-                await sessionEntries.patchSessionEntryCore(scope, () => ({ lifecycleRevision: 1 }));
+                await sessionEntries.patchSessionEntryCore(scope, () => ({
+                  lifecycleRevision: "reset-revision",
+                }));
               }
               return {
                 status: "available",
