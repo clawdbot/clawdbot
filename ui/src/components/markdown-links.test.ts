@@ -295,6 +295,41 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(links[1]?.textContent).toBe("bar.ts:7:3");
     });
 
+    it("targets the first line of a range suffix", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("`src/commands/auth-choice-options.static.ts:26-35`", {
+          fileLinks: true,
+        }),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.dataset.filePath).toBe("src/commands/auth-choice-options.static.ts");
+      expect(link?.dataset.fileLine).toBe("26");
+    });
+
+    it("does not link a shorter prefix of a numeric-suffix filename", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("rotated logs/app.log.1 but see src/lib/foo.ts.", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a[data-file-path]")];
+      expect(links.map((link) => link.dataset.filePath)).toEqual(["src/lib/foo.ts"]);
+      expect(fragment.textContent).toContain("logs/app.log.1");
+    });
+
+    it("does not link dotted version numbers but keeps authored digit-led extensions", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4 [part](assets/part.3mf)",
+          {
+            fileLinks: true,
+          },
+        ),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a[data-file-path]")];
+      expect(links.map((link) => link.dataset.filePath)).toEqual(["assets/part.3mf"]);
+    });
+
     it("links Windows absolute paths", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml("C:/repo/src/foo.ts:42 and `D:\\work\\bar.ts`", {

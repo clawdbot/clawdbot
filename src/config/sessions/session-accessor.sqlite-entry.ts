@@ -525,7 +525,8 @@ async function patchSqliteSessionEntrySnapshot(
         previousEntry: selectedPreviousEntry,
       });
       wrote = true;
-      currentIdentity = readSessionIdentitySnapshot(writeDatabase, [sessionKey]);
+      // Identity observers only consume sessionId, already owned by this canonical write.
+      currentIdentity = new Map([[sessionKey, persisted]]);
       result = cloneSessionEntry(persisted);
     }, toDatabaseOptions(resolved));
     try {

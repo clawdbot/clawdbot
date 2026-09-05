@@ -280,6 +280,9 @@ const enSettings = {
       permissionsIntro: "macOS access for notifications, capture, voice, and device context.",
       app: "App",
       showDockIcon: "Show Dock icon",
+      iconStyle: "Dock icon",
+      iconStyleHint:
+        "Original uses your Mac’s icon style. Other designs follow light/dark mode while OpenClaw runs.",
       showDockIconHint:
         "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
       iconAnimations: "Icon animations",

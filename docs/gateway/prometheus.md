@@ -86,13 +86,14 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 </Steps>
 
 <Note>
-`diagnostics.enabled` defaults to `true`; set it to `false` only in tightly constrained environments. If it is `false`, the plugin still registers the HTTP route, but no diagnostic events flow into the exporter, so the response is empty.
+`diagnostics.enabled` defaults to `true`; set it to `false` only in tightly constrained environments. When it is `false` at exporter startup, the plugin still registers the HTTP route, but no diagnostic events or runtime identity are recorded, so the response is empty.
 </Note>
 
 ## Metrics exported
 
 | Metric                                               | Type      | Labels                                                                                    |
 | ---------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------- |
+| `openclaw_gateway_build_info`                        | gauge     | `process_instance_id`, optional `build_id`                                                |
 | `openclaw_gateway_rpc_requests_total`                | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_first_response_seconds`        | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_seconds`               | histogram | `method`                                                                                  |
@@ -181,6 +182,27 @@ and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
 coverage of every core method can fill the cap, so a zero value matters when
 interpreting totals or latency percentiles. Async diagnostic queue saturation can
 also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_total`.
+
+### Runtime identity
+
+`openclaw_gateway_build_info` has value `1` and identifies the process serving
+the scrape. Its `process_instance_id` is the same process-owned UUID returned by
+`system.info`; it changes when the process restarts, including when a PID is
+reused. `build_id` matches the loaded build reported by `hello.server.buildId`
+and is omitted when that provenance is unavailable. Updating files on disk does
+not change the running process's identity.
+
+When diagnostics are enabled, the exporter captures these facts at service startup,
+before recording events.
+The metric uses one aggregate sample under the existing cap. Older hosts without
+the optional runtime-identity capability omit it. The UUID is confined to this
+info metric; it is not added to RPC or other metric labels.
+
+Use the info sample from the same scrape to attribute new measurements and split
+counter intervals at process changes. It is not a health signal, a request ID,
+or an exporter epoch: restarting the exporter in the same process resets its
+counters while retaining the process identity. It cannot relabel older samples
+or establish complete diagnostic-loss coverage.
 
 ### Event-loop observation windows
 

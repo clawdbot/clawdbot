@@ -241,7 +241,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       });
       return schemaProjection.tools;
     };
-    const uncompactedEffectiveTools = [...projectTools(tools)];
+    const uncompactedEffectiveTools = projectTools(tools);
     return {
       bundleLspRuntime,
       bundleMcpRuntime,

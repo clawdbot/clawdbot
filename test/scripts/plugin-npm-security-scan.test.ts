@@ -215,11 +215,11 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts",
     ];
 
-    expect(resolveReviewedSourceLayout(current)?.id).toBe("current");
-    expect(resolveReviewedSourceLayout(current, "release/2026.9.1")?.id).toBe("current");
+    for (const context of ["", "release/2026.9.1", "release/2026.9.2", "release/2026.9.3"]) {
+      expect(resolveReviewedSourceLayout(current, context)?.id, context).toBe("current");
+    }
     expect(resolveReviewedSourceLayout(frozenLegacy, "release/2026.9.1")).toBeUndefined();
-    expect(resolveReviewedSourceLayout(current, "release/2026.9.2")?.id).toBe("current");
-    expect(resolveReviewedSourceLayout(current, "release/2026.9.3")).toBeUndefined();
+    expect(resolveReviewedSourceLayout(current, "release/2026.9.4")).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy)).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")?.id).toBe(
       "extended-stable-2026.6.33",

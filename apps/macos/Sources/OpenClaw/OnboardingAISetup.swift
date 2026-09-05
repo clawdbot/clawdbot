@@ -1600,17 +1600,19 @@ extension OnboardingAISetupModel {
 }
 
 extension OnboardingAISetupModel {
-    func submitManualKey() {
+    /// Captures submission synchronously; the task settles only after activation recovery finishes.
+    @discardableResult
+    func submitManualKey() -> Task<Void, Never>? {
         let key = self.manualKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let provider = selectedManualProvider, !key.isEmpty, !self.isBusy else { return }
+        guard let provider = selectedManualProvider, !key.isEmpty, !self.isBusy else { return nil }
         guard let context = beginAttemptContext() else {
             self.manualError = Self.transportFailure(
                 "No Gateway is selected. Select a Gateway, then try again.")
-            return
+            return nil
         }
         self.manualError = nil
         self.manualTesting = true
-        Task { await self.activate(.manual(key: key, provider: provider), context: context) }
+        return Task { await self.activate(.manual(key: key, provider: provider), context: context) }
     }
 
     /// A retired socket invalidates every candidate and provider record learned

@@ -32,8 +32,6 @@ import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-s
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 import type {
   ProviderPlugin,
-  ProviderExtraParamsForTransportContext,
-  ProviderPrepareExtraParamsContext,
   ProviderResolveAuthProfileIdContext,
   ProviderFollowupFallbackRouteContext,
   ProviderFollowupFallbackRouteResult,
@@ -438,34 +436,6 @@ export function ensureProviderRuntimePluginHandle(
   return params.runtimeHandle;
 }
 
-export function prepareProviderExtraParams(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  runtimeHandle?: ProviderRuntimePluginHandle;
-  context: ProviderPrepareExtraParamsContext;
-}) {
-  return (
-    ensureProviderRuntimePluginHandle(params).plugin?.prepareExtraParams?.(params.context) ??
-    undefined
-  );
-}
-
-export function resolveProviderExtraParamsForTransport(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  runtimeHandle?: ProviderRuntimePluginHandle;
-  context: ProviderExtraParamsForTransportContext;
-}) {
-  return (
-    ensureProviderRuntimePluginHandle(params).plugin?.extraParamsForTransport?.(params.context) ??
-    undefined
-  );
-}
-
 export function resolveProviderAuthProfileId(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -491,19 +461,6 @@ export function resolveProviderFollowupFallbackRoute(params: {
   return (
     ensureProviderRuntimePluginHandle(params).plugin?.followupFallbackRoute?.(params.context) ??
     undefined
-  );
-}
-
-export function wrapProviderStreamFn(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  runtimeHandle?: ProviderRuntimePluginHandle;
-  context: ProviderWrapStreamFnContext;
-}) {
-  return (
-    ensureProviderRuntimePluginHandle(params).plugin?.wrapStreamFn?.(params.context) ?? undefined
   );
 }
 

@@ -227,6 +227,23 @@ describe("worker task pool", () => {
     expect(next.threadId).not.toBe(result.threadId);
   });
 
+  it("arms idle retirement on the clock the pool was created under", async () => {
+    const pool = createPool({ workerUrl, idleTimeoutMs: 20 });
+    await pool.run({ label: "warm" }, { timeoutMs: 10_000 });
+    // Process-wide pools finish work on worker messages, which can arrive inside an
+    // unrelated test's fake-timer window; that clock must not receive the idle timer.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await pool.run({ label: "under a fake clock" }, {});
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+    const worker = workers.at(-1);
+    assert.ok(worker);
+    await expect.poll(() => worker.threadId).toBe(-1);
+  });
+
   it("lets a headless process exit while warm workers are idle", async () => {
     const moduleUrl = new URL("./worker-task-pool.ts", import.meta.url);
     const { stdout } = await promisify(execFile)(

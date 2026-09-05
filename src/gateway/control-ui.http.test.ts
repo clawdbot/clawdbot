@@ -170,7 +170,6 @@ describe("handleControlUiHttpRequest", () => {
       assistantAgentId?: string;
       devGitBranch?: string;
       environment?: { label: string; color: string };
-      localMediaPreviewRoots?: string[];
       seamColor?: string;
       terminalEnabled: boolean;
       cliAgentsEnabled: boolean;
@@ -1633,7 +1632,6 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.automaticallyFetchFavicons).toBe(true);
         expect(parsed.communityInvite).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
-        expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
   });
@@ -2563,7 +2561,6 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatarStatus).toBe("none");
         expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
-        expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
   });

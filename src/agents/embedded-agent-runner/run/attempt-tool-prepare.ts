@@ -305,6 +305,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
             approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
             oneShotCliRun: attempt.oneShotCliRun,
             toolSearchCatalogRef,
+            codeModeSkills,
             agentDir: params.agentDir,
             preparedModelRuntime: attempt.preparedModelRuntime,
             cwd: params.effectiveCwd,

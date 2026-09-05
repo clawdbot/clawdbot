@@ -495,12 +495,15 @@ suite.define(() => {
     await page.locator(".chat-side-panel-toggle").click();
     const panelSelector = page.locator(".side-panel-empty--selector");
     const panelShortcuts = panelSelector.locator(".side-panel-type-option__shortcut");
+    const panelCombos = [
+      KEYBOARD_SHORTCUT_COMBOS.reviewPanel,
+      KEYBOARD_SHORTCUT_COMBOS.workspaceFiles,
+      KEYBOARD_SHORTCUT_COMBOS.sideChat,
+      KEYBOARD_SHORTCUT_COMBOS.tasksPanel,
+    ];
     await expect
       .poll(() => panelShortcuts.allTextContents())
-      .toEqual([
-        formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, applePlatform),
-        formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat, applePlatform),
-      ]);
+      .toEqual(panelCombos.map((combo) => formatKeyboardShortcutCombo(combo, applePlatform)));
     await expect
       .poll(() =>
         panelShortcuts.evaluateAll((elements) =>
@@ -509,7 +512,7 @@ suite.define(() => {
           }),
         ),
       )
-      .toEqual([expect.stringMatching(/^system-ui,/u), expect.stringMatching(/^system-ui,/u)]);
+      .toEqual(panelCombos.map(() => expect.stringMatching(/^system-ui,/u)));
 
     if (captureUiProof) {
       await mkdir(path.join(suite.artifactDir, "theme-typography"), { recursive: true });
