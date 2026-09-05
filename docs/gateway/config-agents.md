@@ -63,13 +63,25 @@ process working directory. A distinct working directory requires an unsandboxed
 run; sandboxed runs reject it. When the directories differ, the system prompt
 identifies their separate roles so deliverables stay in the working directory.
 
+Path conventions for workspace settings (`agents.defaults.workspace` and
+`agents.entries.*.workspace`): a leading `~` expands to OpenClaw's effective
+home directory on every platform — `OPENCLAW_HOME` when set, otherwise the OS
+home — so the tilde examples in these docs are portable. On Windows with
+neither `OPENCLAW_HOME` nor `HOME` set, `~/.openclaw/workspace` resolves under
+the Windows profile directory (`USERPROFILE`, for example
+`C:\Users\<name>\.openclaw\workspace`). Non-tilde paths are resolved against
+the host platform: absolute paths are used as-is, and on Windows a
+drive-letter path such as `C:\openclaw\workspace` counts as absolute. Other
+path settings follow their own resolvers: `agents.defaults.repoRoot` and
+`OPENCLAW_WORKSPACE_DIR` are resolved as plain paths without tilde expansion.
+
 ### `agents.defaults.repoRoot`
 
 Optional repository root shown in the system prompt's Runtime line. If unset, OpenClaw auto-detects by walking upward from the workspace.
 
 ```json5
 {
-  agents: { defaults: { repoRoot: "~/Projects/openclaw" } },
+  agents: { defaults: { repoRoot: "/home/user/Projects/openclaw" } },
 }
 ```
 
