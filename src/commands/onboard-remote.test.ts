@@ -268,6 +268,46 @@ describe("promptRemoteGatewayConfig", () => {
     );
   });
 
+  it.each([18789, 29443])(
+    "forwards the resolved remote gateway port %i through the default local SSH endpoint",
+    async (port) => {
+      detectBinary.mockResolvedValue(true);
+      discoverGatewayBeacons.mockResolvedValue([
+        {
+          ...createGatewayDiscoveryBeacon(),
+          port,
+          gatewayPort: 41111,
+          sshPort: 2222,
+        },
+      ]);
+      const text: WizardPrompter["text"] = vi.fn(async (params) => {
+        if (params.message === "Gateway WebSocket URL") {
+          expect(params.initialValue).toBe("ws://127.0.0.1:18789");
+          return String(params.initialValue);
+        }
+        return "";
+      }) as WizardPrompter["text"];
+
+      const { next, prompter } = await runRemotePrompt({
+        text,
+        confirm: true,
+        selectResponses: {
+          "Select gateway": "0",
+          "Connection method": "ssh",
+          "Gateway auth": "off",
+        },
+      });
+
+      expect(next.gateway?.remote?.url).toBe("ws://127.0.0.1:18789");
+      expect(prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `ssh -N -L 18789:127.0.0.1:${port} <user>@gateway.tailnet.ts.net -p 2222`,
+        ),
+        "SSH tunnel",
+      );
+    },
+  );
+
   it("falls back to manual URL entry when discovery trust is declined", async () => {
     detectBinary.mockResolvedValue(true);
     discoverGatewayBeacons.mockResolvedValue([

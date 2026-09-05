@@ -163,7 +163,7 @@ export async function promptRemoteGatewayConfig(
         await prompter.note(
           [
             "Start a tunnel before using the CLI:",
-            `ssh -N -L 18789:127.0.0.1:18789 <user>@${host}${target.sshPort ? ` -p ${target.sshPort}` : ""}`,
+            `ssh -N -L 18789:127.0.0.1:${port} <user>@${host}${target.sshPort ? ` -p ${target.sshPort}` : ""}`,
             "Docs: https://docs.openclaw.ai/gateway/remote",
           ].join("\n"),
           t("wizard.remote.sshTunnelTitle"),
