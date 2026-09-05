@@ -114,7 +114,7 @@
           "type": "boolean"
         },
         "target": {
-          "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
+          "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage chat_id:<rowid>, full +E.164 handle, email, or sms:<short-code>",
           "type": "string"
         },
         "targets": {

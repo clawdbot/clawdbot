@@ -8,7 +8,9 @@ import {
 } from "./group-policy.js";
 import { imessageDmPolicy } from "./setup-core.js";
 import { parseIMessageAllowFromEntries } from "./setup-surface.js";
+import type { IMessageService, IMessageTarget } from "./targets.js";
 import {
+  assertDeliverableIMessageHandle,
   formatIMessageChatTarget,
   inferIMessageTargetChatType,
   isAllowedIMessageReplyContextSender,
@@ -201,6 +203,82 @@ describe("imessage targets", () => {
       kind: "chat_identifier",
       chatIdentifier: identifier,
     });
+  });
+
+  it("parses bare numeric handles structurally; deliverability is a send-layer verdict (#125461)", () => {
+    // Parsing stays structural so a configured `service: "sms"` short code can
+    // reach the SMS transport; the send layer owns the deliverability verdict.
+    expect(parseIMessageTarget("5")).toEqual({ kind: "handle", to: "5", service: "auto" });
+  });
+
+  it("reports undeliverable bare numeric handles unless delivery has an sms/auto path (#125461)", () => {
+    // A bare digit string looks like a Messages chat row id, not a phone
+    // handle; pre-fix it normalized to `+<digits>` and the channel send
+    // silently failed (-1728). The error must steer the caller to chat_id /
+    // full E.164 / sms: / auto:.
+    const bareTarget = parseIMessageTarget("5");
+    const shortE164 = parseIMessageTarget("+123456");
+    const rejectedAsHandle = (target: IMessageTarget, service: IMessageService | undefined) =>
+      expect(() => assertDeliverableIMessageHandle({ target, service }));
+    // The default path (no typed prefix, no account service) keeps the
+    // row-id-typo verdict, as does explicit iMessage-only delivery.
+    rejectedAsHandle(bareTarget, undefined).toThrow(/chat_id/);
+    rejectedAsHandle(bareTarget, undefined).toThrow(/sms:/);
+    rejectedAsHandle(bareTarget, "imessage").toThrow(/chat_id/);
+    rejectedAsHandle(shortE164, "imessage").toThrow(/chat_id/);
+    // An SMS short code is a legitimate target once the service resolves to
+    // sms, whether from the typed prefix or the account configuration.
+    expect(() =>
+      assertDeliverableIMessageHandle({ target: bareTarget, service: "sms" }),
+    ).not.toThrow();
+    expect(() =>
+      assertDeliverableIMessageHandle({
+        target: parseIMessageTarget("sms:12345"),
+        service: "sms",
+      }),
+    ).not.toThrow();
+    // A configured automatic account keeps its short-code routing: Messages
+    // receives the handle and configured region and resolves them natively,
+    // exactly as before the guard existed. The documented `auto:<contact>`
+    // prefix resolves to the same effective service at every call site, so
+    // the passed-in service is the single verdict input.
+    expect(() =>
+      assertDeliverableIMessageHandle({
+        target: parseIMessageTarget("auto:12345"),
+        service: "auto",
+      }),
+    ).not.toThrow();
+    // A short local-format handle (region-dependent digits) stays deliverable
+    // on the automatic path for the same reason.
+    expect(() =>
+      assertDeliverableIMessageHandle({
+        target: parseIMessageTarget("683 412"),
+        service: "auto",
+      }),
+    ).not.toThrow();
+    rejectedAsHandle(parseIMessageTarget("683 412"), "imessage").toThrow(/chat_id/);
+    // Explicit iMessage selection still rejects a handle that cannot be one.
+    rejectedAsHandle(parseIMessageTarget("imessage:12345"), "imessage").toThrow(/chat_id/);
+    // Full E.164 handles and non-phone targets stay deliverable.
+    expect(() =>
+      assertDeliverableIMessageHandle({
+        target: parseIMessageTarget("+15552223333"),
+        service: "auto",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertDeliverableIMessageHandle({
+        target: parseIMessageTarget("user@example.com"),
+        service: "auto",
+      }),
+    ).not.toThrow();
+    // Chat-scoped targets never hit the handle verdict.
+    expect(() =>
+      assertDeliverableIMessageHandle({
+        target: parseIMessageTarget("chat_id:5"),
+        service: "auto",
+      }),
+    ).not.toThrow();
   });
 });
 

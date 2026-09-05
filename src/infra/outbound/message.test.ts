@@ -612,6 +612,106 @@ describe("sendMessage", () => {
     expectDeliveryCallFields({ to: "prepared:123456" });
   });
 
+  it("rejects direct dry runs on undeliverable targets like the real send", async () => {
+    const forumPlugin: ChannelPlugin = {
+      id: "forum",
+      meta: {
+        id: "forum",
+        label: "Forum",
+        selectionLabel: "Forum",
+        docsPath: "/channels/forum",
+        blurb: "Forum test plugin.",
+      },
+      capabilities: { chatTypes: ["channel"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      outbound: { deliveryMode: "direct", sendText: vi.fn() },
+    };
+    mocks.resolveOutboundTarget.mockReturnValue({
+      ok: false,
+      error: new Error("target is not deliverable"),
+    });
+
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        preparedPlugin: forumPlugin,
+        to: "5",
+        content: "hi",
+        dryRun: true,
+      }),
+    ).rejects.toThrow("target is not deliverable");
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("reports the resolved target on direct dry runs", async () => {
+    const forumPlugin: ChannelPlugin = {
+      id: "forum",
+      meta: {
+        id: "forum",
+        label: "Forum",
+        selectionLabel: "Forum",
+        docsPath: "/channels/forum",
+        blurb: "Forum test plugin.",
+      },
+      capabilities: { chatTypes: ["channel"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      outbound: { deliveryMode: "direct", sendText: vi.fn() },
+    };
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved:5" });
+
+    const result = await sendMessage({
+      cfg: {},
+      channel: "forum",
+      preparedPlugin: forumPlugin,
+      to: "5",
+      content: "hi",
+      dryRun: true,
+    });
+    expect(result).toMatchObject({ to: "resolved:5", via: "direct", dryRun: true });
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("keeps gateway dry runs unvalidated because the gateway owns target resolution", async () => {
+    const gatewayPlugin: ChannelPlugin = {
+      id: "forum",
+      meta: {
+        id: "forum",
+        label: "Forum",
+        selectionLabel: "Forum",
+        docsPath: "/channels/forum",
+        blurb: "Forum test plugin.",
+      },
+      capabilities: { chatTypes: ["channel"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      outbound: { deliveryMode: "gateway", sendText: vi.fn() },
+    };
+    mocks.resolveOutboundTarget.mockReturnValue({
+      ok: false,
+      error: new Error("must not resolve"),
+    });
+
+    const result = await sendMessage({
+      cfg: {},
+      channel: "forum",
+      preparedPlugin: gatewayPlugin,
+      to: "5",
+      content: "hi",
+      dryRun: true,
+    });
+    expect(result).toMatchObject({ to: "5", via: "gateway", dryRun: true });
+    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+  });
+
   it.each(["cancelled_by_message_sending_hook", "adapter_returned_no_identity"] as const)(
     "preserves aggregate suppression reason %s",
     async (reason) => {

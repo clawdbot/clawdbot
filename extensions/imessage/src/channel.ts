@@ -55,10 +55,13 @@ import {
 import { probeIMessageStatusAccount } from "./status-core.js";
 import { isIMessagePhoneLikeHandle } from "./target-identifiers.js";
 import {
+  assertDeliverableIMessageHandle,
   inferIMessageTargetChatType,
   looksLikeIMessageExplicitTargetId,
+  type IMessageService,
   normalizeIMessageHandle,
   parseIMessageTarget,
+  resolveIMessageTargetService,
 } from "./targets.js";
 
 const loadIMessageChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
@@ -426,6 +429,32 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
     outbound: {
       base: {
         deliveryMode: "direct",
+        // Bare-numeric handles need the resolved service before a verdict:
+        // sms/auto delivery forwards short codes to Messages, so only
+        // iMessage-only or unset service rejects them. Core resolve and
+        // dry-run both land here; the send path re-applies the same helper.
+        resolveTarget: ({ cfg, to, accountId }) => {
+          try {
+            const target = parseIMessageTarget(to ?? "");
+            if (!cfg) {
+              return { ok: true, to: to ?? "" };
+            }
+            const service =
+              resolveIMessageTargetService(target) ??
+              // Plugin-sdk config contracts keep channel values wide.
+              // SAFETY: the imessage schema narrows service to imessage|sms|auto.
+              (resolveIMessageAccount({ cfg, accountId }).config.service as
+                | IMessageService
+                | undefined);
+            assertDeliverableIMessageHandle({ target, service });
+            return { ok: true, to: to ?? "" };
+          } catch (error) {
+            return {
+              ok: false,
+              error: error instanceof Error ? error : new Error(String(error)),
+            };
+          }
+        },
         chunker: chunkMarkdownText,
         chunkerMode: "markdown",
         textChunkLimit: 4000,

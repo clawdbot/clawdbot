@@ -99,6 +99,53 @@ export function normalizeIMessageHandle(raw: string): string {
   return trimmed.replace(/\s+/g, "");
 }
 
+// iMessage phone handles are real numbers; a value with fewer than 7 digits (a
+// Messages chat row id typo like `5`, or `+123456`) cannot reach an iMessage
+// handle. Whether that is a defect depends on the delivery path: sms and auto
+// hand the handle plus configured region to Messages, which resolves short
+// codes natively, so only iMessage-only delivery can prove the verdict. An
+// unset service keeps the default-path verdict — bare digit strings fail
+// before any send. Both the outbound resolve chain and the send handler apply
+// this.
+const MIN_PHONE_HANDLE_DIGITS = 7;
+
+export function assertDeliverableIMessageHandle(params: {
+  target: IMessageTarget;
+  service: IMessageService | undefined;
+}): void {
+  const { target, service } = params;
+  if (target.kind !== "handle") {
+    return;
+  }
+  // Callers pass the effective service: explicit target prefix first, then
+  // the account configuration. Any sms or auto delivery forwards short codes
+  // (and region) to Messages — rejecting them here would break configured
+  // automatic routing that worked before this guard existed.
+  if (service === "sms" || service === "auto") {
+    return;
+  }
+  const tooShortForAPhone =
+    isIMessagePhoneLikeHandle(target.to) &&
+    target.to.replace(/\D/g, "").length < MIN_PHONE_HANDLE_DIGITS;
+  if (tooShortForAPhone) {
+    throw new Error(
+      `iMessage target "${target.to}" is not a deliverable handle. Use chat_id:<rowid> for a Messages chat row, a full E.164 handle beginning with +, sms:<short-code> for an SMS short code, or auto:<contact> to let Messages choose iMessage or SMS.`,
+    );
+  }
+}
+
+/** Explicit service prefixes and non-auto services win; "auto" defers to the
+ * account's configured service. */
+export function resolveIMessageTargetService(target: IMessageTarget): IMessageService | undefined {
+  if (target.kind !== "handle") {
+    return undefined;
+  }
+  if (target.serviceExplicit || target.service !== "auto") {
+    return target.service;
+  }
+  return undefined;
+}
+
 export function parseIMessageTarget(raw: string): IMessageTarget {
   const trimmed = raw.trim();
   if (!trimmed) {

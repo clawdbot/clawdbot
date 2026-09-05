@@ -113,7 +113,12 @@ describe("pending spawn invocation authority", () => {
         stream: "lifecycle",
         data: { phase: "end", endedAt: Date.now() },
       });
-      await vi.waitFor(() => expect(findTaskByRunId("b")?.status).toBe("succeeded"));
+      // The lifecycle completion crosses the shared root-work admission lease and
+      // the SQLite registry write; a cold module cache or a loaded CI shard can
+      // push that chain past vitest's default 1s waitFor window.
+      await vi.waitFor(() => expect(findTaskByRunId("b")?.status).toBe("succeeded"), {
+        timeout: 10_000,
+      });
       clearAgentRunContext("b");
       await settleSubagentRegistryPersistenceWork();
       expect(completedB).toMatchObject({

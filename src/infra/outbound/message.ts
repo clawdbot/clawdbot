@@ -380,30 +380,37 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const mirrorMediaUrls = mirrorProjection.mediaUrls;
   const primaryMediaUrl = mirrorMediaUrls[0] ?? mediaUrl ?? null;
 
+  // Direct sends resolve the target before the dry-run early return so a dry
+  // run fails on an undeliverable target exactly like the send that follows.
+  // Gateway-owned delivery validates its target on the gateway side instead.
+  const directDelivery = deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true;
+  const resolvedTarget = directDelivery
+    ? resolveOutboundTarget({
+        channel,
+        plugin,
+        to: params.to,
+        cfg,
+        accountId: params.accountId,
+        mode: "explicit",
+      })
+    : { ok: true as const, to: params.to };
+  if (!resolvedTarget.ok) {
+    throw resolvedTarget.error;
+  }
+
   if (params.dryRun) {
     return {
       channel,
-      to: params.to,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
+      to: resolvedTarget.to,
+      via: directDelivery ? "direct" : "gateway",
       mediaUrl: primaryMediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
       dryRun: true,
     };
   }
 
-  if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
+  if (directDelivery) {
     const outboundChannel = channel;
-    const resolvedTarget = resolveOutboundTarget({
-      channel: outboundChannel,
-      plugin,
-      to: params.to,
-      cfg,
-      accountId: params.accountId,
-      mode: "explicit",
-    });
-    if (!resolvedTarget.ok) {
-      throw resolvedTarget.error;
-    }
 
     const outboundSession = buildOutboundSessionContext({
       cfg,
@@ -562,12 +569,30 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     ? normalizePollInput(pollInput, { maxOptions: outbound.pollMaxOptions })
     : normalizePollInput(pollInput);
 
+  // Direct polls resolve the target before the dry-run early return so a dry
+  // run fails on an undeliverable target exactly like the poll that follows;
+  // gateway polls validate on the gateway side instead.
+  const gatewayDelivery = deliveryMode === "gateway";
+  const resolvedTarget = gatewayDelivery
+    ? { ok: true as const, to: params.to }
+    : resolveOutboundTarget({
+        channel,
+        plugin,
+        to: params.to,
+        cfg,
+        accountId: params.accountId,
+        mode: "explicit",
+      });
+  if (!resolvedTarget.ok) {
+    throw resolvedTarget.error;
+  }
+
   if (params.dryRun) {
     return buildMessagePollResult({
       channel,
-      to: params.to,
+      to: resolvedTarget.to,
       normalized,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
+      via: gatewayDelivery ? "gateway" : "direct",
       dryRun: true,
     });
   }
@@ -579,19 +604,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     isAnonymous: params.isAnonymous,
   });
 
-  if (deliveryMode !== "gateway") {
-    const resolvedTarget = resolveOutboundTarget({
-      channel,
-      plugin,
-      to: params.to,
-      cfg,
-      accountId: params.accountId,
-      mode: "explicit",
-    });
-    if (!resolvedTarget.ok) {
-      throw resolvedTarget.error;
-    }
-
+  if (!gatewayDelivery) {
     const result = await outbound.sendPoll({
       cfg,
       to: resolvedTarget.to,

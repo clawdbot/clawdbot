@@ -4,7 +4,13 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
-import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
+import {
+  assertDeliverableIMessageHandle,
+  formatIMessageChatTarget,
+  type IMessageService,
+  parseIMessageTarget,
+  resolveIMessageTargetService,
+} from "./targets.js";
 
 type ChatActionOpts = {
   cfg: OpenClawConfig;
@@ -42,10 +48,15 @@ function buildChatTargetParams(
   } else {
     params.to = target.to;
   }
+  // Chat actions share the send/resolver precedence: an explicit service wins,
+  // while a parser-default "auto" defers to the account's configured service
+  // before the deliverability verdict, so configured sms/auto accounts keep
+  // short codes on typing/read RPCs.
   const service =
     opts.service ??
-    (target.kind === "handle" ? target.service : undefined) ??
+    resolveIMessageTargetService(target) ??
     (account.config.service as IMessageService | undefined);
+  assertDeliverableIMessageHandle({ target, service });
   const region = opts.region?.trim() || account.config.region?.trim() || "US";
   return { params, service, region, account };
 }
