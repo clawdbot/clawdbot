@@ -241,6 +241,55 @@ describe("sidebar session live-run projection", () => {
       diskSpaceStatus: "critical",
     });
   });
+
+  it("carries the active device runner id into hovercard presentation", () => {
+    const projected = projectSidebarSession({
+      placement: {
+        state: "active",
+        environmentId: "node:device-1",
+        generation: 1,
+        activeOwnerEpoch: 2,
+        workspaceBaseManifestRef: "manifest-device",
+        remoteWorkspaceDir: "/workspace/device",
+        workerBundleHash: "a".repeat(64),
+        createdAtMs: 10,
+        updatedAtMs: 20,
+        stateChangedAtMs: 15,
+        providerId: "device",
+        profileId: "device:device-1",
+        runner: { kind: "device", status: "available", deviceId: " device-1 " },
+      },
+    });
+
+    expect(projected).toMatchObject({
+      placementIsDevice: true,
+      placementDeviceId: "device-1",
+      placementProviderId: "device",
+      placementProfileId: "device:device-1",
+    });
+  });
+
+  it("marks a device placement before an active runner is projected", () => {
+    const projected = projectSidebarSession({
+      placement: {
+        state: "provisioning",
+        environmentId: "device-environment-1",
+        generation: 1,
+        createdAtMs: 10,
+        updatedAtMs: 20,
+        stateChangedAtMs: 15,
+        providerId: "device",
+        profileId: "device:opaque-device-id",
+      },
+    });
+
+    expect(projected).toMatchObject({
+      placementIsDevice: true,
+      placementProviderId: "device",
+      placementProfileId: "device:opaque-device-id",
+    });
+    expect(projected.placementDeviceId).toBeUndefined();
+  });
 });
 
 describe("sidebar draft ownership presentation", () => {

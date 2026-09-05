@@ -172,6 +172,14 @@ export function buildSidebarSessionNavigationState(input: {
   });
   const toSidebarSession = (row: SessionRow, isChild = false): SidebarRecentSession => {
     const channelInfo = resolveChannelSessionInfo(row.key, row.channel);
+    const placementProviderId =
+      row.placement && "providerId" in row.placement ? row.placement.providerId : undefined;
+    const placementDeviceRunner =
+      row.placement?.state === "active" && row.placement.runner?.kind === "device"
+        ? row.placement.runner
+        : undefined;
+    const placementIsDevice =
+      placementDeviceRunner !== undefined || placementProviderId === "device";
     let runtimeSampledAt = row.runtimeSampledAt;
     if (row.runtimeMs != null && runtimeSampledAt == null) {
       runtimeSampledAt = input.runtimeSampledAtByRow.get(row);
@@ -223,8 +231,9 @@ export function buildSidebarSessionNavigationState(input: {
       worktreeId: row.worktree?.id,
       execNode: row.execNode,
       placementState: row.placement?.state,
-      placementProviderId:
-        row.placement && "providerId" in row.placement ? row.placement.providerId : undefined,
+      placementIsDevice,
+      placementDeviceId: normalizeOptionalString(placementDeviceRunner?.deviceId),
+      placementProviderId,
       placementProfileId:
         row.placement && "profileId" in row.placement ? row.placement.profileId : undefined,
       diskSpaceStatus:

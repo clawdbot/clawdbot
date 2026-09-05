@@ -49,6 +49,7 @@ type SessionHovercardAvatarAuth = {
 
 type SessionHovercardInput = {
   row?: SidebarSessionHovercardRow;
+  placementDeviceLabel?: string;
   selfUserId?: string;
   avatarAuth?: SessionHovercardAvatarAuth;
   personActivity?: PersonActivityRouting;
@@ -450,10 +451,15 @@ function renderProgressHeadsUp(
   </div>`;
 }
 
-function renderSessionContext({ row, progressCard }: SessionHovercardInput) {
+function renderSessionContext({ row, placementDeviceLabel, progressCard }: SessionHovercardInput) {
   const context = row?.workContext;
-  const placementIdentity =
-    row?.placementProviderId && row.placementProfileId
+  const deviceLabel = placementDeviceLabel?.trim() || t("sessionHovercard.device");
+  const placementIdentity = row?.placementIsDevice
+    ? {
+        label: deviceLabel,
+        title: t("sessionHovercard.runsOnDevice", { device: deviceLabel }),
+      }
+    : row?.placementProviderId && row.placementProfileId
       ? {
           label: `${row.placementProviderId} · ${row.placementProfileId}`,
           title: t("sessionHovercard.runsOn", {
@@ -639,6 +645,7 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
   );
   const hasContext = Boolean(
     input.row?.workContext ||
+    input.row?.placementIsDevice ||
     (input.row?.placementProviderId && input.row.placementProfileId) ||
     input.row?.boardFace === "dashboard" ||
     input.row?.hasAutomation === true ||

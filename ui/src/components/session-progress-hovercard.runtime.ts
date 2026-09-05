@@ -1,10 +1,12 @@
-import type { ProgressCard } from "@openclaw/gateway-protocol";
+import type { EnvironmentsListResult, ProgressCard } from "@openclaw/gateway-protocol";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { nothing, ReactiveElement, render } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   sessionProgressCardsForGateway,
   type SessionProgressCardStore,
@@ -31,6 +33,9 @@ const SWEEP_OPEN_DELAY_MS = 80;
 const SKIP_DELAY_MS = 300;
 const CLOSE_DELAY_MS = 100;
 const EXIT_DURATION_MS = 100;
+const PLACEMENT_DEVICE_LABEL_CACHE_TTL_MS = 60_000;
+const PLACEMENT_DEVICE_LABEL_MISS_TTL_MS = 10_000;
+const PLACEMENT_DEVICE_LABEL_RETRY_DELAY_MS = 5_000;
 let nextHovercardId = 0;
 
 function sessionHovercardMenuOpen(owner: ParentNode): boolean {
@@ -57,6 +62,11 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   private stopSessionUpdates: (() => void) | null = null;
   private pullRequests: SessionPullRequestSnapshotStore | null = null;
   private stopPullRequestUpdates: (() => void) | null = null;
+  private placementDeviceLabels = new Map<string, string>();
+  private placementDeviceLabelsLoadedAt = 0;
+  private placementDeviceLabelMisses = new Map<string, number>();
+  private placementDeviceLabelsRetryAt = 0;
+  private placementDeviceLabelsLoad: Promise<void> | null = null;
   private activeTarget: HTMLElement | null = null;
   private activeTrigger: HTMLElement | null = null;
   private activeSessionKey: string | null = null;
@@ -86,11 +96,22 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     }
   });
 
+  private resetPlacementDeviceLabels(): void {
+    this.placementDeviceLabels = new Map();
+    this.placementDeviceLabelsLoadedAt = 0;
+    this.placementDeviceLabelMisses = new Map();
+    this.placementDeviceLabelsRetryAt = 0;
+    this.placementDeviceLabelsLoad = null;
+  }
+
   get client(): GatewayBrowserClient | null {
     return this.applicationClient;
   }
 
   set client(value: GatewayBrowserClient | null) {
+    if (value !== this.applicationClient) {
+      this.resetPlacementDeviceLabels();
+    }
     this.applicationClient = value;
     this.sessionLinkTitler.client = value;
   }
@@ -119,6 +140,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       return;
     }
     this.disconnectStore();
+    this.resetPlacementDeviceLabels();
     this.applicationGateway = value;
     this.close();
     if (this.isConnected) {
@@ -197,6 +219,14 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   private readonly handleSessionUpdate = () => {
     if (this.open && this.hovercard.held) {
       this.showCurrent();
+      const sessionKey = this.activeSessionKey;
+      if (sessionKey) {
+        void this.loadPlacementDeviceLabel(sessionKey).then(() => {
+          if (this.open && this.hovercard.held && this.activeSessionKey === sessionKey) {
+            this.showCurrent();
+          }
+        });
+      }
     }
   };
 
@@ -345,11 +375,10 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.clearSkipDelayTimer();
     this.watchPullRequests(sessionKey);
     this.showCurrent();
-    try {
-      await this.progressCards?.load(sessionKey);
-    } catch {
-      // Session facts and the last successful card remain useful when refresh fails.
-    }
+    await Promise.allSettled([
+      this.progressCards?.load(sessionKey),
+      this.loadPlacementDeviceLabel(sessionKey),
+    ]);
     if (
       generation === this.loadGeneration &&
       this.activeSessionKey === sessionKey &&
@@ -357,6 +386,91 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     ) {
       this.showCurrent();
     }
+  }
+
+  private sidebarRow(sessionKey: string) {
+    return this.querySelector<AppSidebarSessionNavigationElement>(
+      "openclaw-app-sidebar",
+    )?.findSidebarHovercardRowByKey(sessionKey);
+  }
+
+  private async loadPlacementDeviceLabel(sessionKey: string): Promise<void> {
+    const row = this.sidebarRow(sessionKey);
+    const deviceId = normalizeOptionalString(row?.placementDeviceId);
+    if (!row?.placementIsDevice || !deviceId) {
+      return;
+    }
+    const now = Date.now();
+    const cachedLabel = this.placementDeviceLabels.has(deviceId);
+    if (
+      cachedLabel &&
+      now - this.placementDeviceLabelsLoadedAt < PLACEMENT_DEVICE_LABEL_CACHE_TTL_MS
+    ) {
+      return;
+    }
+    if (!cachedLabel && (this.placementDeviceLabelMisses.get(deviceId) ?? 0) > now) {
+      return;
+    }
+    if (this.placementDeviceLabelsRetryAt > now) {
+      return;
+    }
+    const client = this.applicationClient;
+    const gateway = this.applicationGateway;
+    if (
+      !client ||
+      !gateway ||
+      !canCallGatewayMethod(gateway.snapshot, "environments.list", "operator.read")
+    ) {
+      return;
+    }
+    const activeLoad = this.placementDeviceLabelsLoad;
+    if (activeLoad) {
+      await activeLoad;
+      await this.loadPlacementDeviceLabel(sessionKey);
+      return;
+    }
+
+    const load = client
+      .request<EnvironmentsListResult>("environments.list", {})
+      .then((result) => {
+        if (this.applicationClient !== client || this.applicationGateway !== gateway) {
+          return;
+        }
+        const labels = new Map<string, string>();
+        for (const environment of result.environments) {
+          if (environment.type !== "node" || !environment.id.startsWith("node:")) {
+            continue;
+          }
+          const environmentDeviceId = normalizeOptionalString(environment.id.slice("node:".length));
+          const label = normalizeOptionalString(environment.label);
+          if (environmentDeviceId && label) {
+            labels.set(environmentDeviceId, label);
+          }
+        }
+        this.placementDeviceLabels = labels;
+        this.placementDeviceLabelsLoadedAt = Date.now();
+        this.placementDeviceLabelsRetryAt = 0;
+        if (labels.has(deviceId)) {
+          this.placementDeviceLabelMisses.delete(deviceId);
+        } else {
+          this.placementDeviceLabelMisses.set(
+            deviceId,
+            Date.now() + PLACEMENT_DEVICE_LABEL_MISS_TTL_MS,
+          );
+        }
+      })
+      .catch(() => {
+        if (this.applicationClient === client && this.applicationGateway === gateway) {
+          this.placementDeviceLabelsRetryAt = Date.now() + PLACEMENT_DEVICE_LABEL_RETRY_DELAY_MS;
+        }
+      })
+      .finally(() => {
+        if (this.placementDeviceLabelsLoad === load) {
+          this.placementDeviceLabelsLoad = null;
+        }
+      });
+    this.placementDeviceLabelsLoad = load;
+    await load;
   }
 
   private watchPullRequests(sessionKey: string): void {
@@ -386,10 +500,11 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (!target || !sessionKey || !this.open) {
       return;
     }
-    const sidebarRow =
-      this.querySelector<AppSidebarSessionNavigationElement>(
-        "openclaw-app-sidebar",
-      )?.findSidebarHovercardRowByKey(sessionKey);
+    const sidebarRow = this.sidebarRow(sessionKey);
+    const placementDeviceLabel =
+      sidebarRow?.placementIsDevice && sidebarRow.placementDeviceId
+        ? this.placementDeviceLabels.get(sidebarRow.placementDeviceId)
+        : undefined;
     const pullRequests = this.activePullRequestKey
       ? this.pullRequests?.get(this.activePullRequestKey)
       : undefined;
@@ -429,6 +544,11 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
             participants: sidebarRow.participants,
             expandedParticipants: sidebarRow.expandedParticipants,
             participantCount: sidebarRow.participantCount,
+            placementIsDevice: sidebarRow.placementIsDevice,
+            placementDeviceId: sidebarRow.placementDeviceId,
+            placementDeviceLabel,
+            placementProviderId: sidebarRow.placementProviderId,
+            placementProfileId: sidebarRow.placementProfileId,
             workContext: sidebarRow.workContext,
             createdAt: sidebarRow.createdAt,
             startedAt: sidebarRow.startedAt,
@@ -471,6 +591,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     render(
       renderSessionHovercard({
         row: sidebarRow,
+        placementDeviceLabel,
         selfUserId: this.applicationContext?.gateway.snapshot.selfUser?.id,
         avatarAuth: channelAvatarAuth,
         personActivity: this.personActivity(),

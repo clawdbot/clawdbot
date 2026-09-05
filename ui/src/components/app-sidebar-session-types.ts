@@ -105,6 +105,8 @@ export type SidebarRecentSession = {
   worktreeId?: string;
   execNode?: string;
   placementState?: SessionPlacementState;
+  placementIsDevice?: boolean;
+  placementDeviceId?: string;
   placementProviderId?: string;
   placementProfileId?: string;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
@@ -155,6 +157,8 @@ export type SidebarSessionHovercardRow = Pick<
   | "expandedParticipants"
   | "participantCount"
   | "participants"
+  | "placementIsDevice"
+  | "placementDeviceId"
   | "placementProviderId"
   | "placementProfileId"
   | "status"

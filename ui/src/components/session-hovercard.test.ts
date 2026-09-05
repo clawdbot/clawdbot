@@ -277,6 +277,63 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector(".session-hovercard__context-text")).toBeNull();
   });
 
+  it.each([
+    {
+      name: "resolved",
+      placementDeviceLabel: "Hetzner node-01 (ash)",
+      expectedLabel: "Hetzner node-01 (ash)",
+      expectedTitle: "Runs on Hetzner node-01 (ash)",
+    },
+    {
+      name: "catalog unavailable",
+      placementDeviceLabel: undefined,
+      expectedLabel: "Device",
+      expectedTitle: "Runs on Device",
+    },
+  ])("renders a $name device placement without internal identifiers", (testCase) => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        row: row({
+          workContext: undefined,
+          placementIsDevice: true,
+          placementDeviceId: "opaque-device-id",
+          placementProviderId: "device",
+          placementProfileId: "device:opaque-device-id",
+        }),
+        placementDeviceLabel: testCase.placementDeviceLabel,
+      }),
+      container,
+    );
+
+    const context = container.querySelector(".session-hovercard__context-row");
+    expect(context?.textContent?.trim()).toBe(testCase.expectedLabel);
+    expect(context?.getAttribute("aria-label")).toBe(testCase.expectedTitle);
+    expect(context?.getAttribute("title")).toBe(testCase.expectedTitle);
+    expect(context?.textContent).not.toContain("opaque-device-id");
+  });
+
+  it("hides internal identifiers for a device placement without a runner id", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        row: row({
+          workContext: undefined,
+          placementIsDevice: true,
+          placementDeviceId: undefined,
+          placementProviderId: "device",
+          placementProfileId: "device:opaque-device-id",
+        }),
+      }),
+      container,
+    );
+
+    const context = container.querySelector(".session-hovercard__context-row");
+    expect(context?.textContent?.trim()).toBe("Device");
+    expect(context?.getAttribute("aria-label")).toBe("Runs on Device");
+    expect(context?.textContent).not.toContain("opaque-device-id");
+  });
+
   it("labels an authoritative non-repository cwd as a workspace", () => {
     const container = document.createElement("div");
     render(
