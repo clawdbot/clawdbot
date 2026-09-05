@@ -1,8 +1,5 @@
 package ai.openclaw.app.i18n
 
-import ai.openclaw.app.AppearanceThemeMode
-import ai.openclaw.app.ui.appearanceThemeModeForLabel
-import ai.openclaw.app.ui.appearanceThemeOptions
 import android.content.Context
 import android.content.res.Configuration
 import androidx.appcompat.app.AppCompatDelegate
@@ -24,20 +21,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31])
 class NativeStringsTest {
-  @Test
-  fun appearanceThemeModesUseTheAppLanguage() {
-    NativeStringResources.install(RuntimeEnvironment.getApplication())
-    try {
-      NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
-
-      assertEquals(listOf("Système", "Sombre", "Clair"), appearanceThemeOptions())
-      assertEquals(AppearanceThemeMode.Dark, appearanceThemeModeForLabel("Sombre"))
-      assertEquals(AppearanceThemeMode.Light, appearanceThemeModeForLabel("Clair"))
-    } finally {
-      NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
-    }
-  }
-
   @Test
   fun sourceFallbackFormatsNestedKotlinInterpolations() {
     assertEquals(

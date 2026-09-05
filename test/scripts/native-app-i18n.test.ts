@@ -357,6 +357,21 @@ describe("native app i18n inventory", () => {
           ) && entry.source === "Current session",
       ),
     ).toBe(true);
+    // Wear-only entries do not reach phone resources; the phone owner must declare its modes.
+    expect(
+      entries
+        .filter(
+          (entry) =>
+            entry.surface === "android" &&
+            hasSite(
+              entry,
+              (site) =>
+                site.path ===
+                "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+            ),
+        )
+        .map((entry) => entry.source),
+    ).toEqual(expect.arrayContaining(["System", "Dark", "Light"]));
     expect(
       entries.some(
         (entry) =>
