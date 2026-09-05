@@ -33,6 +33,10 @@ type FeishuPresentationTextFormat = "plain" | "markdown";
 const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
 const FEISHU_PRESENTATION_FALLBACK_MARKER = "__openclawPresentationFallback";
 
+/** Card action dispatched when an ask_user option button is tapped. */
+export const FEISHU_PAYLOAD_QUESTION_ACTION = "feishu.question.answer";
+const FEISHU_QUESTION_OPTION_MAX_LENGTH = 512;
+
 export const FEISHU_PRESENTATION_CAPABILITIES = {
   supported: true,
   buttons: true,
@@ -195,9 +199,28 @@ function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
   return "default";
 }
 
+function resolveFeishuPayloadQuestionOption(button: MessagePresentationButton):
+  | { questionId: string; optionValue: string }
+  | undefined {
+  const action = button.action;
+  if (action?.type !== "question" || !("optionValue" in action)) {
+    // Plain option buttons carry optionValue; the custom-input (Other) button does not.
+    return undefined;
+  }
+  const { questionId, optionValue } = action;
+  if (!questionId.trim() || !optionValue.trim()) {
+    return undefined;
+  }
+  if (optionValue.length > FEISHU_QUESTION_OPTION_MAX_LENGTH) {
+    return undefined;
+  }
+  return { questionId, optionValue };
+}
+
 function buildFeishuPayloadButton(button: MessagePresentationButton): Record<string, unknown> {
   const url = resolveSafeFeishuButtonUrl(resolveFeishuButtonUrl(button));
-  const value = resolveFeishuCommandButtonValue(button);
+  const question = resolveFeishuPayloadQuestionOption(button);
+  const value = question ? question.optionValue : resolveFeishuCommandButtonValue(button);
   if (button.disabled || (!url && !value)) {
     // Keep each unavailable control visible without exposing rejected URLs or opaque values.
     return { tag: "markdown", content: `- ${escapeFeishuCardPlainText(button.label)}` };
@@ -210,9 +233,10 @@ function buildFeishuPayloadButton(button: MessagePresentationButton): Record<str
     behaviors.push({
       type: "callback",
       value: createFeishuCardInteractionEnvelope({
-        k: "quick",
-        a: "feishu.payload.button",
-        q: value,
+        k: question ? "button" : "quick",
+        a: question ? FEISHU_PAYLOAD_QUESTION_ACTION : "feishu.payload.button",
+        q: question ? question.questionId : value,
+        ...(question ? { m: { o: question.optionValue } } : {}),
       }),
     });
   }
