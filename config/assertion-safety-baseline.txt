@@ -2259,7 +2259,7 @@ src/claws/add.ts	7
 src/claws/cron.ts	15
 src/claws/doctor.ts	2
 src/claws/export.ts	8
-src/claws/lifecycle-delete-support.ts	7
+src/claws/lifecycle-delete-support.ts	5
 src/claws/mcp.ts	4
 src/claws/openclaw-profile.ts	2
 src/claws/package-update.ts	1
