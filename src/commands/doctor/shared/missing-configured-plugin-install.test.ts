@@ -1012,6 +1012,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     "missing",
     "empty",
     "symlink-root",
+    "deferred",
     "healthy",
     "optional",
     "different-root",
@@ -1105,7 +1106,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         detectConfiguredPluginInstallHealthIssues,
       } = await import("./missing-configured-plugin-install.js");
 
-      const issues = await detectConfiguredPluginInstallHealthIssues({ cfg, env: testEnv });
+      const env =
+        scenario === "deferred"
+          ? {
+              ...testEnv,
+              OPENCLAW_UPDATE_IN_PROGRESS: "1",
+              OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+            }
+          : testEnv;
+      const issues = await detectConfiguredPluginInstallHealthIssues({ cfg, env });
 
       if (scenario === "missing" || scenario === "empty" || scenario === "symlink-root") {
         expect(issues).toEqual([
@@ -1128,6 +1137,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           action: "would-repair-configured-plugin-dependencies",
           dryRunSafe: false,
         });
+      } else if (scenario === "deferred") {
+        expect(issues).toEqual([
+          {
+            kind: "deferred-package-manager-repair",
+            pluginId,
+            installPath: record.installPath,
+          },
+        ]);
+        const result = await repairConfiguredPlugins(cfg, env);
+        expect(result.deferredRepairDetails).toEqual([expect.stringContaining(pluginId)]);
+        expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(false);
       } else {
         expect(issues).toEqual([]);
       }
@@ -1149,6 +1169,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         "persist-throw",
         "consent-error",
         "effect-refused",
+        "cleanup-error",
+        "cleanup-throw",
       ] as const)("settles owned dependency repair markers after %s", async (outcome) => {
         const parent = tempDirs.make("openclaw-doctor-dependency-repair-");
         const packageName = "dependency-plugin";
@@ -1204,6 +1226,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           officialPluginEntry({ id: pluginId, npmSpec: record.spec }),
         ]);
         const failure = new Error(`dependency repair ${outcome}`);
+        const cleanupFailure = new Error("retention cleanup failed");
+        if (!preexisting && (outcome === "cleanup-error" || outcome === "cleanup-throw")) {
+          const originalRm = fs.promises.rm.bind(fs.promises);
+          vi.spyOn(fs.promises, "rm").mockImplementation((target, options) =>
+            target === markerPath ? Promise.reject(cleanupFailure) : originalRm(target, options),
+          );
+        }
         const beforePersistentEffect = vi.fn(async () => {
           if (outcome === "effect-refused") {
             throw failure;
@@ -1223,7 +1252,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             });
             expect(repairRecord?.resolvedSpec).toBeUndefined();
             expect(repairRecord?.resolvedVersion).toBeUndefined();
-            if (outcome === "throw") {
+            if (outcome === "throw" || outcome === "cleanup-throw") {
               throw failure;
             }
             if (outcome === "persist-throw") {
@@ -1232,7 +1261,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             const status =
               outcome === "persist-throw"
                 ? "updated"
-                : outcome === "consent-error"
+                : outcome === "consent-error" || outcome === "cleanup-error"
                   ? "error"
                   : outcome;
             if (status === "updated" || status === "unchanged") {
@@ -1270,7 +1299,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             onCapabilityConsent,
           });
 
-        if (outcome === "throw" || outcome === "persist-throw" || outcome === "effect-refused") {
+        if (outcome === "cleanup-throw" && !preexisting) {
+          await expect(repair()).rejects.toMatchObject({ errors: [failure, cleanupFailure] });
+        } else if (
+          outcome === "throw" ||
+          outcome === "persist-throw" ||
+          outcome === "effect-refused" ||
+          outcome === "cleanup-throw"
+        ) {
           await expect(repair()).rejects.toBe(failure);
         } else {
           const result = await repair();
@@ -1286,6 +1322,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             expect(result.failedPluginIds).toEqual([pluginId]);
             expect(result.records).toEqual(records);
             expect(result.warnings).toContain(failure.message);
+            if (outcome === "cleanup-error" && !preexisting) {
+              expect(result.warnings).toContainEqual(
+                expect.stringContaining(cleanupFailure.message),
+              );
+            }
             expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
             if (outcome === "consent-error") {
               expect(result.outcomes).toContainEqual(
@@ -1313,7 +1354,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             }),
           );
         }
-        const retained = preexisting || outcome === "updated" || outcome === "unchanged";
+        const retained =
+          preexisting ||
+          outcome === "updated" ||
+          outcome === "unchanged" ||
+          outcome === "cleanup-error" ||
+          outcome === "cleanup-throw";
         expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(retained);
         if (preexisting) {
           expect(fs.readFileSync(markerPath, "utf8")).toBe(originalMarker);
