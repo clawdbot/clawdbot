@@ -20,7 +20,10 @@ function createPluginRoot() {
 function writeDependency(rootDir: string, name: string) {
   const packageDir = path.join(rootDir, "node_modules", name);
   fs.mkdirSync(packageDir, { recursive: true });
-  fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({ name, version: "1.0.0" }));
+  fs.writeFileSync(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({ name, version: "1.0.0" }),
+  );
   return packageDir;
 }
 
