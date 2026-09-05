@@ -197,21 +197,19 @@ async function readLaunchAgentEnvironmentFile(
       continue;
     }
     let parsedValue = parseGeneratedEnvValue(value);
-    // The writer's quoted literals can span physical lines; retain their exact newline bytes.
-    while (
-      options?.requireEffective &&
-      quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim() &&
-      index + 1 < lines.length
-    ) {
-      value += `\n${lines[++index]}`;
-      parsedValue = parseGeneratedEnvValue(value);
-    }
-    // Strict inspection accepts the writer's literal syntax, never shell expressions.
-    if (
-      options?.requireEffective &&
-      quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim()
-    ) {
-      throw new Error("Unsupported LaunchAgent environment value");
+    if (options?.requireEffective) {
+      // The writer's quoted literals can span physical lines; retain their exact newline bytes.
+      while (
+        quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim() &&
+        index + 1 < lines.length
+      ) {
+        value += `\n${lines[++index]}`;
+        parsedValue = parseGeneratedEnvValue(value);
+      }
+      // Strict inspection accepts the writer's literal syntax, never shell expressions.
+      if (quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim()) {
+        throw new Error("Unsupported LaunchAgent environment value");
+      }
     }
     environment[key] = parsedValue;
   }
