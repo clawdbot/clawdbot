@@ -5,6 +5,7 @@ import {
   isHelpOrVersionInvocation,
   isRootHelpInvocation,
 } from "./argv.js";
+import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";
 import { resolveParentAwareCommandPath } from "./parent-command-path.js";
 
 type CliArgvInvocation = {
@@ -19,7 +20,10 @@ type CliArgvInvocation = {
 export function resolveCliArgvInvocation(argv: string[]): CliArgvInvocation {
   return {
     argv,
-    commandPath: resolveParentAwareCommandPath(argv) ?? getCommandPathWithRootOptions(argv, 2),
+    commandPath:
+      resolveGatewayCatalogCommandPath(argv) ??
+      resolveParentAwareCommandPath(argv) ??
+      getCommandPathWithRootOptions(argv, 2),
     primary: getPrimaryCommand(argv),
     hasHelpOrVersion: isHelpOrVersionInvocation(argv),
     isRootHelpInvocation: isRootHelpInvocation(argv),

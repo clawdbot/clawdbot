@@ -245,7 +245,7 @@ plugins.
       <Accordion title="Model switching details">
         - Prefer choosing the model when creating a session. Changing it in an established session is an advanced operation because model context limits, prompt/tool behavior, and prompt-cache behavior can differ. See [Choose a model for a session](/concepts/models#choose-a-model-for-a-session).
 
-        **Scope in one line:** `-s` changes only this session, `-a` also updates the agent default, and `-g` also updates the shared global default. Without a flag, `agents.defaults.modelSelectionScope` applies when set; omission preserves existing behavior.
+        **Scope in one line:** `-s` changes only this session, `-a` also updates the agent default, and `-g` also updates the shared global default. Without a flag, `agents.defaults.modelSelectionScope` applies when set; omission changes only this session.
 
         Configured `/<alias>` shorthands accept the same trailing scope and `--runtime` options as `/model <alias>`.
 
@@ -256,7 +256,7 @@ plugins.
         | Update the global default | `/model <model> -g` (or `--global`) | Changes this session and requests an update for `agents.defaults.model` |
         | Use the configured default again | `/model default -s` | Clears this session's model selection without writing defaults; compatible auth pins remain and incompatible pins clear |
 
-        With `modelSelectionScope` unset, a direct owner/admin `/model <model>` also requests an update to the agent's existing explicit primary, or to the shared global fallback if there is none. Without owner/admin authority, bare commands remain session-only and explicit `-a` and `-g` requests are rejected. Selecting the effective configured default clears the session model pin, but agent/global scope still requests the configured-default write. Immutable configuration stays unchanged. Asynchronous write errors do not revert the session selection.
+        With `modelSelectionScope` unset, `/model <model>` changes only the current session, including for owners/admins. Without owner/admin authority, bare commands remain session-only and explicit `-a` and `-g` requests are rejected. Selecting the effective configured default clears the session model pin, but agent/global scope still requests the configured-default write. Immutable configuration stays unchanged. Asynchronous write errors do not revert the session selection.
 
         - If the agent is idle, the next run uses it right away.
         - If a run is active, the switch is marked pending and applied at the next clean retry point.
@@ -395,15 +395,7 @@ use the Control UI Tools panel or config surfaces.
 
 Use `-s` to change only the current session, `-a` to also update the agent default, or `-g` to also update the shared global default. The long forms are `--session`, `--agent`, and `--global`; an explicit scope overrides `agents.defaults.modelSelectionScope`.
 
-Without a flag or that optional setting, direct owner/admin `/model <model>` commands keep their existing behavior: change the session and request a best-effort update of the agent's explicit primary, or the shared global fallback when the agent has none. To make unqualified selections session-only, opt in with:
-
-```json5
-{
-  agents: { defaults: { modelSelectionScope: "session" } },
-}
-```
-
-The setting also accepts `"agent"` and `"global"`; it does not grant permission to write configured defaults. See [Model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+Without a flag or that optional setting, `/model <model>` changes only the current session, including for owners/admins. Set `agents.defaults.modelSelectionScope` to `"agent"` or `"global"` only when you want unqualified selections to update that default. The setting does not grant permission to write configured defaults. See [Model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 
 In text commands, select a model by `provider/model` or a configured alias.
 Numeric selections such as `/model 3` are not supported.
@@ -412,7 +404,7 @@ Numeric selections such as `/model 3` are not supported.
 /model             # show current model and usage guidance
 /model list        # browse providers (same as /models)
 /models openai     # list models from a provider
-/model openai/gpt-5.4    # configured scope, or existing behavior when unset
+/model openai/gpt-5.4    # configured scope, or session-only when unset
 /model openai/gpt-5.4 -s # explicit session scope
 /model openai/gpt-5.4 -a # session + agent default update request
 /model openai/gpt-5.4 -g # session + global default update request

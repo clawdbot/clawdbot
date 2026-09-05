@@ -1964,8 +1964,7 @@ describe("gateway hot reload model state", () => {
         log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        runSkillCollectionReview: async ({ abortSignal }) => {
+        runIsolatedAgentJob: async ({ abortSignal }) => {
           if (!abortSignal) {
             throw new Error("skill review cancellation signal missing");
           }
@@ -1992,9 +1991,12 @@ describe("gateway hot reload model state", () => {
             name: "skill-collection-review-main",
             enabled: true,
             schedule: { kind: "every", everyMs: 7 * 24 * 60 * 60_000 },
-            sessionTarget: "main",
+            sessionTarget: "isolated",
             wakeMode: "next-heartbeat",
-            payload: { kind: "skillCollectionReview" },
+            payload: {
+              kind: "agentTurn",
+              message: "Review the Workshop collection.",
+            },
           },
           { enabledExplicit: true, systemOwned: true },
         );

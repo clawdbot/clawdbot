@@ -1835,6 +1835,7 @@ export const en: TranslationMap & {
     rawTitle: "Edit raw JSON/JSON5 config",
     rawUnavailableTitle: "Raw mode unavailable for this snapshot",
     open: "Open",
+    fileOpenedOnGateway: "Configuration file opened on Gateway host.",
     applying: "Applying…",
     autoSaveSaving: "Saving…",
     autoSaveSaved: "Saved",

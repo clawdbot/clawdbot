@@ -1,36 +1,11 @@
-import { consumeRootOptionToken, findRootCommandIndex } from "../infra/cli-root-options.js";
+import type { Command } from "commander";
 import { hasMachineOutputOption } from "./machine-output-argv.js";
-
-function resolveSkillsSubcommand(argv: readonly string[]): string | null {
-  const rootIndex = findRootCommandIndex(argv);
-  if (rootIndex === null) {
-    return null;
-  }
-  for (let index = rootIndex + 1; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (!arg || arg === "--") {
-      return null;
-    }
-    const rootConsumed = consumeRootOptionToken(argv, index);
-    if (rootConsumed > 0) {
-      index += rootConsumed - 1;
-      continue;
-    }
-    if (arg === "--agent") {
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--agent=")) {
-      continue;
-    }
-    if (!arg.startsWith("-")) {
-      return arg;
-    }
-  }
-  return null;
-}
+import { resolveSkillsParentCommandPath } from "./parent-command-path.js";
 
 /** Skill verification emits JSON unless the caller explicitly requests the Markdown card. */
-export function isSkillsMachineOutput(argv: readonly string[]): boolean {
-  return resolveSkillsSubcommand(argv) === "verify" && !hasMachineOutputOption(argv, "--card");
+export function isSkillsMachineOutput(argv: readonly string[], command?: Command): boolean {
+  return (
+    resolveSkillsParentCommandPath(argv)?.[1] === "verify" &&
+    !hasMachineOutputOption(argv, "--card", command)
+  );
 }

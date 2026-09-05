@@ -1577,6 +1577,16 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: "auto" }));
   });
 
+  it("retains a host-required file boundary while rebuilding compaction tools", async () => {
+    await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+        requireWorkspaceOnly: true,
+      }),
+    );
+    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), { requireWorkspaceOnly: true });
+  });
+
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
     const toolName = "profiled_plugin_tool";
     const metadataSnapshot = {
