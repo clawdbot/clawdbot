@@ -645,7 +645,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const status = await context.cron.status();
-    respond(true, status, undefined);
+    // Absent capability stays absent: the UI gates the task-lanes request and
+    // panel on this flag, so an unconfigured install never polls lane data.
+    respond(
+      true,
+      { ...status, taskLanesConfigured: context.taskLanes?.hasProviders() ?? false },
+      undefined,
+    );
   },
   "cron.get": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateCronGetParams, "cron.get", respond)) {

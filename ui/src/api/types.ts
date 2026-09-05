@@ -487,6 +487,8 @@ export type CronStatus = {
   triggersEnabled: boolean;
   jobs: number;
   nextWakeAtMs?: number | null;
+  /** False means no lane providers are configured: never request or render lanes. */
+  taskLanesConfigured?: boolean;
 };
 
 export type CronRunResult =

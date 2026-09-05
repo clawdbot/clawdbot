@@ -6122,6 +6122,18 @@ export const en: TranslationMap & {
       descending: "Descending",
       reset: "Reset",
     },
+    lanes: {
+      title: "Task lanes",
+      empty: "No task lanes are reporting right now.",
+      providerOk: "{provider}: {lanes} lanes · {items} items",
+      providerTruncated:
+        "{provider}: {lanes} lanes · {items} items (dropped {omittedLanes} lanes, {omittedItems} items at provider cap)",
+      providerError: "{provider}: {error}",
+      artifact: "Artifact",
+      itemsShownOfTotal: "{shown} of {total}",
+      truncated:
+        "Showing {shown} of {total} items (snapshot page limit). Lane counts include off-page items.",
+    },
     runs: {
       searchRuns: "Search runs",
       searchPlaceholder: "Summary, error, or task",

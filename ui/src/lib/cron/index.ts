@@ -2,6 +2,7 @@ import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coe
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { TaskLaneSnapshotPayload } from "../../../../packages/gateway-protocol/src/index.js";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
@@ -248,6 +249,9 @@ export type CronState = {
   cronRunsQuery: string;
   cronRunsSortDir: CronSortDir;
   cronBusy: boolean;
+  // Live task-lane snapshot for the activity panel; null until loaded.
+  taskLanes: TaskLaneSnapshotPayload | null;
+  taskLanesError: string | null;
 };
 
 export type CronModelSuggestionsState = {
@@ -306,6 +310,8 @@ export function createInitialCronState(
     cronRunsQuery: "",
     cronRunsSortDir: "desc",
     cronBusy: false,
+    taskLanes: null,
+    taskLanesError: null,
   };
 }
 
@@ -428,6 +434,33 @@ export function hasCronFormErrors(errors: CronFieldErrors): boolean {
 type CronStatusRequest = { client: GatewayBrowserClient; queued?: Deferred };
 const activeCronStatusRequests = new WeakMap<CronState, CronStatusRequest>();
 
+export async function loadTaskLanes(state: CronState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  try {
+    // Request the bounded maximum page (200 items, the schema cap) so the
+    // panel shows the fullest snapshot the registry will serve; the snapshot
+    // paging/totals signal covers anything omitted beyond that bound.
+    const res = await state.client.request<TaskLaneSnapshotPayload>("taskLanes.list", {
+      limit: 200,
+    });
+    // Defensive shape check: an unexpected response must not crash the pane.
+    state.taskLanes =
+      Array.isArray(res?.lanes) && Array.isArray(res?.diagnostics)
+        ? res
+        : { lanes: [], diagnostics: [] };
+    state.taskLanesError = null;
+  } catch (err) {
+    if (isMissingOperatorReadScopeError(err)) {
+      state.taskLanes = null;
+      state.taskLanesError = formatMissingOperatorReadScopeMessage("task lanes");
+    } else {
+      state.taskLanesError = formatUiError(err);
+    }
+  }
+}
+
 export async function loadCronStatus(
   state: CronState,
   opts?: { coalesce?: boolean },
@@ -448,6 +481,12 @@ export async function loadCronStatus(
     const res = await client.request<CronStatus>("cron.status", {});
     if (isCurrent()) {
       state.cronStatus = res;
+      // Unconfigured installs stay absent: drop any snapshot fetched before the
+      // status response resolved the capability gate.
+      if (res.taskLanesConfigured === false) {
+        state.taskLanes = null;
+        state.taskLanesError = null;
+      }
     }
   } catch (err) {
     if (!isCurrent() || request.queued) {

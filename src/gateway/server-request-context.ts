@@ -33,7 +33,7 @@ type GatewayRequestContextParams = {
   configRevisionProjector: GatewayRequestContext["configRevisionProjector"];
   runtimeState: Pick<
     GatewayServerLiveState,
-    "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
+    "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence" | "taskLanes"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   isConfigReloadSettled: GatewayRequestContext["isConfigReloadSettled"];
@@ -190,6 +190,7 @@ export function createGatewayRequestContext(
     get cronStorePath() {
       return params.runtimeState.cronState.storePath;
     },
+    taskLanes: params.runtimeState.taskLanes,
     getRuntimeConfig: params.getRuntimeConfig,
     isConfigReloadSettled: params.isConfigReloadSettled,
     getGatewayMethodRegistry: params.getGatewayMethodRegistry,

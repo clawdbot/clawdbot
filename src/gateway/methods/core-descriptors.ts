@@ -645,6 +645,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ],
   ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.8"],
   ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.8"],
+  ["taskLanes.list", "task-lanes", "operator.read", "2026.8"],
   ["update.runs.get", "update", "operator.admin", "2026.9"],
   ["update.runs.list", "update", "operator.admin", "2026.9"],
   ["gateway.suspend.handoff", "suspend", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],

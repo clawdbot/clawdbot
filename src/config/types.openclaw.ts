@@ -23,6 +23,7 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
+import type { TaskLanesConfig } from "./types.task-lanes.js";
 import type { TelemetryConfig } from "./types.telemetry.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
@@ -230,6 +231,8 @@ export type OpenClawConfig = {
   cron?: CronConfig;
   /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
+  /** Task-lane snapshot sources rendered in the automation view. */
+  taskLanes?: TaskLanesConfig;
   /** Runtime hook registration and queue behavior. */
   hooks?: HooksConfig;
   /** Network discovery and service advertisement settings. */

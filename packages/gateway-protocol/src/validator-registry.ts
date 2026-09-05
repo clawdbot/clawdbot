@@ -455,6 +455,7 @@ export const validateSkillsProposalEventsListParams = compile(
 );
 export const validateSkillsSecurityVerdictsParams = compile(S.SkillsSecurityVerdictsParamsSchema);
 export const validateSkillsSkillCardParams = compile(S.SkillsSkillCardParamsSchema);
+export const validateTaskLaneListParams = compile(S.TaskLaneListParamsSchema);
 export const validateCronListParams = compile(S.CronListParamsSchema);
 export const validateCronStatusParams = compile(S.CronStatusParamsSchema);
 export const validateCronGetParams = compile(S.CronGetParamsSchema);

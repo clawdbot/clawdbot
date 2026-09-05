@@ -181,6 +181,8 @@ type GatewayKernelContext = {
   configRevisionProjector: GatewayConfigRevisionProjector;
   cron: GatewayCronServiceContract;
   cronStorePath: string;
+  /** Runtime task-lane registry; snapshot source for the taskLanes.list RPC. */
+  taskLanes: import("../../task-lanes/gateway/service.js").TaskLaneGatewayService;
   getRuntimeConfig: () => OpenClawConfig;
   /** Live reload owner, including same-config restart work and shutdown. */
   isConfigReloadSettled: () => boolean;

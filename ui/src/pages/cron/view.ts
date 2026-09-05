@@ -6,6 +6,7 @@ import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type { TaskLaneSnapshotPayload } from "../../../../packages/gateway-protocol/src/index.js";
 // Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
 // starter ideas) and a full-page detail view for creating or editing a single automation.
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
@@ -58,9 +59,12 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { formatCronJobKind } from "./job-kind.ts";
 import { renderSegmented } from "./segmented-control.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
+import { groupUpcomingJobs } from "./upcoming-jobs.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
+import { renderTaskLanesPanel } from "./view-task-lanes.ts";
 
 type CronPanelMode = "overview" | "create" | "job";
 
@@ -111,6 +115,8 @@ type CronProps = {
   runsDeliveryStatuses: CronDeliveryStatus[];
   runsQuery: string;
   runsSortDir: CronSortDir;
+  taskLanes: TaskLaneSnapshotPayload | null;
+  taskLanesError: string | null;
   agentSuggestions: string[];
   modelSuggestions: string[];
   thinkingSuggestions: string[];
@@ -508,6 +514,7 @@ function renderListView(props: CronProps) {
         ${renderToolbar(props, hasAdvancedJobsFilters)}
       </div>
     `,
+    renderUpcomingPanel(props),
     html`
       <div
         id="cron-list-panel"
@@ -519,7 +526,9 @@ function renderListView(props: CronProps) {
           props.listTab === "activity"
             ? renderSettingsSection(
                 {},
-                html`<div class="cron-activity">${renderRunsSection(props)}</div>`,
+                html`<div class="cron-activity">
+                  ${renderTaskLanesPanel(props)}${renderRunsSection(props)}
+                </div>`,
               )
             : [
                 renderSettingsSection({}, renderJobsTable(props, hasAnyJobsFilters)),
@@ -745,6 +754,46 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
         </button>
       </div>
     </wa-popover>
+  `;
+}
+
+function renderUpcomingPanel(props: CronProps) {
+  const { scheduled, event } = groupUpcomingJobs(props.jobs);
+  if (scheduled.length === 0 && event.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="cron-upcoming">
+      <div class="cron-upcoming__heading">
+        <span class="cron-upcoming__title">${t("cron.upcoming.title")}</span>
+        ${
+          event.length > 0
+            ? html`<span class="cron-upcoming__label">${t("cron.upcoming.eventJobs")}</span>`
+            : nothing
+        }
+      </div>
+      <div class="cron-upcoming__items">
+        ${scheduled.slice(0, 5).map((item) => {
+          const isRunning = isCronJobRunning(item.job);
+          return html`
+            <div class="cron-upcoming__item">
+              <span class="cron-upcoming__item-name">${item.job.name}</span>
+              <span class="cron-upcoming__item-eta">
+                ${isRunning ? t("cron.runs.runStatusRunning") : item.relTime}
+              </span>
+            </div>
+          `;
+        })}
+        ${event.slice(0, 3).map(
+          (item) => html`
+            <div class="cron-upcoming__item">
+              <span class="cron-upcoming__item-name">${item.job.name}</span>
+              <span class="cron-upcoming__item-eta">${formatCronSchedule(item.job)}</span>
+            </div>
+          `,
+        )}
+      </div>
+    </div>
   `;
 }
 
@@ -1190,6 +1239,13 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
           ${
             mode === "job" && selectedJob && props.canManage && !systemOwned
               ? renderEnabledSwitch(props, selectedJob)
+              : nothing
+          }
+          ${
+            mode === "job" && selectedJob
+              ? html`<span class="cron-kind-badge"
+                  >${formatCronJobKind(selectedJob.payload.kind)}</span
+                >`
               : nothing
           }
           <span class="cron-detail-sub">${subtitle}</span>

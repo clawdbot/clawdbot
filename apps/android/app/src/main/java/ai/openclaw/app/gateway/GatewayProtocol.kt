@@ -916,6 +916,7 @@ enum class GatewayMethod(
   PluginsControlUiReload("plugins.controlUi.reload"),
   PluginsControlUiReport("plugins.controlUi.report"),
   PluginsControlUiStatus("plugins.controlUi.status"),
+  TaskLanesList("taskLanes.list"),
   UpdateRunsGet("update.runs.get"),
   UpdateRunsList("update.runs.list"),
   GatewaySuspendHandoff("gateway.suspend.handoff"),

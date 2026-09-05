@@ -1,17 +1,18 @@
+// Shared fixtures for cron-page tests. Kept out of the spec files so each
+// stays under the max-lines lint budget.
 import { nothing } from "lit";
 import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { CronState } from "../../lib/cron/index.ts";
 
-type CronTestPage = HTMLElement & {
+export type CronTestPage = HTMLElement & {
   context: ApplicationContext;
   routeSearch: string;
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
   render: () => typeof nothing;
-  cron: CronState;
+  cron: import("../../lib/cron/index.ts").CronState;
   cronModelSuggestions: string[];
 };
 
@@ -19,7 +20,7 @@ export function waitForCronPage(assertion: () => void) {
   return vi.waitFor(assertion, { interval: 1 });
 }
 
-type TestGateway = ApplicationContext["gateway"] & {
+export type TestGateway = ApplicationContext["gateway"] & {
   emitSnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
   emitRetiredEvent: (event: Parameters<GatewayEventListener>[0]) => void;
 };
@@ -159,7 +160,12 @@ export function cronListResponse(jobs: CronJob[]): CronJobsListResult {
 }
 
 export function createRequest(
-  cronStatus: { enabled: boolean; jobs: number; triggersEnabled: boolean } = {
+  cronStatus: {
+    enabled: boolean;
+    jobs: number;
+    triggersEnabled: boolean;
+    taskLanesConfigured?: boolean;
+  } = {
     enabled: true,
     jobs: 0,
     triggersEnabled: true,

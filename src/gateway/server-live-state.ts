@@ -1,6 +1,12 @@
+import type { TaskLanesConfig } from "../config/types.task-lanes.js";
 // Gateway live state factory.
 // Combines mutable runtime handles with startup-resolved services for request contexts.
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { registerConfiguredTaskLaneProviders } from "../task-lanes/gateway/config-registration.js";
+import {
+  createTaskLaneGatewayService,
+  type TaskLaneGatewayService,
+} from "../task-lanes/gateway/service.js";
 import type { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -16,6 +22,7 @@ export type GatewayServerLiveState = GatewayServerMutableState & {
   hooksConfig: HooksConfigResolved | null;
   hookClientIpConfig: HookClientIpConfig;
   cronState: GatewayCronState;
+  taskLanes: TaskLaneGatewayService;
   controlUiSessionPullRequests?: ReturnType<typeof createControlUiSessionPullRequestSubscriptions>;
   sessionViewerPresence?: ReturnType<typeof createSessionViewerPresenceDeclarations>;
   pluginServices: PluginServicesHandle | null;
@@ -28,12 +35,20 @@ export function createGatewayServerLiveState(params: {
   hookClientIpConfig: HookClientIpConfig;
   cronState: GatewayCronState;
   gatewayMethods: string[];
+  taskLanesConfig?: TaskLanesConfig;
+  /** Base for state-dir-relative task lane rootDir config values. */
+  stateDir?: string;
 }): GatewayServerLiveState {
+  const taskLanes = createTaskLaneGatewayService();
+  registerConfiguredTaskLaneProviders(taskLanes, params.taskLanesConfig, {
+    stateDir: params.stateDir,
+  });
   return {
     ...createGatewayServerMutableState(),
     hooksConfig: params.hooksConfig,
     hookClientIpConfig: params.hookClientIpConfig,
     cronState: params.cronState,
+    taskLanes,
     controlUiSessionPullRequests: undefined,
     sessionViewerPresence: undefined,
     pluginServices: null,

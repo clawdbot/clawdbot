@@ -21,6 +21,7 @@ import {
   loadCronModelSuggestions,
   loadCronRuns,
   loadCronStatus,
+  loadTaskLanes,
   loadMoreCronRuns,
   normalizeCronFormState,
   removeCronJob,
@@ -127,6 +128,10 @@ class CronPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
+    if (this.taskLanesReloadTimer !== null) {
+      clearTimeout(this.taskLanesReloadTimer);
+      this.taskLanesReloadTimer = null;
+    }
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -157,7 +162,16 @@ class CronPage extends OpenClawLightDomElement {
       void this.context.agents.ensureList();
     }
     if (!this.cron.cronStatus && !this.cron.cronLoading) {
-      void this.refreshCron({ tableFilters: true, coalesce: true });
+      // Lane data loads only after cron.status resolves the capability gate,
+      // so an unconfigured install never issues a taskLanes.list request.
+      // The continuation binds to this connection epoch: a replaced state
+      // (reconnect) reloads lanes through its own path.
+      const cronState = this.cron;
+      void this.refreshCron({ tableFilters: true, coalesce: true }).then(() => {
+        if (this.cron === cronState) {
+          this.requestTaskLanesLoad();
+        }
+      });
     } else if (!this.cron.cronRuns.length && !this.cron.cronRunsLoadingMore) {
       void this.loadRuns(this.cron.cronRunsScope === "all" ? null : this.cron.cronRunsJobId);
     }
@@ -166,6 +180,41 @@ class CronPage extends OpenClawLightDomElement {
       this.modelSuggestionsState = cronState;
       void this.loadModelSuggestions(cronState);
     }
+    if (this.cron.cronStatus) {
+      this.requestTaskLanesLoad();
+    }
+  }
+
+  private requestTaskLanesLoad() {
+    if (this.taskLanesRequestAllowed()) {
+      void this.runCronTask((current) => loadTaskLanes(current));
+    }
+  }
+
+  private taskLanesReloadTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Fail closed: only a gateway that explicitly reports the capability
+  // configured gets lane requests. An absent signal (unconfigured install or
+  // an unresolved/legacy cron.status) must not be read as permission.
+  private taskLanesRequestAllowed() {
+    return this.cron.cronStatus?.taskLanesConfigured === true;
+  }
+
+  // Task lanes reflect cron mutations (a run adds lane items); coalesce
+  // bursts into one trailing reload so rapid actions stay one request.
+  private scheduleTaskLanesReload() {
+    // An unresolved cron.status cannot prove the capability either way, so it
+    // must not schedule a debounced request the gate would wave through later.
+    if (!this.cron.cronStatus || !this.taskLanesRequestAllowed()) {
+      return;
+    }
+    if (this.taskLanesReloadTimer !== null) {
+      clearTimeout(this.taskLanesReloadTimer);
+    }
+    this.taskLanesReloadTimer = setTimeout(() => {
+      this.taskLanesReloadTimer = null;
+      this.requestTaskLanesLoad();
+    }, 150);
   }
 
   private requestCronUpdate(cronState: CronState = this.cron) {
@@ -245,6 +294,12 @@ class CronPage extends OpenClawLightDomElement {
         loadCronJobsPage(current, { tableFilters: options.tableFilters }),
       ),
     ]);
+    // Externally edited boards change outside cron mutations, so the operator's
+    // explicit Refresh must also re-read the lane snapshot (no-op when the
+    // gateway reports the capability unconfigured). Scheduling only after the
+    // status refresh lands keeps the capability gate exact: a slow cron.status
+    // reporting false must win the race against the debounced lane request.
+    this.scheduleTaskLanesReload();
   }
 
   private loadRuns(jobId: string | null, coalesce = false) {
@@ -427,6 +482,7 @@ class CronPage extends OpenClawLightDomElement {
     }
     await this.runCronTask(async (current) => {
       await removeCronJob(current, currentJob);
+      this.scheduleTaskLanesReload();
       // Removing the selected task drops the panel back to overview;
       // the runs scope must follow or recent activity stays empty.
       if (current.cronRunsScope === "job" && current.cronRunsJobId === null) {
@@ -455,6 +511,7 @@ class CronPage extends OpenClawLightDomElement {
       if (!result.saved) {
         return;
       }
+      this.scheduleTaskLanesReload();
       if (cronState.cronEditingJob) {
         return;
       }
@@ -536,6 +593,8 @@ class CronPage extends OpenClawLightDomElement {
           runsDeliveryStatuses: this.cron.cronRunsDeliveryStatuses,
           runsQuery: this.cron.cronRunsQuery,
           runsSortDir: this.cron.cronRunsSortDir,
+          taskLanes: this.cron.taskLanes,
+          taskLanesError: this.cron.taskLanesError,
           fieldErrors: this.cron.cronFieldErrors,
           canSubmit: !hasCronFormErrors(this.cron.cronFieldErrors),
           agentSuggestions: suggestions.agentSuggestions,
@@ -559,9 +618,15 @@ class CronPage extends OpenClawLightDomElement {
           onClosePanel: () => this.closePanel(),
           onClone: (job) => this.cloneJob(job),
           onToggle: (job, enabled) =>
-            this.runCronAdminTask((cronState) => toggleCronJob(cronState, job, enabled)),
+            this.runCronAdminTask(async (cronState) => {
+              await toggleCronJob(cronState, job, enabled);
+              this.scheduleTaskLanesReload();
+            }),
           onRun: (job, mode) =>
-            this.runCronAdminTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
+            this.runCronAdminTask(async (cronState) => {
+              await runCronJob(cronState, job.id, mode ?? "force");
+              this.scheduleTaskLanesReload();
+            }),
           onRemove: (job) => void this.removeJob(job),
           onLoadMoreJobs: () =>
             void this.runCronTask((cronState) =>

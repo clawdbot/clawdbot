@@ -394,6 +394,32 @@ export const OpenClawSchemaShape = {
         .optional(),
     })
     .optional(),
+  taskLanes: z
+    .strictObject({
+      providers: z
+        .array(
+          z.strictObject({
+            id: z.string().regex(/^[a-z][a-z0-9._-]{1,63}$/),
+            rootDir: z.string().min(1),
+            filePath: z.string().min(1),
+          }),
+        )
+        .superRefine((providers, ctx) => {
+          const seen = new Set<string>();
+          for (const [index, provider] of providers.entries()) {
+            if (seen.has(provider.id)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [index, "id"],
+                message: `duplicate task lane provider id: ${provider.id}`,
+              });
+            }
+            seen.add(provider.id);
+          }
+        })
+        .optional(),
+    })
+    .optional(),
   hooks: z
     .strictObject({
       enabled: z.boolean().optional(),

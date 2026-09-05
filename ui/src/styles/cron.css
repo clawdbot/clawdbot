@@ -757,6 +757,160 @@
   height: 13px;
 }
 
+/* Task lanes panel — per-provider lanes with newest-first items */
+.cron-task-lanes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+
+.cron-task-lanes__heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.cron-task-lanes__title {
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.cron-task-lanes__diagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.cron-task-lanes__chip {
+  font-size: var(--control-ui-text-xs);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  color: var(--muted);
+}
+
+.cron-task-lanes__chip--error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.cron-task-lanes__chip--warn {
+  color: var(--warning, var(--muted));
+  border-color: color-mix(in srgb, var(--warning, var(--border)) 40%, transparent);
+}
+
+.cron-task-lanes__error {
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+}
+
+.cron-task-lanes__empty {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.cron-task-lanes__lanes {
+  display: flex;
+  flex-direction: column;
+}
+
+.cron-task-lanes__lane {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 30%, transparent);
+}
+
+.cron-task-lanes__lane:last-child {
+  border-bottom: none;
+}
+
+.cron-task-lanes__lane-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--control-ui-text-sm);
+  cursor: var(--cursor-action);
+  list-style: none;
+}
+
+.cron-task-lanes__lane-summary::-webkit-details-marker {
+  display: none;
+}
+
+.cron-task-lanes__lane-label {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-task-lanes__lane-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.cron-task-lanes__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0 0 var(--space-1) var(--space-3);
+}
+
+.cron-task-lanes__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+}
+
+.cron-task-lanes__item-state {
+  flex: 0 0 auto;
+  font-size: var(--control-ui-text-xs);
+  color: var(--muted);
+}
+
+.cron-task-lanes__item-state--failed {
+  color: var(--danger);
+}
+
+.cron-task-lanes__item-state--running {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.cron-task-lanes__item-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-task-lanes__item-time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.cron-task-lanes__item-outcome {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-task-lanes__item-artifact {
+  flex: 0 0 auto;
+  font-size: var(--control-ui-text-xs);
+}
+
 .cron-trigger-script {
   width: 100%;
   min-height: 160px;
