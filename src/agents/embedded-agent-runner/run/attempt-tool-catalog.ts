@@ -21,7 +21,10 @@ import {
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
 import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
-import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
+import {
+  createToolExecutionMatcher,
+  TOOL_EXECUTION_GATED_MESSAGE,
+} from "../../tool-policy-shared.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
@@ -293,8 +296,9 @@ function gateToolExecution(
   tools: readonly AnyAgentTool[],
   allowNames: readonly string[],
 ): AnyAgentTool[] {
+  const executionAllowed = createToolExecutionMatcher(allowNames);
   return tools.map((tool) =>
-    isToolExecutionAllowed(allowNames, tool.name) || TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)
+    executionAllowed(tool.name) || TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)
       ? tool
       : markAgentToolExecutionUnavailable(
           copyAgentToolAvailability(tool, {
