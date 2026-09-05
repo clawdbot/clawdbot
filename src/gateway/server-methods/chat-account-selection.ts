@@ -26,7 +26,10 @@ export function resolveChatAccountSelection(params: {
     return {
       kind: "shared",
       authProfileId,
-      label: truncateUtf16Safe(credential?.displayName?.trim() || authProfileId, 256),
+      label: truncateUtf16Safe(
+        (credential?.displayName?.trim() || authProfileId).toWellFormed(),
+        256,
+      ),
       source,
     };
   }

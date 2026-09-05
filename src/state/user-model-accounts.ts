@@ -253,7 +253,11 @@ function accountSummary(
     authProfileId,
     provider: credential.provider,
     label: truncateUtf16Safe(
-      credential.displayName?.trim() || credential.email?.trim() || credential.provider,
+      (
+        credential.displayName?.trim() ||
+        credential.email?.trim() ||
+        credential.provider
+      ).toWellFormed(),
       256,
     ),
     authType: credential.type,

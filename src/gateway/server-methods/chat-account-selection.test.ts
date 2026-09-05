@@ -34,6 +34,26 @@ describe("resolveChatAccountSelection", () => {
     expect(selection.label).toBe(prefix);
   });
 
+  it("repairs a historically malformed shared credential label", () => {
+    const prefix = "x".repeat(255);
+    const selection = resolveChatAccountSelection({
+      authStore: {
+        version: 1,
+        profiles: {
+          shared: {
+            type: "token",
+            provider: "example",
+            token: "fixture-token",
+            displayName: `${prefix}\ud83e`,
+          },
+        },
+      },
+      sessionEntry: { authProfileOverride: "shared" },
+    });
+
+    expect(selection.label).toBe(`${prefix}\ufffd`);
+  });
+
   it("keeps personal owner labels valid at the UTF-16 limit", () => {
     const prefix = "x".repeat(255);
     profileDisplay.displayName = `${prefix}🤖`;

@@ -154,6 +154,31 @@ describe("personal model accounts", () => {
     expect(listUserModelAccounts({ profileId: bob.id }, options)).toEqual({ accounts: [] });
   });
 
+  it("repairs a persisted malformed credential label when projecting account inventory", () => {
+    const options = stateOptions();
+    const owner = ensureProfileForEmail("malformed-label@example.test", options);
+    const prefix = "x".repeat(255);
+    connectUserModelAccount(
+      {
+        ownerProfileId: owner.id,
+        credential: {
+          type: "token",
+          provider: "anthropic",
+          token: "synthetic-malformed-label-token",
+          displayName: `${prefix}\ud83e`,
+        },
+        assertCurrent() {},
+      },
+      options,
+    );
+
+    closeOpenClawStateDatabaseByPath(options.path);
+
+    expect(listUserModelAccounts({ profileId: owner.id }, options).accounts[0]?.label).toBe(
+      `${prefix}\ufffd`,
+    );
+  });
+
   it.each([
     {
       name: "API-key SecretRef",
