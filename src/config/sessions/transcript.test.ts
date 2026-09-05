@@ -15,6 +15,7 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import {
   loadTranscriptEvents,
@@ -66,6 +67,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         storePath,
       });
     } finally {
+      await cleanupSessionStateForTest({ stateDir: tempDir });
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -171,9 +173,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("uses configured session.store when storePath is omitted", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-config-store-"));
+    const stateDir = path.join(tempDir, "default-state");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const sessionsDir = path.join(tempDir, "configured", "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
       const storePath = path.join(sessionsDir, "sessions.json");
@@ -220,6 +223,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         }),
       );
     } finally {
+      await cleanupSessionStateForTest({ stateDir: tempDir });
+      await cleanupSessionStateForTest({ stateDir });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
@@ -231,10 +236,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("uses the session key agent for configured session.store templates", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-agent-store-"));
+    const stateDir = path.join(tempDir, "default-state");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
     try {
-      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const storeTemplate = path.join(tempDir, "agents", "{agentId}", "sessions", "sessions.json");
       const sessionsDir = path.join(tempDir, "agents", "worker", "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
@@ -293,6 +299,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(event.sessionKey).toBe(configuredSessionKey);
     } finally {
       emitSpy.mockRestore();
+      await cleanupSessionStateForTest({ stateDir: tempDir });
+      await cleanupSessionStateForTest({ stateDir });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {

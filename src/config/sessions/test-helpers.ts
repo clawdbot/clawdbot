@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach } from "vitest";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { applySessionEntryLifecycleMutation, replaceSessionEntry } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 
@@ -19,7 +20,8 @@ export function useTempSessionsFixture(prefix: string) {
     storePath = path.join(sessionsDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await cleanupSessionStateForTest({ stateDir: tempDir });
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
