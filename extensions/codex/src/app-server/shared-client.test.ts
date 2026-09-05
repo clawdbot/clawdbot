@@ -528,20 +528,34 @@ describe("shared Codex app-server client", () => {
     expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
   });
 
-  it("does not adopt shared client state left behind by an older plugin build", async () => {
+  it.each([
+    {
+      version: "2026.7.1",
+      create: () => ({ clients: new Map(), leasedReleases: new WeakMap() }),
+    },
+    {
+      version: "2026.9.1",
+      create: () => ({
+        clients: new Map(),
+        liveClients: new Set(),
+        isolatedClients: new Set(),
+        entriesByClient: new WeakMap(),
+        leasedReleases: new WeakMap(),
+        desktopGenerationDrainChecks: new Set(),
+      }),
+    },
+  ])("does not adopt shared client state from published $version", async ({ create }) => {
     // A plugin update inside a container restarts the gateway in-process, so the
     // new plugin build starts with the previous build's globalThis. This is the
     // slot name and record shape every build before the keyed slot wrote.
     const legacySlot = Symbol.for("openclaw.codexAppServerClientState");
-    const legacyState = { clients: new Map(), leasedReleases: new WeakMap() };
+    const legacyState = create();
     const globalState = globalThis as Record<symbol, unknown>;
     globalState[legacySlot] = legacyState;
     try {
-      const harness = createClientHarness();
+      const harness = createAutoInitializingClientHarness();
       vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-      const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
-      await sendInitializeResult(harness, "openclaw/0.149.0 (Linux; test)");
-      const client = await acquire;
+      const client = await getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
 
       expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
       expect(legacyState.clients.size).toBe(0);

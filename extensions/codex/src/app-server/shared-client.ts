@@ -135,6 +135,8 @@ type CodexAppServerSpawnIdentity = Omit<
   "clientId" | "serverVersion" | "userAgent"
 >;
 
+// Gateway close disposes the old harness before importing the next plugin build.
+// Keep this callback preloaded: importing during shutdown can load replacement bytes.
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 const createStartupLifetime = (): CodexAppServerStartupLifetime => ({
   controller: new AbortController(),
