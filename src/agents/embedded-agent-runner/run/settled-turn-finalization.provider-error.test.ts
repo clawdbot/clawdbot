@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import {
   createSettledFinalizationTestInput,
   createSettledProviderFailureAttempt,
@@ -7,6 +8,75 @@ import {
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
+
+function createAssistantReportedProviderFailureAttempt(): EmbeddedRunAttemptResult {
+  const base = createSettledProviderFailureAttempt({ terminal: { kind: "ok" } });
+  const assistant = base.currentAttemptCompletedAssistant;
+  if (!assistant) {
+    throw new Error("Missing failed assistant");
+  }
+  assistant.errorMessage = "WebSocket error";
+  assistant.errorCode = "ERR_WEBSOCKET_TRANSPORT";
+  return completeEmbeddedAttemptResult({
+    attempt: {
+      runId: "run-settled",
+      admittedRunContext: { operationalRunInstance: { runId: "run-settled" } },
+      sessionId: base.sessionIdUsed,
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      model: { api: "openai-responses" },
+      trigger: "user",
+    } as never,
+    subscription: {
+      assistantTexts: [],
+      didSendDeterministicApprovalPrompt: () => false,
+      didSendViaMessagingTool: () => false,
+      getAcceptedSessionSpawns: () => [],
+      getAssistantTurnCount: () => 1,
+      getCompactionCount: () => 0,
+      getHeartbeatToolResponse: () => undefined,
+      getItemLifecycle: () => base.itemLifecycle,
+      getLastAssistantTextMessageIndex: () => undefined,
+      getLastCompactionTokensAfter: () => undefined,
+      getLastToolError: () => undefined,
+      getLatestMcpAppChannelView: () => undefined,
+      getLatestMcpConnectAction: () => undefined,
+      getMessagingToolSentMediaUrls: () => [],
+      getMessagingToolSentTargets: () => [],
+      getMessagingToolSentTexts: () => [],
+      getMessagingToolSourceReplyPayloads: () => [],
+      getSourceReplyDelivered: () => undefined,
+      getPendingToolMediaReply: () => undefined,
+      getToolAutoDeliveryMediaUrls: () => [],
+      getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: true }),
+      getSuccessfulCronAdds: () => [],
+      getVisibleBlockReplyCount: () => 0,
+      hasToolMediaBlockReply: () => false,
+      setTerminalLifecycleMeta: () => {},
+      toolMetas: base.toolMetas,
+    } as never,
+    state: {
+      terminal: { kind: "ok" },
+      currentAttemptAssistant: assistant,
+      currentAttemptCompletedAssistant: assistant,
+      sessionIdUsed: base.sessionIdUsed,
+      messagesSnapshot: base.messagesSnapshot,
+      yieldDetected: false,
+      didDeliverSourceReplyViaMessageTool: false,
+    } as never,
+    clientToolCallSlots: [],
+    hookRunner: null,
+    hookAgentId: "main",
+    bootstrapPromptWarning: {},
+    cache: {
+      observabilityEnabled: false,
+      trace: null,
+      break: null,
+      changesForTurn: null,
+      streamStrategy: "default",
+    },
+  });
+}
 
 function prepareRequest(
   attempt = createSettledProviderFailureAttempt(),
@@ -42,6 +112,19 @@ describe("prepared provider errors after settled tools", () => {
         text: expect.stringContaining("connection refused"),
       }),
     ]);
+    expect(resolveSettledTurnFinalizationRequest(request)).toContain(
+      "Do not repeat completed tool calls",
+    );
+  });
+
+  it("finalizes a provider error reported through the completed assistant", () => {
+    const attempt = createAssistantReportedProviderFailureAttempt();
+    expect(attempt).toMatchObject({
+      terminal: { kind: "ok" },
+      settledTurnFinalizationContext: { source: "openclaw-transcript" },
+    });
+    const request = prepareRequest(attempt);
+    expect(request.payloadsWithToolMedia).toEqual([expect.objectContaining({ isError: true })]);
     expect(resolveSettledTurnFinalizationRequest(request)).toContain(
       "Do not repeat completed tool calls",
     );
