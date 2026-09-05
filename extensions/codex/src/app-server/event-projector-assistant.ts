@@ -58,6 +58,7 @@ export class CodexAssistantProjection {
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
+    private readonly enqueuePresentation: (callback: () => void | Promise<void>) => void,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
     private readonly matchesToolProgressEcho: (text: string) => boolean,
     private readonly nextTranscriptTimestamp: () => number,
@@ -73,7 +74,7 @@ export class CodexAssistantProjection {
     }
   }
 
-  async handleAssistantDelta(params: JsonObject): Promise<void> {
+  handleAssistantDelta(params: JsonObject): void {
     const itemId = readString(params, "itemId") ?? "assistant";
     const delta = readString(params, "delta") ?? "";
     if (!delta) {
@@ -90,7 +91,7 @@ export class CodexAssistantProjection {
     }
     if (!this.assistantStarted) {
       this.assistantStarted = true;
-      await this.params.onAssistantMessageStart?.();
+      this.enqueuePresentation(() => this.params.onAssistantMessageStart?.());
     }
     this.rememberAssistantItem(itemId);
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
@@ -135,7 +136,7 @@ export class CodexAssistantProjection {
     // Legacy channel preview callbacks are append-oriented and do not all
     // understand replacement snapshots.
     if (knownFinalAnswer && !replaceable) {
-      await this.params.onPartialReply?.(streamPayload);
+      this.enqueuePresentation(() => this.params.onPartialReply?.(streamPayload));
     }
   }
 

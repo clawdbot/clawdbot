@@ -31,11 +31,12 @@ export class CodexReasoningProjection {
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
+    private readonly enqueuePresentation: (callback: () => void | Promise<void>) => void,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
     private readonly onNativePlanUpdate?: (update: NativePlanUpdate) => void | Promise<void>,
   ) {}
 
-  async handleReasoningDelta(method: ReasoningDeltaMethod, params: JsonObject): Promise<void> {
+  handleReasoningDelta(method: ReasoningDeltaMethod, params: JsonObject): void {
     const itemId = readString(params, "itemId") ?? "reasoning";
     const delta = readString(params, "delta") ?? "";
     if (!delta) {
@@ -58,10 +59,10 @@ export class CodexReasoningProjection {
       index: groupIndex,
       text: `${current?.text ?? ""}${delta}`,
     });
-    await this.params.onReasoningStream?.({
-      text: this.reasoningText(),
-      isReasoningSnapshot: true,
-    });
+    const text = this.reasoningText();
+    this.enqueuePresentation(() =>
+      this.params.onReasoningStream?.({ text, isReasoningSnapshot: true }),
+    );
   }
 
   handlePlanDelta(params: JsonObject): void {
@@ -131,12 +132,12 @@ export class CodexReasoningProjection {
     }
   }
 
-  async maybeEndReasoning(): Promise<void> {
+  maybeEndReasoning(): void {
     if (!this.reasoningStarted || this.reasoningEnded) {
       return;
     }
     this.reasoningEnded = true;
-    await this.params.onReasoningEnd?.();
+    this.enqueuePresentation(() => this.params.onReasoningEnd?.());
   }
 
   reasoningText(): string {

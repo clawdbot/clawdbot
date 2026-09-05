@@ -1,5 +1,6 @@
 // Codex plugin module implements event projector behavior.
 import {
+  embeddedAgentLog,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
   type AgentMessage,
@@ -67,6 +68,7 @@ export class CodexAppServerEventProjector {
   private readonly toolTranscriptProjection: CodexToolTranscriptProjection;
   private completedTurn: CodexTurn | undefined;
   private projectionClosed = false;
+  private presentationTail: Promise<void> = Promise.resolve();
   /** Structured overloads may continue once the exact settled transcript is captured. */
   settledTurnFailureFinalizationAllowed = false;
   private readonly terminalFailure = new CodexTerminalFailureProjection();
@@ -132,6 +134,7 @@ export class CodexAppServerEventProjector {
     );
     this.assistantProjection = new CodexAssistantProjection(
       params,
+      this.enqueuePresentation,
       (event) => this.emitAgentEvent(event),
       (text) => this.toolProgressProjection.matchesEcho(text),
       this.transcriptCheckpoint.nextTimestamp,
@@ -139,6 +142,7 @@ export class CodexAppServerEventProjector {
     );
     this.reasoningProjection = new CodexReasoningProjection(
       params,
+      this.enqueuePresentation,
       (event) => this.emitAgentEvent(event),
       options.onNativePlanUpdate,
     );
@@ -180,6 +184,25 @@ export class CodexAppServerEventProjector {
       this.assistantProjection.markAssistantBoundaryPersisted(itemId);
       this.pendingSteeringAssistantBoundaryItemId = undefined;
     }
+  }
+
+  // Presentation stays ordered, but cannot hold canonical native items behind a slow channel.
+  // Finalization joins accepted callbacks under the existing settlement deadline.
+  private readonly enqueuePresentation = (callback: () => void | Promise<void>): void => {
+    this.presentationTail = this.presentationTail.then(async () => {
+      if (this.projectionClosed || this.aborted || this.options.runAbortSignal?.aborted) {
+        return;
+      }
+      try {
+        await callback();
+      } catch (error) {
+        embeddedAgentLog.debug("codex app-server presentation callback failed", { error });
+      }
+    });
+  };
+
+  drainPresentation(): Promise<void> {
+    return this.presentationTail;
   }
 
   /** Fence delayed projections before the turn's final snapshot leaves its owner. */
@@ -248,11 +271,11 @@ export class CodexAppServerEventProjector {
 
     switch (notification.method) {
       case "item/agentMessage/delta":
-        await this.assistantProjection.handleAssistantDelta(params);
+        this.assistantProjection.handleAssistantDelta(params);
         break;
       case "item/reasoning/summaryTextDelta":
       case "item/reasoning/textDelta":
-        await this.reasoningProjection.handleReasoningDelta(notification.method, params);
+        this.reasoningProjection.handleReasoningDelta(notification.method, params);
         break;
       case "item/plan/delta":
         this.reasoningProjection.handlePlanDelta(params);
@@ -677,7 +700,7 @@ export class CodexAppServerEventProjector {
     }
     this.assistantProjection.finalizeAnswerCandidate(turn);
     this.activeCompactionItemIds.clear();
-    await this.reasoningProjection.maybeEndReasoning();
+    this.reasoningProjection.maybeEndReasoning();
   }
 
   private async emitSnapshotOnlyNativeToolProgress(item: CodexThreadItem): Promise<void> {

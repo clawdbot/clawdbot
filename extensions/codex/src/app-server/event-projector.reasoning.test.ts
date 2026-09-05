@@ -609,6 +609,7 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
       }),
     );
 
+    await projector.drainPresentation();
     expect(onReasoningStream).toHaveBeenCalledTimes(3);
     expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
       text: "Checking ",
@@ -653,6 +654,7 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
       }),
     );
 
+    await projector.drainPresentation();
     expect(onReasoningStream).toHaveBeenCalledTimes(3);
     expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
       text: "Second",

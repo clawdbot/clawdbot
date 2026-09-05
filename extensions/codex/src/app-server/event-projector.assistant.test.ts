@@ -21,6 +21,110 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector assistant projection", () => {
+  it.each(["drain", "close", "abort"] as const)(
+    "retains native state while assistant start is pending, then handles %s",
+    async (finish) => {
+      const start = Promise.withResolvers<void>();
+      const controller = new AbortController();
+      const calls: string[] = [];
+      const projector = await createProjector(
+        {
+          ...(await createParams()),
+          onAssistantMessageStart: () => {
+            calls.push("start");
+            return start.promise;
+          },
+          onPartialReply: ({ text }) => {
+            calls.push(`reply:${text}`);
+          },
+          onReasoningStream: ({ text }) => {
+            calls.push(`reasoning:${text}`);
+          },
+          onReasoningEnd: () => {
+            calls.push("reasoning:end");
+          },
+        },
+        { runAbortSignal: controller.signal },
+      );
+      try {
+        await projector.handleNotification(
+          forCurrentTurn("item/started", {
+            item: { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "" },
+          }),
+        );
+        await projector.handleNotification(agentMessageDelta("hel"));
+        await projector.handleNotification(agentMessageDelta("lo"));
+        for (const delta of ["first", " second"]) {
+          await projector.handleNotification(
+            forCurrentTurn("item/reasoning/textDelta", {
+              itemId: "reasoning-1",
+              delta,
+            }),
+          );
+        }
+        await projector.handleNotification(
+          turnCompleted([
+            { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "hello complete" },
+          ]),
+        );
+        expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
+          "hello complete",
+        ]);
+        expect(projector.getCompletedTurnStatus()).toBe("completed");
+        expect(calls).toEqual(["start"]);
+        if (finish === "close") {
+          await projector.closeProjection();
+        } else if (finish === "abort") {
+          controller.abort();
+        }
+        start.resolve();
+        await projector.drainPresentation();
+        expect(calls).toEqual(
+          finish === "drain"
+            ? [
+                "start",
+                "reply:hel",
+                "reply:hello",
+                "reasoning:first",
+                "reasoning:first second",
+                "reasoning:end",
+              ]
+            : ["start"],
+        );
+      } finally {
+        start.resolve();
+        await projector.closeProjection();
+        await projector.drainPresentation();
+      }
+    },
+  );
+
+  it.each(["throw", "reject"] as const)(
+    "continues presentation after a callback %s",
+    async (failure) => {
+      const onPartialReply = vi.fn();
+      const projector = await createProjector({
+        ...(await createParams()),
+        onAssistantMessageStart: () => {
+          if (failure === "throw") {
+            throw new Error("presentation failed");
+          }
+          return Promise.reject(new Error("presentation failed"));
+        },
+        onPartialReply,
+      });
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "" },
+        }),
+      );
+      await projector.handleNotification(agentMessageDelta("hello"));
+      await projector.drainPresentation();
+      expect(onPartialReply).toHaveBeenCalledWith({ text: "hello", delta: "hello" });
+      expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual(["hello"]);
+    },
+  );
+
   it("projects assistant deltas and usage into embedded attempt results", async () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
       await createProjectorWithAssistantHooks();
@@ -809,6 +913,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     await projector.handleNotification(agentMessageDelta("hel", "msg-final"));
     await projector.handleNotification(agentMessageDelta("lo", "msg-final"));
 
+    await projector.drainPresentation();
     expect(onPartialReply).toHaveBeenCalledTimes(2);
     expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
       { text: "hel", delta: "hel" },
