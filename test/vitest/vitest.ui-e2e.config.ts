@@ -5,7 +5,7 @@ import {
   loadPatternListFromEnv,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
-import { preserveIndependentVitestProject, sharedVitestConfig } from "./vitest.shared.config.ts";
+import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 import { controlUiE2eTestGlobs } from "./vitest.ui-paths.mjs";
 
@@ -202,7 +202,7 @@ export function createUiE2eVitestConfig(
             name: "ui-e2e-serial-standalone",
           },
         },
-      ].map(preserveIndependentVitestProject),
+      ],
       // Refit needs native file totals; verbose still reports cases to the output watchdog.
       reporters: [...baseTest.reporters, "default"],
       sequence: { ...baseSequence, sequencer: UiE2eSequencer },
