@@ -31,7 +31,7 @@ import {
   maxTranscriptScrollOffset,
   measureConnectedTranscriptRows,
   resolveTranscriptScrollMargin,
-  syncPositionRailGutter,
+  PositionRailGutterController,
   syncScrollMargin,
 } from "./chat-transcript-geometry.ts";
 import {
@@ -58,6 +58,7 @@ import {
 export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscriptSession {
   expandedAssistantMessages = new Map<string, AssistantMessageExpansionState>();
   private readonly controllers = new Set<ReactiveController>();
+  private readonly positionRail: PositionRailGutterController;
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
   private threadInnerElement: HTMLDivElement | null = null;
   private connected = false;
@@ -132,7 +133,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
   private readonly handleGeometryCommit = (event: Event) => {
     this.reconcileInteractionResize(event.target);
-    syncPositionRailGutter(this.scrollElement, this.threadInnerElement);
+    this.positionRail.sync();
     if (event instanceof CustomEvent && event.detail?.widthChanged === false) {
       return;
     }
@@ -212,6 +213,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
     private readonly callbacks: TranscriptCallbacks = {},
   ) {
+    this.positionRail = new PositionRailGutterController(this, () => this.threadInnerElement);
     this.implicitEndAnchorPending = initialOffset === null;
     this.virtualizerController = new VirtualizerController(this, {
       count: 0,
@@ -234,7 +236,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           const heightChanged = previousHeight !== null && previousHeight !== rect.height;
           this.observedWidth = rect.width;
           this.observedHeight = rect.height;
-          syncPositionRailGutter(this.scrollElement, this.threadInnerElement);
+          this.positionRail.sync();
           // appliedHeaderHeight, not headerHeight: only the render paths fold a
           // header toggle into the margin, because they own its compensation.
           syncScrollMargin(instance.scrollElement, instance, this.appliedHeaderHeight);
@@ -379,9 +381,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
     }
-    // Saved message widths can change the inner column without resizing the
-    // viewport. Read committed layout, including foreign-host geometry commits.
-    syncPositionRailGutter(this.scrollElement, this.threadInnerElement);
     this.reconcileInteractionResize();
     this.reconcileImplicitEndAnchor();
     this.applyPendingScrollOffset();
