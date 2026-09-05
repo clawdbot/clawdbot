@@ -357,24 +357,43 @@ describe("session permission filesystem tools", () => {
     });
   });
 
-  it("keeps full mode filesystem access unrestricted", async () => {
-    await withTempDir("openclaw-permission-full-", async (root) => {
-      const outside = path.join(path.dirname(root), `outside-${path.basename(root)}.txt`);
-      await fs.writeFile(outside, "outside", "utf8");
-      try {
-        const tools = createOpenClawCodingTools({
+  describe.each([undefined, true] as const)("full mode with required root=%s", (required) => {
+    it.each(fileToolCases)("preserves $name authority and final file effects", async (testCase) => {
+      await withTempDir("openclaw-permission-full-", async (parent) => {
+        const root = path.join(await fs.realpath(parent), "workshop");
+        const inside = path.join(root, "proof.txt");
+        const outside = path.join(parent, "other-agent.txt");
+        await fs.mkdir(root);
+        await fs.writeFile(outside, "original\n");
+        if (testCase.initial !== undefined) {
+          await fs.writeFile(inside, testCase.initial);
+        }
+        const tool = createOpenClawCodingTools({
           workspaceDir: root,
+          requireWorkspaceOnly: required,
           sessionPermissionPolicy: { root, mode: "full" },
-        });
-        const { readTool, writeTool } = expectReadWriteEditTools(tools);
-        expect(getTextContent(await readTool.execute("full-read", { path: outside }))).toContain(
-          "outside",
-        );
-        await writeTool.execute("full-write", { path: outside, content: "changed" });
-        await expect(fs.readFile(outside, "utf8")).resolves.toBe("changed");
-      } finally {
-        await fs.rm(outside, { force: true });
-      }
+        }).find((entry) => entry.name === testCase.name);
+        if (!tool) {
+          throw new Error(`expected ${testCase.name} tool`);
+        }
+        const result = await tool.execute("inside", testCase.args(inside));
+        if (testCase.name === "read") {
+          expect(getTextContent(result)).toContain(testCase.expected);
+        }
+        await expect(fs.readFile(inside, "utf8")).resolves.toBe(testCase.expected);
+        if (required) {
+          await expect(tool.execute("outside", testCase.args(outside))).rejects.toThrow(
+            /sandbox root/i,
+          );
+          await expect(fs.readFile(outside, "utf8")).resolves.toBe("original\n");
+        } else {
+          const outsideResult = await tool.execute("outside", testCase.args(outside));
+          if (testCase.name === "read") {
+            expect(getTextContent(outsideResult)).toContain(testCase.expected);
+          }
+          await expect(fs.readFile(outside, "utf8")).resolves.toBe(testCase.expected);
+        }
+      });
     });
   });
 });
