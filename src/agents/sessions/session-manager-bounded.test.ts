@@ -182,8 +182,7 @@ it.each(["compaction", "reset"] as const)(
       ],
     });
     const reopened = SessionManager.open(scope, dir);
-    // Existing reset navigation fences pre-reset branches; preserve that canonical policy.
-    expect(reopened.getBoundaryCount()).toBe(kind === "reset" ? 2 : 1);
+    expect(reopened.getBoundaryCount()).toBe(1);
     expect(manager.getBoundaryCount()).toBe(reopened.getBoundaryCount());
     expect(manager.getBranch()).toEqual(reopened.getBranch());
     expect(manager.buildSessionContext()).toEqual(reopened.buildSessionContext());

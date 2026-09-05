@@ -145,6 +145,9 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         this.opaqueParentsById.set(id, parentId);
       }
       this.appendParentId = bounded.activeLeafEntryId;
+      // The projection already selected the active path; its leaf control may
+      // be outside the payload window, including when it selects side entries.
+      this.leafId = this.resolveOpaqueLeafTargetId(bounded.activeLeafEntryId);
       for (const [boundaryId, range] of bounded.firstKeptRanges) {
         // An empty retained slice starts at the boundary itself, never at an
         // earlier ancestor. Opaque entries do not become model-context cut points.

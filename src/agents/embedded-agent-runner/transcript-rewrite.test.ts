@@ -527,6 +527,93 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     expect(replayedAssistant.content).toEqual([{ type: "text", text: "summarized" }]);
   });
 
+  it.each([false, true])(
+    "keeps one active suffix after repeated successful rewrites (reset=%s)",
+    async (withReset) => {
+      const dir = tempDirs.make("openclaw-rewrite-reset-");
+      const target = {
+        agentId: "main",
+        sessionId: "rewrite-reset",
+        sessionKey: "agent:main:rewrite-reset",
+        storePath: path.join(dir, "sessions.json"),
+      };
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      let manager = SessionManager.open(target, dir);
+      manager.appendMessage({ role: "user", content: "prefix", timestamp: 1 });
+      manager.appendMessage({ role: "user", content: "replacement-0", timestamp: 2 });
+      manager.appendMessage({ role: "user", content: "suffix", timestamp: 3 });
+      if (withReset) {
+        manager.appendResetBoundary("new");
+        manager.appendMessage({ role: "user", content: "current task", timestamp: 4 });
+      }
+      const originalRows = await loadTranscriptEvents(target);
+      const expectedLength = manager.getBranch().length;
+      for (let iteration = 1; iteration <= 3; iteration++) {
+        const entry = manager.getBranch()[1];
+        if (entry?.type !== "message" || entry.message.role !== "user") {
+          throw new Error("missing rewrite target");
+        }
+        expect(
+          rewriteTranscriptEntriesInSessionManager({
+            sessionManager: manager,
+            replacements: [
+              {
+                entryId: entry.id,
+                message: { ...entry.message, content: `replacement-${iteration}` },
+              },
+            ],
+          }).changed,
+        ).toBe(true);
+        const reopened = SessionManager.open(target, dir);
+        expect(reopened.getBranch()).toHaveLength(expectedLength);
+        expect(reopened.getBranch()).toEqual(manager.getBranch());
+        expect(
+          getBranchMessages(reopened).map((message) =>
+            "content" in message ? message.content : undefined,
+          ),
+        ).toEqual([
+          "prefix",
+          `replacement-${iteration}`,
+          "suffix",
+          ...(withReset ? ["current task"] : []),
+        ]);
+        expect(reopened.getBoundaryCount()).toBe(withReset ? 1 : 0);
+        if (withReset) {
+          expect(reopened.buildSessionContext().messages).toMatchObject([
+            { content: "current task" },
+          ]);
+        }
+        expect((await loadTranscriptEvents(target)).slice(0, originalRows.length)).toEqual(
+          originalRows,
+        );
+        manager = reopened;
+      }
+      await waitForSessionTranscriptProjection(target);
+      const bounded = SessionManager.openBounded(target, { maxBytes: 64_000, maxEvents: 20 });
+      expect(bounded.buildSessionContext()).toEqual(manager.buildSessionContext());
+      expect(SessionManager.openModelContext(target).buildSessionContext()).toEqual(
+        manager.buildSessionContext(),
+      );
+      expect((await SessionManager.openModelContextAsync(target)).buildSessionContext()).toEqual(
+        manager.buildSessionContext(),
+      );
+      const unchanged = manager.getBranch()[1];
+      if (unchanged?.type !== "message") {
+        throw new Error("missing unchanged rewrite target");
+      }
+      const rowsBeforeNoop = await loadTranscriptEvents(target);
+      expect(
+        rewriteTranscriptEntriesInSessionManager({
+          sessionManager: manager,
+          replacements: [{ entryId: unchanged.id, message: unchanged.message }],
+        }).changed,
+      ).toBe(false);
+      expect(await loadTranscriptEvents(target)).toEqual(rowsBeforeNoop);
+      manager.appendMessage({ role: "user", content: "next turn", timestamp: 5 });
+      expect(SessionManager.open(target).getBranch()).toHaveLength(expectedLength + 1);
+    },
+  );
+
   it.each(
     ["unkeyed", "keyed suffix", "keyed replacement"].flatMap((variant) =>
       [false, true].map((bounded) => ({ variant, bounded })),
@@ -816,9 +903,13 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps the complete active branch when suffix replay is interrupted (reset=%s)",
-    async (reset) => {
+  it.each([
+    { reset: false, finalLeaf: false },
+    { reset: true, finalLeaf: false },
+    { reset: true, finalLeaf: true },
+  ])(
+    "keeps the complete active branch when suffix replay is interrupted (reset=$reset, finalLeaf=$finalLeaf)",
+    async ({ reset, finalLeaf }) => {
       const dir = tempDirs.make("openclaw-transcript-rewrite-interrupted-");
       const storePath = path.join(dir, "sessions.json");
       const target = {
@@ -857,8 +948,11 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         agentId: target.agentId,
         path: resolveSessionTranscriptDatabasePath(target),
       });
+      const reject = finalLeaf
+        ? "json_extract(NEW.event_json, '$.type') = 'leaf'"
+        : "json_extract(NEW.event_json, '$.message.content[0].text') = 'replay interruption sentinel'";
       database.db.exec(`CREATE TRIGGER reject_interrupted_rewrite BEFORE INSERT ON transcript_events
-      WHEN json_extract(NEW.event_json, '$.message.content[0].text') = 'replay interruption sentinel'
+      WHEN ${reject}
       BEGIN SELECT RAISE(ABORT, 'suffix replay interrupted'); END;`);
 
       expect(() =>
@@ -876,6 +970,20 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       expect(getBranchMessages(sessionManager)).toEqual(originalMessages);
       expect(getBranchMessages(SessionManager.open(target, dir))).toEqual(originalMessages);
       expect(await loadTranscriptEvents(target)).toEqual(originalRows);
+      database.db.exec("DROP TRIGGER reject_interrupted_rewrite");
+      rewriteTranscriptEntriesInSessionManager({
+        sessionManager,
+        replacements: [
+          {
+            entryId: expectDefined(entryIds[1], "tool result entry id"),
+            message: createToolResultReplacement("exec", "rewritten after interruption", 2),
+          },
+        ],
+      });
+      const reopened = SessionManager.open(target, dir);
+      expect(getBranchMessages(reopened)).toHaveLength(originalMessages.length);
+      expect(getBranchMessages(reopened).at(-1)).toEqual(originalMessages.at(-1));
+      expect(reopened.getBranch()).toEqual(sessionManager.getBranch());
     },
   );
 });
