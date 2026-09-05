@@ -136,8 +136,6 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
     )?.identity,
   resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
     cfg.messages?.responsePrefix,
-  resolveMessagePrefix: (_cfg: unknown, _agentId: string, opts?: { configured?: string }) =>
-    opts?.configured,
   runEmbeddedAgent: vi.fn(),
 }));
 

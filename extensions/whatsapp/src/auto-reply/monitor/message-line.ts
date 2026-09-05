@@ -1,5 +1,4 @@
 // Whatsapp plugin module implements message line behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getPrimaryIdentityId,
   getReplyContext,
@@ -8,11 +7,7 @@ import {
 } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
-import {
-  formatInboundEnvelope,
-  resolveMessagePrefix,
-  type EnvelopeFormatOptions,
-} from "./message-line.runtime.js";
+import { formatInboundEnvelope, type EnvelopeFormatOptions } from "./message-line.runtime.js";
 
 function formatReplyTarget(replyTo: WhatsAppReplyContext | null) {
   if (!replyTo?.body) {
@@ -28,28 +23,20 @@ function formatReplyContext(msg: AdmittedWebInboundMessage) {
 }
 
 export function buildInboundLine(params: {
-  cfg: OpenClawConfig;
   msg: AdmittedWebInboundMessage;
-  agentId: string;
   previousTimestamp?: number;
   envelope?: EnvelopeFormatOptions;
   visibleReplyTo?: WhatsAppReplyContext | null;
 }) {
-  const { cfg, msg, agentId, previousTimestamp, envelope } = params;
-  // WhatsApp inbound prefix: channels.whatsapp.responsePrefix > identity/defaults.
-  const messagePrefix = resolveMessagePrefix(cfg, agentId, {
-    configured: cfg.channels?.whatsapp?.responsePrefix,
-    hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
-  });
+  const { msg, previousTimestamp, envelope } = params;
   const admission = requireWhatsAppInboundAdmission(msg);
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
-  const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
   const replyContext =
     params.visibleReplyTo === undefined
       ? formatReplyContext(msg)
       : formatReplyTarget(params.visibleReplyTo);
-  const baseLine = `${prefixStr}${msg.payload.body}${replyContext ? `\n\n${replyContext}` : ""}`;
+  const baseLine = `${msg.payload.body}${replyContext ? `\n\n${replyContext}` : ""}`;
   const sender = getSenderIdentity(msg);
 
   // Wrap with standardized envelope for the agent.

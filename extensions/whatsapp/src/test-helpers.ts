@@ -591,19 +591,6 @@ vi.mock("./auto-reply/monitor/group-activation.runtime.js", () => ({
 
 vi.mock("./auto-reply/monitor/message-line.runtime.js", () => ({
   formatInboundEnvelope: formatInboundEnvelopeMock,
-  resolveMessagePrefix: (
-    cfg: {
-      channels?: { whatsapp?: { messagePrefix?: string; allowFrom?: string[] } };
-    },
-    _agentId: string,
-    params?: { configured?: string; hasAllowFrom?: boolean },
-  ) => {
-    const configured = params?.configured ?? cfg.channels?.whatsapp?.messagePrefix;
-    if (configured !== undefined) {
-      return configured;
-    }
-    return params?.hasAllowFrom === true ? "" : "[openclaw]";
-  },
 }));
 
 vi.mock("./auth-store.runtime.js", () => ({
