@@ -671,14 +671,6 @@ extension GatewayConnection {
             distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
     }
 
-    func requestRaw(
-        method: String,
-        params: [String: AnyCodable]? = nil,
-        timeoutMs: Double? = nil) async throws -> Data
-    {
-        try await self.request(method: method, params: params, timeoutMs: timeoutMs)
-    }
-
     func requestDecoded<T: Decodable>(
         method: Method,
         params: [String: AnyCodable]? = nil,
@@ -1511,7 +1503,7 @@ extension GatewayConnection {
 
     func refreshMainSessionKey(timeoutMs: Double = 15000) async -> String {
         do {
-            let data = try await requestRaw(method: "config.get", params: nil, timeoutMs: timeoutMs)
+            let data = try await request(method: "config.get", params: nil, timeoutMs: timeoutMs)
             return try Self.mainSessionKey(fromConfigGetData: data)
         } catch {
             return "main"

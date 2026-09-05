@@ -64,7 +64,7 @@ struct MacGatewayChatTransportMappingTests {
             configProvider: { (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil) },
             sessionBox: WebSocketSessionBox(session: socketSession))
         do {
-            _ = try await gateway.requestRaw(method: "health")
+            _ = try await gateway.request(method: "health", params: nil)
             let transport = MacGatewayChatTransport(connection: gateway, defaultGlobalAgentID: "main")
             let ordinary = try await transport.fetchProgressCard(
                 sessionKey: "agent:research:global",
