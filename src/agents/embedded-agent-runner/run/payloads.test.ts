@@ -50,6 +50,23 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Scan complete. No new actionable inbox items.");
   });
 
+  it("does not parse replyToId from suppressed internal context when there is no current assistant snapshot", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        [
+          "Visible",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "[[reply_to:123]]",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+      ],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Visible");
+    expect(payloads[0]?.replyToId).toBeUndefined();
+  });
+
   it("preserves a completed literal GLM marker when there is no current assistant snapshot", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Use <tool_call>exec"],
