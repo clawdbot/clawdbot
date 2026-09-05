@@ -1,7 +1,5 @@
 // Exposes private secret file helpers with fs-safe defaults.
 import "./fs-safe-defaults.js";
-import { constants as fsConstants } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe";
 import {
@@ -13,6 +11,7 @@ import {
   type SecretFileReadOptions as FsSafeSecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";
 import { resolveUserPath } from "../utils.js";
+import { tightenPrivateDirChain } from "./private-dir-mode.js";
 
 export {
   DEFAULT_SECRET_FILE_MAX_BYTES,
@@ -27,49 +26,16 @@ type SecretFileWriteParams = Parameters<typeof writeSecretFileAtomicImpl>[0];
 
 // fs-safe 0.8 no longer repairs existing directory modes; OpenClaw keeps its
 // documented behavior of tightening its own secret directories before writing.
-// Every component is opened no-follow and chmodded through the pinned
-// descriptor, so a swapped or symlinked directory is never mutated — fs-safe
-// rejects those itself.
-async function tightenSecretDirectoryModes(params: {
+function tightenSecretDirectoryModes(params: {
   rootDir: string;
   filePath: string;
   dirMode?: number;
 }): Promise<void> {
-  if (process.platform === "win32") {
-    return;
-  }
-  const root = path.resolve(params.rootDir);
-  const parent = path.dirname(path.resolve(params.filePath));
-  const relative = path.relative(root, parent);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    return;
-  }
-  const targetMode = params.dirMode ?? PRIVATE_SECRET_DIR_MODE;
-  const chain: string[] = [root];
-  if (relative) {
-    let current = root;
-    for (const segment of relative.split(path.sep)) {
-      current = path.join(current, segment);
-      chain.push(current);
-    }
-  }
-  const openFlags = fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_DIRECTORY;
-  for (const dir of chain) {
-    let handle;
-    try {
-      handle = await fs.open(dir, openFlags);
-    } catch {
-      return; // Missing parents are created by fs-safe at dirMode; symlinked or non-directory components are rejected by it.
-    }
-    try {
-      const stat = await handle.stat();
-      if ((stat.mode & 0o777) !== targetMode) {
-        await handle.chmod(targetMode);
-      }
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
-  }
+  return tightenPrivateDirChain(
+    params.rootDir,
+    path.dirname(params.filePath),
+    params.dirMode ?? PRIVATE_SECRET_DIR_MODE,
+  );
 }
 
 export async function writePrivateSecretFileAtomic(params: SecretFileWriteParams): Promise<void> {
