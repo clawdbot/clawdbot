@@ -77,6 +77,11 @@ const FORCED_COPY_FAILURE_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.repla
   "        raise OSError(errno.ENOSPC, 'forced copy failure')\n        copy_completed = True",
 );
 
+const FIFO_READ_WATCHDOG_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "def read_file_impl(parent_fd, basename, max_bytes):",
+  "def read_file_impl(parent_fd, basename, max_bytes):\n    import signal\n    signal.alarm(1)",
+);
+
 const FORCED_CREATE_FAILURE_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
   "        # exclusive create payload is durable before publication",
   "        raise OSError(errno.ENOSPC, 'forced create failure')\n        # exclusive create payload is durable before publication",
@@ -545,16 +550,12 @@ describe("sandbox pinned mutation helper", () => {
       await fs.mkdir(workspace, { recursive: true });
       expect(spawnSync("mkfifo", [fifoPath]).status).toBe(0);
 
-      const result = spawnSync(
-        "python3",
-        ["-c", SANDBOX_PINNED_MUTATION_PYTHON, "read", workspace, "", "live.pipe"],
-        {
-          encoding: "utf8",
-          stdio: ["pipe", "pipe", "pipe"],
-          timeout: 1_000,
-          killSignal: "SIGKILL",
-        },
-      );
+      const result = runMutationWithSource(FIFO_READ_WATCHDOG_MUTATION_PYTHON, [
+        "read",
+        workspace,
+        "",
+        "live.pipe",
+      ]);
 
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
