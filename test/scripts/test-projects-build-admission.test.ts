@@ -80,7 +80,7 @@ afterEach(() => {
 
 describe("CLI runtime admission", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
-  posixIt.each([
+  posixIt.each<[name: string, args: string[]]>([
     ["ordinary target", [ordinaryQa]],
     [
       "ordinary CLI selection",
@@ -91,7 +91,7 @@ describe("CLI runtime admission", () => {
         ["cli", "src/cli"],
         ["cli-process", ""],
       ] as const
-    ).map(([project, dir]) => {
+    ).map(([project, dir]): [string, string[]] => {
       const config = `test/vitest/vitest.${project}.config.ts`;
       return [
         `${project} runtime exclusions`,
