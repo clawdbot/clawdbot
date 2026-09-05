@@ -25,7 +25,7 @@ struct GatewayConnectionMediaAuthorityTests {
         let transport = GatewayTLSPinningSession(params: Self.tlsParams(tls))
         defer { transport.finishTasksAndInvalidate() }
         let gate = GatewayConnectionSuspensionGate()
-        let request = URLRequest(url: server.url("/cancelled"))
+        let request = URLRequest(url: Self.mediaURL(server, "/cancelled"))
         let pending = Task {
             if !afterAdmission { await gate.suspend() }
             return try await transport.data(for: request, maximumBytes: 5) {
@@ -44,7 +44,9 @@ struct GatewayConnectionMediaAuthorityTests {
         } catch {
             #expect(error is CancellationError || (error as? URLError)?.code == .cancelled)
         }
-        let (bytes, _) = try await transport.data(for: URLRequest(url: server.url("/control")), maximumBytes: 5)
+        let (bytes, _) = try await transport.data(
+            for: URLRequest(url: Self.mediaURL(server, "/control")),
+            maximumBytes: 5)
         #expect(bytes == Data("image".utf8))
         #expect(requests.count == 1)
         #expect(requests.first?.hasPrefix("GET /control ") == true)
@@ -64,23 +66,26 @@ struct GatewayConnectionMediaAuthorityTests {
         let server = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity, requestHandler: { request in
             requests.append(request)
             return scenario == "redirect"
-                ? "HTTP/1.1 302 Found\r\nLocation: \(other.url(Self.ticket))\r\nContent-Length: 0\r\n\r\n"
+                ? "HTTP/1.1 302 Found\r\nLocation: \(Self.mediaURL(other, Self.ticket))\r\nContent-Length: 0\r\n\r\n"
                 : Self.imageResponse.replacingOccurrences(
                     of: "Connection: close",
                     with: "Set-Cookie: \(cookieName)-response=other-account; Secure; Path=/\r\nConnection: close")
         })
         defer { server.stop() }
         let ambient = try #require(HTTPCookie(properties: [
-            .name: cookieName, .value: "ambient-account", .originURL: server.url(), .path: "/", .secure: "TRUE",
+            .name: cookieName, .value: "ambient-account", .originURL: Self.mediaURL(server), .path: "/",
+            .secure: "TRUE",
         ]))
         HTTPCookieStorage.shared.setCookie(ambient)
+        #expect(HTTPCookieStorage.shared.cookies(for: Self.mediaURL(server))?
+            .contains { $0.name == cookieName } == true)
         defer {
             for cookie in HTTPCookieStorage.shared.cookies ?? [] where cookie.name.hasPrefix(cookieName) {
                 HTTPCookieStorage.shared.deleteCookie(cookie)
             }
         }
         let browser = try gatewayBrowserSessionFixture(
-            origin: (scenario == "wrong-origin" ? other.url() : server.url()).absoluteString,
+            origin: Self.mediaURL(scenario == "wrong-origin" ? other : server).absoluteString,
             expiresAt: scenario == "expired" ? Date(timeIntervalSince1970: 1) : Date().addingTimeInterval(300))
         let source = GatewayConnectionEndpointSource(endpoint: Self.endpoint(server, tls: tls, browser: browser))
         let connection = Self.connection(source)
@@ -135,7 +140,7 @@ struct GatewayConnectionMediaAuthorityTests {
             })
         defer { server.stop() }
         let browser = try gatewayBrowserSessionFixture(
-            origin: server.url().absoluteString,
+            origin: Self.mediaURL(server).absoluteString,
             expiresAt: Date().addingTimeInterval(retirement == "expiry" ? 3 : 300))
         let source = GatewayConnectionEndpointSource(endpoint: Self.endpoint(
             server, tls: tls, browser: retirement == "manual-upgrade" ? nil : browser))
@@ -150,7 +155,7 @@ struct GatewayConnectionMediaAuthorityTests {
                 operation: { await gate.waitUntilStarted() })
             if retirement != "expiry" {
                 let successor = try gatewayBrowserSessionFixture(
-                    origin: server.url().absoluteString, token: "successor-browser-session")
+                    origin: Self.mediaURL(server).absoluteString, token: "successor-browser-session")
                 source.setEndpoint(Self.endpoint(server, tls: tls, browser: successor))
                 _ = try await connection.request(method: "health", params: nil)
             }
@@ -194,12 +199,20 @@ struct GatewayConnectionMediaAuthorityTests {
         browser: GatewayBrowserSession?) -> GatewayConnection.EndpointSnapshot
     {
         .init(
-            config: (server.websocketURL(), browser == nil ? "synthetic-owner" : nil, nil),
+            config: (self.mediaURL(server, websocket: true), browser == nil ? "synthetic-owner" : nil, nil),
             tls: GatewayTLSRoute(
                 params: self.tlsParams(tls),
                 allowsTrustedPinReplacement: false),
             routeAuthority: nil,
             browserSession: browser)
+    }
+
+    private static func mediaURL(
+        _ server: DashboardHTTPFixture, _ path: String = "/", websocket: Bool = false) -> URL
+    {
+        // macOS 14+ applies ATS to IP literals, preventing fixture pin overrides.
+        // The unqualified local hostname retains exact pinning; the listener stays on loopback.
+        URL(string: "\(websocket ? "wss" : "https")://localhost:\(server.port)\(path)")!
     }
 
     private static func connection(_ source: GatewayConnectionEndpointSource) -> GatewayConnection {
