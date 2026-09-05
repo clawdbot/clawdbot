@@ -1097,6 +1097,47 @@ describe("Tool Search", () => {
     expect(directory.length).toBeLessThanOrEqual(testing.maxToolSchemaDirectoryPromptChars);
   });
 
+  it.each(["tools", "directory"] as const)(
+    "lists only deferred tools while keeping direct tools searchable in %s mode",
+    async (mode) => {
+      const catalogRef = createToolSearchCatalogRef();
+      const config = { tools: { toolSearch: { enabled: true, mode } } };
+      const read = fakeTool("read", "Read a workspace file");
+      const status = fakeTool("session_status", "Inspect the current session");
+      const tools = [...createToolSearchTools({ config, catalogRef }), read, status];
+      const apply = mode === "directory" ? applyToolSchemaDirectoryCatalog : applyToolSearchCatalog;
+      const ctx = { config, catalogRef };
+      const first = apply({ ...ctx, tools });
+      expect(first.tools).toContain(read);
+      expect(first.tools).not.toContain(status);
+      expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("- read (core)");
+      expect(buildToolSchemaDirectoryPrompt(ctx)).toContain("- session_status (core)");
+      const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig(config));
+      expect(await runtime.search("read", { limit: 1 })).toEqual([
+        expect.objectContaining({ name: "read" }),
+      ]);
+      expect(await runtime.call("openclaw:core:read", { value: "file.txt" })).toEqual(
+        expect.objectContaining({
+          result: expect.objectContaining({
+            details: { name: "read", input: { value: "file.txt" } },
+          }),
+        }),
+      );
+
+      // Same tools, different native surface: a cached deferred row must disappear.
+      const direct = apply({ ...ctx, tools, directToolNames: ["session_status"] });
+      expect(direct.tools).toContain(status);
+      expect(buildToolSchemaDirectoryPrompt(ctx)).toBe("Available deferred-schema tools: none.");
+      apply({ ...ctx, tools });
+      expect(buildToolSchemaDirectoryPrompt(ctx)).toContain("- session_status (core)");
+
+      const lookalike = pluginTool("read", "Unrelated plugin reader");
+      apply({ ...ctx, tools: [...tools, lookalike] });
+      expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("- read (");
+      expect(await runtime.search("read", { limit: 5 })).toHaveLength(2);
+    },
+  );
+
   it("keeps the capability directory byte-stable across catalog insertion orders", () => {
     const config = { tools: { toolSearch: true } } as never;
     const buildDirectory = (reverse: boolean) => {
@@ -2824,7 +2865,7 @@ describe("Tool Search", () => {
 
   it.each(["code", "tools", "directory"] as const)(
     "bounds the %s capability directory and keeps omitted tools searchable",
-    (mode) => {
+    async (mode) => {
       const catalogRef = createToolSearchCatalogRef();
       const config = { tools: { toolSearch: { enabled: true, mode } } } as never;
       const catalogTools = Array.from({ length: 200 }, (_, index) =>
@@ -2846,9 +2887,12 @@ describe("Tool Search", () => {
         applyToolSearchCatalog({ tools, config, catalogRef });
       }
 
-      const directory = buildToolSchemaDirectoryPrompt({ config, catalogRef });
+      const directory = buildToolSchemaDirectoryPrompt(
+        { config, catalogRef },
+        { contextTokenBudget: 32_768 },
+      );
 
-      expect(directory.length).toBeLessThanOrEqual(testing.maxToolSchemaDirectoryPromptChars);
+      expect(directory.length).toBeLessThanOrEqual(3_276);
       expect(directory).toContain("- fake_directory_tool_000");
       expect(directory).not.toContain("- fake_directory_tool_199");
       expect(directory).toContain("additional tools omitted");
@@ -2868,6 +2912,13 @@ describe("Tool Search", () => {
         expect(directory).not.toContain("Call tool_call");
         expect(directory).not.toContain("Call a unique deferred tool name directly");
       }
+      const runtime = new ToolSearchRuntime(
+        { config, catalogRef },
+        resolveToolSearchConfig(config),
+      );
+      expect(await runtime.search("fake_directory_tool_199", { limit: 1 })).toEqual([
+        expect.objectContaining({ name: "fake_directory_tool_199" }),
+      ]);
     },
   );
 
@@ -2876,7 +2927,7 @@ describe("Tool Search", () => {
     { mode: "tools" as const, descriptionChars: 144, longerDescriptions: 10 },
     { mode: "directory" as const, descriptionChars: 145, longerDescriptions: 25 },
   ])(
-    "keeps the exact capability directory boundary in $mode mode",
+    "shortens descriptions only beyond the exact directory boundary in $mode mode",
     ({ mode, descriptionChars, longerDescriptions }) => {
       const render = (overflow: boolean) => {
         const catalogRef = createToolSearchCatalogRef();
@@ -2910,8 +2961,9 @@ describe("Tool Search", () => {
       const overflow = render(true);
       expect(overflow.length).toBeLessThanOrEqual(18_000);
       expect(overflow).toContain("- boundary_098 (fake-catalog):");
-      expect(overflow).not.toContain("- boundary_099");
-      expect(overflow).toContain("1 additional tools omitted.");
+      expect(overflow).toContain("- boundary_099 (fake-catalog):");
+      expect(overflow).not.toContain("additional tools omitted");
+      expect(overflow).toContain(`${"x".repeat(61)}...`);
     },
   );
 
@@ -3709,6 +3761,44 @@ describe("Tool Search", () => {
       ),
     ).rejects.toThrow("Did you mean: openclaw:first-plugin:write, openclaw:second-plugin:write?");
   });
+
+  it.each(["call", "callExactId", "describe"] as const)(
+    "redirects mistaken skill IDs to admitted instructions during %s",
+    async (operation) => {
+      const catalogRef = createToolSearchCatalogRef();
+      registerHeadlessToolSearchCatalog({ catalogRef, tools: [fakeTool("read", "Read a file")] });
+      const reader = vi.fn();
+      const codeModeSkills = [
+        {
+          name: "ledger-audit",
+          description: "Audit the ledger",
+          location: "/workspace/skills/ledger-audit/SKILL.md",
+          source: { filePath: "/private-host/skills/ledger-audit/SKILL.md" },
+          reader,
+        },
+      ];
+      const runtime = new ToolSearchRuntime(
+        { catalogRef, codeModeSkills },
+        resolveToolSearchConfig(),
+      );
+      await expect(runtime[operation]("ledger-audit")).rejects.toThrow(
+        'Load its complete instructions from "/workspace/skills/ledger-audit/SKILL.md"',
+      );
+      expect(reader).not.toHaveBeenCalled();
+      const withoutSkill = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig());
+      await expect(withoutSkill[operation]("ledger-audit")).rejects.toThrow("Unknown tool id");
+      registerHeadlessToolSearchCatalog({ catalogRef, tools: [fakeTool("exec", "Run a command")] });
+      await expect(runtime[operation]("ledger-audit")).rejects.toThrow("Unknown tool id");
+      registerHeadlessToolSearchCatalog({
+        catalogRef,
+        tools: [fakeTool("ledger-audit", "Real tool")],
+      });
+      expect(await runtime.call("ledger-audit", {})).toHaveProperty(
+        "result.details.name",
+        "ledger-audit",
+      );
+    },
+  );
 
   it("keeps raw Tool Search recovery guidance when no suggestion matches", async () => {
     const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
@@ -4529,3 +4619,90 @@ describe("Tool Search", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+function createCatalog(count = 40) {
+  const config = { tools: { toolSearch: { enabled: true, mode: "tools" as const } } };
+  const entries = Array.from({ length: count }, (_, index) => {
+    const name = `capability_${String(index).padStart(2, "0")}`;
+    const tool = {
+      name,
+      label: name,
+      description: `Inspect the archive for ${name}. ${"Preserve complete source records. ".repeat(6)}`,
+      parameters: Type.Object({ target: Type.String(), limit: Type.Optional(Type.Integer()) }),
+      execute: vi.fn(async () => jsonResult({ completed: true })),
+    };
+    return {
+      id: `openclaw:archive:${name}`,
+      name,
+      description: tool.description,
+      source: "openclaw" as const,
+      sourceName: "archive",
+      parameters: tool.parameters,
+      tool,
+    };
+  });
+  const catalogRef: ToolSearchCatalogRef = {
+    current: {
+      entries,
+      counterScope: "budget-test",
+      searchCount: 0,
+      describeCount: 0,
+      callCount: 0,
+    },
+  };
+  return { config, catalogRef, entries };
+}
+
+describe("context-sized tool discovery", () => {
+  it("shortens descriptions before names and keeps the complete executable catalog", async () => {
+    const ctx = createCatalog();
+    const full = buildToolSchemaDirectoryPrompt(ctx);
+    const small = buildToolSchemaDirectoryPrompt(ctx, { contextTokenBudget: 32_768 });
+    expect(small.length).toBeLessThanOrEqual(3_276);
+    expect(small.length).toBeLessThan(full.length / 2);
+    for (const entry of ctx.entries) {
+      expect(small).toContain(entry.name);
+    }
+    expect(buildToolSchemaDirectoryPrompt(ctx)).toBe(full);
+    expect(buildToolSchemaDirectoryPrompt(ctx, { contextTokenBudget: 32_768 })).toBe(small);
+    const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig(ctx.config));
+    const last = expectDefined(ctx.entries.at(-1), "last catalog entry");
+    expect(await runtime.search(last.name, { limit: 1 })).toEqual([
+      expect.objectContaining({ id: last.id }),
+    ]);
+    await runtime.call(last.id, { target: "archive" });
+    expect(last.tool.execute).toHaveBeenCalledOnce();
+  });
+
+  it("does not reuse directory text across changing authorization filters", () => {
+    const ctx = createCatalog(2);
+    const firstEntry = expectDefined(ctx.entries[0], "first catalog entry");
+    const secondEntry = expectDefined(ctx.entries[1], "second catalog entry");
+    const first = new Set([firstEntry.id]);
+    const second = new Set([secondEntry.id]);
+    const firstPrompt = buildToolSchemaDirectoryPrompt(ctx, { allowedIds: first });
+    const secondPrompt = buildToolSchemaDirectoryPrompt(ctx, { allowedIds: second });
+    expect(firstPrompt).toContain(firstEntry.name);
+    expect(firstPrompt).not.toContain(secondEntry.name);
+    expect(secondPrompt).toContain(secondEntry.name);
+    expect(secondPrompt).not.toContain(firstEntry.name);
+    first.clear();
+    expect(buildToolSchemaDirectoryPrompt(ctx, { allowedIds: first })).not.toContain(
+      firstEntry.name,
+    );
+  });
+
+  it("returns the expected input shape with a validation error before executing", async () => {
+    const ctx = createCatalog(1);
+    const entry = expectDefined(ctx.entries[0], "catalog entry");
+    const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig(ctx.config), {
+      validateInput: true,
+    });
+    await expect(runtime.call(entry.id, { limit: 2 })).rejects.toThrow(
+      "Expected input: { target: string; limit?: number /* integer */ }",
+    );
+    expect(entry.tool.execute).not.toHaveBeenCalled();
+    await runtime.call(entry.id, { target: "archive", limit: 2 });
+    expect(entry.tool.execute).toHaveBeenCalledOnce();
+  });
+});

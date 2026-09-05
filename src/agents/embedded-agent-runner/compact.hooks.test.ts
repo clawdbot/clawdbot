@@ -17,6 +17,7 @@ import {
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import {
   requireActivePluginRegistry,
   withPluginRegistrationContext,
@@ -24,6 +25,7 @@ import {
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { getRegisteredAgentHarness, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
+import { getModelProviderLocalServiceReconciler } from "../provider-local-service-reconcile.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -1575,6 +1577,16 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       sessionPermissionPolicy: { mode: "workspace", root: canonicalWorkspace },
     });
     expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: "auto" }));
+  });
+
+  it("retains a host-required file boundary while rebuilding compaction tools", async () => {
+    await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+        requireWorkspaceOnly: true,
+      }),
+    );
+    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), { requireWorkspaceOnly: true });
   });
 
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
@@ -3309,6 +3321,31 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       api: "ollama",
       id: "qwen3:8b",
     });
+  });
+
+  it("carries the prepared provider reconciler into direct compaction", async () => {
+    mockResolvedModel();
+    const reconcile = vi.fn(async () => undefined);
+    const { resolvePreparedProviderRuntimeHandle } = await import("../runtime-plan/build.js");
+    vi.mocked(resolvePreparedProviderRuntimeHandle).mockImplementationOnce((params) => ({
+      provider: params.provider,
+      modelId: params.modelId,
+      workspaceDir: params.workspaceDir,
+      prepared: true,
+      plugin: { id: params.provider, label: "Fixture", auth: [], reconcileLocalService: reconcile },
+    }));
+
+    await expect(compactEmbeddedAgentSessionDirect(wrappedCompactionArgs())).resolves.toMatchObject(
+      { ok: true },
+    );
+
+    const streamRegistration = mockCallArg(registerProviderStreamForModelMock) as {
+      model: object;
+    };
+    expect(getModelProviderLocalServiceReconciler(streamRegistration.model)).toBe(reconcile);
+    expect(getModelProviderRuntimePluginHandle(streamRegistration.model)).toBe(
+      buildAgentRuntimePlanMock.mock.calls[0]?.[0].providerRuntimeHandle,
+    );
   });
 
   it("aborts in-flight compaction when the caller abort signal fires", async () => {

@@ -448,7 +448,7 @@ See [Configuration reference](/gateway/configuration-reference) and
   Block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection). Per-agent override: `agents.entries.*.subagents.requireAgentId`.
 </ParamField>
 <ParamField path="agents.defaults.subagents.announceTimeoutMs" type="number" default="120000">
-  Timeout for gateway `agent` announce delivery attempts. Once a handoff is accepted, waiting for the parent session's turn does not consume this budget; the timer starts again when execution begins. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Queue waits and transient retries can make total delivery time longer than one configured timeout.
+  Timeout for gateway `agent` announcement handoff attempts. Once a handoff is accepted, waiting for the parent session's turn does not consume this budget. After execution starts, the requester's normal [runtime timeout and cancellation controls](/concepts/agent-loop#timeouts) apply; the announcement timer does not restart. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Queue waits, requester execution, and transient retries can make total delivery time longer than one configured timeout.
 </ParamField>
 
 If the requester session is sandboxed, `sessions_spawn` rejects targets
@@ -640,9 +640,9 @@ Sub-agents use the same profile and tool-policy pipeline as the parent or
 target agent first. After that, OpenClaw applies the sub-agent restriction
 layer.
 
-Sub-agents always lose `gateway`, `agents_list`, `session_status`, `cron`,
+Sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
 `message`, `sessions_send`, and the `conversations_*` tools regardless of
-depth or role (system-level/interactive tools, direct delivery surfaces, or
+depth or role (system-level/interactive tools, parent-owned progress cards, direct delivery surfaces, or
 tools the main agent should coordinate). This hard-deny layer is derived from
 the persisted sub-agent session envelope on every turn, including resumed and
 visible dashboard sessions; ordinary `allow`/`alsoAllow` entries cannot override

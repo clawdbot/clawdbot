@@ -28,7 +28,7 @@ scenario:
       tuiPtyCases:
         - coverageId: tui.streaming-message-rendering
           testFile: src/tui/tui-pty-harness.e2e.test.ts
-          testNamePattern: ^TUI PTY harness authenticates a streamed prefix before the complete ordered final frame$
+          testNamePattern: ^TUI PTY harness > authenticates a streamed prefix before the complete ordered final frame$
         - coverageId: tui.tool-cards
           testFile: src/tui/tui-pty-harness.e2e.test.ts
-          testNamePattern: ^TUI PTY harness authenticates running partial and completed tool cards in real terminal frames$
+          testNamePattern: ^TUI PTY harness > authenticates running partial and completed tool cards in real terminal frames$

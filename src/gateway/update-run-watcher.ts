@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { findActiveUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
 import type { UpdateRunPhase } from "../infra/update-run-record.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { GATEWAY_EVENT_UPDATE_RUN_CHANGED } from "./events.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 
@@ -13,12 +14,12 @@ export function wakeUpdateRunWatcher(): void {
   wakeCurrentWatcher?.();
 }
 
-/** The update-check lifecycle owns polling and fences it before Gateway teardown. */
+/** The update-check lifecycle joins notices and their transport tails before Gateway teardown. */
 export function startUpdateRunWatcher(params: {
   broadcast: GatewayBroadcastFn;
   log: { warn: (message: string) => void };
-}): { stop: () => void } {
-  let stopped = false;
+}): { stop: () => Promise<void> } {
+  const work = new AsyncWorkScope();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let watched:
     | { runId: string; startedAtMs: number; revision?: number; phase?: UpdateRunPhase }
@@ -26,7 +27,7 @@ export function startUpdateRunWatcher(params: {
   let notices = Promise.resolve();
 
   const poll = () => {
-    if (stopped) {
+    if (work.isClosing) {
       return;
     }
     timer = undefined;
@@ -56,19 +57,21 @@ export function startUpdateRunWatcher(params: {
           (step) => step.step === "notice:ack" && step.status === "completed",
         );
         if (run.phase === "activating" || (terminal && acknowledged)) {
-          notices = notices
-            .then(async () => {
-              if (stopped) {
-                return;
-              }
-              const { notifyUpdateRunPhase } = await import("./update-run-notice.runtime.js");
-              if (!stopped) {
-                await notifyUpdateRunPhase(run);
-              }
-            })
-            .catch((error: unknown) => {
-              params.log.warn(`update run notice failed: ${formatErrorMessage(error)}`);
-            });
+          notices = work.track(() =>
+            notices
+              .then(async () => {
+                if (work.isClosing) {
+                  return;
+                }
+                const { notifyUpdateRunPhase } = await import("./update-run-notice.runtime.js");
+                if (!work.isClosing) {
+                  await notifyUpdateRunPhase(run);
+                }
+              })
+              .catch((error: unknown) => {
+                params.log.warn(`update run notice failed: ${formatErrorMessage(error)}`);
+              }),
+          );
         }
       }
       if (terminal || expired) {
@@ -96,7 +99,6 @@ export function startUpdateRunWatcher(params: {
   wake();
   return {
     stop: () => {
-      stopped = true;
       if (timer) {
         clearTimeout(timer);
         timer = undefined;
@@ -104,6 +106,7 @@ export function startUpdateRunWatcher(params: {
       if (wakeCurrentWatcher === wake) {
         wakeCurrentWatcher = undefined;
       }
+      return work.drain();
     },
   };
 }

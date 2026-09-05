@@ -10,7 +10,6 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
-import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -111,7 +110,7 @@ export async function buildMessagePayload(params: {
     typeof rawLocation === "string" && normalizeOptionalString(rawLocation) === undefined
       ? undefined
       : normalizeOutboundLocation(rawLocation);
-  const caption = readToolStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
+  const caption = readToolStringParam(actionParams, "caption", { trim: false }) ?? "";
   const voiceText = readToolStringParam(actionParams, "voiceText");
   const voiceProvider = readToolStringParam(actionParams, "voiceProvider");
   const voiceId = readToolStringParam(actionParams, "voiceId");
@@ -119,12 +118,13 @@ export async function buildMessagePayload(params: {
     readToolStringParam(actionParams, "message", {
       required: !hasMediaHint && !hasPresentation && !hasInteractive && !location && !voiceText,
       allowEmpty: true,
+      trim: false,
     }) ?? "";
   if (message.includes("\\n")) {
     message = message.replaceAll("\\n", "\n");
   }
-  if (!message.trim() && caption.trim()) {
-    message = caption;
+  if (!message.trim()) {
+    message = caption.trim() ? caption : "";
   }
 
   const parsed = parseInlineDirectives(message, {
@@ -529,18 +529,9 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   // outbound adapter; credentials and account selection may exist only remotely.
   const gatewayPluginAction = requiresCoreDelivery
     ? null
-    : await executeGatewayAction({
-        cfg,
-        params,
-        channel,
-        channelPlugin,
+    : await executeGatewayAction(ctx, {
         action,
         reply,
-        accountId,
-        dryRun,
-        gateway,
-        input,
-        agentId,
         result: (payload) => ({
           kind: "send",
           channel,
@@ -555,15 +546,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     await commitOutboundSessionRoute();
     return annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
-      {
-        cfg,
-        actionParams: params,
-        channel,
-        accountId,
-        input,
-        agentId,
-        replyToIsExplicit: reply?.source === "explicit",
-      },
+      ctx,
+      reply?.source === "explicit",
     );
   }
 
@@ -585,54 +569,14 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
 
   const send = await executeSendAction({
     ctx: {
-      cfg,
-      channel,
-      plugin: channelPlugin,
-      params,
-      idempotencyKey: ctx.idempotencyKey,
-      agentId,
-      sessionKey: input.sessionKey,
-      requesterAccountId: input.requesterAccountId ?? undefined,
-      requesterSenderId: input.requesterSenderId ?? undefined,
-      requesterSenderName: input.requesterSenderName ?? undefined,
-      requesterSenderUsername: input.requesterSenderUsername ?? undefined,
-      requesterSenderE164: input.requesterSenderE164 ?? undefined,
-      senderIsOwner: input.senderIsOwner,
-      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
-        input.conversationReadOrigin,
-      ),
+      ...ctx,
       mediaAccess,
-      accountId: accountId ?? undefined,
       conversationType: outboundRoute?.chatType,
-      sessionId: input.sessionId,
-      runId: input.runId,
-      executionIdentityToken: input.executionIdentityToken,
-      inboundEventKind: input.inboundEventKind,
-      gateway,
-      toolContext: input.toolContext,
-      deps: input.deps,
-      dryRun,
-      preparedMessageId: input.preparedMessageId,
-      gatewayOwnedDelivery: input.gatewayOwnedDelivery,
-      forceCoreDelivery: requiresCoreDelivery,
-      requireQueuePersistence: input.requireQueuePersistence,
-      deliveryIntentId: input.deliveryIntentId,
-      deliveryCompletion: input.deliveryCompletion,
       // Model-authored sends get the failure back and resend it themselves; every
       // other caller only reports the error, so recovery keeps its replay right.
       deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
-      onDeliveryIntent: input.onDeliveryIntent,
-      onPlatformSendDispatch: input.onPlatformSendDispatch,
-      skipQueue: input.skipQueue,
-      onDeliveryAttempt: input.onDeliveryAttempt,
-      // Identified platform evidence is the first success proof on the core
-      // path; commit the route here so the transcript mirror (which runs later
-      // in the same delivery) can resolve a just-created session entry.
-      onDeliveryResult: async (result) => {
-        await commitOutboundSessionRoute();
-        await input.onDeliveryResult?.(result);
-      },
-      onPluginSendAccepted: commitOutboundSessionRoute,
+      // Both delivery paths must commit a first-contact route before mirroring.
+      onSendAccepted: commitOutboundSessionRoute,
       mirror:
         !dryRun && input.transcriptMirror
           ? {
@@ -649,7 +593,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
                 idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
               }
             : undefined,
-      abortSignal,
       silent: sendPayload.silent ?? undefined,
     },
     to,
@@ -688,13 +631,9 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     sendResult: send.sendResult,
     dryRun,
   };
-  return annotateSourceDelivery(withSendNormalization(result, sendPayload.normalization), {
-    cfg,
-    actionParams: params,
-    channel,
-    accountId,
-    input,
-    agentId,
-    replyToIsExplicit: reply?.source === "explicit",
-  });
+  return annotateSourceDelivery(
+    withSendNormalization(result, sendPayload.normalization),
+    ctx,
+    reply?.source === "explicit",
+  );
 }

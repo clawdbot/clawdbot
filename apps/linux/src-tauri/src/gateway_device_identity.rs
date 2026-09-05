@@ -264,17 +264,7 @@ fn build_device_auth_payload(fields: DeviceAuthPayloadFields<'_>) -> String {
 }
 
 fn normalize_metadata(value: &str) -> String {
-    value
-        .trim()
-        .chars()
-        .map(|character| {
-            if character.is_ascii_uppercase() {
-                character.to_ascii_lowercase()
-            } else {
-                character
-            }
-        })
-        .collect()
+    value.trim().to_ascii_lowercase()
 }
 
 fn non_empty_trimmed(value: Option<&str>) -> Option<&str> {

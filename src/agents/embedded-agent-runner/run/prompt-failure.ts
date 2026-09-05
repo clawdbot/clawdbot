@@ -5,11 +5,10 @@ import {
   buildAgentRunTerminalOutcomeFromAttempt,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
-import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
+import type { AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyFailoverReason,
   type FailoverReason,
-  isFailoverErrorMessage,
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../../embedded-agent-helpers.js";
@@ -20,17 +19,17 @@ import {
   isCliTerminalStopCode,
   resolveFailoverStatus,
 } from "../../failover-error.js";
-import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import { classifyRateLimitWindow, resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,
 } from "../../session-suspension.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
-import { isShortWindowRateLimitMessage } from "./assistant-failover.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
+import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -69,26 +68,15 @@ export async function handleEmbeddedPromptFailure(input: {
   externalAbort: boolean;
   pluginHarnessOwnsTransport: boolean;
   timedOutByRunBudget: boolean;
-  resolveAuthProfileFailureReason: (
-    reason: FailoverReason | null,
-    options?: { providerStarted?: boolean; transientRateLimit?: boolean },
-  ) => AuthProfileFailureReason | null;
-  advanceAuthProfile: () => Promise<boolean>;
-  advanceRateLimitAuthProfile: (context: {
-    failoverProvider: string;
-    failoverModel: string;
-    logFallbackDecision: ReturnType<typeof createFailoverDecisionLogger>;
-  }) => Promise<boolean>;
-  maybeMarkAuthProfileFailure: (failure: {
-    profileId?: string;
-    reason?: AuthProfileFailureReason | null;
-    modelId?: string;
-  }) => Promise<void>;
-  maybeRetryTransient: (retry: {
-    reason: FailoverReason;
-    retryAfterMs?: number;
-  }) => Promise<boolean>;
-  getTransientRetryCount: () => number;
+  failover: Pick<
+    EmbeddedRunFailoverRetryController,
+    | "resolveAuthProfileFailureReason"
+    | "advanceAuthProfile"
+    | "advanceRateLimitAuthProfile"
+    | "maybeMarkAuthProfileFailure"
+    | "maybeRetryTransient"
+    | "transientRetryCount"
+  >;
   attemptedThinking: Set<ThinkLevel>;
   thinkLevel: ThinkLevel;
   // Profile rotation resets thinking inside the runtime; read it after advancing.
@@ -131,9 +119,7 @@ export async function handleEmbeddedPromptFailure(input: {
         : undefined,
   };
   const normalizedPromptFailover = coerceToFailoverError(input.promptError, failoverContext);
-  const promptErrorDetails = normalizedPromptFailover
-    ? describeFailoverError(normalizedPromptFailover)
-    : describeFailoverError(input.promptError);
+  const promptErrorDetails = describeFailoverError(normalizedPromptFailover ?? input.promptError);
   if (normalizedPromptFailover?.suspend) {
     input.suspendForFailure({
       cfg: input.runParams.config,
@@ -170,14 +156,15 @@ export async function handleEmbeddedPromptFailure(input: {
 
   const promptFailoverReason =
     promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider: input.provider });
-  const promptProfileFailureReason = input.resolveAuthProfileFailureReason(promptFailoverReason, {
-    providerStarted: input.promptErrorSource === "prompt",
-    transientRateLimit:
-      promptFailoverReason === "rate_limit" && isShortWindowRateLimitMessage(errorText),
-  });
-  const promptFailoverFailure =
-    promptFailoverReason !== null ||
-    isFailoverErrorMessage(errorText, { provider: input.provider });
+  const promptProfileFailureReason = input.failover.resolveAuthProfileFailureReason(
+    promptFailoverReason,
+    {
+      providerStarted: input.promptErrorSource === "prompt",
+      transientRateLimit:
+        promptFailoverReason === "rate_limit" &&
+        classifyRateLimitWindow(errorText).kind === "short",
+    },
+  );
   const promptTimeoutFallbackSafe =
     input.promptErrorSource === "prompt" &&
     promptFailoverReason === "timeout" &&
@@ -198,39 +185,37 @@ export async function handleEmbeddedPromptFailure(input: {
     profileId: failedProfileId,
     fallbackConfigured: input.fallbackConfigured,
     aborted: input.aborted,
-    retryCount: input.getTransientRetryCount(),
+    retryCount: input.failover.transientRetryCount,
     attemptCount: input.traceAttempts.length + 1,
   });
-  let failoverDecision = resolveRunFailoverDecision({
-    stage: "prompt",
-    aborted: input.aborted,
-    externalAbort: input.externalAbort,
-    fallbackConfigured: input.fallbackConfigured,
-    failoverCode: promptErrorDetails.code,
-    failoverFailure: promptFailoverFailure,
-    failoverReason: promptFailoverReason,
-    harnessOwnsTransport: input.pluginHarnessOwnsTransport,
-    promptTimeoutFallbackSafe,
-    timedOutByRunBudget: input.timedOutByRunBudget,
-    profileRotated: false,
-  });
+  const resolveDecision = (profileRotated: boolean) =>
+    resolveRunFailoverDecision({
+      stage: "prompt",
+      externalAbort: input.externalAbort,
+      fallbackConfigured: input.fallbackConfigured,
+      failoverCode: promptErrorDetails.code,
+      failoverFailure: promptFailoverReason !== null,
+      failoverReason: promptFailoverReason,
+      harnessOwnsTransport: input.pluginHarnessOwnsTransport,
+      promptTimeoutFallbackSafe,
+      timedOutByRunBudget: input.timedOutByRunBudget,
+      profileRotated,
+    });
+  let failoverDecision = resolveDecision(false);
   const canRetryRateLimit =
-    promptFailoverReason !== "rate_limit" || isShortWindowRateLimitMessage(errorText);
+    promptFailoverReason !== "rate_limit" || classifyRateLimitWindow(errorText).kind === "short";
   if (
     !recordedTerminalStop &&
     !input.externalAbort &&
     canRetryRateLimit &&
     promptFailoverReason &&
-    (failoverDecision.action === "rotate_profile" ||
-      failoverDecision.action === "fallback_model" ||
-      failoverDecision.action === "surface_error") &&
-    (await input.maybeRetryTransient({
+    (await input.failover.maybeRetryTransient({
       reason: promptFailoverReason,
       retryAfterMs: resolveRetryAfterMs(errorText),
     }))
   ) {
     logFailoverDecision("retry_same_model", {
-      retryCount: input.getTransientRetryCount(),
+      retryCount: input.failover.transientRetryCount,
     });
     return {
       action: "retry",
@@ -245,18 +230,20 @@ export async function handleEmbeddedPromptFailure(input: {
   let rotated = false;
   if (failoverDecision.action === "rotate_profile") {
     if (promptFailoverReason === "rate_limit") {
-      rotated = await input.advanceRateLimitAuthProfile({
+      rotated = await input.failover.advanceRateLimitAuthProfile({
         failoverProvider: input.provider,
         failoverModel: input.modelId,
         logFallbackDecision: logFailoverDecision,
       });
     } else {
-      rotated = await input.advanceAuthProfile();
+      rotated = await input.failover.advanceAuthProfile();
+    }
+    if (!rotated) {
+      failoverDecision = resolveDecision(true);
     }
   }
-  if (rotated) {
-    if (promptProfileFailureReason) {
-      void input
+  const markFailedProfilePromise = promptProfileFailureReason
+    ? input.failover
         .maybeMarkAuthProfileFailure({
           profileId: failedProfileId,
           reason: promptProfileFailureReason,
@@ -264,8 +251,10 @@ export async function handleEmbeddedPromptFailure(input: {
         })
         .catch((error: unknown) => {
           log.warn(`prompt profile failure mark failed: ${String(error)}`);
-        });
-    }
+        })
+    : undefined;
+  if (rotated) {
+    // A selected replacement can retry while the failed profile's record settles.
     input.traceAttempts.push({
       provider: input.provider,
       model: input.modelId,
@@ -278,8 +267,8 @@ export async function handleEmbeddedPromptFailure(input: {
       failoverReason: promptFailoverReason,
     });
     logFailoverDecision("rotate_profile", {
-      retryCount: input.getTransientRetryCount(),
-      profileRotationCount: rotated ? 1 : 0,
+      retryCount: input.failover.transientRetryCount,
+      profileRotationCount: 1,
     });
     return {
       action: "retry",
@@ -288,31 +277,8 @@ export async function handleEmbeddedPromptFailure(input: {
       lastRetryFailoverReason,
     };
   }
-  if (failoverDecision.action === "rotate_profile") {
-    failoverDecision = resolveRunFailoverDecision({
-      stage: "prompt",
-      aborted: input.aborted,
-      externalAbort: input.externalAbort,
-      fallbackConfigured: input.fallbackConfigured,
-      failoverCode: promptErrorDetails.code,
-      failoverFailure: promptFailoverFailure,
-      failoverReason: promptFailoverReason,
-      harnessOwnsTransport: input.pluginHarnessOwnsTransport,
-      promptTimeoutFallbackSafe,
-      timedOutByRunBudget: input.timedOutByRunBudget,
-      profileRotated: true,
-    });
-  }
-  if (promptProfileFailureReason) {
-    try {
-      await input.maybeMarkAuthProfileFailure({
-        profileId: failedProfileId,
-        reason: promptProfileFailureReason,
-        modelId: input.modelId,
-      });
-    } catch (error) {
-      log.warn(`prompt profile failure mark failed: ${String(error)}`);
-    }
+  if (markFailedProfilePromise) {
+    await markFailedProfilePromise;
   }
   const fallbackThinking = recordedTerminalStop
     ? undefined
@@ -322,7 +288,7 @@ export async function handleEmbeddedPromptFailure(input: {
       `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
     );
     logFailoverDecision("retry_thinking_level", {
-      retryCount: input.getTransientRetryCount(),
+      retryCount: input.failover.transientRetryCount,
     });
     return {
       action: "retry",
@@ -332,7 +298,7 @@ export async function handleEmbeddedPromptFailure(input: {
     };
   }
   if (failoverDecision.action === "fallback_model") {
-    const fallbackReason = failoverDecision.reason ?? "unknown";
+    const fallbackReason = failoverDecision.reason;
     const status = resolveFailoverStatus(fallbackReason);
     input.traceAttempts.push({
       provider: input.provider,
@@ -344,7 +310,7 @@ export async function handleEmbeddedPromptFailure(input: {
     });
     logFailoverDecision("fallback_model", {
       status,
-      retryCount: input.getTransientRetryCount(),
+      retryCount: input.failover.transientRetryCount,
       profileRotationCount: 0,
     });
     throw (
@@ -367,7 +333,7 @@ export async function handleEmbeddedPromptFailure(input: {
       stage: "prompt",
     });
     logFailoverDecision("surface_error", {
-      retryCount: input.getTransientRetryCount(),
+      retryCount: input.failover.transientRetryCount,
       profileRotationCount: 0,
     });
   }

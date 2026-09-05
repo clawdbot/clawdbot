@@ -111,10 +111,7 @@ export type {
   OpenClawStateDatabaseOptions,
   OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
-export {
-  assertOpenClawStateDatabaseForMaintenance,
-  createOpenClawDatabaseVerificationError,
-} from "./openclaw-state-db-maintenance.js";
+export { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
 export { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 export { detectOpenClawStateDatabaseSchemaMigrations } from "./openclaw-state-db-schema-repair.js";
 

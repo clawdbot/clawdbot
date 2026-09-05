@@ -21,6 +21,11 @@ to twice without rerunning those tools. Partial responses and unfinished tool
 batches do not qualify for this recovery. No additional retry configuration is
 required.
 
+Thinking-level recovery applies only when the provider identifies a reasoning or
+thinking parameter. Model/account restrictions and unrelated unsupported options
+keep their original failure classification and follow the configured fallback
+policy; OpenClaw does not retry them with thinking disabled.
+
 ## Runtime flow
 
 <Steps>

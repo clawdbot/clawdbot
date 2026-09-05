@@ -3872,7 +3872,7 @@ describe("grouped chat rendering", () => {
     expect(preview?.querySelector(".session-run-spinner")).toBeInstanceOf(HTMLElement);
   });
 
-  it("checks local assistant audio against server metadata while preview roots load", async () => {
+  it("checks local assistant audio against server metadata", async () => {
     const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.mp3`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(new URL(url, "http://control.test").pathname).toBe("/__openclaw__/assistant-media");
@@ -3896,7 +3896,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "",
           assistantAttachmentAuthToken: "session-token",
-          localMediaPreviewRoots: [],
           onRequestUpdate: renderMessage,
         },
       );
@@ -4266,7 +4265,7 @@ describe("grouped chat rendering", () => {
     ).toContain("Unavailable");
   });
 
-  it("checks local assistant images against server metadata while preview roots load", async () => {
+  it("checks local assistant images against server metadata", async () => {
     const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.png`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(url).toContain("meta=1");
@@ -4291,7 +4290,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "session-token",
-          localMediaPreviewRoots: [],
           onRequestUpdate: renderMessage,
         },
       );
@@ -4317,47 +4315,43 @@ describe("grouped chat rendering", () => {
       reason: "File not found",
       source: "/home/node/.openclaw/media/outbound/bootstrap-missing.mp3",
     },
-  ] as const)(
-    "keeps server-rejected $code media blocked while preview roots load",
-    async ({ code, reason, source }) => {
-      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-        expect(url).toContain("meta=1");
-        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
-        return { ok: true, json: async () => ({ available: false, code, reason }) };
-      });
-      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  ] as const)("keeps server-rejected $code media blocked", async ({ code, reason, source }) => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toContain("meta=1");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+      return { ok: true, json: async () => ({ available: false, code, reason }) };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-      const container = document.createElement("div");
-      const renderMessage = () =>
-        renderAssistantMessage(
-          container,
-          createAssistantMessage(`Unavailable recording\nMEDIA:${source}`, {
-            id: `assistant-bootstrap-blocked-${code}`,
-          }),
-          {
-            showToolCalls: false,
-            resourceBasePath: "/openclaw",
-            assistantAttachmentAuthToken: "session-token",
-            localMediaPreviewRoots: [],
-            onRequestUpdate: renderMessage,
-          },
-        );
+    const container = document.createElement("div");
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        createAssistantMessage(`Unavailable recording\nMEDIA:${source}`, {
+          id: `assistant-bootstrap-blocked-${code}`,
+        }),
+        {
+          showToolCalls: false,
+          resourceBasePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          onRequestUpdate: renderMessage,
+        },
+      );
 
-      renderMessage();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      await flushAssistantAttachmentAvailabilityChecks();
+    renderMessage();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await flushAssistantAttachmentAvailabilityChecks();
 
-      await vi.waitFor(() => {
-        expect(
-          container.querySelector(
-            ".chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__status-meta",
-          )?.textContent,
-        ).toContain(reason);
-      });
-      expect(container.querySelector("audio")).toBeNull();
-      expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
-    },
-  );
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(
+          ".chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__status-meta",
+        )?.textContent,
+      ).toContain(reason);
+    });
+    expect(container.querySelector("audio")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
+  });
 
   describe("omitted historical images", () => {
     it("renders a non-interactive placeholder with the projected byte size", () => {
@@ -4568,7 +4562,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "session-token",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: renderMessage,
         },
       );
@@ -4631,7 +4624,6 @@ describe("grouped chat rendering", () => {
         {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
       );
@@ -4694,7 +4686,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
       );
@@ -4746,7 +4737,6 @@ describe("grouped chat rendering", () => {
         {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
       );
@@ -4796,7 +4786,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: token,
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: () => renderWithToken(token),
         },
       );
@@ -4839,7 +4828,6 @@ describe("grouped chat rendering", () => {
         {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
       );
@@ -4880,7 +4868,6 @@ describe("grouped chat rendering", () => {
         {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
       );
@@ -4919,7 +4906,6 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         resourceBasePath: "/openclaw",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
       },
     );
 
@@ -4956,7 +4942,6 @@ describe("grouped chat rendering", () => {
         {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
       );
@@ -5015,7 +5000,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         });
       rerender();
@@ -5087,7 +5071,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
-          localMediaPreviewRoots: [],
           onRequestUpdate: rerender,
         },
       );
@@ -5170,7 +5153,6 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "session-token",
-        localMediaPreviewRoots: [],
       },
     );
 
@@ -5398,7 +5380,6 @@ describe("grouped chat rendering", () => {
     };
     panel.content = sidebarContent;
     panel.attachmentRuntime = {
-      localMediaPreviewRoots: [],
       resolveArtifactDownload,
     };
     document.body.append(panel);

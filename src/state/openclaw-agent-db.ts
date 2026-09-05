@@ -92,10 +92,10 @@ import {
 } from "./openclaw-agent-db.paths.js";
 import {
   clearOpenClawDatabaseQuarantine,
+  createOpenClawDatabaseVerificationError,
   readOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
 import {
-  createOpenClawDatabaseVerificationError,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";

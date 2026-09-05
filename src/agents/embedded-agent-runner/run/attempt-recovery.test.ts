@@ -97,7 +97,7 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     advanceRateLimitAuthProfile: vi.fn(),
     maybeMarkAuthProfileFailure: vi.fn(),
     maybeRetryTransient: vi.fn(),
-    getTransientRetryCount: () => 0,
+    transientRetryCount: 0,
   };
   const recovery = await recoverEmbeddedRunAttempt({
     runInput: {
@@ -369,7 +369,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       advanceRateLimitAuthProfile: vi.fn(),
       maybeMarkAuthProfileFailure: vi.fn(),
       maybeRetryTransient: vi.fn(),
-      getTransientRetryCount: () => 0,
+      transientRetryCount: 0,
     };
     const attempt = makeEmbeddedRunnerAttempt({
       terminal: {

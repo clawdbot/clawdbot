@@ -7,7 +7,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalEvents } from "../../skills/workshop/store-evaluation.js";
-import { writeConfigMachineState } from "../../state/config-machine-state.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,

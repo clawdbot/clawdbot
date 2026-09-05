@@ -243,7 +243,9 @@ Cron jobs declare scheduled work for the new agent:
 ```
 
 Claws use the existing Gateway scheduler and bind created jobs to the new
-agent. Preview, provenance, status, and removal cover those jobs without
+agent. Before creating jobs during add or update, Claws wait for the target
+agent to appear in the Gateway's applied configuration. Preview, provenance,
+status, and removal cover those jobs without
 changing the behavior of ordinary cron commands. Removal rereads the live job
 through the Gateway and preserves it when its owned definition changed after
 planning.

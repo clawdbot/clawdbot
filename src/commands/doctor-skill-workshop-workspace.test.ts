@@ -194,9 +194,16 @@ describe("Workshop relocation and workspace survival", () => {
 
       await autoMigrateLegacyState(migrationInput);
 
-      await expect(fs.readFile(fixture.created.target.skillFile, "utf8")).resolves.toBe(
-        fixture.content,
-      );
+      const preflightSkillFile = doctorOnlyStateMigrations
+        ? path.join(fixture.destination, "SKILL.md")
+        : fixture.created.target.skillFile;
+      await expect(fs.readFile(preflightSkillFile, "utf8")).resolves.toBe(fixture.content);
+      if (doctorOnlyStateMigrations) {
+        await expect(fs.access(fixture.created.target.skillFile)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.access(marker)).rejects.toMatchObject({ code: "ENOENT" });
+      }
       expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toBeUndefined();
       const detected = await detectLegacyStateMigrations({
         ...migrationInput,

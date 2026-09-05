@@ -5,7 +5,7 @@ import {
   loadPatternListFromEnv,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
-import { preserveIndependentVitestProject, sharedVitestConfig } from "./vitest.shared.config.ts";
+import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 import { controlUiE2eTestGlobs } from "./vitest.ui-paths.mjs";
 
@@ -31,6 +31,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+  "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
   sessionHostCommandStateRealGatewayTest,
@@ -153,6 +154,8 @@ export function createUiE2eVitestConfig(
       projects: [
         {
           ...base,
+          // Each resource owner supplies its complete inventory and setup.
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-bundled",
           test: {
             ...projectTest,
@@ -165,6 +168,7 @@ export function createUiE2eVitestConfig(
         },
         {
           ...base,
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-standalone",
           test: {
             ...projectTest,
@@ -176,6 +180,7 @@ export function createUiE2eVitestConfig(
         },
         {
           ...base,
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-serial",
           test: {
             ...projectTest,
@@ -188,6 +193,7 @@ export function createUiE2eVitestConfig(
         },
         {
           ...base,
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-serial-standalone",
           test: {
             ...projectTest,
@@ -197,7 +203,7 @@ export function createUiE2eVitestConfig(
             name: "ui-e2e-serial-standalone",
           },
         },
-      ].map(preserveIndependentVitestProject),
+      ],
       // Refit needs native file totals; verbose still reports cases to the output watchdog.
       reporters: [...baseTest.reporters, "default"],
       sequence: { ...baseSequence, sequencer: UiE2eSequencer },

@@ -198,8 +198,10 @@ function scheduleProviderAuthStatePrewarm(params: {
     if (isStopped()) {
       return;
     }
-    setAuthProfileFailureHook(() => {
-      if (isStopped()) {
+    setAuthProfileFailureHook((reason) => {
+      // Rate-limit cooldowns change profile selection, not credential presence.
+      // Keep the prepared catalog usable instead of rebuilding it after each 429.
+      if (isStopped() || reason === "rate_limit") {
         return;
       }
       clearCurrentProviderAuthState();
@@ -259,17 +261,22 @@ function schedulePostReadySidecarTask(params: {
   run: (isStopped: () => boolean, signal: AbortSignal) => Awaitable<void>;
   stop?: () => Awaitable<void>;
   waitForPostReadyWork?: () => Promise<void>;
+  shouldRun?: () => boolean;
 }): GatewayPostReadySidecarHandle {
-  let stopped = false;
   const abortController = new AbortController();
-  const isStopped = () => stopped;
+  // Closing retires producers before received work permits sidecar teardown.
+  const isStopped = () => abortController.signal.aborted || params.shouldRun?.() === false;
   const handle = setImmediate(() => {
     void (async () => {
       await params.waitForPostReadyWork?.();
       if (isStopped()) {
         return;
       }
+      // Suspension can defer admission, so eligibility must be checked again inside it.
       await runWithGatewayIndependentRootWorkAdmission(async () => {
+        if (isStopped()) {
+          return;
+        }
         await measureStartup(params.startupTrace, params.name, () =>
           params.run(isStopped, abortController.signal),
         );
@@ -283,7 +290,6 @@ function schedulePostReadySidecarTask(params: {
     stop: async () => {
       // Sidecars get both a synchronous stopped predicate and an AbortSignal so
       // lazy imports and long-running watchers can cooperate with shutdown.
-      stopped = true;
       abortController.abort();
       clearImmediate(handle);
       await params.stop?.();
@@ -296,19 +302,24 @@ function scheduleGatewayGenerationTimer(params: {
   origin: string;
   run: (isStopped: () => boolean) => Awaitable<void>;
   onError: (err: unknown) => void;
+  shouldRun?: () => boolean;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const isStopped = () => stopped;
+  const isStopped = () => stopped || params.shouldRun?.() === false;
   timer = setTimeout(() => {
     timer = undefined;
     if (isStopped()) {
       return;
     }
     void runWithGatewayIndependentRootWorkAdmission(async () => {
+      if (isStopped()) {
+        return;
+      }
       await params.run(isStopped);
     }, params.origin).catch((err: unknown) => {
-      if (!isStopped()) {
+      // Closing must not hide errors from callbacks already admitted before it.
+      if (!stopped) {
         params.onError(err);
       }
     });
@@ -328,10 +339,12 @@ function scheduleGatewayGenerationTimer(params: {
 function scheduleRestartSentinelWakeAfterReady(params: {
   deps: CliDeps;
   log: { warn: (msg: string) => void };
+  shouldRun?: () => boolean;
 }): GatewayPostReadySidecarHandle {
   return scheduleGatewayGenerationTimer({
     delayMs: 750,
     origin: "restart-sentinel:wake",
+    shouldRun: params.shouldRun,
     run: async (isStopped) => {
       const { scheduleRestartSentinelWake } = await loadGatewayRestartSentinelModule();
       if (isStopped()) {
@@ -348,6 +361,7 @@ function scheduleTranscriptsAutoStartSidecar(params: {
   startupTrace?: GatewayStartupTrace;
   log: { warn: (msg: string) => void };
   waitForPostReadyWork?: () => Promise<void>;
+  shouldRun?: () => boolean;
 }): GatewayPostReadySidecarHandle {
   let stopTranscriptsAutoStart: (() => Promise<void>) | undefined;
   return schedulePostReadySidecarTask({
@@ -355,6 +369,7 @@ function scheduleTranscriptsAutoStartSidecar(params: {
     name: "sidecars.transcripts-auto-start",
     log: params.log,
     waitForPostReadyWork: params.waitForPostReadyWork,
+    shouldRun: params.shouldRun,
     run: async (isStopped) => {
       const { createTranscriptsAutoStartService } =
         await import("../agents/tools/transcripts-tool.js");
@@ -832,6 +847,7 @@ export async function startGatewaySidecars(params: {
       scheduleGatewayGenerationTimer({
         delayMs: 250,
         origin: "hooks:gateway-startup",
+        shouldRun: params.shouldCreatePostReadySidecars,
         run: async (isStopped) => {
           const { createInternalHookEvent, triggerInternalHook } = await loadInternalHooksModule();
           if (isStopped()) {
@@ -851,6 +867,9 @@ export async function startGatewaySidecars(params: {
 
   if (params.cfg.acp?.enabled) {
     void runWithGatewayIndependentRootWorkAdmission(async () => {
+      if (params.shouldCreatePostReadySidecars?.() === false) {
+        return;
+      }
       const ready = await measureStartup(params.startupTrace, "sidecars.acp.runtime-ready", () =>
         waitForAcpRuntimeBackendReady({ backendId: params.cfg.acp?.backend }),
       );
@@ -858,12 +877,18 @@ export async function startGatewaySidecars(params: {
         ["readyCount", ready ? 1 : 0],
         ["backend", params.cfg.acp?.backend ?? "default"],
       ]);
+      if (params.shouldCreatePostReadySidecars?.() === false) {
+        return;
+      }
       await measureStartup(params.startupTrace, "sidecars.acp.identity-reconcile", async () => {
         const [{ getAcpSessionManager }, { ACP_SESSION_IDENTITY_RENDERER_VERSION }] =
           await Promise.all([
             import("../acp/control-plane/manager.js"),
             import("@openclaw/acp-core/runtime/session-identifiers"),
           ]);
+        if (params.shouldCreatePostReadySidecars?.() === false) {
+          return;
+        }
         const result = await getAcpSessionManager().reconcilePendingSessionIdentities({
           cfg: params.cfg,
         });
@@ -886,6 +911,7 @@ export async function startGatewaySidecars(params: {
       name: "sidecars.restart-sentinel",
       log: params.log,
       waitForPostReadyWork: params.waitForPostReadyWork,
+      shouldRun: params.shouldCreatePostReadySidecars,
       run: async (isStopped) => {
         if (!shouldCheckRestartSentinel() || isStopped()) {
           return;
@@ -896,6 +922,7 @@ export async function startGatewaySidecars(params: {
         restartSentinelWake = scheduleRestartSentinelWakeAfterReady({
           deps: params.deps,
           log: params.log,
+          shouldRun: params.shouldCreatePostReadySidecars,
         });
       },
       stop: async () => {
@@ -911,6 +938,7 @@ export async function startGatewaySidecars(params: {
         name: "sidecars.gmail-watch",
         log: params.log,
         waitForPostReadyWork: params.waitForPostReadyWork,
+        shouldRun: params.shouldCreatePostReadySidecars,
         run: async (isStopped, signal) => {
           const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
           if (isStopped()) {
@@ -933,6 +961,7 @@ export async function startGatewaySidecars(params: {
         name: "sidecars.gmail-model",
         log: params.log,
         waitForPostReadyWork: params.waitForPostReadyWork,
+        shouldRun: params.shouldCreatePostReadySidecars,
         run: async (isStopped) => {
           const [
             { DEFAULT_MODEL, DEFAULT_PROVIDER },
@@ -963,6 +992,9 @@ export async function startGatewaySidecars(params: {
               providerDiscoveryProviderIds: [hooksModelRef.provider],
               scopedLiveProviderDiscovery: true,
             });
+            if (isStopped()) {
+              return;
+            }
             const status = getModelRefStatus({
               cfg: params.cfg,
               catalog,
@@ -1069,11 +1101,10 @@ function createDeferredGatewayUpdateCheck(params: {
 
   const stop = () => {
     stopped = true;
-    runWatcher?.stop();
     return (stopPromise ??= (async () => {
       // Fence immediately; a lazy factory that finishes later stops its own
       // owner below. Never join the post-ready barrier during failed startup.
-      const cleanup = owner?.stop();
+      const cleanup = Promise.all([runWatcher?.stop(), owner?.stop()]);
       await ownerReady;
       await cleanup;
       await initialization;
@@ -1245,6 +1276,7 @@ export async function startGatewayPostAttachRuntime(
           name: "sidecars.control-ui-assets",
           startupTrace: params.startupTrace,
           log: params.log,
+          shouldRun: () => params.isClosing?.() !== true,
           run: controlUiRootLifecycle.start,
           stop: controlUiRootLifecycle.stop,
         })
@@ -1562,6 +1594,7 @@ export async function startGatewayPostAttachRuntime(
                 startupTrace: params.startupTrace,
                 log: params.log,
                 waitForPostReadyWork: params.waitForPostReadyWork,
+                shouldRun: () => params.isClosing?.() !== true,
               }),
             );
           }

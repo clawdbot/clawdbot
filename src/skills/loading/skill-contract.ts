@@ -30,6 +30,15 @@ export function escapeSkillXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
+export function decodeSkillXml(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
 export const COMPACT_DESCRIPTION_MAX_CHARS = 220;
 const SKILL_FRONTMATTER_BLOCK = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u;
 const SKILL_TITLE_HEADING = /^#\s+(.+?)\s*#*\s*$/mu;
@@ -58,6 +67,47 @@ function truncateSkillDescription(description: string, maxChars: number): string
     return truncateUtf16Safe(normalized, maxChars);
   }
   return `${truncateUtf16Safe(normalized, maxChars - 3).trimEnd()}...`;
+}
+
+/** Project descriptions for a model without changing admitted identities or loading instructions. */
+export function compactSkillsPromptForContext(prompt: string, contextTokenBudget?: number): string {
+  if (!contextTokenBudget || !Number.isFinite(contextTokenBudget) || contextTokenBudget <= 0) {
+    return prompt;
+  }
+  const targetChars = Math.floor(contextTokenBudget / 5);
+  if (prompt.length <= targetChars) {
+    return prompt;
+  }
+  const start = prompt.indexOf("<available_skills>");
+  const end = prompt.indexOf("</available_skills>", start);
+  if (start < 0 || end < start) {
+    return prompt;
+  }
+  const catalog = prompt.slice(start, end);
+  const render = (maxChars: number) =>
+    prompt.slice(0, start) +
+    catalog.replace(
+      /<description>([\s\S]*?)<\/description>/gu,
+      (_match, description: string) =>
+        `<description>${escapeSkillXml(truncateSkillDescription(decodeSkillXml(description), maxChars))}</description>`,
+    ) +
+    prompt.slice(end);
+  // Names, mapped locations and loading notes are an identity floor, not optional prose.
+  // Keep a short matching description even when that floor exceeds the model's share.
+  let lo = 64;
+  let hi = COMPACT_DESCRIPTION_MAX_CHARS;
+  let result = render(lo);
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const candidate = render(mid);
+    if (candidate.length <= targetChars) {
+      result = candidate;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return result.length < prompt.length ? result : prompt;
 }
 
 /**

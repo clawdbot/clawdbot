@@ -26,6 +26,9 @@ import {
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
+export type EmbeddedRunFailoverRetryController = ReturnType<
+  typeof createEmbeddedRunFailoverRetryController
+>;
 type AuthRetryTrace = TraceAttempt & { reason: FailoverReason };
 
 type RateLimitAuthProfileContext = {

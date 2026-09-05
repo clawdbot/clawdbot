@@ -14,19 +14,21 @@ const cfg = {
 } satisfies OpenClawConfig;
 
 describe("resolveGatewayModelSelectionPolicy", () => {
-  it("discloses the effective write target to an admin", () => {
+  it("keeps an admin's ordinary selection session-only", () => {
     expect(
       resolveGatewayModelSelectionPolicy({
-        agentId: "main",
         callerScopes: ["operator.admin"],
         cfg,
       }).target,
-    ).toBe("global");
+    ).toBe("session");
+  });
+
+  it("discloses an explicitly requested agent target to an admin", () => {
     expect(
       resolveGatewayModelSelectionPolicy({
-        agentId: "work",
         callerScopes: ["operator.admin"],
         cfg,
+        scope: "agent",
       }).target,
     ).toBe("agent");
   });
@@ -34,17 +36,17 @@ describe("resolveGatewayModelSelectionPolicy", () => {
   it("discloses session-only selection without writable config", () => {
     expect(
       resolveGatewayModelSelectionPolicy({
-        agentId: "work",
         callerScopes: ["operator.write"],
         cfg,
+        scope: "global",
       }).target,
     ).toBe("session");
     expect(
       withEnv({ OPENCLAW_NIX_MODE: "1" }, () =>
         resolveGatewayModelSelectionPolicy({
-          agentId: "work",
           callerScopes: ["operator.admin"],
           cfg,
+          scope: "global",
         }),
       ).target,
     ).toBe("session");

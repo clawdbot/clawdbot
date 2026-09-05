@@ -1,4 +1,4 @@
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 // Maintains config metadata fields written alongside user config.
 import { VERSION } from "../version.js";
 import { materializeModelPolicyAllowlist } from "./model-policy-allowlist-migration.js";

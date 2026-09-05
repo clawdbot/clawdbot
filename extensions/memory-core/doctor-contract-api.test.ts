@@ -973,14 +973,19 @@ describe("memory-core doctor dreaming migration", () => {
         await fs.symlink(externalMemoryDir, path.join(workspaceDir, "memory"));
 
         await expect(hostEventsMigration().detectLegacyState(migrationParams())).resolves.toEqual({
-          preview: [expect.stringContaining("requires safe-path repair")],
+          preview: [expect.stringContaining("Skipped unsafe Memory Core host event source")],
         });
         const result = await hostEventsMigration().migrateLegacyState(migrationParams());
 
         expect(result.changes).toEqual([]);
         expect(result.warnings).toEqual([
-          expect.stringContaining("Skipped unsafe Memory Core host event source"),
+          expect.stringContaining(path.join(workspaceDir, "memory", ".dreams", "events.jsonl")),
         ]);
+        expect(result.warnings[0]).toContain("memory.search.extraPaths");
+        expect(result.warnings[0]).toContain("regular files and directories");
+        await expect(hostEventsMigration().detectLegacyState(migrationParams())).resolves.toEqual({
+          preview: result.warnings.map((warning) => `- ${warning}`),
+        });
         await expect(fs.readFile(externalEventPath, "utf8")).resolves.toContain(
           "outside workspace",
         );
