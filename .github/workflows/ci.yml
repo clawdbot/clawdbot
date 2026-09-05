@@ -4842,7 +4842,8 @@ jobs:
 
       - &install_watch_rust_toolchain
         name: Install Watch Rust toolchain
-        if: env.HISTORICAL_TARGET != 'true'
+        # Frozen release sources can include Watch RTC even when they use compatibility CI.
+        if: env.HISTORICAL_TARGET != 'true' || hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''
         run: |
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:$PATH"
@@ -4851,7 +4852,7 @@ jobs:
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
 
       - name: Test Watch RTC engine
-        if: matrix.phase == 'tests' && env.HISTORICAL_TARGET != 'true'
+        if: matrix.phase == 'tests' && (env.HISTORICAL_TARGET != 'true' || hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != '')
         working-directory: apps/shared/OpenClawWatchRTC
         run: |
           set -euo pipefail

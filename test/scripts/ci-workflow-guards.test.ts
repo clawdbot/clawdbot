@@ -131,6 +131,7 @@ function evaluateWorkflowExpression(
     dispatchId?: string;
     draft?: boolean;
     eventName: "pull_request" | "push" | "workflow_dispatch" | "repository_dispatch" | "schedule";
+    env?: Record<string, string>;
     frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
     headRepository?: string;
@@ -222,6 +223,7 @@ function evaluateWorkflowExpression(
       target_ref: context.targetRef ?? "",
       use_github_hosted_runners: context.useGithubHostedRunners ?? false,
     },
+    env: context.env ?? {},
     matrix: context.matrix ?? {},
     runner: { environment: context.runnerEnvironment ?? "" },
     steps: context.steps ?? {},
@@ -9238,6 +9240,37 @@ server.listen(0, "127.0.0.1", () => {
       expect(existsSync(marker)).toBe(testCase.helperPresent);
     },
   );
+
+  it.each([
+    { historical: false, hasWatchRtc: true, expected: true },
+    { historical: false, hasWatchRtc: false, expected: true },
+    { historical: true, hasWatchRtc: true, expected: true },
+    { historical: true, hasWatchRtc: false, expected: false },
+  ])("prepares Watch RTC by source capability: %j", ({ historical, hasWatchRtc, expected }) => {
+    const workflow = readCiWorkflow();
+    for (const jobName of ["ios-build", "ios-screenshot-shard"]) {
+      const install = workflow.jobs[jobName].steps.find(
+        (step: WorkflowStep) => step.name === "Install Watch Rust toolchain",
+      );
+      const engine = workflow.jobs["ios-build"].steps.find(
+        (step: WorkflowStep) => step.name === "Test Watch RTC engine",
+      );
+      for (const phase of ["tests", "release"]) {
+        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          env: { HISTORICAL_TARGET: String(historical) },
+          matrix: { phase },
+          fileHashes: hasWatchRtc ? { "apps/shared/OpenClawWatchRTC/Cargo.toml": "present" } : {},
+        };
+        expect(evaluateWorkflowExpression(`\${{ ${install.if} }}`, context)).toBe(expected);
+        expect(evaluateWorkflowExpression(`\${{ ${engine.if} }}`, context)).toBe(
+          expected && phase === "tests",
+        );
+      }
+    }
+  });
 
   it("retries macOS release builds only when Sparkle metadata is incomplete", () => {
     const workflow = readCiWorkflow();
