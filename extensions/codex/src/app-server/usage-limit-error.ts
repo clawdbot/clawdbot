@@ -3,7 +3,6 @@
  * marks blocked auth profiles when Codex exposes a reset time.
  */
 import {
-  AgentHarnessTerminalError,
   embeddedAgentLog,
   formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -46,9 +45,6 @@ export class CodexUsageLimitPromptError extends Error {
 export function resolveCodexPromptError(
   source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
 ): string | Error | undefined {
-  if (source.codexErrorInfo === "misalignmentPolicyViolation") {
-    return new AgentHarnessTerminalError(source.message ?? "Codex rejected this request.");
-  }
   const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
   if (usageLimitMessage) {
     return new CodexUsageLimitPromptError(usageLimitMessage);

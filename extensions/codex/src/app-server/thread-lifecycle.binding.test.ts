@@ -405,7 +405,12 @@ async function createManualResumeFixture(
       if (resumes > 0 && options.competingLease === "resume") {
         compete();
       }
-      if (resumes++ > 0 && options.receipt !== "none" && options.receipt !== "stale") {
+      if (
+        resumes++ > 0 &&
+        !options.systemError &&
+        options.receipt !== "none" &&
+        options.receipt !== "stale"
+      ) {
         await harness.notify({
           method: "thread/status/changed",
           params: {
@@ -1018,6 +1023,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       const threadId = "ordinary-warm-policy";
       const response = threadStartResult(threadId);
       const methods: string[] = [];
+      let subscribed = true;
       const wire = await createLeasedLifecycleWireClient(path.join(tempDir, "agent"), (request) => {
         methods.push(request.method);
         if (request.method === "config/read") {
@@ -1027,16 +1033,20 @@ describe("Codex app-server thread lifecycle bindings", () => {
           return { requirements: null };
         }
         if (request.method === "thread/start" || request.method === "thread/resume") {
+          if (!subscribed && nativeStatus === "idle") {
+            wire.send({
+              method: "thread/status/changed",
+              params: { threadId, status: { type: "notLoaded" } },
+            });
+          }
+          subscribed = true;
           return response;
         }
         if (request.method === "thread/read") {
           return { thread: { ...response.thread, status: { type: nativeStatus } } };
         }
         if (request.method === "thread/unsubscribe") {
-          wire.send({
-            method: "thread/status/changed",
-            params: { threadId, status: { type: "notLoaded" } },
-          });
+          subscribed = false;
           return { status: "unsubscribed" };
         }
         if (request.method === "thread/inject_items") {
@@ -1067,7 +1077,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
           undefined,
           first.liveThreadConfigFingerprint,
         );
-        const second = await startOrResumeThread({ ...common, developerInstructions });
+        const resume = startOrResumeThread({ ...common, developerInstructions });
+        if (nativeStatus === "systemError" && developerInstructions !== "initial policy") {
+          await expect(resume).rejects.toThrow("did not confirm unloading");
+          expect(methods).not.toContain("thread/inject_items");
+          expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
+          return;
+        }
+        const second = await resume;
         expect(second.threadId).toBe(first.threadId);
         expect(methods).toEqual(
           developerInstructions === "initial policy"
@@ -1729,10 +1746,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       options: { dynamicTools: [createNamedDynamicTool("example")] },
     },
     {
-      label: "native thread after a completed failed turn",
-      options: { systemError: true, wireClient: true },
-    },
-    {
       label: "cold native thread with no stored tools",
       options: { cold: true, omitCatalog: true, receipt: "none" as const },
     },
@@ -1771,6 +1784,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
   );
 
   it.each([
+    { options: { systemError: true, wireClient: true }, error: "did not confirm unloading" },
     { options: { receipt: "none" as const }, error: "did not confirm unloading" },
     { options: { receipt: "unrelated" as const }, error: "did not confirm unloading" },
     { options: { receipt: "stale" as const }, error: "did not confirm unloading" },

@@ -4,7 +4,6 @@ import { isRetryableAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
-import { hasModelFallbackStop } from "../../failover-error.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
@@ -135,10 +134,6 @@ export async function recoverEmbeddedRunAttempt(input: {
     timedOutDuringToolExecution,
     timedOutByRunBudget,
   } = projectAgentRunAttemptTerminal(attempt.terminal);
-  // Provider policy refusals end this admitted request before any recovery can replay it.
-  if (hasModelFallbackStop(promptError)) {
-    throw toErrorObject(promptError, "Harness request failed");
-  }
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
   // Mid-turn overflow continues from the persisted tool results and never

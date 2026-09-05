@@ -248,6 +248,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       codexErrorInfo: "cyberPolicy",
       category: "cyber",
     },
+    {
+      label: "typed misalignment",
+      message: "This request was blocked due to a misalignment policy violation.",
+      codexErrorInfo: "misalignmentPolicyViolation",
+      category: "misalignment",
+    },
   ])(
     "keeps $label refusals terminal when error is followed by failed turn completion",
     async ({ message, codexErrorInfo, category }) => {
@@ -279,6 +285,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
         ],
       });
       expect(result.lastAssistant).toBe(terminalAssistant);
+      expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
       expect(
         result.messagesSnapshot.filter(
           (candidate) =>
@@ -293,7 +300,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     { codexErrorInfo: "serverOverloaded", expected: true },
     { codexErrorInfo: "usageLimitExceeded", expected: false },
     { codexErrorInfo: "unauthorized", expected: false },
-    { codexErrorInfo: "misalignmentPolicyViolation", expected: false },
     { codexErrorInfo: "other", expected: false },
   ])(
     "projects $codexErrorInfo terminal error recovery eligibility as $expected",
@@ -533,31 +539,3 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
   });
 });
-
-it.each(["misalignmentPolicyViolation"])(
-  "preserves %s as terminal on both error and completed notifications",
-  async (codexErrorInfo) => {
-    const projector = await createProjector();
-    const message = "Provider rejected this request";
-    await projector.handleNotification(
-      appServerError({ message, willRetry: false, codexErrorInfo }),
-    );
-    expect(
-      readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry())).promptError,
-    ).toMatchObject({
-      name: "AgentHarnessTerminalError",
-      message,
-    });
-    await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: { id: TURN_ID, status: "failed", items: [], error: { message, codexErrorInfo } },
-      }),
-    );
-    expect(
-      readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry())).promptError,
-    ).toMatchObject({
-      name: "AgentHarnessTerminalError",
-      message,
-    });
-  },
-);

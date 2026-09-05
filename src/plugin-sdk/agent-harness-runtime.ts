@@ -110,7 +110,6 @@ export type {
 } from "../agents/harness/types.js";
 export {
   AgentHarnessPreflightError,
-  AgentHarnessTerminalError,
   AgentHarnessSessionSupersededError,
 } from "../agents/harness/errors.js";
 export { projectSettledTurnFinalizationAttemptResult } from "../agents/harness/settled-turn-finalization-result.js";
