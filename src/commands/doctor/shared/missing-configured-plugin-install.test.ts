@@ -1003,6 +1003,120 @@ describe("repairMissingConfiguredPluginInstalls", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it.each([
+    "missing",
+    "empty",
+    "symlink-root",
+    "healthy",
+    "optional",
+    "different-root",
+    "package-mismatch",
+    "resolved-name-mismatch",
+    "disabled",
+    "globally-disabled",
+    "denylisted",
+    "allowlist-excluded",
+    "path-source",
+    "archive-source",
+    "missing-spec",
+    "bundled",
+  ] as const)(
+    "attributes %s dependency health to the active npm install only",
+    async (scenario) => {
+      const parent = tempDirs.make("openclaw-doctor-dependency-health-");
+      const rootDir = path.join(parent, "node_modules", "dependency-plugin");
+      const dependencyDir = path.join(rootDir, "node_modules", "required-runtime");
+      const packageName = "dependency-plugin";
+      const pluginId = "dependency-plugin";
+      createColdPluginFixture({ rootDir, pluginId, packageName });
+      const cfg: OpenClawConfig = { plugins: { entries: { [pluginId]: { enabled: true } } } };
+      const record = {
+        source:
+          scenario === "path-source" ? "path" : scenario === "archive-source" ? "archive" : "npm",
+        spec: scenario === "missing-spec" ? undefined : `${packageName}@1.0.0`,
+        resolvedName: scenario === "resolved-name-mismatch" ? "another-package" : packageName,
+        installPath: rootDir,
+      };
+      if (scenario === "different-root") {
+        record.installPath = path.join(parent, "recorded-copy");
+        createColdPluginFixture({ rootDir: record.installPath, pluginId, packageName });
+      } else if (scenario === "symlink-root") {
+        record.installPath = path.join(parent, "linked-copy");
+        fs.symlinkSync(rootDir, record.installPath, "junction");
+      }
+      if (scenario === "empty" || scenario === "healthy") {
+        fs.mkdirSync(dependencyDir, { recursive: true });
+        if (scenario === "healthy") {
+          fs.writeFileSync(
+            path.join(dependencyDir, "package.json"),
+            JSON.stringify({ name: "required-runtime", version: "1.0.0" }),
+          );
+        }
+      }
+      if (scenario === "disabled") {
+        cfg.plugins = { entries: { [pluginId]: { enabled: false } } };
+      } else if (scenario === "globally-disabled") {
+        cfg.plugins = { ...cfg.plugins, enabled: false };
+      } else if (scenario === "denylisted") {
+        cfg.plugins = { ...cfg.plugins, deny: [pluginId] };
+      } else if (scenario === "allowlist-excluded") {
+        cfg.plugins = { ...cfg.plugins, allow: ["different-plugin"] };
+      }
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({ [pluginId]: record });
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        plugins: [
+          {
+            id: pluginId,
+            origin: scenario === "bundled" ? "bundled" : "global",
+            rootDir,
+            source: path.join(rootDir, "index.js"),
+            packageName: scenario === "package-mismatch" ? "another-package" : packageName,
+            packageDependencies: { "required-runtime": "1.0.0" },
+            packageOptionalDependencies:
+              scenario === "optional" ? { "required-runtime": "2.0.0" } : {},
+            channels: [],
+          },
+        ],
+        diagnostics: [],
+      });
+      const {
+        configuredPluginInstallIssueToHealthFinding,
+        configuredPluginInstallIssueToRepairEffect,
+        detectConfiguredPluginInstallHealthIssues,
+      } = await import("./missing-configured-plugin-install.js");
+
+      const issues = await detectConfiguredPluginInstallHealthIssues({ cfg, env: testEnv });
+
+      if (scenario === "missing" || scenario === "empty" || scenario === "symlink-root") {
+        expect(issues).toEqual([
+          {
+            kind: "missing-required-dependencies",
+            pluginId,
+            installPath: record.installPath,
+            installSpec: record.spec,
+            missingRequired: ["required-runtime"],
+          },
+        ]);
+        const issue = expectDefined(issues[0], "dependency health issue");
+        expect(configuredPluginInstallIssueToHealthFinding(issue)).toMatchObject({
+          target: pluginId,
+          message: expect.stringContaining("required-runtime"),
+          fixHint: expect.stringContaining("doctor --fix"),
+        });
+        expect(configuredPluginInstallIssueToRepairEffect(issue)).toMatchObject({
+          kind: "package",
+          action: "would-repair-configured-plugin-dependencies",
+          dryRunSafe: false,
+        });
+      } else {
+        expect(issues).toEqual([]);
+      }
+      expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    },
+  );
+
   it("maps a missing configured plugin install to a structured finding and dry-run effect", async () => {
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
