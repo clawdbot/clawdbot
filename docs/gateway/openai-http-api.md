@@ -102,7 +102,7 @@ Agent selection precedence, first match wins:
 3. An agent-scoped `x-openclaw-session-key` (`agent:<agentId>:<rest>`). A generic `model` names no agent, so the session key names the owner. This is the path for an explicit multi-agent roster (`agents.ownership: "explicit"`, or no entry marked `default: true`): send `model: "openclaw"` plus the agent's own session key and that agent handles the request.
 4. The configured default agent, for `openclaw` and `openclaw/default`.
 
-The selected agent is the one that executes the turn, not just the one that routes it. A step 1 or step 2 selector that names a different agent than an agent-scoped session key is a contradiction, not a precedence question, and is rejected with `400 invalid_request_error` (`Selected agent '<a>' does not match the agent in `x-openclaw-session-key` ('<b>')`). Send one or the other.
+The selected agent is the one that executes the turn, not just the one that routes it. A step 1 or step 2 selector that names a different agent than an agent-scoped session key is a contradiction, not a precedence question, and is rejected with `400 invalid_request_error` (``Selected agent '<a>' does not match the agent in `x-openclaw-session-key` ('<b>')``). Send one or the other.
 
 A generic `model` with no header, no session key, and no default agent is rejected with `400 invalid_request_error` (`Multiple agents are configured, but this operation has no explicit owner`). Every selector is checked against the configured roster; an unknown agent id is also a `400`.
 
