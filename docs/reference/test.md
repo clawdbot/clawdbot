@@ -36,8 +36,10 @@ release proof.
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
 Git cleanup and rsync cannot delete dependencies, build output, or ignored runtime
-there. The wrapper verifies and applies the source bundle in that execution
-workspace, then runs the payload there. It never restores runtime from the caller
+there. The wrapper applies and verifies the source bundle in that execution
+workspace, runs its frozen dependency install, and checks the source and Git
+identity again before the payload. Install output goes to stderr; an install or
+verification failure stops the payload. It never restores runtime from the caller
 or changes the selected rsync binary.
 
 Workspace preparation changes require a fresh lease. A missing or overlapping
@@ -175,6 +177,9 @@ lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
   for release proof. Direct-provider flags such as `--fresh-pr`, `--full-resync`,
   `--script*`, `--env-helper`, capture/download flags, and `--stop-after` are not
   a substitute for the delegated Testbox workflow.
+- For Testbox scripts, run a synced file as trailing command arguments or use
+  `--shell`. Active `--script` and `--script-stdin` uploads are rejected before
+  source preparation or lease work.
 
 When remote sync uses a temporary checkout, the wrapper preserves native
 `.crabbox/runs` and `.crabbox/captures` outputs together beneath a fresh
