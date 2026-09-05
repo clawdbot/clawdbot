@@ -1159,11 +1159,31 @@ If you disable gateway auth (not recommended on shared hosts), the avatar route 
 
 ## Assistant media route auth
 
+Local image previews follow the chat's filesystem permissions. Project chats use
+their session workspace, including managed worktrees. Full Access, or disabled
+workspace-only filesystem protection, also permits image previews outside that
+workspace. An explicit session permission mode takes precedence over the agent's
+filesystem setting.
+
+Full Access also preserves playback and downloads for existing attachments in
+the agent's configured workspace. It does not permit arbitrary outside
+non-image files.
+
+With workspace protection enabled, an outside image shows **Outside allowed
+folders**. Hover over its filename to inspect the source path. Administrators can
+select **Allow image** to preview that exact file without changing the session's
+permissions or allowing its parent folder. The allowance uses a short-lived media
+ticket; replacing the file or restarting the Gateway requires a new allowance.
+
 When gateway auth is configured, assistant local-media previews use a two-step route:
 
-- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth; the browser sends the gateway token as a bearer header when checking availability.
-- Successful metadata responses include a short-lived `mediaTicket` scoped to that exact source path.
+- `GET /__openclaw__/assistant-media?meta=1&source=<path>&sessionKey=<key>&agentId=<id>` requires the normal Control UI operator auth and access to the selected session; the browser sends the gateway token as a bearer header when checking availability.
+- Successful metadata responses include a short-lived `mediaTicket` scoped to the file and session. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
 - Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
+
+Tickets remain bound to the issuing reader's current access. Losing session
+visibility or role permissions stops new reads through existing tickets, even
+before they expire.
 
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 

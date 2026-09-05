@@ -31,6 +31,7 @@ type StreamMessageOptions = Pick<
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
   | "localMediaPreviewRoots"
+  | "mediaPolicyKey"
   | "connectionEpoch"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"

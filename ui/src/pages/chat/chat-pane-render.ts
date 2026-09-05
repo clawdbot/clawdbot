@@ -656,6 +656,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
       personActivity: personActivityRouting(this.context),
       localMediaPreviewRoots: state.localMediaPreviewRoots,
+      mediaPolicyEpoch: state.mediaPolicyEpoch,
       connectionEpoch: state.connectionEpoch,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
