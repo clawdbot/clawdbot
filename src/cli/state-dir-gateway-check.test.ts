@@ -116,6 +116,40 @@ describe("state-dir-gateway-check", () => {
     expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "refuses an offline home mismatch when the service sets OPENCLAW_HOME: %s",
+    async (serviceSetsHome) => {
+      const canonicalRoot = await fs.realpath(root);
+      const serviceHome = path.join(canonicalRoot, "service-home");
+      const cliHome = path.join(canonicalRoot, "cli-home");
+      const serviceRuntimeHome = serviceSetsHome ? path.join(serviceHome, "runtime") : serviceHome;
+      await fs.mkdir(serviceHome);
+      await fs.mkdir(cliHome);
+      vi.stubEnv("HOME", serviceHome);
+      vi.stubEnv("OPENCLAW_HOME", cliHome);
+      vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
+      mocks.readGatewayServiceState.mockImplementation(
+        async (_service: unknown, options: { env: NodeJS.ProcessEnv }) => ({
+          installed: true,
+          running: false,
+          env: {
+            ...options.env,
+            HOME: serviceHome,
+            ...(serviceSetsHome ? { OPENCLAW_HOME: serviceRuntimeHome } : {}),
+          },
+        }),
+      );
+
+      await expect(
+        checkCliGatewayStateDir({ command: "openclaw configure", config: {} }),
+      ).resolves.toMatchObject({
+        kind: "refuse",
+        message: expect.stringContaining(path.join(serviceRuntimeHome, ".openclaw")),
+      });
+    },
+  );
+
   it("refuses paths from an authenticated hello without service fallback", async () => {
     const gatewayStateDir = path.join(root, "gateway");
     const gatewayConfigPath = path.join(gatewayStateDir, "openclaw.json");

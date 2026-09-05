@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveServiceInspectionEnv } from "../daemon/service-env-merge.js";
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import {
   buildGatewayConnectionDetails,
@@ -108,12 +109,8 @@ export async function checkCliGatewayStateDir(params: {
     });
   }
 
-  const serviceEnv = { ...process.env };
-  // Caller path overrides select the write target, not the installed service definition.
-  delete serviceEnv.OPENCLAW_STATE_DIR;
-  delete serviceEnv.OPENCLAW_CONFIG_PATH;
   const serviceState = await readGatewayServiceState(resolveGatewayService(), {
-    env: serviceEnv,
+    env: resolveServiceInspectionEnv(),
     timeoutMs: STATE_DIR_CHECK_TIMEOUT_MS,
   });
   if (serviceState.installed) {

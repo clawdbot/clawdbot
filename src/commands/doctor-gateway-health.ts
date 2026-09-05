@@ -6,6 +6,7 @@ import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { compareCliGatewayStateDirs, type GatewayHello } from "../cli/state-dir-gateway-check.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveServiceInspectionEnv } from "../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import {
   buildGatewayConnectionDetails,
@@ -107,12 +108,7 @@ async function noteInstalledGatewayStateDirectory(cfg: OpenClawConfig, timeoutMs
     if (!isLoopbackGatewayUrl(buildGatewayConnectionDetails({ config: cfg }).url)) {
       return;
     }
-    const serviceEnv = { ...process.env };
-    // CLI path overrides select its store, not the installed service's environment.
-    delete serviceEnv.OPENCLAW_STATE_DIR;
-    delete serviceEnv.OPENCLAW_CONFIG_PATH;
-    delete serviceEnv.OPENCLAW_HOME;
-    const command = await resolveGatewayService().readCommand(serviceEnv, {
+    const command = await resolveGatewayService().readCommand(resolveServiceInspectionEnv(), {
       timeoutMs: Math.min(timeoutMs, 3_000),
       requireEffective: true,
     });
