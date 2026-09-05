@@ -353,7 +353,7 @@ async function executeReadWithAdaptivePaging(params: {
     const pageContinuation = truncation?.continuation;
     const pageText =
       pageContinuation || reachedEof ? stripReadContinuationNotice(rawText) : rawText;
-    const delimiter = aggregatedText && pageText && next.kind === "line" ? "\n" : "";
+    const delimiter = page > 0 && next.kind === "line" ? "\n" : "";
     const candidateBytes = aggregatedBytes + delimiter.length + Buffer.byteLength(pageText, "utf8");
     const continuationNotice = pageContinuation
       ? formatReadContinuationNotice(pageContinuation, params.maxBytes)
@@ -366,7 +366,7 @@ async function executeReadWithAdaptivePaging(params: {
         params.modelBudget,
       )
     ) {
-      if (aggregatedText) {
+      if (page > 0) {
         return withReadContinuation(
           firstResult,
           `${aggregatedText}${previousNotice}`,

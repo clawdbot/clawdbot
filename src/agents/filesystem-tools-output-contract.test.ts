@@ -3,10 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createOpenClawReadTool } from "./agent-tools.read.js";
+import { createOpenClawReadTool, resolveAdaptiveReadMaxBytes } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
+import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import { DEFAULT_MAX_BYTES } from "./sessions/tools/truncate.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 
@@ -63,6 +64,64 @@ describe("filesystem tool output contracts", () => {
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
       '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; continuation: { kind: "line"; offset: number; limit?: number } | { cursor: number; kind: "cursor"; offset: number; limit?: number }; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; totalBytes: number; totalLines: number; truncated: true; truncatedBy: "lines" | "bytes" } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
     );
+  });
+
+  it.each([
+    { name: "one leading blank line", prefix: "\n", size: 52 * 1024 },
+    { name: "no leading blank line", prefix: "", size: 52 * 1024 },
+    { name: "two leading blank lines", prefix: "\n\n", size: 52 * 1024 },
+    { name: "a short file", prefix: "\n", size: 10 },
+    { name: "an offset on a blank line", prefix: "\n", size: 52 * 1024, offset: 2 },
+  ])("preserves $name across read continuations", async ({ prefix, size, offset }) => {
+    const expected = `${prefix}${JSON.stringify({ generated: "x".repeat(size) })}`;
+    await fs.writeFile(
+      path.join(tmpDir, "paged.json"),
+      `${offset ? "before\n" : ""}${expected}`,
+      "utf8",
+    );
+    const tool = createOpenClawReadTool(
+      createReadTool(tmpDir, {
+        maxBytes: resolveAdaptiveReadMaxBytes(),
+      }) as unknown as AnyAgentTool,
+    );
+    let args: { path: string; offset?: number; cursor?: number; limit?: number } = {
+      path: "paged.json",
+      ...(offset ? { offset } : {}),
+    };
+    let actual = "";
+    let separator = "";
+    let complete = false;
+    for (let page = 0; page < 8; page++) {
+      const result = await tool.execute(`read-page-${page}`, args);
+      expectContract(tool, result.details);
+      const details = result.details as ReadToolDetails;
+      const text = result.content.find((block) => block.type === "text")!.text;
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(resolveAdaptiveReadMaxBytes());
+      expect(details).toMatchObject({ content: text });
+      if (details.kind !== "truncated") {
+        actual += separator + text;
+        complete = true;
+        break;
+      }
+      const footer = text.lastIndexOf("\n\n[Read output capped at ");
+      expect(footer).toBeGreaterThanOrEqual(0);
+      const next = details.continuation;
+      expect(text.slice(footer)).toContain(`offset=${next.offset}`);
+      if (next.kind === "cursor") {
+        expect(text.slice(footer)).toContain(`cursor=${next.cursor}`);
+      }
+      actual += separator + text.slice(0, footer);
+      separator = next.kind === "line" ? "\n" : "";
+      args = {
+        path: "paged.json",
+        offset: next.offset,
+        ...(next.kind === "cursor" ? { cursor: next.cursor } : {}),
+        ...(next.limit === undefined ? {} : { limit: next.limit }),
+      };
+    }
+    expect(complete).toBe(true);
+    expect(Buffer.byteLength(actual)).toBe(Buffer.byteLength(expected));
+    expect(actual).toBe(expected);
   });
 
   it("validates edit changed and no-op results", async () => {
