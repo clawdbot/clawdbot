@@ -674,6 +674,73 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "resolves a routed extglob past an external extglob-named symlink without a false security reject",
+    async () => {
+      // Extglob routing regression: `@(a|b)/*/AGENTS.md` carries `*`, so it routes
+      // to fs.glob where `@(a|b)` is an extglob alternation matching the real `a`/`b`
+      // dirs. A directory symlink literally named `@(a|b)` points OUTSIDE the
+      // workspace. Pre-fix the security pre-gate scanned the routed literal prefix
+      // for `? * { } [ ]` only, missed the `@(` extglob open, treated `@(a|b)` as a
+      // literal segment, realpath'd that escaping symlink, and falsely rejected the
+      // whole pattern with a `security` diagnostic — even though fs.glob roots its
+      // walk at the workspace root over the alternatives and never traverses the
+      // literally-named symlink. The fix recognizes the extglob open so the prefix
+      // collapses to the workspace root, matching where fs.glob roots the walk.
+      const routedWs = await createWorkspaceDir("routed-extglob-symlink");
+      const outsideRouted = await createWorkspaceDir("routed-extglob-outside");
+      await fs.writeFile(path.join(outsideRouted, "AGENTS.md"), "outside", "utf-8");
+      for (const name of ["a", "b"]) {
+        const dir = path.join(routedWs, name, "core");
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(path.join(dir, "AGENTS.md"), `${name} agents`, "utf-8");
+      }
+      try {
+        await fs.symlink(outsideRouted, path.join(routedWs, "@(a|b)"), "dir");
+      } catch (err) {
+        if (["EPERM", "EACCES", "ENOSYS"].includes((err as NodeJS.ErrnoException).code ?? "")) {
+          return;
+        }
+        throw err;
+      }
+
+      const routed = await loadExtraBootstrapFilesWithDiagnostics(routedWs, ["@(a|b)/*/AGENTS.md"]);
+      expect(routed.diagnostics).toHaveLength(0);
+      expect(routed.files.map((file) => file.path).toSorted()).toStrictEqual(
+        [
+          path.join(routedWs, "a", "core", "AGENTS.md"),
+          path.join(routedWs, "b", "core", "AGENTS.md"),
+        ].toSorted(),
+      );
+      expect(routed.files.map((file) => file.path)).not.toContain(
+        path.join(outsideRouted, "AGENTS.md"),
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "loads a literal extglob-named directory as a literal path",
+    async () => {
+      // hasGlobPattern contract lock: `@(a|b)/AGENTS.md` carries no `? * { }`, so it
+      // is NOT routed to fs.glob — the extglob stays literal and names the real
+      // on-disk directory called `@(a|b)`, reading that one file. The extglob-open
+      // fix touches only the routed prefix grammar; this literal-path contract must
+      // stay byte-identical. POSIX-gated because `|` is not a legal Windows filename
+      // byte, so the real fixture directory can only exist off Windows.
+      const workspaceDir = await createWorkspaceDir("literal-extglob-dir");
+      const packageDir = path.join(workspaceDir, "@(a|b)");
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.writeFile(path.join(packageDir, "AGENTS.md"), "literal extglob agents", "utf-8");
+
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        "@(a|b)/AGENTS.md",
+      ]);
+
+      expect(diagnostics).toHaveLength(0);
+      expect(files.map((file) => file.path)).toStrictEqual([path.join(packageDir, "AGENTS.md")]);
+    },
+  );
+
   it("treats a bracket parent with a child glob as fs.glob (bracket is a class)", async () => {
     // A pattern that mixes brackets with real magic (`pkg[ab]/**/AGENTS.md`)
     // routes to fs.glob, where `[ab]` IS a character class — the same asymmetry

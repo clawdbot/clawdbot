@@ -1239,6 +1239,38 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
       expect(matches).toStrictEqual(oracle);
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "resolves a routed extglob via the fallback past an external decoy symlink (fs.glob parity)",
+    async () => {
+      // Extglob walk-root probe for the fs.glob-absent fallback. `@(a|b)/*/AGENTS.md`
+      // carries `*`, so `@(a|b)` is an extglob alternation matching the real `a`/`b`
+      // dirs; the fallback matcher (Minimatch, extglobs on) honors it. The walk root
+      // must stop before the `@(` extglob segment and root at the workspace, exactly
+      // where fs.glob roots the walk. Pre-fix the routed-prefix scan saw no
+      // `? * { } [ ]` in `@(a|b)` and rooted the walk at the escaping decoy symlink
+      // literally named `@(a|b)`, diverging from the fs.glob oracle.
+      const workspaceDir = await createWorkspaceDir("fallback-extglob");
+      const outside = await createWorkspaceDir("fallback-extglob-outside");
+      await fs.writeFile(path.join(outside, "AGENTS.md"), "outside", "utf-8");
+      await fs.mkdir(path.join(workspaceDir, "a", "x"), { recursive: true });
+      await fs.mkdir(path.join(workspaceDir, "b", "y"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "a", "x", "AGENTS.md"), "a", "utf-8");
+      await fs.writeFile(path.join(workspaceDir, "b", "y", "AGENTS.md"), "b", "utf-8");
+      if (!(await trySymlink(outside, path.join(workspaceDir, "@(a|b)")))) {
+        return;
+      }
+
+      const pattern = "@(a|b)/*/AGENTS.md";
+      const oracle = await nodeGlobRelative(workspaceDir, pattern);
+      expect(oracle).toStrictEqual(["a/x/AGENTS.md", "b/y/AGENTS.md"]);
+
+      await withoutNativeGlobApis(async () => {
+        const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+        expect(matches).toStrictEqual(oracle);
+      });
+    },
+  );
 });
 
 describe("toPortableMatchPath", () => {
