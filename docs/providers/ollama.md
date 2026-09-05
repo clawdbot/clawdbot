@@ -981,8 +981,13 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     does Ollama choose its own model, Modelfile, `OLLAMA_CONTEXT_LENGTH`, or
     VRAM-based default; the native adapter does not fall back directly to the
     advertised `contextWindow`. After upgrading an older configuration, run
-    `openclaw doctor --fix`. Use `params.num_ctx` to override the native request
-    context explicitly. The
+    `openclaw doctor --fix`. Doctor preserves current `contextTokens` caps without
+    creating a stronger model or provider `num_ctx` pin; uncapped legacy native
+    entries still migrate their older context budgets. Existing explicit
+    `params.num_ctx` values remain authoritative, including pins an older Doctor
+    already wrote. Review or remove an oversized existing pin to let
+    `contextTokens` drive the request again. Use `params.num_ctx` to override
+    the native request context explicitly. The
     OpenAI-compatible adapter still injects `options.num_ctx` by default from
     `params.num_ctx`, then the matching model entry's `contextTokens` or
     `contextWindow`; disable with
