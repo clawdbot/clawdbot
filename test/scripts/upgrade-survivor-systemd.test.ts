@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,7 +23,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const owner = resolve("scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh");
 
 function fixture() {
-  const home = tempDirs.make("survivor-manager-");
+  const home = realpathSync(tempDirs.make("survivor-manager-"));
   const env = {
     HOME: home,
     PATH: `${home}/bin:${process.env.PATH}`,
@@ -44,7 +52,18 @@ function fixture() {
     });
   const unit = join(home, ".config/systemd/user/openclaw-gateway.service");
   mkdirSync(join(home, ".config/systemd/user"), { recursive: true });
-  return { home, env, shell, systemctl, unit };
+  const manager = (...args: string[]) =>
+    spawnSync(process.execPath, [join(home, "bin/systemd-fixture.mjs"), ...args], {
+      env,
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+  const execute = () => {
+    const command = manager("command");
+    expect(command.status, command.stderr).toBe(0);
+    return spawnSync("bash", ["-c", command.stdout], { env, encoding: "utf8", timeout: 5_000 });
+  };
+  return { home, env, shell, systemctl, unit, manager, execute };
 }
 
 describe.skipIf(process.platform === "win32")("survivor manager fixture", () => {
@@ -147,6 +166,144 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
     });
   });
 
+  it.each(["plain", 'space "quoted" %h %%h', "trailing\\"])(
+    "executes literal scalar paths through the copied fixture with cwd %j",
+    async (directory) => {
+      const { home, env, unit, manager, execute } = fixture();
+      const workingDirectory = join(home, directory);
+      const stateDirectory = join(home, 'state *?[ab](x)\\ "quoted" %h %%h');
+      const alternateDirectory = join(home, 'state 12a(x) "quoted" %h %%h');
+      for (const fixtureDirectory of [workingDirectory, stateDirectory, alternateDirectory]) {
+        mkdirSync(fixtureDirectory, { recursive: true });
+      }
+      const environmentFile = join(stateDirectory, "gateway.systemd.env");
+      const fileValue = 'file "quoted" \\ $literal `literal` %h %%h';
+      const inlineValue = 'inline "quoted" \\ %h %%h';
+      writeFileSync(environmentFile, serializeSystemdEnvironmentFile({ FIXTURE_VALUE: fileValue }));
+      writeFileSync(
+        join(alternateDirectory, "gateway.systemd.env"),
+        serializeSystemdEnvironmentFile({ FIXTURE_VALUE: "wrong neighbor" }),
+      );
+      const program = join(home, "finite child.mjs");
+      writeFileSync(
+        program,
+        "console.log(JSON.stringify({argv:process.argv.slice(2), cwd:process.cwd(), inline:process.env.FIXTURE_INLINE, value:process.env.FIXTURE_VALUE}));\n",
+      );
+      const programArguments = [process.execPath, program, 'argument "quoted" \\ %h %%h'];
+      writeFileSync(
+        unit,
+        buildSystemdUnit({
+          programArguments,
+          workingDirectory,
+          environment: { FIXTURE_INLINE: inlineValue, FIXTURE_VALUE: "inline fallback" },
+          environmentFiles: [environmentFile],
+        }),
+      );
+      const properties = manager(
+        "busctl",
+        "--user",
+        "--json=short",
+        "get-property",
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice",
+        "org.freedesktop.systemd1.Service",
+        "ExecStart",
+        "WorkingDirectory",
+        "Environment",
+        "EnvironmentFiles",
+        "UnsetEnvironment",
+      );
+      expect(properties.status, properties.stderr).toBe(0);
+      expect(
+        properties.stdout
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ).toContainEqual({
+        type: "a(sb)",
+        data: [
+          [`${home}/state \\*\\?\\[ab\\]\\(x\\)\\\\ "quoted" %h %%h/gateway.systemd.env`, true],
+        ],
+      });
+      expect(await readSystemdServiceExecStart(env, { requireEffective: true })).toMatchObject({
+        programArguments,
+        workingDirectory,
+        environment: { FIXTURE_INLINE: inlineValue, FIXTURE_VALUE: fileValue },
+      });
+      const child = execute();
+      expect(child.status, child.stderr).toBe(0);
+      expect(JSON.parse(child.stdout)).toEqual({
+        argv: programArguments.slice(2),
+        cwd: workingDirectory,
+        inline: inlineValue,
+        value: fileValue,
+      });
+    },
+  );
+
+  it("preserves lexical dot-dot paths while executing through a symlink", async () => {
+    const { home, env, unit, execute } = fixture();
+    mkdirSync(join(home, "target/nested"), { recursive: true });
+    mkdirSync(join(home, "target/cwd"));
+    mkdirSync(join(home, "cwd"));
+    symlinkSync(join(home, "target/nested"), join(home, "link"), "dir");
+    // Joining or normalizing this spelling would select the tempting home/cwd instead.
+    const workingDirectory = `${home}/link/../cwd`;
+    writeFileSync(
+      unit,
+      buildSystemdUnit({
+        programArguments: [process.execPath, "-p", "process.cwd()"],
+        workingDirectory: `${workingDirectory}/.`,
+      }),
+    );
+    expect.soft(await readSystemdServiceExecStart(env, { requireEffective: true })).toMatchObject({
+      workingDirectory,
+    });
+    const child = execute();
+    expect(child.status, child.stderr).toBe(0);
+    expect(child.stdout.trim()).toBe(join(home, "target/cwd"));
+  });
+
+  it("does not broaden a missing optional literal file and fails when it is required", () => {
+    const { home, unit, manager, execute } = fixture();
+    mkdirSync(join(home, "state-one"));
+    writeFileSync(join(home, "state-one/gateway.systemd.env"), "FIXTURE_VALUE=wrong-neighbor\n");
+    const content = buildSystemdUnit({
+      programArguments: [process.execPath, "-p", "process.env.FIXTURE_VALUE"],
+      environment: { FIXTURE_VALUE: "inline %h %%h" },
+      environmentFiles: [join(home, "state*/gateway.systemd.env")],
+    });
+    writeFileSync(unit, content);
+    const child = execute();
+    expect(child.status, child.stderr).toBe(0);
+    expect(child.stdout.trim()).toBe("inline %h %%h");
+    writeFileSync(unit, content.replace("EnvironmentFile=-", "EnvironmentFile="));
+    expect(manager("reload").status).toBe(0);
+    const required = manager("command");
+    expect(required.status).not.toBe(0);
+    expect(required.stderr).toContain("ENOENT");
+  });
+
+  it.each(["*.env", "?.env", "[ab].env", "dangling\\", "unknown\\q"])(
+    "rejects unsupported EnvironmentFile pattern %j visibly",
+    (pattern) => {
+      const { home, unit, manager } = fixture();
+      writeFileSync(
+        unit,
+        buildSystemdUnit({ programArguments: [process.execPath, "-p", "process.cwd()"] }).replace(
+          "[Service]",
+          `[Service]\nEnvironmentFile=-${home}/${pattern}`,
+        ),
+      );
+      const load = manager("load-state");
+      expect(load.status).not.toBe(0);
+      expect(load.stderr).toContain("Unsupported");
+      const command = manager("command");
+      expect(command.status).not.toBe(0);
+      expect(command.stderr).toContain("Unsupported");
+    },
+  );
+
   it("keeps the inspected service alive after the caller terminal closes and drains restart children", async () => {
     const { home, env, shell, systemctl, unit } = fixture();
     const record = join(home, "starts.jsonl");
@@ -180,14 +337,18 @@ setInterval(() => {}, 1000);
       }),
     );
     const records = (): Array<{ pid: number; argv: string[]; cwd: string; value: string }> => {
-      if (!existsSync(record)) return [];
+      if (!existsSync(record)) {
+        return [];
+      }
       // The restarted service appends one JSON record per line while this poller reads
       // concurrently, so a read landing mid-append sees a torn final line. Only whole
       // newline-terminated records count as observed starts; an unterminated tail is
       // dropped so the poll retries instead of throwing. Earlier lines are always
       // complete, so a parse failure there still fails the test.
       const lines = readFileSync(record, "utf8").split("\n");
-      if (lines.at(-1) !== "") lines.pop();
+      if (lines.at(-1) !== "") {
+        lines.pop();
+      }
       return lines.filter((line) => line !== "").map((line) => JSON.parse(line));
     };
     const waitForStarts = async (count: number) => {

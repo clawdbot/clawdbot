@@ -1,5 +1,6 @@
 /** Renders and parses systemd unit snippets for managed gateway services. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { escape as escapeGlob } from "minimatch";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
 
@@ -39,7 +40,8 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
     const rawValue = value ?? "";
     assertNoSystemdLineBreaks(key, "Systemd environment variable names");
     assertNoSystemdLineBreaks(rawValue, "Systemd environment variable values");
-    return `Environment=${systemdEscapeArg(`${key}=${rawValue.trim()}`)}`;
+    const assignment = `${key}=${rawValue.trim()}`.replaceAll("%", "%%");
+    return `Environment=${systemdEscapeArg(assignment)}`;
   });
 }
 
@@ -49,7 +51,8 @@ function renderEnvironmentFileLines(environmentFiles: string[] | undefined): str
   }
   return normalizeStringEntries(environmentFiles).map((entry) => {
     assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
-    return `EnvironmentFile=-${systemdEscapeArg(entry)}`;
+    // EnvironmentFile is one scalar glob, not a quoted argv word.
+    return `EnvironmentFile=-${escapeGlob(entry).replaceAll("%", "%%")}`;
   });
 }
 
@@ -60,12 +63,29 @@ export function buildSystemdUnit({
   environment,
   environmentFiles,
 }: GatewayServiceRenderArgs): string {
-  const execStart = programArguments.map(systemdEscapeArg).join(" ");
+  const execStart = programArguments
+    .map((argument) => systemdEscapeArg(argument.replaceAll("%", "%%")))
+    .join(" ");
   const descriptionValue = description?.trim() || "OpenClaw Gateway";
   assertNoSystemdLineBreaks(descriptionValue, "Systemd Description");
   const descriptionLine = `Description=${descriptionValue}`;
-  const workingDirLine = workingDirectory
-    ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
+  if (workingDirectory) {
+    assertNoSystemdLineBreaks(workingDirectory, "Systemd WorkingDirectory");
+    const lastComponent = workingDirectory
+      .split("/")
+      .findLast((part) => part !== "" && part !== ".");
+    // systemd 255 strips trailing whitespace when serializing cwd to its executor.
+    // Check the last real component without normalizing symlink-sensitive parent segments.
+    if (lastComponent && /[ \t]$/u.test(lastComponent)) {
+      throw new Error(
+        "Systemd WorkingDirectory cannot end in spaces or tabs; choose a directory without trailing whitespace.",
+      );
+    }
+  }
+  // Scalar paths are unquoted; /. shields a final backslash from line continuation.
+  const workingDirPath = workingDirectory?.replace(/\\$/u, "$&/.");
+  const workingDirLine = workingDirPath
+    ? `WorkingDirectory=${workingDirPath.replaceAll("%", "%%")}`
     : null;
   const envLines = renderEnvLines(environment);
   const environmentFileLines = renderEnvironmentFileLines(environmentFiles);
