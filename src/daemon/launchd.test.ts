@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PortListener } from "../infra/ports-types.js";
 import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
@@ -680,6 +680,8 @@ vi.mock("node:fs/promises", async () => {
   };
   return { ...wrapped, default: wrapped };
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 beforeEach(() => {
   state.launchctlCalls.length = 0;
@@ -3463,6 +3465,7 @@ describe("launchd install", () => {
   }>)(
     "protects the current service and allows $name",
     async ({ managedPidAfterCleanup, listeners }) => {
+      vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
       const env = createLaunchdEnvWithGatewayPort("19002");
       if (managedPidAfterCleanup !== 4242) {
         state.printOutput = ["state = running", `pid = ${managedPidAfterCleanup}`].join("\n");
@@ -3484,6 +3487,14 @@ describe("launchd install", () => {
         expect.objectContaining({ resolveProtectedPid: expect.any(Function) }),
       );
       expect(state.cleanupProtectedPids).toEqual([managedPidAfterCleanup]);
+      expect(launchctlSpawnSync).toHaveBeenCalledWith(
+        "launchctl",
+        ["print", serviceId],
+        expect.objectContaining({
+          env: expect.not.objectContaining({ BOUNDARY_PARENT_ONLY: "synthetic" }),
+          timeout: 2_000,
+        }),
+      );
       expect(inspectPortUsage).toHaveBeenCalledWith(19002, {
         probeHosts: ["127.0.0.1"],
       });
