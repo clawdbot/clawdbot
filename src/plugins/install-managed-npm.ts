@@ -79,7 +79,6 @@ import {
   auditDeclaredOpenClawHostDependency,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
-
 import {
   buildPluginDependencyStatus,
   normalizePluginDependencySpecs,
