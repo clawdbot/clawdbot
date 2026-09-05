@@ -139,6 +139,11 @@ function stepGlobPositions(glob: string, positions: readonly number[], char: str
   return closeGlobPositions(glob, next);
 }
 
+// Candidate characters simulated across every glob before the search gives up.
+// Operator policies stay in the low thousands (a 40-character allow literal under
+// twenty denies costs ~1.2k), so only a policy denying per letter reaches this.
+const MAX_NAMESPACE_SEARCH_EXTENSIONS = 20_000;
+
 /** One glob list run in lockstep: `positions[i]` tracks `globs[i]`. */
 type GlobRun = { globs: readonly string[]; positions: number[][] };
 
@@ -190,13 +195,32 @@ function globRunAccepts(run: GlobRun): boolean {
 }
 
 /**
+ * Characters some allow layer still needs at its current positions. Walking
+ * those first follows a literal an allow glob spells out instead of extending
+ * names no allow glob can finish.
+ */
+function pendingAllowLiterals(layers: readonly GlobRun[]): Set<string> {
+  const pending = new Set<string>();
+  for (const run of layers) {
+    run.positions.forEach((positions, index) => {
+      for (const position of positions) {
+        const symbol = run.globs[index]?.[position];
+        if (symbol && symbol !== "*") {
+          pending.add(symbol);
+        }
+      }
+    });
+  }
+  return pending;
+}
+
+/**
  * Whether some provider-safe tool name under `namespace` is matched by a glob
  * of every allow layer and by no deny glob. Every glob is simulated together
- * over one candidate name at a time, breadth-first over the suffix, so the
- * decision is exact: no synthetic witness, no cap that drops a candidate.
- * The position sets form a finite space the search never revisits, so it
- * always terminates with the exact answer; a policy that denies every
- * candidate ends as soon as each branch reaches a deny's trailing `*`.
+ * over one candidate name at a time, depth-first over the suffix and trying the
+ * characters an allow glob still needs first, so a name only a long literal can
+ * spell is reached in as many steps as that name is long. No state is visited
+ * twice and the space is finite, so ordinary policies get the exact answer.
  */
 function globLayersAdmitSomeName(params: {
   namespace: string;
@@ -251,9 +275,9 @@ function globLayersAdmitSomeName(params: {
       .join("|");
 
   const visited = new Set<string>([keyOf(initial)]);
-  const queue: SearchState[] = [initial];
-  // `for…of` sees states pushed during iteration, so the queue needs no index.
-  for (const state of queue) {
+  const stack: SearchState[] = [initial];
+  let extensions = 0;
+  for (let state = stack.pop(); state; state = stack.pop()) {
     const candidate = namespace + state.suffix;
     if (
       state.suffix.length > 0 &&
@@ -266,10 +290,22 @@ function globLayersAdmitSomeName(params: {
     if (candidate.length >= TOOL_NAME_MAX_TOTAL) {
       continue;
     }
-    for (const char of alphabet) {
+    // Depth-first explores the last state pushed first, so the characters an
+    // allow glob still needs go last and lead the walk.
+    const pending = pendingAllowLiterals(state.layers);
+    const ordered = [...alphabet].filter((char) => !pending.has(char)).concat([...pending]);
+    for (const char of ordered) {
       // Generated names open their suffix with a letter; nothing else can follow.
       if (state.suffix.length === 0 && !/[a-z]/.test(char)) {
         continue;
+      }
+      // Denies that each track one letter (`memos__*b*0`) make the state space
+      // exponential, so the work is capped. Past the cap the namespace counts as
+      // excluded: hiding an outage the policy may admit costs a lookup miss,
+      // naming a server it excludes leaks that the server is configured.
+      extensions += 1;
+      if (extensions > MAX_NAMESPACE_SEARCH_EXTENSIONS) {
+        return false;
       }
       const next: SearchState = {
         layers: state.layers.map((run) => settleGlobRun(stepGlobRun(run, char))),
@@ -286,7 +322,7 @@ function globLayersAdmitSomeName(params: {
         continue;
       }
       visited.add(key);
-      queue.push(next);
+      stack.push(next);
     }
   }
   return false;

@@ -584,6 +584,24 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: true,
     },
     {
+      label: "a long allow literal under denies that each track one suffix letter",
+      tools: {
+        allow: [`memos__*${"a".repeat(40)}`],
+        deny: "bcdfghijklnpqrtuvwxy".split("").map((char) => `memos__*${char}*0`),
+      },
+      toolNames: ["a".repeat(40)],
+      visible: true,
+    },
+    {
+      label: "an allow needing a digit every letter denies before it",
+      tools: {
+        allow: ["memos__*0"],
+        deny: "abcdefghijklmnopqrstuvwxyz".split("").map((char) => `memos__*${char}*0`),
+      },
+      toolNames: ["a0"],
+      visible: false,
+    },
+    {
       label: "an allow and a deny naming the same memos tool",
       tools: { allow: ["memos__read_note"], deny: ["memos__read_note"] },
       visible: false,
