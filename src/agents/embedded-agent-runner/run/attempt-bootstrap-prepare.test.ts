@@ -71,6 +71,59 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     );
   });
 
+  it("keeps managed-worktree bootstrap on the session checkout only", async () => {
+    // Worktree sessions must not inject shared agent-home AGENTS.md/SOUL.md, or a
+    // rewritten shared file poisons every later worktree prompt.
+    const agentWorkspace = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-home-")),
+    );
+    const worktreeWorkspace = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-worktree-")),
+    );
+    tempDirs.push(agentWorkspace, worktreeWorkspace);
+    await fs.writeFile(path.join(agentWorkspace, "AGENTS.md"), "Shared home instructions");
+    await fs.writeFile(path.join(agentWorkspace, "SOUL.md"), "Shared home soul");
+    await fs.writeFile(path.join(worktreeWorkspace, "AGENTS.md"), "Worktree instructions");
+    await fs.writeFile(path.join(worktreeWorkspace, "SOUL.md"), "Worktree soul");
+
+    const result = await prepareEmbeddedAttemptBootstrap({
+      attempt: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:dashboard:worktree",
+        trigger: "user",
+        isCanonicalWorkspace: false,
+        config: { agents: { defaults: { workspace: agentWorkspace } } },
+      } as EmbeddedRunAttemptParams,
+      bootstrapWorkspaceDir: worktreeWorkspace,
+      effectiveWorkspace: worktreeWorkspace,
+      hasReadTool: true,
+      isRawModelRun: false,
+      markStage: () => undefined,
+      resolvedWorkspace: worktreeWorkspace,
+      sessionAgentId: "main",
+      sessionLabel: "agent:main:dashboard:worktree",
+    });
+
+    expect(result.contextFiles).toContainEqual(
+      expect.objectContaining({
+        path: path.join(worktreeWorkspace, "AGENTS.md"),
+        content: "Worktree instructions",
+      }),
+    );
+    expect(result.contextFiles).toContainEqual(
+      expect.objectContaining({
+        path: path.join(worktreeWorkspace, "SOUL.md"),
+        content: "Worktree soul",
+      }),
+    );
+    expect(result.contextFiles).not.toContainEqual(
+      expect.objectContaining({ path: path.join(agentWorkspace, "AGENTS.md") }),
+    );
+    expect(result.contextFiles).not.toContainEqual(
+      expect.objectContaining({ path: path.join(agentWorkspace, "SOUL.md") }),
+    );
+  });
+
   it("keeps same-workspace bootstrap output byte-identical", async () => {
     const workspace = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-same-workspace-")),
