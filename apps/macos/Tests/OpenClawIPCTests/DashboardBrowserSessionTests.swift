@@ -303,7 +303,8 @@ struct DashboardBrowserSessionTests {
 
     @Test func `removal clears a persisted browser session before any window opens in this process`() async throws {
         let profileID = "forgotten-\(UUID().uuidString)"
-        let identifier = DashboardBrowserSessionStore.identifier(profileID: profileID)
+        let identifier = DashboardBrowserSessionStore.identifier(
+            profileID: profileID, registryNamespace: MacGatewayProfileStore.service)
 
         do {
             try await self.verifyPersistedSessionRemoval(profileID: profileID, identifier: identifier)
@@ -336,6 +337,47 @@ struct DashboardBrowserSessionTests {
         #expect(manager._testController() == nil)
         #expect(manager._testAuxiliaryWindows().isEmpty)
         await connection.shutdown()
+    }
+
+    @Test func `named app registries isolate persisted cookies for the same Gateway`() async throws {
+        let service = "openclaw.browser-isolation-test.\(UUID().uuidString)"
+        let identifiers = ["work", "personal"].map { name in
+            DashboardBrowserSessionStore.identifier(
+                profileID: "same-gateway",
+                registryNamespace: AppProfile(environment: ["OPENCLAW_PROFILE": name]).keychainService(base: service))
+        }
+        let result: Result<Void, Error>
+        do {
+            try await self.verifyIsolatedRegistryCookies(identifiers)
+            result = .success(())
+        } catch {
+            result = .failure(error)
+        }
+        // The helper releases every store owner before WebKit removes its directory.
+        for identifier in Set(identifiers) {
+            do {
+                try await WKWebsiteDataStore.remove(forIdentifier: identifier)
+            } catch {
+                Issue.record(error, "Could not remove the test's isolated WebKit store")
+            }
+        }
+        try result.get()
+    }
+
+    private func verifyIsolatedRegistryCookies(_ identifiers: [UUID]) async throws {
+        let work = DashboardBrowserSessionStore(dataStore: WKWebsiteDataStore(forIdentifier: identifiers[0]))
+        let personal = DashboardBrowserSessionStore(dataStore: WKWebsiteDataStore(forIdentifier: identifiers[1]))
+        let workSession = try self.session("work-account-cookie")
+        let personalSession = try self.session("personal-account-cookie")
+        try await work.lease(for: workSession).prepare(for: workSession.origin, in: WKUserContentController())
+        try await personal.lease(for: personalSession).prepare(
+            for: personalSession.origin,
+            in: WKUserContentController())
+        #expect(await work.dataStore.httpCookieStore.allCookies().map(\.value) == ["work-account-cookie"])
+        #expect(await personal.dataStore.httpCookieStore.allCookies().map(\.value) == ["personal-account-cookie"])
+        try await work.invalidate().value
+        #expect(await work.dataStore.httpCookieStore.allCookies().isEmpty)
+        #expect(await personal.dataStore.httpCookieStore.allCookies().map(\.value) == ["personal-account-cookie"])
     }
 
     private func postRemoval(profileID: String) -> UUID {

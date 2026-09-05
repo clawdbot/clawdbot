@@ -909,7 +909,8 @@ extension DashboardManager {
             return store
         }
         let store = DashboardBrowserSessionStore(dataStore: websiteDataStore.isPersistent
-            ? WKWebsiteDataStore(forIdentifier: DashboardBrowserSessionStore.identifier(profileID: profileID))
+            ? WKWebsiteDataStore(forIdentifier: DashboardBrowserSessionStore.identifier(
+                profileID: profileID, registryNamespace: MacGatewayProfileStore.service))
             : .nonPersistent())
         self.profileBrowserStores[profileID] = store
         return store

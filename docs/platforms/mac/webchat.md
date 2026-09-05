@@ -55,7 +55,7 @@ and do not inherit `gateway.remote.tlsFingerprint` from the primary Gateway.
 Dashboard windows enforce that same saved-profile pinning policy.
 Browser sessions use normal HTTPS trust and remain bound to their authenticated
 Gateway origin, including its port. Each saved profile has its own dashboard
-browser data. Links opened beside a browser-authenticated dashboard use a separate
+browser data, isolated across named app profiles. Links opened beside a browser-authenticated dashboard use a separate
 temporary browser session.
 Removing a profile closes its native chat and dashboard windows and shuts down
 its secondary connection.
