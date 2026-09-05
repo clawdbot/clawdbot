@@ -1,12 +1,18 @@
 /* @vitest-environment jsdom */
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   GitHubPublicationController,
   type GitHubPublicationOptions,
-  type GitHubPublicationScope,
-} from "./chat-github-publication.ts";
+  type GitHubPublicationPresentationBinding,
+} from "../../lib/sessions/github-publication-controller.ts";
+
+type GitHubPublicationScope = Parameters<GitHubPublicationPresentationBinding["sync"]>[0] & {
+  client: Pick<GatewayBrowserClient, "request">;
+  key: string;
+  sessionKey: string;
+};
 
 const shared = { source: "system-configured" as const, accountId: 1, login: "system-bot" };
 const account = { accountId: 2, login: "alice-tools" };
@@ -63,11 +69,38 @@ function setup(initialOptions = options) {
     isCurrent: () => true,
   };
   const changed = vi.fn();
-  const controller = new GitHubPublicationController(changed);
-  controller.sync(scope);
+  let current = scope;
+  const create = (owner: GitHubPublicationScope) =>
+    new GitHubPublicationController({
+      client: owner.client,
+      sessionKey: owner.sessionKey,
+      isCurrent: () => current.key === owner.key && current.isCurrent(),
+      reserve: () => {},
+      release: () => {},
+      unbound: () => {},
+    });
+  let operation = create(scope);
+  let binding = operation.bind(changed);
+  binding.sync(scope);
+  const controller = {
+    view: () => binding.view(),
+    reset: () => operation.reset(),
+    sync(next: GitHubPublicationScope) {
+      if (next.key !== current.key) {
+        binding.detach();
+        operation.reset();
+        current = next;
+        operation = create(next);
+        binding = operation.bind(changed);
+      } else {
+        current = next;
+      }
+      binding.sync(next);
+    },
+  };
   return { controller, request, scope, changed };
 }
-async function settled(controller: GitHubPublicationController) {
+async function settled(controller: ReturnType<typeof setup>["controller"]) {
   await vi.waitFor(() => expect(controller.view()?.busy).toBe(false));
   return controller.view()!;
 }
@@ -481,6 +514,71 @@ describe("explicit GitHub publication", () => {
     expect(request).toHaveBeenLastCalledWith(
       "sessions.github.publish",
       expect.objectContaining({ selection: { source: "shared", expected: shared } }),
+    );
+  });
+});
+
+describe("publication action observation", () => {
+  it("does not let an old terminal acknowledgement release a newer uncertain attempt", async () => {
+    const { controller, request } = setup();
+    request.mockResolvedValueOnce({ requestId, status: "published", publisher: shared });
+    (await settled(controller)).onPublish?.();
+    const terminal = await settled(controller);
+    terminal.onNewAction?.();
+    const next = await settled(controller);
+    request.mockRejectedValueOnce(new Error("Response lost"));
+    next.onPublish?.();
+    const unknown = await settled(controller);
+    const calls = request.mock.calls.length;
+    terminal.onNewAction?.();
+    expect(controller.view()).toMatchObject({
+      locked: true,
+      error: unknown.error,
+      selection: unknown.selection,
+    });
+    expect(request).toHaveBeenCalledTimes(calls);
+    controller.view()?.onPublish?.();
+    await settled(controller);
+    const publications = request.mock.calls.filter(
+      ([method]) => method === "sessions.github.publish",
+    );
+    expect(publications.at(-1)).toEqual(publications.at(-2));
+  });
+
+  it("does not let a saved confirmation confirm a different publication", async () => {
+    const { controller, request } = setup({ ...options, pendingPersonal: interrupted });
+    const original = await settled(controller);
+    request.mockResolvedValueOnce({
+      requestId,
+      status: "published",
+      publisher: { source: "personal", ...account },
+    });
+    original.onConfirm?.();
+    const terminal = await settled(controller);
+    request.mockResolvedValueOnce(options);
+    terminal.onNewAction?.();
+    (await settled(controller)).onSelect?.("personal");
+    const next = {
+      ...interrupted,
+      result: { ...interrupted.result, requestId: "bdca439a-e787-4f9f-b5f3-a878c662cc78" },
+      confirmation: { ...confirmation, requestDigest: "b".repeat(64) },
+    };
+    request.mockResolvedValueOnce(next.result).mockResolvedValueOnce(next);
+    controller.view()?.onPublish?.();
+    const reviewed = await settled(controller);
+    expect(reviewed.confirmation).toEqual(next.confirmation);
+    const calls = request.mock.calls.length;
+    original.onConfirm?.();
+    expect(request).toHaveBeenCalledTimes(calls);
+    request.mockResolvedValueOnce({ ...next.result, status: "requested" });
+    reviewed.onConfirm?.();
+    await settled(controller);
+    expect(request).toHaveBeenLastCalledWith(
+      "sessions.github.confirm",
+      expect.objectContaining({
+        requestId: next.result.requestId,
+        requestDigest: next.confirmation.requestDigest,
+      }),
     );
   });
 });

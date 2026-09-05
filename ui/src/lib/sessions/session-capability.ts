@@ -23,6 +23,7 @@ import type {
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
 import type { SessionGroupSettings } from "./custom-groups.ts";
@@ -33,6 +34,7 @@ import type {
   SessionReconcileOptions,
   SessionRunTerminal,
 } from "./reconcile.ts";
+import type { createSessionGitHubPublication } from "./session-github-publication.ts";
 
 export type SessionState = {
   result: SessionsListResult | null;
@@ -128,7 +130,7 @@ export type SessionGateway = {
     hello: GatewayHelloOk | null;
     assistantAgentId?: string | null;
     sessionKey?: string;
-    selfUser?: { readonly id: string } | null;
+    selfUser?: AuthenticatedUser | null;
   };
   subscribe: (listener: (snapshot: SessionGateway["snapshot"]) => void) => () => void;
   subscribeEvents: (listener: (event: GatewayEventFrame) => void) => () => void;
@@ -149,6 +151,7 @@ export type SessionMessageSubscription = GatewaySessionMessageSubscription;
 export type SessionArchiveVisibility = "pending" | "archived";
 
 export type SessionCapability = {
+  readonly githubPublication: ReturnType<typeof createSessionGitHubPublication>;
   readonly state: SessionState;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;

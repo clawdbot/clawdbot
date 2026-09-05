@@ -3311,6 +3311,8 @@ export const en: TranslationMap & {
     account: "Publication account",
     choose: "Choose an account",
     newAction: "Choose a new publication",
+    capacity:
+      'Too many publications are awaiting review. Finish an existing publication, then select "{newAction}" to make room. Existing retries remain available.',
     confirm: "Confirm original publication",
     check: "Check publication",
     refresh: "Refresh publication",
