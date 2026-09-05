@@ -258,7 +258,7 @@ describe("provider local service", () => {
     expect(hasManagedProviderLocalServices()).toBe(false);
   });
 
-  it("resolves process configuration from the host config", async () => {
+  it("resolves process configuration for root and exact legacy baseURL endpoints", async () => {
     const port = await getFreePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const acquire = createConfiguredProviderLocalServiceAcquirer(
@@ -268,7 +268,7 @@ describe("provider local service", () => {
             providers: {
               "gpu-spark": {
                 baseUrl: "",
-                baseURL: `127.0.0.1:${port}/v1`,
+                baseURL: `127.0.0.1:${port}/V1`,
                 models: [],
                 localService: {
                   command: process.execPath,
@@ -286,17 +286,23 @@ describe("provider local service", () => {
         }) as OpenClawConfig,
     );
 
-    const lease = await withSpawnReadyHealthProbe(() =>
+    const rootLease = await withSpawnReadyHealthProbe(() =>
       acquire({
         providerId: "gpu-spark",
         baseUrl: `http://127.0.0.1:${port}`,
         service: { command: "caller-controlled" },
       } as Parameters<typeof acquire>[0]),
     );
+    const configuredLease = await acquire({
+      providerId: "gpu-spark",
+      baseUrl: `http://127.0.0.1:${port}/V1`,
+    });
 
-    expect(lease).toBeDefined();
+    expect(rootLease).toBeDefined();
+    expect(configuredLease).toBeDefined();
     expect((await fetch(healthUrl)).ok).toBe(true);
-    lease?.release();
+    rootLease?.release();
+    configuredLease?.release();
     await waitForProbeFailure(healthUrl);
   });
 

@@ -64,8 +64,9 @@ function normalizeProviderBaseUrl(value: string): string | undefined {
 }
 
 function configuredProviderBaseUrlVariants(value: string): Set<string> {
-  const root = normalizeProviderBaseUrl(value)?.replace(/\/v1$/iu, "");
-  return root ? new Set([root, `${root}/v1`]) : new Set();
+  const normalized = normalizeProviderBaseUrl(value);
+  const root = normalized?.replace(/\/v1$/iu, "");
+  return normalized && root ? new Set([normalized, root, `${root}/v1`]) : new Set();
 }
 
 function isLoopbackProviderBaseUrl(value: string): boolean {
