@@ -114,8 +114,19 @@ struct DashboardWindowSmokeTests {
         // The empty unified toolbar is what grows the titlebar to 52pt so the
         // traffic lights center against the web titlebar row; without it they
         // hug the top edge and misalign with the hosted web buttons.
-        #expect(controller.window?.toolbar != nil)
+        let toolbar = try #require(controller.window?.toolbar)
         #expect(controller.window?.toolbarStyle == .unified)
+        #expect(controller.window?.toolbar?.isVisible == true)
+        NotificationCenter.default.post(
+            name: NSWindow.didEnterFullScreenNotification,
+            object: controller.window)
+        #expect(controller.window?.toolbar?.isVisible == false)
+        #expect(controller.window?.toolbar === toolbar)
+        NotificationCenter.default.post(
+            name: NSWindow.didExitFullScreenNotification,
+            object: controller.window)
+        #expect(controller.window?.toolbar?.isVisible == true)
+        #expect(controller.window?.toolbar === toolbar)
         // The toolbar only exists to size the titlebar, so View > Hide Toolbar
         // (⌥⌘T) must be refused; otherwise hiding it desyncs the 52pt web inset.
         controller.window?.toggleToolbarShown(nil)
@@ -124,6 +135,84 @@ struct DashboardWindowSmokeTests {
         #expect((controller.window?.frame.height ?? 0) >= DashboardWindowLayout.windowMinSize.height)
         #expect(controller.window?.frameAutosaveName == windowAutosaveName)
         controller.closeDashboard()
+    }
+
+    @Test func `dashboard reused window reconciles toolbar visibility in init`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let url = server.url("/control/#token=device-token")
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(
+                gatewayUrl: server.websocketURL("/control/").absoluteString,
+                token: "device-token",
+                password: nil),
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.show()
+        let originalWindow = try #require(controller.window)
+        let originalToolbar = try #require(originalWindow.toolbar)
+        #expect(originalToolbar.isVisible == true)
+        NotificationCenter.default.post(
+            name: NSWindow.didEnterFullScreenNotification,
+            object: originalWindow)
+        #expect(originalToolbar.isVisible == false)
+
+        let transferredWindow = try #require(controller.detachWindowForReplacement())
+        let replacement = DashboardWindowController(
+            url: url,
+            auth: controller.auth,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            reusingWindow: transferredWindow,
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { replacement.closeDashboard() }
+
+        #expect(replacement.window === originalWindow)
+        #expect(replacement.window?.toolbar !== originalToolbar)
+        // New toolbar inherits hidden state; .fullScreen off-transition throws NSGenericException.
+        #expect(replacement.window?.toolbar?.isVisible == true)
+    }
+
+    @Test func `dashboard fullscreen toolbar state is per window`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let url = server.url("/control/#token=device-token")
+        let firstController = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(
+                gatewayUrl: server.websocketURL("/control/").absoluteString,
+                token: "device-token",
+                password: nil),
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { firstController.closeDashboard() }
+        let secondController = DashboardWindowController(
+            url: url,
+            auth: firstController.auth,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { secondController.closeDashboard() }
+        firstController.show()
+        secondController.show()
+        #expect(firstController.window?.toolbar?.isVisible == true)
+        #expect(secondController.window?.toolbar?.isVisible == true)
+
+        NotificationCenter.default.post(
+            name: NSWindow.didEnterFullScreenNotification,
+            object: firstController.window)
+        #expect(firstController.window?.toolbar?.isVisible == false)
+        #expect(secondController.window?.toolbar?.isVisible == true)
+
+        NotificationCenter.default.post(
+            name: NSWindow.didExitFullScreenNotification,
+            object: firstController.window)
+        #expect(firstController.window?.toolbar?.isVisible == true)
+        #expect(secondController.window?.toolbar?.isVisible == true)
     }
 
     @Test func `dashboard context menu removes browser items and collapses separators`() {
