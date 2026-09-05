@@ -1,5 +1,6 @@
 // Gateway cron runtime service runs scheduled agent turns, heartbeat wakeups,
 // plugin hooks, notifications, and cron lifecycle cleanup.
+import fs from "node:fs/promises";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
@@ -105,7 +106,6 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
-import { buildCollectionReviewPrompt } from "../skills/workshop/collection-review-prompt.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
@@ -908,17 +908,15 @@ export function buildGatewayCronService(params: {
       const executionRoot = reviewAgentId
         ? resolveWorkshopSkillsDir(runtimeConfig, agentId)
         : undefined;
-      const turnMessage = executionRoot
-        ? await buildCollectionReviewPrompt(executionRoot)
-        : message;
+      if (executionRoot) {
+        await fs.mkdir(executionRoot, { recursive: true });
+      }
       try {
         return await runCronIsolatedAgentTurn({
           cfg: runtimeConfig,
           deps: params.deps,
-          job: executionRoot
-            ? { ...job, payload: { ...job.payload, kind: "agentTurn", message: turnMessage } }
-            : job,
-          message: turnMessage,
+          job,
+          message,
           abortSignal,
           onExecutionStarted,
           onExecutionPhase,

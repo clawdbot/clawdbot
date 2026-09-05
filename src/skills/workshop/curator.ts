@@ -66,10 +66,10 @@ function canonicalSkillKey(name: string): string {
   return key;
 }
 
-export type SkillUsageFacts = { lastUsedAtMs: number; useCount: number };
+type SkillUsageFacts = { lastUsedAtMs: number; useCount: number };
 
 /** Single reader for recorded usage; callers pass canonical skill files. */
-export function readSkillUsageByFile(
+function readSkillUsageByFile(
   skillFiles: readonly string[],
   options: OpenClawStateDatabaseOptions = {},
 ): Map<string, SkillUsageFacts> {

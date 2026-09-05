@@ -33,7 +33,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       payload: {
         kind: "agentTurn",
         message: expect.any(String),
-        toolsAllow: ["read", "write", "edit", "apply_patch", "exec", "process"],
+        toolsAllow: ["ls", "read", "write", "edit", "apply_patch", "exec", "process"],
       },
       schedule: {
         kind: "every",

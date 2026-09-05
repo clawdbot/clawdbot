@@ -41,7 +41,6 @@ const {
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
   runCronIsolatedAgentTurnMock,
-  buildCollectionReviewPromptMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
   abortAndDrainEmbeddedAgentRunMock,
@@ -80,7 +79,6 @@ const {
     status: "ok",
     summary: "ok",
   })),
-  buildCollectionReviewPromptMock: vi.fn(async () => "review"),
   runCronChangedMock: vi.fn(async (_event: unknown, _context?: unknown) => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "cron_changed",
@@ -218,10 +216,6 @@ vi.mock("../cron/delivery.js", async () => {
 
 vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
-}));
-
-vi.mock("../skills/workshop/collection-review-prompt.js", () => ({
-  buildCollectionReviewPrompt: buildCollectionReviewPromptMock,
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -486,7 +480,6 @@ describe("buildGatewayCronService", () => {
     fetchWithSsrFGuardMock.mockClear();
     sendCronAnnouncePayloadStrictMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
-    buildCollectionReviewPromptMock.mockReset().mockResolvedValue("review");
     runCronChangedMock.mockClear();
     getGlobalHookRunnerMock.mockClear();
     abortAndDrainEmbeddedAgentRunMock.mockClear();

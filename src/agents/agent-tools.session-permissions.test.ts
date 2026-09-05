@@ -358,6 +358,32 @@ describe("session permission filesystem tools", () => {
   });
 
   describe.each([undefined, true] as const)("full mode with required root=%s", (required) => {
+    it("lists directories without granting access beyond a required root", async () => {
+      await withTempDir("openclaw-listing-root-", async (parent) => {
+        const root = path.join(await fs.realpath(parent), "workspace");
+        const outside = path.join(await fs.realpath(parent), "other-agent");
+        await fs.mkdir(path.join(root, "nested"), { recursive: true });
+        await fs.mkdir(outside);
+        await fs.writeFile(path.join(outside, "private.txt"), "private");
+        const ls = createOpenClawCodingTools({
+          workspaceDir: root,
+          requireWorkspaceOnly: required,
+          sessionPermissionPolicy: { root, mode: "full" },
+        }).find((tool) => tool.name === "ls");
+        if (!ls) {
+          throw new Error("Expected directory discovery tool.");
+        }
+        expect(getTextContent(await ls.execute("inside", { path: "." }))).toBe('"nested/"');
+        if (required) {
+          await expect(ls.execute("outside", { path: outside })).rejects.toThrow(/sandbox root/i);
+        } else {
+          expect(getTextContent(await ls.execute("outside", { path: outside }))).toBe(
+            '"private.txt"',
+          );
+        }
+      });
+    });
+
     it.each(fileToolCases)("preserves $name authority and final file effects", async (testCase) => {
       await withTempDir("openclaw-permission-full-", async (parent) => {
         const root = path.join(await fs.realpath(parent), "workshop");

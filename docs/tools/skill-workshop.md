@@ -113,10 +113,14 @@ a normal isolated agent turn: cron owns scheduling, cancellation, and run
 history. `propose` and `off` disable these reviews.
 
 The reviewer reads and edits the agent's Workshop directory with normal file
-tools. Its prompt includes the complete relative file index and recorded usage.
+tools. Directory listings are paged to fit the selected model instead of putting
+every file path into the initial prompt. The reviewer follows each continuation
+before changing that directory.
 Skill contents are review material, not active instructions. It keeps useful
 procedures, simplifies bloated skills, consolidates overlap, and removes obsolete
-files. Zero recorded use alone never justifies removal.
+files. Absence of use in the current run never justifies removal. Usage tracking
+and experience review remain active; weekly cleanup does not receive a separate
+usage table.
 
 The file tools stay rooted at the Workshop directory. Shell commands use the
 operator's existing cron execution and approval policy; enabling review does not
@@ -126,8 +130,8 @@ shell commands; a full-access policy permits them. File discovery does not need 
 Reviews require the embedded runtime. If an enabled sandbox has
 `workspaceAccess: "ro"` or `"none"`, the turn refuses to run rather than editing
 a disposable copy. A writable sandbox uses the agent's Workshop directory.
-The inventory is limited to 10,000 entries and six directory levels; an
-incomplete inventory produces a visible failed run.
+Sandbox backends must support directory reads to provide shell-free discovery.
+Bundled backends use their existing filesystem permissions for these reads.
 
 ### Changes and recovery
 
