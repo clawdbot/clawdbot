@@ -437,14 +437,9 @@ export async function buildPreparedModelCatalogSnapshot(
       cfg,
       env,
     );
-    const providerReadiness = new Map<string, boolean>();
-    for (const outcome of params.providerOutcomes ?? []) {
-      const provider = normalizeProvider(outcome.provider);
-      providerReadiness.set(
-        provider,
-        providerReadiness.get(provider) === true || outcome.status === "ready",
-      );
-    }
+    const observedProviders = new Set(
+      params.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
+    );
     const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
     logStage("catalog-deps-ready");
     const entries = params.modelRegistry.getAll() as DiscoveredModel[];
@@ -468,9 +463,6 @@ export async function buildPreparedModelCatalogSnapshot(
         continue;
       }
       const provider = normalizeProvider(rawProvider);
-      if (providerReadiness.get(provider) === false) {
-        continue;
-      }
       const id = normalizeModelId(provider, rawId);
       const baseUrl = normalizeOptionalString(entry?.baseUrl);
       if (shouldSuppressBuiltInModel({ provider, id, baseUrl })) {
@@ -526,7 +518,7 @@ export async function buildPreparedModelCatalogSnapshot(
       supplementalManifestPlan.rows.map((entry) => catalogEntryDedupeKey(entry.provider, entry.id)),
     );
     const runtimeDiscoveryProviders = new Set([
-      ...providerReadiness.keys(),
+      ...observedProviders,
       ...supplementalManifestPlan.entries.flatMap((entry) =>
         entry.discovery === "runtime" ? [normalizeProviderId(entry.provider)] : [],
       ),
@@ -539,7 +531,7 @@ export async function buildPreparedModelCatalogSnapshot(
     const manifestModels = declaredManifestModels.filter(
       (entry) =>
         supplementalManifestKeys.has(catalogEntryDedupeKey(entry.provider, entry.id)) &&
-        (!providerReadiness.has(entry.provider) ||
+        (!observedProviders.has(entry.provider) ||
           discoveredKeys.has(catalogEntryDedupeKey(entry.provider, entry.id))),
     );
     mergeCatalogRouteVariants(routeVariants, manifestModels);

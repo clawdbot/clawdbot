@@ -92,8 +92,10 @@ describe("prepared model catalog builder", () => {
   });
 
   it.each(["ready", "unavailable", "auth-rejected"] as const)(
-    "does not replenish %s account inventory from metadata",
+    "preserves %s provider membership without replenishing it from metadata",
     async (status) => {
+      const entries =
+        status === "unavailable" ? [{ provider: "demo", id: "fallback", name: "Fallback" }] : [];
       mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
         { provider: "demo", id: "augmentation", name: "Augmentation" },
       ]);
@@ -103,12 +105,12 @@ describe("prepared model catalog builder", () => {
           discovery: "refreshable",
           modelIds: ["manifest-only"],
         }),
-        entries: status === "ready" ? [] : [{ provider: "demo", id: "fallback", name: "Fallback" }],
+        entries,
         providerOutcomes: [{ provider: "demo", status }],
         readOnly: false,
       });
-      expect(snapshot.entries).toEqual([]);
-      expect(snapshot.routeVariants).toEqual([]);
+      expect(snapshot.entries).toMatchObject(entries);
+      expect(snapshot.routeVariants).toMatchObject(entries);
       expect(snapshot.authoritative).toBe(status === "ready");
     },
   );

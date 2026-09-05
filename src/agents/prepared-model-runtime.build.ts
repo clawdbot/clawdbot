@@ -233,7 +233,7 @@ function createFullModelCatalogAccess(params: {
   if (fullCatalog) {
     if (
       params.pluginGeneration.pluginRegistry?.agentHarnesses.some(
-        ({ harness }) => harness.loadModelCatalog,
+        ({ harness }) => typeof harness.loadModelCatalog === "function",
       )
     ) {
       fullCatalog.authoritative = false;

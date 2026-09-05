@@ -125,6 +125,10 @@ export function prepareModelCatalogPublication(
       );
       if (
         discoveryOrigins.some((origin) => origin.provider === provider) ||
+        (!previousOrigins?.length &&
+          previous?.providerOutcomes?.some(
+            (candidate) => normalizeProvider(candidate.provider) === provider,
+          )) ||
         !previousAuth ||
         !previousAuth.credentials ||
         !auth.credentials ||
@@ -162,7 +166,7 @@ export function prepareModelCatalogPublication(
   ) =>
     dedupeByKey(
       [
-        ...current,
+        ...current.filter((entry) => !retainedProviders.has(normalizeProvider(entry.provider))),
         ...retained.filter(
           (entry) =>
             !entry.nativeRuntime && retainedProviders.has(normalizeProvider(entry.provider)),

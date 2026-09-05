@@ -5,7 +5,7 @@ import {
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
@@ -70,6 +70,7 @@ describe("prepared model runtime scoped refresh", () => {
       const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
       const learned = { provider: "provider-a", id: "learned", name: "Learned" };
       const variant = { ...learned, baseUrl: "https://catalog.example.test/v1" };
+      const fallback = { provider: "provider-a", id: "advisory", name: "Advisory" };
       const sibling = { provider: "provider-b", id: "new", name: "New" };
       const native = {
         provider: "provider-a",
@@ -79,6 +80,11 @@ describe("prepared model runtime scoped refresh", () => {
       };
       const snapshots: ModelCatalogSnapshot[] = [
         {
+          entries: [fallback],
+          routeVariants: [fallback],
+          providerOutcomes: [{ provider: "provider-a", profileId, status: "unavailable" }],
+        },
+        {
           entries: [native],
           routeVariants: [variant, native],
           providerOutcomes: [
@@ -86,8 +92,8 @@ describe("prepared model runtime scoped refresh", () => {
           ],
         },
         {
-          entries: [sibling],
-          routeVariants: [sibling],
+          entries: [fallback, sibling],
+          routeVariants: [fallback, sibling],
           providerOutcomes: [
             { provider: "provider-a", profileId, status: "unavailable" },
             { provider: "provider-b", status: "ready" },
@@ -105,13 +111,14 @@ describe("prepared model runtime scoped refresh", () => {
           entries: [sibling],
           routeVariants: [sibling],
           providerOutcomes: [
-            { provider: "provider-a", status: "ready" },
+            { provider: "provider-a", profileId: "provider-a:default", status: "ready" },
             { provider: "provider-b", status: "ready" },
           ],
         },
       ];
       const owner = await prepareCatalogOwner(config, snapshots);
-      await owner.loadFullModelCatalog!();
+      expect((await owner.loadFullModelCatalog!()).entries).toMatchObject([fallback]);
+      await owner.loadFullModelCatalog!({ refresh: true });
       const failed = await owner.loadFullModelCatalog!({ refresh: true });
       expect(failed.entries).toMatchObject([learned, sibling]);
       expect(failed.routeVariants).toMatchObject([variant, sibling]);
@@ -126,6 +133,12 @@ describe("prepared model runtime scoped refresh", () => {
       expect(recovered.entries).toMatchObject([sibling]);
       expect(recovered.routeVariants).toMatchObject([sibling]);
       expect(recovered.authoritative).not.toBe(false);
+      mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(snapshots[2]!);
+      expect(await owner.loadFullModelCatalog!({ refresh: true })).toMatchObject({
+        entries: [sibling],
+        routeVariants: [sibling],
+        authoritative: false,
+      });
     },
   );
 
@@ -637,6 +650,9 @@ describe("prepared model runtime scoped refresh", () => {
   });
 
   it("recomposes configured models and retires native rows on a compatible reload", async () => {
+    const { resolveAgentEffectiveModelPrimary } =
+      await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
+    mocks.resolveAgentEffectiveModelPrimary.mockImplementation(resolveAgentEffectiveModelPrimary);
     const nativeStarted = createDeferredCore();
     const releaseNative = createDeferredCore();
     let holdNative = false;
