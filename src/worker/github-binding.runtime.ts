@@ -133,11 +133,13 @@ async function bindWorkerGitHubCheckout(
       }
       return (await entries).get(name.toLowerCase());
     };
+    const removableTrackedCollisions = new Set<string>();
     let hasPathPrefixCollision = false;
     // Inspect only incoming path components; unrelated workspace inventories can exceed output caps.
     for (const addedPath of added) {
       const segments = addedPath.split("/");
       let directory = cwd;
+      let collisionPath: string | undefined;
       for (const [index, segment] of segments.entries()) {
         const entry = await findLocalEntry(directory, segment);
         if (!entry) {
@@ -145,18 +147,49 @@ async function bindWorkerGitHubCheckout(
         }
         const isExactPath = index === segments.length - 1;
         if (!entry.isDirectory) {
-          hasPathPrefixCollision = !isExactPath;
+          if (!isExactPath) {
+            collisionPath = path.relative(cwd, path.join(directory, entry.name));
+          }
           break;
         }
         if (isExactPath) {
-          hasPathPrefixCollision = true;
+          collisionPath = path.relative(cwd, path.join(directory, entry.name));
           break;
         }
         directory = path.join(directory, entry.name);
       }
-      if (hasPathPrefixCollision) {
+      if (!collisionPath) {
+        continue;
+      }
+      const gitPath = collisionPath.split(path.sep).join("/");
+      const status = await requireGit([
+        "--literal-pathspecs",
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+        "--ignore-submodules=none",
+        "--",
+        gitPath,
+      ]);
+      const tracked = await listPaths([
+        "--literal-pathspecs",
+        "ls-files",
+        "--stage",
+        "-z",
+        "--",
+        gitPath,
+      ]);
+      const isCleanTracked =
+        status.length === 0 &&
+        tracked.length > 0 &&
+        tracked.every((entry) => !entry.startsWith("160000 "));
+      if (!isCleanTracked) {
+        hasPathPrefixCollision = true;
         break;
       }
+      removableTrackedCollisions.add(collisionPath);
     }
     if (hasPathPrefixCollision) {
       log.warn(`GitHub checkout fast-forward skipped: local path conflicts with ${binding.branch}`);
@@ -167,6 +200,9 @@ async function bindWorkerGitHubCheckout(
     const listDeleted = () => listPaths(["ls-files", "--deleted", "-z"]);
     const deletedBefore = new Set(await listDeleted());
     await requireGit(["reset", "--mixed", "FETCH_HEAD"]);
+    for (const collisionPath of removableTrackedCollisions) {
+      await fs.rm(path.join(cwd, collisionPath), { recursive: true });
+    }
     const missing = (await listDeleted()).filter((file) => !deletedBefore.has(file));
     if (missing.length > 0) {
       await requireGit(["--literal-pathspecs", "checkout", "--", ...missing]);
