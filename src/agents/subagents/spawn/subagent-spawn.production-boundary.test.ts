@@ -150,12 +150,15 @@ afterEach(async () => {
 
 async function createBoundParent() {
   const cfg = getRuntimeConfig();
-  const storePath = await writeSubagentSessionEntry({
-    stateDir,
-    agentId: "main",
-    sessionKey: parentSessionKey,
-    defaultSessionId: "parent-session",
-  });
+  const storePath = await waitForStage(
+    "parent session persistence",
+    writeSubagentSessionEntry({
+      stateDir,
+      agentId: "main",
+      sessionKey: parentSessionKey,
+      defaultSessionId: "parent-session",
+    }),
+  );
   const context = createChatAbortContext({
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(),
@@ -180,7 +183,7 @@ async function createBoundParent() {
     timeoutMs: 60_000,
     operationalRunInstance: admission.operationalRunInstance,
   });
-  const admitted = await admission.admit("embedded");
+  const admitted = await waitForStage("parent runtime admission", admission.admit("embedded"));
   bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
   const authority = getAdmittedRunDelegatedAuthority(admitted)!;
   parent.bindAgentRunDelegatedAuthority(authority);
