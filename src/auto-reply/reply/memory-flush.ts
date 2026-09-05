@@ -11,8 +11,25 @@ import {
   resolveMergedModelProviderConfig,
   resolveMergedModelProviderModels,
 } from "../../config/model-provider-config.js";
-import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
+import {
+  resolveFreshSessionTotalTokens,
+  resolveSessionTotalTokens,
+  SESSION_TOTAL_TOKENS_VERSION,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+
+/**
+ * Safety factor applied to stale persisted token totals when they fall back to
+ * the compaction gate. When neither a projected token count nor a fresh total
+ * is available (e.g. during a provider outage where no recent usage landed),
+ * the last persisted total is the only signal the gate has. Scaling it down
+ * keeps the gate from going blind while remaining conservative — a stale
+ * total tends to under-count a still-growing transcript, so the discount
+ * biases toward the real-world ceiling rather than over-trusting a frozen
+ * snapshot.
+ */
+const STALE_TOTAL_TOKENS_SAFETY_FACTOR = 0.8;
 
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
@@ -124,8 +141,24 @@ function resolveMaintenanceGateState<
     return null;
   }
 
-  const totalTokens =
+  const freshOrProjectedTotalTokens =
     resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
+  // Last-resort fallback: when no projected token count and no fresh total are
+  // available (provider outage → usage stale), trust a *versioned* stale
+  // persisted total at a safety factor so the gate keeps its eyes instead of
+  // going blind and silently skipping compaction (#138871). Only versioned
+  // totals (totalTokensVersion === SESSION_TOTAL_TOKENS_VERSION) qualify —
+  // unversioned legacy cumulative CLI totals remain ignored because they
+  // historically over-count retries and are not comparable to a fresh
+  // context snapshot. The discount biases toward the real-world ceiling of a
+  // still-growing transcript rather than over-trusting a frozen snapshot.
+  const staleFallbackTotalTokens =
+    params.entry.totalTokensVersion === SESSION_TOTAL_TOKENS_VERSION
+      ? Math.floor(
+          (resolveSessionTotalTokens(params.entry) ?? 0) * STALE_TOTAL_TOKENS_SAFETY_FACTOR,
+        )
+      : 0;
+  const totalTokens = freshOrProjectedTotalTokens ?? staleFallbackTotalTokens;
   if (!totalTokens || totalTokens <= 0) {
     return null;
   }
