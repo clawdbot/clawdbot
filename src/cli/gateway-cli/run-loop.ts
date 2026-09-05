@@ -23,6 +23,7 @@ import {
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { flushLogger } from "../../logging/logger.js";
@@ -50,7 +51,7 @@ const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 const LOG_FLUSH_EXIT_TIMEOUT_MS = 4_000;
 const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
 
-type GatewayRunSignalAction = "stop" | "restart";
+type GatewayRunSignalAction = "stop" | "restart" | "external-restart";
 type GatewayRunSignalRequest = {
   action: GatewayRunSignalAction;
   signal: string;
@@ -609,10 +610,10 @@ export async function runGatewayLoop(params: {
 
   const runAcceptedRequest = (acceptedRequest: GatewayRunSignalRequest) => {
     const { action, restartIntent } = acceptedRequest;
-    const isRestart = action === "restart";
-    if (isRestart) {
+    const isRestart = action !== "stop";
+    if (action === "restart") {
       activeRestartRequest = acceptedRequest;
-    } else {
+    } else if (!isRestart) {
       startGatewayRestartTrace("stop.signal.received", [["signal", acceptedRequest.signal]]);
     }
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -644,7 +645,7 @@ export async function runGatewayLoop(params: {
       hardExitWatchdog?.cancel();
       hardExitWatchdog = null;
     };
-    if (isRestart) {
+    if (action === "restart") {
       forceActiveRestartExit = () => {
         clearForceExitTimer();
         if (!getManagedUpdateOwner()) {
@@ -841,7 +842,7 @@ export async function runGatewayLoop(params: {
         if (handoffClosed) {
           server = null;
         }
-        if (isRestart) {
+        if (action === "restart") {
           try {
             await hostLifecycle?.retire();
             if (shutdownFailed) {
@@ -865,12 +866,20 @@ export async function runGatewayLoop(params: {
         } else {
           await hostLifecycle?.retire();
           clearForceExitTimer();
-          params.completeBoot?.({
-            outcome: shutdownFailed ? "forced_stop" : "clean_stop",
-            reason: shutdownFailed ? "gateway.stop_close_failed" : "gateway.stop",
-          });
-          await releaseLockIfHeld();
-          await exitProcessAfterLogFlush(shutdownFailed ? 1 : 0);
+          if (isRestart && shutdownFailed) {
+            await forceExitAfterStabilityBundle("gateway.restart_close_failed");
+          } else {
+            params.completeBoot?.(
+              isRestart
+                ? { outcome: "planned_restart", reason: "gateway.restart.external" }
+                : {
+                    outcome: shutdownFailed ? "forced_stop" : "clean_stop",
+                    reason: shutdownFailed ? "gateway.stop_close_failed" : "gateway.stop",
+                  },
+            );
+            await releaseLockIfHeld();
+            await exitProcessAfterLogFlush(shutdownFailed ? 1 : 0);
+          }
         }
       }
     })();
@@ -895,7 +904,13 @@ export async function runGatewayLoop(params: {
     restartIntent?: GatewayRestartIntent,
     hostedStop?: ReturnType<typeof createGatewayHostLifecycle>,
   ) => {
-    const acceptedRequest = { action, signal, restartReason, restartIntent, hostedStop };
+    const acceptedRequest: GatewayRunSignalRequest = {
+      action,
+      signal,
+      restartReason,
+      restartIntent,
+      hostedStop,
+    };
     if (shuttingDown) {
       const currentRestartRequest = pendingStartupRequest ?? activeRestartRequest;
       if (
@@ -940,7 +955,18 @@ export async function runGatewayLoop(params: {
       gatewayLog.info(`received ${signal} during shutdown; ignoring`);
       return;
     }
-    const isRestart = action === "restart";
+    if (action === "stop" && signal === "SIGTERM") {
+      // Transfer the exact one-shot authority before host retirement and the
+      // one-way fence discard it; neither operation may precede consumption.
+      const handoff = consumeGatewaySuspendHandoff(hostLifecycle?.capability.externalRestart);
+      if (!handoff.ok) {
+        gatewayLog.warn(`external restart handoff refused: ${handoff.error}`);
+      } else if (handoff.value) {
+        acceptedRequest.action = "external-restart";
+        acceptedRequest.restartIntent = { force: true };
+      }
+    }
+    const isRestart = acceptedRequest.action !== "stop";
     if (hostLifecycle !== hostedStop) {
       void hostLifecycle?.retire();
     }
@@ -953,7 +979,7 @@ export async function runGatewayLoop(params: {
       startGatewayRestartTrace("restart.signal.received", [
         ["signal", signal],
         ["reason", restartReason ?? signal],
-        ["force", restartIntent?.force === true],
+        ["force", acceptedRequest.restartIntent?.force === true],
         ["waitMs", restartIntent?.waitMs ?? "default"],
       ]);
     }

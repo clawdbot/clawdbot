@@ -85,6 +85,7 @@ export const validateWorkerLiveEventParams = compile(
 export const validateGatewaySuspendPrepareParams = compile(S.GatewaySuspendPrepareParamsSchema);
 export const validateGatewaySuspendStatusParams = compile(S.GatewaySuspendStatusParamsSchema);
 export const validateGatewaySuspendResumeParams = compile(S.GatewaySuspendResumeParamsSchema);
+export const validateGatewaySuspendHandoffParams = compile(S.GatewaySuspendHandoffParamsSchema);
 export const validateRequestFrame = compile(S.RequestFrameSchema);
 export const validateMessageActionParams = compile(S.MessageActionParamsSchema);
 export const validateSendParams = compile(S.SendParamsSchema);
