@@ -448,7 +448,6 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
     });
   }
 
-  const childIndexes = new Set<number>();
   for (let index = 0; index < tree.length; index += 1) {
     for (const childId of tree[index]?.raw.childIds ?? []) {
       const childIndex = byId.get(childId);
@@ -457,11 +456,12 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
       }
       tree[index]?.children.push(childIndex);
       expectDefined(tree[childIndex], "CDP child node index").parent = index;
-      childIndexes.add(childIndex);
     }
   }
 
-  const roots = tree.map((_node, index) => index).filter((index) => !childIndexes.has(index));
+  const roots = tree
+    .map((_node, index) => index)
+    .filter((index) => tree[index]?.parent === undefined);
   const stack = roots.map((index) => ({ index, depth: 0 }));
   while (stack.length) {
     const current = stack.pop();
