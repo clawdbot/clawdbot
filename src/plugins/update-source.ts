@@ -2,6 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
+import {
+  fetchClawHubPackageDetail,
+  resolveLatestVersionFromPackage,
+} from "../infra/clawhub-packages.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
@@ -235,7 +239,7 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
   // Only the recorded selector owns pin diagnostics.
   const packageName = resolveNpmSpecPackageName(params.recordedSpec);
   const exactVersion = resolveExactNpmSpecVersion(params.recordedSpec);
-  const probeNpmVersion = normalizeExactNpmVersion(params.probeNpmVersion);
+  const probeNpmVersion = normalizeExactSemverVersion(params.probeNpmVersion);
   if (!packageName || !exactVersion || probeNpmVersion !== exactVersion) {
     return undefined;
   }
@@ -260,6 +264,46 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
   return comparePackageUpdateVersions(metadataResult.metadata.version, params.currentVersion) > 0
     ? { packageName, registryLine, version: metadataResult.metadata.version }
     : undefined;
+}
+
+export async function resolveNewerExactPinnedClawHubDefaultLine(params: {
+  currentVersion: string | undefined;
+  recordedSpec: string | undefined;
+  probeClawHubVersion: string | undefined;
+  baseUrl?: string;
+  updateChannel?: UpdateChannel;
+  timeoutMs?: number;
+}): Promise<{ packageName: string; registryLine: "beta" | "latest"; version: string } | undefined> {
+  if (!params.currentVersion || !params.probeClawHubVersion || !params.recordedSpec) {
+    return undefined;
+  }
+  const parsed = parseClawHubPluginSpec(params.recordedSpec);
+  const exactVersion = normalizeExactSemverVersion(parsed?.version);
+  const probeClawHubVersion = normalizeExactSemverVersion(params.probeClawHubVersion);
+  if (
+    !parsed?.name ||
+    !exactVersion ||
+    !probeClawHubVersion ||
+    probeClawHubVersion !== exactVersion
+  ) {
+    return undefined;
+  }
+
+  const detail = await fetchClawHubPackageDetail({
+    name: parsed.name,
+    baseUrl: params.baseUrl,
+    timeoutMs: params.timeoutMs,
+  }).catch(() => undefined);
+  if (!detail?.package || detail.package.name !== parsed.name) {
+    return undefined;
+  }
+  const betaVersion = detail.package.tags?.beta;
+  const registryLine = params.updateChannel === "beta" && betaVersion ? "beta" : "latest";
+  const version = registryLine === "beta" ? betaVersion : resolveLatestVersionFromPackage(detail);
+  if (!version || comparePackageUpdateVersions(version, params.currentVersion) <= 0) {
+    return undefined;
+  }
+  return { packageName: parsed.name, registryLine, version };
 }
 
 async function loadNpmPackageVersionsForUpdate(params: {
@@ -499,11 +543,11 @@ export function resolveNpmSpecPackageName(spec: string | undefined): string | un
 export function resolveExactNpmSpecVersion(spec: string | undefined): string | undefined {
   const parsed = spec ? parseRegistryNpmSpec(spec) : null;
   return parsed?.selectorKind === "exact-version"
-    ? normalizeExactNpmVersion(parsed.selector)
+    ? normalizeExactSemverVersion(parsed.selector)
     : undefined;
 }
 
-function normalizeExactNpmVersion(value: string | undefined): string | undefined {
+function normalizeExactSemverVersion(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
   }
@@ -595,12 +639,28 @@ export function resolveClawHubUpdateSpecs(params: {
     params.officialSpecOverride ??
     params.record.resolvedSpec ??
     `clawhub:${clawhubPackage}`;
-  return resolveClawHubInstallSpecsForUpdateChannel({
+  const specs = resolveClawHubInstallSpecsForUpdateChannel({
     spec: recordSpec,
     updateChannel: params.updateChannel,
     officialPackageName: params.officialPackageName,
     coreVersion: params.coreVersion,
   });
+  return {
+    ...specs,
+    installSpec: normalizeExactClawHubInstallSpec(specs.installSpec),
+  };
+}
+
+function normalizeExactClawHubInstallSpec(spec: string | undefined): string | undefined {
+  if (!spec) {
+    return undefined;
+  }
+  const parsed = parseClawHubPluginSpec(spec);
+  const version = normalizeExactSemverVersion(parsed?.version);
+  if (!parsed?.name || !version || parsed.version === version) {
+    return spec;
+  }
+  return `clawhub:${parsed.name}@${version}`;
 }
 
 /** Identity matching permits id/path cleanup, never an implicit registry-source switch. */

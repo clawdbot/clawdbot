@@ -607,6 +607,7 @@ export async function updateNpmInstalledPlugins(params: {
           timeoutMs: params.timeoutMs,
           channelFallbackSuffix,
           npmChannelFallback,
+          checkNewerExactPinnedClawHubDefaultLine: Boolean(trustedOfficialClawHubInstall),
         }),
       );
       completedCanonicalUpdates.add(pluginId);
@@ -680,7 +681,7 @@ export async function updateNpmInstalledPlugins(params: {
     completedCanonicalUpdates.add(pluginId);
 
     outcomes.push(
-      buildPluginUpdateVersionOutcome({
+      await buildPluginUpdateVersionOutcome({
         pluginId,
         record,
         result,
@@ -688,6 +689,9 @@ export async function updateNpmInstalledPlugins(params: {
         nextVersion,
         channelFallbackSuffix,
         channelFallback: npmChannelFallback,
+        checkNewerExactPinnedClawHubDefaultLine: Boolean(trustedOfficialClawHubInstall),
+        updateChannel,
+        timeoutMs: params.timeoutMs,
       }),
     );
   }
