@@ -146,22 +146,15 @@ suite.define(() => {
       );
 
       const title = page.locator(".profile-hero__name");
-      await expect(title).toHaveText(longEmail);
-      expect(
-        await title.evaluate((element) => {
-          const parent = element.parentElement;
-          return (
-            parent !== null &&
-            element.getBoundingClientRect().width <= parent.clientWidth &&
-            element.scrollWidth <= element.clientWidth
-          );
-        }),
-      ).toBe(true);
       const handle = page.locator(".profile-hero__handle");
+      await expect(title).toHaveText(longEmail);
       await expect(handle).toContainText(longEmail);
-      expect(await handle.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
-        true,
-      );
+      for (const field of [title, handle]) {
+        await expect(field).toBeInViewport({ ratio: 1 });
+        expect(await field.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+          true,
+        );
+      }
       expect(
         await page.locator("body").evaluate((element) => element.scrollWidth),
       ).toBeLessThanOrEqual(360);
