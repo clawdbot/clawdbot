@@ -429,6 +429,11 @@ async function runManagedServiceManagerBoundary(
         options.controlDisconnect === "transferred",
       );
     } else if (options?.parentExitTimeoutMs !== undefined) {
+      if (options.parkBeforeParentExitTimeout) {
+        const parked = waitForHandoffResponse(runningHelper.stdout, "parked");
+        runningHelper.stdin?.write("park\n");
+        await parked;
+      }
       const timeout = options.parentExitTimeoutMs + (options.launchdTeardown ? 8_000 : 3_000);
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {

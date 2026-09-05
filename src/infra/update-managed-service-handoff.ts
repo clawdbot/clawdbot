@@ -643,7 +643,7 @@ function captureFailedUpdateResult() {
   }
 }
 
-function recordUpdateHandoffOutcome(reason, restored, completedStatus, expectedRevision) {
+function recordUpdateHandoffOutcome(reason, restored, completedStatus, expectedRevision, serviceStop) {
   if (!ownsManagedUpdateLease()) return false;
   let metaFile;
   try {
@@ -725,6 +725,10 @@ function recordUpdateHandoffOutcome(reason, restored, completedStatus, expectedR
       if (typeof restored === "boolean") {
         payload.stats.steps = [
           ...(payload.stats.steps || []),
+          ...(serviceStop
+            ? [{ name: "service-stop", command: "systemd",
+              log: { exitCode: serviceStop.code, stderrTail: "exact gateway parent required SIGKILL" } }]
+            : []),
           { name: "service-restore", command: params.serviceRecovery.kind,
             log: { exitCode: restored ? 0 : 1, ...(completedStatus && !restored ? { stderrTail: reason } : {}) } },
         ];
@@ -781,6 +785,7 @@ function isLaunchdNotLoaded(result) {
 
 let parkedServiceGeneration = null;
 let parkedServiceInvocation = null;
+let systemdParentForceKilled = false;
 let restorationArmed = false;
 let updaterStarted = false;
 let pendingServiceStop;
@@ -865,8 +870,10 @@ async function parkGatewayService() {
 
 async function restoreGatewayService(reason, decision = params.recovery, childStatus) {
   let expectedRevision;
+  let serviceStop;
   const record = (restored) => recordUpdateHandoffOutcome(
     restored ? reason : "managed-service-handoff-restore-failed", restored, childStatus, expectedRevision,
+    serviceStop,
   );
   if (decision?.serviceRestartSafe !== true || !decision.version) {
     appendLog("recovery refused: original runtime identity could not be verified");
@@ -888,18 +895,24 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
   // observed revision; notification persistence never decides recovery safety.
   if (childStatus) expectedRevision = recordUpdateHandoffOutcome(reason, undefined, childStatus);
   if (recovery?.kind === "systemd") {
-    if (!pendingServiceStop || (await pendingServiceStop).code !== 0) {
+    const stopped = pendingServiceStop ? await pendingServiceStop : null;
+    if (!stopped) {
       appendLog("recovery refused: exact systemd stop did not complete");
       record(false);
       return false;
     }
+    if (systemdParentForceKilled) serviceStop = stopped;
     const parked = await inspectSystemdService(recovery.unit);
     const retained = parked?.ExecMainStartTimestampMonotonic === parkedServiceGeneration &&
       parked?.InvocationID === parkedServiceInvocation;
     const cleared = parked?.ExecMainStartTimestampMonotonic === "0" && !parked?.InvocationID;
+    const terminal = parked?.ActiveState === "inactive" ||
+      (systemdParentForceKilled && parked?.ActiveState === "failed");
+    // A failed unit is terminal only for the exact parent this handoff killed;
+    // otherwise another process generation may own the service.
     if (!parked || parked.Id !== recovery.unit || parked.LoadState !== "loaded" ||
-      parked.ActiveState !== "inactive" || parked.MainPID !== "0" || !(retained || cleared) ||
-      !ownsRecovery()) {
+      !terminal || parked.MainPID !== "0" || isPidAlive(params.parentPid) ||
+      !(retained || cleared) || !ownsRecovery()) {
       appendLog("recovery refused: parked systemd service identity changed or stop is incomplete");
       record(false);
       return false;
@@ -1198,7 +1211,10 @@ async function collectUpdateFailureTriage() {
         }
         if (ownsManagedUpdateLease() &&
           readProcessStartIdentity(params.parentPid) === params.parentStartIdentity) {
-          try { process.kill(params.parentPid, "SIGKILL"); } catch {}
+          try {
+            process.kill(params.parentPid, "SIGKILL");
+            systemdParentForceKilled = params.serviceRecovery?.kind === "systemd";
+          } catch {}
         }
       }
       // A child CLI must finish reporting before its Gateway's stop kills it.

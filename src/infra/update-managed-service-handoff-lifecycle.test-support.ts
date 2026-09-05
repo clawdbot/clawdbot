@@ -25,11 +25,13 @@ export type ManagedServiceManagerBoundaryOptions = {
     pendingOperationInProgress?: number;
   };
   overdueCommit?: boolean;
+  parkBeforeParentExitTimeout?: boolean;
   systemdFault?: "start-failed" | "dead-restored-pid";
   systemdHandoffDeadlineMs?: number;
   systemdHandoffFailure?: boolean;
   systemdPostExitStates?: ManagedSystemdPostExitState[];
   systemdStopDelayMs?: number;
+  systemdStopExitCode?: number;
   revokeOwner?: boolean;
   requester?: { channel?: string; accountId?: string; senderId?: string };
   updaterExitCode?: number;
@@ -125,6 +127,104 @@ export function registerManagedSystemdHandoffConvergenceTests(
     expect(sentinel).toBeNull();
   });
 
+  itUnix("recovers a failed systemd unit after forcing the exact parent to stop", async () => {
+    const { commands, parentSignal, sentinel, state } = await runManagedServiceManagerBoundary(
+      "systemd",
+      {
+        parentExitTimeoutMs: 1_000,
+        parkBeforeParentExitTimeout: true,
+        systemdPostExitStates: [
+          {
+            activeState: "failed",
+            generation: "parked",
+            invocation: "parked",
+            mainPid: "none",
+          },
+        ],
+        systemdStopExitCode: 1,
+      },
+    );
+
+    expect(commands.map((command) => command.split(" ")[1])).toEqual([
+      "show",
+      "stop",
+      "show",
+      "start",
+      "show",
+    ]);
+    expect(parentSignal).toEqual("SIGKILL");
+    expect(state).toMatchObject({
+      parked: true,
+      postExitShows: 1,
+      restored: true,
+      healthProbeCount: 1,
+      expectedVersion: "1.0.0",
+    });
+    expect(sentinel).toMatchObject({
+      payload: {
+        status: "skipped",
+        stats: {
+          reason: "managed-service-handoff-cancelled",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              name: "service-stop",
+              command: "systemd",
+              log: { exitCode: 1, stderrTail: "exact gateway parent required SIGKILL" },
+            }),
+            expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
+          ]),
+        },
+      },
+    });
+  });
+
+  itUnix.each([
+    [
+      "a replacement generation",
+      {
+        activeState: "failed",
+        generation: "replacement",
+        invocation: "replacement",
+        mainPid: "none",
+      },
+    ],
+    ["a replacement main PID", { activeState: "failed", mainPid: "replacement" }],
+    ["a replaced unit", { activeState: "failed", id: "replacement.service", mainPid: "none" }],
+    ["an unloaded unit", { activeState: "failed", loadState: "not-found", mainPid: "none" }],
+  ] as const)(
+    "fails closed after forcing the exact parent when systemd reports %s",
+    async (_label, invalidState) => {
+      const { commands, parentSignal, sentinel, state } = await runManagedServiceManagerBoundary(
+        "systemd",
+        {
+          parentExitTimeoutMs: 1_000,
+          parkBeforeParentExitTimeout: true,
+          systemdPostExitStates: [invalidState],
+          systemdStopExitCode: 1,
+        },
+      );
+
+      expect(parentSignal).toEqual("SIGKILL");
+      expect(commands.filter((command) => command.includes(" start "))).toHaveLength(0);
+      expect(state.restored).toBeUndefined();
+      expect(sentinel).toMatchObject({
+        payload: {
+          status: "error",
+          stats: {
+            reason: "managed-service-handoff-restore-failed",
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                name: "service-stop",
+                log: { exitCode: 1, stderrTail: "exact gateway parent required SIGKILL" },
+              }),
+              expect.objectContaining({ name: "service-restore", log: { exitCode: 1 } }),
+            ]),
+          },
+        },
+      });
+    },
+  );
+
   itUnix.each([
     [
       "an inactive replacement generation",
@@ -180,6 +280,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
       const { sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
         systemdHandoffDeadlineMs: 5_000,
         systemdHandoffFailure: true,
+        systemdPostExitStates: [{ activeState: "deactivating", mainPid: "none" }],
         systemdStopDelayMs: 6_000,
       });
 
@@ -220,6 +321,7 @@ if (${JSON.stringify(kind)} === "systemd") {
     sleep(${options?.systemdStopDelayMs ?? 0});
     ${options?.revokeOwner ? `fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
     state.stopCompleted = true;
+    process.exitCode = ${options?.systemdStopExitCode ?? 0};
   }
   if (action === "reset-failed") state.reset = true;
   if (action === "start" && ${JSON.stringify(options?.systemdFault)} === "start-failed") {
