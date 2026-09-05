@@ -9,7 +9,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
-import type { WorkerWorkspaceSyncRequest } from "./tunnel-contract.js";
+import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -176,10 +176,14 @@ it.each([
       expect(await fs.readFile(path.join(first.remoteWorkspaceDir, "setup.txt"), "utf8")).toBe(
         "prepared\n",
       );
-      let checkpoint: Extract<
-        WorkerWorkspaceSyncRequest["source"],
-        { kind: "repository" }
-      >["checkpoint"];
+      let checkpoint:
+        | Parameters<
+            Extract<
+              WorkerWorkspaceReconcileRequest["source"],
+              { kind: "repository" }
+            >["prepareCheckpoint"]
+          >[0]
+        | undefined;
       let revision = 0;
       const capture = async () => {
         const result = await actions.reconcileWorkspace({
