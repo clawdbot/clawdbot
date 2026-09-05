@@ -20,6 +20,7 @@ import { registerProviderStreamForModel } from "../../provider-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
+import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -564,7 +565,13 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
-    webSearchEnabled: attempt.disableTools !== true && attempt.toolOverrides?.webSearch !== false,
+    // Provider-hosted search bypasses local execute hooks, so its request must
+    // honor the same execution cap without changing foreground function schemas.
+    webSearchEnabled:
+      attempt.disableTools !== true &&
+      attempt.toolOverrides?.webSearch !== false &&
+      (!attempt.toolExecutionAllow ||
+        isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search")),
     runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
     sandboxToolPolicy: input.sandbox?.tools,
@@ -580,7 +587,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     senderE164: attempt.senderE164,
   };
 
-  applyExtraParamsToAgent(
+  const { nativeWebSearchAllowedByToolPolicy } = applyExtraParamsToAgent(
     session.agent,
     attempt.config,
     attempt.provider,
@@ -603,6 +610,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       agentDir: input.agentDir,
       agentId: input.sessionAgentId,
       ...nativeWebSearchPolicyContext,
+      nativeWebSearchAllowedByToolPolicy,
       codeModeToolSurfaceEnabled: true,
     });
   }

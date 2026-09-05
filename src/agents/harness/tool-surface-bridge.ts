@@ -63,7 +63,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   forceMessageTool?: boolean;
   isRawModelRun?: boolean;
   /** Prepared model row carrying catalog compat; required for `"auto"` code-mode resolution. */
-  model?: { compat?: unknown; contextWindow?: number };
+  model?: { compat?: unknown; contextWindow?: number; toolSearchMode?: "tools" | false };
   contextTokenBudget?: number;
   modelId?: string;
   modelProvider?: string;

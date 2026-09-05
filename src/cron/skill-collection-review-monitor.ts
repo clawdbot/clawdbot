@@ -1,6 +1,5 @@
 /** Canonical projection from skill workshop config to system-owned cron jobs. */
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { canonicalizePath } from "../agents/utils/paths.js";
+import { listAgentIds } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
@@ -21,49 +20,34 @@ export function skillCollectionReviewMonitorAgentId(job: CronJob): string | unde
   return key.slice(SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX.length) || undefined;
 }
 
+/** One system-owned review job per configured agent and its Workshop directory. */
 export function resolveSkillCollectionReviewMonitorSpecs(
   cfg: OpenClawConfig,
   options: { schedulerSeed?: string } = {},
 ): Array<{ agentId: string; input: CronJobCreate }> {
-  const workspaceAgents = new Map<string, string[]>();
-  for (const agentId of listAgentIds(cfg)) {
-    const workspaceDir = canonicalizePath(resolveAgentWorkspaceDir(cfg, agentId));
-    const agentIds = workspaceAgents.get(workspaceDir) ?? [];
-    agentIds.push(agentId);
-    workspaceAgents.set(workspaceDir, agentIds);
-  }
-
   const schedulerSeed = resolveHeartbeatSchedulerSeed(options.schedulerSeed);
   const enabled = resolveSkillWorkshopConfig(cfg).autonomous.mode === "auto";
-  return [...workspaceAgents.values()].flatMap((agentIds) => {
-    const agentId = agentIds[0];
-    if (!agentId) {
-      return [];
-    }
-    return [
-      {
-        agentId,
-        input: {
-          declarationKey: `${SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX}${agentId}`,
-          name: `skill-collection-review-${agentId}`,
-          displayName: `Skill collection review (${agentId})`,
+  return listAgentIds(cfg).map((agentId) => ({
+    agentId,
+    input: {
+      declarationKey: `${SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX}${agentId}`,
+      name: `skill-collection-review-${agentId}`,
+      displayName: `Skill collection review (${agentId})`,
+      agentId,
+      enabled,
+      schedule: {
+        kind: "every",
+        everyMs: SKILL_COLLECTION_REVIEW_EVERY_MS,
+        anchorMs: resolveHeartbeatPhaseMs({
+          schedulerSeed,
           agentId,
-          enabled,
-          schedule: {
-            kind: "every",
-            everyMs: SKILL_COLLECTION_REVIEW_EVERY_MS,
-            anchorMs: resolveHeartbeatPhaseMs({
-              schedulerSeed,
-              agentId,
-              intervalMs: SKILL_COLLECTION_REVIEW_EVERY_MS,
-            }),
-          },
-          payload: { kind: "skillCollectionReview" },
-          // Main is the only valid target for a no-turn system-owned payload; the timer invokes the runner directly.
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-        },
+          intervalMs: SKILL_COLLECTION_REVIEW_EVERY_MS,
+        }),
       },
-    ];
-  });
+      payload: { kind: "skillCollectionReview" },
+      // The timer invokes the runner directly because this payload has no turn target.
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+    },
+  }));
 }

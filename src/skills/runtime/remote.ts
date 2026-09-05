@@ -1,6 +1,6 @@
 // Remote skill runtime helpers send skill refresh and snapshot state across remotes.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeRegistry, NodeSession } from "../../gateway/node-registry.js";
 import { updatePairedNodeBins } from "../../infra/device-pairing-node-facts.js";
@@ -505,10 +505,15 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     return;
   }
 
-  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
   const requiredBins = new Set<string>();
-  for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkills(workspaceDir, { config: params.cfg });
+  for (const agentId of listAgentIds(params.cfg)) {
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+    // Probe prerequisites before host eligibility can hide remote-only skills.
+    const entries = loadWorkspaceSkills(workspaceDir, {
+      config: params.cfg,
+      agentId,
+      agentSkillFilter: "ignore",
+    });
     for (const bin of collectRequiredBins(entries, "darwin")) {
       requiredBins.add(bin);
     }

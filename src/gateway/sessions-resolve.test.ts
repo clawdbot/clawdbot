@@ -248,6 +248,10 @@ describe("resolveSessionKeyFromResolveParams", () => {
   ])("resolves %j from raw metadata without hydrating session rows", async (p) => {
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath,
+      targetsBySessionKey: new Map([
+        ["agent:main:noisy", { agentId: "main", storeTarget: { agentId: "main", storePath } }],
+        ["agent:main:target", { agentId: "main", storeTarget: { agentId: "main", storePath } }],
+      ]),
       store: {
         "agent:main:noisy": {
           sessionId: "sess-noisy",
@@ -457,7 +461,12 @@ describe("resolveSessionKeyFromResolveParams", () => {
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath,
       store,
-      agentIdBySessionKey: new Map(Object.keys(store).map((key) => [key, "main"])),
+      targetsBySessionKey: new Map(
+        Object.keys(store).map((key) => [
+          key,
+          { agentId: "main", storeTarget: { agentId: "main", storePath } },
+        ]),
+      ),
     });
     const result = await resolveSessionKeyFromResolveParams({
       cfg: {},
@@ -485,7 +494,9 @@ describe("resolveSessionKeyFromResolveParams", () => {
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath,
       store: { global: { updatedAt: 1, displayName: "Work dashboard", boardFace: "dashboard" } },
-      agentIdBySessionKey: new Map([["global", "work"]]),
+      targetsBySessionKey: new Map([
+        ["global", { agentId: "work", storeTarget: { agentId: "work", storePath } }],
+      ]),
     });
     await expect(
       resolveSessionKeyFromResolveParams({
@@ -508,7 +519,9 @@ describe("resolveSessionKeyFromResolveParams", () => {
       hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
         storePath,
         store: { [key]: { updatedAt: 1, displayName: "Room" } },
-        agentIdBySessionKey: new Map([[key, "main"]]),
+        targetsBySessionKey: new Map([
+          [key, { agentId: "main", storeTarget: { agentId: "main", storePath } }],
+        ]),
       });
       const result = await resolveSessionKeyFromResolveParams({
         cfg: {},
@@ -551,7 +564,12 @@ describe("resolveSessionKeyFromResolveParams", () => {
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath,
       store,
-      agentIdBySessionKey: new Map(Object.keys(store).map((key) => [key, "main"])),
+      targetsBySessionKey: new Map(
+        Object.keys(store).map((key) => [
+          key,
+          { agentId: "main", storeTarget: { agentId: "main", storePath } },
+        ]),
+      ),
     });
     await expect(
       resolveSessionKeyFromResolveParams({
