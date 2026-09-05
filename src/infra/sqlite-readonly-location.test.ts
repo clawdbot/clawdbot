@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -517,6 +518,69 @@ describe("prepareSqliteReadOnlyLocation", () => {
       expect(reported.message).toContain("(code=ERR_SQLITE_ERROR, errcode=778)");
     },
   );
+
+  it("preserves online-backup contention across the isolated worker boundary", () => {
+    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-worker-contention-");
+    const preloadPath = path.join(cacheRoot, "wedged-backup.mjs");
+    fs.writeFileSync(
+      preloadPath,
+      `
+        const sqlite = process.getBuiltinModule("node:sqlite");
+        sqlite.backup = async (_source, _destination, options) => {
+          for (let step = 0; step < 20_000; step += 1) {
+            options.progress({ remainingPages: 50, totalPages: 50 });
+          }
+          throw new Error("online backup plateau guard did not abort");
+        };
+      `,
+    );
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const database = new sqlite.DatabaseSync(databasePath);
+    // Rollback journal mode reaches online backup in the async worker; sync raw-copies instead.
+    database.exec("PRAGMA journal_mode = DELETE; CREATE TABLE probe (value TEXT);");
+    database.close();
+    const workerUrl = resolveRuntimeWorkerUrl({
+      ...runtimeProcessEntrypoints.sqliteReadOnly,
+      currentModuleUrl: import.meta.url,
+    });
+    const extension = workerUrl.pathname.endsWith(".ts") ? ".ts" : ".js";
+    const moduleUrl = new URL(`./sqlite-readonly-location${extension}`, workerUrl).href;
+    const ownerUrl = new URL(`./sqlite-online-backup${extension}`, workerUrl).href;
+    const script = `
+      const { prepareSqliteReadOnlyLocation } = await import(${JSON.stringify(moduleUrl)});
+      const { isSqliteBackupContentionError } = await import(${JSON.stringify(ownerUrl)});
+      try {
+        await prepareSqliteReadOnlyLocation(${JSON.stringify(databasePath)});
+        process.exitCode = 24;
+      } catch (error) {
+        console.log(JSON.stringify({
+          message: error instanceof Error ? error.message : String(error),
+          contention: isSqliteBackupContentionError(error),
+        }));
+      }
+    `;
+    const child = spawnSync(
+      process.execPath,
+      [...resolveRuntimeWorkerArgv(workerUrl).slice(0, -1), "--input-type=module", "-e", script],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(preloadPath).href}`]
+            .filter(Boolean)
+            .join(" "),
+          XDG_CACHE_HOME: cacheRoot,
+        },
+      },
+    );
+
+    expect(child.status, child.stderr).toBe(0);
+    const reported = JSON.parse(child.stdout) as { contention: boolean; message: string };
+    expect(reported.contention).toBe(true);
+    expect(reported.message).toMatch(/quiesce writes|Stop the Gateway/u);
+  });
 
   it("propagates async public entry point failures", async () => {
     const missingPath = path.join(tempDirs.make("openclaw-sqlite-readonly-missing-"), "missing.db");

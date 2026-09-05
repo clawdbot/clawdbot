@@ -51,6 +51,13 @@ export function isSqliteBackupContentionError(error: unknown): boolean {
   ).some((candidate) => candidate instanceof SqliteBackupContentionError);
 }
 
+// Worker JSON cannot carry the private class, so the parent rebuilds this typed
+// cause from the worker's `failure: "contention"` tag; without it the backup
+// boundary could not add its remedy on the worker path.
+export function createSqliteBackupContentionCause(message: string): Error {
+  return new SqliteBackupContentionError(message);
+}
+
 function createSqliteBackupContentionError(sourcePath: string, reason: string): Error {
   // Read-only state-database opens and ownership checks reach this owner too,
   // so the remedy stays generic; a caller that can offer more, such as the
