@@ -5008,6 +5008,45 @@ describe("matrix monitor handler draft streaming", () => {
     expect(redactEventMock).not.toHaveBeenCalled();
   });
 
+  it("redacts an accepted partial when dispatch deliberately ends silently", async () => {
+    sendSingleTextMessageMatrixMock
+      .mockReset()
+      .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
+    editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
+
+    const redactEventMock = vi.fn(async () => "$redacted");
+
+    const { handler } = createMatrixHandlerTestHarness({
+      streaming: "partial",
+      client: { redactEvent: redactEventMock },
+      createReplyDispatcherWithTyping: () => ({
+        dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+        replyOptions: {},
+        markDispatchIdle: () => {},
+        markRunComplete: () => {},
+      }),
+      dispatchInboundMessage: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+        args.replyOptions?.onPartialReply?.({ text: "partial" });
+        await waitForMatrixState(() => {
+          expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+        });
+        return {
+          queuedFinal: false,
+          counts: { final: 0, block: 0, tool: 0 },
+          deliberateSilentTerminalReply: true,
+        };
+      }) as never,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+    );
+
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+  });
+
   it.each([
     { name: "no media", payload: {} },
     { name: "blank-only media", payload: { mediaUrls: ["   "] } },

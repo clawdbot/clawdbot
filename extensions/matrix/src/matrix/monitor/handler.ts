@@ -638,7 +638,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const { dispatchResult } = turnResult;
       const { queuedFinal } = dispatchResult;
       const hasFinalDispatch = hasFinalInboundReplyDispatch(dispatchResult);
-      if (!hasFinalDispatch) {
+      if (!hasFinalDispatch && !dispatchResult.deliberateSilentTerminalReply) {
         await draftController.finalizeAcceptedPartialDraft();
       }
       if (replyDispatcher.finalReplyDeliveryFailed()) {
