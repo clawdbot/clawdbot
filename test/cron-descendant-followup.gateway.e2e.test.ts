@@ -3,6 +3,23 @@ vi.hoisted(() => {
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
+const followupMocks = vi.hoisted(() => ({
+  listDescendantRunsForRequester: vi.fn(),
+  readLatestAssistantReply: vi.fn(),
+  callGateway: vi.fn(),
+}));
+
+vi.mock("../src/agents/subagents/registry/subagent-registry-read.js", () => ({
+  listDescendantRunsForRequester: followupMocks.listDescendantRunsForRequester,
+}));
+vi.mock("../src/agents/run-wait.js", async () => {
+  const actual = await vi.importActual<typeof import("../src/agents/run-wait.js")>(
+    "../src/agents/run-wait.js",
+  );
+  return { ...actual, readLatestAssistantReply: followupMocks.readLatestAssistantReply };
+});
+vi.mock("../src/gateway/call.js", () => ({ callGateway: followupMocks.callGateway }));
+
 import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -317,9 +334,7 @@ describe("cron descendant follow-up Gateway transport", () => {
             "tasks.list",
             { limit: 100 },
           );
-          const current = tasks.tasks.filter(
-            (task) => task.runtime === "subagent" && typeof task.taskId === "string",
-          );
+          const current = tasks.tasks.filter((task) => typeof task.taskId === "string");
           expect(current.length).toBeGreaterThan(0);
           return current;
         },
@@ -328,6 +343,42 @@ describe("cron descendant follow-up Gateway transport", () => {
       childTaskIds = childTasks.flatMap((task) =>
         typeof task.taskId === "string" ? [task.taskId] : [],
       );
+      const helperActiveRun = {
+        runId: "gateway-clock-step-child",
+        childSessionKey: "agent:main:subagent:gateway-clock-step-child",
+        requesterSessionKey: "agent:main:gateway-proof",
+        requesterDisplayKey: "agent:main:gateway-proof",
+        task: "clock-step descendant",
+        cleanup: "keep" as const,
+        createdAt: Date.now(),
+        execution: { status: "running" as const },
+      };
+      followupMocks.listDescendantRunsForRequester
+        .mockReturnValueOnce([helperActiveRun])
+        .mockReturnValue([]);
+      followupMocks.readLatestAssistantReply.mockResolvedValue(undefined);
+      const realDateNow = Date.now.bind(Date);
+      followupMocks.callGateway.mockImplementationOnce(async () => {
+        vi.spyOn(Date, "now").mockImplementation(() => realDateNow() - 60_000);
+        return { status: "timeout" };
+      });
+      try {
+        const helperStartedAt = performance.now();
+        await expect(
+          waitForDescendantSubagentSummary({
+            sessionKey: helperActiveRun.requesterSessionKey,
+            initialReply: "on it",
+            timeoutMs: 1,
+            observedActiveDescendants: true,
+          }),
+        ).resolves.toBeUndefined();
+        expect(performance.now() - helperStartedAt).toBeLessThan(100);
+      } finally {
+        vi.restoreAllMocks();
+        followupMocks.listDescendantRunsForRequester.mockReset();
+        followupMocks.readLatestAssistantReply.mockReset();
+        followupMocks.callGateway.mockReset();
+      }
       provider.releaseChild();
       await withProofTimeout("parent final", finalRun);
       await Promise.all(
@@ -372,6 +423,9 @@ describe("cron descendant follow-up Gateway transport", () => {
         await withProofTimeout("Gateway disconnect", disconnectGatewayClient(client)).catch(
           () => undefined,
         );
+      }
+      if (instance) {
+        await withProofTimeout("Gateway stop", instance.stopGateway()).catch(() => undefined);
       }
       await provider?.close();
     }
