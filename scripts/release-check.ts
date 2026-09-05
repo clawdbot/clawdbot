@@ -34,6 +34,7 @@ import {
   collectRootPackageExcludedExtensionDirs,
   listBundledPluginPackArtifacts,
 } from "./lib/bundled-plugin-build-entries.mjs";
+import { GATEWAY_RUN_CHUNK_METADATA_VERSION } from "./lib/gateway-run-chunk-metadata.mts";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
@@ -1421,7 +1422,10 @@ async function verifyPackedContents(results: NpmPackResult[], packedRoot: string
   const locatorModule = existsSync(locatorModulePath)
     ? await tsImport(pathToFileURL(locatorModulePath).href, import.meta.url)
     : undefined;
-  if (locatorModule && locatorModule.GATEWAY_RUN_CHUNK_METADATA_VERSION !== 1) {
+  if (
+    locatorModule &&
+    locatorModule.GATEWAY_RUN_CHUNK_METADATA_VERSION !== GATEWAY_RUN_CHUNK_METADATA_VERSION
+  ) {
     throw new Error("release-check: unsupported target gateway run chunk metadata version.");
   }
   checkCliBootstrapExternalImports({
