@@ -79,7 +79,7 @@ function resolveGitHubToolIdentity(params: {
 }) {
   const agentOverride = resolveAgentConfig(params.config, params.agentId)?.tools?.github;
   const config = agentOverride ?? params.config.tools?.github;
-  if (!config) {
+  if (!config || !isManagedGitHubProfileId(config.profileId)) {
     return { source: "system-detected" as const };
   }
   const source: "agent-override" | "system-configured" = agentOverride
@@ -104,7 +104,7 @@ function resolveScopedGitHubToolIdentity(params: {
   env?: NodeJS.ProcessEnv;
 }): ResolvedGitHubToolIdentity | undefined {
   const config = resolveConfiguredGitHubToolIdentity(params);
-  if (!config) {
+  if (!config || !isManagedGitHubProfileId(config.profileId)) {
     return params.scope === "system" ? { source: "system-detected" as const } : undefined;
   }
   const source = params.scope === "system" ? "system-configured" : "agent-override";

@@ -97,6 +97,18 @@ describe("GitHub tool identity", () => {
       managedLocalIdentity: false,
     });
 
+    expect(
+      prepareGitHubToolEnvironment({
+        config: {
+          tools: { github: { profileId: `ghp_${"Z".repeat(36)}`, kind: "oauth" } },
+        },
+        agentId: "main",
+      }),
+    ).toMatchObject({
+      localIdentityEnv: {},
+      managedLocalIdentity: false,
+    });
+
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const expectedProfileDir = resolveManagedGitHubProfileDir({
       agentId: "main",
