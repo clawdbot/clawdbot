@@ -53,6 +53,87 @@ const model = {
 } satisfies Model<"openai-responses">;
 
 describe("managed Responses transport terminal errors", () => {
+  it.each(["incomplete", "completed", "filtered", "failed", "eof", "aborted"] as const)(
+    "fences later tool completions after truncated output until %s",
+    async (ending) => {
+      const controller = new AbortController();
+      const calls = [0, 1].map((index) => ({
+        type: "function_call",
+        id: `fc_parallel_${index}`,
+        call_id: `call_parallel_${index}`,
+        name: "probe",
+        arguments: index === 0 ? '{"token":"unfinished' : '{"token":"complete"}',
+        status: index === 0 ? "incomplete" : "completed",
+        async: true,
+      }));
+      sseState.outcomes.push({
+        data: (async function* () {
+          for (const [output_index, item] of calls.entries()) {
+            yield {
+              type: "response.output_item.added",
+              output_index,
+              item: { ...item, arguments: "", status: "in_progress" },
+            };
+          }
+          for (const [output_index, item] of calls.entries()) {
+            yield { type: "response.output_item.done", output_index, item };
+          }
+          if (ending === "aborted") {
+            controller.abort();
+          }
+          if (ending === "eof" || ending === "aborted") {
+            return;
+          }
+          const status = ending === "filtered" ? "incomplete" : ending;
+          yield {
+            type: `response.${status}`,
+            response: {
+              id: "resp_parallel_truncated",
+              model: "served-model",
+              status,
+              incomplete_details: {
+                reason: ending === "filtered" ? "content_filter" : "max_output_tokens",
+              },
+              error:
+                ending === "failed" ? { code: "server_error", message: "provider failed" } : null,
+              output: calls,
+              usage: { input_tokens: 20, output_tokens: 9, total_tokens: 29 },
+            },
+          };
+        })(),
+        response: new Response(null, { status: 200 }),
+      });
+      const stream = await createOpenAIResponsesTransportStreamFn()(
+        { ...model, id: "gpt-6-astra" },
+        { messages: [], tools: [] },
+        {
+          apiKey: "test-key",
+          transport: "sse",
+          asyncToolExecution: true,
+          signal: controller.signal,
+        } satisfies OpenAIResponsesOptions,
+      );
+      const events: string[] = [];
+      for await (const event of stream) {
+        events.push(event.type);
+      }
+      const result = await stream.result();
+      expect(events).not.toContain("toolcall_end");
+      expect(events.filter((type) => type === "done" || type === "error")).toEqual(["error"]);
+      expect(result.stopReason).toBe(ending === "aborted" ? "aborted" : "error");
+      if (ending !== "eof" && ending !== "aborted") {
+        expect(result.usage).toMatchObject({ input: 20, output: 9, totalTokens: 29 });
+        expect(result.responseId).toBe("resp_parallel_truncated");
+        expect(result.responseModel).toBe("served-model");
+      }
+      if (ending === "filtered") {
+        expect(result.errorMessage).toBe("Provider incomplete_reason: content_filter");
+      } else if (ending === "failed") {
+        expect(result.errorMessage).toContain("provider failed");
+      }
+    },
+  );
+
   it.each([false, true])(
     "retains usage when truncated tool output has an item-done event: %s",
     async (itemDone) => {

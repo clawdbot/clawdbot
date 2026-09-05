@@ -74,6 +74,7 @@ export async function processResponsesStream<TApi extends Api>(
   const outputSlots = createResponsesOutputSlotTracker<ResponsesOutputSlot>();
   const outputs = createResponsesOutputTracker();
   let terminalResponse: CompletedResponse | null | undefined;
+  let incompleteToolCall: CompletedToolCall | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
   const compactionTracker = createCompactionTracker(output, model, options);
@@ -319,6 +320,24 @@ export async function processResponsesStream<TApi extends Api>(
       // provider progress; keep the idle watchdog alive without exposing them,
       // matching the completions and anthropic transports.
       notifyLlmRequestActivity(options?.signal);
+      if (
+        event.type === "response.output_item.done" &&
+        event.item.type === "function_call" &&
+        event.item.status === "incomplete"
+      ) {
+        incompleteToolCall ??= event.item;
+      }
+      // An incomplete call closes output admission; only drain terminal facts.
+      // Later async tool completions must not authorize side effects.
+      if (
+        incompleteToolCall &&
+        event.type !== "response.completed" &&
+        event.type !== "response.incomplete" &&
+        event.type !== "response.failed" &&
+        event.type !== "error"
+      ) {
+        continue;
+      }
       if (event.type === "response.created") {
         output.responseId = event.response.id;
       } else if (event.type === "response.output_item.added") {
@@ -611,7 +630,7 @@ export async function processResponsesStream<TApi extends Api>(
             });
           }
           outputSlots.forget(outputSlot);
-        } else if (item.type === "function_call" && item.status !== "incomplete") {
+        } else if (item.type === "function_call") {
           if (outputs.get(item, readResponsesOutputIndex(event))?.completed) {
             continue;
           }
@@ -643,6 +662,12 @@ export async function processResponsesStream<TApi extends Api>(
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         // Preserve reported accounting before rejecting unfinished tool calls.
         terminal.finalizeResponse(event.response, event.type);
+        if (incompleteToolCall) {
+          if (output.errorMessage) {
+            throw new Error(output.errorMessage);
+          }
+          resolveCompletedResponsesToolCall(incompleteToolCall);
+        }
         if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
           throw new Error(
             output.errorMessage ?? "Responses stream completed with unresolved tool calls",
