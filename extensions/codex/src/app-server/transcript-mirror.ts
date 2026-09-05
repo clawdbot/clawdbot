@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   deliverAgentHarnessUserInputPrompt,
   embeddedAgentLog,
@@ -18,7 +17,6 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AttemptSettlementWarning, EmbeddedRunAttemptResult } from "./attempt-terminal.js";
-import type { CodexAsyncAssistantMessage } from "./event-projector-assistant-message.js";
 import type { CodexAsyncDeliverySettlement } from "./event-projector-options.js";
 import type { CodexThread } from "./protocol.js";
 import {
@@ -29,8 +27,11 @@ import {
   applyCodexTranscriptTaint,
   attachCodexMirrorAttestation,
   attachCodexMirrorRunId,
+  buildCodexMirrorDedupeIdentity,
   fingerprintCodexMirrorSourceMessage,
+  isMirroredAgentMessage,
   readCodexMirrorSourceFingerprint,
+  type MirroredAgentMessage,
 } from "./transcript-mirror-attestation.js";
 import {
   attachCodexMirrorIdentity,
@@ -46,8 +47,6 @@ import {
 export { buildCodexUserPromptMessage };
 export { projectBoundedCodexThreadHistory };
 
-type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }> &
-  Partial<Pick<CodexAsyncAssistantMessage, "openclawAsyncDelivery">>;
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
 type MirroredUserMessageReceipt = {
   anchor: TranscriptEntryAnchor;
@@ -62,10 +61,6 @@ type CodexAppServerTranscriptMirrorResult = {
   messagesPresent: MirroredAgentMessage[];
   userMessageReceipts: MirroredUserMessageReceipt[];
 };
-
-function isMirroredAgentMessage(message: AgentMessage): message is MirroredAgentMessage {
-  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
-}
 
 function readMirroredAssistantText(message: MirroredAgentMessage | undefined): string | undefined {
   if (message?.role !== "assistant") {
@@ -318,23 +313,6 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
   }
 }
 
-// Fallback content fingerprint for callers that did not tag the message
-// with a stable mirror identity. Only role and content participate; volatile
-// metadata (timestamps, usage, etc.) is intentionally excluded so the
-// fingerprint survives snapshot reordering inside a fixed scope. Distinct
-// same-content turns are still distinguished by the caller's idempotency
-// scope when callers route through this fallback.
-function fingerprintMirrorMessageContent(message: MirroredAgentMessage): string {
-  const payload = JSON.stringify({ role: message.role, content: message.content });
-  return createHash("sha256").update(payload).digest("hex").slice(0, 16);
-}
-
-function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
-  return (
-    readMirrorIdentity(message) || `${message.role}:${fingerprintMirrorMessageContent(message)}`
-  );
-}
-
 async function mirror(params: {
   assertCurrent?: () => void;
   assertWriteCurrent?: () => void;
@@ -368,7 +346,7 @@ async function mirror(params: {
   }
 
   const candidates = messages.map((message) => {
-    const dedupeIdentity = buildMirrorDedupeIdentity(message);
+    const dedupeIdentity = buildCodexMirrorDedupeIdentity(message);
     const sourceFingerprint = fingerprintCodexMirrorSourceMessage(message);
     const sourceUserIdempotencyKey =
       message.role === "user"

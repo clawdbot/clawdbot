@@ -14,10 +14,8 @@ import { CodexAsyncDeliveryProjection } from "./event-projector-async-delivery.j
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection, emitCodexAgentEvent } from "./event-projector-events.js";
 import {
-  itemStatus,
   matchesCodexSnapshotTurn,
   shouldClearTerminalPresentationForNativeItem,
-  shouldSynthesizeToolProgressForItem,
 } from "./event-projector-items.js";
 import { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
@@ -401,7 +399,6 @@ export class CodexAppServerEventProjector {
       synthesizedMissingToolResultError: this.synthesizedMissingToolResultError,
       recordSynthesizedMissingToolResultError: (error) => {
         this.synthesizedMissingToolResultError = error;
-        this.terminalFailure.promptErrorSource ??= "prompt";
       },
       aborted: this.aborted,
       contextTokens: this.contextTokens,
@@ -687,7 +684,12 @@ export class CodexAppServerEventProjector {
       }
       this.toolProgressProjection.recordToolMeta(item);
       this.toolProgressProjection.rememberCommandAggregateOutputEcho(item);
-      await this.emitSnapshotOnlyNativeToolProgress(item);
+      await this.eventProjection.emitSnapshotOnlyNativeToolProgress({
+        item,
+        activeItemIds: this.activeItemIds,
+        completedItemIds: this.completedItemIds,
+        isActive: () => !this.projectionClosed,
+      });
       if (this.projectionClosed) {
         return;
       }
@@ -714,29 +716,6 @@ export class CodexAppServerEventProjector {
     this.assistantProjection.finalizeAnswerCandidate(turn);
     this.activeCompactionItemIds.clear();
     await this.reasoningProjection.maybeEndReasoning();
-  }
-
-  private async emitSnapshotOnlyNativeToolProgress(item: CodexThreadItem): Promise<void> {
-    if (
-      !shouldSynthesizeToolProgressForItem(item) ||
-      !matchesCodexSnapshotTurn(item, this.turnId) ||
-      this.completedItemIds.has(item.id) ||
-      itemStatus(item) === "running"
-    ) {
-      return;
-    }
-    const wasStarted = this.activeItemIds.has(item.id);
-    if (!wasStarted) {
-      this.eventProjection.emitStandardItemEvent({ phase: "start", item });
-      await this.eventProjection.emitNormalizedToolItemEvent({ phase: "start", item });
-    }
-    if (this.projectionClosed) {
-      return;
-    }
-    this.activeItemIds.delete(item.id);
-    this.eventProjection.emitStandardItemEvent({ phase: "end", item });
-    await this.eventProjection.emitNormalizedToolItemEvent({ phase: "result", item });
-    this.completedItemIds.add(item.id);
   }
 
   private async handleRawResponseItemCompleted(params: JsonObject): Promise<void> {

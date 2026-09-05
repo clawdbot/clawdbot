@@ -14,6 +14,7 @@ import {
   itemName,
   itemStatus,
   itemTitle,
+  matchesCodexSnapshotTurn,
   shouldSynthesizeToolProgressForItem,
 } from "./event-projector-items.js";
 import {
@@ -390,6 +391,34 @@ export class CodexEventProjection {
         ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
       },
     });
+  }
+
+  async emitSnapshotOnlyNativeToolProgress(params: {
+    item: CodexThreadItem;
+    activeItemIds: Set<string>;
+    completedItemIds: Set<string>;
+    isActive: () => boolean;
+  }): Promise<void> {
+    const { item, activeItemIds, completedItemIds, isActive } = params;
+    if (
+      !shouldSynthesizeToolProgressForItem(item) ||
+      !matchesCodexSnapshotTurn(item, this.turnId) ||
+      completedItemIds.has(item.id) ||
+      itemStatus(item) === "running"
+    ) {
+      return;
+    }
+    if (!activeItemIds.has(item.id)) {
+      this.emitStandardItemEvent({ phase: "start", item });
+      await this.emitNormalizedToolItemEvent({ phase: "start", item });
+    }
+    if (!isActive()) {
+      return;
+    }
+    activeItemIds.delete(item.id);
+    this.emitStandardItemEvent({ phase: "end", item });
+    await this.emitNormalizedToolItemEvent({ phase: "result", item });
+    completedItemIds.add(item.id);
   }
 
   async emitNormalizedToolItemEvent(params: {
