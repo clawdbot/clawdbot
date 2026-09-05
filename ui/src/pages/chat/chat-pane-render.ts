@@ -304,7 +304,8 @@ export class ChatPane extends ChatPaneLayoutRender {
           hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
         personalReady:
           !hasAbortableSessionRun(state) &&
-          !isCloudWorkerPlacementState(placement?.state) &&
+          (!isCloudWorkerPlacementState(placement?.state) ||
+            (Boolean(publicationRow.repositoryWorkspaceId) && placement?.state === "active")) &&
           !workspaceConflict,
         isPresented: () => this.presented,
         isCurrent: () => {
