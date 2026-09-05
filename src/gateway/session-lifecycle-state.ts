@@ -19,6 +19,7 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js
 import {
   appendSessionTranscriptReport,
   patchSessionEntryCore,
+  type SessionTranscriptWriteScope,
 } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -133,6 +134,37 @@ function resolveSettledLifecycleTerminalOutcome(
 
 function sanitizeSessionRunError(error: unknown): string {
   return renderUserFacingText(error, { errorContext: true }).replace(/\s+/g, " ").trim();
+}
+
+/** Shared transcript outcome for owners that already committed a failed run. */
+export async function recordGatewaySessionRunFailure(params: {
+  target: SessionTranscriptWriteScope & { sessionId: string };
+  runId: string;
+  error: unknown;
+  assertCommitAllowed?: () => void;
+}): Promise<void> {
+  const { runId } = params;
+  const error = boundedWorkerError(sanitizeSessionRunError(params.error), 512);
+  const result = await appendSessionTranscriptReport(params.target, {
+    kind: "custom",
+    customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
+    suppressWhenAssistantRun: runId,
+    selectReport: (latest) => {
+      params.assertCommitAllowed?.();
+      if (isRecord(latest?.details) && latest.details.runId === runId) {
+        return undefined;
+      }
+      return {
+        customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
+        content: `This turn did not run: ${error}.`,
+        display: true,
+        details: { runId, error },
+      };
+    },
+  });
+  if (!result.ok) {
+    throw new Error(`Failed run notice could not be appended: ${result.error.code}`);
+  }
 }
 
 function resolveSessionRunError(
@@ -368,7 +400,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
   let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
-  let failedRun: { runId: string; error: string } | undefined;
+  let failedRun: { runId: string; error: unknown } | undefined;
   const persisted = await patchSessionEntryCore(
     {
       storePath: sessionEntry.storePath,
@@ -424,10 +456,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       ) {
         failedRun = {
           runId: eventRunId,
-          error: boundedWorkerError(
-            sanitizeSessionRunError(resolveTerminalOutcome(params.event).error),
-            512,
-          ),
+          error: resolveTerminalOutcome(params.event).error,
         };
       }
       const recoveryTerminalRunId = normalizeLifecycleRunId(params.event.runId);
@@ -463,34 +492,17 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     const { runId, error } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
-    const result = await appendSessionTranscriptReport(
-      {
+    await recordGatewaySessionRunFailure({
+      target: {
         agentId: sessionEntry.agentId,
         storePath: sessionEntry.storePath,
         sessionKey: sessionEntry.canonicalKey,
         sessionId: persisted.sessionId,
         expectedLifecycleRevision: persisted.lifecycleRevision,
       },
-      {
-        kind: "custom",
-        customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
-        suppressWhenAssistantRun: runId,
-        selectReport: (latest) => {
-          params.assertCommitAllowed?.();
-          if (isRecord(latest?.details) && latest.details.runId === runId) {
-            return undefined;
-          }
-          return {
-            customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
-            content: `This turn did not run: ${error}.`,
-            display: true,
-            details: { runId, error },
-          };
-        },
-      },
-    );
-    if (!result.ok) {
-      throw new Error(`Failed run notice could not be appended: ${result.error.code}`);
-    }
+      runId,
+      error,
+      assertCommitAllowed: params.assertCommitAllowed,
+    });
   }
 }
