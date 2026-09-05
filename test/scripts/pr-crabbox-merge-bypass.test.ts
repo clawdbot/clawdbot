@@ -323,14 +323,25 @@ describe("Crabbox admin merge bypass verifier", () => {
 
 function runProtectedShell(
   command: string,
-  { role = "admin", state = "active", denied = "", override = false, revoke = false } = {},
+  {
+    role = "admin",
+    state = "active",
+    denied = "",
+    override = false,
+    revoke = false,
+    longPreview = false,
+  } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "pr-crabbox-protected-"));
   const bin = join(root, "bin");
   mkdirSync(bin);
   mkdirSync(join(root, ".local"));
   writeFileSync(join(root, "calls.jsonl"), "");
-  const evidence = input();
+  const evidence = {
+    ...input(),
+    // Exercise pipe backpressure during trailer parsing without changing authorization.
+    mergePreview: "Reviewed fixture body".repeat(longPreview ? 16_384 : 1),
+  };
   const reviewComments = validClawsweeperReviewCommentPages(131091, headSha);
   evidence.membership.role = role;
   evidence.membership.state = state;
@@ -362,7 +373,7 @@ else if (args[0] === "pr" && args[1] === "checks" && args.includes("--required")
 else if (args[0] === "pr" && args[1] === "merge") out("synthetic merge request accepted");
 else if (args[0] === "workflow" && args[1] === "run") { value.dispatched = true; save(); }
 else if (endpoint === "graphql" && args.some(arg => arg.includes("viewerMergeBodyText"))) {
-  out({data:{repository:{pullRequest:{...pr,viewerMergeBodyText:"Reviewed fixture body"}}}});
+  out({data:{repository:{pullRequest:{...pr,viewerMergeBodyText:value.mergePreview}}}});
 }
 else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(owner:"))) {
   out({data:{repository:{...repo,ref:{target:{oid:"${mainSha}"}},pullRequest:pr}}});
@@ -412,7 +423,8 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
       fetch|cat-file|merge-base) exit 0;;
       merge-tree) echo candidate-tree;;
       rev-parse) echo main-tree;;
-      -c) exit 0;;
+      # The trailer parser writes stdin; drain it before exit to avoid EPIPE.
+      -c) cat >/dev/null; exit 0;;
       *) echo "unexpected fixture git: $*" >&2; exit 19;;
     esac`,
     aws: "exit 19",
@@ -585,13 +597,14 @@ describe("Crabbox authorization before final effects", () => {
   });
 
   it.each([
-    { role: "member", revoke: false, reads: 1, merges: 0 },
-    { role: "admin", revoke: false, reads: 2, merges: 1 },
-    { role: "admin", revoke: true, reads: 2, merges: 0 },
+    { role: "member", revoke: false, reads: 1, merges: 0, longPreview: false },
+    { role: "admin", revoke: false, reads: 2, merges: 1, longPreview: false },
+    { role: "admin", revoke: false, reads: 2, merges: 1, longPreview: true },
+    { role: "admin", revoke: true, reads: 2, merges: 0, longPreview: false },
   ])(
-    "gates admin merge on $role membership (revoked=$revoke)",
-    ({ role, revoke, reads, merges }) => {
-      const result = runProtectedShell(mergeAuthorizationCommand, { role, revoke });
+    "gates admin merge on $role membership (revoked=$revoke, long preview=$longPreview)",
+    ({ role, revoke, reads, merges, longPreview }) => {
+      const result = runProtectedShell(mergeAuthorizationCommand, { role, revoke, longPreview });
       const output = result.stdout + result.stderr;
       expect(result.status, output).toBe(1);
       const viewers = result.calls.filter((args) =>
@@ -601,7 +614,7 @@ describe("Crabbox authorization before final effects", () => {
         args.includes("orgs/openclaw/memberships/maintainer"),
       );
       const requests = result.calls.filter((args) => args[0] === "pr" && args[1] === "merge");
-      expect(viewers).toHaveLength(reads);
+      expect(viewers, output).toHaveLength(reads);
       expect(memberships).toHaveLength(reads);
       expect(requests).toHaveLength(merges);
       expect(result.calls.some((args) => args.includes("user") || args[0] === "workflow")).toBe(
