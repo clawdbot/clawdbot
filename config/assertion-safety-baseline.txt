@@ -3055,7 +3055,7 @@ src/infra/install-source-utils.ts	2
 src/infra/json-file.ts	1
 src/infra/json-utf8-bytes.ts	4
 src/infra/kysely-sync-cache-state.ts	1
-src/infra/kysely-sync.ts	9
+src/infra/kysely-sync.ts	7
 src/infra/net/fetch-guard.ts	3
 src/infra/net/form-data.ts	2
 src/infra/net/node-proxy-agent.ts	4
