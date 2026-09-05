@@ -46,6 +46,7 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
     dataType: "INTEGER",
     tableName: "skill_workshop_proposals",
   },
+  { columnName: "profile_preseeded", dataType: "INTEGER", tableName: "workspace_setup_state" },
 ] as const satisfies readonly LazyAdditiveStateColumnDefinition[];
 
 function isFirstUseAdditiveStateColumn({

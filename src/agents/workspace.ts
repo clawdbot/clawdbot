@@ -426,7 +426,7 @@ async function fileContentDiffersFromTemplate(
 
 async function hasWorkspaceUserContentEvidence(
   dir: string,
-  opts?: { includeGit?: boolean },
+  opts?: { includeGit?: boolean; includeSkills?: boolean },
 ): Promise<boolean> {
   const indicators = [path.join(dir, "memory")];
   if (opts?.includeGit) {
@@ -443,7 +443,10 @@ async function hasWorkspaceUserContentEvidence(
   if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
     return true;
   }
-  return await hasWorkspaceSkillEvidence(dir);
+  if (opts?.includeSkills ?? true) {
+    return await hasWorkspaceSkillEvidence(dir);
+  }
+  return false;
 }
 
 async function hasWorkspaceSkillEvidence(dir: string): Promise<boolean> {
@@ -493,17 +496,21 @@ async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<bo
   return false;
 }
 
+async function workspaceOnboardingProfilesDifferFromTemplates(dir: string): Promise<boolean> {
+  const fileDiffs = await Promise.all(
+    WORKSPACE_ONBOARDING_PROFILE_FILENAMES.map(async (fileName) =>
+      fileContentDiffersFromTemplate(path.join(dir, fileName), await loadTemplate(fileName)),
+    ),
+  );
+  return fileDiffs.some(Boolean);
+}
+
 async function workspaceProfileLooksConfigured(params: {
   dir: string;
   includeGitEvidence?: boolean;
 }): Promise<boolean> {
-  const profileFileDiffs = await Promise.all(
-    WORKSPACE_ONBOARDING_PROFILE_FILENAMES.map(async (fileName) =>
-      fileContentDiffersFromTemplate(path.join(params.dir, fileName), await loadTemplate(fileName)),
-    ),
-  );
   return (
-    profileFileDiffs.some(Boolean) ||
+    (await workspaceOnboardingProfilesDifferFromTemplates(params.dir)) ||
     (await hasWorkspaceUserContentEvidence(params.dir, {
       includeGit: params.includeGitEvidence,
     }))
@@ -566,7 +573,16 @@ async function workspaceAttestedGeneratedFilesIntact(
   return true;
 }
 
-async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }): Promise<boolean> {
+async function workspaceHasBootstrapCompletionEvidence(params: {
+  dir: string;
+  state?: Pick<WorkspaceSetupState, "profilePreseeded">;
+}): Promise<boolean> {
+  // Operator-preseeded profiles must not complete onboarding by themselves;
+  // only durable user content can. Template-seeded workspaces keep the
+  // documented profile-diff recovery contract (docs/start/bootstrapping.md).
+  if (params.state?.profilePreseeded) {
+    return await hasWorkspaceUserContentEvidence(params.dir, { includeSkills: false });
+  }
   return await workspaceProfileLooksConfigured(params);
 }
 
@@ -605,6 +621,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     !bootstrapExists ||
     !(await workspaceHasBootstrapCompletionEvidence({
       dir: params.dir,
+      state: params.state,
     }))
   ) {
     return { repaired: false, bootstrapExists, state: params.state };
@@ -917,6 +934,10 @@ export async function seedWorkspaceBootstrap(params: {
       dir,
       {
         bootstrapSeededAt: new Date(nowMs).toISOString(),
+        ...(initialState.profilePreseeded ||
+        (await workspaceOnboardingProfilesDifferFromTemplates(dir))
+          ? { profilePreseeded: true }
+          : {}),
       },
       nowMs,
       params.stateOptions,
@@ -1174,7 +1195,17 @@ export async function ensureAgentWorkspace(params?: {
 
   let bootstrapExists = await pathExists(bootstrapPath);
   if (!state.bootstrapSeededAt && bootstrapExists) {
-    markState({ bootstrapSeededAt: nowIso() });
+    // Record provenance at the producer boundary, in the same write
+    // transaction that wins the initial seed marker: profiles already
+    // differing from templates now mean operator preseed. The canonical
+    // state the store returns is authoritative for everything downstream,
+    // so a stale concurrent writer cannot reclassify this workspace.
+    state = mergeWorkspaceSetupState(dir, {
+      bootstrapSeededAt: nowIso(),
+      ...(state.profilePreseeded || (await workspaceOnboardingProfilesDifferFromTemplates(dir))
+        ? { profilePreseeded: true }
+        : {}),
+    });
   }
 
   if (!state.setupCompletedAt) {

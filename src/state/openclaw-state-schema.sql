@@ -732,6 +732,7 @@ CREATE TABLE IF NOT EXISTS workspace_setup_state (
   version INTEGER,
   bootstrap_seeded_at TEXT,
   setup_completed_at TEXT,
+  profile_preseeded INTEGER,
   updated_at INTEGER,
   attested_at_ms INTEGER,
   attestation_updated_at_ms INTEGER,

@@ -66,6 +66,10 @@ export type WorkspaceSetupState = {
   version: typeof WORKSPACE_SETUP_STATE_VERSION;
   bootstrapSeededAt?: string;
   setupCompletedAt?: string;
+  /** Write-once: onboarding profiles already differed from templates when
+   * bootstrap was first seeded (operator/managed preseed), so profile diffs
+   * must not count as user completion evidence. */
+  profilePreseeded?: boolean;
 };
 
 export type WorkspaceAttestation = {
@@ -287,6 +291,7 @@ function readSnapshotFromDatabase(params: {
       version: WORKSPACE_SETUP_STATE_VERSION,
       ...(setupRow?.bootstrap_seeded_at ? { bootstrapSeededAt: setupRow.bootstrap_seeded_at } : {}),
       ...(setupRow?.setup_completed_at ? { setupCompletedAt: setupRow.setup_completed_at } : {}),
+      ...(setupRow?.profile_preseeded ? { profilePreseeded: true } : {}),
     },
     ...(attestationPresent
       ? {
@@ -386,10 +391,19 @@ export function mergeWorkspaceSetupState(
     const snapshot = readSnapshotFromDatabase({ identity, database });
     const bootstrapSeededAt = snapshot.setup.bootstrapSeededAt ?? next.bootstrapSeededAt;
     const setupCompletedAt = snapshot.setup.setupCompletedAt ?? next.setupCompletedAt;
+    // Provenance belongs to the transaction that wins the initial seed marker:
+    // once a workspace is already seeded, a later writer's classification is
+    // discarded (it may have observed post-seed user edits), and a recorded
+    // marker never clears. Unseeded legacy rows keep NULL (not preseeded).
+    const winsInitialSeed = !snapshot.setup.bootstrapSeededAt && next.bootstrapSeededAt;
+    const profilePreseeded = winsInitialSeed
+      ? next.profilePreseeded === true
+      : Boolean(snapshot.setup.profilePreseeded);
     const merged: WorkspaceSetupState = {
       version: WORKSPACE_SETUP_STATE_VERSION,
       ...(bootstrapSeededAt ? { bootstrapSeededAt } : {}),
       ...(setupCompletedAt ? { setupCompletedAt } : {}),
+      ...(profilePreseeded ? { profilePreseeded: true } : {}),
     };
     const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
     executeSqliteQuerySync(
@@ -402,6 +416,7 @@ export function mergeWorkspaceSetupState(
           version: WORKSPACE_SETUP_STATE_VERSION,
           bootstrap_seeded_at: merged.bootstrapSeededAt ?? null,
           setup_completed_at: merged.setupCompletedAt ?? null,
+          profile_preseeded: merged.profilePreseeded ? 1 : null,
           updated_at: nowMs,
         })
         .onConflict((conflict) =>
@@ -410,6 +425,7 @@ export function mergeWorkspaceSetupState(
             version: WORKSPACE_SETUP_STATE_VERSION,
             bootstrap_seeded_at: merged.bootstrapSeededAt ?? null,
             setup_completed_at: merged.setupCompletedAt ?? null,
+            profile_preseeded: merged.profilePreseeded ? 1 : null,
             updated_at: nowMs,
           }),
         ),

@@ -271,6 +271,7 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       "web_push_subscriptions.user_profile_id TEXT",
       "web_push_subscriptions.preferences_json TEXT",
       "skill_workshop_proposals.claim_released_time INTEGER",
+      "workspace_setup_state.profile_preseeded INTEGER",
     ]);
 
     const database = createGlobalDatabase();

@@ -167,6 +167,44 @@ describe("workspace state store", () => {
     expect(readWorkspaceStateSnapshot(dir).setup).toStrictEqual(state);
   });
 
+  it("binds preseed provenance to the initial seed transaction", () => {
+    const dir = workspaceDir();
+    // Writer A wins the initial seed marker for a normal (template) workspace.
+    const seeded = mergeWorkspaceSetupState(
+      dir,
+      { bootstrapSeededAt: "2026-07-16T01:00:00.000Z", profilePreseeded: false },
+      1_000,
+    );
+    expect(seeded.profilePreseeded).toBeUndefined();
+
+    // A stale writer that observed post-seed profile edits must not flip an
+    // already-seeded workspace to preseeded: it does not win the initial seed.
+    const reclassified = mergeWorkspaceSetupState(
+      dir,
+      { bootstrapSeededAt: "2026-07-16T03:00:00.000Z", profilePreseeded: true },
+      3_000,
+    );
+    expect(reclassified.bootstrapSeededAt).toBe("2026-07-16T01:00:00.000Z");
+    expect(reclassified.profilePreseeded).toBeUndefined();
+    expect(readWorkspaceStateSnapshot(dir).setup).toStrictEqual(reclassified);
+
+    // Conversely, the winning initial-seed writer records preseed once, and a
+    // later writer cannot clear it.
+    const preseedDir = `${dir}-preseed`;
+    const preseeded = mergeWorkspaceSetupState(
+      preseedDir,
+      { bootstrapSeededAt: "2026-07-16T04:00:00.000Z", profilePreseeded: true },
+      4_000,
+    );
+    expect(preseeded.profilePreseeded).toBe(true);
+    const cleared = mergeWorkspaceSetupState(
+      preseedDir,
+      { bootstrapSeededAt: "2026-07-16T05:00:00.000Z", profilePreseeded: false },
+      5_000,
+    );
+    expect(cleared.profilePreseeded).toBe(true);
+  });
+
   it("replaces generated hashes atomically and ignores older attestations", () => {
     const dir = workspaceDir();
     replaceWorkspaceAttestation({
