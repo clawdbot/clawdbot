@@ -182,7 +182,12 @@ When remote sync uses a temporary checkout, the wrapper preserves native
 Repeated runs retain separate evidence even when native filenames match. The
 wrapper prints the old-to-new root mapping; native logs and generated proof may
 still reference the old paths. A preservation error fails the wrapper and retains
-the temporary checkout at the reported path for manual recovery.
+the temporary checkout at the reported path for manual recovery, preserving the
+child's nonzero exit code. The wrapper rejects symlinks in artifact trees
+and destination parents, and copies only regular files and real directories.
+Retained files use mode `0600` and new directories use `0700` on POSIX systems.
+If preservation fails, recover the outputs from the reported checkout before
+removing it; incomplete destination copies are removed.
 
 These are local artifacts, not published or fully sanitized proof. Blacksmith's
 native failure bundle contains captured stdout/stderr and diagnostic metadata;
