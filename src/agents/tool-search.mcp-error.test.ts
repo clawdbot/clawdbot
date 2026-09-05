@@ -19,6 +19,7 @@ import { buildBundleMcpPolicyLayers } from "./embedded-agent-runner/effective-to
 import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { isToolResultError } from "./tool-result-error.js";
+import { MAX_UNAVAILABLE_MCP_ERROR_CHARS } from "./tool-search-lookup-miss.js";
 import { MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS } from "./tool-search-types.js";
 import {
   applyToolSearchCatalog,
@@ -621,22 +622,31 @@ describe("Tool Search with an unavailable MCP server", () => {
 
   it("keeps the outage payload inside the batch response cap at every limit", async () => {
     const { control } = await createControls(makeEscapedOutagesCatalog());
-    // Sixteen queries filling the 512-byte batch text budget, none matching:
-    // nothing but the echoed queries and the outage payload remains to render.
+    // Sixteen queries filling the 512-byte batch text budget, each hitting the
+    // one healthy tool: the hits cannot fit beside the outage, so every group
+    // and the batch gain a truncated flag, and the echoed queries, those flags,
+    // and the outage payload are all that remains to render.
     const batch = await control(TOOL_SEARCH_RAW_TOOL_NAME).execute("search-batch-escaped", {
       queries: Array.from({ length: 16 }, (_, index) => ({
-        query: `${index}`.padEnd(28, "q"),
+        query: `list saved notes ${index}`.padEnd(28, "q"),
         limit: 1,
       })),
     });
     const details = batch.details as {
-      results: Array<{ candidates: unknown[] }>;
+      results: Array<{ candidates: unknown[]; truncated?: true }>;
+      truncated?: true;
       unavailableMcpServers: Array<{ error: string }>;
     };
-    expect(details.results.every((result) => result.candidates.length === 0)).toBe(true);
+    expect(details.truncated).toBe(true);
+    expect(details.results).toHaveLength(16);
+    for (const result of details.results) {
+      expect(result).toMatchObject({ candidates: [], truncated: true });
+    }
     expect(details.unavailableMcpServers).toHaveLength(8);
     for (const server of details.unavailableMcpServers) {
-      expect(JSON.stringify(server.error).length - 2).toBeLessThanOrEqual(160);
+      expect(JSON.stringify(server.error).length - 2).toBeLessThanOrEqual(
+        MAX_UNAVAILABLE_MCP_ERROR_CHARS,
+      );
     }
     expect(JSON.stringify(details, null, 2).length).toBeLessThanOrEqual(
       MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,

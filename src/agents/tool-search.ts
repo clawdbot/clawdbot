@@ -173,8 +173,9 @@ function boundToolSearchBatchResponse(
   let truncated = bounded.some((result) => result.truncated);
   // The outage note is never trimmed: it is the fact that stops a model from
   // re-searching for tools that cannot appear. Its budget is reserved by its
-  // own caps (8 servers, 30-char safe names, 160 serialized error chars), which
-  // with the 16-query text budget echoed and no candidates stays under the cap.
+  // own caps (8 servers, 30-char safe names, 120 serialized error chars), which
+  // stay under the cap beside the echoed 16-query text budget and the
+  // `truncated` flags every group and the batch gain once their hits are gone.
   const render = () => ({
     results: bounded,
     ...(truncated ? { truncated: true as const } : {}),

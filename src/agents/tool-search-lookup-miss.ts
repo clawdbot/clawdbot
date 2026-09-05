@@ -23,8 +23,9 @@ import type {
 const MAX_UNAVAILABLE_MCP_SERVERS = 8;
 // Serialized bound. Eight entries with 30-char safe names and this many error
 // chars, plus the note, fit under MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS even
-// when a batch echoes its full 512-byte query budget with no candidates.
-const MAX_UNAVAILABLE_MCP_ERROR_CHARS = 160;
+// when a batch echoes its full 512-byte query budget and every group and the
+// batch carry the `truncated` flag its dropped candidates leave behind.
+export const MAX_UNAVAILABLE_MCP_ERROR_CHARS = 120;
 const MCP_CATALOG_ID_SERVER_RE = /^mcp:([^:]+):/u;
 
 export type UnavailableMcpServersNote = {
