@@ -23,6 +23,21 @@ import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { prepareSessionWorkerPlacementStop } from "./session-placement-lifecycle.js";
 
+const { workerPlacementWarn } = vi.hoisted(() => ({ workerPlacementWarn: vi.fn() }));
+
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/worker-placement"
+        ? { ...logger, warn: workerPlacementWarn }
+        : logger;
+    },
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker placement dispatch reclaim", () => {
@@ -31,6 +46,7 @@ describe("worker placement dispatch reclaim", () => {
   let placementStore: PlacementStore;
 
   beforeEach(async () => {
+    workerPlacementWarn.mockClear();
     root = tempDirs.make("openclaw-dispatch-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
@@ -609,6 +625,28 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.reportWorkspaceResultConflict).not.toHaveBeenCalled();
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("reclaims an unchanged worker with unknown conflict state without silently clearing its report", async () => {
+    const harness = createHarness(placementStore, {
+      priorWorkspaceResultConflictLookup: { kind: "unknown", reason: "malformed-report" },
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(harness.service.reclaim(REQUEST)).resolves.toMatchObject({
+      state: "reclaimed",
+      workspaceBaseManifestRef: MANIFEST_REF,
+      turnClaim: null,
+    });
+
+    expect(harness.reportWorkspaceResultConflict).not.toHaveBeenCalled();
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+    expect(workerPlacementWarn).toHaveBeenCalledExactlyOnceWith(
+      `Cloud workspace conflict state unknown sessionId=${REQUEST.sessionId} reason=malformed-report; preserving prior conflict state`,
+    );
   });
 
   it("retires only the exact unclaimed safe placement generation", () => {
