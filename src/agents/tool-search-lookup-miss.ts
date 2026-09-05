@@ -10,7 +10,10 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+} from "../security/external-content.js";
 import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type {
   ToolSearchCatalogEntry,
@@ -35,13 +38,16 @@ export type UnavailableMcpServersNote = {
 
 /** Bounded by serialized length: JSON escaping inflates a control character up to sixfold. */
 function boundedFailure(diagnostic: McpToolCatalogDiagnostic): string {
-  let text = truncateUtf16Safe(diagnostic.message, MAX_UNAVAILABLE_MCP_ERROR_CHARS);
+  let text = truncateSanitizedExternalContent(
+    diagnostic.message,
+    MAX_UNAVAILABLE_MCP_ERROR_CHARS,
+  ).text;
   for (
     let over = JSON.stringify(text).length - 2 - MAX_UNAVAILABLE_MCP_ERROR_CHARS;
     over > 0;
     over = JSON.stringify(text).length - 2 - MAX_UNAVAILABLE_MCP_ERROR_CHARS
   ) {
-    text = truncateUtf16Safe(text, text.length - Math.ceil(over / 6));
+    text = truncateSanitizedExternalContent(text, text.length - Math.ceil(over / 6)).text;
   }
   return text;
 }
@@ -103,7 +109,11 @@ function formatUnavailableMcpToolError(
   needle: string,
   diagnostic: McpToolCatalogDiagnostic,
 ): string {
-  return `Tool "${needle}" belongs to MCP server "${diagnostic.safeServerName}", which failed for this run: ${boundedFailure(diagnostic)}. Its tools are absent from the Tool Search catalog. Do not retry searches or calls for it; report the outage and continue without it.`;
+  const failure = wrapExternalContent(boundedFailure(diagnostic), {
+    source: "api",
+    includeWarning: false,
+  });
+  return `Tool "${needle}" belongs to MCP server "${diagnostic.safeServerName}", which failed for this run: ${failure}. Its tools are absent from the Tool Search catalog. Do not retry searches or calls for it; report the outage and continue without it.`;
 }
 
 function tokenizeLookupValue(input: string): Set<string> {

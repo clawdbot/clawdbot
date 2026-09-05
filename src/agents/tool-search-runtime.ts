@@ -476,9 +476,16 @@ export class ToolSearchRuntime {
     unwrapToolResultValue((await this.call(id, input, options)).result);
 
   hasNetworkContent(parentToolCallId?: string): boolean {
-    return parentToolCallId
-      ? this.networkInvocations.has(parentToolCallId)
-      : this.networkInvocations.size > 0;
+    if (parentToolCallId) {
+      return this.networkInvocations.has(parentToolCallId);
+    }
+    // A recorded MCP outage rides on every search and Code Mode result as
+    // server-controlled text, so those parent-less results are network content
+    // for the whole runtime, the same sticky scope a guest network call gets.
+    return (
+      this.networkInvocations.size > 0 ||
+      (this.ctx.catalogRef?.current?.mcpDiagnostics?.diagnostics.length ?? 0) > 0
+    );
   }
 
   takeTerminalTargetBatch(parentToolCallId?: string): boolean {

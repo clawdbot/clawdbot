@@ -20,6 +20,7 @@ import {
   setToolSearchCodeModeSupportedForTest,
   setToolSearchMinCodeTimeoutMsForTest,
 } from "./tool-search-config.js";
+import { renderToolSearchControlText } from "./tool-search-control-result.js";
 import {
   applyToolSchemaDirectoryCatalog,
   MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
@@ -89,6 +90,7 @@ type ToolSearchBatchGroup = {
 const MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS = 180;
 const MAX_BATCH_CANDIDATE_DESCRIPTION_SCAN_CHARS = MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS * 4;
 const MAX_BATCH_CANDIDATE_METADATA_CHARS = 2_000;
+const TOOL_SEARCH_CONTROL_ENVELOPE_OVERHEAD = renderToolSearchControlText("", true).text.length;
 
 function compactBatchCandidateDescription(candidate: ToolSearchCandidate): ToolSearchCandidate {
   // Remote catalog descriptions are untrusted. Bound the scanned prefix before
@@ -173,15 +175,20 @@ function boundToolSearchBatchResponse(
   let truncated = bounded.some((result) => result.truncated);
   // The outage note is never trimmed: it is the fact that stops a model from
   // re-searching for tools that cannot appear. Its budget is reserved by its
-  // own caps (8 servers, 30-char safe names, 120 serialized error chars), which
-  // stay under the cap beside the echoed 16-query text budget and the
-  // `truncated` flags every group and the batch gain once their hits are gone.
+  // own caps (8 servers, 30-char safe names, 120 serialized error chars) plus
+  // the control envelope overhead, which stay under the cap beside the echoed
+  // 16-query text budget and the `truncated` flags every group and the batch
+  // gain once their hits are gone.
   const render = () => ({
     results: bounded,
     ...(truncated ? { truncated: true as const } : {}),
     ...outage,
   });
-  while (JSON.stringify(render(), null, 2).length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
+  const envelopeOverhead = outage ? TOOL_SEARCH_CONTROL_ENVELOPE_OVERHEAD : 0;
+  while (
+    JSON.stringify(render(), null, 2).length + envelopeOverhead >
+    MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS
+  ) {
     let removable: ToolSearchBatchGroup | undefined;
     for (const group of bounded) {
       if (group.candidates.length === 0) {
@@ -368,7 +375,10 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           // A plain array stays the no-outage shape; the recorded failed servers
           // ride alongside the candidates only when the MCP runtime reported one.
           const outage = describeUnavailableMcpServers(resolveCatalog(ctx));
-          return jsonResult(outage ? { candidates, ...outage } : candidates);
+          return formatToolSearchControlResult(
+            outage ? { candidates, ...outage } : candidates,
+            runtime,
+          );
         }
         const results = await Promise.all(
           request.searches.map(async (search) => ({
@@ -376,8 +386,9 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             candidates: await runtime.search(search.query, { limit: search.limit }),
           })),
         );
-        return jsonResult(
+        return formatToolSearchControlResult(
           boundToolSearchBatchResponse(results, describeUnavailableMcpServers(resolveCatalog(ctx))),
+          runtime,
         );
       },
     },
