@@ -9,6 +9,7 @@ import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   installNativeAncestorTypes,
   materializeNativeCompiler,
+  resolveNativeFixtureShortPath,
   writeNativeFixtureFile,
 } from "./native-boundary-fixture.js";
 
@@ -102,15 +103,75 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
       signal.removeEventListener("abort", abort);
     }
   };
-  const run = () =>
+  const run = (declared = root) =>
     step("native-fixture", [
-      path.join(root, "scripts/prepare-extension-package-boundary-artifacts.mts"),
+      path.join(declared, "scripts/prepare-extension-package-boundary-artifacts.mts"),
       `--mode=${mode}`,
     ]);
   return { ancestor, root, native, write, plugins, recordPath, output, step, run };
 }
 
 describe("native declaration preparation", () => {
+  it.runIf(process.platform === "win32").for([
+    { name: "short entry", entry: true, workspace: false },
+    { name: "workspace junction", entry: false, workspace: true },
+    { name: "short entry and workspace junction", entry: true, workspace: true },
+  ])(
+    "publishes cold native output and reuses warm receipts through Windows 8.3 $name",
+    { timeout: 30_000 },
+    ({ entry, workspace }, context) => {
+      const f = createPreparationFixture("package-boundary", context.signal);
+      let declared = f.root;
+      if (entry) {
+        const short = resolveNativeFixtureShortPath(f.root);
+        if (!short) {
+          return context.skip("Filesystem does not expose a distinct Windows 8.3 checkout alias");
+        }
+        declared = short;
+        expect(fs.realpathSync(declared)).not.toBe(f.root);
+        expect(fs.realpathSync.native(declared)).toBe(f.root);
+      }
+      if (workspace) {
+        const sdk = path.join(f.root, "packages/plugin-sdk");
+        const short = resolveNativeFixtureShortPath(sdk);
+        if (!short) {
+          return context.skip("Filesystem does not expose a distinct Windows 8.3 workspace alias");
+        }
+        const link = path.join(f.root, "node_modules/fixture-sdk");
+        fs.unlinkSync(link);
+        fs.symlinkSync(short, link, "junction");
+        expect(fs.realpathSync(link)).not.toBe(sdk);
+        expect(fs.realpathSync.native(link)).toBe(sdk);
+      }
+      return fixture.run(async () => {
+        const cold = await f.run(declared).catch((error: unknown) => error);
+        const declaration = path.join(f.root, f.output, "src/nested.d.ts");
+        const metadata = path.join(f.root, f.output, ".tsbuildinfo");
+        // Even the failing-before case must reach real native emit, not fail during setup.
+        expect(fs.readFileSync(declaration, "utf8")).toContain("value = 1");
+        const receipt: { fileNames: string[]; fileInfos: unknown[] } = JSON.parse(
+          fs.readFileSync(metadata, "utf8"),
+        );
+        expect(receipt.fileInfos.length).toBeGreaterThan(0);
+        expect(receipt.fileNames.some((file) => file.endsWith("/src/nested.ts"))).toBe(true);
+        expect(cold).toBeUndefined();
+        const record = readArtifactRecord(f.recordPath);
+        expect(record?.inputs).toContain("src/nested.ts");
+        expect(record?.outputs[`${f.output}/src/nested.d.ts`]).toBeDefined();
+        const artifacts = [f.recordPath, declaration, metadata].map((file) => ({
+          file,
+          bytes: fs.readFileSync(file),
+          mtimeMs: fs.statSync(file).mtimeMs,
+        }));
+        await f.run(declared);
+        for (const artifact of artifacts) {
+          expect(fs.readFileSync(artifact.file)).toEqual(artifact.bytes);
+          expect(fs.statSync(artifact.file).mtimeMs).toBe(artifact.mtimeMs);
+        }
+      });
+    },
+  );
+
   it.for([false, true])(
     "refuses a shared install before creating dependency links or receipts (linked=%s)",
     (linked, { signal }) => {

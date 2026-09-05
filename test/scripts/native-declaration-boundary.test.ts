@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   installNativeAncestorTypes,
   materializeNativeCompiler,
+  resolveNativeFixtureShortPath,
   writeNativeFixtureFile,
 } from "./native-boundary-fixture.js";
 
@@ -125,21 +126,12 @@ for (const kind of [
       fs.mkdirSync(root, { recursive: true });
       let target = root;
       if (kind.includes("8.3")) {
-        const short = spawnSync(
-          "cmd.exe",
-          ["/d", "/c", 'for %I in ("%DECLARATION_ALIAS_ROOT%") do @echo %~sI'],
-          {
-            encoding: "utf8",
-            windowsVerbatimArguments: true,
-            env: { ...process.env, DECLARATION_ALIAS_ROOT: root },
-          },
-        );
-        expect(short.status, short.stderr).toBe(0);
-        target = short.stdout.trim();
-        expect(fs.realpathSync.native(target)).toBe(root);
-        if (fs.realpathSync(target).toLowerCase() === root.toLowerCase()) {
+        const short = resolveNativeFixtureShortPath(root);
+        if (!short) {
           context.skip("Filesystem does not expose a distinct Windows 8.3 checkout alias");
+          return;
         }
+        target = short;
       }
       let declared = target;
       if (kind.startsWith("directory alias") || longExecutable) {

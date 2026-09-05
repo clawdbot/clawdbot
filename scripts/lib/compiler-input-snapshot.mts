@@ -163,10 +163,10 @@ export class CompilerInputSnapshot {
             add(`${id}:${isDirectory ? "directory" : "file"}`);
           }
           if (isDirectory) {
-            // Extend the canonical parent path for ordinary children; resolve only links.
-            // Rewalking every ancestor multiplies metadata calls across installed trees.
+            // Extend native-canonical parents; resolve only links so Windows aliases
+            // share output ownership without rewalking every ancestor.
             const canonical = entry.isSymbolicLink()
-              ? fs.realpathSync(canonicalFile)
+              ? fs.realpathSync.native(canonicalFile)
               : canonicalFile;
             visit(file, canonical, installed || entry.name === "node_modules");
           } else if (/\.(?:[cm]?[jt]sx?|json)$/u.test(entry.name)) {
@@ -178,7 +178,7 @@ export class CompilerInputSnapshot {
       // A failed lookup can be outside declared roots. Name/existence changes in
       // the local resolution namespace invalidate conservatively; unrelated byte
       // edits do not. Installed package contents are included, not just lockfiles.
-      visit(this.rootDir, fs.realpathSync(this.rootDir));
+      visit(this.rootDir, fs.realpathSync.native(this.rootDir));
       this.topology = names.toSorted((left, right) => (left.name < right.name ? -1 : 1));
     }
     // Workspace aliases can expose this producer's outputs as installed inputs.

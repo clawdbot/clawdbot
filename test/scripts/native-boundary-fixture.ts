@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -49,6 +50,31 @@ export function materializeNativeCompiler(rootDir: string) {
     path.join(root, "node_modules/@typescript/native-preview/lib/getExePath.js"),
   );
   return getExePath.default();
+}
+
+export function resolveNativeFixtureShortPath(directory: string) {
+  const short = spawnSync(
+    "cmd.exe",
+    ["/d", "/c", 'for %I in ("%DECLARATION_ALIAS_ROOT%") do @echo %~sI'],
+    {
+      encoding: "utf8",
+      // cmd.exe owns these quotes; libuv must not backslash-escape them.
+      windowsVerbatimArguments: true,
+      env: { ...process.env, DECLARATION_ALIAS_ROOT: directory },
+    },
+  );
+  if (short.error) {
+    throw short.error;
+  }
+  if (short.status !== 0) {
+    throw new Error(`Windows short-path lookup failed: ${short.stderr}`);
+  }
+  const target = short.stdout.trim();
+  const canonical = fs.realpathSync.native(directory);
+  if (fs.realpathSync.native(target) !== canonical) {
+    throw new Error(`Windows short path does not resolve to its fixture directory: ${target}`);
+  }
+  return fs.realpathSync(target).toLowerCase() === canonical.toLowerCase() ? undefined : target;
 }
 
 export function writeNativeFixtureFile(root: string, file: string, text: string) {

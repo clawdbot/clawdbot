@@ -93,10 +93,10 @@ describe("native owner content records", () => {
     const depth = 32;
     const nested = `namespace/${"nested/".repeat(depth)}`;
     f.write(`${nested}candidate.ts`, "export {};");
-    const originalRealpath = fs.realpathSync;
+    const originalRealpath = fs.realpathSync.native;
     const namespaceRoot = path.join(f.root, "namespace");
     let resolutions = 0;
-    fs.realpathSync = new Proxy(originalRealpath, {
+    fs.realpathSync.native = new Proxy(originalRealpath, {
       apply(target, receiver, args) {
         const requested = String(args[0]);
         if (requested === namespaceRoot || requested.startsWith(`${namespaceRoot}${path.sep}`)) {
@@ -111,7 +111,7 @@ describe("native owner content records", () => {
       first = snapshot.signature(f.config, f.args, []);
       expect(snapshot.signature(f.config, f.args, [])).toBe(first);
     } finally {
-      fs.realpathSync = originalRealpath;
+      fs.realpathSync.native = originalRealpath;
     }
     expect(resolutions).toBeLessThan(depth);
     f.write(`${nested}added.ts`, "export {};");
