@@ -149,7 +149,9 @@ afterEach(async () => {
 });
 
 async function createBoundParent() {
+  process.stderr.write("spawn-boundary:create-parent:start\n");
   const cfg = runtimeConfig;
+  process.stderr.write("spawn-boundary:persistence:start\n");
   const storePath = await waitForStage(
     "parent session persistence",
     writeSubagentSessionEntry({
@@ -159,6 +161,7 @@ async function createBoundParent() {
       defaultSessionId: "parent-session",
     }),
   );
+  process.stderr.write("spawn-boundary:persistence:done\n");
   const context = createChatAbortContext({
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(),
@@ -183,7 +186,9 @@ async function createBoundParent() {
     timeoutMs: 60_000,
     operationalRunInstance: admission.operationalRunInstance,
   });
+  process.stderr.write("spawn-boundary:admission:start\n");
   const admitted = await waitForStage("parent runtime admission", admission.admit("embedded"));
+  process.stderr.write("spawn-boundary:admission:done\n");
   bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
   const authority = getAdmittedRunDelegatedAuthority(admitted)!;
   parent.bindAgentRunDelegatedAuthority(authority);
@@ -217,7 +222,9 @@ function createBoundSpawnInvocation(bound: Awaited<ReturnType<typeof createBound
 
 describe("recursive spawn production boundary", () => {
   it("authorizes and admits an upgraded descendant before model execution", async () => {
+    process.stderr.write("spawn-boundary:test:start\n");
     const bound = await createBoundParent();
+    process.stderr.write("spawn-boundary:refresh:start\n");
     await waitForStage(
       "prepared model runtime publication",
       refreshPreparedModelRuntimeSnapshots(bound.cfg, {
@@ -226,6 +233,7 @@ describe("recursive spawn production boundary", () => {
         defaultWorkspaceDir: stateDir,
       }),
     );
+    process.stderr.write("spawn-boundary:refresh:done\n");
     const context = bound.context as unknown as GatewayRequestContext;
     const validateRuntimeAuthority = createAgentRuntimeApprovalAuthorityValidator();
     let observedRuntimeIdentity: AgentRuntimeIdentity | undefined;
@@ -245,10 +253,12 @@ describe("recursive spawn production boundary", () => {
     runEmbeddedAgent.mockReturnValueOnce(modelRun.promise);
     let childRunId: string | undefined;
     try {
+      process.stderr.write("spawn-boundary:invoke:start\n");
       const result = await waitForStage(
         "production spawn acceptance",
         createBoundSpawnInvocation(bound)(),
       );
+      process.stderr.write("spawn-boundary:invoke:done\n");
       expect(result).toMatchObject({
         details: {
           status: "accepted",
