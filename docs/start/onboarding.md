@@ -101,7 +101,10 @@ different connection. Runtime plugins installed for that attempt are kept.
 If the result is uncertain or settings may already have been saved, the app keeps
 replacement setup blocked while it checks the Gateway. **Check again** repeats
 that check without starting another activation; it does not discard the pending
-attempt or shorten its wait.
+attempt or shorten its wait. If reconciliation still cannot confirm completion
+after the wait, the app returns to connection choices with the error visible
+instead of automatically retrying a detected credential. Retry that connection
+or choose another one to start a new activation.
 
 The macOS setup sheet shows the selected provider and current activity with a
 spinner while the Gateway works. Plugin installation does not estimate a

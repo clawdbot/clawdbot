@@ -112,15 +112,13 @@ final class OnboardingAISetupModel {
         }
     }
 
+    var automaticSetupIntent: SetupIntent {
+        self.started || self.waitingForPendingActivationDeadline ? .resumePending : .startSetup
+    }
+
     func startIfNeeded() {
-        if self.waitingForPendingActivationDeadline {
-            self.resetForGatewayChange(clearPendingHandoff: false)
-        }
-        guard !self.started else { return }
-        self.configuredGatewayBlocker = nil
-        self.started = true
-        self.phase = .detecting
-        scheduleDetection()
+        guard self.automaticSetupIntent == .startSetup || self.configuredGatewayBlocker != nil else { return }
+        self.resumeSetup(intent: self.automaticSetupIntent)
     }
 
     func retryFromScratch() {
@@ -146,8 +144,6 @@ final class OnboardingAISetupModel {
             return
         }
         self.resetForGatewayChange()
-        self.started = true
-        self.phase = .detecting
         scheduleDetection()
     }
 
@@ -165,14 +161,21 @@ final class OnboardingAISetupModel {
         self.beginPendingActivationDeadlineWait()
     }
 
-    func updateConfiguredGatewayBlockerState(
-        _ blocker: ConfiguredGatewayBlocker?,
-        phase: Phase,
-        detectError: Failure?)
-    {
+    func enterConfiguredGatewayBlocker(_ blocker: ConfiguredGatewayBlocker, failure: Failure? = nil) {
+        // Retire stale route work without turning a prior attempt back into first
+        // setup. Only an initial blocked probe remains eligible for automatic testing.
+        let started = self.started
+        self.resetForGatewayChange(clearPendingHandoff: false)
+        self.started = started
         self.configuredGatewayBlocker = blocker
-        self.phase = phase
-        self.detectError = detectError
+        self.phase = .ready
+        self.detectError = failure
+    }
+
+    func beginConfiguredGatewayProbeRetry() {
+        guard self.configuredGatewayBlocker != nil else { return }
+        self.phase = .detecting
+        self.detectError = nil
     }
 
     /// Restore only the pending handoff state. A configured model label is not
@@ -180,26 +183,24 @@ final class OnboardingAISetupModel {
     func resumeConfiguredInference(modelRef: String) {
         let model = modelRef.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else { return }
-        if self.waitingForPendingActivationDeadline {
-            self.resetForGatewayChange(clearPendingHandoff: false)
-        }
         // Reconnects and page changes can discover the same pending handoff
         // repeatedly. Keep the first attempt and let every caller await it.
-        guard !self.ownsInferenceTransition else { return }
+        guard self.waitingForPendingActivationDeadline || !self.ownsInferenceTransition else { return }
         let routeIdentity = self.routeIdentityProvider()
         let pendingState = OnboardingSystemAgentResumeStore.pendingState(
             for: routeIdentity,
             defaults: self.defaults)
-        let inMemoryOwner = self.pendingActivationOwner
-        let restoredOwner = OnboardingSystemAgentResumeStore.activationOwner(
+        let inMemoryOwner = self.waitingForPendingActivationDeadline ? nil : self.pendingActivationOwner
+        let activationOwner = inMemoryOwner ?? OnboardingSystemAgentResumeStore.activationOwner(
             for: routeIdentity,
             defaults: self.defaults)
-        let activationOwner = inMemoryOwner ?? restoredOwner
         // A completed receipt may resume only after live inference and an exact
         // owner check. Other relaunched states must repeat activation because a
         // model label alone does not prove which attempt committed it.
         let requiresFreshActivation = inMemoryOwner != nil || pendingState != .none
+        let failure = self.detectError
         self.resetForGatewayChange(clearPendingHandoff: false)
+        self.detectError = failure
         // resetForGatewayChange retires the async attempt but the route-owned
         // durable receipt above must survive into this reconciliation attempt.
         self.pendingActivationOwner = activationOwner
@@ -244,8 +245,9 @@ final class OnboardingAISetupModel {
         return outcome
     }
 
-    func resumeSetup(ifCurrent context: AttemptContext) {
-        guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
+    func resumeSetup(ifCurrent context: AttemptContext? = nil, intent: SetupIntent = .resumePending) {
+        guard let context = context ?? self.captureAttemptContext(),
+              self.isCurrentAttempt(context), !Task.isCancelled else { return }
         if OnboardingSystemAgentResumeStore.pendingState(for: context.routeIdentity, defaults: self.defaults) != .none {
             // A new receipt can arrive after verification returned. Its owner
             // must be reconciled before this caller may start another activation.
@@ -254,8 +256,10 @@ final class OnboardingAISetupModel {
             self.onPendingActivationDeadline?(deadline, context.routeIdentity)
             return
         }
+        let failure = self.detectError
         self.resetForGatewayChange(clearPendingHandoff: false)
-        self.startIfNeeded()
+        self.detectError = failure
+        self.scheduleDetection(intent: intent)
     }
 
     private func performPendingConfiguredInferenceVerification(
@@ -265,13 +269,11 @@ final class OnboardingAISetupModel {
             return .superseded
         }
         self.phase = .detecting
-        self.detectError = nil
         let lease: GatewayConnection.ServerLease
         do {
             lease = try await self.gateway.acquireServerLease()
         } catch {
             guard isCurrentAttempt(context), !Task.isCancelled else { return .superseded }
-            self.phase = .ready
             self.detectError = Self.transportFailure(
                 "The selected Gateway changed before inference could be verified. Try again.")
             return self.pendingVerificationFailureOutcome(context: context)
@@ -297,7 +299,7 @@ final class OnboardingAISetupModel {
                     return .notConnected
                 }
                 clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
-                self.detectError = activationOwner.isUnbound ? nil : Self.transportFailure(
+                self.detectError = activationOwner.isUnbound ? self.detectError : Self.transportFailure(
                     "The Gateway authentication changed while AI setup was finishing. Test it again.")
                 return .freshSetupAllowed(context)
             }
@@ -360,7 +362,6 @@ final class OnboardingAISetupModel {
                 self.acceptVerifiedPendingInference(modelRef: modelRef)
                 return self.connected ? .connected : .superseded
             }
-            self.phase = .ready
             self.detectError = Self.failure(
                 label: "Configured AI",
                 status: result.status,
@@ -370,7 +371,6 @@ final class OnboardingAISetupModel {
             guard isCurrentAttempt(context), !Task.isCancelled else { return .superseded }
             // A failed read-only verification never proves activation failed.
             // Keep the marker and let Try again repeat this same verification.
-            self.phase = .ready
             self.detectError = Self.transportFailure(error.localizedDescription)
             return self.pendingVerificationFailureOutcome(context: context)
         }
@@ -379,6 +379,7 @@ final class OnboardingAISetupModel {
     private func pendingVerificationFailureOutcome(
         context: AttemptContext) -> PendingVerificationOutcome
     {
+        self.phase = .ready
         switch OnboardingSystemAgentResumeStore.pendingState(
             for: context.routeIdentity,
             defaults: self.defaults)
@@ -550,32 +551,37 @@ final class OnboardingAISetupModel {
 }
 
 extension OnboardingAISetupModel {
-    func detectAndAutoConnect() async {
+    func detectConnections(intent: SetupIntent = .startSetup) async {
         guard let context = captureAttemptContext() else {
             self.failDetectionForMissingRoute()
             return
         }
-        await self.detectAndAutoConnect(context: context)
+        await self.detectConnections(context: context, intent: intent)
     }
 
     private func scheduleDetection(
+        intent: SetupIntent = .startSetup,
         preparedChoiceID: String? = nil,
         preparedProviderLabel: String? = nil)
     {
+        self.started = true
+        self.phase = .detecting
         guard let context = captureAttemptContext() else {
             self.failDetectionForMissingRoute()
             return
         }
         Task {
-            await self.detectAndAutoConnect(
+            await self.detectConnections(
                 context: context,
+                intent: intent,
                 preparedChoiceID: preparedChoiceID,
                 preparedProviderLabel: preparedProviderLabel)
         }
     }
 
-    private func detectAndAutoConnect(
+    private func detectConnections(
         context: AttemptContext,
+        intent: SetupIntent,
         preparedChoiceID: String? = nil,
         preparedProviderLabel: String? = nil) async
     {
@@ -583,7 +589,9 @@ extension OnboardingAISetupModel {
         // before every activation side effect so stale attempts cannot hand off.
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         self.phase = .detecting
-        self.detectError = nil
+        // Reconciliation refreshes choices, not mutation authority. Keep its
+        // recorded failure until the operator explicitly starts another test.
+        if intent == .startSetup { self.detectError = nil }
         self.providerCatalogError = nil
         do {
             let lease = try await gateway.acquireServerLease()
@@ -672,7 +680,7 @@ extension OnboardingAISetupModel {
                 }
                 return
             }
-            if let first = autoCandidateAfter(kind: nil) {
+            if intent == .startSetup, let first = autoCandidateAfter(kind: nil) {
                 await self.activate(kind: first.kind, context: context)
             } else {
                 self.showManualEntry = !self.manualProviders.isEmpty
@@ -802,6 +810,7 @@ extension OnboardingAISetupModel {
             requireFreshDetection()
             return
         }
+        self.detectError = nil
         let persistedStateBeforeActivation = self.lastDetectedActivationState
         var supportsExactModel = false
         if !request.isManual {

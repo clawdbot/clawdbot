@@ -9,12 +9,6 @@ struct GatewayAuthenticationReturnDecision: Equatable {
 }
 
 extension OnboardingView {
-    enum InferenceProbeIntent: Equatable {
-        case inspectOnly
-        case resumePending
-        case startSetup
-    }
-
     /// Structured AI setup: detect what's already available on the Gateway, test the
     /// best option live, fall through automatically, offer an API-key form
     /// when nothing works. OpenClaw becomes available only after inference
@@ -75,7 +69,7 @@ extension OnboardingView {
             guard currentRouteIdentity == routeIdentity else { return }
             self.configuredGatewayProbe.schedulePendingActivationRecheck(deadline: deadline) {
                 guard self.aiSetupRouteIdentityProvider() == routeIdentity else { return }
-                self.probeConfiguredGatewayForDashboard(intent: .startSetup)
+                self.probeConfiguredGatewayForDashboard(intent: .resumePending)
             }
         }
         if aiSetup.onConnected == nil {
@@ -90,7 +84,7 @@ extension OnboardingView {
     @discardableResult
     func resumePendingSystemAgent(
         modelRef: String,
-        intent: InferenceProbeIntent = .resumePending) -> Task<Void, Never>
+        intent: OnboardingAISetupModel.SetupIntent = .resumePending) -> Task<Void, Never>
     {
         self.prepareSystemAgentHandoff()
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
@@ -101,7 +95,7 @@ extension OnboardingView {
         return Task {
             let outcome = await self.aiSetup.verifyPendingConfiguredInference()
             if case let .freshSetupAllowed(context) = outcome {
-                if intent != .inspectOnly { self.aiSetup.resumeSetup(ifCurrent: context) }
+                if intent != .inspectOnly { self.aiSetup.resumeSetup(ifCurrent: context, intent: intent) }
                 return
             }
             // The outcome belongs to the exact attempt and route captured by
@@ -126,7 +120,7 @@ extension OnboardingView {
     }
 
     @discardableResult
-    func retryConfiguredGatewayProbe(intent: InferenceProbeIntent = .startSetup) -> Task<Void, Never>? {
+    func retryConfiguredGatewayProbe(intent: OnboardingAISetupModel.SetupIntent = .startSetup) -> Task<Void, Never>? {
         // The action carries intent; expiry or a changed view state must never
         // turn Check again into a new activation. Timer/reconnect callers own auto-resume.
         aiSetup.beginConfiguredGatewayProbeRetry()
@@ -177,7 +171,6 @@ extension OnboardingView {
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
         }
-        aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        aiSetup.startIfNeeded()
+        aiSetup.resumeSetup()
     }
 }

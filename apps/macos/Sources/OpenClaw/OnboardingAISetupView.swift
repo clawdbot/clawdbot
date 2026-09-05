@@ -96,7 +96,7 @@ struct GatewayAuthCard: Equatable {
 struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
     var returnToGatewayAuthentication: () -> Void
-    var retryConfiguredGatewayProbe: (OnboardingView.InferenceProbeIntent) -> Void
+    var retryConfiguredGatewayProbe: (OnboardingAISetupModel.SetupIntent) -> Void
     @State private var manualEntryRequest = 0
 
     static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {

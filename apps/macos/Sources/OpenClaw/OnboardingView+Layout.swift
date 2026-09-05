@@ -7,10 +7,6 @@ extension OnboardingView {
         false
     }
 
-    private var automaticInferenceProbeIntent: InferenceProbeIntent {
-        self.activePageIndex == self.aiPageIndex ? .startSetup : .resumePending
-    }
-
     var body: some View {
         GeometryReader { windowGeometry in
             let contentHeight = self.contentHeight(for: windowGeometry.size.height)
@@ -77,8 +73,7 @@ extension OnboardingView {
         }
         .task {
             await self.configuredGatewayProbe.consumeReconnects {
-                self.probeConfiguredGatewayForDashboard(
-                    intent: self.automaticInferenceProbeIntent)
+                self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
             }
         }
     }
@@ -90,7 +85,7 @@ extension OnboardingView {
         updateMonitoring(for: 0)
         // App launch may have connected and emitted its snapshot before this
         // view subscribed. Always inspect the selected route once on appear.
-        return self.probeConfiguredGatewayForDashboard(knownVisible: true)
+        return self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent, knownVisible: true)
     }
 
     func onboardingDidDisappear() {
@@ -128,14 +123,12 @@ extension OnboardingView {
         self.returnToInferenceSetupIfNeeded()
         if let updatePageMonitoring {
             updatePageMonitoring(self.activePageIndex)
-            self.probeConfiguredGatewayForDashboard(
-                intent: self.automaticInferenceProbeIntent)
+            self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
             return
         }
         // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
         updateMonitoring(for: self.activePageIndex)
-        self.probeConfiguredGatewayForDashboard(
-            intent: self.automaticInferenceProbeIntent)
+        self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
     }
 
     func resetGatewayBoundAIState() {
@@ -147,7 +140,7 @@ extension OnboardingView {
 
     @discardableResult
     func probeConfiguredGatewayForDashboard(
-        intent: InferenceProbeIntent = .resumePending,
+        intent: OnboardingAISetupModel.SetupIntent = .resumePending,
         knownVisible: Bool = false,
         knownAISetupPage: Bool = false) -> Task<Void, Never>?
     {
@@ -200,7 +193,9 @@ extension OnboardingView {
                     // reconnect must not downgrade connected state or fork a
                     // second resume operation.
                     guard !self.aiSetup.connected else { return }
-                    await self.resumePendingSystemAgent(modelRef: modelRef, intent: intent).value
+                    // Reopening a receipt authorizes observation, never another automatic test.
+                    let recoveryIntent = intent == .inspectOnly ? intent : .resumePending
+                    await self.resumePendingSystemAgent(modelRef: modelRef, intent: recoveryIntent).value
                     return
                 case .verified:
                     // Inference was observed, but the dropped activation can
@@ -243,7 +238,7 @@ extension OnboardingView {
                 case .none:
                     break
                 }
-                if intent == .startSetup,
+                if intent != .inspectOnly,
                    knownAISetupPage || self.activePageIndex == self.aiPageIndex
                 {
                     self.aiSetup.startIfNeeded()
@@ -302,7 +297,7 @@ extension OnboardingView {
         case let .activating(deadline), let .verified(deadline):
             self.configuredGatewayProbe.schedulePendingActivationRecheck(deadline: deadline) {
                 guard self.aiSetupRouteIdentityProvider() == routeIdentity else { return }
-                self.probeConfiguredGatewayForDashboard(intent: .startSetup)
+                self.probeConfiguredGatewayForDashboard(intent: .resumePending)
             }
         case .activationExpired, .completed, .none:
             break

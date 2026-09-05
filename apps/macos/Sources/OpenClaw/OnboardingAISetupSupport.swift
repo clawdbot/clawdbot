@@ -10,6 +10,12 @@ extension OnboardingAISetupModel {
     /// alive long enough for approval plus the post-login inference probe.
     static let providerAuthRequestTimeoutMs: Double = 1_200_000
 
+    enum SetupIntent {
+        case inspectOnly
+        case resumePending
+        case startSetup
+    }
+
     enum ActivationRequest {
         case candidate(kind: String, modelRef: String, label: String, tryNextOnFailure: Bool)
         case manual(key: String, provider: ManualProvider)
