@@ -659,4 +659,87 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       }
     },
   );
+
+  it("keeps the original approval applyable when an observer aborts before resolution", async (testContext) => {
+    const proposal = {
+      operation: { kind: "gateway-restart" as const },
+      hash: "f".repeat(64),
+    };
+    const resolveOperatorApproval = vi.fn().mockResolvedValue({
+      text: "Applied",
+      action: "none" as const,
+      applied: true,
+    });
+    const session = {
+      engine: {
+        historyLength: () => 0,
+        historySince: () => [],
+        noteAssistantMessage: vi.fn(),
+        getPendingOperatorProposal: () => proposal,
+        resolveOperatorApproval,
+      },
+      lastUsedAt: 1,
+      ownerKey: "agent:main:main",
+    } as unknown as SystemAgentChatSession;
+    const sessionId = "delegate-observer";
+    const sessions = new Map([[sessionId, session]]);
+    const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
+      approvalKind: "system-agent",
+      resolveAllowedDecisions: (request) => request.allowedDecisions,
+      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
+    });
+    const context = {
+      systemAgentApprovalManager: manager,
+      broadcast: vi.fn(),
+      validateAgentRuntimeApprovalAuthority: () => true,
+    } as unknown as GatewayRequestContext;
+    const operationalRunInstance = createOperationalRunInstanceRef("delegated-observer-run");
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const ownerController = new AbortController();
+    const observerController = new AbortController();
+    const turnClaim = workerTurnClaim("turn-3");
+    const prepareForLease = async (signal: AbortSignal) =>
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operationalRunInstance,
+          approvalAuthority: claimAgentRunApprovalAuthority(authority, [signal]),
+          approvalSignals: [signal],
+          workerTurnClaim: turnClaim,
+        },
+        () =>
+          prepareDelegatedSystemAgentApproval({
+            context,
+            sessions,
+            session,
+            sessionId,
+            delegation: { agentId: "main", sessionKey: "agent:main:main" },
+          }),
+      );
+
+    const ownerResolution = await (await prepareForLease(ownerController.signal))(proposal);
+    if (ownerResolution.kind !== "approval") {
+      throw new Error("expected a human approval request");
+    }
+    // Order matters: the observer must lose its lease after preparation reused the
+    // pending decision and before it resolves the proposal it never owned.
+    const resolveObserverProposal = await prepareForLease(observerController.signal);
+    observerController.abort();
+    await expect(resolveObserverProposal(proposal)).rejects.toThrow(
+      "system-agent approval authority is no longer active",
+    );
+
+    expect(session.pendingApproval?.id).toBe(ownerResolution.id);
+    expect(manager.listPendingRecords().map((record) => record.id)).toEqual([ownerResolution.id]);
+    expect(resolveOperatorApproval).not.toHaveBeenCalled();
+    expect(manager.resolve(ownerResolution.id, "allow-once", "operator-ui")).toBe(true);
+    await expect(ownerResolution.completion).resolves.toMatchObject({ applied: true });
+    expect(resolveOperatorApproval).toHaveBeenCalledWith(
+      "allow-once",
+      proposal.hash,
+      expect.any(Function),
+      undefined,
+    );
+  });
 });
