@@ -17,6 +17,7 @@ import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import { createInitialChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   closeSlot,
@@ -57,6 +58,8 @@ type TestChatPane = HTMLElement & {
   createSession: () => Promise<boolean>;
   paneId: string;
   presented: boolean;
+  visuallyPresented: boolean;
+  readonly conversationPresented: boolean;
   presentedChanged: (presented: boolean) => void;
   sessionKey: string;
   resetConfirmationOpen: boolean;
@@ -100,6 +103,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
     gateway: { snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() } },
   } as unknown as ApplicationContext;
   pane.state = {
+    ...createInitialChatRealtimeState(),
     chatError: null,
     chatLoading: false,
     chatMessages: [],
@@ -270,6 +274,33 @@ describe("chat pane board shell", () => {
     expect(pane.onFaceChange).toHaveBeenCalledOnce();
   });
 
+  it("publishes conversation presentation per pane without overwriting shared session state", () => {
+    const first = createTestPane();
+    const second = createTestPane();
+    second.state = first.state;
+    const provider = mockBoardProvider(first.state.sessionKey);
+    first.boardProvider = provider;
+    second.boardProvider = provider;
+    const changed = vi.fn();
+    first.addEventListener("openclaw-chat-pane-lifecycle-changed", changed);
+    first.updated();
+    second.updated();
+    expect(first.conversationPresented).toBe(true);
+    expect(second.conversationPresented).toBe(true);
+    expect(changed).toHaveBeenCalledOnce();
+
+    first.visuallyPresented = false;
+    expect(first.conversationPresented).toBe(false);
+    expect(second.conversationPresented).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(2);
+    first.presented = false;
+    first.visuallyPresented = true;
+    expect(first.conversationPresented).toBe(false);
+    first.updated();
+    expect(second.conversationPresented).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["terminal", "dashboard"] as const)(
     "applies a focused dashboard link over saved %s main only once",
     (slot) => {
@@ -286,7 +317,8 @@ describe("chat pane board shell", () => {
       pane.state.sidebarLayout = savedLayout;
       patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
 
-      pane.syncRetainedBoardSession(pane.resolveBoardView());
+      pane.updated();
+      expect(pane.conversationPresented).toBe(false);
       expect(pane.state.sidebarLayout.expanded).toBe(true);
       expect(pane.state.sidebarLayout.open).toBe(true);
       expect(sidebarMainPanel(pane.state.sidebarLayout)?.slot).toBe("dashboard");
@@ -295,8 +327,9 @@ describe("chat pane board shell", () => {
       );
 
       pane.state.sidebarLayout = { ...pane.state.sidebarLayout, expanded: false };
-      pane.syncRetainedBoardSession(pane.resolveBoardView());
+      pane.updated();
       expect(pane.state.sidebarLayout.expanded).toBe(false);
+      expect(pane.conversationPresented).toBe(slot === "dashboard");
     },
   );
 

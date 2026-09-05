@@ -15,6 +15,7 @@ import {
   getDebugProxyCaptureStore,
   persistEventPayload,
 } from "./store.sqlite.js";
+import type { CaptureEventRecord, CaptureQueryPreset } from "./types.js";
 
 const cleanupDirs: string[] = [];
 
@@ -487,7 +488,7 @@ describe("DebugProxyCaptureStore", () => {
     expect(store.isClosed).toBe(true);
   });
 
-  it("stores sessions, blobs, and duplicate-send query results", () => {
+  it("stores sessions and deduplicates complete payloads", () => {
     const store = makeStore();
     store.upsertSession({
       id: "session-1",
@@ -525,30 +526,130 @@ describe("DebugProxyCaptureStore", () => {
       path: "/v1/send",
       ...firstPayload,
     });
-    store.recordEvent({
-      sessionId: "session-1",
-      ts: 2,
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      protocol: "https",
-      direction: "outbound",
-      kind: "request",
-      flowId: "flow-2",
-      method: "POST",
-      host: "api.example.com",
-      path: "/v1/send",
-      ...firstPayload,
-    });
-
     expect(store.listSessions(10)).toHaveLength(1);
-    const duplicateRows = store.queryPreset("double-sends", "session-1");
-    expect(duplicateRows).toHaveLength(1);
-    expect(duplicateRows[0]?.host).toBe("api.example.com");
-    expect(duplicateRows[0]?.path).toBe("/v1/send");
-    expect(duplicateRows[0]?.method).toBe("POST");
-    expect(duplicateRows[0]?.duplicateCount).toBe(2);
     expect(store.readBlob(firstPayload.dataBlobId ?? "")).toContain('"ok":true');
   });
+
+  it.each(["shared", "path"] as const)(
+    "preserves %s diagnostic grouping, session scope, and native read retries",
+    (kind) => {
+      const env = makeStateEnv("openclaw-proxy-capture-diagnostics-");
+      const store =
+        kind === "shared"
+          ? new DebugProxyCaptureStore({ env })
+          : new DebugProxyCaptureStore(
+              path.join(env.OPENCLAW_STATE_DIR!, "capture.sqlite"),
+              path.join(env.OPENCLAW_STATE_DIR!, "blobs"),
+            );
+      const record = (overrides: Partial<CaptureEventRecord>) =>
+        store.recordEvent({
+          sessionId: "captured",
+          ts: 1,
+          sourceScope: "openclaw",
+          sourceProcess: "test",
+          protocol: "https",
+          direction: "outbound",
+          kind: "request",
+          flowId: "cross-session",
+          host: "api.example",
+          path: "/send",
+          method: "POST",
+          ...overrides,
+        });
+      try {
+        for (const [index, id] of ["captured", "other", "empty"].entries()) {
+          store.upsertSession({
+            id,
+            startedAt: index,
+            mode: "test",
+            sourceScope: "openclaw",
+            sourceProcess: "test",
+          });
+        }
+        for (const eventKind of ["request", "ws-frame"] as const) {
+          for (const dataSha256 of ["first", "second"]) {
+            record({ kind: eventKind, dataSha256 });
+            record({ kind: eventKind, dataSha256 });
+          }
+        }
+        for (const status of [428, 429, 500]) {
+          record({ kind: "response", direction: "inbound", status });
+        }
+        record({ path: "/cache?variant" });
+        record({ path: "/cache", headersJson: "CACHE-CONTROL" });
+        record({ path: "/pragma", headersJson: "pragma" });
+        record({ sessionId: "other", kind: "ws-frame", direction: "inbound" });
+        record({ kind: "error", host: undefined, path: undefined });
+        const presets: CaptureQueryPreset[] = [
+          "double-sends",
+          "retry-storms",
+          "cache-busting",
+          "ws-duplicate-frames",
+          "missing-ack",
+          "error-bursts",
+        ];
+        const location = { host: "api.example", path: "/send" };
+        const results = Object.fromEntries(
+          presets.map((preset) => [preset, store.queryPreset(preset, "captured")]),
+        );
+        expect(results).toEqual({
+          "double-sends": [
+            { ...location, method: "POST", duplicateCount: 2 },
+            { ...location, method: "POST", duplicateCount: 2 },
+          ],
+          "retry-storms": [{ ...location, errorCount: 2 }],
+          "cache-busting": expect.arrayContaining([
+            { host: "api.example", path: "/cache", variantCount: 1 },
+            { host: "api.example", path: "/cache?variant", variantCount: 1 },
+            { host: "api.example", path: "/pragma", variantCount: 1 },
+          ]),
+          "ws-duplicate-frames": [
+            { ...location, duplicateFrames: 2 },
+            { ...location, duplicateFrames: 2 },
+          ],
+          "missing-ack": [{ flowId: "cross-session", ...location, outboundFrames: 4 }],
+          "error-bursts": [{ host: null, path: null, errorCount: 1 }],
+        });
+        expect(results["cache-busting"]).toHaveLength(3);
+        expect(store.queryPreset("missing-ack")).toEqual([]);
+        expect(store.queryPreset("missing-ack", "")).toEqual([]);
+        expect(store.queryPreset("error-bursts", " captured ")).toEqual([]);
+        expect(store.listSessions(1)).toEqual([
+          {
+            id: "empty",
+            startedAt: 2,
+            endedAt: null,
+            mode: "test",
+            sourceProcess: "test",
+            proxyUrl: null,
+            eventCount: 0,
+          },
+        ]);
+        expect(store.listSessions(0)).toEqual([]);
+        expect(store.listSessions(-1)).toHaveLength(3);
+
+        store.db.setAuthorizer((action, table) =>
+          action === constants.SQLITE_READ && table === "capture_events"
+            ? constants.SQLITE_DENY
+            : constants.SQLITE_OK,
+        );
+        for (const preset of presets) {
+          expect(() => store.queryPreset(preset, "captured")).toThrow(/prohibited/u);
+        }
+        expect(() => store.listSessions()).toThrow(/prohibited/u);
+        expect(store.db.isOpen).toBe(true);
+        store.db.setAuthorizer(null);
+        expect(
+          Object.fromEntries(
+            presets.map((preset) => [preset, store.queryPreset(preset, "captured")]),
+          ),
+        ).toEqual(results);
+      } finally {
+        store.db.setAuthorizer(null);
+        store.close();
+      }
+    },
+  );
 
   it("keeps byte-limited UTF-8 previews on a complete character boundary", () => {
     const store = makeStore();

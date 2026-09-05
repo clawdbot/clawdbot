@@ -2,6 +2,7 @@ import type { SQLInputValue } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { cronJobDefinitionFromReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
@@ -250,7 +251,7 @@ export function clawCronGatewayJobMatchesRef(
   if (!value || typeof value !== "object") {
     return false;
   }
-  const live = value as Partial<CronJob>;
+  const live = cronJobDefinitionFromReadView(value as Partial<CronJob>);
   const expected = normalizeCronJobCreate(clawCronGatewayInput(agentId, ref));
   if (
     !expected ||

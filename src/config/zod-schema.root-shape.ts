@@ -76,7 +76,6 @@ export const OpenClawSchemaShape = {
       lastRunCommit: z.string().optional(),
       lastRunCommand: z.string().optional(),
       lastRunMode: z.union([z.literal("local"), z.literal("remote")]).optional(),
-      localModelLeanAutoModel: z.string().optional(),
       securityAcknowledgedAt: z.string().optional(),
     })
     .optional(),

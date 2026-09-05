@@ -680,6 +680,7 @@ export async function runEmbeddedAgentAttempt(params: {
   }
 
   return {
+    startedAt,
     result,
     fallbackProvider,
     fallbackModel,

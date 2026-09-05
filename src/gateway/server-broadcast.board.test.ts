@@ -12,12 +12,14 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { boardStore } from "./board-store.js";
+import { progressCardStore } from "./progress-card-store.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
 import { createBoardHandlers } from "./server-methods/board.js";
+import { createProgressCardHandlers } from "./server-methods/progress-card.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -191,10 +193,15 @@ describe("board event scope guards", () => {
   });
 });
 
-describe("board event session ownership", () => {
-  it.each(["global", "per-sender"] as const)(
-    "delivers board events only to the canonical draft owner in %s mode",
-    async (scope) => {
+describe("board and progress event session ownership", () => {
+  it.each([
+    { scope: "global", feature: "progress" },
+    { scope: "per-sender", feature: "progress" },
+    { scope: "global", feature: "board" },
+    { scope: "per-sender", feature: "board" },
+  ] as const)(
+    "delivers $feature events only to the canonical draft owner in $scope mode",
+    async ({ scope, feature }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
@@ -232,7 +239,7 @@ describe("board event session ownership", () => {
           canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
             canReceiveSessionEventForClient({ cfg, client, sessionKeys, agentId, event, payload }),
         });
-        const handlers = createBoardHandlers(boardStore);
+        const handlers = { ...createProgressCardHandlers(), ...createBoardHandlers(boardStore) };
         const context = {
           broadcast,
           broadcastToConnIds,
@@ -259,6 +266,36 @@ describe("board event session ownership", () => {
             return frames.map(({ event, payload }) => ({ event, payload }));
           });
         };
+        if (feature === "progress") {
+          const rawWrite = await invoke("progressCard.put", {
+            sessionKey: "global",
+            agentId: "work",
+            plan: [{ step: "Done", status: "completed" }],
+          });
+          const rawClear = await invoke("progressCard.put", {
+            sessionKey: "global",
+            agentId: "work",
+            expectedRevision: 1,
+          });
+          const ordinaryWrite = await invoke("progressCard.put", {
+            sessionKey: "agent:work:global",
+            markdown: "Ordinary session",
+          });
+          expect(progressCardStore.get("global", "work")).toBeNull();
+          expect(progressCardStore.get("agent:work:global", "work")?.markdown).toBe(
+            "Ordinary session",
+          );
+          const changed = (revision: number | null) => ({
+            event: "progressCard.changed",
+            payload: { sessionKey: "agent:work:global", revision },
+          });
+          expect({ rawWrite, rawClear, ordinaryWrite }).toEqual({
+            rawWrite: [[changed(1)], [], []],
+            rawClear: [[changed(null)], [], []],
+            ordinaryWrite: [[], [changed(1)], []],
+          });
+          return;
+        }
         const target = { sessionKey: "global", agentId: "work" };
         const rawUpdate = await invoke("board.update", {
           ...target,

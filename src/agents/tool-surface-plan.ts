@@ -19,7 +19,7 @@ type AgentToolSurfacePlanParams = {
   agentId?: string;
   sessionKey?: string;
   forceDirectMessageTool: boolean;
-  model?: { compat?: unknown };
+  model?: { compat?: unknown; toolSearchMode?: "tools" | false };
   modelProvider?: string;
   modelId?: string;
   codeModeOverride?: boolean | "auto";
@@ -31,6 +31,12 @@ type AgentToolSurfacePlanParams = {
 };
 
 export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) {
+  // Private completion replies have one message capability. Ordinary forced
+  // delivery keeps message direct while other tools can still use discovery.
+  const completionPrivateMessageOnly =
+    params.forceDirectMessageTool &&
+    params.toolsAllow?.length === 1 &&
+    normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "message";
   const codeModeConfig = resolveCodeModeConfig(
     params.config,
     params.agentId,
@@ -43,7 +49,8 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
-    forceDirectMessageTool: params.forceDirectMessageTool,
+    completionPrivateMessageOnly,
+    model: params.model,
   });
   const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
   const toolsAvailable =
@@ -52,13 +59,7 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     params.disableTools !== true &&
     !params.isRawModelRun &&
     params.toolsAllow?.length !== 0 &&
-    // Completion-private replies must never expose catalog controls that can
-    // invoke tools beyond their single directly visible message capability.
-    !(
-      params.forceDirectMessageTool &&
-      params.toolsAllow?.length === 1 &&
-      normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "message"
-    );
+    !completionPrivateMessageOnly;
   const codeModeControlsEnabled =
     toolsAvailable &&
     // Restart recovery continues one provider turn. Keep its original control

@@ -1270,15 +1270,19 @@ public struct ProgressCard: Codable, Sendable {
 
 public struct ProgressCardGetParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
 
     public init(
-        sessionkey: String)
+        sessionkey: String,
+        agentid: String? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
@@ -1294,17 +1298,20 @@ public struct ProgressCardGetResult: Codable, Sendable {
 
 public struct ProgressCardPutParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let markdown: String?
     public let plan: [ProgressCardStep]?
     public let expectedrevision: Int?
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         markdown: String? = nil,
         plan: [ProgressCardStep]? = nil,
         expectedrevision: Int? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.markdown = markdown
         self.plan = plan
         self.expectedrevision = expectedrevision
@@ -1312,6 +1319,7 @@ public struct ProgressCardPutParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case markdown
         case plan
         case expectedrevision = "expectedRevision"

@@ -689,6 +689,11 @@ async function runSummarizationCompletion(params: {
   return ok(summary);
 }
 
+/** Caller-owned formats replace the default headings; focus remains additive. */
+export type CompactionSummaryPrompt =
+  | { kind: "turn-prefix" }
+  | { kind: "custom"; instructions: string };
+
 /** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
   currentMessages: AgentMessage[],
@@ -702,12 +707,27 @@ export async function generateSummary(
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
+  summaryPrompt?: CompactionSummaryPrompt,
 ): Promise<Result<string, CompactionError>> {
   const maxTokens = Math.min(
-    Math.floor(0.8 * reserveTokens),
+    Math.floor((summaryPrompt?.kind === "turn-prefix" ? 0.5 : 0.8) * reserveTokens),
     model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
   );
-  const prompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
+  const selectedPrompt =
+    summaryPrompt?.kind === "turn-prefix"
+      ? TURN_PREFIX_SUMMARIZATION_PROMPT
+      : summaryPrompt?.instructions;
+  const prompt = summaryPrompt
+    ? [
+        previousSummary &&
+          "Update the previous summary with the new conversation. Preserve relevant facts, decisions, and unresolved asks; remove stale or duplicate detail. Use the format below.",
+        selectedPrompt,
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+    : previousSummary
+      ? UPDATE_SUMMARIZATION_PROMPT
+      : SUMMARIZATION_PROMPT;
   return await runSummarizationCompletion({
     messages: currentMessages,
     prompt,
@@ -721,7 +741,8 @@ export async function generateSummary(
     thinkingLevel,
     streamFn,
     runtime,
-    errorLabel: "Summarization",
+    errorLabel:
+      summaryPrompt?.kind === "turn-prefix" ? "Turn prefix summarization" : "Summarization",
   });
 }
 
@@ -900,7 +921,7 @@ export function prepareCompaction(
   });
 }
 
-export const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
+const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
 
 Summarize the prefix to provide context for the retained suffix:
 
@@ -979,24 +1000,20 @@ export async function compact(
 
   let latestContext = "";
   if (summarizeTurnPrefix) {
-    const maxTokens = Math.min(
-      Math.floor(0.5 * settings.reserveTokens),
-      model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-    );
-    const turnPrefixResult = await runSummarizationCompletion({
-      messages: turnPrefixMessages,
-      prompt: TURN_PREFIX_SUMMARIZATION_PROMPT,
-      customInstructions,
+    const turnPrefixResult = await generateSummary(
+      turnPrefixMessages,
       model,
-      maxTokens,
+      settings.reserveTokens,
       apiKey,
       headers,
       signal,
+      customInstructions,
+      undefined,
       thinkingLevel,
       streamFn,
       runtime,
-      errorLabel: "Turn prefix summarization",
-    });
+      { kind: "turn-prefix" },
+    );
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }

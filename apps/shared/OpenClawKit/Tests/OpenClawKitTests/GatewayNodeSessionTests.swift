@@ -383,13 +383,17 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             idempotencyKey: idempotencyKey))))
     }
 
-    func emitResponse(id: String, payload: [String: Any]) {
-        let frame: [String: Any] = [
+    func emitResponse(id: String, payload: [String: Any], error: [String: Any]? = nil) {
+        var frame: [String: Any] = [
             "type": "res",
             "id": id,
-            "ok": true,
-            "payload": payload,
+            "ok": error == nil,
         ]
+        if let error {
+            frame["error"] = error
+        } else {
+            frame["payload"] = payload
+        }
         let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
         self.emitInbound(.success(.data(data)))
     }
@@ -2313,8 +2317,8 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `route bound request rejects a response after its socket is retired`() async throws {
+    @Test(arguments: [false, true], [false, true])
+    func `route bound requests validate both responses and denials`(retireRoute: Bool, deny: Bool) async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let options = nodeConnectOptions()
@@ -2324,26 +2328,44 @@ struct GatewayNodeSessionTests {
         let socket = try #require(session.latestTask())
         let request = Task {
             try await gateway.request(
-                method: "sessions.list",
-                paramsJSON: "{}",
+                method: "progressCard.get",
+                paramsJSON: #"{"sessionKey":"agent:main:main"}"#,
                 ifCurrentRoute: route)
         }
         try await waitUntil("route bound request sent") {
-            socket.sentRequestCount(method: "sessions.list") == 1
+            socket.sentRequestCount(method: "progressCard.get") == 1
         }
-        let sent = try #require(socket.sentRequests(method: "sessions.list").first)
+        let sent = try #require(socket.sentRequests(method: "progressCard.get").first)
 
-        await gateway._test_handleChannelDisconnected("socket retired", socketGeneration: 1)
+        if retireRoute {
+            await gateway._test_handleChannelDisconnected("socket retired", socketGeneration: 1)
+        }
         try socket.emitResponse(
             id: #require(sent["id"] as? String),
-            payload: ["sessions": []])
+            payload: ["card": NSNull()],
+            error: deny ? [
+                "code": "INVALID_REQUEST",
+                "message": "Session access denied",
+                "details": ["code": "SESSION_PARTICIPATION_REQUIRED"],
+            ] : nil)
 
         do {
-            _ = try await request.value
-            Issue.record("late response unexpectedly crossed the retired route")
+            let data = try await request.value
+            #expect(!retireRoute && !deny)
+            #expect(!data.isEmpty)
         } catch is CancellationError {
-            // Expected: the response belongs to the retired admission generation.
+            #expect(retireRoute)
+        } catch let error as GatewayResponseError {
+            #expect(!retireRoute && deny)
+            #expect(error.method == "progressCard.get")
+            #expect(error.code == "INVALID_REQUEST")
+            #expect(error.details["code"]?.stringValue == "SESSION_PARTICIPATION_REQUIRED")
+        } catch {
+            await gateway.disconnect()
+            throw error
         }
+        #expect(socket.sentRequestCount(method: "progressCard.get") == 1)
+        await gateway.disconnect()
     }
 
     @Test
