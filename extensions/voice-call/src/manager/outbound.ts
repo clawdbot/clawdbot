@@ -169,6 +169,14 @@ export async function initiateCall(
     return { callId: "", success: false, error: "Webhook URL not configured" };
   }
 
+  if (opts.record && ctx.provider.name !== "twilio") {
+    return {
+      callId: "",
+      success: false,
+      error: `${ctx.provider.name} does not support call recording`,
+    };
+  }
+
   if (ctx.activeCalls.size >= ctx.config.maxConcurrentCalls) {
     return {
       callId: "",
@@ -206,6 +214,7 @@ export async function initiateCall(
       ...(initialMessage && { initialMessage }),
       mode,
       ...(requesterSessionKey ? { requesterSessionKey } : {}),
+      ...(opts.record ? { recordingRequested: true } : {}),
     },
   };
 
@@ -246,6 +255,7 @@ export async function initiateCall(
       webhookUrl: ctx.webhookUrl,
       inlineTwiml,
       preConnectTwiml,
+      record: opts.record,
       ...(streamSession
         ? { streamUrl: streamSession.streamUrl, streamAuthToken: streamSession.token }
         : {}),

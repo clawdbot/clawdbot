@@ -53,6 +53,7 @@ const VoiceCallToolSchema = Type.Union([
     mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
+    record: Type.Optional(Type.Boolean({ description: "Record this call (Twilio only)" })),
   }),
   Type.Object({
     action: Type.Literal("continue_call"),
@@ -84,6 +85,7 @@ const VoiceCallToolSchema = Type.Union([
     message: Type.Optional(Type.String({ description: "Optional intro message" })),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
+    record: Type.Optional(Type.Boolean({ description: "Record this call (Twilio only)" })),
   }),
 ]);
 
@@ -332,6 +334,7 @@ export default definePluginEntry({
             params?.mode === "notify" || params?.mode === "conversation" ? params.mode : undefined,
           sessionKey: normalizeOptionalString(params?.sessionKey),
           requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
+          record: params?.record === true,
         });
       },
       VOICE_CALL_WRITE_METHOD_SCOPE,
@@ -438,6 +441,7 @@ export default definePluginEntry({
           sessionKey: normalizeOptionalString(params?.sessionKey),
           requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
           agentId: normalizedAgentId,
+          record: params?.record === true,
         });
       },
       VOICE_CALL_WRITE_METHOD_SCOPE,
@@ -479,6 +483,7 @@ export default definePluginEntry({
                     sessionKey: normalizeOptionalString(rawParams.sessionKey),
                     agentId,
                     requesterSessionKey,
+                    record: rawParams.record === true,
                   }),
                 );
               }
@@ -533,6 +538,7 @@ export default definePluginEntry({
                 sessionKey: normalizeOptionalString(rawParams.sessionKey),
                 agentId,
                 requesterSessionKey,
+                record: rawParams.record === true,
               },
               "to required for call",
             ),

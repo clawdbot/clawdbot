@@ -124,6 +124,15 @@ const NormalizedEventSchema = z.discriminatedUnion("type", [
     digits: z.string(),
   }),
   BaseEventSchema.extend({
+    type: z.literal("call.recording"),
+    recordingSid: z.string(),
+    recordingUrl: z.string().optional(),
+    status: z.enum(["in-progress", "completed", "absent", "failed"]),
+    durationSeconds: z.number().int().nonnegative().optional(),
+    channels: z.number().int().positive().optional(),
+    errorCode: z.string().optional(),
+  }),
+  BaseEventSchema.extend({
     type: z.literal("call.ended"),
     reason: EndReasonSchema,
   }),
@@ -153,6 +162,15 @@ const TranscriptEntrySchema = z.object({
 });
 export type TranscriptEntry = z.infer<typeof TranscriptEntrySchema>;
 
+const CallRecordingSchema = z.object({
+  sid: z.string(),
+  url: z.string().optional(),
+  status: z.enum(["in-progress", "completed", "absent", "failed"]),
+  durationSeconds: z.number().int().nonnegative().optional(),
+  channels: z.number().int().positive().optional(),
+  errorCode: z.string().optional(),
+  updatedAt: z.number(),
+});
 export const CallRecordSchema = z.object({
   callId: z.string(),
   providerCallId: z.string().optional(),
@@ -169,6 +187,7 @@ export const CallRecordSchema = z.object({
   endedAt: z.number().optional(),
   endReason: EndReasonSchema.optional(),
   transcript: z.array(TranscriptEntrySchema).default([]),
+  recording: CallRecordingSchema.optional(),
   processedEventIds: z.array(z.string()).default([]),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
@@ -233,6 +252,8 @@ export type InitiateCallInput = {
   streamUrl?: string;
   /** Per-call auth token the carrier echoes back on the WS upgrade. */
   streamAuthToken?: string;
+  /** Request provider-side recording for this call. */
+  record?: boolean;
 };
 
 export type InitiateCallResult = {
@@ -321,4 +342,6 @@ export type OutboundCallOptions = {
   requesterSessionKey?: string;
   /** Agent selected for this call instead of the plugin default. */
   agentId?: string;
+  /** Request provider-side recording for this call. */
+  record?: boolean;
 };
