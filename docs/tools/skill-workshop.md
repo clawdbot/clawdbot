@@ -97,13 +97,21 @@ The following lifecycle applies to Workshop proposals:
 Open **Plugins → Workshop** and select the agent whose skills you want to inspect.
 
 - **Skills** opens by default and lists the skills currently installed in that
-  agent's Workshop directory. Select a skill to read its current instructions,
-  including edits made by collection review.
+  agent's Workshop directory. Skills with instruction changes appear first.
+  Select one to compare its saved applied instructions with the current skill.
+  Unchanged skills show their current instructions.
 - **Suggestions** contains pending proposals that you can evaluate, revise,
   apply, or reject.
-- **History** contains past applied, rejected, quarantined, and stale proposals.
-  These are retained draft records, and their count is separate from the installed
-  skill count. Applied revisions retain their comparisons and supporting files.
+
+Past applied, rejected, quarantined, and stale proposals remain available through
+CLI and Gateway inspection. They are not listed as a separate Control UI section
+or counted as installed skills.
+
+Comparisons use retained applied versions, not a complete edit timeline.
+Relative dates identify the saved baseline, not when later edits occurred.
+Supporting files and frontmatter are not compared. Missing versions and shortened
+diffs are labeled; no historical content is reconstructed.
+If the preview omits changed lines, the current instructions remain readable.
 
 Removing an installed skill does not remove its proposal history. Reading a
 historical draft does not restore or reinstall it. Handwritten and externally

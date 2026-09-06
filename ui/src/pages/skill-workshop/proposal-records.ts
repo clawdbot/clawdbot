@@ -33,6 +33,7 @@ type SkillProposalRecord = {
   description: string;
   createdAt: string;
   updatedAt: string;
+  appliedAt?: string;
   proposedVersion: string;
   draftHash: string;
   evaluation?: SkillWorkshopEvaluation;
@@ -41,6 +42,7 @@ type SkillProposalRecord = {
   target: {
     skillName: string;
     skillKey: string;
+    source?: string;
   };
 };
 

@@ -285,7 +285,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
     const next = createSkillWorkshopState();
     next.skillWorkshopAgentId = previous.skillWorkshopAgentId;
-    next.skillWorkshopStatusFilter = previous.skillWorkshopStatusFilter;
     next.skillWorkshopQuery = previous.skillWorkshopQuery;
     next.skillWorkshopQueueWidth = previous.skillWorkshopQueueWidth;
     next.skillWorkshopMode = previous.skillWorkshopMode;

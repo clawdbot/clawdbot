@@ -1049,6 +1049,12 @@ export function isSensitiveFieldKey(key: string): boolean {
   return STRUCTURED_SECRET_FIELD_RE.test(key) || STRUCTURED_SECRET_ENV_FIELD_RE.test(key);
 }
 
+function isPublicShareIdPath(path: readonly string[]): boolean {
+  const idKey = path.at(-1)?.toLowerCase();
+  const parentKey = path.at(-2)?.toLowerCase().replaceAll("-", "").replaceAll("_", "");
+  return idKey === "id" && parentKey === "publicshare";
+}
+
 function redactSensitiveFieldValueWithOptions(
   key: string,
   value: string,
@@ -1056,6 +1062,9 @@ function redactSensitiveFieldValueWithOptions(
   path: readonly string[] = [key],
 ): string {
   const exactRedacted = redactRegisteredSecretValues(value, maskToken);
+  if (isPublicShareIdPath(path)) {
+    return maskToken(exactRedacted);
+  }
   const sensitiveKey = isSensitiveFieldKey(key);
   const fieldOptions =
     sensitiveKey && options.sensitiveFieldPatterns
@@ -1168,7 +1177,11 @@ function shouldRedactStructuredAuthorizationCode(
 
 function shouldRedactStructuredPrimitiveField(key: string, path: readonly string[]): boolean {
   const normalizedKey = key.toLowerCase();
-  return shouldRedactStructuredAuthorizationCode(normalizedKey, path) || isSensitiveFieldKey(key);
+  return (
+    isPublicShareIdPath(path) ||
+    shouldRedactStructuredAuthorizationCode(normalizedKey, path) ||
+    isSensitiveFieldKey(key)
+  );
 }
 
 function isPlainRedactableObject(value: object): value is Record<string, unknown> {
