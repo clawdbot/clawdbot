@@ -14,15 +14,23 @@ import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner } from "./shared.js";
-import type {
-  ManagedGatewayUpdateVerdict,
-  PreManagedServiceStop,
-} from "./update-command-service-maintenance.js";
 
 export type ManagedServiceRootRedirect = {
   root: string;
   previousRoot: string;
 };
+
+export type ManagedGatewayUpdateVerdict =
+  | { kind: "absent" | "foreign" }
+  | {
+      kind: "owned";
+      root: string;
+      fingerprint: string;
+      refreshDefinition: boolean;
+      requiresInstallRootRefresh?: boolean;
+    }
+  | { kind: "unresolved"; root: string; fingerprint: string }
+  | { kind: "unavailable"; message: string };
 
 export class GatewayServiceUpdateOwnershipError extends Error {
   constructor(message: string, cause: unknown) {
@@ -32,7 +40,7 @@ export class GatewayServiceUpdateOwnershipError extends Error {
 }
 
 export function assertGatewayServiceAdmissionUnchanged(
-  expectedService: Pick<PreManagedServiceStop, "serviceUpdateVerdict"> | undefined,
+  expectedService: { serviceUpdateVerdict?: ManagedGatewayUpdateVerdict } | undefined,
   serviceUpdateVerdict: ManagedGatewayUpdateVerdict,
 ): void {
   const expectedVerdict = expectedService?.serviceUpdateVerdict;

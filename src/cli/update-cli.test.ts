@@ -5966,7 +5966,7 @@ describe("update-cli", () => {
     expect(errors).toContain(
       `This command is running inside the gateway process tree (gateway PID ${gatewayFixturePid}).`,
     );
-    expect(errors).toContain("Run this command from a shell outside the gateway service.");
+    expect(errors).not.toContain("Run this command from a shell outside the gateway service.");
     expect(errors).toContain("would kill this command");
     expect(errors).toContain("gateway update action or /update");
     expect(errors).not.toContain("stop the gateway service first");
@@ -6176,7 +6176,7 @@ describe("update-cli", () => {
     expect(errors).toContain(
       `This command is running inside the gateway process tree (gateway PID ${gatewayFixturePid}).`,
     );
-    expect(errors).toContain("Run this command from a shell outside the gateway service.");
+    expect(errors).not.toContain("Run this command from a shell outside the gateway service.");
     expect(errors).toContain("would kill this command");
     expect(errors).toContain("gateway update action or /update");
     expect(errors).not.toContain("stop the gateway service first");
