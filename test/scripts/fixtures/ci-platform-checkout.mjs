@@ -30,11 +30,15 @@ const localGit = options.localGit ?? options.performance;
 // uses .js specifiers that native Node type stripping cannot resolve.
 let getFileLockProcessStartTime;
 if (options.cancelDuringCleanup && ["supervise", "git"].includes(mode)) {
-  const { tsImport } = await import("tsx/esm/api");
-  ({ getFileLockProcessStartTime } = await tsImport(
-    "../../../src/shared/pid-alive.ts",
-    import.meta.url,
-  ));
+  if (process.versions.bun) {
+    ({ getFileLockProcessStartTime } = await import("../../../src/shared/pid-alive.ts"));
+  } else {
+    const { tsImport } = await import("tsx/esm/api");
+    ({ getFileLockProcessStartTime } = await tsImport(
+      "../../../src/shared/pid-alive.ts",
+      import.meta.url,
+    ));
+  }
 }
 const refsFile = path.join(root, "refs.json");
 

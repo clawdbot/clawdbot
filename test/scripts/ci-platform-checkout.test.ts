@@ -611,7 +611,7 @@ it.skipIf(process.platform === "win32").each(["census", "corrupt-report", "timeo
     const preload = String.raw`
 import cp from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import path from "node:path";
 if (process.argv[2] === "sentinel" && fault === "timeout") {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
@@ -651,7 +651,7 @@ if (process.argv[2] === "supervise") {
     }
     return result;
   };
-  syncBuiltinESMExports();
+  syncFixtureBuiltinExports();
 }
 `;
     // Use the actual outer namespace owner, including its cleanup on exit code 1.
@@ -664,11 +664,10 @@ if (process.argv[2] === "supervise") {
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import { fixturePreloadEnv, syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mock } from "node:test";
-import { pathToFileURL } from "node:url";
 const timeoutFault = process.argv[2] === "timeout";
 let root, failure;
 let supervisor, ready, onReady;
@@ -684,7 +683,7 @@ if (timeoutFault) {
     supervisor.on("message", onReady);
     return supervisor;
   };
-  syncBuiltinESMExports();
+  syncFixtureBuiltinExports();
 }
 try {
   const { withCiCheckoutFixture } = await import(process.argv[1]);
@@ -694,7 +693,7 @@ try {
     fs.writeFileSync(path.join(root, "checkout.sh"), "exit 0\n");
     const preload = path.join(root, "fault.mjs");
     fs.writeFileSync(preload, "const fault = " + JSON.stringify(process.argv[2]) + ";\n" + process.argv[3]);
-    return { NODE_OPTIONS: "--import=" + pathToFileURL(preload).href };
+    return fixturePreloadEnv(preload);
   }, (report, result, stderr) => {
     throw new Error("unexpected completed report: " + JSON.stringify({ report, result, stderr }));
   }).catch(error => {
@@ -731,7 +730,7 @@ try {
     mock.timers.reset();
     supervisor?.off("message", onReady);
     cp.fork = fork;
-    syncBuiltinESMExports();
+    syncFixtureBuiltinExports();
   }
 }
 console.log(JSON.stringify({ root, outerRoot: tmpdir(), failure,
@@ -874,8 +873,7 @@ cp.spawnSync = (command, args, options) => {
   }
   return spawnSync(command, args, options);
 };
-require("node:module").syncBuiltinESMExports();
-''')
+''' + "\nrequire(" + json.dumps(sys.argv[5]) + ").syncFixtureBuiltinExports();\n")
     with subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.read()"],
                           stdin=subprocess.PIPE) as child, contextlib.ExitStack() as cleanup:
         if os.name == "nt":
@@ -932,6 +930,7 @@ print("fixture lifetime contract passed")
       ciCheckoutFixture,
       fileURLToPath(new URL("./fixtures/ci-windows-process-census.py", import.meta.url)),
       new URL("./fixtures/ci-windows-process-census.mjs", import.meta.url).href,
+      fileURLToPath(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url)),
     ],
     { encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL" },
   );
