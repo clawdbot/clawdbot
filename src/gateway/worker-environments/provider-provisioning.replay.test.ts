@@ -293,7 +293,7 @@ describe("worker environment service provision replay", () => {
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       resolveWorkspacePath: async () => "/gateway/workspace",
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
       onActivated,
     });
     const uninstallReconcileGuard = restarted.installReconcileEnvironmentGuard(

@@ -87,6 +87,18 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
   const prepared = await withUpdateInProgressEnv(invocationCwd, () =>
     prepareUpdateCommand(inputOpts),
   );
+  // Post-core children report phase results; the outer updater owns the run ledger.
+  if (prepared.postCoreUpdateResume) {
+    return await withUpdateInProgressEnv(invocationCwd, async () => {
+      const { resumePostCoreUpdate } = await import("./update-execution.runtime.js");
+      await resumePostCoreUpdate({
+        root: prepared.discoveredRoot,
+        channel: prepared.postCoreUpdateChannel,
+        opts: inputOpts,
+        timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+      });
+    });
+  }
   const run = await admitUpdateCommandRun({
     opts: inputOpts,
     root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
@@ -98,7 +110,7 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     runId: run.runId,
   };
   recoveryState.triageTarget.root = prepared.discoveredRoot;
-  const presentation = createUpdateProgress(!opts.json && !prepared.postCoreUpdateResume, run);
+  const presentation = createUpdateProgress(!opts.json, run);
   try {
     await withUpdateFailureTriage(
       { ...opts, invocationCwd },
@@ -140,12 +152,10 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
             recoveryState.windowsTaskAutoStartRecovery?.complete();
           }
           if (failure) {
-            if (!prepared.postCoreUpdateResume) {
-              if (failure.error instanceof UpdateCommandFailure) {
-                completeUpdateCommandRun(failure.error.result, run);
-              } else {
-                failUpdateCommandRun(failure.error, run);
-              }
+            if (failure.error instanceof UpdateCommandFailure) {
+              completeUpdateCommandRun(failure.error.result, run);
+            } else {
+              failUpdateCommandRun(failure.error, run);
             }
             throw failure.error;
           }
@@ -166,8 +176,6 @@ async function updateCommandInternal(
 ): Promise<void> {
   const {
     startedAt,
-    postCoreUpdateResume,
-    postCoreUpdateChannel,
     timeoutMs,
     shouldRestart,
     requestedChannel,
@@ -179,17 +187,6 @@ async function updateCommandInternal(
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
   let root = discoveredRoot;
-  if (postCoreUpdateResume) {
-    const { resumePostCoreUpdate } = await import("./update-execution.runtime.js");
-    await resumePostCoreUpdate({
-      root,
-      channel: postCoreUpdateChannel,
-      opts,
-      timeoutMs: updateStepTimeoutMs,
-    });
-    return;
-  }
-
   let updateInstallKind = installKind;
   const refuseUpdate = (reason: string, message?: string) =>
     reportPreMutationUpdateFailure({

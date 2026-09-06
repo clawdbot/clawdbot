@@ -384,6 +384,28 @@ describe("SessionHistorySseState", () => {
     expect(oldest.nextCursor).toBeUndefined();
   });
 
+  test("closes interleaved pages across unsequenced rows without admitting older duplicate groups", () => {
+    const messages = [1, 2, 2, 3, undefined, 4, 3, 4].map((seq, index) => ({
+      role: "assistant" as const,
+      content: textContent(`Projected row ${index}`),
+      __openclaw: seq === undefined ? undefined : { seq },
+    }));
+    const { history } = buildSessionHistorySnapshot({
+      rawMessages: [],
+      projection: {
+        messages,
+        turnBoundaryPending: false,
+        streamErrorFallbackPending: false,
+        streamErrorFallbackRepaired: false,
+      },
+      limit: 1,
+    });
+
+    expect(history.messages).toEqual(messages.slice(3));
+    expect(history.nextCursor).toBe("3");
+    expect(history.hasMore).toBe(true);
+  });
+
   test("keeps commentary fallback rows reachable across cursor pages and SSE state", () => {
     const rawMessages = [
       userTextMessage("check the workspace", 1),

@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
-import "../plugins/control-ui-contributions.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
 import { icons } from "../components/icons.ts";
@@ -23,6 +22,7 @@ import { normalizeAgentId, resolveUiSelectedSessionAgentId } from "../lib/sessio
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { renderControlUiPluginRecovery } from "../plugins/control-ui-contributions.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { renderCommandPaletteLoading } from "./app-shell-command-palette-loading.ts";
@@ -707,20 +707,20 @@ export function renderApplicationShell(host: ShellViewHost) {
     </div>
   `;
   return html`${renderPluginSurface(
-      "workspace",
-      {
-        sessionKey: host.activeSessionKey,
-        agentId: resolveUiSelectedSessionAgentId(
-          {
-            assistantAgentId:
-              context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId,
-            agentsList: context.agents.state.agentsList,
-            hello: gatewaySnapshot.hello,
-          },
-          host.activeSessionKey,
-        ),
-        routeId: activeRoute,
-      },
-      workspace,
-    )}<openclaw-plugin-manager></openclaw-plugin-manager>`;
+    "workspace",
+    {
+      sessionKey: host.activeSessionKey,
+      agentId: resolveUiSelectedSessionAgentId(
+        {
+          assistantAgentId:
+            context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId,
+          agentsList: context.agents.state.agentsList,
+          hello: gatewaySnapshot.hello,
+        },
+        host.activeSessionKey,
+      ),
+      routeId: activeRoute,
+    },
+    workspace,
+  )}${renderControlUiPluginRecovery(context.plugins, activeRoute)}`;
 }

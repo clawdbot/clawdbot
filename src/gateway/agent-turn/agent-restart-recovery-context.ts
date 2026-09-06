@@ -14,6 +14,29 @@ type AgentRestartRecoveryChannelContext = {
   sourceTurnId: string;
 };
 
+/** A recovered UI turn can finish its durable dashboard without claiming a live renderer. */
+export function resolveAgentRestartRecoveryPinnedWidgetAuthoring(params: {
+  isRestartRecoveryResumeRun: boolean;
+  canUseInternalRuntimeHandoff: boolean;
+  expectedExistingSessionId?: string;
+  resolvedSessionId?: string;
+  runId: string;
+  sessionEntry?: SessionEntry;
+}): true | undefined {
+  const expectedSessionId = normalizeOptionalString(params.expectedExistingSessionId);
+  return params.isRestartRecoveryResumeRun &&
+    params.canUseInternalRuntimeHandoff &&
+    expectedSessionId !== undefined &&
+    expectedSessionId === normalizeOptionalString(params.resolvedSessionId) &&
+    expectedSessionId === normalizeOptionalString(params.sessionEntry?.sessionId) &&
+    normalizeOptionalString(params.sessionEntry?.restartRecoveryDeliveryRunId) === params.runId &&
+    normalizeOptionalString(params.sessionEntry?.restartRecoveryDeliverySourceRunId) !==
+      undefined &&
+    params.sessionEntry?.restartRecoverySourceIngress === "control-ui"
+    ? true
+    : undefined;
+}
+
 /** Resolve only the private token durably owned by the admitted recovery cycle. */
 export function resolveAgentRestartRecoveryExecutionIdentityAdmission(params: {
   collectionEnabled: boolean;
