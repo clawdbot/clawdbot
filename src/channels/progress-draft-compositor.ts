@@ -57,7 +57,6 @@ type ChannelProgressDraftUpdateOptions = {
   snapshot: ChannelProgressDraftCompositorSnapshot;
 };
 
-/** Creates a stateful compositor for one streaming channel reply. */
 export function createChannelProgressDraftCompositor(params: {
   /** @deprecated v2026.9.1 SDK presentation; retain until a breaking SDK release. */
   presentation?: "summary";
@@ -217,7 +216,7 @@ export function createChannelProgressDraftCompositor(params: {
     };
   };
 
-  const clearProgressState = (suppressed: boolean) => {
+  const clearActivityState = (suppressed: boolean) => {
     clearPreambleExpiryTimer();
     progressSuppressed = suppressed;
     lines = [];
@@ -232,10 +231,13 @@ export function createChannelProgressDraftCompositor(params: {
     preambleItemId = undefined;
     preambleAt = undefined;
     narrationText = "";
-    planSteps = undefined;
-    planExplanation = "";
     diffStatTracker.reset();
     lastStartRendered = false;
+  };
+  const clearProgressState = (suppressed: boolean) => {
+    clearActivityState(suppressed);
+    planSteps = undefined;
+    planExplanation = "";
   };
 
   const publish = async (options?: { flush?: boolean }): Promise<boolean> => {
@@ -500,6 +502,16 @@ export function createChannelProgressDraftCompositor(params: {
     },
     reset() {
       clearProgressState(false);
+    },
+    resetActivity(options?: { suppressed?: boolean }) {
+      clearActivityState(options?.suppressed === true);
+    },
+    beginAssistantMessage() {
+      // Model messages delimit cumulative text, not the task's card or tool history.
+      if (progressSuppressed) {
+        clearActivityState(false);
+      }
+      reasoningRawText = "";
     },
     resetReasoningProgress() {
       reasoningRawText = "";

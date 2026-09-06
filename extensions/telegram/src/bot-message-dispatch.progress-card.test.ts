@@ -3,6 +3,7 @@ import {
   createBot,
   createContext,
   createDirectSessionPayload,
+  createSequencedDraftStream,
   createTelegramDraftStream,
   deliverReplies,
   describeTelegramDispatch,
@@ -12,9 +13,57 @@ import {
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 
-// Use the real compositor, renderer and draft transport. Only Telegram's network
-// boundary is replaced so short sends and stopped-stream regressions are visible.
 describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
+  it.each(["progress", "partial", "block"] as const)(
+    "retains the plan across an answer-to-tool transition in %s mode",
+    async (mode) => {
+      const draft = createSequencedDraftStream();
+      createTelegramDraftStream.mockReturnValue(draft);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onAssistantMessageStart?.();
+          await replyOptions?.onPlanUpdate?.({
+            phase: "update",
+            explanation: "Checking the change",
+            steps: [{ step: "Verify delivery", status: "in_progress" }],
+          });
+          await replyOptions?.onToolStart?.({ name: "Read", phase: "start" });
+          if (mode === "partial") {
+            await replyOptions?.onPartialReply?.({ text: "Checking the result" });
+          } else {
+            await replyOptions?.onBlockReplyQueued?.({ text: "Checking the result" });
+            await dispatcherOptions.deliver({ text: "Checking the result" }, { kind: "block" });
+          }
+          await replyOptions?.onAssistantMessageStart?.();
+          await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+          return { queuedFinal: false };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: mode,
+        telegramCfg: {
+          streaming: {
+            mode,
+            progress: { toolProgress: true, label: false },
+            preview: { toolProgress: true },
+          },
+        },
+      });
+      const preview = draft.updatePreview.mock.calls.at(-1)?.[0].text;
+      expect(preview).toContain("Verify delivery (in progress)");
+      expect(preview).toContain("Exec");
+      if (mode === "progress") {
+        expect(preview).toContain("Read");
+      } else {
+        expect(preview).not.toContain("Read");
+      }
+    },
+  );
+
+  // The real compositor, renderer and transport expose short sends, stopped
+  // streams and lifecycle resets at Telegram's stubbed network boundary.
   it.each(["progress", "partial", "block"] as const)(
     "replaces, clears and resumes a short card before the final reply in %s mode",
     async (mode) => {
@@ -30,8 +79,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
         editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
         let draft: TelegramDraftStream | undefined;
         createTelegramDraftStream.mockImplementation((params) => {
-          draft = actualDraft.createTelegramDraftStream(params);
-          return draft;
+          const stream = actualDraft.createTelegramDraftStream(params);
+          draft ??= stream;
+          return stream;
         });
         const bot = createBot();
         let nextMessageId = 1001;
@@ -58,10 +108,12 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
         });
         dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
           async ({ dispatcherOptions, replyOptions }) => {
+            await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
             await draft?.flush();
             expect(send).not.toHaveBeenCalled();
 
+            await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onPlanUpdate?.({
               phase: "update",
               explanation: "Working",
@@ -71,6 +123,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             expect(send).toHaveBeenCalledOnce();
             expect([...visible.values()]).toEqual(["<b>Working</b>"]);
 
+            await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onPlanUpdate?.({
               phase: "update",
               explanation: "1/2 complete",
@@ -84,35 +137,63 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             expect([...visible.values()][0]).toContain("[x] Inspect");
             expect([...visible.values()][0]).not.toContain("Working");
 
+            await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
             await vi.advanceTimersByTimeAsync(4_000);
             expect(visible.size).toBe(0);
 
+            await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onPlanUpdate?.({
               phase: "update",
               explanation: "Resumed",
-              steps: [],
+              steps: [{ step: "Resume work", status: "in_progress" }],
             });
             await draft?.flush();
             expect(send).toHaveBeenCalledTimes(2);
-            expect([...visible.values()]).toEqual(["<b>Resumed</b>"]);
+            expect([...visible.values()][0]).toContain("<b>Resumed</b>");
+            expect([...visible.values()][0]).toContain("Resume work (in progress)");
 
+            await replyOptions?.onAssistantMessageStart?.();
+            await replyOptions?.onItemEvent?.({
+              kind: "tool",
+              name: "progress_card",
+              itemId: "blocked-card",
+              status: "blocked",
+            });
+            await draft?.flush();
+            expect([...visible.values()][0]).toContain("Resume work (in progress)");
+            expect([...visible.values()][0]).toContain("Progress Card");
+            expect([...visible.values()][0]).toContain("blocked");
+
+            await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onToolStart?.({
               phase: "start",
-              name: "Read",
-              args: { file_path: "/tmp/fixture.ts" },
+              name: "exec",
+              toolCallId: "exec-proof",
+              args: { command: "printf proof" },
             });
+            await replyOptions?.onReasoningEnd?.();
+            await draft?.flush();
+            expect([...visible.values()][0]).toContain("Resume work (in progress)");
+            expect([...visible.values()][0]).toContain("blocked");
+            expect([...visible.values()][0]).toContain("Exec");
+
+            await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
             await draft?.flush();
-            expect([...visible.values()][0]).toContain("Read");
+            expect([...visible.values()][0]).toContain("Exec");
+            expect([...visible.values()][0]).toContain("blocked");
             expect([...visible.values()][0]).not.toContain("Resumed");
+            expect([...visible.values()][0]).not.toContain("Resume work");
             expect(send).toHaveBeenCalledTimes(2);
 
+            await replyOptions?.onAssistantMessageStart?.();
             await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
             expect([...visible.values()]).toContain("Done");
             const finalMessages = [...visible.entries()];
             const sendsAfterFinal = send.mock.calls.length;
             const editsAfterFinal = edit.mock.calls.length;
+            await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onPlanUpdate?.({
               phase: "update",
               explanation: "Late card",
@@ -128,7 +209,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
 
         await dispatchWithContext({
           bot,
-          cfg: { channels: { telegram: { botToken: "test-token" } } },
+          cfg: {
+            agents: { defaults: { reasoningDefault: "stream" } },
+            channels: { telegram: { botToken: "test-token" } },
+          },
           context: createContext({
             ctxPayload: createDirectSessionPayload(),
             threadSpec: { id: undefined, scope: "none" },

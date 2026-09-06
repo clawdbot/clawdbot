@@ -83,7 +83,7 @@ export function createDiscordMessageProgressRuntime(params: {
       : undefined,
     onReasoningEnd: draftPreview.draftStream
       ? () => {
-          handleAssistantMessageBoundary();
+          draftPreview.resetReasoningProgress();
           return false;
         }
       : undefined,

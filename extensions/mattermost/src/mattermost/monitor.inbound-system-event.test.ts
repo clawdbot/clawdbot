@@ -1485,13 +1485,15 @@ describe("mattermost inbound user posts", () => {
   );
 
   it.each([
-    { toolProgress: undefined, label: "Working" },
-    { toolProgress: false, label: "Working" },
-    { toolProgress: true, label: "Working" },
-    { toolProgress: false, label: false },
+    { toolProgress: undefined, label: "Working", mode: "progress" },
+    { toolProgress: false, label: "Working", mode: "progress" },
+    { toolProgress: true, label: "Working", mode: "progress" },
+    { toolProgress: false, label: false, mode: "progress" },
+    { toolProgress: true, label: false, mode: "partial" },
+    { toolProgress: true, label: false, mode: "block" },
   ] as const)(
-    "keeps Mattermost progress useful and clears after delivery with $toolProgress and label $label",
-    async ({ toolProgress, label }) => {
+    "keeps Mattermost $mode progress with $toolProgress and label $label",
+    async ({ toolProgress, label, mode }) => {
       const socket = new FakeWebSocket();
       const abortController = new AbortController();
       mockState.abortController = abortController;
@@ -1500,6 +1502,7 @@ describe("mattermost inbound user posts", () => {
         flush: vi.fn(async () => {}),
         clear: vi.fn(async () => {}),
         deleteCurrentMessage: vi.fn(async () => {}),
+        forceNewMessage: vi.fn(async () => {}),
         stop: vi.fn(async () => {}),
       };
       mockState.createMattermostDraftStream.mockReturnValue(draftStream);
@@ -1513,7 +1516,7 @@ describe("mattermost inbound user posts", () => {
             dmPolicy: "open",
             groupPolicy: "open",
             streaming: {
-              mode: "progress",
+              mode,
               progress: {
                 label,
                 toolProgress,
@@ -1530,6 +1533,36 @@ describe("mattermost inbound user posts", () => {
             steps: [{ step: "Inspect", status: "in_progress" }],
           });
           await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
+          expect(draftStream.deleteCurrentMessage).toHaveBeenCalledTimes(1);
+          await params.replyOptions?.onPlanUpdate?.({
+            phase: "update",
+            steps: [{ step: "Resume", status: "in_progress" }],
+          });
+          params.replyOptions?.onAssistantMessageStart?.();
+          await params.replyOptions?.onItemEvent?.({
+            itemId: "card-rejected",
+            kind: "tool",
+            name: "progress_card",
+            phase: "end",
+            status: "blocked",
+          });
+          params.replyOptions?.onAssistantMessageStart?.();
+          await params.replyOptions?.onToolStart?.({
+            toolCallId: "exec-boundary",
+            name: "exec",
+            phase: "start",
+          });
+          const withActivity = draftStream.update.mock.calls.at(-1)?.[0];
+          expect(withActivity).toContain("▸ Resume");
+          expect(withActivity).toContain("blocked");
+          if (toolProgress) {
+            expect(withActivity).toContain("Exec");
+          }
+          params.replyOptions?.onAssistantMessageStart?.();
+          await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
+          const afterClear = draftStream.update.mock.calls.at(-1)?.[0];
+          expect(afterClear).not.toContain("Resume");
+          expect(afterClear).toContain("blocked");
           expect(draftStream.deleteCurrentMessage).toHaveBeenCalledTimes(1);
         }
         await params.replyOptions?.onToolStart?.({
@@ -1633,7 +1666,9 @@ describe("mattermost inbound user posts", () => {
         expect(updates.at(-1)).not.toContain("done");
       }
       expect(updates.at(-1)).toContain("failed");
-      expect(updates.at(-1)).toContain("Checking");
+      if (mode === "progress") {
+        expect(updates.at(-1)).toContain("Checking");
+      }
       expect(updates.at(-1)).not.toContain("ThinkingChecking");
       expect(updates.some((text) => text.includes("1/2 complete"))).toBe(true);
       expect(updates.some((text) => text.includes("✅ Inspect"))).toBe(true);

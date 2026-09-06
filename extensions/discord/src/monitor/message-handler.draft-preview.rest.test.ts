@@ -62,6 +62,32 @@ describe("Discord draft preview REST lifecycle", () => {
       await controller.pushPlanProgress([{ step: "Retry", status: "pending" }]);
       await controller.flush();
       expect([...visible.values()]).toEqual(["▢ Retry"]);
+      controller.handleAssistantMessageBoundary();
+      await controller.pushItemEvent({
+        itemId: "card-rejected",
+        kind: "tool",
+        name: "progress_card",
+        phase: "end",
+        status: "blocked",
+        meta: '<progress aria-label="private detail"></progress>',
+      });
+      controller.handleAssistantMessageBoundary();
+      await controller.pushToolEvent({ toolCallId: "exec-1", name: "exec", phase: "start" });
+      await controller.flush();
+      expect(visible.size).toBe(1);
+      const withActivity = [...visible.values()][0];
+      expect(withActivity).toContain("▢ Retry");
+      expect(withActivity).toContain("blocked");
+      expect(withActivity).toContain("Exec");
+      expect(withActivity).not.toContain("private detail");
+      controller.handleAssistantMessageBoundary();
+      await controller.pushPlanProgress([]);
+      await controller.flush();
+      expect(visible.size).toBe(1);
+      const afterClear = [...visible.values()][0];
+      expect(afterClear).not.toContain("Retry");
+      expect(afterClear).toContain("blocked");
+      expect(afterClear).toContain("Exec");
       await controller.cleanup();
     },
   );

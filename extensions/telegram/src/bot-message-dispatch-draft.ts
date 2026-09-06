@@ -250,7 +250,7 @@ export async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boo
     return false;
   }
   repositionLaneForNewMessage(turn, turn.answerLane);
-  turn.progressCompositor.suppress();
+  turn.progressCompositor.resetActivity({ suppressed: true });
   turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
   return true;
 }
@@ -347,7 +347,7 @@ function updateTelegramDraftFromPartial(
   }
   if (lane === turn.answerLane) {
     turn.activeAnswerDraftIsToolProgressOnly = false;
-    turn.progressCompositor.suppress();
+    turn.progressCompositor.resetActivity({ suppressed: true });
     turn.lastAnswerPartialText = nextText;
   }
   lane.hasStreamedMessage = true;
@@ -465,7 +465,9 @@ export async function prepareQueuedAnswerBlock(
   ) {
     return;
   }
-  turn.progressCompositor.reset();
+  if (turn.streamMode !== "progress") {
+    turn.progressCompositor.resetActivity();
+  }
   const assistantMessageIndex = blockContext?.assistantMessageIndex;
   if (assistantMessageIndex === undefined) {
     turn.queuedAnswerBlockRotations.push({

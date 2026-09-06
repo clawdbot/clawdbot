@@ -585,7 +585,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               onAssistantMessageStart: draftStream
                 ? () => {
                     draftController.resetDraftBlockOffsets();
-                    draftController.resetPreviewToolProgress();
+                    draftController.beginAssistantMessage();
                     return false;
                   }
                 : undefined,

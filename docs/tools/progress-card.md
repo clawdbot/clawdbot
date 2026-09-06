@@ -45,7 +45,7 @@ For example:
 
 Every call is a replacement, not a patch. Omitting `markdown` removes the previous note; omitting `plan` removes the previous checklist.
 
-The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done)` or `Progress card updated (rev 4)` when there is no plan. Its structured result contains the revision and completed/total step counts, or `null` without a plan. Successful writes also update channel previews from the complete plan state. Failed or blocked writes leave the previous plan in place and keep the failure visible.
+The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done)` or `Progress card updated (rev 4)` when there is no plan. Its structured result contains the revision and completed/total step counts, or `null` without a plan. Successful writes also update channel previews from the complete plan state. Failed or blocked writes leave the previous plan in place. Error visibility follows each channel's display policy; Discord omits failed tool results from previews.
 
 ## Format the note
 

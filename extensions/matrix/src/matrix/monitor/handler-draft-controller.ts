@@ -93,10 +93,6 @@ export async function createMatrixDraftController(params: {
     deleteCurrent: () => draftStream?.deleteCurrentMessage(),
   });
 
-  const resetPreviewToolProgress = () => {
-    progressDraft.reset();
-  };
-
   const buildPreviewToolProgressReplyOptions = (): Partial<GetReplyOptions> => {
     if (!shouldSuppressDefaultToolProgressMessages) {
       return {};
@@ -199,7 +195,6 @@ export async function createMatrixDraftController(params: {
     latestQueuedDraftBoundaryOffsets.clear();
     currentDraftReplyToId = draftReplyToId;
     progressDraft.beginNewTurn({ force: true });
-    resetPreviewToolProgress();
   };
 
   return {
@@ -209,12 +204,13 @@ export async function createMatrixDraftController(params: {
     queueDraftBlockBoundary,
     advanceDraftBlockBoundary,
     resetDraftBlockOffsets,
-    resetPreviewToolProgress,
+    beginAssistantMessage: () => progressDraft.beginAssistantMessage(),
     resetDraftDeliveryState,
     updateDraftFromLatestFullText,
     draftDisposition: () => draftDisposition,
     beginDraftGeneration: () => {
       draftDisposition = "active";
+      progressDraft.resetActivity();
     },
     markDraftConsumed: () => {
       draftDisposition = "consumed";
@@ -235,7 +231,7 @@ export async function createMatrixDraftController(params: {
       }
       latestDraftFullText = text;
       if (text.trim()) {
-        progressDraft.suppress();
+        progressDraft.resetActivity({ suppressed: true });
       }
       updateDraftFromLatestFullText();
       return false;

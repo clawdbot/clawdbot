@@ -2,6 +2,80 @@ import { describe, expect, it, vi } from "vitest";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 
 describe("progress draft plan lifecycle", () => {
+  it.each(["partial", "block", "progress"] as const)(
+    "preserves the plan across message and answer boundaries in %s mode",
+    async (mode) => {
+      const update = vi.fn();
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode, progress: { label: false, toolProgress: true } } },
+        mode,
+        active: true,
+        seed: "lifecycle",
+        update,
+      });
+      const plan = [{ step: "Patch", status: "in_progress" as const }];
+      const explanation = "0/1 complete";
+
+      await progress.pushPlanProgress(plan, { explanation });
+      await progress.pushToolProgress("Inspecting files", { startImmediately: true });
+      progress.beginAssistantMessage();
+      await progress.pushItemEvent({
+        itemId: "blocked-card",
+        kind: "tool",
+        name: "progress_card",
+        phase: "end",
+        status: "blocked",
+      });
+      const retainedActivity = [
+        "Inspecting files",
+        expect.objectContaining({ id: "blocked-card", status: "blocked" }),
+      ];
+      expect(update).toHaveBeenLastCalledWith(
+        expect.stringContaining("▸ Patch"),
+        expect.objectContaining({
+          snapshot: expect.objectContaining({
+            plan,
+            planExplanation: explanation,
+            lines: retainedActivity,
+          }),
+        }),
+      );
+
+      progress.beginAssistantMessage();
+      expect(await progress.pushPlanProgress([])).toBe(true);
+      expect(progress.getSnapshot()).toEqual({ lines: retainedActivity });
+      expect(update).toHaveBeenLastCalledWith(
+        expect.stringContaining("Inspecting files"),
+        expect.objectContaining({ snapshot: { lines: retainedActivity } }),
+      );
+
+      await progress.pushPlanProgress(plan, { explanation });
+      progress.resetActivity({ suppressed: true });
+      expect(await progress.pushToolProgress("Hidden activity")).toBe(false);
+      progress.beginAssistantMessage();
+      expect(await progress.pushToolProgress("Verifying files", { startImmediately: true })).toBe(
+        true,
+      );
+      expect(update).toHaveBeenLastCalledWith(
+        "0/1 complete\n\n• Verifying files\n▸ Patch",
+        expect.objectContaining({
+          snapshot: {
+            lines: ["Verifying files"],
+            plan,
+            planExplanation: explanation,
+            statusHeadline: explanation,
+          },
+        }),
+      );
+
+      expect(progress.beginNewTurn({ force: true })).toBe(true);
+      expect(progress.getSnapshot()).toEqual({ lines: [] });
+      await progress.pushPlanProgress(plan, { explanation });
+      progress.reset();
+      expect(progress.getSnapshot()).toEqual({ lines: [] });
+    },
+  );
+
   it("starts immediately for plans, replaces snapshots, and clears them on reset", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({

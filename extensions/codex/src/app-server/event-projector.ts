@@ -1,4 +1,3 @@
-// Codex plugin module implements event projector behavior.
 import {
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,

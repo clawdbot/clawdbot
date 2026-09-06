@@ -3465,6 +3465,33 @@ describe("matrix monitor handler draft streaming", () => {
         expect(lastCallArg(sendSingleTextMessageMatrixMock, 1, "Matrix resumed plan body")).toBe(
           "`▸ Resume`",
         );
+        opts.onAssistantMessageStart?.();
+        await opts.onItemEvent?.({
+          itemId: "card-rejected",
+          kind: "tool",
+          name: "progress_card",
+          phase: "end",
+          status: "blocked",
+        });
+        opts.onAssistantMessageStart?.();
+        await opts.onToolStart?.({ toolCallId: "exec-1", name: "exec", phase: "start" });
+        await vi.advanceTimersByTimeAsync(1_000);
+        const withActivity = lastCallArg(editMessageMatrixMock, 2, "Matrix plan with activity");
+        expect(withActivity).toContain("▸ Resume");
+        expect(withActivity).toContain("blocked");
+        expect(withActivity).toContain("Exec");
+        opts.onAssistantMessageStart?.();
+        await opts.onPlanUpdate?.({ phase: "update", steps: [] });
+        await vi.advanceTimersByTimeAsync(1_000);
+        const afterClear = lastCallArg(
+          editMessageMatrixMock,
+          2,
+          "Matrix activity after plan clear",
+        );
+        expect(afterClear).not.toContain("Resume");
+        expect(afterClear).toContain("blocked");
+        expect(afterClear).toContain("Exec");
+        expect(redactEventMock).toHaveBeenCalledTimes(1);
       } finally {
         try {
           await finish?.();

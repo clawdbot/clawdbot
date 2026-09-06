@@ -516,7 +516,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     }
 
     if (slackStreaming.mode === "block") {
-      progressDraft.suppress();
+      progressDraft.resetActivity({ suppressed: true });
       const next = applyAppendOnlyStreamUpdate({
         incoming: trimmed,
         rendered: appendRenderedText,
@@ -536,7 +536,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       return false;
     }
 
-    progressDraft.suppress();
+    progressDraft.resetActivity({ suppressed: true });
     draftStream?.update(trimmed);
     hasStreamedAnswer = true;
     return false;
@@ -576,9 +576,6 @@ export function createSlackProgressRuntime(runtimeParams: {
     hasStreamedAnswer = false;
     appendRenderedText = "";
     appendSourceText = "";
-  };
-  const resetDraftProgressState = () => {
-    progressDraft.reset();
   };
   const beginNewProgressTurn = async (options?: { force?: boolean }) => {
     if (useNativeProgressStreaming) {
@@ -624,13 +621,14 @@ export function createSlackProgressRuntime(runtimeParams: {
       : async () => {
           if (isProgressMode) {
             await beginNewProgressTurn();
+            progressDraft.beginAssistantMessage();
             return;
           }
           if (hasStreamedAnswer) {
             draftStream?.forceNewMessage();
           }
           resetDraftDeliveryState();
-          resetDraftProgressState();
+          progressDraft.beginAssistantMessage();
         };
 
   const onQueuedFollowupAdmitted =
@@ -648,7 +646,7 @@ export function createSlackProgressRuntime(runtimeParams: {
           }
           delivery.resetDeliveryTracker();
           resetDraftDeliveryState();
-          resetDraftProgressState();
+          progressDraft.reset();
         };
   // A queued turn can drain after its dispatch returned, so dispatch closeout is
   // no longer available to settle the card it published. Leave none in Working.
