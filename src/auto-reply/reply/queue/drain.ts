@@ -1089,9 +1089,9 @@ export async function dropAbortedFollowups(
   queue: FollowupQueueSummaryState & Pick<FollowupQueueState, "items">,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): Promise<number> {
-  // Only the injection owner may retire a parked steer before its outcome settles.
+  // Waiting reservations are cancellable; started injections retain custody until their outcome.
   const canDrop = (run: FollowupRun) =>
-    !run.steerPending &&
+    run.steerPending?.phase !== "injecting" &&
     isFollowupRunAborted(run) &&
     !queue.inFlight.has(run) &&
     !queue.activeSummarySources.has(run);

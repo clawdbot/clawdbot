@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -111,6 +111,105 @@ async function withQuestionCreator(
 }
 
 describe("question response custody through reply adoption", () => {
+  it("cancels a waiting steer without waiting for its predecessor's acceptance", async () => {
+    const key = "agent:main:waiting-steer-abort";
+    const first = createQueueTestRun({ prompt: "first input", messageId: "first-input" });
+    await withQuestionCreator(key, first, async (operation, fingerprint) => {
+      const backendEntered = createDeferred();
+      const firstOutcome = createDeferred();
+      const firstAdopted = vi.fn(async () => {});
+      const firstAbandoned = vi.fn();
+      const secondDeferred = createDeferred();
+      const source = new AbortController();
+      const abandoned = vi.fn();
+      const settled = vi.fn();
+      const adopted = vi.fn(async () => {});
+      const followup = vi.fn(async (_run: FollowupRun) => {});
+      first.turnAdoptionLifecycle = { onAdopted: firstAdopted, onAbandoned: firstAbandoned };
+      const second: FollowupRun = {
+        ...first,
+        prompt: "waiting input",
+        messageId: "waiting-input",
+        abortSignal: source.signal,
+        turnAdoptionLifecycle: {
+          onDeferred: () => secondDeferred.resolve(),
+          onAdopted: adopted,
+          onAbandoned: abandoned,
+          onSettled: settled,
+        },
+      };
+      const queueMessage = vi.fn((_message: string) => {
+        backendEntered.resolve();
+        // No acceptance callback yet: the next parked input must wait for this outcome.
+        return firstOutcome.promise;
+      });
+      operation.attachBackend({
+        kind: "embedded",
+        runId: "accepted-backing-work",
+        toolAuthorityFingerprint: fingerprint,
+        cancel: vi.fn(),
+        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+      });
+      operation.setPhase("running");
+      const startSteer = (run: FollowupRun) => {
+        const typing = createMockTypingController();
+        return runActiveReplySteer({
+          followupRun: run,
+          opts: undefined,
+          providedReplyOperation: operation,
+          queueKey: key,
+          releaseAdmissionTicket: () => {},
+          replyOperationRunState: undefined,
+          resolvedQueue: { mode: "steer", debounceMs: 0 },
+          restartRecoverySourceTurnId: run.messageId,
+          runFollowup: followup,
+          sessionCtx: {},
+          sessionKey: key,
+          touchActiveSessionEntry: async () => {},
+          typing,
+          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          toolAuthorityFingerprint: fingerprint,
+        });
+      };
+      const firstSteer = startSteer(first);
+      let waitingSteer: ReturnType<typeof startSteer> | undefined;
+      try {
+        await Promise.race([
+          backendEntered.promise,
+          firstSteer.then(() => {
+            throw new Error("first steer did not reach backend injection");
+          }),
+        ]);
+        waitingSteer = startSteer(second);
+        await secondDeferred.promise;
+        source.abort(new Error("cancel source waiting for predecessor acceptance"));
+        await expect(
+          withTestTimeout(waitingSteer, 1_000, "cancelled steer still waits for predecessor"),
+        ).resolves.toBe("handled");
+        expect(abandoned).toHaveBeenCalledOnce();
+        expect(settled).toHaveBeenCalledOnce();
+        expect(adopted).not.toHaveBeenCalled();
+        expect(firstAdopted).not.toHaveBeenCalled();
+        expect(firstAbandoned).not.toHaveBeenCalled();
+        expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first input"]);
+        expect(
+          enqueueFollowupRun(
+            key,
+            createQueueTestRun({ prompt: "waiting input", messageId: second.messageId }),
+            { mode: "followup", debounceMs: 0 },
+            "message-id",
+            followup,
+            false,
+          ),
+        ).toBe(true);
+      } finally {
+        firstOutcome.resolve();
+        await Promise.allSettled([firstSteer, waitingSteer]);
+        clearSessionQueues([key]);
+      }
+    });
+  });
+
   it.each(["confirmed", "unconfirmed"] as const)(
     "retains accepted input during source cancellation until its %s outcome settles",
     async (confirmation) => {

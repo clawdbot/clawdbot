@@ -1,6 +1,7 @@
 // Enqueues follow-up reply runs and schedules queue drains.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../../channels/chat-type.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -35,6 +36,7 @@ import {
   completeFollowupRunLifecycle,
   isFollowupRunAborted,
   markFollowupRunEnqueued,
+  resolveFollowupAbortSignal,
   type EnqueueFollowupRunOptions,
   type FollowupRun,
   type QueueDedupeMode,
@@ -189,7 +191,7 @@ export function enqueueFollowupRun(
       return false;
     }
     const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
-    run.steerPending = { predecessor: queue.steerAcceptanceTail, settle };
+    run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
     queue.steerAcceptanceTail = acceptance;
     appendQueueItem({
       key,
@@ -434,11 +436,25 @@ export function parkSteerCandidate(
   );
   return {
     async admit() {
-      const predecessorAccepted = (await run.steerPending?.predecessor) ?? true;
+      const pending = run.steerPending;
+      const predecessorAccepted = await racePromiseWithAbortSignal(
+        pending?.predecessor ?? Promise.resolve(true),
+        resolveFollowupAbortSignal(run),
+      ).catch((error: unknown) => {
+        if (isFollowupRunAborted(run)) {
+          return false;
+        }
+        throw error;
+      });
       if (isFollowupRunAborted(run) || !isParkedFollowupRunOwned(key, run)) {
         return "cancelled";
       }
-      return predecessorAccepted ? "steer" : "fallback";
+      if (!predecessorAccepted || !pending || run.steerPending !== pending) {
+        return "fallback";
+      }
+      // The injection owner now decides whether this input can safely be replayed.
+      pending.phase = "injecting";
+      return "steer";
     },
     accepted: (accepted) => settleParkedSteerAcceptance(key, run, accepted),
     fallback: () => settleParkedSteerAcceptance(key, run, false),

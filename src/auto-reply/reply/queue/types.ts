@@ -137,6 +137,7 @@ export type FollowupRun = {
   /** The current-turn hook already ran before this steer became a fallback. */
   /** Pending same-turn acceptance while this item remains parked in FIFO order. */
   steerPending?: {
+    phase: "waiting" | "injecting";
     predecessor: Promise<boolean>;
     settle: (accepted: boolean) => void;
   };
