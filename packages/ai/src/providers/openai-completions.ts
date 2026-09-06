@@ -1,5 +1,5 @@
 // OpenAI completions provider adapts chat completions to the agent runtime.
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import type {
   ChatCompletionAssistantMessageParam,
   ChatCompletionContentPartText,
@@ -8,7 +8,6 @@ import type {
   ChatCompletionSystemMessageParam,
 } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { getAiTransportHost } from "../host.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provider-options.js";
@@ -21,7 +20,6 @@ import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-
 import {
   createOpenAIProviderAcceptanceHook,
   isOpenAICompletionsThinkingEnabled,
-  resolveOpenAIClientBaseUrl,
 } from "../transports/openai-transport-shared.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import {
@@ -52,10 +50,10 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { splitSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveCacheRetention } from "./cache-retention.js";
-import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "./openai-completions-tool-calls.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import { createOpenAIProviderClient } from "./openai-provider-client.js";
 import {
   resolveOpenAICompletionsResponseFormat,
   shouldOmitOllamaCompatResponseFormat,
@@ -329,32 +327,7 @@ function createClient(
     }
   }
 
-  // Merge options headers last so they can override defaults
-  if (optionsHeaders) {
-    Object.assign(headers, optionsHeaders);
-  }
-
-  const defaultHeaders =
-    model.provider === "cloudflare-ai-gateway"
-      ? {
-          ...headers,
-          Authorization: headers.Authorization ?? null,
-          "cf-aig-authorization": `Bearer ${apiKey}`,
-        }
-      : headers;
-
-  const baseUrl = isCloudflareProvider(model.provider)
-    ? resolveCloudflareBaseUrl(model)
-    : model.baseUrl;
-  return new OpenAI({
-    apiKey,
-    baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
-    dangerouslyAllowBrowser: true,
-    defaultHeaders,
-    maxRetries: 0,
-    // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
-    fetch: getAiTransportHost().buildModelFetch(model),
-  });
+  return createOpenAIProviderClient(model, apiKey, headers, optionsHeaders);
 }
 
 function buildParams(
