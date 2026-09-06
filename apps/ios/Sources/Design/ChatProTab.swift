@@ -217,6 +217,7 @@ struct ChatProTab: View {
                 hostConnectionStatus: Self.chatHostConnectionStatus(
                     state: self.gatewayDisplayState,
                     isGatewayUsable: self.gatewayConnected),
+                enablesTasteMotion: true,
                 messagePlaceholder: self.messagePlaceholder,
                 emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,

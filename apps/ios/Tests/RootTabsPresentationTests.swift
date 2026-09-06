@@ -475,6 +475,7 @@ struct RootTabsPresentationTests {
             encoding: .utf8)
         #expect(!source.contains(".id(ObjectIdentifier(viewModel))"))
         #expect(source.contains("chatCanvasIdentity("))
+        #expect(source.contains("enablesTasteMotion: true"))
     }
 
     @Test func `localized QR status matcher accepts positional placeholders`() {
