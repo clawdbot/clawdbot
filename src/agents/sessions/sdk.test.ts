@@ -992,7 +992,8 @@ describe("AgentSession retry behavior", () => {
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
     return await createAgentSession({
-      model: testModel,
+      // Retry-only cases need room for the default SDK prompt and reserve.
+      model: { ...testModel, contextWindow: 32_768 },
       resourceLoader: createEmptyResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({

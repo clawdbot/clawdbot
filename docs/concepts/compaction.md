@@ -82,9 +82,9 @@ Client-side compaction in the built-in OpenClaw runtime passes focus to both old
 
 Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
 
-Client-side automatic compaction in the built-in OpenClaw runtime also accounts
-for the prepared foreground system prompt, tool schemas, pending input, and
-output reserve when choosing the retained tail.
+When the built-in OpenClaw runtime has prepared the foreground request,
+client-side automatic compaction also accounts for its system prompt, tool
+schemas, pending input, and output reserve when choosing the retained tail.
 It may retain fewer recent messages so the summary and conversation fit together.
 Choosing a larger summarization model does not increase the foreground model's
 context window. The reserve is a preferred target, not a provider token limit.
@@ -92,6 +92,8 @@ When the fixed prompt or pending input consumes that target, OpenClaw can still 
 history while preserving the unprocessed request. Such a replacement must
 strictly reduce history; unchanged or larger results are rejected. Otherwise,
 automatic compaction requires the complete replacement to fit the estimated target.
+Early required preflight runs before those request facts are available and still
+uses history-based sizing; it does not guarantee this preferred headroom.
 
 ### Provider checkpoints
 

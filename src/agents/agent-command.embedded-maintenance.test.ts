@@ -69,6 +69,7 @@ describe("agentCommand embedded maintenance", () => {
     });
 
     await agentCommand({ message: "continue", sessionId, sessionKey });
+    await waitForSessionMaintenance(sessionKey);
 
     expect(state.runSessionCompactionIfNeededMock).toHaveBeenCalledWith(
       expect.objectContaining({ compactionRequestBudget: { ...foreground, pendingTokens: 0 } }),
