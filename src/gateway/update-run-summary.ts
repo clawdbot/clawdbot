@@ -16,18 +16,13 @@ export function summarizeUpdateRunResponse(response: unknown) {
   const before = text(asRecord(result.before).version, 100);
   const after = text(asRecord(result.after).version, 100);
   const failedSteps = (Array.isArray(result.steps) ? result.steps : [])
-    .flatMap((value) => {
-      const step = asRecord(value);
-      return step.exitCode === 0 || (step.exitCode === null && status !== "error")
-        ? []
-        : [
-            {
-              name: text(step.name, 100) || "update",
-              exitCode: typeof step.exitCode === "number" ? step.exitCode : null,
-              stderrTail: sliceUtf16Safe(readStringField(step, "stderrTail") ?? "", -500),
-            },
-          ];
-    })
+    .map(asRecord)
+    .filter((step) => step.exitCode !== 0 && (step.exitCode !== null || status === "error"))
+    .map((step) => ({
+      name: text(step.name, 100) || "update",
+      exitCode: typeof step.exitCode === "number" ? step.exitCode : null,
+      stderrTail: sliceUtf16Safe(readStringField(step, "stderrTail") ?? "", -500),
+    }))
     .slice(-3);
   const summary = {
     ok,
