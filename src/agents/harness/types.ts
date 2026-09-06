@@ -284,7 +284,7 @@ export type AgentHarnessSideQuestionResult = {
 };
 export type AgentHarnessCompactParams =
   import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
-export type AgentHarnessCompactResult =
+type AgentHarnessCompactResult =
   import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
 export type AgentHarnessNativeCompactionRequest = "after_context_engine" | "required_preflight";
 export type AgentHarnessNativeCompactionParams = AgentHarnessCompactParams & {

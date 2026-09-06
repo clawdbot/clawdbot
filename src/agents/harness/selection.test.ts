@@ -1,6 +1,7 @@
 // Covers agent harness selection, fallback behavior, and compaction routing.
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AgentHarnessCompactResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -87,11 +88,7 @@ import {
   resolveAgentHarnessPreparedAuthSupport,
   resolveAgentHarnessPreparedRouteSupport,
 } from "./support.js";
-import type {
-  AgentHarness,
-  AgentHarnessCompactParams,
-  AgentHarnessCompactResult,
-} from "./types.js";
+import type { AgentHarness, AgentHarnessCompactParams } from "./types.js";
 
 type TestNativeCompactionParams = AgentHarnessCompactParams & {
   nativeCompactionRequest: "required_preflight" | "after_context_engine";

@@ -534,6 +534,27 @@ describe("shared Codex app-server client", () => {
     expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
   });
 
+  it("does not retain a registered client that already reports a transport close", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
+    await sendInitializeResult(harness, "openclaw/0.149.0 (Linux; test)");
+    const client = await acquire;
+
+    // Close-before-retain race: the transport closed (authoritative client-side
+    // close) before the registry entry reconciled, so the entry is still findable
+    // with closeError/closeWhenIdle unset. Retaining it would hand back a client
+    // whose next request rejects as non-recoverable, so the caller must instead
+    // fall through to a fresh acquisition (undefined).
+    const closeErrorSpy = vi
+      .spyOn(client, "getCloseError")
+      .mockReturnValue(new Error("codex app-server client is closed"));
+    expect(retainSharedCodexAppServerClientByInstanceId(client.getInstanceId())).toBeUndefined();
+
+    closeErrorSpy.mockRestore();
+    expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+  });
+
   it.each([
     {
       version: "2026.7.1",

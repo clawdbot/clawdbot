@@ -19,6 +19,7 @@ import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-en
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import { isNativeHarnessBindingRecoverySkip } from "../../agents/harness/compaction-recovery.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
@@ -1140,7 +1141,14 @@ export async function runSessionCompactionIfNeeded(params: {
     if (!result?.ok) {
       assertActive();
       const reason = result?.reason ?? "not_compacted";
-      if (result && isBenignCompactionSkipResult(result)) {
+      // A model-locked native harness has no context-engine fallback; its
+      // recoverable binding failure carries the authenticated recovery
+      // disposition, so continue the turn instead of dropping it
+      // (#119971/#119977). Unknown or non-recoverable failures stay fatal.
+      if (
+        result &&
+        (isBenignCompactionSkipResult(result) || isNativeHarnessBindingRecoverySkip(result))
+      ) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;

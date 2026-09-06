@@ -27,6 +27,7 @@ import {
   type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
+import type { EmbeddedAgentCompactResult as InternalEmbeddedAgentCompactResult } from "../agents/embedded-agent-runner/types.js";
 import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
 import {
   compileStructuredInputForm,
@@ -87,7 +88,6 @@ export type {
   AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
-  AgentHarnessCompactResult,
   AgentHarnessNativeCompaction,
   AgentHarnessNativeCompactionParams,
   AgentHarnessNativeCompactionRequest,
@@ -156,6 +156,22 @@ export type EmbeddedRunAttemptParamsV2 = EmbeddedRunAttemptParamsBase & {
   hostCapabilities: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
 };
 export type { EmbeddedRunAttemptResult };
+/**
+ * SDK-facing compaction result contract.
+ *
+ * The internal runtime type carries a host-only `nativeHarnessBindingRecovery`
+ * authorization marker that is stamped and stripped exclusively by the
+ * queued-compaction owner; plugin-supplied values are ignored by sanitization.
+ * That marker is intentionally kept out of the plugin SDK contract, so the
+ * exported result type omits it. Internal runtime types and sanitization are
+ * unchanged — this narrowing applies only at the SDK boundary.
+ */
+export type EmbeddedAgentCompactResult = Omit<
+  InternalEmbeddedAgentCompactResult,
+  "nativeHarnessBindingRecovery"
+>;
+/** SDK-facing alias of the narrowed compaction result contract. */
+export type AgentHarnessCompactResult = EmbeddedAgentCompactResult;
 export type {
   ContextEngine as HarnessContextEngine,
   ContextEngineHostCapability,
@@ -163,7 +179,6 @@ export type {
   ContextEngineProjection,
 } from "../context-engine/types.js";
 export type { CompactEmbeddedAgentSessionParams } from "../agents/embedded-agent-runner/compact.js";
-export type { EmbeddedAgentCompactResult } from "../agents/embedded-agent-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
   MessagingToolSend,

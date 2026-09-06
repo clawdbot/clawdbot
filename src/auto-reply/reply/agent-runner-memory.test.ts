@@ -1977,6 +1977,71 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["stale_thread_binding", "codex app-server binding changed before native compaction"],
+    ["missing_thread_binding", "no codex app-server thread binding"],
+  ] as const)(
+    "safe-continues required preflight on a model-locked %s recovery disposition",
+    async (recoveryReason, reason) => {
+      const sessionFile = path.join(rootDir, "session.jsonl");
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+        "utf8",
+      );
+      registerMemoryFlushPlanResolverForTest(() => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 0,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
+      // A model-locked native harness cannot fall back to context-engine
+      // compaction; the queued owner returns an honest ok:false carrying the
+      // authenticated recovery disposition, so preflight must continue the turn
+      // instead of dropping it (#119971/#119977).
+      compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason,
+        failure: { reason: recoveryReason },
+        nativeHarnessBindingRecovery: true,
+      });
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 120,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        agentHarnessId: "openclaw",
+        modelSelectionLocked: true,
+      };
+      const sessionStore = { "agent:main:telegram:group:redacted": sessionEntry };
+
+      const result = await runSessionCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "agent:main:telegram:group:redacted",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        modelContextTokens: 100,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:telegram:group:redacted",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        ...createCompactionLifecycle(createReplyOperation()),
+      });
+
+      expect(result).toMatchObject({ sessionId: "session", modelSelectionLocked: true });
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("still fails preflight compaction for non-binding native harness failures", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(

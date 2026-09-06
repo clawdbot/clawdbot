@@ -17,11 +17,13 @@ import {
   type AgentHarnessQuestionGatewayCall,
   type AgentHarnessAttemptParams,
   type AgentHarnessAttemptParamsV2,
+  type AgentHarnessCompactResult,
   type AgentHarnessSideQuestionParams,
   type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSupportContext,
   type AgentHarnessTerminalOutcomeClassification,
   type AgentHarnessV2,
+  type EmbeddedAgentCompactResult,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptParamsV2,
 } from "./agent-harness-runtime.js";
@@ -230,6 +232,25 @@ describe("agent harness runtime SDK facade", () => {
       "run" | "source-bound"
     >();
     expectTypeOf<Parameters<GuardedInjection["queueMessage"]>["length"]>().toEqualTypeOf<4>();
+  });
+
+  it("keeps the native binding-recovery marker out of the SDK compact-result contract", () => {
+    // The internal runtime type carries a host-only `nativeHarnessBindingRecovery`
+    // authorization marker (stamped/stripped solely by the queued-compaction owner).
+    // It must not be part of the plugin SDK contract, so the exported result type
+    // omits it and the harness alias resolves to the same narrowed shape.
+    expectTypeOf<
+      "nativeHarnessBindingRecovery" extends keyof EmbeddedAgentCompactResult ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      "nativeHarnessBindingRecovery" extends keyof AgentHarnessCompactResult ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<AgentHarnessCompactResult>().toEqualTypeOf<EmbeddedAgentCompactResult>();
+    // The rest of the compaction result contract is preserved for SDK consumers.
+    expectTypeOf<EmbeddedAgentCompactResult>().toMatchTypeOf<{
+      ok: boolean;
+      compacted: boolean;
+    }>();
   });
 
   it("keeps legacy question callbacks and requires explicit guarded dispatch authority", () => {

@@ -1306,7 +1306,17 @@ export function retainSharedCodexAppServerClientByInstanceId(
   }
   for (const entry of getSharedCodexAppServerClientState().clients.values()) {
     const client = entry.client;
-    if (client?.getInstanceId() !== normalizedClientId || entry.closeWhenIdle || entry.closeError) {
+    // `client.getCloseError()` is the authoritative transport-close signal: a
+    // client can close between this lookup and the lease before the registry
+    // entry reconciles (closeError/closeWhenIdle still unset). Rejecting it here
+    // makes the caller acquire fresh instead of leasing a client whose next
+    // request rejects as non-recoverable.
+    if (
+      client?.getInstanceId() !== normalizedClientId ||
+      entry.closeWhenIdle ||
+      entry.closeError ||
+      client.getCloseError()
+    ) {
       continue;
     }
     return { client, release: retainSharedClientEntry(entry) };
