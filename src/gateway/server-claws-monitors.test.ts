@@ -8,7 +8,11 @@ import { beginAgentDeletion, isAgentDeletionBlocked } from "../agents/agent-life
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { applyClawAddPlan } from "../claws/add.js";
 import type { ClawRemoveApplyOptions } from "../claws/lifecycle-remove-contract.js";
-import { applyClawRemovePlan, buildClawRemovePlan } from "../claws/lifecycle-state.js";
+import {
+  applyClawRemovePlan,
+  buildClawRemovePlan,
+  readClawStatus,
+} from "../claws/lifecycle-state.js";
 import { buildClawAddPlan } from "../claws/lifecycle.js";
 import { resolveClawMonitorCleanupBinding } from "../claws/monitor-cleanup-binding.js";
 import {
@@ -226,6 +230,57 @@ async function fixture(
 }
 
 describe("Claw serving monitor cleanup", () => {
+  it.each(["quiesce", "drain"])(
+    "retains a configured agent without a Claw install during %s",
+    async (phase) => {
+      const current = await fixture(false);
+      const deletion = beginAgentDeletion({
+        agentId: "worker",
+        agentDir: current.state.agentDir("worker"),
+        workspaceDir: current.workspaceDir,
+        sessionsDir: current.state.sessionsDir("worker"),
+        deleteFiles: false,
+      });
+      openOpenClawStateDatabase()
+        .db.prepare("DELETE FROM claw_installs WHERE agent_id = ?")
+        .run("worker");
+      await expect(
+        current.invoke({
+          phase,
+          agentId: "worker",
+          operationId: deletion.entry.operationId,
+          ...(phase === "quiesce" ? { monitors: await current.gateway.inspect("worker") } : {}),
+        }),
+      ).rejects.toThrow("configuration changed");
+      expect(listAgentEntries(current.getConfig()).some((agent) => agent.id === "worker")).toBe(
+        true,
+      );
+      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+    },
+  );
+
+  it("removes orphaned workspace ownership through the serving monitor handler", async () => {
+    const current = await fixture(false);
+    await current.commitConfig(() => ({
+      agents: { entries: { main: { workspace: current.state.path("main-workspace") } } },
+    }));
+    openOpenClawStateDatabase()
+      .db.prepare("DELETE FROM claw_installs WHERE agent_id = ?")
+      .run("worker");
+    expect(
+      (await readClawStatus("worker", { config: current.getConfig() })).records[0],
+    ).toMatchObject({
+      orphaned: true,
+      agentState: "missing",
+    });
+    const plan = await current.plan();
+    expect(plan.blockers).toEqual([]);
+    expect(await current.apply(plan)).toMatchObject({ status: "complete", agentRemoved: false });
+    expect(readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(true);
+    expect((await readClawStatus("worker", { config: current.getConfig() })).summary.claws).toBe(0);
+    await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).rejects.toThrow();
+  });
+
   it("retains local monitor blockers when the serving inspection is unavailable", async () => {
     const current = await fixture(false);
     const plan = await buildClawRemovePlan("worker", {

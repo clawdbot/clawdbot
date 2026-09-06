@@ -114,18 +114,15 @@ function inspectMonitors(
   });
 }
 
-function assertDeletionFence(
-  agentId: string,
-  operationId: string,
-  config: OpenClawConfig | undefined,
-) {
+function assertDeletionFence(agentId: string, operationId: string, config: OpenClawConfig) {
   const journal = readAgentDeletionJournal(agentId);
   const install = readClawInstallRecord(agentId);
-  if (!journal || journal.operationId !== operationId || journal.cleanupCompleted || !install) {
+  if (!journal || journal.operationId !== operationId || journal.cleanupCompleted) {
     throw new Error("Claw removal no longer owns the serving Gateway's deletion fence.");
   }
-  const agent = config && listAgentEntries(config).find((entry) => entry.id === agentId);
-  if (agent && digestClawAgentConfig(agent) !== install.agentConfigDigest) {
+  // Orphaned ownership can outlive its install row, but must never remove a configured replacement.
+  const agent = listAgentEntries(config).find((entry) => entry.id === agentId);
+  if (agent && digestClawAgentConfig(agent) !== install?.agentConfigDigest) {
     throw new Error("The serving Gateway's Claw agent configuration changed after planning.");
   }
   return journal;
@@ -207,11 +204,7 @@ export const clawsMonitorHandlers = {
       }
       const assertCurrent = () => {
         assertBinding();
-        return assertDeletionFence(
-          input.agentId,
-          input.operationId,
-          input.phase === "quiesce" ? context.getRuntimeConfig() : undefined,
-        );
+        return assertDeletionFence(input.agentId, input.operationId, context.getRuntimeConfig());
       };
       assertCurrent();
       if (input.phase === "quiesce") {
