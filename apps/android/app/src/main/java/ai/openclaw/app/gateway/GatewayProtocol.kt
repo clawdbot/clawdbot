@@ -921,10 +921,10 @@ enum class GatewayMethod(
   UpdateRunsGet("update.runs.get"),
   UpdateRunsList("update.runs.list"),
   GatewaySuspendHandoff("gateway.suspend.handoff"),
-  UpdateReport("update.report"),
-  SkillsWorkshopRead("skills.workshop.read"),
   TranscriptsExport("transcripts.export"),
   TranscriptsStatus("transcripts.status"),
+  UpdateReport("update.report"),
+  SkillsWorkshopRead("skills.workshop.read"),
 }
 
 enum class GatewayEvent(

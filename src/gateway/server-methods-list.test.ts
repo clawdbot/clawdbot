@@ -91,10 +91,10 @@ describe("listGatewayMethods", () => {
       "update.runs.get",
       "update.runs.list",
       "gateway.suspend.handoff",
-      "update.report",
-      "skills.workshop.read",
       "transcripts.export",
       "transcripts.status",
+      "update.report",
+      "skills.workshop.read",
     ]);
   });
 
