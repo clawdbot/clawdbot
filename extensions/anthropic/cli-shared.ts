@@ -55,8 +55,27 @@ const CLAUDE_DEFAULT_PERMISSION_MODE = "default";
 const CLAUDE_NO_TOOLS_VALUE = "";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
-const CLAUDE_RESTRICTED_SETTINGS =
-  '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
+// Claude Code loads its own memory surfaces into every run: project CLAUDE.md
+// files and its auto-memory. Those instructions address Claude Code as a coding
+// assistant, so on this backend they land in an agent context OpenClaw did not
+// compose and did not account for. `--setting-sources user` already keeps
+// project *settings files* out; CLAUDE.md and auto-memory are separate
+// mechanisms that it does not cover, and only these keys turn them off.
+const CLAUDE_MEMORY_ISOLATION_SETTING_FIELDS = {
+  autoMemoryEnabled: false,
+  claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
+} as const;
+// Ordinary runs isolate memory only. Hooks and plugins are operator-owned
+// customization that does not feed the model's context, so leave them alone
+// here; the restricted profile below is where they are also shut off.
+const CLAUDE_MEMORY_ISOLATION_SETTINGS = JSON.stringify(CLAUDE_MEMORY_ISOLATION_SETTING_FIELDS);
+// Built from the same fields so the two profiles cannot drift into expressing
+// different memory policies.
+const CLAUDE_RESTRICTED_SETTINGS = JSON.stringify({
+  disableAllHooks: true,
+  enabledPlugins: {},
+  ...CLAUDE_MEMORY_ISOLATION_SETTING_FIELDS,
+});
 
 type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
 type ClaudeCliEffortArgAction =
@@ -173,9 +192,17 @@ function normalizeClaudeBackendArgs(
   const normalized: string[] = [];
   let hasPermissionMode = false;
   let hasSettingSources = false;
+  let hasSettings = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
     if (arg === CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG) {
+      continue;
+    }
+    // An operator who supplies their own --settings owns the whole payload:
+    // note it and pass it through untouched rather than appending a second one.
+    if (arg === CLAUDE_SETTINGS_ARG || arg.startsWith(`${CLAUDE_SETTINGS_ARG}=`)) {
+      hasSettings = true;
+      normalized.push(arg);
       continue;
     }
     if (arg === CLAUDE_PERMISSION_MODE_ARG || arg === CLAUDE_SETTING_SOURCES_ARG) {
@@ -213,6 +240,9 @@ function normalizeClaudeBackendArgs(
   }
   if (!hasSettingSources) {
     normalized.push(CLAUDE_SETTING_SOURCES_ARG, CLAUDE_SAFE_SETTING_SOURCES);
+  }
+  if (!hasSettings) {
+    normalized.push(CLAUDE_SETTINGS_ARG, CLAUDE_MEMORY_ISOLATION_SETTINGS);
   }
   if (permissionMode && !hasPermissionMode) {
     normalized.push(CLAUDE_PERMISSION_MODE_ARG, permissionMode);

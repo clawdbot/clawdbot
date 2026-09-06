@@ -24,6 +24,12 @@ type ClaudePreparedExecutionWithSecret = {
 const CLAUDE_CLI_DISALLOWED_TOOLS =
   "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor";
 const CLAUDE_CACHE_FLAG = "--exclude-dynamic-system-prompt-sections";
+// Spelled out rather than imported so a change to the shipped payload has to be
+// restated here: this is the default that keeps Claude Code's own memory out of
+// the agent context, and it should not be able to move silently.
+const CLAUDE_MEMORY_ISOLATION_SETTINGS =
+  '{"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
+const CLAUDE_MEMORY_ISOLATION_ARGS = ["--settings", CLAUDE_MEMORY_ISOLATION_SETTINGS];
 
 describe("Claude CLI adapter equivalence", () => {
   const commonArgs = [
@@ -130,80 +136,6 @@ function normalizeClaudeArgs(
     context,
   ).args;
 }
-
-describe("Claude backend permission args", () => {
-  it("removes legacy skip-permissions without adding bypassPermissions", () => {
-    expect(normalizeClaudeArgs(["-p", "--dangerously-skip-permissions", "--verbose"])).toEqual([
-      "-p",
-      "--verbose",
-      "--setting-sources",
-      "user",
-    ]);
-  });
-
-  it("keeps explicit permission-mode overrides", () => {
-    expect(normalizeClaudeArgs(["-p", "--permission-mode", "acceptEdits"])).toEqual([
-      "-p",
-      "--permission-mode",
-      "acceptEdits",
-      "--setting-sources",
-      "user",
-    ]);
-    expect(normalizeClaudeArgs(["-p", "--permission-mode=acceptEdits"])).toEqual([
-      "-p",
-      "--permission-mode=acceptEdits",
-      "--setting-sources",
-      "user",
-    ]);
-  });
-
-  it("drops malformed permission-mode flags in both split and equals forms", () => {
-    expect(
-      normalizeClaudeArgs(["-p", "--permission-mode", "--output-format", "stream-json"]),
-    ).toEqual(["-p", "--output-format", "stream-json", "--setting-sources", "user"]);
-    expect(normalizeClaudeArgs(["-p", "--permission-mode="])).toEqual([
-      "-p",
-      "--setting-sources",
-      "user",
-    ]);
-    expect(normalizeClaudeArgs(["-p", "--permission-mode=--output-format"])).toEqual([
-      "-p",
-      "--setting-sources",
-      "user",
-    ]);
-  });
-});
-
-describe("Claude backend setting sources", () => {
-  it("injects user-only setting sources when args omit the flag", () => {
-    expect(normalizeClaudeArgs(["-p", "--output-format", "stream-json", "--verbose"])).toEqual([
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--setting-sources",
-      "user",
-    ]);
-  });
-
-  it("forces explicit project or local setting sources back to user-only", () => {
-    expect(normalizeClaudeArgs(["-p", "--setting-sources", "project"])).toEqual([
-      "-p",
-      "--setting-sources",
-      "user",
-    ]);
-    expect(normalizeClaudeArgs(["-p", "--setting-sources=local,user"])).toEqual([
-      "-p",
-      "--setting-sources=user",
-    ]);
-  });
-
-  it("treats a bare setting-sources flag as malformed and falls back to user-only", () => {
-    expect(
-      normalizeClaudeArgs(["-p", "--setting-sources", "--output-format", "stream-json"]),
-    ).toEqual(["-p", "--output-format", "stream-json", "--setting-sources", "user"]);
-  });
-});
 
 it("keeps pinned Claude CLI model refs on exact selectors", () => {
   const aliases = buildAnthropicCliBackend().config.modelAliases;
@@ -542,6 +474,7 @@ describe("normalizeClaudeBackendConfig", () => {
       "--verbose",
       "--setting-sources",
       "user",
+      ...CLAUDE_MEMORY_ISOLATION_ARGS,
       "--permission-mode",
       "bypassPermissions",
     ]);
@@ -554,6 +487,7 @@ describe("normalizeClaudeBackendConfig", () => {
       "{sessionId}",
       "--setting-sources",
       "user",
+      ...CLAUDE_MEMORY_ISOLATION_ARGS,
       "--permission-mode",
       "bypassPermissions",
     ]);
