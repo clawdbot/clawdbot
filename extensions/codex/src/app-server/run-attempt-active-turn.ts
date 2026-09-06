@@ -222,6 +222,17 @@ export function activateCodexAttemptTurn(
             signal: runAbortController.signal,
           });
         } catch (error) {
+          // Nothing else re-delivers this catalog, so the record must name what
+          // compaction actually restored. Claiming the refresh is still live
+          // would make every later turn skip it and strand the conversation on
+          // the creation-time catalog.
+          const ephemeralPolicy = resourceState.thread.liveThreadEphemeralPolicy;
+          if (ephemeralPolicy) {
+            resourceState.thread.liveThreadEphemeralPolicy = {
+              ...ephemeralPolicy,
+              skillsInstructions: ephemeralPolicy.nativeSkillsInstructions,
+            };
+          }
           embeddedAgentLog.warn("failed to restore Codex skill catalog after compaction", {
             runId: params.runId,
             threadId: resourceState.thread.threadId,
