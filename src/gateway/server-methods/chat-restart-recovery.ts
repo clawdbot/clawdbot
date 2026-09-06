@@ -23,6 +23,7 @@ import {
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOrCreateProcessDeviceIdentity } from "../../infra/device-identity.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { findRestartRecoveryUnsafeChatAdmissionHook } from "../../plugins/restart-recovery-hook-safety.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
@@ -31,13 +32,18 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-state.js";
+import {
+  deriveGatewaySessionLifecycleSnapshot,
+  recordGatewaySessionRunFailure,
+} from "../session-lifecycle-state.js";
+import { boundedWorkerError } from "../worker-environments/worker-error.js";
 import { resolveChatSendActiveScopeKey } from "./chat-origin-routing.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export { hasRestartRecoveryTerminalRun };
 
 const RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN = "openclaw.chat.restart-retry.v1";
+const log = createSubsystemLogger("gateway/restart-recovery");
 
 type RestartSafeChatRequest = {
   fingerprint: string;
@@ -415,7 +421,7 @@ export async function terminalizeRestartSafeChatAdmission(
 ): Promise<boolean> {
   const endedAt = Date.now();
   let terminalized = false;
-  await patchSessionEntryCore(
+  const persisted = await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (current) => {
       if (
@@ -455,5 +461,20 @@ export async function terminalizeRestartSafeChatAdmission(
     },
     { requireWriteSuccess: true, skipMaintenance: true },
   );
+  if (terminalized && persisted && params.status === "failed") {
+    await recordGatewaySessionRunFailure({
+      target: {
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        sessionId: persisted.sessionId,
+        expectedLifecycleRevision: persisted.lifecycleRevision,
+      },
+      runId: params.clientRunId,
+      error: params.error,
+    }).catch((error: unknown) => {
+      // The claim is already settled; report failure must not trigger a competing terminal write.
+      log.warn(`Failed to record restart-safe chat failure notice: ${boundedWorkerError(error)}`);
+    });
+  }
   return terminalized;
 }

@@ -37,7 +37,7 @@ function requirePluginEntries(config: { plugins?: { entries?: Record<string, unk
 }
 
 describe("release-check", () => {
-  it("loads sparse release tooling and checks the separate target SDK and worker inventories", () => {
+  it("loads sparse release tooling and checks the target worker contract", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-target-"));
     try {
       const toolingRoot = join(root, "tooling");
@@ -67,15 +67,7 @@ describe("release-check", () => {
         files: ["dist"],
       });
       writeFileSync(join(root, "package.json"), packageJson);
-      writeFileSync(
-        join(root, "scripts/lib/plugin-sdk-entrypoints.json"),
-        JSON.stringify(["target-private", "target-public"]),
-      );
-      writeFileSync(
-        join(root, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"),
-        JSON.stringify(["target-private"]),
-      );
-      mkdirSync(join(root, "scripts", "fixtures"));
+      mkdirSync(join(root, "scripts", "fixtures"), { recursive: true });
       writeFileSync(
         join(root, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
         "stale target fixture",
@@ -89,9 +81,9 @@ describe("release-check", () => {
           "--input-type=module",
           "--eval",
           `import { readFileSync } from "node:fs";\n` +
-            `const { collectForbiddenPackPaths, collectMissingPackPaths, createPackedPluginSdkTypescriptSmokeProject } = await import(${JSON.stringify(moduleUrl)});\n` +
+            `const { createPackedPluginSdkTypescriptSmokeProject } = await import(${JSON.stringify(moduleUrl)});\n` +
             `createPackedPluginSdkTypescriptSmokeProject({ consumerDir: "consumer", packageSpec: "file:fixture.tgz" });\n` +
-            `console.log(JSON.stringify({ forbidden: collectForbiddenPackPaths(["dist/plugin-sdk/target-private.d.ts", "dist/plugin-sdk/target-public.d.ts"]), required: collectMissingPackPaths([]).filter(path => path.startsWith("dist/plugin-sdk/")), fixture: readFileSync("consumer/src/index.ts", "utf8") }));`,
+            `console.log(JSON.stringify({ fixture: readFileSync("consumer/src/index.ts", "utf8") }));`,
         ],
         {
           cwd: root,
@@ -104,16 +96,12 @@ describe("release-check", () => {
           join(toolingRoot, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
           "utf8",
         ),
-        forbidden: ["dist/plugin-sdk/target-private.d.ts"],
-        required: [
-          "dist/plugin-sdk/target-private.js",
-          "dist/plugin-sdk/target-public.d.ts",
-          "dist/plugin-sdk/target-public.js",
-        ],
       });
 
       copyFileSync("appcast.xml", join(root, "appcast.xml"));
       mkdirSync(join(root, "src/shared"), { recursive: true });
+      mkdirSync(join(root, "src/worker"), { recursive: true });
+      writeFileSync(join(root, "src/worker/worker-deploy-entry.ts"), "export {};\n");
       const packedRoot = join(root, "package");
       const packedFiles = {
         "package.json": packageJson,
@@ -206,6 +194,105 @@ describe("release-check", () => {
         // Valid target-specific artifacts reach the SDK check; this fixture omits SDK output.
         expect(result.stderr).toContain(expected);
       }
+
+      writeFileSync(
+        join(root, "src/shared/worker-bundle-hash.ts"),
+        'export const WORKER_BUNDLE_ENTRY_PATH = "";\n',
+      );
+      const emptyPathResult = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          join(toolingRoot, "scripts/tsx.mjs"),
+          join(toolingRoot, "scripts/release-check.ts"),
+          "--tarball",
+          tarball,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...process.env, TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json") },
+        },
+      );
+      expect(emptyPathResult.status).toBe(1);
+      expect(emptyPathResult.stderr).toContain(
+        "release-check: target worker artifact WORKER_BUNDLE_ENTRY_PATH must be a non-empty path string.",
+      );
+
+      writeFileSync(
+        join(root, "src/shared/worker-bundle-hash.ts"),
+        'export const WORKER_BUNDLE_ENTRY_PATH = "../worker/main.mjs";\n',
+      );
+      const escapingPathResult = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          join(toolingRoot, "scripts/tsx.mjs"),
+          join(toolingRoot, "scripts/release-check.ts"),
+          "--tarball",
+          tarball,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...process.env, TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json") },
+        },
+      );
+      expect(escapingPathResult.status).toBe(1);
+      expect(escapingPathResult.stderr).toContain(
+        "release-check: target worker artifact WORKER_BUNDLE_ENTRY_PATH must be a normalized relative path within dist/worker.",
+      );
+
+      writeFileSync(
+        join(root, "src/shared/worker-bundle-hash.ts"),
+        "export const OTHER_PATH = 1;\n",
+      );
+      const missingContractResult = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          join(toolingRoot, "scripts/tsx.mjs"),
+          join(toolingRoot, "scripts/release-check.ts"),
+          "--tarball",
+          tarball,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...process.env, TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json") },
+        },
+      );
+      expect(missingContractResult.status).toBe(1);
+      expect(missingContractResult.stderr).toContain(
+        "release-check: target worker producer is missing WORKER_BUNDLE_*_PATH declarations.",
+      );
+
+      // Shared worker helpers predate the deploy producer and cannot define the
+      // package contract for those historical frozen targets.
+      rmSync(join(root, "src/worker/worker-deploy-entry.ts"));
+      rmSync(join(packedRoot, "dist/worker"), { recursive: true, force: true });
+      const noWorkerTarball = join(root, "target-without-workers.tgz");
+      create({ cwd: root, file: noWorkerTarball, gzip: true, sync: true }, ["package"]);
+      const noWorkerResult = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          join(toolingRoot, "scripts/tsx.mjs"),
+          join(toolingRoot, "scripts/release-check.ts"),
+          "--tarball",
+          noWorkerTarball,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...process.env, TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json") },
+        },
+      );
+      expect(noWorkerResult.status).toBe(1);
+      expect(noWorkerResult.stderr).toContain(
+        "release-check: packed dist/plugin-sdk directory not found.",
+      );
+      expect(noWorkerResult.stderr).not.toContain("Worker deploy artifact");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

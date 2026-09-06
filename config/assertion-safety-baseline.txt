@@ -3890,7 +3890,6 @@ ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	1
 ui/src/lib/sessions/reconcile.ts	10
 ui/src/lib/sessions/session-key.ts	4
-ui/src/lib/sessions/swarm-activity.ts	1
 ui/src/lib/skills/index.ts	1
 ui/src/lit/stream-auto-follow-controller.ts	1
 ui/src/lit/subscriptions-controller.ts	1
@@ -3954,7 +3953,6 @@ ui/src/pages/chat/components/chat-session-sharing.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
 ui/src/pages/chat/components/chat-sidebar-editor-menu.ts	2
 ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
-ui/src/pages/chat/components/chat-swarm-progress.ts	2
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	3
 ui/src/pages/chat/components/chat-voice-activity.ts	1

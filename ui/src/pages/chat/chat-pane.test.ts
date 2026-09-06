@@ -8,6 +8,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
+import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import {
   installDialogPolyfill,
   submitInputDialog,
@@ -112,11 +113,11 @@ describe("chat pane retained presentation", () => {
     const lifecycle = pane as TestChatPane & { hasUpdated: boolean; render: () => unknown };
     lifecycle.render = () => null;
     ChatPaneBase.prototype.connectedCallback.call(lifecycle);
-    await lifecycle.updateComplete;
+    await settleLitElement(lifecycle);
     const performUpdate = vi.spyOn(lifecycle, "performUpdate");
 
     lifecycle.onPaneSessionChange = () => undefined;
-    await lifecycle.updateComplete;
+    await settleLitElement(lifecycle);
 
     expect(performUpdate).not.toHaveBeenCalled();
     ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);

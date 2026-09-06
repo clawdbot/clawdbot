@@ -164,6 +164,13 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   fullCatalogConcurrencyLimit: number;
 }>;
 
+export type PreparedModelCatalogInventory = {
+  catalog: ModelCatalogSnapshot;
+  key: string;
+  pluginFingerprint: string;
+  discoveryOrigins: readonly { provider: string; profileId?: string }[];
+};
+
 export type PreparedModelRuntimeOwner = {
   input: PreparedModelRuntimeInput;
   catalogOwner: PublishedModelCatalogOwnerCandidate["catalogOwner"];
@@ -174,7 +181,7 @@ export type PreparedModelRuntimeOwner = {
   needsRefresh: boolean;
   catalogStale: boolean;
   /** Completed discovery facts; runtime capability projection belongs to each generation. */
-  catalogInventory?: { catalog: ModelCatalogSnapshot; key: string };
+  catalogInventory?: PreparedModelCatalogInventory;
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;

@@ -5,15 +5,22 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 
 const history: ChatHistoryResult = {
   sessionId: "research-notes",
@@ -36,9 +43,12 @@ function progressCard(revision = 1): ProgressCard {
   };
 }
 
-function createHistoryProgressPane(request: ReturnType<typeof vi.fn>) {
-  const client = { request } as unknown as GatewayBrowserClient;
-  const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+function createHistoryProgressPane(
+  request: GatewayRequestHandler,
+  sessions = createSessionCapabilityFixture(),
+) {
+  const client = createGatewayBrowserClientFixture({ request });
+  const { pane, state } = createTestChatPane({ client, sessions });
   const hello = gatewayHelloForMethods(["chat.history", "progressCard.get", "progressCard.put"]);
   pane.context.gateway.snapshot.hello = hello;
   state.hello = hello;
@@ -112,6 +122,51 @@ describe("retained bare pane progress follows accepted history ownership", () =>
       expectedRevision: 2,
     });
     expect(progress.card).toBeNull();
+  });
+
+  it.each([
+    { raw: "notes", canonical: "agent:research:notes", request: { key: "agent:research:notes" } },
+    { raw: "unknown", canonical: "unknown", request: { key: "unknown", agentId: "research" } },
+  ])("binds Swarm parent reads to accepted $raw history", async (target) => {
+    const session: GatewaySessionRow = {
+      ...expectDefined(history.sessionInfo, "accepted history session"),
+      key: target.canonical,
+      agentId: "research",
+      kind: "direct",
+    };
+    const request = vi.fn(async (method: string) =>
+      method === "chat.history"
+        ? { ...history, sessionInfo: session }
+        : method === "sessions.describe"
+          ? { session }
+          : { card: null },
+    );
+    const sessions = createSessionCapabilityFixture({
+      canonicalListRevision: 1,
+      list: vi.fn(async () => createSessionsListResult({ omitSessionFromList: true })),
+    });
+    const { pane, state } = createHistoryProgressPane(request, sessions);
+    pane.sessionKey = target.raw;
+    state.sessionKey = target.raw;
+    state.settings = {
+      ...state.settings,
+      sessionKey: target.raw,
+      lastActiveSessionKey: target.raw,
+    };
+    const swarmPane = pane as TestChatPane & {
+      refreshSwarmRoster: () => void;
+      swarmHydrator?: { dispose: () => void; rows: GatewaySessionRow[] };
+    };
+    onTestFinished(() => swarmPane.swarmHydrator?.dispose());
+    swarmPane.refreshSwarmRoster();
+    expect(request).not.toHaveBeenCalled();
+    await loadChatHistory(state, { deferBranches: true });
+    swarmPane.refreshSwarmRoster();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("sessions.describe", target.request),
+    );
+    await vi.waitFor(() => expect(swarmPane.swarmHydrator?.rows).toContainEqual(session));
+    expect(state.sessionKey).toBe(target.raw);
   });
 
   it.each([

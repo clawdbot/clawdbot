@@ -216,6 +216,11 @@ including build outputs, fast-forwards `main` (or rebases a local server branch
 onto `origin/main`), installs dependencies with a frozen lockfile, builds clean,
 and restarts the gateway only after the build succeeds.
 
+Like `openclaw update`, the script builds runtime JavaScript, plugin assets, and
+the Control UI without generating TypeScript declarations by default. Set
+`OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` when invoking the script if this checkout
+also needs fresh declarations for plugin development.
+
 This reference script requires **Corepack** and creates temporary shims without
 global activation before fetching. After fetching, it freezes the target commit
 and checks that its exact pnpm pin can run through those shims in a private probe
