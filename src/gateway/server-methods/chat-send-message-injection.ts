@@ -40,7 +40,7 @@ export function createChatSendMessageInjectionStarter(params: {
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
-  documentContext?: InboundDocumentContext;
+  documentContext?: ({ status: "rendered" } & InboundDocumentContext) | { status: "failed" };
   userTurnTranscriptRecorder: NonNullable<
     ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
   >;
@@ -59,14 +59,16 @@ export function createChatSendMessageInjectionStarter(params: {
       inlineMode: p.queueMode,
     });
     const baseText = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
-    const documentContext = params.documentContext?.text.trim();
+    const rendered =
+      params.documentContext?.status === "rendered" ? params.documentContext : undefined;
+    const documentContext = rendered?.text.trim();
     let text = baseText;
-    if (documentContext) {
+    if (documentContext || params.documentContext?.status === "failed") {
       text = [buildInboundMediaNoteProjection(ctx).text, baseText.trim(), documentContext]
         .filter(Boolean)
         .join("\n\n");
     }
-    const documentImages = params.documentContext?.images ?? [];
+    const documentImages = rendered?.images ?? [];
     const injectionImages: ChatImageContent[] | undefined =
       documentImages.length > 0
         ? [

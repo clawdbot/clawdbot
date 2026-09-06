@@ -1,9 +1,12 @@
 /** Covers steer finalize audit honesty: aborted unconfirmed commits must not audit as completed. */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import {
   beginReplyMessageInjectionTarget,
+  createReplyOperation,
   finalizeReplyMessageInjectionAttempt,
+  replyRunRegistry,
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
@@ -12,8 +15,9 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
-import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import {
@@ -25,10 +29,15 @@ import type { GatewayRequestContext } from "./types.js";
 vi.mock("../../auto-reply/reply/dispatch-from-config.audit.js", () => ({
   emitInboundMessageAuditTerminal: vi.fn(),
 }));
-vi.mock("../../auto-reply/reply/reply-run-registry.js", () => ({
-  beginReplyMessageInjectionTarget: vi.fn(),
-  finalizeReplyMessageInjectionAttempt: vi.fn(),
-}));
+vi.mock(import("../../auto-reply/reply/reply-run-registry.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    beginReplyMessageInjectionTarget: vi.fn<typeof actual.beginReplyMessageInjectionTarget>(),
+    finalizeReplyMessageInjectionAttempt:
+      vi.fn<typeof actual.finalizeReplyMessageInjectionAttempt>(),
+  };
+});
 vi.mock("../../auto-reply/reply/message-received-hooks.js", () => ({
   emitMessageReceivedHooks: vi.fn(),
 }));
@@ -157,32 +166,67 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
 });
 
 describe("createChatSendMessageInjectionStarter", () => {
+  beforeEach(() => {
+    vi.mocked(beginReplyMessageInjectionTarget).mockImplementation((target) => ({
+      targetRunId: target.runId,
+      acceptance: Promise.resolve(true),
+      outcome: Promise.resolve({ status: "accepted" }),
+    }));
+  });
+
   function makeStarterParams(params?: {
     body?: string;
     rawMessage?: string;
     media?: RuntimeMsgContext["media"];
-    documentContext?: InboundDocumentContext;
+    documentContext?: Parameters<
+      typeof createChatSendMessageInjectionStarter
+    >[0]["documentContext"];
     replyOptionImages?: ChatImageContent[];
     isInternalTextSlashCommandTurn?: boolean;
-  }) {
+  }): Parameters<typeof createChatSendMessageInjectionStarter>[0] {
+    const sessionKey = "agent:main:steer-test";
+    const sessionId = "steer-test-session";
+    const rawMessage = params?.rawMessage ?? params?.body ?? "raw steer";
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    onTestFinished(() => operation.complete());
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "active-run",
+      supportsQueueMessageImages: true,
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn(async () => {}),
+      },
+    });
+    const target = expectDefined(replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey));
+
     return {
-      target: {} as ReplyMessageInjectionTarget,
+      target,
       request: {
-        p: {},
-        rawMessage: params?.rawMessage ?? "raw steer",
+        p: { sessionKey, message: rawMessage, idempotencyKey: "steer-input" },
+        rawMessage,
         supportsTaskSuggestions: false,
       },
       session: { cfg: {}, entry: undefined },
       turn: {
+        discardUnreferencedMedia: async () => {},
+        accountId: undefined,
         ctx: { Provider: "dashboard", Body: params?.body, media: params?.media },
         isInternalTextSlashCommandTurn: params?.isInternalTextSlashCommandTurn ?? false,
+        queuedFollowupOwnerKey: undefined,
+        pluginBoundMediaPromise: Promise.resolve([]),
         replyOptionImages: params?.replyOptionImages ?? [],
         replyOptionMedia: [],
       },
       imageOrder: [],
-      ...(params?.documentContext ? { documentContext: params.documentContext } : {}),
-      userTurnTranscriptRecorder: vi.fn(),
-    } as unknown as Parameters<typeof createChatSendMessageInjectionStarter>[0];
+      documentContext: params?.documentContext,
+      userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+        input: { text: params?.body ?? rawMessage, media: params?.media },
+        target: createTestUserTurnTranscriptTarget({ sessionKey, sessionId }),
+      }),
+    };
   }
 
   it.each([
@@ -199,7 +243,6 @@ describe("createChatSendMessageInjectionStarter", () => {
         '[media attached: media://inbound/note.txt (text/plain) "note.txt"]\n\n<file name="note.txt" mime="text/plain">doc body</file>',
     },
   ])("retains marker and document text for a $label steer", ({ caption, expectedText }) => {
-    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
     const documentText = '<file name="note.txt" mime="text/plain">doc body</file>';
     const params = makeStarterParams({
       body: caption,
@@ -212,7 +255,7 @@ describe("createChatSendMessageInjectionStarter", () => {
           fileName: "note.txt",
         },
       ],
-      documentContext: { text: documentText, images: [] },
+      documentContext: { status: "rendered", text: documentText, images: [] },
     });
     const durableContext = structuredClone(params.turn.ctx);
 
@@ -227,8 +270,25 @@ describe("createChatSendMessageInjectionStarter", () => {
     expect(params.turn.ctx).toEqual(durableContext);
   });
 
+  it("keeps the attachment note when document rendering fails", () => {
+    const params = makeStarterParams({
+      body: "read the attachment",
+      media: [{ path: "media://inbound/note.txt", contentType: "text/plain" }],
+      documentContext: { status: "failed" },
+    });
+    const originalContext = structuredClone(params.turn.ctx);
+
+    createChatSendMessageInjectionStarter(params)();
+
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
+      params.target,
+      "[media attached: media://inbound/note.txt (text/plain)]\n\nread the attachment",
+      expect.objectContaining({ isInboundUserMessage: true }),
+    );
+    expect(params.turn.ctx).toEqual(originalContext);
+  });
+
   it("keeps the base text untouched when no document context was rendered", () => {
-    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
     createChatSendMessageInjectionStarter(makeStarterParams({ body: "plain steer" }))();
 
     expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
@@ -239,7 +299,6 @@ describe("createChatSendMessageInjectionStarter", () => {
   });
 
   it("merges extracted page images after the prepared inbound images", () => {
-    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
     const params = makeStarterParams({
       body: "see attached",
       media: [
@@ -254,6 +313,7 @@ describe("createChatSendMessageInjectionStarter", () => {
         { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
       ],
       documentContext: {
+        status: "rendered",
         text: "[PDF content rendered to images]",
         images: [
           { type: "image", data: "page-1", mimeType: "image/png", attachmentIndex: 1 },
@@ -283,11 +343,11 @@ describe("createChatSendMessageInjectionStarter", () => {
   });
 
   it("injects extracted page images when the steer carries no inbound images", () => {
-    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
     createChatSendMessageInjectionStarter(
       makeStarterParams({
         body: "scan attached",
         documentContext: {
+          status: "rendered",
           text: "[PDF content rendered to images]",
           images: [{ type: "image", data: "page-1", mimeType: "image/png", attachmentIndex: 0 }],
         },

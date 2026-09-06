@@ -402,16 +402,20 @@ async function handleChatSendWithOptions(
       messageInjectionTarget && !isInternalTextSlashCommandTurn && ctx.media?.length
         ? await mediaDocumentContextLoader
             .load()
-            .then((runtime) =>
-              runtime.renderInboundDocumentContext({ ctx, cfg: preparedSession.value.cfg }),
-            )
+            .then(async (runtime) => ({
+              status: "rendered" as const,
+              ...(await runtime.renderInboundDocumentContext({
+                ctx,
+                cfg: preparedSession.value.cfg,
+              })),
+            }))
             .catch((err: unknown) => {
               // A poisoned lazy import must not be served to later steers.
               mediaDocumentContextLoader.clear();
               logVerbose(
                 `steer document render failed, injecting raw content: ${formatErrorMessage(err)}`,
               );
-              return undefined;
+              return { status: "failed" as const };
             })
         : undefined;
     if (activeRunAbort.controller.signal.aborted) {
