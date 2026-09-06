@@ -13,14 +13,18 @@ import {
 } from "./kysely-sync.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { ensureUpdateRunLedgerSchema } from "./update-run-ledger.js";
+import { appendUpdateRecoveryAfterImage } from "./update-run-recovery-after-image.js";
 import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 import {
   UpdateRecoveryRecordSchema,
+  decodeUpdateRecovery,
+  encodeUpdateRecovery,
   UpdateRecoveryConflictError,
   UpdateRecoveryRequiredError,
   parseUpdateRecoveryCheckpoint,
   sealUpdateRecoveryPublication,
   UpdateRecoveryRestoreProgressSchema,
+  type UpdateRecoveryAfterImage,
   type UpdateRecoveryRestoreProgress,
   type UpdateRecoveryEffect,
   type UpdateRecoveryRecord,
@@ -36,11 +40,11 @@ export {
 } from "./update-run-recovery-schema.js";
 export type {
   UpdateRecoveryRecord,
+  UpdateRecoveryAfterImage,
   UpdateRecoveryEffect,
   UpdateRecoveryRestoreProgress,
 } from "./update-run-recovery-schema.js";
 type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
-const MAX_RECOVERY_BYTES = 1024 * 1024;
 
 /** Current executor-held exclusion, never deserialized. CAS does not authorize effects. */
 export type UpdateRecoveryFence = { assertCurrent: () => void };
@@ -52,23 +56,6 @@ export type UpdateRecoveryRevision = Pick<
 /** Correlation only. The receiving runtime must independently reacquire authority. */
 export type UpdateRecoveryHandoff = UpdateRecoveryRevision & { handoffId: string };
 
-function decodeRecovery(raw: string, runId: string): UpdateRecoveryRecord {
-  if (Buffer.byteLength(raw) > MAX_RECOVERY_BYTES) {
-    throw new Error("Update recovery record exceeds its storage limit");
-  }
-  const record = UpdateRecoveryRecordSchema.parse(JSON.parse(raw));
-  if (record.runId !== runId) {
-    throw new Error("Update recovery record does not match its history run");
-  }
-  return record;
-}
-function encodeRecovery(record: UpdateRecoveryRecord): string {
-  const raw = JSON.stringify(UpdateRecoveryRecordSchema.parse(record));
-  if (Buffer.byteLength(raw) > MAX_RECOVERY_BYTES) {
-    throw new Error("Update recovery record exceeds its storage limit");
-  }
-  return raw;
-}
 function readRecoveries(db: DatabaseSync): UpdateRecoveryRecord[] {
   if (!tableExists(db, "config_machine_state")) {
     return [];
@@ -82,7 +69,7 @@ function readRecoveries(db: DatabaseSync): UpdateRecoveryRecord[] {
       .where("state_key", "<", UPDATE_RECOVERY_KEY_END)
       .orderBy("state_key", "asc"),
   ).rows.map((row) =>
-    decodeRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
+    decodeUpdateRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
   );
 }
 /** Must run before general database open, admission writes, or runtime migration. */
@@ -140,7 +127,7 @@ function requireRevision(
   if (!row?.value_json) {
     throw new UpdateRecoveryConflictError();
   }
-  const record = decodeRecovery(row.value_json, expected.runId);
+  const record = decodeUpdateRecovery(row.value_json, expected.runId);
   if (
     record.transactionId !== expected.transactionId ||
     record.revision !== expected.revision ||
@@ -171,7 +158,7 @@ function mutateRecovery(
         db,
         getNodeSqliteKysely<RecoveryDatabase>(db)
           .updateTable("config_machine_state")
-          .set({ value_json: encodeRecovery(record), updated_at_ms: record.updatedAtMs })
+          .set({ value_json: encodeUpdateRecovery(record), updated_at_ms: record.updatedAtMs })
           .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + record.runId)
           .where("value_json", "=", raw),
       );
@@ -223,7 +210,7 @@ export function beginUpdateRecovery(
         verification: null,
         primaryFailure: null,
       };
-      const raw = encodeRecovery(record);
+      const raw = encodeUpdateRecovery(record);
       executeSqliteQuerySync(
         db,
         getNodeSqliteKysely<RecoveryDatabase>(db)
@@ -234,7 +221,7 @@ export function beginUpdateRecovery(
             updated_at_ms: now,
           }),
       );
-      return decodeRecovery(raw, input.runId);
+      return decodeUpdateRecovery(raw, input.runId);
     },
     options,
   );
@@ -257,6 +244,27 @@ export function bindUpdateRecoveryCheckpoint(
     (record) => {
       record.checkpoint = parseUpdateRecoveryCheckpoint(record, checkpoint);
     },
+    options,
+  );
+}
+
+/**
+ * Persist owner-reopened after-image facts before releasing the mutation interval
+ * or starting another effect. The caller must await checkpoint capture/reopen
+ * with writer-retained outputs, then revalidate live exclusion. A late snapshot,
+ * matching IDs, or this record cannot establish mutation provenance/authority.
+ * Replay reopens each retained artifact again. No artifact cleanup occurs here.
+ */
+export function bindUpdateRecoveryAfterImage(
+  expected: UpdateRecoveryRevision,
+  input: Omit<UpdateRecoveryAfterImage, "boundAtRevision">,
+  fence: UpdateRecoveryFence,
+  options: OpenClawStateDatabaseOptions = {},
+): UpdateRecoveryRecord {
+  return mutateRecovery(
+    expected,
+    fence,
+    (record) => appendUpdateRecoveryAfterImage(record, input),
     options,
   );
 }
@@ -566,7 +574,7 @@ function assertExactRecovery(db: DatabaseSync, expected: UpdateRecoveryRecord): 
       .select("updated_at_ms")
       .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + expected.runId),
   );
-  if (raw !== encodeRecovery(expected) || row?.updated_at_ms !== expected.updatedAtMs) {
+  if (raw !== encodeUpdateRecovery(expected) || row?.updated_at_ms !== expected.updatedAtMs) {
     throw new UpdateRecoveryConflictError();
   }
 }
@@ -663,7 +671,7 @@ export function prepareUpdateRecoveryCarryForward(params: {
   record.revision++;
   record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
   sealUpdateRecoveryPublication(record);
-  const raw = encodeRecovery(record);
+  const raw = encodeUpdateRecovery(record);
   let sourceBinding: UpdateRecoveryDatabaseBinding;
   let stagedBinding: UpdateRecoveryDatabaseBinding;
   sourceDb.exec("BEGIN IMMEDIATE"); // sqlite-allow-raw -- Fenced snapshot/copy primitive.
@@ -723,7 +731,7 @@ export function prepareUpdateRecoveryCarryForward(params: {
     );
     for (const row of recoveries) {
       // Decode all carried operational rows; corrupt facts must not be published.
-      decodeRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length));
+      decodeUpdateRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length));
       executeSqliteQuerySync(
         stagedDb,
         stage
@@ -761,5 +769,5 @@ export function prepareUpdateRecoveryCarryForward(params: {
     }
     throw error;
   }
-  return { record: decodeRecovery(raw, record.runId), sourceBinding, stagedBinding };
+  return { record: decodeUpdateRecovery(raw, record.runId), sourceBinding, stagedBinding };
 }

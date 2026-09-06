@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { UpdateServingReceiptSchema } from "./update-serving-verification-receipt.js";
 
@@ -49,12 +50,13 @@ export type UpdateRecoveryRestoreProgress = z.infer<typeof UpdateRecoveryRestore
 /** Exact storage projection of the checkpoint owner's ref and manifest binding.
  * Artifact verification stays with reopenUpdateCheckpoint; these facts grant no authority.
  */
+const checkpointRef = z.strictObject({
+  checkpointId: z.uuid(),
+  manifestPath: absolutePath,
+  manifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
 const checkpoint = z.strictObject({
-  ref: z.strictObject({
-    checkpointId: z.uuid(),
-    manifestPath: absolutePath,
-    manifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  }),
+  ref: checkpointRef,
   binding: z.strictObject({
     runId: z.uuid(),
     stateDir: absolutePath,
@@ -63,46 +65,101 @@ const checkpoint = z.strictObject({
   }),
 });
 
-/** Private operational state, never passed through the redacted history codec. */
-export const UpdateRecoveryRecordSchema = z.strictObject({
-  runId: z.uuid(),
-  transactionId: z.uuid(),
-  revision: counter,
-  claimId: z.uuid(),
-  claimKind: z.enum(["initial", "recovery", "handoff"]),
-  handoff: z
-    .strictObject({
-      handoffId: z.uuid(),
-      state: z.enum(["prepared", "accepted"]),
-    })
-    .nullable(),
-  // Captured at admission, before config/service mutation. Missing legacy facts
-  // cannot be inferred from a later checkpoint reference.
-  source: z.strictObject({ stateDir: absolutePath, configPath: absolutePath }).optional(),
-  from: runtime,
-  to: runtime,
-  createdAtMs: counter,
-  updatedAtMs: counter,
-  effects: z.array(UpdateRecoveryEffectSchema).max(4096),
-  checkpoint: checkpoint.optional(),
-  restore: UpdateRecoveryRestoreProgressSchema.nullable().default(null),
-  // Sealed in BOTH copies before publication; later live-only writes preserve it.
-  // Hash of the canonical publication row except this self-referential field.
-  publication: z
-    .strictObject({
-      revision: counter,
-      sha256: z.string().regex(/^[a-f0-9]{64}$/u),
-    })
-    .optional(),
-  verification: z
-    .strictObject({
-      runtime: z.enum(["candidate", "previous"]),
-      effectId: z.uuid(),
-      receipt: UpdateServingReceiptSchema,
-    })
-    .nullable(),
-  primaryFailure: z.strictObject({ code: exactText, effectId: z.uuid().nullable() }).nullable(),
+const afterImage = z.strictObject({
+  checkpointRef,
+  afterUpdate: checkpoint,
+  effectIds: z.array(z.uuid()).min(1).max(4096),
+  boundAtRevision: counter,
 });
+export type UpdateRecoveryAfterImage = z.infer<typeof afterImage>;
+
+/** Private operational state, never passed through the redacted history codec. */
+export const UpdateRecoveryRecordSchema = z
+  .strictObject({
+    runId: z.uuid(),
+    transactionId: z.uuid(),
+    revision: counter,
+    claimId: z.uuid(),
+    claimKind: z.enum(["initial", "recovery", "handoff"]),
+    handoff: z
+      .strictObject({
+        handoffId: z.uuid(),
+        state: z.enum(["prepared", "accepted"]),
+      })
+      .nullable(),
+    // Captured at admission, before config/service mutation. Missing legacy facts
+    // cannot be inferred from a later checkpoint reference.
+    source: z.strictObject({ stateDir: absolutePath, configPath: absolutePath }).optional(),
+    from: runtime,
+    to: runtime,
+    createdAtMs: counter,
+    updatedAtMs: counter,
+    effects: z.array(UpdateRecoveryEffectSchema).max(4096),
+    checkpoint: checkpoint.optional(),
+    // Append-only owner-reopened after-images. No defaults: preserve existing
+    // publication commitments for records written before this facility existed.
+    afterImages: z.array(afterImage).max(4096).optional(),
+    restore: UpdateRecoveryRestoreProgressSchema.nullable().default(null),
+    // Sealed in BOTH copies before publication; later live-only writes preserve it.
+    // Hash of the canonical publication row except this self-referential field.
+    publication: z
+      .strictObject({
+        revision: counter,
+        sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+      })
+      .optional(),
+    verification: z
+      .strictObject({
+        runtime: z.enum(["candidate", "previous"]),
+        effectId: z.uuid(),
+        receipt: UpdateServingReceiptSchema,
+      })
+      .nullable(),
+    primaryFailure: z.strictObject({ code: exactText, effectId: z.uuid().nullable() }).nullable(),
+  })
+  .superRefine((record, ctx) => {
+    let cursor = 0;
+    let revision = -1;
+    const refs = record.checkpoint ? [record.checkpoint.ref] : [];
+    for (const [index, image] of (record.afterImages ?? []).entries()) {
+      const effects = record.effects.slice(cursor, cursor + image.effectIds.length);
+      if (
+        !record.checkpoint ||
+        !isDeepStrictEqual(image.checkpointRef, record.checkpoint.ref) ||
+        !isDeepStrictEqual(image.afterUpdate.binding, record.checkpoint.binding) ||
+        image.boundAtRevision <= revision ||
+        image.boundAtRevision > record.revision ||
+        !isDeepStrictEqual(
+          image.effectIds,
+          effects.map((effect) => effect.effectId),
+        ) ||
+        effects.some(
+          (effect) =>
+            effect.state !== "observed" ||
+            effect.runtime !== "candidate" ||
+            effect.kind === "checkpoint-restore" ||
+            effect.kind === "package-restore" ||
+            effect.kind === "retirement",
+        ) ||
+        refs.some(
+          (ref) =>
+            ref.checkpointId === image.afterUpdate.ref.checkpointId ||
+            ref.manifestPath === image.afterUpdate.ref.manifestPath ||
+            ref.manifestSha256 === image.afterUpdate.ref.manifestSha256,
+        )
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["afterImages", index],
+          message:
+            "After-image must bind a distinct checkpoint to the exact completed mutation interval",
+        });
+      }
+      cursor += image.effectIds.length;
+      revision = image.boundAtRevision;
+      refs.push(image.afterUpdate.ref);
+    }
+  });
 export type UpdateRecoveryRecord = z.infer<typeof UpdateRecoveryRecordSchema>;
 export type UpdateRecoveryEffect = z.infer<typeof UpdateRecoveryEffectSchema>;
 
@@ -188,4 +245,24 @@ export function assertUpdateRecoveryPublicationRecord(
   ) {
     throw new UpdateRecoveryConflictError();
   }
+}
+
+const MAX_RECOVERY_BYTES = 1024 * 1024;
+
+export function decodeUpdateRecovery(raw: string, runId: string): UpdateRecoveryRecord {
+  if (Buffer.byteLength(raw) > MAX_RECOVERY_BYTES) {
+    throw new Error("Update recovery record exceeds its storage limit");
+  }
+  const record = UpdateRecoveryRecordSchema.parse(JSON.parse(raw));
+  if (record.runId !== runId) {
+    throw new Error("Update recovery record does not match its history run");
+  }
+  return record;
+}
+export function encodeUpdateRecovery(record: UpdateRecoveryRecord): string {
+  const raw = JSON.stringify(UpdateRecoveryRecordSchema.parse(record));
+  if (Buffer.byteLength(raw) > MAX_RECOVERY_BYTES) {
+    throw new Error("Update recovery record exceeds its storage limit");
+  }
+  return raw;
 }
