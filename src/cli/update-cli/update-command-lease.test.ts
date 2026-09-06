@@ -133,6 +133,7 @@ async function invoke(lane: Lane): Promise<void> {
     });
   }
   await finishUpdate({
+    mutationStarted: true,
     result: {
       status: "ok",
       mode: "npm",

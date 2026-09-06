@@ -1,3 +1,4 @@
+import type { PluginUpdateOutcome } from "../plugins/update.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import type { UpdateChannel } from "./update-channels.js";
@@ -42,6 +43,8 @@ export type UpdateRunResult = {
   recovery?: UpdateRecovery;
   postUpdate?: {
     plugins?: {
+      /** A declined or unavailable capability acknowledgment must stay operator-owned. */
+      capabilityConsentRequired?: true;
       status: "ok" | "warning" | "skipped" | "error";
       reason?: string;
       changed: boolean;
@@ -60,21 +63,7 @@ export type UpdateRunResult = {
       };
       npm: {
         changed: boolean;
-        outcomes: Array<{
-          pluginId: string;
-          status: "updated" | "unchanged" | "skipped" | "error";
-          message: string;
-          currentVersion?: string;
-          nextVersion?: string;
-          channelFallback?: {
-            requestedSpec: string;
-            usedSpec: string;
-            requestedLabel: string;
-            usedLabel: string;
-            reason: "unavailable" | "failed";
-            message: string;
-          };
-        }>;
+        outcomes: PluginUpdateOutcome[];
       };
       integrityDrifts: Array<{
         pluginId: string;

@@ -1,4 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -36,6 +37,7 @@ import {
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   UpdateCommandFailure,
+  resolveAutomaticUpdateTriage,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
@@ -62,6 +64,8 @@ const CLI_NAME = resolveCliName();
 
 export type FinishUpdateParams = UpdateRestartParams & {
   failure?: { cause: unknown; detail: string };
+  mutationStarted: boolean;
+  expectedVersion?: string;
   previousInstallRoot?: string;
   installKindChanged: boolean;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -83,6 +87,20 @@ export type FinishUpdateParams = UpdateRestartParams & {
 };
 
 export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRunResult> {
+  let gateway: TriageFailureContext["gateway"] = "preserve";
+  let triageAllowed = true;
+  const createFailure = (
+    result: UpdateRunResult,
+    exitCode = 1,
+    detail?: string,
+    options?: ErrorOptions,
+  ) =>
+    new UpdateCommandFailure(result, exitCode, detail, {
+      ...options,
+      automaticTriage: triageAllowed
+        ? resolveAutomaticUpdateTriage(result, detail, { ...params, gateway })
+        : undefined,
+    });
   let rollbackAttempted = false;
   let postVerificationRepairAttempted = false;
   let rollbackStopState: PreManagedServiceStop | undefined;
@@ -340,6 +358,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       });
       if (service) {
         finalResult.recovery = { ...finalResult.recovery, service };
+        if (service === "healthy" && params.shouldRestart) {
+          gateway = "verify-running";
+        }
         if (service === "failed") {
           finalResult.status = "error";
           try {
@@ -379,7 +400,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
             cause: restoreFailure.cause,
           })
         : restoreFailure.cause;
-      throw new UpdateCommandFailure(
+      throw createFailure(
         reportedResult,
         resolveManagedServiceUpdateFailureExitCode(reportedResult),
         detail,
@@ -414,7 +435,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         { ...params.result, status: "error" },
         params.result.recovery?.serviceRestartSafe === true,
       );
-      throw new UpdateCommandFailure(
+      throw createFailure(
         reported,
         resolveManagedServiceUpdateFailureExitCode(reported),
         params.failure?.detail,
@@ -427,7 +448,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         params.result,
         params.result.recovery?.serviceRestartSafe === true,
       );
-      throw new UpdateCommandFailure(
+      throw createFailure(
         reported,
         classifyUpdateOutcome(reported) === "failed"
           ? resolveManagedServiceUpdateFailureExitCode(reported)
@@ -439,8 +460,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
       const convergence = await convergeUpdatePlugins({ ...params, beforeDoctor });
       if (convergence.resultWithPostUpdate.status === "error") {
+        triageAllowed = !convergence.cancelled;
         const reported = await reportResult(convergence.resultWithPostUpdate);
-        throw new UpdateCommandFailure(
+        throw createFailure(
           reported,
           resolveManagedServiceUpdateFailureExitCode(reported),
           convergence.detail,
@@ -482,12 +504,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         status: "error",
         reason: "service-revalidation-failed",
       });
-      throw new UpdateCommandFailure(
-        reported,
-        resolveManagedServiceUpdateFailureExitCode(reported),
-        message,
-        { cause: error },
-      );
+      throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
+        cause: error,
+      });
     }
     let { restartScriptPath, refreshGatewayServiceEnv, gatewayServiceEnv, serviceUpdateVerdict } =
       restartContext;
@@ -535,6 +554,16 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       if (restarted === "ok") {
         return;
       }
+      triageAllowed = serviceMutationAllowed;
+      if (
+        restarted === "restart-health-failed" &&
+        params.shouldRestart &&
+        serviceMutationAllowed &&
+        (params.preManagedServiceStop?.running !== false || params.preManagedServiceStop.stopped) &&
+        !skipLegacyServiceRestart
+      ) {
+        gateway = "verify-running";
+      }
       const failure: UpdateRunResult = {
         ...resultWithPostUpdate,
         status: "error",
@@ -579,10 +608,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           jsonMode: Boolean(params.opts.json),
         });
         const reported = await reportResult(recovered.result, false, undefined, false);
-        throw new UpdateCommandFailure(
-          reported,
-          resolveManagedServiceUpdateFailureExitCode(reported),
-        );
+        throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
       }
     };
     await restart();
@@ -685,7 +711,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           undefined,
           false,
         );
-        throw new UpdateCommandFailure(reported, 1, retirement.error);
+        throw createFailure(reported, 1, retirement.error);
       }
     }
 
@@ -712,11 +738,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         },
       ],
     });
-    throw new UpdateCommandFailure(
-      reported,
-      resolveManagedServiceUpdateFailureExitCode(reported),
-      message,
-      { cause: error },
-    );
+    throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
+      cause: error,
+    });
   }
 }

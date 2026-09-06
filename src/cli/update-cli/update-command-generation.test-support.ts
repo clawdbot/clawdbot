@@ -176,6 +176,7 @@ export function registerGenerationRecoveryTests(
       };
       let completedStatus: string | undefined;
       const error = await finishUpdate({
+        mutationStarted: true,
         result,
         root,
         configSnapshot,

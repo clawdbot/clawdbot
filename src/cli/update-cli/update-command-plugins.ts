@@ -157,7 +157,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
 
   const warnings: PostUpdatePluginWarning[] = [];
-  const capabilityConsent = params.onCapabilityConsent
+  const configuredConsent = params.onCapabilityConsent
     ? { onCapabilityConsent: params.onCapabilityConsent }
     : resolvePluginCapabilityConsentCliOptions({
         acceptCapabilities: params.acceptCapabilities,
@@ -165,6 +165,14 @@ export async function updatePluginsAfterCoreUpdate(params: {
         allowPrompt: !params.json,
         runtime,
       });
+  let capabilityConsentRequired = false;
+  const capabilityConsent: ReturnType<typeof resolvePluginCapabilityConsentCliOptions> = {
+    onCapabilityConsent: async (review) => {
+      const acknowledgment = await configuredConsent.onCapabilityConsent?.(review);
+      capabilityConsentRequired ||= !acknowledgment;
+      return acknowledgment;
+    },
+  };
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
   const coreVersion = await readPackageVersion(params.root);
@@ -356,6 +364,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
         : "ok";
   const result: PostCorePluginUpdateResult = {
     status,
+    ...(capabilityConsentRequired ? { capabilityConsentRequired: true as const } : {}),
     changed: pluginsChanged,
     warnings,
     sync: {
