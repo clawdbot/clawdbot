@@ -37,7 +37,7 @@ struct GatewayStatusBuilderTests {
     }
 
     @Test func `chat gateway status labels match display state`() {
-        #expect(ChatProTab.gatewayStatusTitle(state: .disconnected, isGatewayUsable: false) == "Offline")
+        #expect(ChatProTab.gatewayStatusTitle(state: .disconnected, isGatewayUsable: false) == "Disconnected")
         #expect(ChatProTab.gatewayStatusTitle(state: .connecting, isGatewayUsable: false) == "Connecting")
         #expect(ChatProTab.gatewayStatusTitle(state: .error, isGatewayUsable: false) == "Attention")
         #expect(ChatProTab.gatewayStatusTitle(state: .connected, isGatewayUsable: true) == "Connected")
@@ -99,6 +99,23 @@ struct GatewayStatusBuilderTests {
             isAttachmentOwnerPinned: false,
             capturedOwnerID: "gateway-a",
             currentOwnerID: "gateway-b") == .connected)
+    }
+
+    @Test func `chat toolbar and banner share one disconnected status title`() {
+        #expect(ChatProTab.reservedGatewayStatusTitle == "Disconnected")
+        #expect(ChatProTab.gatewayStatusTitle(state: .disconnected, isGatewayUsable: false)
+            == ChatProTab.reservedGatewayStatusTitle)
+        #expect(ChatProTab.gatewayStatusTitle(state: .connecting, isGatewayUsable: false) != "Disconnected")
+        #expect(ChatProTab.reservedGatewayStatusTitle.count
+            >= ChatProTab.gatewayStatusTitle(state: .connecting, isGatewayUsable: false).count)
+    }
+
+    @Test func `chat host connection status follows the gateway display state`() {
+        #expect(ChatProTab.chatHostConnectionStatus(state: .connecting, isGatewayUsable: false) == .connecting)
+        #expect(ChatProTab.chatHostConnectionStatus(state: .disconnected, isGatewayUsable: false) == .disconnected)
+        #expect(ChatProTab.chatHostConnectionStatus(state: .connected, isGatewayUsable: true) == .connected)
+        #expect(ChatProTab.chatHostConnectionStatus(state: .connected, isGatewayUsable: false) == .error)
+        #expect(ChatProTab.chatHostConnectionStatus(state: .error, isGatewayUsable: false) == .error)
     }
 
     @Test func `chat starter prompts stay stable and actionable`() {
