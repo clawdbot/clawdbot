@@ -181,7 +181,7 @@ describe("verified package rollback", () => {
       });
       const nextAction = resolveUpdateResultNextAction({
         result: outcome.result,
-        managedGatewayStopped: !reachable,
+        serviceRunning: reachable,
         env,
       });
       expect(renderUpdateRunReport(row, { nextAction }).markdown).toContain(
@@ -302,6 +302,20 @@ describe("verified package rollback", () => {
   );
   it.each([
     { change: "none", previousVerified: true, restored: true, service: "stopped" },
+    { change: "new-agent", previousVerified: true, restored: true, service: "stopped" },
+    { change: "new-agent-foreign", previousVerified: true, restored: false, service: "stopped" },
+    {
+      change: "new-agent-previous-incompatible",
+      previousVerified: true,
+      restored: false,
+      service: "stopped",
+    },
+    {
+      change: "new-agent-previous-unknown",
+      previousVerified: true,
+      restored: false,
+      service: "stopped",
+    },
     { change: "identity-read-failed", previousVerified: true, restored: true, service: "stopped" },
     { change: "shared", previousVerified: true, restored: false, service: "stopped" },
     { change: "agent", previousVerified: true, restored: false, service: "stopped" },
@@ -319,8 +333,13 @@ describe("verified package rollback", () => {
       const shared = path.join(stateDir, "state/openclaw.sqlite");
       const agent = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
       setVersion(shared, 7);
-      setVersion(agent, 3);
+      if (!change.startsWith("new-agent")) {
+        setVersion(agent, 3);
+      }
       const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+      if (change.startsWith("new-agent")) {
+        setVersion(agent, change === "new-agent-foreign" ? 4 : 3);
+      }
       if (change === "shared") {
         setVersion(shared, 8);
       }
@@ -361,6 +380,14 @@ describe("verified package rollback", () => {
         previousRoot,
         nodeRunner: process.execPath,
         schemaVersions,
+        candidateSchemaVersions: { state: 7, agent: 3 },
+        previousSchemaVersions:
+          change === "new-agent-previous-unknown"
+            ? undefined
+            : {
+                state: 7,
+                agent: change === "new-agent-previous-incompatible" ? 2 : 3,
+              },
         previousVerified,
         packageTransaction: { backupRoot: "/backup", rollback, complete: vi.fn() },
         config,
@@ -386,7 +413,7 @@ describe("verified package rollback", () => {
       });
       expect(outcome.rolledBack).toBe(restored);
       expect(rollback, JSON.stringify(outcome)).toHaveBeenCalledTimes(
-        change === "none" || change === "identity-read-failed" ? 1 : 0,
+        change === "none" || change === "identity-read-failed" || change === "new-agent" ? 1 : 0,
       );
       expect(mocks.restart).toHaveBeenCalledTimes(restored ? 1 : 0);
       if (service !== "stopped") {
@@ -418,7 +445,7 @@ describe("verified package rollback", () => {
         );
       } else {
         expect(outcome.result.reason).toBe(
-          change === "unknown-runtime"
+          change === "unknown-runtime" || change.startsWith("new-agent-previous-")
             ? "rollback-state-unverified"
             : previousVerified
               ? "state-migrated-no-rollback"
@@ -426,6 +453,10 @@ describe("verified package rollback", () => {
         );
         if (!previousVerified) {
           expect(outcome.result).toMatchObject({ root: previousRoot, after: result.before });
+        }
+        if (change.startsWith("new-agent-previous-")) {
+          expect(outcome.result).toMatchObject({ root: candidateRoot, after: result.after });
+          expect(mocks.stop).not.toHaveBeenCalled();
         }
       }
     },

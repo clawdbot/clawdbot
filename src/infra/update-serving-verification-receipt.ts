@@ -51,6 +51,8 @@ export type UpdateServingVerificationResult =
         | "runtime-changed"
         | "aborted"
         | "turn-failed"
+        | "turn-incomplete"
+        | "response-mismatch"
         | "persistence-missing"
         | "persistence-changed";
     }

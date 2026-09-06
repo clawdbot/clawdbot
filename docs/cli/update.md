@@ -479,6 +479,22 @@ artifact version/build. Unavailable inference, timeout, failed turns, or missing
 persistence fail verification and enter the existing repair or rollback flow.
 Health or readiness alone cannot pass verification.
 
+The saved assistant reply may contain punctuation or a short sentence, but must
+include the run-specific verification token as a whole word. The check still
+requires the matching run, transcript lineage, provider/model metadata, and a
+successful stop reason. Reports, chat notices, and `openclaw update status` retain
+the failed check and its next action:
+
+| Reason                | Meaning and next action                                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `response-mismatch`   | The completed turn was saved, but the reply did not contain the token. Run `openclaw triage` to inspect the configured agent. |
+| `turn-incomplete`     | Saved transcript evidence did not prove a complete, valid turn. Run `openclaw triage` to inspect the turn and its lineage.    |
+| `persistence-missing` | No committed request/response pair was found. Run `openclaw triage` to inspect session persistence.                           |
+
+A candidate can be running while verification fails. Recovery guidance uses the
+latest observed service state and names the running version when known; an
+earlier activation stop does not mean the service remains stopped.
+
 Plugin packages download and sync after the core Gateway is serving. When the
 plugin snapshot changes, the updater stops the service for a second measured
 activation window, runs the required full Doctor migration pass under exclusive
@@ -490,14 +506,19 @@ is verified. If activation fails before a working package is confirmed and rollb
 cannot be verified, finalization retains the backup and reports its location. Keep
 that backup and repair the installation before restarting, including for older
 targets without migration continuation. Automatic rollback requires that retained package, its pre-update verification, unchanged
-configuration content, and unchanged shared and affected per-agent SQLite
-`user_version` values. The updater restores the previous generation and verifies
+configuration content, and unchanged pre-existing shared and affected per-agent
+SQLite `user_version` values. A database first created during activation or
+verification is schema-neutral only at the candidate's supported version for its
+database kind; a missing pre-existing database or a new database at a foreign
+version blocks rollback. Newly created databases must also be readable by the
+previous package; unknown or incompatible support refuses rollback with
+`rollback-state-unverified`. The updater restores the previous generation and verifies
 it running before finishing `rolled-back`, preserving the failing check as its
 reason. See [Automatic rollback](/install/updating#automatic-schema-neutral-rollback)
 for the restoration and package-manager guards. A failure alone does not
 authorize restarting the candidate.
 
-If configuration content or a schema version changed, automatic rollback is refused with
+If configuration content changed or the databases are not schema-neutral, automatic rollback is refused with
 `state-migrated-no-rollback`. The updater enters `repairing` on the installed
 candidate, also used if rollback itself fails. If the previous package was
 already restored, repair targets that version. Between repair attempts, the

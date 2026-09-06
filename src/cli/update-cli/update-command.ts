@@ -704,6 +704,8 @@ async function updateCommandInternal(
     invocationCwd,
     packageTransaction: execution.packageTransaction,
     schemaVersions: execution.schemaVersions,
+    candidateSchemaVersions: execution.candidateSchemaVersions,
+    previousSchemaVersions: execution.previousSchemaVersions,
     previousVerified: execution.previousVerified,
   };
   const rollbackBlockedReason = await inspectActivatedUpdateState({
