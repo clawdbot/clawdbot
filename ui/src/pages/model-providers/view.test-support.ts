@@ -11,6 +11,7 @@ export function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderC
     profileProviderIds: {},
     profileOrders: {},
     profileOrderStoredProviders: [],
+    profileOrderExplicitProviders: [],
     profileOrderLocks: {},
     credentialProviderIds: ["openai"],
     logoutTargets: [],

@@ -636,58 +636,68 @@ describe("ModelProvidersPage agent scope", () => {
     expect(toast.querySelector('[role="status"]')).toBeNull();
   });
 
-  it("re-resolves a configured profile order after Reset", async () => {
-    const { context, request } = createHarness("main");
-    const page = appendPage(context);
-    await waitForFast(() => expect(page.data?.config).toEqual({}));
-    const originalRequest = request.getMockImplementation()!;
-    request.mockImplementation(async (method: string, params?: unknown) => {
-      if (method === "models.authStatus") {
-        return {
-          ts: 2,
-          providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "ok",
-              profiles: [
-                { profileId: "openai:one", type: "oauth", status: "ok" },
-                { profileId: "openai:two", type: "oauth", status: "ok" },
-              ],
-              profileOrder: ["openai:two", "openai:one"],
-            },
-          ],
-        };
-      }
-      void params;
-      return originalRequest(method);
-    });
-    page.data = {
-      ...EMPTY_MODEL_PROVIDERS_DATA,
-      config: {},
-      authStatus: await request("models.authStatus"),
-      updatedAt: 1,
-    } as ModelProvidersData;
+  it.each([{ order: undefined }, { order: ["openai:two", "openai:one"] }])(
+    "re-resolves priority after Reset ($order)",
+    async ({ order }) => {
+      const { context, request, snapshot } = createHarness("main");
+      snapshot.hello = {
+        type: "hello-ok",
+        protocol: 3,
+        auth: { role: "operator", scopes: ["operator.admin"] },
+      };
+      const page = appendPage(context);
+      await waitForFast(() => expect(page.data?.config).toEqual({}));
+      const originalRequest = request.getMockImplementation()!;
+      request.mockImplementation(async (method: string, params?: unknown) => {
+        if (method === "models.authStatus") {
+          return {
+            ts: 2,
+            providers: [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                status: "ok",
+                profiles: [
+                  { profileId: "openai:one", type: "oauth", status: "ok" },
+                  { profileId: "openai:two", type: "oauth", status: "ok" },
+                ],
+                profileOrder: order,
+              },
+            ],
+          };
+        }
+        void params;
+        return originalRequest(method);
+      });
+      page.data = {
+        ...EMPTY_MODEL_PROVIDERS_DATA,
+        config: {},
+        authStatus: await request("models.authStatus"),
+        updatedAt: 1,
+      } as ModelProvidersData;
 
-    const initialProvider = page.data.authStatus!.providers[0]!;
-    initialProvider.profileOrder = ["openai:one", "openai:two"];
-    initialProvider.profileOrderStored = true;
+      const initialProvider = page.data.authStatus!.providers[0]!;
+      initialProvider.profileOrder = ["openai:one", "openai:two"];
+      initialProvider.profileOrderStored = true;
 
-    page.profileActions.setOrder("openai", "openai", null);
+      page.profileActions.setOrder("openai", "openai", null);
 
-    await vi.waitFor(() =>
-      expect(page.data?.authStatus?.providers[0]?.profileOrder).toEqual([
-        "openai:two",
-        "openai:one",
-      ]),
-    );
-    expect(request).toHaveBeenCalledWith("models.authOrderSet", {
-      provider: "openai",
-      agentId: "main",
-    });
-    expect(page.data?.authStatus?.providers[0]?.profileOrderStored).not.toBe(true);
-    await vi.waitFor(() => expect(page.profileOrders.openai).toBeUndefined());
-  });
+      await vi.waitFor(() =>
+        expect(page.data?.authStatus?.providers[0]?.profileOrder).toEqual(order),
+      );
+      expect(request).toHaveBeenCalledWith("models.authOrderSet", {
+        provider: "openai",
+        agentId: "main",
+      });
+      expect(page.data?.authStatus?.providers[0]?.profileOrderStored).not.toBe(true);
+      await vi.waitFor(() => expect(page.profileOrders.openai).toBeUndefined());
+      await page.updateComplete;
+      expect(page.querySelectorAll(".model-providers__profile-position")).toHaveLength(
+        order ? 2 : 0,
+      );
+      expect(page.textContent?.includes("Account selection is automatic.")).toBe(!order);
+    },
+  );
 
   it("drains a queued profile order after switching agents during an active save", async () => {
     const { agentSelection, context, notifySelection, request } = createHarness("main");

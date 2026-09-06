@@ -68,6 +68,8 @@ export type ModelProviderCard = {
   profileProviderIds: Record<string, string>;
   /** Explicit priority, or inventory order while selection is automatic, by auth owner. */
   profileOrders: Record<string, string[]>;
+  /** Auth owners with explicit priority, including inherited and configured orders. */
+  profileOrderExplicitProviders: string[];
   /** Auth owners whose stored priority can be reset. */
   profileOrderStoredProviders: string[];
   /** Configuration owner that pins priority for each auth owner. */
@@ -142,6 +144,7 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
       profiles: [],
       profileProviderIds: {},
       profileOrders: {},
+      profileOrderExplicitProviders: [],
       profileOrderStoredProviders: [],
       profileOrderLocks: {},
       credentialProviderIds: [],
@@ -194,6 +197,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   const drafts: CardDraft[] = [];
   const apiKeyCapabilities = new Map<string, boolean>();
   const profileOrdersByAuthProvider = new Map<string, string[]>();
+  const explicitOrderProviders = new Set<string>();
   for (const capability of input.authStatus?.providerCapabilities ?? []) {
     const id = canonicalProviderId(capability.provider);
     if (!id) {
@@ -280,6 +284,9 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       for (const profile of provider.profiles) {
         draft.card.profileProviderIds[profile.profileId] = authProvider;
       }
+      if (provider.profileOrder !== undefined) {
+        explicitOrderProviders.add(authProvider);
+      }
       const order = provider.profileOrder ?? provider.profiles.map((profile) => profile.profileId);
       profileOrdersByAuthProvider.set(authProvider, [
         ...new Set([...(profileOrdersByAuthProvider.get(authProvider) ?? []), ...order]),
@@ -324,6 +331,9 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   }
 
   for (const draft of drafts) {
+    draft.card.profileOrderExplicitProviders = Object.keys(draft.card.profileOrders).filter(
+      (provider) => explicitOrderProviders.has(provider),
+    );
     for (const authProvider of Object.keys(draft.card.profileOrders)) {
       const completeOrder = profileOrdersByAuthProvider.get(authProvider);
       if (completeOrder) {

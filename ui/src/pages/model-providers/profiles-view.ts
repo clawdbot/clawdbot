@@ -163,6 +163,8 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
     const lock = card.profileOrderLocks[provider];
     const complete = hasExactProfileOrder(profiles, order);
     const stored = card.profileOrderStoredProviders.includes(provider);
+    const explicit =
+      drafts[provider] !== undefined || card.profileOrderExplicitProviders.includes(provider);
     const explanation = lock
       ? profileOrderLockMessage(lock)
       : !complete
@@ -171,7 +173,9 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
               ? "modelProviders.profiles.partialStoredOrder"
               : "modelProviders.profiles.partialOrder",
           )
-        : undefined;
+        : !explicit
+          ? t("modelProviders.profiles.automaticOrder")
+          : undefined;
     const profileById = new Map(profiles.map((profile) => [profile.profileId, profile]));
     return {
       provider,
@@ -179,6 +183,7 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
       lock,
       complete,
       stored,
+      explicit,
       explanation,
       profiles: completeOrder(profiles, order).flatMap((profileId) => {
         const profile = profileById.get(profileId);
@@ -377,7 +382,7 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
           rows,
           ({ profile }) => profile.profileId,
           ({ profile, group }) => {
-            const { provider, order, complete, lock, stored } = group;
+            const { provider, order, complete, lock, stored, explicit } = group;
             const index = order.indexOf(profile.profileId);
             const canMove = props.canMutate && !lock && complete && order.length > 1 && index >= 0;
             const showMoves = !lock && (complete || stored) && order.length > 1;
@@ -456,7 +461,7 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                 <span class="model-providers__profile-status">${profileStatus(profile)}</span>
                 <span class="model-providers__profile-actions">
                   ${
-                    complete && index >= 0
+                    explicit && complete && index >= 0
                       ? html`<span
                           class="model-providers__profile-position"
                           aria-label=${t("modelProviders.profiles.priority", {

@@ -316,6 +316,7 @@ describe("buildModelProviderCards", () => {
     });
 
     expect(cards).toHaveLength(2);
+    expect(cards.map((provider) => provider.profileOrderExplicitProviders)).toEqual([[], []]);
     expect(cards[0]?.profileOrders["shared-auth"]).toEqual(["shared:first", "shared:second"]);
     expect(cards[1]?.profileOrders["shared-auth"]).toEqual(["shared:first", "shared:second"]);
   });
@@ -404,6 +405,7 @@ describe("buildModelProviderCards", () => {
     expect(firstCard(cards)).toMatchObject({
       profileProviderIds: { p1: "anthropic", p2: "anthropic" },
       profileOrders: { anthropic: ["p2", "p1"] },
+      profileOrderExplicitProviders: ["anthropic"],
       profileOrderStoredProviders: ["anthropic"],
     });
   });

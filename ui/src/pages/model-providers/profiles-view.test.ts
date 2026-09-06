@@ -14,6 +14,7 @@ function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
     profileProviderIds: {},
     profileOrders: {},
     profileOrderStoredProviders: [],
+    profileOrderExplicitProviders: [],
     profileOrderLocks: {},
     credentialProviderIds: ["openai"],
     logoutTargets: [],
@@ -403,6 +404,8 @@ describe("renderProviderProfiles", () => {
     const container = mount(renderProviderProfiles(providerCard, viewProps));
     const grip = container.querySelector<HTMLButtonElement>(".model-providers__profile-grip")!;
     grip.focus();
+    expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(0);
+    expect(container.textContent).toContain("Account selection is automatic.");
     expect(grip.getAttribute("aria-keyshortcuts")).toBe("ArrowUp ArrowDown");
 
     for (const order of [
@@ -417,6 +420,7 @@ describe("renderProviderProfiles", () => {
           ),
         ).toEqual(order);
         expect(document.activeElement).toBe(grip);
+        expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(3);
       });
     }
     grip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
