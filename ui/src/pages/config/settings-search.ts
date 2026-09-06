@@ -5,7 +5,10 @@ import {
   type SettingsSearchBlock,
 } from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
-import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import type {
+  NativeDeviceSettingsCapability,
+  NativeDeviceSettingsSnapshot,
+} from "../../app/native-device-settings.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
@@ -29,14 +32,26 @@ type StaticSettingsBlock = SettingsSearchBlock & {
 const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
   Object.values(SETTINGS_SEARCH_TARGETS);
 
-function resolveStaticSettingsBlock(block: SettingsSearchTarget): StaticSettingsBlock {
+function resolveStaticSettingsBlock(
+  block: SettingsSearchTarget,
+  snapshot: NativeDeviceSettingsSnapshot | null,
+): StaticSettingsBlock {
   const label = t(block.labelKey);
+  const nativeKeys = snapshot
+    ? Object.entries(block.nativeSearchKeys ?? {})
+        .filter(([, available]) => available(snapshot))
+        .map(([key]) => key)
+    : [];
   return {
     routeId: block.routeId,
     ...(block.search === undefined ? {} : { search: block.search }),
     hash: block.hash,
     label,
-    searchText: [label, ...block.searchKeys.map((key) => t(key)), block.aliases ?? ""].join(" "),
+    searchText: [
+      label,
+      ...[...block.searchKeys, ...nativeKeys].map((key) => t(key)),
+      block.aliases ?? "",
+    ].join(" "),
   };
 }
 
@@ -100,7 +115,9 @@ export function findSettingsSearchBlocks(params: {
               params.nativeDeviceSettings,
             ),
         )
-          .map(resolveStaticSettingsBlock)
+          .map((block) =>
+            resolveStaticSettingsBlock(block, params.nativeDeviceSettings?.snapshot ?? null),
+          )
           .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
       : [];
   const schema =

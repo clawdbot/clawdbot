@@ -574,52 +574,56 @@ describe("native device settings pages", () => {
     }
   });
 
-  it("renders iOS permission subsets in published order and keeps system-owned precision read-only", async () => {
-    const snapshot = createIosNativeDeviceSettingsSnapshot();
-    snapshot.permissions.entries = [
-      { id: "photos", status: "limited" },
-      { id: "contacts", status: "limited" },
-      { id: "calendars", status: "notDetermined" },
-      { id: "reminders", status: "denied" },
-    ];
-    snapshot.permissions.location.precise = false;
-    const native = createCapability(snapshot);
-    const page = await mount("openclaw-device-permissions-page", native.capability);
-    expect(
-      [...page.querySelector(".settings-group")!.querySelectorAll(".settings-row__title")].map(
-        (element) => element.textContent?.trim(),
-      ),
-    ).toEqual(["Photos", "Contacts", "Calendars", "Reminders"]);
-    for (const title of ["Photos", "Contacts"]) {
-      expect(row(page, title).textContent).toContain("Limited");
+  it.each([false, undefined])(
+    "keeps iOS permission order and system-owned precision read-only (editable: %s)",
+    async (preciseEditable) => {
+      const snapshot = createIosNativeDeviceSettingsSnapshot();
+      snapshot.permissions.location.preciseEditable = preciseEditable;
+      snapshot.permissions.entries = [
+        { id: "photos", status: "limited" },
+        { id: "contacts", status: "limited" },
+        { id: "calendars", status: "notDetermined" },
+        { id: "reminders", status: "denied" },
+      ];
+      snapshot.permissions.location.precise = false;
+      const native = createCapability(snapshot);
+      const page = await mount("openclaw-device-permissions-page", native.capability);
       expect(
-        row(page, title).querySelector(".settings-row__desc")?.textContent?.trim(),
-      ).toBeTruthy();
-    }
-    row(page, "Calendars").querySelector<HTMLButtonElement>("button")!.click();
-    expect(native.capability.requestPermission).toHaveBeenCalledWith("calendars");
-    row(page, "Reminders").querySelector<HTMLButtonElement>("button")!.click();
-    expect(native.capability.openSystemSettings).toHaveBeenCalledWith("reminders");
-    expect(page.textContent).not.toContain("Active computer presence");
-    expect(row(page, "Precise location").querySelector("wa-switch")).toBeNull();
-    expect(row(page, "Precise location").textContent).toContain("Disabled");
-    const settings = row(page, "Precise location").querySelector<HTMLButtonElement>("button")!;
-    expect(settings.textContent?.trim()).toBe("Open Settings");
-    settings.click();
-    expect(native.capability.openSystemSettings).toHaveBeenCalledWith("location");
-    expect(native.capability.set).not.toHaveBeenCalled();
+        [...page.querySelector(".settings-group")!.querySelectorAll(".settings-row__title")].map(
+          (element) => element.textContent?.trim(),
+        ),
+      ).toEqual(["Photos", "Contacts", "Calendars", "Reminders"]);
+      for (const title of ["Photos", "Contacts"]) {
+        expect(row(page, title).textContent).toContain("Limited");
+        expect(
+          row(page, title).querySelector(".settings-row__desc")?.textContent?.trim(),
+        ).toBeTruthy();
+      }
+      row(page, "Calendars").querySelector<HTMLButtonElement>("button")!.click();
+      expect(native.capability.requestPermission).toHaveBeenCalledWith("calendars");
+      row(page, "Reminders").querySelector<HTMLButtonElement>("button")!.click();
+      expect(native.capability.openSystemSettings).toHaveBeenCalledWith("reminders");
+      expect(page.textContent).not.toContain("Active computer presence");
+      expect(row(page, "Precise location").querySelector("wa-switch")).toBeNull();
+      expect(row(page, "Precise location").textContent).toContain("Disabled");
+      const settings = row(page, "Precise location").querySelector<HTMLButtonElement>("button")!;
+      expect(settings.textContent?.trim()).toBe("Open Settings");
+      settings.click();
+      expect(native.capability.openSystemSettings).toHaveBeenCalledWith("location");
+      expect(native.capability.set).not.toHaveBeenCalled();
 
-    native.publish({
-      ...snapshot,
-      permissions: {
-        ...snapshot.permissions,
-        location: { ...snapshot.permissions.location, precise: true },
-      },
-    });
-    await page.updateComplete;
-    expect(row(page, "Precise location").textContent).toContain("Enabled");
-    expect(row(page, "Precise location").querySelector("wa-switch")).toBeNull();
-  });
+      native.publish({
+        ...snapshot,
+        permissions: {
+          ...snapshot.permissions,
+          location: { ...snapshot.permissions.location, precise: true },
+        },
+      });
+      await page.updateComplete;
+      expect(row(page, "Precise location").textContent).toContain("Enabled");
+      expect(row(page, "Precise location").querySelector("wa-switch")).toBeNull();
+    },
+  );
 
   it("enables precision with location access and changes local location and activity preferences", async () => {
     const native = createCapability();
