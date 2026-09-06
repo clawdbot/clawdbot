@@ -23,6 +23,7 @@ import {
   startDiagnosticRunActivityTracking,
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
   buildPreparedCliRunContext,
   captureModelCallDiagnostics,
@@ -212,7 +213,9 @@ describe("runCliAgent spawn path", () => {
     expect(logLine).not.toContain("claude-session-secret");
   });
 
-  it("streams a node-placed Claude resume through the normal JSONL parser", async () => {
+  it("streams a node-placed Claude resume through the normal JSONL parser", async ({
+    onTestFinished,
+  }) => {
     const writeSystemPrompt = vi.fn(writeCliSystemPromptFile);
     let toolAvailability: unknown = "unset";
     const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
@@ -299,6 +302,14 @@ describe("runCliAgent spawn path", () => {
     context.params.claimCliSessionFork = vi.fn(async () => true);
     context.params.persistCliSessionForkSuccessor = vi.fn(async () => {});
 
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      context.params.runId,
+      "main",
+      "cli-node-resume-test",
+    );
+    onTestFinished(admission.close);
+    context.params.admittedRunContext = await admission.admit("embedded");
     const output = await executePreparedCliRun(context, "source-node-session");
 
     expect(output).toMatchObject({ text: "node answer", sessionId: "forked-node-session" });
