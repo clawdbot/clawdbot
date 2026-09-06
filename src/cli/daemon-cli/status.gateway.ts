@@ -30,7 +30,7 @@ export type GatewayStatusSummary = {
   windowsFirewall?: WindowsGatewayFirewallDiagnostic;
 };
 
-type PortStatusSummary = {
+export type PortStatusSummary = {
   port: number;
   status: PortUsageStatus;
   listeners: PortListener[];

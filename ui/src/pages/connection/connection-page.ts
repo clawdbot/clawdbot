@@ -29,8 +29,6 @@ import { renderConnection } from "./view.ts";
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
 const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
 
-export { supportsSystemInfo } from "./system-info.ts";
-
 export class ConnectionPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
