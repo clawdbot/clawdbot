@@ -373,6 +373,33 @@ describe("Slack message tools", () => {
     ]);
   });
 
+  it("keeps top-level action gates the account did not override", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-root",
+          actions: {
+            reactions: false,
+            messages: false,
+            pins: false,
+            memberInfo: false,
+            emojiList: false,
+          },
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+              actions: {
+                reactions: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg, "work")).toEqual(["send", "react", "reactions"]);
+  });
+
   it("describes Slack file ids separately from message ids", () => {
     const discovery = describeSlackMessageTool({
       cfg: {

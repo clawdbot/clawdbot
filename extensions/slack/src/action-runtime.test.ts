@@ -666,6 +666,29 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/Slack reactions are disabled/);
   });
 
+  it("keeps top-level action gates the account did not override", async () => {
+    const cfg = slackConfig({
+      actions: { messages: false, pins: false },
+      accounts: {
+        work: {
+          botToken: "xoxb-work",
+          actions: { reactions: true },
+        },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "listPins", channelId: "C1", accountId: "work" }, cfg),
+    ).rejects.toThrow(/Slack pins are disabled/);
+    expect(listSlackPins).not.toHaveBeenCalled();
+
+    await handleSlackAction(
+      { action: "react", channelId: "C1", messageId: "123.456", emoji: "✅", accountId: "work" },
+      cfg,
+    );
+    expect(reactSlackMessage).toHaveBeenCalled();
+  });
+
   it("rejects Slack reaction reads for non-allowlisted target channels", async () => {
     const cfg = slackConfig({
       groupPolicy: "allowlist",
