@@ -400,6 +400,58 @@ class ChatControllerStreamReplayTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun terminalBeforeSendSettlementKeepsTheCurrentSessionsLiveOutput() =
+    runTest {
+      for (status in listOf("ok", "timeout", "error")) {
+        withPendingRunReplay {
+          val entered = CompletableDeferred<Unit>()
+          val release = CompletableDeferred<Unit>()
+          gateway.respond("chat.send") {
+            entered.complete(Unit)
+            release.await()
+            sendAck("z-original", status)
+          }
+          val pending = async { send("z-original") }
+          try {
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            val currentSession = "agent:other:current-chat"
+            controller.switchSession(currentSession)
+            runCurrent()
+            assertEquals(currentSession, controller.sessionKey.value)
+            assertEquals(0, controller.pendingRunCount.value)
+            controller.handleGatewayEvent(
+              "agent",
+              """{"sessionKey":"$currentSession","stream":"assistant","data":{"text":"Current session output"}}""",
+            )
+            controller.handleGatewayEvent(
+              "agent",
+              """{"sessionKey":"$currentSession","stream":"tool","data":{"phase":"start","name":"edit","toolCallId":"current-tool"}}""",
+            )
+            val currentTools = controller.pendingToolCalls.value
+            assertEquals(1, currentTools.size)
+
+            // A terminal can retire the projection while its asynchronous send settlement waits.
+            terminal("z-original", "chat-error")
+            runCurrent()
+            assertEquals("Current session output", controller.streamingAssistantText.value)
+            assertEquals(currentTools, controller.pendingToolCalls.value)
+
+            release.complete(Unit)
+            assertTrue(pending.await())
+            runCurrent()
+            assertEquals(status, "Current session output", controller.streamingAssistantText.value)
+            assertEquals(status, currentTools, controller.pendingToolCalls.value)
+            assertEquals(currentSession, controller.sessionKey.value)
+          } finally {
+            release.complete(Unit)
+          }
+        }
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun cleanRunStreamsV3AndV4DeltasThenConvergesToHistoryWithoutDuplicates() =
     runTest {
       val gateway = ScriptedGateway(json)

@@ -2451,6 +2451,7 @@ private fun ChatComposer(
   val sendEnabled =
     chatComposerSendEnabled(
       voiceNoteState = voiceNoteState,
+      talkActive = talkActive,
       hasContent = hasContent,
       shareStaging = shareStaging,
       sendInFlight = sendInFlight,

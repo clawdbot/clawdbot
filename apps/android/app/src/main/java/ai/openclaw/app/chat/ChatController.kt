@@ -3430,7 +3430,8 @@ class ChatController internal constructor(
 
     fun settleProjectedRun(settledRunId: String) {
       retireRunTelemetry(settledRunId)
-      clearPendingRun(settledRunId)
+      // A terminal may already have retired the projection while this dispatch was suspended.
+      clearPendingRun(settledRunId, owner = capturedOwner)
       removeOptimisticMessage(settledRunId)
       unresolvedRepliesByRunId.remove(settledRunId)
       if (runDiagnosticOwner?.runId == settledRunId) runDiagnosticOwner = null
