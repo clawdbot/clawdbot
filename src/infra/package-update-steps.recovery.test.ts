@@ -591,7 +591,7 @@ describe("package update recovery safety", () => {
       const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
         const source = String(args[0]);
         if (
-          String(args[1]) === targetCmdShim &&
+          path.basename(source) === "openclaw.cmd" &&
           path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-")
         ) {
           throw Object.assign(new Error("launcher restoration denied"), { code: "EACCES" });
@@ -655,7 +655,7 @@ describe("package update recovery safety", () => {
       });
       expect(result.afterVersion).toBe("1.0.0");
       await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old openclaw\n");
-      await expect(fs.readFile(targetCmdShim, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(targetCmdShim, "utf8")).resolves.toBe("new openclaw.cmd\n");
       const backupDirs = (await fs.readdir(globalRoot)).filter((entry) =>
         entry.startsWith(".openclaw.shim-backup-"),
       );

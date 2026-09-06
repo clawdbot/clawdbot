@@ -8,10 +8,11 @@ import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { formatErrorMessage } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { completePendingPackageLifecycle } from "./package-lifecycle.js";
+import { readPackageVersionIfPresent } from "./package-update-integrity.js";
+import type { PackageRecoveryHooks } from "./package-update-recovery.js";
 import {
   isBlockingPackageUpdateStep,
   PackageUpdateActivationError,
-  readPackageVersionIfPresent,
   removePackageUpdatePath,
   swapStagedPackageInstall,
   type PackageUpdateTransaction,
@@ -668,6 +669,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   validateCandidate?: (packageRoot: string) => Promise<UpdateStepResult[]>;
   beforeActivate?: () => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  recovery?: PackageRecoveryHooks;
   expectedGitCheckout?: GitRuntimeIdentity;
   activateGitRoot?: string;
 }): Promise<PackageUpdateStepsResult> {
@@ -676,9 +678,11 @@ export async function runGlobalPackageUpdateSteps(params: {
     params.validateCandidate ||
     params.beforeActivate ||
     params.onTransaction ||
+    params.recovery ||
     params.activateGitRoot,
   );
   let stagedInstall: StagedPackageInstall | null = null;
+  let recoveryOwnsStage = false;
   let packedInstallDir: string | null = null;
   const originalPackageRoot = params.installTarget.packageRoot ?? params.packageRoot ?? null;
   let activePackageRoot = originalPackageRoot;
@@ -1164,6 +1168,7 @@ export async function runGlobalPackageUpdateSteps(params: {
             process.platform === "win32" ? "junction" : undefined,
           );
         }
+        const recovery = params.recovery;
         const swap = await swapStagedPackageInstall({
           timeoutMs: params.timeoutMs,
           stage: stagedInstall,
@@ -1175,6 +1180,17 @@ export async function runGlobalPackageUpdateSteps(params: {
             liveTreeMutated = true;
           },
           onTransaction: params.onTransaction,
+          recovery: recovery
+            ? {
+                ...recovery,
+                persistDescriptor: (observed) => {
+                  // Persistence may commit before its acknowledgement fails.
+                  // Once offered to Recovery, staging is no longer disposable.
+                  recoveryOwnsStage = true;
+                  return recovery.persistDescriptor(observed);
+                },
+              }
+            : undefined,
         });
         steps.push(swap.step);
         if (swap.postVerifyStep) {
@@ -1244,7 +1260,9 @@ export async function runGlobalPackageUpdateSteps(params: {
     };
     return await packageUpdateFailure(failedStep, [...steps, failedStep]);
   } finally {
-    await cleanupStagedPackageInstall(stagedInstall);
+    if (!recoveryOwnsStage) {
+      await cleanupStagedPackageInstall(stagedInstall);
+    }
     if (packedInstallDir) {
       await removePackageUpdatePath(packedInstallDir);
     }
