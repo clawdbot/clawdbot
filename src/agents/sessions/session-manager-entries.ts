@@ -68,20 +68,29 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     try {
       persistenceResult = this.persist(canonicalEntry, persistenceOptions);
     } catch (error) {
-      const canRebasePreparedAppend =
-        canonicalEntry.type !== "message" || canonicalEntry.message.role === "user";
       if (
         !activeBranchAppend ||
-        !canRebasePreparedAppend ||
         !(error instanceof Error) ||
         error.name !== "SqliteTranscriptMutationConflictError"
       ) {
         throw error;
       }
-      // User ingress and control metadata can follow a concurrent additive tail. Prepared
-      // assistant replies cannot: rebasing one could attach an answer to the wrong user turn.
+      const preparedAssistant =
+        canonicalEntry.type === "message" && canonicalEntry.message.role === "assistant";
+      const canRetryPreparedAppend =
+        canonicalEntry.type !== "message" ||
+        canonicalEntry.message.role === "user" ||
+        preparedAssistant;
+      if (!canRetryPreparedAppend) {
+        throw error;
+      }
+      // Preserve the prepared parent so storage can distinguish a descendant tail from an
+      // unrelated branch. Assistant replies may follow only a descendant tail with no newer
+      // user turn; reset boundaries and reentrant assistant writes remain compatible.
       this.reloadPersistedTranscript();
-      canonicalEntry.parentId = this.appendParentId;
+      if (preparedAssistant && !this.canRebasePreparedAssistant(canonicalEntry.parentId)) {
+        throw error;
+      }
       persistenceResult = this.persist(canonicalEntry, persistenceOptions);
     }
     if (persistenceResult?.adoptedMessageId) {
@@ -124,6 +133,26 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       // Detached managers append locally; only the storage owner supplies a durable anchor.
       appended: persistenceResult?.appended ?? true,
     };
+  }
+
+  private canRebasePreparedAssistant(preparedParentId: string | null): boolean {
+    let currentId = this.appendParentId;
+    const seen = new Set<string>();
+    while (currentId !== preparedParentId) {
+      if (!currentId || seen.has(currentId)) {
+        return false;
+      }
+      seen.add(currentId);
+      const current = this.byId.get(currentId);
+      if (!current) {
+        return false;
+      }
+      if (current.type === "message" && current.message.role === "user") {
+        return false;
+      }
+      currentId = current.parentId;
+    }
+    return true;
   }
 
   resolveCurrentTurnEntryId(isInterruptedTail?: (entry: SessionEntry) => boolean): string | null {
