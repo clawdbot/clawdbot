@@ -88,7 +88,9 @@ const unattendedRepair = vi.hoisted(() =>
   vi.fn<typeof import("../infra/update-repair-agent.js").prepareUnattendedUpdateRepair>(),
 );
 const httpReadiness = vi.hoisted(() => vi.fn());
-const inferenceVerification = vi.hoisted(() => vi.fn());
+const servingVerification = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/update-serving-verification.js").verifyUpdateServing>(),
+);
 const stateSchemaVersions = vi.hoisted(() => vi.fn());
 const mockedRunDaemonInstall = vi.fn();
 const serviceReadCommand = vi.fn();
@@ -176,8 +178,8 @@ vi.mock("../infra/update-repair-agent.js", () => ({
 vi.mock("../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: candidateValidation,
 }));
-vi.mock("./update-cli/update-command-inference.js", () => ({
-  runUpdateInferenceProbe: inferenceVerification,
+vi.mock("../infra/update-serving-verification.js", () => ({
+  verifyUpdateServing: servingVerification,
 }));
 vi.mock("../infra/update-candidate-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-candidate-state.js")>()),
@@ -1032,6 +1034,7 @@ describe("update-cli", () => {
       mode: "git",
       steps: [],
       durationMs: 100,
+      after: { version: "1.0.0" },
       ...overrides,
     }) as UpdateRunResult;
 
@@ -1664,12 +1667,14 @@ describe("update-cli", () => {
     expect([logs, ...vi.mocked(defaultRuntime.error).mock.calls.flat()].join("\n")).toContain(
       message,
     );
-    expect(logs).not.toContain("Gateway: restarted and verified.");
+    expect(logs).not.toContain("Gateway: restarted, served a turn, and verified persistence.");
     expect(logs).not.toContain("Update Result: OK");
   };
 
   const mockGatewayHealth = (version: string, connId: string, buildId?: string) => {
-    callGateway.mockImplementation(gatewayHealthResponse({ server: { version, connId, buildId } }));
+    callGateway.mockImplementation(
+      gatewayHealthResponse({ server: { version, connId, buildId, bootId: "test-gateway-boot" } }),
+    );
   };
 
   const completeChangedPostCorePluginUpdate = (
@@ -1890,7 +1895,28 @@ describe("update-cli", () => {
       }),
     );
     httpReadiness.mockResolvedValue({ healthz: 200, readyz: 200 });
-    inferenceVerification.mockResolvedValue(true);
+    servingVerification.mockImplementation(async (params) => ({
+      status: "verified",
+      receipt: {
+        runId: params.runId,
+        gateway: {
+          bootId: "test-gateway-boot",
+          version: params.expectedVersion,
+          buildId: params.expectedBuildId ?? null,
+        },
+        agentId: "main",
+        sessionKey: "agent:main:update-verification:test",
+        sessionId: "test-session",
+        agentRunId: "00000000-0000-4000-8000-000000000002",
+        transcript: {
+          generation: "test-generation",
+          maxSeq: 2,
+          user: { entryId: "user-entry", seq: 1 },
+          assistant: { entryId: "assistant-entry", seq: 2 },
+        },
+        verifiedAtMs: 123,
+      },
+    }));
     stateSchemaVersions.mockImplementation(
       async ({ stateDir, env }: { stateDir: string; env?: NodeJS.ProcessEnv }) => [
         { path: resolveOpenClawStateSqlitePath(env), userVersion: OPENCLAW_STATE_SCHEMA_VERSION },
@@ -2687,7 +2713,9 @@ describe("update-cli", () => {
       expect(serviceStop).toHaveBeenCalledOnce();
       expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
       expect(runRestartScript).toHaveBeenCalledOnce();
-      expect(getLogOutput()).toContain("Gateway: restarted and verified.");
+      expect(getLogOutput()).toContain(
+        "Gateway: restarted, served a turn, and verified persistence.",
+      );
       expect(spawnCall()?.[2]?.env).toMatchObject({
         OPENCLAW_PROFILE: "work",
         OPENCLAW_STATE_DIR: managedState,
@@ -2798,7 +2826,9 @@ describe("update-cli", () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
     expect(runRestartScript).toHaveBeenCalledOnce();
-    expect(getLogOutput()).toContain("Gateway: restarted and verified.");
+    expect(getLogOutput()).toContain(
+      "Gateway: restarted, served a turn, and verified persistence.",
+    );
     const freshCalls = vi
       .mocked(runExec)
       .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? ""));
@@ -7526,7 +7556,9 @@ describe("update-cli", () => {
       (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
         ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,
     ).toBe("0");
-    expect(getLogOutput()).toContain("Gateway: restarted and verified.");
+    expect(getLogOutput()).toContain(
+      "Gateway: restarted, served a turn, and verified persistence.",
+    );
     const npmInstallCallIndex = vi
       .mocked(runCommandWithTimeout)
       .mock.calls.findIndex(
@@ -8054,26 +8086,29 @@ describe("update-cli", () => {
         expect(process.listenerCount("SIGINT")).toBe(originalSignalListeners);
       });
       let reportedError: unknown;
-      // The native fixture uses its account HOME; the suite's relocated-home
-      // marker deliberately opts Doctor out of host service management.
-      await withEnvAsync({ OPENCLAW_HOME: undefined }, async () => {
-        try {
-          if (command === "doctor") {
-            const { maybeOfferUpdateBeforeDoctor } = await import("../commands/doctor-update.js");
-            await maybeOfferUpdateBeforeDoctor({
-              runtime: defaultRuntime,
-              options: {},
-              root,
-              confirm: async () => true,
-              outro: vi.fn(),
-            });
-          } else {
-            await updateCommand({});
+      // This fixture owns a native service; neither a relocated home nor the
+      // host's external-repair policy should opt Doctor out of exercising it.
+      await withEnvAsync(
+        { OPENCLAW_HOME: undefined, OPENCLAW_SERVICE_REPAIR_POLICY: undefined },
+        async () => {
+          try {
+            if (command === "doctor") {
+              const { maybeOfferUpdateBeforeDoctor } = await import("../commands/doctor-update.js");
+              await maybeOfferUpdateBeforeDoctor({
+                runtime: defaultRuntime,
+                options: {},
+                root,
+                confirm: async () => true,
+                outro: vi.fn(),
+              });
+            } else {
+              await updateCommand({});
+            }
+          } catch (error) {
+            reportedError = error;
           }
-        } catch (error) {
-          reportedError = error;
-        }
-      });
+        },
+      );
 
       expect(
         nativeCommands.map((argv) => argv.at(-1)),
@@ -8135,6 +8170,7 @@ describe("update-cli", () => {
         healthy: fault === "none",
         staleGatewayPids: [],
         gatewayVersion: "1.0.0",
+        gatewayBootId: "test-gateway-boot",
         gatewayBuildId: "candidate-build",
         expectedVersion: "1.0.0",
         probeError: fault === "none" ? undefined : "candidate readiness failed",
@@ -10828,7 +10864,9 @@ describe("update-cli", () => {
         });
         expect(runRestartScript).toHaveBeenCalledTimes(1);
         expect(runDaemonRestart).not.toHaveBeenCalled();
-        expect(getLogOutput()).toContain("Gateway: restarted and verified.");
+        expect(getLogOutput()).toContain(
+          "Gateway: restarted, served a turn, and verified persistence.",
+        );
       },
     },
     {
@@ -10877,9 +10915,11 @@ describe("update-cli", () => {
         expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(
           false,
         );
-        expect(logLines.some((line) => line.includes("Gateway: restarted and verified."))).toBe(
-          false,
-        );
+        expect(
+          logLines.some((line) =>
+            line.includes("Gateway: restarted, served a turn, and verified persistence."),
+          ),
+        ).toBe(false);
       },
     },
   ] as const)("updateCommand service refresh behavior: $name", runUpdateCliScenario);
@@ -10945,7 +10985,9 @@ describe("update-cli", () => {
       if (json) {
         expect(getErrorOutput()).toContain("Gateway install blocked: newer configuration");
       } else {
-        expect(getLogOutput()).toContain("Gateway: restarted and verified.");
+        expect(getLogOutput()).toContain(
+          "Gateway: restarted, served a turn, and verified persistence.",
+        );
       }
     },
   );
@@ -11099,7 +11141,9 @@ describe("update-cli", () => {
     expect(gatewayCommandCall(updatedEntrypoint, "restart")).toBeUndefined();
     expect(runRestartScript).not.toHaveBeenCalled();
     expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
-    expect(getLogOutput()).toContain("Gateway: restarted and verified.");
+    expect(getLogOutput()).toContain(
+      "Gateway: restarted, served a turn, and verified persistence.",
+    );
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
@@ -11234,7 +11278,7 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(true);
     callGateway.mockImplementation(
       gatewayHealthResponse({
-        server: { version: "2026.4.24", connId: "updated-gateway" },
+        server: { version: "2026.4.24", connId: "updated-gateway", bootId: "test-gateway-boot" },
         health: {
           ok: true,
           plugins: {
@@ -11277,13 +11321,7 @@ describe("update-cli", () => {
         setup = setupUpdatedRootRefresh({
           gatewayUpdateImpl: async (root) => {
             process.env.OPENCLAW_GATEWAY_AUTH_TOKEN = "runtime-auth-ref";
-            return {
-              status: "ok",
-              mode: "npm",
-              root,
-              steps: [],
-              durationMs: 100,
-            };
+            return makeOkUpdateResult({ mode: "npm", root });
           },
         });
         primeServiceCommand([process.execPath, setup.entrypoints[0], "gateway", "run"], {
@@ -11320,7 +11358,15 @@ describe("update-cli", () => {
       },
       assertExtra: () => {
         expect(runDaemonInstall).not.toHaveBeenCalled();
-        expect(runRestartScript).toHaveBeenCalledTimes(1);
+        // Install already serves the target version; verify that boot without
+        // issuing a redundant second restart.
+        expect(runRestartScript).not.toHaveBeenCalled();
+        expect(servingVerification).toHaveBeenCalledWith(
+          expect.objectContaining({
+            expectedVersion: "1.0.0",
+            expectedBootId: "test-gateway-boot",
+          }),
+        );
       },
     },
     {
@@ -11358,13 +11404,7 @@ describe("update-cli", () => {
               throw new Error("ENOENT: current working directory is gone");
             });
             restoreCwd = () => cwdSpy.mockRestore();
-            return {
-              status: "ok",
-              mode: "npm",
-              root,
-              steps: [],
-              durationMs: 100,
-            };
+            return makeOkUpdateResult({ mode: "npm", root });
           },
         });
         try {
