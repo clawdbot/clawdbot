@@ -95,6 +95,7 @@ describe("listGatewayMethods", () => {
       "transcripts.status",
       "update.report",
       "skills.workshop.read",
+      "session.publicShare.set",
     ]);
   });
 
