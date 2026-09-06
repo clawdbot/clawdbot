@@ -564,8 +564,10 @@ export function resolveTsdownCleanOutputRoots(args: string[] = []) {
 }
 
 export function sanitizeTsdownBuildOutputRoots(args: string[] = [], cwd = process.cwd()): void {
-  for (const root of resolveTsdownCleanOutputRoots(args)) {
-    sanitizeBundlerHelperDtsExportTree(path.resolve(cwd, root));
+  const roots = resolveTsdownCleanOutputRoots(args);
+  const rootPaths = assertTsdownCleanOutputRoots({ cwd, roots });
+  for (const rootPath of rootPaths) {
+    sanitizeBundlerHelperDtsExportTree(rootPath);
   }
 }
 

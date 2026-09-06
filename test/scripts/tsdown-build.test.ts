@@ -1956,6 +1956,41 @@ describe("resolveTsdownBuildInvocation", () => {
       await expect(fsPromises.readFile(rootDeclaration, "utf8")).resolves.toBe(malformed);
     }));
 
+  it("refuses to sanitize a symlinked direct-build output root", () =>
+    fixture.run(async () => {
+      const rootDir = createTempDir("openclaw-tsdown-sanitize-symlink-");
+      const targetDir = path.join(rootDir, "target");
+      const declaration = path.join(targetDir, "index.d.ts");
+      const malformed = "export { __exportAll, publicApi };\n";
+      await fsPromises.mkdir(targetDir);
+      await fsPromises.writeFile(declaration, malformed);
+      await fsPromises.mkdir(path.join(rootDir, "packages", "ai"), { recursive: true });
+      await fsPromises.symlink(targetDir, path.join(rootDir, "packages", "ai", "dist"), "dir");
+
+      expect(() =>
+        sanitizeTsdownBuildOutputRoots(["--config", "tsdown.ai.config.ts"], rootDir),
+      ).toThrow(/symbolic link/u);
+
+      await expect(fsPromises.readFile(declaration, "utf8")).resolves.toBe(malformed);
+    }));
+
+  it("refuses to sanitize a direct-build output root behind an intermediate symlink", () =>
+    fixture.run(async () => {
+      const rootDir = createTempDir("openclaw-tsdown-sanitize-parent-symlink-");
+      const targetPackages = path.join(rootDir, "target-packages");
+      const declaration = path.join(targetPackages, "ai", "dist", "index.d.ts");
+      const malformed = "export { __exportAll, publicApi };\n";
+      await fsPromises.mkdir(path.dirname(declaration), { recursive: true });
+      await fsPromises.writeFile(declaration, malformed);
+      await fsPromises.symlink(targetPackages, path.join(rootDir, "packages"), "dir");
+
+      expect(() =>
+        sanitizeTsdownBuildOutputRoots(["--config", "tsdown.ai.config.ts"], rootDir),
+      ).toThrow(/symbolic link/u);
+
+      await expect(fsPromises.readFile(declaration, "utf8")).resolves.toBe(malformed);
+    }));
+
   it.each([
     { code: 0, expectedAi: "export { publicApi };\n", label: "successful" },
     { code: 1, expectedAi: "export { __exportAll, publicApi };\n", label: "failed" },
