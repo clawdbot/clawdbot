@@ -180,11 +180,17 @@ describePosix("native squash attribution", () => {
     "Co-authored-by: Claude <noreply@anthropic.com>",
     "co-authored-by: Claude <NOREPLY@ANTHROPIC.COM>",
     "Co-Authored-By: Claude\n <noreply@anthropic.com>",
+    "Co-authored-by: Cursor <cursoragent@cursor.com>",
+    "co-authored-by: Cursor <CURSORAGENT@CURSOR.COM>",
+    "Co-Authored-By: Cursor\n <cursoragent@cursor.com>",
   ])("omits imported machine credit while preserving human credit: %j", (machineCredit) => {
     const humanCredit = [
       "Co-authored-by: Claude <claude@example.com>",
       "Co-authored-by: Human <person@anthropic.com>",
       "Co-authored-by: Other <noreply@anthropic.com.example.org>",
+      "Co-authored-by: Cursor <cursor@example.com>",
+      "Co-authored-by: Human <person@cursor.com>",
+      "Co-authored-by: Other <cursoragent@cursor.com.example.org>",
     ].join("\n");
     const server = "Co-authored-by: Server <server@example.com>";
     const result = prepareBody({
@@ -201,7 +207,11 @@ describePosix("native squash attribution", () => {
     expect(result.trailerCommandCalled).toBe(false);
   });
 
-  it.each([undefined, "Reviewed correction.\n\nCo-authored-by: Claude <noreply@anthropic.com>\n"])(
+  it.each([
+    undefined,
+    "Reviewed correction.\n\nCo-authored-by: Claude <noreply@anthropic.com>\n",
+    "Reviewed correction.\n\nCo-authored-by: Cursor <cursoragent@cursor.com>\n",
+  ])(
     "requires a reviewed body when the chosen message contains machine credit: %j",
     (overrideBody) => {
       const machineCredit = "Co-authored-by: Claude <noreply@anthropic.com>";
@@ -216,15 +226,18 @@ describePosix("native squash attribution", () => {
     },
   );
 
-  it("rejects machine credit present only in the default server preview", () => {
-    const result = prepareBody({
-      sourceMessages: ["Repair"],
-      previewBody: "Server description\n\nCo-authored-by: Claude <noreply@anthropic.com>",
-    });
-    expect(result.status).toBe(1);
-    expect(result.mergeBody).toBeNull();
-    expect(result.stderr).toContain("--body-file");
-  });
+  it.each(["Claude <noreply@anthropic.com>", "Cursor <cursoragent@cursor.com>"])(
+    "rejects machine credit present only in the default server preview: %s",
+    (identity) => {
+      const result = prepareBody({
+        sourceMessages: ["Repair"],
+        previewBody: `Server description\n\nCo-authored-by: ${identity}`,
+      });
+      expect(result.status).toBe(1);
+      expect(result.mergeBody).toBeNull();
+      expect(result.stderr).toContain("--body-file");
+    },
+  );
 
   it("keeps queue admission without a body override or source trailers", () => {
     const result = prepareBody({ sourceMessages: ["Repair"], previewQueue: true });
