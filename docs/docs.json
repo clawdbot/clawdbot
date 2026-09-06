@@ -1231,6 +1231,106 @@
     {
       "source": "/web/control-ui/updates",
       "destination": "/web/control-ui/settings#updates"
+    },
+    {
+      "source": "/ci/pipeline-overview",
+      "destination": "/ci/pipeline#pipeline-overview"
+    },
+    {
+      "source": "/ci/fail-fast-order",
+      "destination": "/ci/pipeline#fail-fast-order"
+    },
+    {
+      "source": "/ci/control-ui-size-budgets",
+      "destination": "/ci/pipeline#control-ui-size-budgets"
+    },
+    {
+      "source": "/ci/watching-pull-request-ci",
+      "destination": "/ci/watching-runs#watching-pull-request-ci"
+    },
+    {
+      "source": "/ci/pr-context-and-evidence",
+      "destination": "/ci/watching-runs#pr-context-and-evidence"
+    },
+    {
+      "source": "/ci/checkout-ownership",
+      "destination": "/ci/checkout#checkout-ownership"
+    },
+    {
+      "source": "/ci/measured-shard-weights",
+      "destination": "/ci/capacity#measured-shard-weights"
+    },
+    {
+      "source": "/ci/clawsweeper-activity-forwarding",
+      "destination": "/ci/scheduled-workflows#clawsweeper-activity-forwarding"
+    },
+    {
+      "source": "/ci/manual-dispatches",
+      "destination": "/ci/scope-and-routing#manual-dispatches"
+    },
+    {
+      "source": "/ci/runner-registration-budget",
+      "destination": "/ci/capacity#runner-registration-budget"
+    },
+    {
+      "source": "/ci/surface-ratchets",
+      "destination": "/ci/local-proof#surface-ratchets"
+    },
+    {
+      "source": "/ci/local-equivalents",
+      "destination": "/ci/local-proof#local-equivalents"
+    },
+    {
+      "source": "/ci/openclaw-performance",
+      "destination": "/ci/scheduled-workflows#openclaw-performance"
+    },
+    {
+      "source": "/ci/full-release-validation",
+      "destination": "/ci/release-validation#full-release-validation"
+    },
+    {
+      "source": "/ci/live-and-e2e-shards",
+      "destination": "/ci/release-validation#live-and-e2e-shards"
+    },
+    {
+      "source": "/ci/package-acceptance",
+      "destination": "/ci/release-validation#package-acceptance"
+    },
+    {
+      "source": "/ci/install-smoke",
+      "destination": "/ci/release-validation#install-smoke"
+    },
+    {
+      "source": "/ci/local-docker-e2e",
+      "destination": "/ci/release-validation#local-docker-e2e"
+    },
+    {
+      "source": "/ci/plugin-prerelease",
+      "destination": "/ci/release-validation#plugin-prerelease"
+    },
+    {
+      "source": "/ci/qa-lab",
+      "destination": "/ci/scheduled-workflows#qa-lab"
+    },
+    {
+      "source": "/ci/codeql",
+      "destination": "/ci/scheduled-workflows#codeql"
+    },
+    {
+      "source": "/ci/maintenance-workflows",
+      "destination": "/ci/scheduled-workflows#maintenance-workflows"
+    },
+    {
+      "source": "/ci/local-check-gates-and-changed-routing",
+      "destination": "/ci/local-proof#local-check-gates-and-changed-routing"
+    },
+    {
+      "source": "/ci/testbox-validation",
+      "destination": "/ci/local-proof#testbox-validation"
+    },
+    {
+      "source": "/ci/runner-backend-modes",
+      "destination": "/ci/runners#runner-backend-modes"
     }
   ],
   "navigation": {
@@ -2399,6 +2499,20 @@
                 "pages": [
                   "reference/test",
                   "ci",
+                  {
+                    "group": "CI",
+                    "pages": [
+                      "ci/pipeline",
+                      "ci/watching-runs",
+                      "ci/checkout",
+                      "ci/scope-and-routing",
+                      "ci/runners",
+                      "ci/capacity",
+                      "ci/release-validation",
+                      "ci/scheduled-workflows",
+                      "ci/local-proof"
+                    ]
+                  },
                   "help/scripts",
                   "concepts/qa-e2e-automation",
                   "concepts/personal-agent-benchmark-pack"
