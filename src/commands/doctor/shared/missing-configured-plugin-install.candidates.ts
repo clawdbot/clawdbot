@@ -122,7 +122,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
       currentVersion,
     });
   const installedPluginMissingRequiredDependencies =
-    collectInstalledPluginMissingRequiredDependencies({
+    await collectInstalledPluginMissingRequiredDependencies({
       cfg: params.cfg,
       snapshot,
       installRecords: records,
