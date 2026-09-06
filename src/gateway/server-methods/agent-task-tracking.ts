@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -100,7 +101,31 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
   if (params.modelRun === true) {
     return "none";
   }
-  if (!params.sessionKey?.trim() || params.inputProvenance?.kind === "inter_session") {
+  if (!params.sessionKey?.trim()) {
+    return "none";
+  }
+  // An inter_session follow-up (e.g. a yielded nested requester's settle
+  // wake) targets a session that may own a paused sessions_yield run.
+  // Returning "none" here skips registerPluginSubagentRunFromGateway, so
+  // the paused run is never adopted and the original requester is left
+  // waiting for a completion that never arrives. When a paused
+  // sessions_yield run exists, fall through to the plugin_subagent branch
+  // so admission calls adoptPausedSubagentRunForFollowUp before the turn
+  // starts.
+  if (params.inputProvenance?.kind === "inter_session") {
+    const pausedYieldRun = getLatestLiveSubagentRunByChildSessionKey(
+      params.sessionKey.trim(),
+      (entry) => entry.pauseReason === "sessions_yield",
+    );
+    if (pausedYieldRun) {
+      // A paused sessions_yield run exists for this session. Return
+      // plugin_subagent so admission calls registerPluginSubagentRunFromGateway
+      // → adoptPausedSubagentRunForFollowUp, which replaces the paused run
+      // with this turn's runId and preserves its requesterSettleWake. Without
+      // this, the nested requester's continuation runs as an untracked sibling
+      // and the original requester never receives its completion.
+      return "plugin_subagent";
+    }
     return "none";
   }
   const runTaskOwner = params.client?.internal?.agentRunTracking;
