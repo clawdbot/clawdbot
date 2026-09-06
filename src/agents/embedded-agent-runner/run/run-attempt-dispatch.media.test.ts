@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt-image-provenance.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-submit.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 async function preparePluginHarnessPromptImages(params: {
   runParams: Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]["attempt"];
@@ -117,6 +117,9 @@ describe("plugin harness prompt media", () => {
           sessionId: "session-canonical-media",
           userTurnTranscriptRecorder: {
             message: { role: "user", content: "inspect", __openclaw: { media } },
+            async resolveMessage() {
+              return this.message;
+            },
           },
         },
         runtime: {
@@ -164,11 +167,18 @@ describe("plugin harness prompt media", () => {
         userTurnTranscriptRecorder: {
           message: {
             role: "user",
-            content: "inspect",
-            __openclaw: {
-              media: [{ path: imagePath, contentType: "image/png" }, documentFact],
-              mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
-            },
+            content: "stale initial facts",
+            __openclaw: { media: [documentFact] },
+          },
+          async resolveMessage() {
+            return {
+              role: "user",
+              content: "inspect",
+              __openclaw: {
+                media: [{ path: imagePath, contentType: "image/png" }, documentFact],
+                mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
+              },
+            };
           },
         },
       },
@@ -484,6 +494,9 @@ describe("plugin harness prompt media", () => {
         ],
         sessionId: "session-layout-suppressed",
         userTurnTranscriptRecorder: {
+          async resolveMessage() {
+            return this.message;
+          },
           message: {
             role: "user",
             content: "compare",

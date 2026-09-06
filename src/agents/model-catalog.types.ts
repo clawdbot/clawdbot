@@ -19,6 +19,8 @@ type ModelContextWindowOption = {
 
 /** Normalized model metadata exposed by the agent model catalog. */
 export type ModelCatalogEntry = {
+  /** Native catalog owner, not a physical provider route or transferable readiness fact. */
+  nativeRuntime?: string;
   id: string;
   name: string;
   provider: string;

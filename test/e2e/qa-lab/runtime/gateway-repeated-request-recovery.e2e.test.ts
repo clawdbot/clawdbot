@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 type StabilityEvent = {
   seq?: unknown;
@@ -26,6 +27,7 @@ type GatewayChatRun = {
   runId?: unknown;
   status?: unknown;
   stopReason?: unknown;
+  endedAt?: unknown;
 };
 
 type GatewayChatMessage = {
@@ -40,12 +42,16 @@ type GatewayChatHistory = {
 type MockRequestSnapshot = {
   cursor?: unknown;
   prompt?: unknown;
+  allInputText?: unknown;
+  model?: unknown;
   outcome?: unknown;
   errorCode?: unknown;
 };
 
 type ClassifiedMockRequest = {
   cursor: unknown;
+  model: unknown;
+  continuation: boolean;
   prompt: "recovery" | "queued" | "other" | "missing";
   outcome: unknown;
   errorCode: unknown;
@@ -63,15 +69,19 @@ const RECOVERY_PROGRESS_INTERVAL_MS = 60_000;
 const HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const HISTORY_RETRY_INTERVAL_MS = 250;
 
-let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
+let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
 
 afterEach(async () => {
-  await harness?.stop().catch(() => undefined);
+  if (gatewayOwner) {
+    await stopQaGatewayFixture(gatewayOwner);
+  }
   harness = undefined;
+  gatewayOwner = undefined;
 });
 
 async function readStability(
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"],
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
   sinceSeq?: number,
 ): Promise<StabilitySnapshot> {
   return (await gateway.call(
@@ -82,7 +92,7 @@ async function readStability(
 }
 
 async function waitForStability(
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"],
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
   sinceSeq: number,
   predicate: (events: StabilityEvent[]) => boolean,
   timeoutMs: number,
@@ -176,7 +186,7 @@ function resolveRetryableHistoryDelayMs(error: unknown): number | null {
 }
 
 async function waitForQueuedReply(
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"],
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
   sessionKey: string,
 ): Promise<GatewayChatHistory> {
   const startedAt = Date.now();
@@ -223,13 +233,20 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
   return fetch(`${mockBaseUrl}/debug/requests`)
     .then((response) => response.json() as Promise<MockRequestSnapshot[]>)
     .then((records) =>
-      records.map(({ cursor, prompt, outcome, errorCode }) => ({
+      records.map(({ cursor, prompt, allInputText, model, outcome, errorCode }) => ({
         cursor,
+        model,
+        continuation:
+          typeof prompt === "string" &&
+          !prompt.includes(RECOVERY_PROMPT) &&
+          !prompt.includes(QUEUED_PROMPT) &&
+          typeof allInputText === "string" &&
+          allInputText.includes(RECOVERY_PROMPT),
         prompt:
           typeof prompt === "string"
             ? prompt.includes(QUEUED_PROMPT)
               ? "queued"
-              : prompt.includes(RECOVERY_PROMPT)
+              : typeof allInputText === "string" && allInputText.includes(RECOVERY_PROMPT)
                 ? "recovery"
                 : "other"
             : "missing",
@@ -240,7 +257,7 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
 }
 
 async function readFailureEvidence(params: {
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"];
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"];
   mockBaseUrl: string | undefined;
   sinceSeq: number;
 }): Promise<string> {
@@ -281,10 +298,11 @@ async function readFailureEvidence(params: {
 
 describe("Gateway repeated-request provider timeout", () => {
   it(
-    "lets the provider timeout terminate the stalled attempt before draining one queued followup",
+    "continues after a provider timeout and settles failure before draining one queued followup",
     { timeout: 510_000 },
     async () => {
-      harness = await startQaLiveLaneGateway({
+      gatewayOwner = createQaLiveLaneGateway();
+      harness = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
@@ -358,16 +376,14 @@ describe("Gateway repeated-request provider timeout", () => {
       expect(queued).toMatchObject({ status: "started" });
       expect(typeof queued.runId).toBe("string");
 
+      // The provider deadline starts before model-call observation, so its diagnostic
+      // duration can be shorter than timeoutSeconds. The failure kind owns timeout evidence.
       const events = await waitForStability(
         gateway,
         baselineSeq,
         (records) =>
           records.some(
-            (event) =>
-              event.type === "model.call.error" &&
-              event.failureKind === "timeout" &&
-              typeof event.durationMs === "number" &&
-              event.durationMs >= MODEL_REQUEST_ALLOWANCE_SECONDS * 1_000,
+            (event) => event.type === "model.call.error" && event.failureKind === "timeout",
           ),
         350_000,
       );
@@ -393,7 +409,10 @@ describe("Gateway repeated-request provider timeout", () => {
         { runId: active.runId, timeoutMs: 30_000 },
         { timeoutMs: 35_000 },
       )) as GatewayChatRun;
-      expect(activeTerminal.status).not.toBe("ok");
+      expect(activeTerminal).toMatchObject({
+        status: "error",
+        endedAt: expect.any(Number),
+      });
 
       const history = await waitForQueuedReply(gateway, sessionKey).catch(
         async (error: unknown) => {
@@ -417,9 +436,19 @@ describe("Gateway repeated-request provider timeout", () => {
         throw new Error("mock provider request evidence unavailable");
       }
       const requests = await readClassifiedMockRequests(mockBaseUrl);
-      expect(
-        requests.filter((request) => request.prompt === "recovery").length,
-      ).toBeGreaterThanOrEqual(5);
+      const recoveryRequests = requests.filter((request) => request.prompt === "recovery");
+      expect(recoveryRequests.length).toBeGreaterThanOrEqual(5);
+      expect(recoveryRequests[0]?.model).toBe("gpt-5.6-luna");
+      expect(recoveryRequests[1]?.model).toBe(recoveryRequests[0]?.model);
+      expect(recoveryRequests).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            continuation: true,
+            outcome: "error",
+            errorCode: "response_failed_no_details",
+          }),
+        ]),
+      );
       expect(requests.filter((request) => request.prompt === "queued")).toEqual([
         expect.objectContaining({ outcome: "success" }),
       ]);

@@ -124,6 +124,61 @@ function expectAlertTextContaining(
 }
 
 describe("CronService failure alerts", () => {
+  it.each([
+    { name: "default", global: undefined, job: undefined, cooldownMs: 3_600_000 },
+    {
+      name: "global",
+      global: { after: 8, cooldownMs: 60_000 },
+      job: undefined,
+      cooldownMs: 60_000,
+    },
+    {
+      name: "job override",
+      global: { cooldownMs: 60_000 },
+      job: { after: 8, cooldownMs: 120_000 },
+      cooldownMs: 120_000,
+    },
+    { name: "zero", global: undefined, job: { after: 8, cooldownMs: 0 }, cooldownMs: 0 },
+  ])("honors $name cooldown for delivery failures without an after gate", async (testCase) => {
+    await withFailureAlertCron(
+      {
+        failureAlert: testCase.global,
+        runResult: { status: "ok", delivered: false, deliveryError: "primary rejected" },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("delivery cooldown", {
+          delivery: {
+            ...createTelegramDelivery(),
+            failureDestination: { mode: "webhook", to: "https://alerts.example.test/cron" },
+          },
+          failureAlert: testCase.job,
+        });
+        const firstAt = Date.now();
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+
+        if (testCase.cooldownMs > 0) {
+          vi.setSystemTime(firstAt + testCase.cooldownMs - 1);
+          await cron.run(job.id, "force");
+          expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+          expect(cron.getJob(job.id)?.state).toMatchObject({
+            lastRunStatus: "ok",
+            lastDeliveryStatus: "not-delivered",
+            lastDeliveryError: "primary rejected",
+            consecutiveErrors: 0,
+            lastFailureAlertAtMs: firstAt,
+            lastFailureNotificationDeliveryStatus: "not-requested",
+          });
+        }
+
+        vi.setSystemTime(firstAt + testCase.cooldownMs);
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
+        expect(cron.getJob(job.id)?.state.lastFailureAlertAtMs).toBe(Date.now());
+      },
+    );
+  });
+
   it("defaults route-backed jobs to two failures and a one-hour cooldown", async () => {
     await withFailureAlertCron({}, async ({ cron, sendCronFailureAlert, addJob }) => {
       const job = await addJob("default routed alert", { delivery: createTelegramDelivery() });
@@ -185,32 +240,30 @@ describe("CronService failure alerts", () => {
 
   it.each([
     {
-      name: "suppressed before reaching the recipient",
-      recipientReached: false,
+      name: "was not delivered",
+      outcome: { delivered: false, status: "not-delivered" as const },
       rejects: false,
       fallbackCalls: 1,
     },
     {
-      name: "suppressed after the recipient may have received it",
-      recipientReached: true,
+      name: "has an unknown outcome",
+      outcome: { status: "unknown" as const },
       rejects: false,
       fallbackCalls: 0,
     },
     {
-      name: "failed after reaching the recipient",
-      recipientReached: true,
-      rejects: true,
+      name: "was delivered",
+      outcome: { delivered: true, status: "delivered" as const },
+      rejects: false,
       fallbackCalls: 0,
     },
     {
-      name: "failed before reaching the recipient",
-      recipientReached: false,
-      rejects: true,
-      fallbackCalls: 1,
-    },
-    {
-      name: "rejected before a delivery attempt",
-      recipientReached: undefined,
+      name: "failed after settling as not delivered",
+      outcome: {
+        delivered: false,
+        status: "not-delivered" as const,
+        error: "failure alert delivery failed",
+      },
       rejects: true,
       fallbackCalls: 1,
     },
@@ -219,9 +272,7 @@ describe("CronService failure alerts", () => {
       { failureAlert: { enabled: true, after: 1 } },
       async ({ cron, sendCronFailureAlert, enqueueSystemEvent, addJob }) => {
         sendCronFailureAlert.mockImplementationOnce(async (alert) => {
-          if (testCase.recipientReached !== undefined) {
-            alert.onDeliveryAttempt?.(testCase.recipientReached);
-          }
+          await alert.onDeliverySettled(testCase.outcome);
           if (testCase.rejects) {
             throw new Error("failure alert delivery failed");
           }
@@ -231,14 +282,9 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
 
         expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-        expect(enqueueSystemEvent).toHaveBeenCalledTimes(testCase.fallbackCalls);
-
-        const deliveryAttempt = alertCallArg(sendCronFailureAlert).onDeliveryAttempt;
-        expect(typeof deliveryAttempt).toBe("function");
-        if (typeof deliveryAttempt === "function") {
-          deliveryAttempt(false);
-        }
-        expect(enqueueSystemEvent).toHaveBeenCalledTimes(testCase.fallbackCalls);
+        await vi.waitFor(() =>
+          expect(enqueueSystemEvent).toHaveBeenCalledTimes(testCase.fallbackCalls),
+        );
       },
     );
   });

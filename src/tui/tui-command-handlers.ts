@@ -93,9 +93,11 @@ type CommandHandlerContext = {
   consumeCompletedRunForPendingSend?: (runId: string) => boolean;
   isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: () => void;
-  runAuthFlow?: (params: {
-    provider?: string;
-  }) => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
+  runAuthFlow?: (params: { provider?: string }) => Promise<{
+    exitCode: number | null;
+    signal: NodeJS.Signals | null;
+    commandArgv: string;
+  }>;
   requestExit: (result?: Partial<TuiResult>) => void;
 };
 
@@ -500,7 +502,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             : typeof result.exitCode === "number"
               ? ` (exit ${String(result.exitCode)})`
               : "";
-          chatLog.addSystem(`auth flow failed${failureSuffix}`);
+          chatLog.addSystem(
+            `auth flow failed${failureSuffix} — command argv: ${result.commandArgv}; retry provider login in a regular terminal to see its output`,
+          );
           setActivityStatus("error");
         }
       } catch (err) {

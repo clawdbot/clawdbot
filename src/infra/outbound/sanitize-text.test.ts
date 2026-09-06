@@ -57,8 +57,13 @@ describe("sanitizeForPlainText", () => {
 
   // --- block elements -----------------------------------------------------
 
-  it("converts <p> and <div> to newlines", () => {
-    expect(sanitizeForPlainText("<p>paragraph</p>")).toBe("\nparagraph\n");
+  it.each([
+    ["<p>paragraph</p>", "\nparagraph\n"],
+    ['before<p class="x">inside</p>after', "before\ninside\nafter"],
+    ['before<div id="y">inside</div>after', "before\ninside\nafter"],
+    ["before<DIV id='y' title='a>b'>inside</DIV>after", "before\ninside\nafter"],
+  ])("preserves block boundaries in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
   });
 
   it("converts headings to bold text with newlines", () => {
@@ -73,6 +78,51 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("<li>item one</li><li>item two</li>")).toBe(
       "• item one\n• item two\n",
     );
+  });
+
+  it.each([
+    ["<b></b>", { style: "markdown" as const }],
+    ["<strong></strong>", {}],
+    ["<i></i>", { style: "markdown" as const }],
+    ["<em></em>", { style: "markdown" as const }],
+    ["<s></s>", { style: "markdown" as const }],
+    ["<strike></strike>", { style: "markdown" as const }],
+    ["<del></del>", { style: "markdown" as const }],
+    ["<code></code>", {}],
+    ["<h2></h2>", { style: "markdown" as const }],
+    ["<li></li>", { style: "markdown" as const }],
+    ["<b>   </b>", { style: "markdown" as const }],
+    ["<strong title='empty'></strong>", { style: "markdown" as const }],
+    ["<b><span></span></b>", { style: "markdown" as const }],
+    ["<b><img src='empty'/></b>", { style: "markdown" as const }],
+    ["<li><img src='empty'/></li>", { style: "markdown" as const }],
+    ["<i><b></b></i>", { style: "markdown" as const }],
+    ["<b><i></i></b>", { style: "markdown" as const }],
+  ])("does not create visible structure from %s", (input, options) => {
+    expect(sanitizeForPlainText(input, options)).toBe("");
+  });
+
+  it("preserves visible content around an empty element", () => {
+    expect(
+      sanitizeForPlainText("before\n<b></b>\nafter", {
+        style: "markdown",
+      }),
+    ).toBe("before\n\nafter");
+  });
+
+  it.each([
+    ["<b><br></b>", "\n"],
+    ["<b>\n</b>", "\n"],
+    ["<b>\r\n</b>", "\r\n"],
+    ["<p></p>", "\n\n"],
+    ["<div></div>", "\n\n"],
+    ["<p><br></p>", "\n\n"],
+  ])("preserves structural breaks in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+  });
+
+  it("preserves a wrapped line break between visible text", () => {
+    expect(sanitizeForPlainText("before<b>\n</b>after")).toBe("before\nafter");
   });
 
   // --- tag stripping ------------------------------------------------------
@@ -149,6 +199,27 @@ describe("sanitizeForPlainText", () => {
     );
   });
 
+  it.each([
+    ['Link: <a href="`hidden`">click</a> end', "Link: click end"],
+    ['Link: <a href="`hidden`">click</a> then `visible` end', "Link: click then `visible` end"],
+    ['`first` <a href="`hidden`">click</a> then `last`', "`first` click then `last`"],
+    ['<a href="`one`">a</a><span title="`two`">b</span> `visible`', "ab `visible`"],
+    ['<b title="`hidden`">`visible`</b>', "*`visible`*"],
+  ])("restores only surviving code regions in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+    expect(sanitizeForPlainText(input, { style: "markdown" })).toBe(
+      input.startsWith("<b") ? "**`visible`**" : expected,
+    );
+  });
+
+  it("preserves marker-shaped input around and inside surviving code", () => {
+    const sentinels = "\u0000e\u0000p0;\u0000p1;\u0000p12;";
+    const visible = `\`${sentinels}<Button>\``;
+    expect(sanitizeForPlainText(`${sentinels}<a href="\`hidden\`">click</a> ${visible}`)).toBe(
+      `${sentinels}click ${visible}`,
+    );
+  });
+
   it("preserves tag-shaped code inside indented code blocks", () => {
     expect(sanitizeForPlainText('Example:\n\n    <div id="root"></div>\n\ndone')).toBe(
       'Example:\n\n    <div id="root"></div>\n\ndone',
@@ -174,6 +245,35 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("See <https://example.com/path?q=1> now")).toBe(
       "See https://example.com/path?q=1 now",
     );
+  });
+
+  it.each([
+    ["<https://example.com/a.pdf|Manual>", "Manual"],
+    ["<https://example.com|Docs>", "Docs"],
+    ["<mailto:support@example.com|Help>", "Help"],
+    ["<https://example.com/a.pdf|User Manual>", "User Manual"],
+    ["See <http://example.com/a.pdf|User Manual> now", "See User Manual now"],
+    ["<mailto:support@example.com|Contact Support>", "Contact Support"],
+    ["<mailto:a/b@example.com|Contact Support>", "Contact Support"],
+  ])("keeps the visible label from labeled angle links in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+  });
+
+  it.each([
+    "<https://example.com/a.pdf title=hidden>",
+    "<https://example.com/a.pdf\nsecret>",
+    "<https://example.com/a.pdf|   >",
+    "<ftp://example.com/a.pdf|File Manual>",
+    "</https://example.com/a.pdf>",
+  ])("does not broaden URL-shaped angle handling for %s", (input) => {
+    expect(sanitizeForPlainText(input)).toBe("");
+  });
+
+  it("keeps labeled angle text literal inside code", () => {
+    const link = "<https://example.com/a.pdf|User Manual>";
+    expect(sanitizeForPlainText(`\`${link}\` ${link}`)).toBe(`\`${link}\` User Manual`);
+    const unspaced = "<https://example.com/a.pdf|Manual>";
+    expect(sanitizeForPlainText(`\`${unspaced}\` ${unspaced}`)).toBe(`\`${unspaced}\` Manual`);
   });
 
   it("preserves angle-addr email addresses", () => {
@@ -255,6 +355,47 @@ describe("stripInternalRuntimeScaffolding", () => {
       text: example,
       channelData: { example, leaked: "" },
     });
+  });
+
+  it.each([
+    { strip: false, nullPrototype: false },
+    { strip: false, nullPrototype: true },
+    { strip: true, nullPrototype: false },
+    { strip: true, nullPrototype: true },
+  ])("preserves payload shape and identity for %j", ({ strip, nullPrototype }) => {
+    const sibling = { text: "keep" };
+    const items = [sibling];
+    items.length = 2;
+    const symbol = Symbol("metadata");
+    let reads = 0;
+    const channelData = {
+      get label() {
+        reads += 1;
+        return strip ? "visible<previous_response>internal</previous_response>" : "visible";
+      },
+      sibling,
+      items,
+      [symbol]: "metadata",
+    };
+    Object.defineProperty(channelData, "hidden", { value: "metadata" });
+    if (nullPrototype) {
+      Object.setPrototypeOf(channelData, null);
+    }
+    const payload = { text: "hello", channelData };
+
+    const result = stripInternalRuntimeScaffoldingFromPayload(payload);
+
+    expect(reads).toBe(1);
+    expect(result.channelData?.label).toBe("visible");
+    expect(result.channelData?.sibling).toBe(sibling);
+    expect(result.channelData?.items).toBe(items);
+    if (strip) {
+      expect(result).not.toBe(payload);
+      expect(Object.getPrototypeOf(result.channelData)).toBe(Object.prototype);
+      expect(Reflect.ownKeys(result.channelData!)).toEqual(["label", "sibling", "items"]);
+    } else {
+      expect(result).toBe(payload);
+    }
   });
 
   it("does not let Markdown fences bypass private runtime scaffolding removal", () => {

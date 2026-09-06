@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
-import { isMissingOperatorReadScopeError, isWizardNotFoundError } from "./gateway-errors.ts";
+import {
+  isMissingOperatorReadScopeError,
+  isWizardNotFoundError,
+  isSetupAdmissionBusyError,
+} from "./gateway-errors.ts";
 
 function gatewayRequestError(params: { code: string; message: string; details?: unknown }): Error {
   return Object.assign(new Error(params.message), {
@@ -13,42 +17,49 @@ function gatewayRequestError(params: { code: string; message: string; details?: 
 }
 
 describe("gateway error helpers", () => {
-  it("classifies structured missing-wizard errors", () => {
-    expect(
-      isWizardNotFoundError(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "localized or changed public copy",
-          details: { code: "WIZARD_NOT_FOUND" },
+  it.each([
+    [isWizardNotFoundError, "INVALID_REQUEST", "WIZARD_NOT_FOUND"],
+    [isSetupAdmissionBusyError, "UNAVAILABLE", "SETUP_ADMISSION_BUSY"],
+  ] as const)(
+    "classifies structured %s %s %s without parsing copy",
+    (classify, code, detailCode) => {
+      expect(
+        classify(
+          new GatewayRequestError({
+            code,
+            message: "localized or changed public copy",
+            details: { code: detailCode },
+          }),
+        ),
+      ).toBe(true);
+      expect(
+        classify({
+          gatewayCode: code,
+          details: { code: detailCode },
         }),
-      ),
-    ).toBe(true);
-    expect(
-      isWizardNotFoundError({
-        gatewayCode: "INVALID_REQUEST",
-        details: { code: "WIZARD_NOT_FOUND" },
-      }),
-    ).toBe(true);
-  });
+      ).toBe(true);
+    },
+  );
 
-  it("rejects unrelated errors and malformed missing-wizard details", () => {
+  it.each([
+    [isWizardNotFoundError, "INVALID_REQUEST", "WIZARD_NOT_FOUND", "UNAVAILABLE"],
+    [isSetupAdmissionBusyError, "UNAVAILABLE", "SETUP_ADMISSION_BUSY", "INVALID_REQUEST"],
+  ] as const)("rejects unrelated %s %s %s %s errors", (classify, code, detailCode, wrongCode) => {
     expect(
-      isWizardNotFoundError({
-        gatewayCode: "UNAVAILABLE",
-        details: { code: "WIZARD_NOT_FOUND" },
+      classify({
+        gatewayCode: wrongCode,
+        details: { code: detailCode },
       }),
     ).toBe(false);
     expect(
-      isWizardNotFoundError({
-        gatewayCode: "INVALID_REQUEST",
+      classify({
+        gatewayCode: code,
         details: { code: "UNKNOWN_AGENT_ID" },
       }),
     ).toBe(false);
-    expect(
-      isWizardNotFoundError({ gatewayCode: "INVALID_REQUEST", message: "wizard not found" }),
-    ).toBe(false);
-    for (const details of [null, "WIZARD_NOT_FOUND", [], { code: 42 }]) {
-      expect(isWizardNotFoundError({ gatewayCode: "INVALID_REQUEST", details })).toBe(false);
+    expect(classify({ gatewayCode: code, message: "wizard not found" })).toBe(false);
+    for (const details of [null, detailCode, [], { code: 42 }]) {
+      expect(classify({ gatewayCode: code, details })).toBe(false);
     }
   });
 

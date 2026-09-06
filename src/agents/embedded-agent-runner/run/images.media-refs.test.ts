@@ -234,28 +234,38 @@ describe("fact-carried image references", () => {
     }
   });
 
-  it("fails an exact inline slot whose image block is missing", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-missing-inline-"));
-    const imagePath = path.join(workspaceDir, "stale.png");
-    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+  it.each(["readable", "unavailable"] as const)(
+    "handles a missing inline block with its %s exact source",
+    async (source) => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-missing-inline-"));
+      const imagePath = path.join(workspaceDir, "photo.png");
+      const sourceAvailable = source === "readable";
 
-    try {
-      const result = await detectAndLoadPromptImages({
-        prompt: "inspect",
-        media: [{ path: imagePath, contentType: "image/png" }],
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        imageOrder: ["inline"],
-        workspaceOnly: true,
-      });
+      try {
+        if (sourceAvailable) {
+          await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        }
+        const result = await detectAndLoadPromptImages({
+          prompt: "inspect",
+          media: [{ path: imagePath, contentType: "image/png" }],
+          workspaceDir,
+          model: { input: ["text", "image"] },
+          imageOrder: ["inline"],
+          workspaceOnly: true,
+        });
 
-      expect(result.loadedCount).toBe(0);
-      expect(result.failedMediaCount).toBe(1);
-      expect(result.images).toEqual([]);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
+        expect(result.loadedCount).toBe(sourceAvailable ? 1 : 0);
+        expect(result.skippedCount).toBe(sourceAvailable ? 0 : 1);
+        expect(result.failedMediaCount).toBe(sourceAvailable ? 0 : 1);
+        expect(result.images).toEqual(
+          sourceAvailable ? [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }] : [],
+        );
+        expect(result.imageFactIndexes).toEqual(sourceAvailable ? [0] : []);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("hydrates a fact whose only local identity is a file URL", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-file-url-"));

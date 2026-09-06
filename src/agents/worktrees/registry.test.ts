@@ -10,14 +10,15 @@ import {
 import {
   deleteRegistryWorktree,
   getRegistryWorktreeProvisionedChunk,
-  findRegistryWorktreeByPath,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktreeProvisionedChunk,
   insertRegistryWorktree,
+  listLegacyRegistryWorktreesForMigration,
   listRegistryWorktrees,
+  listRegistryWorktreesForMigration,
   updateRegistryWorktree,
 } from "./registry.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -35,6 +36,12 @@ describe("managed worktree registry", () => {
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("inspects absent legacy worktrees without creating the state database", async () => {
+    expect(listLegacyRegistryWorktreesForMigration(env)).toEqual([]);
+    expect(listRegistryWorktreesForMigration(env)).toEqual([]);
+    await expect(fs.stat(env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("persists, orders, updates, and deletes worktree rows through Kysely", () => {
@@ -62,6 +69,10 @@ describe("managed worktree registry", () => {
     });
 
     expect(listRegistryWorktrees(env).map((entry) => entry.id)).toEqual(["second", "first"]);
+    expect(listRegistryWorktreesForMigration(env)).toEqual(listRegistryWorktrees(env));
+    expect(listLegacyRegistryWorktreesForMigration(env).map((entry) => entry.id)).toEqual([
+      "second",
+    ]);
     expect(findLiveRegistryWorktreeByPath(env, record.path)).toMatchObject({
       id: "first",
       ownerKind: "workboard",
@@ -88,7 +99,6 @@ describe("managed worktree registry", () => {
       snapshotRef: "refs/openclaw/snapshots/first",
     });
     expect(findLiveRegistryWorktreeByPath(env, record.path)).toBeUndefined();
-    expect(findRegistryWorktreeByPath(env, record.path)?.id).toBe("first");
     expect(getRegistryWorktreeProvisionedPaths(env, "first")).toEqual([".env.local"]);
     expect(getRegistryWorktreeProvisionedState(env, "first")).toEqual([
       { path: ".env.local", mode: 0o600, chunks: 1 },

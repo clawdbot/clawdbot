@@ -81,10 +81,47 @@ describe("approval scope", () => {
     { kind: "payment", amount: `${"x".repeat(39)}\u202E`, currency: "EUR", target: "Stripe" },
     { kind: "payment", amount: "49.99", currency: `${"x".repeat(11)}\u202E`, target: "Stripe" },
     { kind: "external-post", target: `${"x".repeat(127)}\u202E`, visibility: "public" },
+    {
+      kind: "standing-grant",
+      automation: `${"x".repeat(127)}\u202E`,
+      command: "id -un",
+    },
+    {
+      kind: "standing-grant",
+      automation: "nightly",
+      command: `${"x".repeat(255)}\u202E`,
+    },
   ] satisfies ApprovalScope[])(
     "drops scopes that exceed a bound after escaping ($kind)",
     (scope) => {
       expect(sanitizeApprovalScope(scope)).toBeNull();
     },
   );
+
+  it("sanitizes and summarizes standing-grant scopes", () => {
+    const sanitized = sanitizeApprovalScope({
+      kind: "standing-grant",
+      automation: "nightly backup",
+      command: "id -un",
+      expiresInDays: 30,
+    });
+    expect(sanitized).toEqual({
+      kind: "standing-grant",
+      automation: "nightly backup",
+      command: "id -un",
+      expiresInDays: 30,
+    });
+    expect(summarizeApprovalScope(sanitized!)).toBe(
+      'Always allow runs this exact command for "nightly backup" without asking, for 30 days (revocable)',
+    );
+    expect(
+      summarizeApprovalScope({
+        kind: "standing-grant",
+        automation: "nightly backup",
+        command: "id -un",
+      }),
+    ).toBe(
+      'Always allow runs this exact command for "nightly backup" without asking, until revoked (revocable)',
+    );
+  });
 });

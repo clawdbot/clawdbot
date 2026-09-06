@@ -214,6 +214,19 @@ struct RootTabsPresentationTests {
         })
     }
 
+    @Test func `usage summary preserves numeric and string counts with missing totals`() throws {
+        let cases: [(json: String, expected: Int?)] = [
+            (#"{"totals":{"totalTokens":1200}}"#, 1200),
+            (#"{"totals":{"totalTokens":"1200"}}"#, 1200),
+            (#"{"totals":{}}"#, nil),
+            (#"{}"#, nil),
+        ]
+        for testCase in cases {
+            let summary = try JSONDecoder().decode(CostUsageSummaryLite.self, from: Data(testCase.json.utf8))
+            #expect(summary.totalTokens == testCase.expected)
+        }
+    }
+
     @Test func `iOS usage requests device calendar days`() throws {
         let cases: [(timeZoneID: String, timestamp: TimeInterval, expectedOffset: String)] = [
             ("America/Los_Angeles", 1_769_000_000, "UTC-8"),
@@ -688,12 +701,27 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.sidebarWidth(containerWidth: 402, isDrawerLayout: true) == 340)
     }
 
-    @Test func `sidebar shows configured agent rows with sane clamping`() {
-        #expect(RootSidebar.shownAgentCount(configured: 1, total: 5) == 1)
-        #expect(RootSidebar.shownAgentCount(configured: 3, total: 5) == 3)
-        #expect(RootSidebar.shownAgentCount(configured: 0, total: 5) == 1)
-        #expect(RootSidebar.shownAgentCount(configured: 3, total: 2) == 2)
-        #expect(RootSidebar.shownAgentCount(configured: 1, total: 0) == 1)
+    @Test func `sidebar session accessibility names pin and unread state`() {
+        #expect(RootSidebar.sessionAccessibilityValue(isPinned: false, isUnread: false).isEmpty)
+        #expect(RootSidebar.sessionAccessibilityValue(isPinned: true, isUnread: false) == "Pinned")
+        #expect(RootSidebar.sessionAccessibilityValue(isPinned: false, isUnread: true) == "Unread")
+        #expect(RootSidebar.sessionAccessibilityValue(isPinned: true, isUnread: true) == "Pinned, Unread")
+    }
+
+    @Test func `iOS sidebar moves pinned sessions ahead of the remaining inventory`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                Self.sessionEntry(key: "pinned", pinned: true),
+                Self.sessionEntry(key: "recent"),
+            ],
+            currentSessionKey: "recent",
+            excludesMainSession: true,
+            query: "")
+
+        let layout = RootSidebar.sessionLayout(sections)
+
+        #expect(layout.pinnedNodes.map(\.session.key) == ["pinned"])
+        #expect(layout.sections.map(\.id) == ["recent"])
     }
 
     @Test func `sidebar agent badges use canonical identity fallback`() {
@@ -1123,6 +1151,7 @@ struct RootTabsPresentationTests {
     private static func sessionEntry(
         key: String,
         archived: Bool? = nil,
+        pinned: Bool? = nil,
         totalTokens: Int? = nil,
         totalTokensFresh: Bool? = nil,
         contextTokens: Int? = nil,
@@ -1151,6 +1180,7 @@ struct RootTabsPresentationTests {
             modelProvider: nil,
             model: nil,
             contextTokens: contextTokens,
+            pinned: pinned,
             archived: archived,
             observerDigest: observerDigest,
             lastReadAt: lastReadAt,

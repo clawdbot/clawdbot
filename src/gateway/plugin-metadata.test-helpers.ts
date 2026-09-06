@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
 function ownerEntries(value: ReadonlyMap<string, readonly string[]>) {
@@ -32,7 +33,7 @@ export function assertPluginMetadataSnapshotConsistency(snapshot: PluginMetadata
       throw new Error(`plugin metadata fixture lookup diverged for ${plugin.id}`);
     }
     const providers = new Set(plugin.providers);
-    const cliBackends = new Set(plugin.cliBackends);
+    const cliBackends = new Set([...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])]);
     const authRefs = new Set([
       ...(plugin.providerAuthChoices ?? []).map((choice) => choice.choiceId),
       ...(plugin.providerAuthChoices ?? []).flatMap((choice) => choice.deprecatedChoiceIds ?? []),
@@ -55,7 +56,7 @@ export function assertPluginMetadataSnapshotConsistency(snapshot: PluginMetadata
       }
     }
     for (const backend of cliBackends) {
-      appendOwner(expectedCliBackendOwners, backend, plugin.id);
+      appendOwner(expectedCliBackendOwners, normalizeProviderId(backend), plugin.id);
     }
     for (const ref of plugin.syntheticAuthRefs ?? []) {
       if (!providers.has(ref) && !cliBackends.has(ref) && !authRefs.has(ref)) {

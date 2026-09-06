@@ -88,6 +88,7 @@ export function createDirectChatContext(
     },
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),

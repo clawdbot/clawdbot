@@ -25,6 +25,7 @@ import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
+import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -86,7 +87,8 @@ import {
 } from "./pending-final-delivery.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
-import { createReplyTimingTracker } from "./reply-timing-tracker.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
+import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
@@ -129,28 +131,8 @@ const commandsCoreRuntimeLoader = createLazyImportLoader(
   () => import("./commands-core.runtime.js"),
 );
 
-function loadSessionResetModelRuntime() {
-  return sessionResetModelRuntimeLoader.load();
-}
-
-function loadStageSandboxMediaRuntime() {
-  return stageSandboxMediaRuntimeLoader.load();
-}
-
-function loadMediaUnderstandingApplyRuntime() {
-  return mediaUnderstandingApplyRuntimeLoader.load();
-}
-
-function loadLinkUnderstandingApplyRuntime() {
-  return linkUnderstandingApplyRuntimeLoader.load();
-}
-
-function loadCommandsCoreRuntime() {
-  return commandsCoreRuntimeLoader.load();
-}
-
 function hasLinkCandidate(ctx: MsgContext): boolean {
-  const message = ctx.commandText;
+  const message = ctx.agentText;
   if (!message) {
     return false;
   }
@@ -171,7 +153,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
     return undefined;
   }
   try {
-    const { applyMediaUnderstanding } = await loadMediaUnderstandingApplyRuntime();
+    const { applyMediaUnderstanding } = await mediaUnderstandingApplyRuntimeLoader.load();
     return await applyMediaUnderstanding(params);
   } catch (err) {
     mediaUnderstandingApplyRuntimeLoader.clear();
@@ -206,12 +188,15 @@ function canSelfServeLocalPaths(params: {
   }
   const policySessionKey = resolveRuntimePolicySessionKey({
     cfg: params.cfg,
+    agentId: params.agentId,
     ctx: params.ctx,
     sessionKey: params.sessionKey,
   });
   const sandboxed = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: policySessionKey,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    classificationSessionKey: policySessionKey,
   }).sandboxed;
   if (
     (sandboxed && !params.stagedPathsAvailable) ||
@@ -286,15 +271,19 @@ function withExtractedFileImages(
 async function applyLinkUnderstandingIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  signal?: AbortSignal;
 }): Promise<boolean> {
   if (!hasLinkCandidate(params.ctx)) {
     return false;
   }
   try {
-    const { applyLinkUnderstanding } = await loadLinkUnderstandingApplyRuntime();
+    const { applyLinkUnderstanding } = await linkUnderstandingApplyRuntimeLoader.load();
     await applyLinkUnderstanding(params);
     return true;
   } catch (err) {
+    if (isAbortError(err)) {
+      throw err;
+    }
     linkUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `link understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
@@ -319,10 +308,13 @@ export async function getReplyFromConfig(
       isFastTestEnv,
       configOverride,
     });
-  // Profiler spans stay inert unless diagnostics enable `profiler` or
-  // `reply.profiler`, so normal replies do not pay per-stage Date.now/array
-  // bookkeeping while we can still split resolver costs on demand.
-  const resolverTiming = createReplyTimingTracker({ log: replyResolverTimingLog, config: cfg });
+  // Retain preparation timings before a stall happens. Whole-turn summaries
+  // include inference and tools, so only profiling warns on their duration.
+  const profilerEnabled = isReplyProfilerEnabled({ config: cfg });
+  const resolverTiming = createReplyTimingTracker({
+    log: replyResolverTimingLog,
+    enabled: profilerEnabled,
+  });
   const useFastTestBootstrap = resolverTiming.measureSync("reply.resolve_fast_test_bootstrap", () =>
     shouldUseReplyFastTestBootstrap({
       isFastTestEnv,
@@ -504,6 +496,7 @@ export async function getReplyFromConfig(
         provider,
         model,
         workspaceDir: workspaceDirForNativeCommand,
+        preparedModelCatalog,
         typing,
         opts: optsWithSkillFilter,
         skillFilter: mergedSkillFilter,
@@ -555,8 +548,10 @@ export async function getReplyFromConfig(
       stageRemoteInboundMediaIfNeeded({
         ctx: finalized,
         cfg,
+        agentId,
         sessionKey: agentSessionKey,
         workspaceDir,
+        abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
   }
@@ -604,8 +599,15 @@ export async function getReplyFromConfig(
       applyLinkUnderstandingIfNeeded({
         ctx: finalized,
         cfg,
+        signal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
+  }
+  // Cleanup may resolve after cancellation; hooks must stay inside the reply lifetime.
+  if (internalOptsWithSkillFilter?.abortSignal?.aborted) {
+    throw createAbortError("Reply canceled during preprocessing", {
+      cause: internalOptsWithSkillFilter.abortSignal.reason,
+    });
   }
   emitPreAgentMessageHooks({
     ctx: finalized,
@@ -634,6 +636,7 @@ export async function getReplyFromConfig(
               : {}),
             pinExpectedExistingSession:
               internalOptsWithSkillFilter?.pinExpectedExistingSession === true,
+            newlyCreatedSessionId: internalOptsWithSkillFilter?.newlyCreatedSessionId,
             requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
             resumeRequestedSession: internalOptsWithSkillFilter?.resumeRequestedSession,
             signal: internalOptsWithSkillFilter?.abortSignal,
@@ -678,6 +681,8 @@ export async function getReplyFromConfig(
     initialSessionEntry,
     sessionEntryHandle,
     previousSessionEntry,
+    previousSessionMemory,
+    previousSessionResetMessages,
     sessionStore,
     sessionKey,
     sessionId,
@@ -701,8 +706,15 @@ export async function getReplyFromConfig(
   }
   // Utility-model narration is turn-local decoration. Initialize the durable
   // session first, then keep it completely outside model-locked native runs.
-  const optsWithSessionSkillOverrides = sessionEntry.toolOverrides?.skills
-    ? { ...optsWithCommandQueueOverride, skillOverrides: sessionEntry.toolOverrides.skills }
+  const admittedSessionSettings =
+    // SAFETY: Gateway dispatch owns this internal extension and forwards the same options object here.
+    (optsWithCommandQueueOverride as RuntimeInternalGetReplyOptions | undefined)
+      ?.admittedSessionSettings;
+  const turnToolOverrides = admittedSessionSettings
+    ? admittedSessionSettings.toolOverrides
+    : sessionEntry.toolOverrides;
+  const optsWithSessionSkillOverrides = turnToolOverrides?.skills
+    ? { ...optsWithCommandQueueOverride, skillOverrides: turnToolOverrides.skills }
     : optsWithCommandQueueOverride;
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
@@ -752,7 +764,7 @@ export async function getReplyFromConfig(
   }
 
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
-    const { applyResetModelOverride } = await loadSessionResetModelRuntime();
+    const { applyResetModelOverride } = await sessionResetModelRuntimeLoader.load();
     try {
       await applyResetModelOverride({
         cfg,
@@ -887,6 +899,15 @@ export async function getReplyFromConfig(
     model = resolvedChannelModelOverride.ref.model;
   }
 
+  const conversation =
+    internalResolvedOpts?.replyConversation ??
+    prepareReplyConversation({
+      ctx: sessionCtx,
+      sessionEntry: sessionStore[sessionKey] ?? sessionEntry,
+      groupResolution,
+      isHeartbeat: opts?.isHeartbeat,
+    });
+
   if (
     shouldUseReplyFastDirectiveExecution({
       isFastTestBootstrap: useFastTestRuntime,
@@ -929,6 +950,7 @@ export async function getReplyFromConfig(
       runPreparedReply({
         ctx,
         sessionCtx,
+        conversation,
         cfg,
         agentId,
         agentDir,
@@ -980,7 +1002,9 @@ export async function getReplyFromConfig(
         autoFallbackPrimaryProbe,
       }),
     );
-    logResolverTiming("completed", "fast_directive_prepared_reply");
+    if (profilerEnabled) {
+      logResolverTiming("completed", "fast_directive_prepared_reply");
+    }
     return fastReplyResult;
   }
 
@@ -998,7 +1022,7 @@ export async function getReplyFromConfig(
       sessionKey,
       storePath,
       sessionScope,
-      groupResolution,
+      conversation,
       isGroup,
       triggerBodyNormalized,
       resetTriggered,
@@ -1063,7 +1087,7 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
-    const { emitResetCommandHooks } = await loadCommandsCoreRuntime();
+    const { emitResetCommandHooks } = await commandsCoreRuntimeLoader.load();
     const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
@@ -1075,6 +1099,8 @@ export async function getReplyFromConfig(
       storePath,
       sessionEntry,
       previousSessionEntry,
+      previousSessionMemory,
+      previousSessionResetMessages,
       onObservedReplyDelivery: resolvedOpts?.onObservedReplyDelivery,
       workspaceDir,
     });
@@ -1101,6 +1127,8 @@ export async function getReplyFromConfig(
       ...(initialSessionEntry ? { initialSessionEntry } : {}),
       allowCreateSessionEntry: useFastTestBootstrap && initialSessionEntry === undefined,
       previousSessionEntry,
+      previousSessionMemory,
+      previousSessionResetMessages,
       sessionStore,
       sessionKey,
       storePath,
@@ -1111,6 +1139,7 @@ export async function getReplyFromConfig(
       typing,
       allowTextCommands,
       inlineStatusRequested,
+      inlineCommand: directiveResult.result.inlineCommand,
       command,
       skillCommands,
       directives,
@@ -1180,11 +1209,10 @@ export async function getReplyFromConfig(
         preparedModelCatalog,
       });
     } catch (error) {
-      if (error instanceof ModelSelectionLockedError) {
-        typing.cleanup();
-        return { text: error.message };
-      }
-      if (!isSessionWorkStartInvalidatedError(error)) {
+      if (
+        !(error instanceof ModelSelectionLockedError) &&
+        !isSessionWorkStartInvalidatedError(error)
+      ) {
         throw error;
       }
       typing.cleanup();
@@ -1203,15 +1231,9 @@ export async function getReplyFromConfig(
       resolvedThinkLevel = await runModelState.resolveDefaultThinkingLevel();
     }
     const rawSessionReasoningLevel = sessionEntry.reasoningLevel;
-    const canUseReasoningState =
-      command.isAuthorizedSender ||
-      command.senderIsOwner ||
-      (Array.isArray(ctx.GatewayClientScopes) &&
-        ctx.GatewayClientScopes.includes("operator.admin"));
     const hasExplicitReasoningLevel =
       directives.reasoningLevel !== undefined ||
-      (rawSessionReasoningLevel != null && canUseReasoningState) ||
-      (rawSessionReasoningLevel != null && !canUseReasoningState) ||
+      rawSessionReasoningLevel != null ||
       agentEntry?.reasoningDefault != null ||
       agentCfg?.reasoningDefault != null;
     if (!hasExplicitReasoningLevel) {
@@ -1234,14 +1256,16 @@ export async function getReplyFromConfig(
     !hasStagedMediaFacts(ctx.media) &&
     hasInboundMedia(ctx)
   ) {
-    const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
+    const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
     const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
       stageSandboxMedia({
         ctx,
         sessionCtx,
         cfg,
+        agentId,
         sessionKey,
         workspaceDir,
+        abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
     stagedAttachmentPaths = stageResult.staged;
@@ -1275,6 +1299,7 @@ export async function getReplyFromConfig(
     runPreparedReply({
       ctx,
       sessionCtx,
+      conversation,
       cfg,
       agentId,
       agentDir,
@@ -1326,7 +1351,9 @@ export async function getReplyFromConfig(
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
     }),
   );
-  logResolverTiming("completed", "prepared_reply");
+  if (profilerEnabled) {
+    logResolverTiming("completed", "prepared_reply");
+  }
   return replyResult;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseWorkerLaunchPlan, type WorkerLaunchPlan } from "./launch-descriptor.js";
+import { hasExactOwnKeys } from "./protocol-record.js";
 
 const IDENTIFIER_MAX_CHARS = 256;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -60,12 +61,6 @@ export type NodeWorkerConnectionFailureMessage = {
   type: typeof NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE;
   cause: string | null;
 };
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return (
-    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
-  );
-}
 
 function isIdentifier(value: unknown): value is string {
   return (
@@ -129,7 +124,7 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
 export function validateNodeWorkerLaunchInput(value: unknown): NodeWorkerLaunchInput {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, [
+    !hasExactOwnKeys(value, [
       "environmentSession",
       "launchId",
       "gatewayNamespace",
@@ -178,7 +173,7 @@ export function validateNodeWorkerLaunchInput(value: unknown): NodeWorkerLaunchI
 
 export function parseNodeWorkerLookupInput(raw?: string | null): { launchId: string } {
   const value = decodeRequest(raw);
-  if (!isRecord(value) || !hasExactKeys(value, ["launchId"])) {
+  if (!isRecord(value) || !hasExactOwnKeys(value, ["launchId"])) {
     throw new Error("INVALID_REQUEST: invalid node worker lookup request");
   }
   return { launchId: requireIdentifier(value.launchId, "launchId") };
@@ -191,7 +186,7 @@ export function parseNodeWorkerCancelInput(raw?: string | null): NodeWorkerSuper
   const value = decodeRequest(raw);
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, [
+    !hasExactOwnKeys(value, [
       "launchId",
       "planHash",
       "environmentId",
@@ -229,7 +224,7 @@ export function parseNodeWorkerEnvironmentStopInput(
   const value = decodeRequest(raw);
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["gatewayNamespace", "environmentId", "sessionId", "ownerEpoch"])
+    !hasExactOwnKeys(value, ["gatewayNamespace", "environmentId", "sessionId", "ownerEpoch"])
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker environment stop request");
   }
@@ -325,7 +320,7 @@ export function parseNodeWorkerConnectionFailureMessage(
 ): NodeWorkerConnectionFailureMessage | null {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["type", "cause"]) ||
+    !hasExactOwnKeys(value, ["type", "cause"]) ||
     value.type !== NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE ||
     (value.cause !== null &&
       (typeof value.cause !== "string" ||
@@ -351,18 +346,18 @@ export function parseNodeWorkerSupervisorReceipt(
     return null;
   }
   if (value.state === "pending" || value.state === "running") {
-    return hasExactKeys(value, [...RECEIPT_IDENTITY_KEYS, "state"])
+    return hasExactOwnKeys(value, [...RECEIPT_IDENTITY_KEYS, "state"])
       ? { ...identity, state: value.state }
       : null;
   }
   if (value.state === "completed") {
-    return hasExactKeys(value, [...RECEIPT_IDENTITY_KEYS, "state", "resultJson"]) &&
+    return hasExactOwnKeys(value, [...RECEIPT_IDENTITY_KEYS, "state", "resultJson"]) &&
       isBoundedResultJson(value.resultJson)
       ? { ...identity, state: value.state, resultJson: value.resultJson }
       : null;
   }
   if (value.state === "failed" || value.state === "interrupted" || value.state === "cancelled") {
-    return hasExactKeys(value, [...RECEIPT_IDENTITY_KEYS, "state", "errorText"]) &&
+    return hasExactOwnKeys(value, [...RECEIPT_IDENTITY_KEYS, "state", "errorText"]) &&
       isBoundedErrorText(value.errorText)
       ? { ...identity, state: value.state, errorText: value.errorText }
       : null;

@@ -334,7 +334,7 @@ function makeModelPickerConfig(
   overrides: {
     config?: Omit<OpenClawConfig, "agents" | "channels" | "session">;
     defaultModel?: string;
-    models?: Record<string, Record<string, never>>;
+    models?: Record<string, { agentRuntime?: { id: string } }>;
     omitModels?: boolean;
     telegram?: TelegramChannelConfig;
   } = {},
@@ -2623,7 +2623,7 @@ describe("createTelegramBot", () => {
         `${CHECK_MARK_EMOJI} Model reset to default`,
       );
       expect(String(firstEditMessageTextArg(2))).toContain(
-        "Session model selection cleared. Runtime unchanged. New replies use the agent's configured default.",
+        "Session model selection cleared. Runtime set to <b>openclaw</b> from configured policy. New replies use the agent's configured default.",
       );
 
       const entry = readOnlySessionEntry(storePath);
@@ -2678,7 +2678,7 @@ describe("createTelegramBot", () => {
     expect(entry?.modelOverride).toBeUndefined();
     expect(entry?.agentRuntimeOverride).toBeUndefined();
     expect(String(firstEditMessageTextArg(2))).toBe(
-      `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. Runtime reset to configured policy. New replies use the agent's configured default.`,
+      `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. Runtime set to <b>openclaw</b> from configured policy. New replies use the agent's configured default.`,
     );
   });
 
@@ -2707,6 +2707,7 @@ describe("createTelegramBot", () => {
         defaultModel: "gpt-5",
         callbackData: "mdl_sel_openai/gpt-5",
         outcomeText: "Compatible auth profile retained.",
+        expectedRuntime: "codex",
         expectedProfile: "team:prod",
       },
       {
@@ -2716,6 +2717,7 @@ describe("createTelegramBot", () => {
         defaultModel: "claude-sonnet-4-5",
         callbackData: "mdl_sel_anthropic/claude-sonnet-4-5",
         outcomeText: "Incompatible auth profile cleared.",
+        expectedRuntime: "openclaw",
         expectedProfile: undefined,
       },
     ])(
@@ -2726,6 +2728,7 @@ describe("createTelegramBot", () => {
         defaultModel,
         callbackData,
         expectedProfile,
+        expectedRuntime,
         outcomeText,
       }) => {
         onSpy.mockClear();
@@ -2780,6 +2783,17 @@ describe("createTelegramBot", () => {
           providers: ["anthropic", "openai"],
           resolvedDefault: { provider: defaultProvider, model: defaultModel },
           modelNames: new Map(),
+          modelCatalog: [
+            { provider: "openai", id: "gpt-4o", name: "GPT-4o", reasoning: false },
+            { provider: "openai", id: "gpt-4.1", name: "GPT-4.1", reasoning: false },
+            { provider: "openai", id: "gpt-5", name: "GPT-5", reasoning: true },
+            {
+              provider: "anthropic",
+              id: "claude-sonnet-4-5",
+              name: "Claude Sonnet",
+              reasoning: true,
+            },
+          ],
         });
 
         loadConfig.mockReturnValue(config);
@@ -2801,7 +2815,7 @@ describe("createTelegramBot", () => {
           expect(entry?.modelOverride).toBeUndefined();
           const confirmation = String(firstEditMessageTextArg(2));
           expect(confirmation).toBe(
-            `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. ${outcomeText} Runtime unchanged. New replies use the agent's configured default.`,
+            `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. ${outcomeText} Runtime set to <b>${expectedRuntime}</b> from configured policy. New replies use the agent's configured default.`,
           );
           expect(confirmation).not.toContain("team:prod");
         }
@@ -2816,6 +2830,7 @@ describe("createTelegramBot", () => {
       byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
       providers: ["openai"],
       resolvedDefault: { provider: "openai", model: "gpt-5" },
+      modelCatalog: [],
       modelNames: new Map<string, string>([
         ["openai/gpt-4.1", "GPT 4.1 Bridge"],
         ["openai/gpt-5", "GPT Five Bridge"],
@@ -2844,6 +2859,9 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    expect(firstEditMessageTextArg(2)).toContain(
+      "Selecting a model also applies its configured runtime.",
+    );
     const params = firstEditMessageTextArg(3);
     const inlineKeyboard = (
       params as {
@@ -2863,7 +2881,36 @@ describe("createTelegramBot", () => {
 
   it("formats non-default model selection confirmations with Telegram HTML parse mode", async () => {
     const storePath = createTelegramTestStorePath("model-html");
-    const config = makeModelPickerConfig(storePath);
+    const config = makeModelPickerConfig(storePath, {
+      models: {
+        "anthropic/claude-opus-4-6": {},
+        "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
+      },
+    });
+    const route = resolveTelegramConversationRoute({
+      cfg: config,
+      accountId: "default",
+      chatId: 1234,
+      isGroup: false,
+      threadSpec: { scope: "none" },
+      senderId: 9,
+    }).route;
+    const sessionKey = resolveTelegramConversationBaseSessionKey({
+      cfg: config,
+      route,
+      chatId: 1234,
+      isGroup: false,
+      senderId: 9,
+    });
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "model-html",
+        updatedAt: 1,
+        agentRuntimeOverride: "openclaw",
+      },
+    });
 
     loadConfig.mockReturnValue(config);
     createTelegramBot({
@@ -2886,7 +2933,7 @@ describe("createTelegramBot", () => {
     expect(editCall[0]).toBe(1234);
     expect(editCall[1]).toBe(17);
     expect(editCall[2]).toBe(
-      `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime &lt;runtime&gt; -s to switch harnesses. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`,
+      `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime set to <b>openclaw</b> from configured policy. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`,
     );
     expect(requireRecord(editCall[3], "edit params").parse_mode).toBe("HTML");
 
@@ -2894,6 +2941,7 @@ describe("createTelegramBot", () => {
     expect(entry?.providerOverride).toBe("openai");
     expect(entry?.modelOverride).toBe("gpt-5.4");
     expect(entry?.modelOverrideSource).toBe("user");
+    expect(entry?.agentRuntimeOverride).toBeUndefined();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
   });
 

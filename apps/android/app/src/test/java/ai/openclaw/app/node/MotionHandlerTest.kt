@@ -4,7 +4,6 @@ import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -18,7 +17,7 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleMotionActivity_requiresPermission() =
     runTest {
-      val handler = MotionHandler.forTesting(appContext(), FakeMotionDataSource(hasPermission = false))
+      val handler = MotionHandler(appContext(), FakeMotionDataSource(hasPermission = false))
 
       val result = handler.handleMotionActivity(null)
 
@@ -29,7 +28,7 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleMotionActivity_rejectsInvalidJson() =
     runTest {
-      val handler = MotionHandler.forTesting(appContext(), FakeMotionDataSource(hasPermission = true))
+      val handler = MotionHandler(appContext(), FakeMotionDataSource(hasPermission = true))
 
       val result = handler.handleMotionActivity("[]")
 
@@ -53,7 +52,7 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
           isUnknown = false,
         )
       val handler =
-        MotionHandler.forTesting(
+        MotionHandler(
           appContext(),
           FakeMotionDataSource(hasPermission = true, activityRecord = activity),
         )
@@ -61,16 +60,11 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
       val result = handler.handleMotionActivity(null)
 
       assertTrue(result.ok)
-      val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
-      val activities = payload.getValue("activities").jsonArray
-      assertEquals(1, activities.size)
       assertEquals(
-        "high",
-        activities
-          .first()
-          .jsonObject
-          .getValue("confidence")
-          .jsonPrimitive.content,
+        Json.parseToJsonElement(
+          """{"activities":[{"startISO":"2026-02-28T10:00:00Z","endISO":"2026-02-28T10:00:02Z","confidence":"high","isWalking":true,"isRunning":false,"isCycling":false,"isAutomotive":false,"isStationary":false,"isUnknown":false}]}""",
+        ),
+        Json.parseToJsonElement(result.payloadJson ?: error("missing payload")),
       )
     }
 
@@ -78,7 +72,7 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
   fun handleMotionActivity_treatsJsonNullRangeAsAbsent() =
     runTest {
       val dataSource = FakeMotionDataSource(hasPermission = true)
-      val handler = MotionHandler.forTesting(appContext(), dataSource)
+      val handler = MotionHandler(appContext(), dataSource)
 
       val result = handler.handleMotionActivity("""{"startISO":null,"endISO":null,"limit":null}""")
 
@@ -92,7 +86,7 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
   fun handleMotionPedometer_treatsJsonNullRangeAsAbsent() =
     runTest {
       val dataSource = FakeMotionDataSource(hasPermission = true)
-      val handler = MotionHandler.forTesting(appContext(), dataSource)
+      val handler = MotionHandler(appContext(), dataSource)
 
       val result = handler.handleMotionPedometer("""{"startISO":null,"endISO":null}""")
 
@@ -113,7 +107,7 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
   fun motionRangeRequests_preserveLiteralNullStringsAndLimitBounds() =
     runTest {
       val dataSource = FakeMotionDataSource(hasPermission = true)
-      val handler = MotionHandler.forTesting(appContext(), dataSource)
+      val handler = MotionHandler(appContext(), dataSource)
 
       assertTrue(handler.handleMotionActivity("""{"startISO":" null ","endISO":"null","limit":2000}""").ok)
       assertEquals("null", dataSource.lastActivityRequest?.startISO)
@@ -129,7 +123,7 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
   fun handleMotionPedometer_mapsRangeUnsupportedError() =
     runTest {
       val handler =
-        MotionHandler.forTesting(
+        MotionHandler(
           appContext(),
           FakeMotionDataSource(
             hasPermission = true,
@@ -148,7 +142,7 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
   fun handleMotionActivity_propagatesParentCancellation() =
     runTest {
       val handler =
-        MotionHandler.forTesting(
+        MotionHandler(
           appContext(),
           FakeMotionDataSource(
             hasPermission = true,
@@ -168,7 +162,7 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
   fun handleMotionPedometer_propagatesParentCancellation() =
     runTest {
       val handler =
-        MotionHandler.forTesting(
+        MotionHandler(
           appContext(),
           FakeMotionDataSource(
             hasPermission = true,

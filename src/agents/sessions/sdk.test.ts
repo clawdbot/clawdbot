@@ -14,6 +14,7 @@ import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-pr
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
@@ -144,14 +145,7 @@ function createAssistantError(errorMessage: string): AssistantMessage {
     api: testModel.api,
     provider: testModel.provider,
     model: testModel.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "error",
     errorMessage,
     timestamp: 1,
@@ -169,6 +163,15 @@ function createAssistantResultStream(message: AssistantMessage) {
     stream.end();
   });
   return stream;
+}
+
+function createRecoveredAssistantStream() {
+  return createAssistantResultStream({
+    ...createAssistantError(""),
+    content: [{ type: "text", text: "recovered" }],
+    stopReason: "stop",
+    errorMessage: undefined,
+  });
 }
 
 function createEmptyResourceLoader(): ResourceLoader {
@@ -271,14 +274,7 @@ function createSessionManagerWithPersistedAssistantMessages(
         api: "messages",
         provider: "anthropic",
         model: "sonnet-4.6",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: message.stopReason ?? "stop",
         timestamp: Date.now(),
       },
@@ -360,14 +356,7 @@ describe("AgentSession tree navigation", () => {
       api: testModel.api,
       provider: testModel.provider,
       model: testModel.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: 3,
     });
@@ -380,14 +369,7 @@ describe("AgentSession tree navigation", () => {
         api: testModel.api,
         provider: testModel.provider,
         model: testModel.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "stop",
         timestamp: 4,
       }),
@@ -815,14 +797,7 @@ describe("createAgentSession tool defaults", () => {
         api: testModel.api,
         provider: testModel.provider,
         model: testModel.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "toolUse",
         timestamp: Date.now(),
       },
@@ -865,14 +840,7 @@ describe("createAgentSession tool defaults", () => {
         api: testModel.api,
         provider: testModel.provider,
         model: testModel.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "toolUse",
         timestamp: Date.now(),
       },
@@ -1034,42 +1002,37 @@ describe("AgentSession retry behavior", () => {
     });
   }
 
-  it("stops permanent errors and retries transient HTTP errors in a session", async () => {
-    streamMocks.streamSimple.mockReset();
-    const permanentEvents: string[] = [];
-    streamMocks.streamSimple.mockImplementation(() =>
-      createAssistantResultStream(createAssistantError("model model-x-500-preview not found")),
+  it.each(["permanent", "transient", "refusal"])("handles %s provider errors", async (kind) => {
+    const error = createAssistantError(
+      kind === "permanent"
+        ? "model model-x-500-preview not found"
+        : "HTTP 503 temporary provider response",
     );
-    const { session: permanentSession } = await createRetrySession();
-    permanentSession.subscribe((event) => permanentEvents.push(event.type));
-
-    await permanentSession.prompt("test permanent error");
-
-    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    expect(permanentEvents).not.toContain("auto_retry_start");
-
-    const transientEvents: string[] = [];
-    streamMocks.streamSimple.mockReset();
+    if (kind === "refusal") {
+      error.diagnostics = [
+        {
+          type: "provider_refusal",
+          timestamp: 0,
+          details: { provider: "anthropic", category: "cyber" },
+        },
+      ];
+    }
     streamMocks.streamSimple
-      .mockImplementationOnce(() =>
-        createAssistantResultStream(createAssistantError("HTTP 503 temporary provider response")),
-      )
-      .mockImplementationOnce(() =>
-        createAssistantResultStream({
-          ...createAssistantError(""),
-          content: [{ type: "text", text: "recovered" }],
-          stopReason: "stop",
-          errorMessage: undefined,
-        }),
+      .mockReset()
+      .mockImplementationOnce(() => createAssistantResultStream(error))
+      .mockImplementation(createRecoveredAssistantStream);
+    const { session } = await createRetrySession();
+    const events: string[] = [];
+    session.subscribe((event) => events.push(event.type));
+    try {
+      await session.prompt(`test ${kind} error`);
+      expect(streamMocks.streamSimple).toHaveBeenCalledTimes(kind === "transient" ? 2 : 1);
+      expect(events.filter((event) => event.startsWith("auto_retry_"))).toEqual(
+        kind === "transient" ? ["auto_retry_start", "auto_retry_end"] : [],
       );
-    const { session: transientSession } = await createRetrySession();
-    transientSession.subscribe((event) => transientEvents.push(event.type));
-
-    await transientSession.prompt("test transient error");
-
-    expect(streamMocks.streamSimple.mock.calls.length).toBeGreaterThan(1);
-    expect(transientEvents).toContain("auto_retry_start");
-    expect(transientEvents).toContain("auto_retry_end");
+    } finally {
+      session.dispose();
+    }
   });
 
   it("uses a short server Retry-After as the auto-retry delay floor", async () => {
@@ -1082,14 +1045,7 @@ describe("AgentSession retry behavior", () => {
             createAssistantError("HTTP 429: rate limited; Retry-After: 30 seconds"),
           ),
         )
-        .mockImplementationOnce(() =>
-          createAssistantResultStream({
-            ...createAssistantError(""),
-            content: [{ type: "text", text: "recovered" }],
-            stopReason: "stop",
-            errorMessage: undefined,
-          }),
-        );
+        .mockImplementationOnce(createRecoveredAssistantStream);
       const { session } = await createRetrySession({ baseDelayMs: 2_000, maxRetries: 1 });
       const retryDelays: number[] = [];
       session.subscribe((event) => {

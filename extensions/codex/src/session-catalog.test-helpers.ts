@@ -1,14 +1,18 @@
-// Shared fixtures for the split Codex session catalog suites.
+// Register narrow mocks before any production imports evaluate the catalog graph.
+// oxfmt-ignore
+import {
+  commandRpcMocks,
+  pinnedConnectionMocks,
+  transcriptMirrorMocks,
+  nodeHostMocks,
+} from "./session-catalog.test-mocks.js";
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  resolveAgentDir,
-  resolveDefaultAgentDir,
-  resolveSessionAgentIds,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir, resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   validateJsonSchemaValue,
@@ -16,17 +20,30 @@ import {
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  createCapturedPluginRegistration,
+  createEmptyPluginRegistry,
+  createPluginRecord,
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { SessionCatalogProvider as RegisteredSessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
+import { createCodexAppServerAgentHarness } from "../harness.js";
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
 } from "./app-server/auth-start-options.js";
 import { resolveCodexAppServerUserHomeDir } from "./app-server/config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
-import type { CodexThread } from "./app-server/protocol.js";
+import type { CodexThread, CodexThreadItem } from "./app-server/protocol.js";
 import { sessionBindingIdentity } from "./app-server/session-binding.js";
 import {
   createCodexTestBindingStore,
@@ -38,7 +55,7 @@ import { listPairedNode } from "./session-catalog-node-continue.js";
 import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
-  requireCatalogEligibleThread,
+  CODEX_TERMINAL_START_COMMAND,
   type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import type {
@@ -55,14 +72,42 @@ import {
 
 export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
+export const CODEX_CATALOG_TRANSCRIPT_READ_COMMAND = "codex.sessionCatalog.transcript.read.v1";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
 export const CODEX_NODE_CONTINUE_COMMANDS = [
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_CLI_SESSION_RESUME_COMMAND,
 ] as const;
-export const originalPath = process.env.PATH;
+const originalPath = process.env.PATH;
 export const tempDirs: string[] = [];
+
+beforeEach(() => {
+  const stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "codex-catalog-owner-"));
+  tempDirs.push(stateDir);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  nodeHostMocks.runNodePtyCommand.mockClear();
+  nodeHostMocks.userShellPaths.clear();
+  commandRpcMocks.codexControlRequest.mockReset();
+  pinnedConnectionMocks.getClient.mockReset();
+  pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
+  pinnedConnectionMocks.releaseClient.mockReset();
+  pinnedConnectionMocks.request.mockReset();
+  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset();
+  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockResolvedValue({
+    importedMessages: 0,
+    omittedMessages: 0,
+  });
+});
+
+afterEach(async () => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  resetPluginRuntimeStateForTest();
+  vi.unstubAllEnvs();
+  process.env.PATH = originalPath;
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
 
 const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
 const continueLocalCodexSessionRuntime = codexSessionCatalogRuntime.continueLocal;
@@ -75,7 +120,7 @@ export function createCodexSessionCatalogControl(
 ): CodexSessionCatalogControl {
   const config = params.getRuntimeConfig() ?? {};
   return createCodexSessionCatalogControlFactory(params).forRequest(
-    resolveSessionAgentIds({ config }).sessionAgentId,
+    resolveSessionAgentIdsStrict({ config }).sessionAgentId,
   );
 }
 
@@ -109,14 +154,37 @@ export function listCodexSessionCatalog(
   return listCodexSessionCatalogRuntime({ ...params, control: asControlFactory(params.control) });
 }
 
+const catalogOwners = new WeakMap<
+  CodexAppServerBindingStore,
+  ReturnType<typeof createEmptyPluginRegistry>
+>();
+
 export function continueLocalCodexSession(
   params: Omit<Parameters<typeof continueLocalCodexSessionRuntime>[0], "agentId"> & {
     agentId?: string;
   },
 ) {
+  let registry = catalogOwners.get(params.bindingStore);
+  if (!registry) {
+    registry = createEmptyPluginRegistry();
+    registry.plugins.push(createPluginRecord({ id: "codex" }));
+    registry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "runtime",
+      harness: createCodexAppServerAgentHarness({
+        bindingStore: params.bindingStore,
+        runtime: params.api.runtime,
+      }),
+    });
+    catalogOwners.set(params.bindingStore, registry);
+  }
+  if (getActivePluginRegistry() !== registry) {
+    setActivePluginRegistry(registry);
+  }
   return continueLocalCodexSessionRuntime({
     ...params,
-    agentId: params.agentId ?? resolveSessionAgentIds({ config: params.config }).sessionAgentId,
+    agentId:
+      params.agentId ?? resolveSessionAgentIdsStrict({ config: params.config }).sessionAgentId,
   });
 }
 
@@ -286,6 +354,28 @@ export function idleThread(overrides: Partial<CodexThread> = {}): CodexThread {
   };
 }
 
+export function catalogThreadItem(
+  id: string,
+  overrides: Partial<CodexThreadItem> = {},
+): CodexThreadItem {
+  return {
+    id,
+    type: "agentMessage",
+    title: null,
+    status: null,
+    name: null,
+    tool: null,
+    server: null,
+    command: null,
+    cwd: null,
+    query: null,
+    aggregatedOutput: null,
+    text: "",
+    changes: [],
+    ...overrides,
+  };
+}
+
 export function createControl(overrides: Partial<CodexSessionCatalogControl> = {}) {
   const withPinnedConnection = vi.fn(
     async (run: (value: CodexSessionCatalogControl) => Promise<unknown>) => await run(control),
@@ -293,9 +383,11 @@ export function createControl(overrides: Partial<CodexSessionCatalogControl> = {
   const control = {
     connectionFingerprint: "catalog-connection",
     withPinnedConnection,
+    requireEligibleThread: vi.fn(async (threadId: string) => idleThread({ id: threadId })),
     listPage: vi.fn(async () => ({ sessions: [] })),
     listDescendantPage: vi.fn(async () => ({ data: [] })),
     listTurnPage: vi.fn(async () => ({ data: [] })),
+    listItemPage: vi.fn(async () => ({ data: [] })),
     readThread: vi.fn(async (threadId: string) => idleThread({ id: threadId })),
     archiveThread: vi.fn(async () => undefined),
     ...overrides,
@@ -388,6 +480,7 @@ export function interruptedAdoptionEntry(params: { sourceThreadId: string; sessi
     sessionFile: `/tmp/${params.sessionId}.jsonl`,
     updatedAt: 1,
     initializationPending: true,
+    spawnedCwd: "/workspace/project",
     agentHarnessId: "codex",
     modelSelectionLocked: true,
     pluginExtensions: {
@@ -411,64 +504,53 @@ export function createRuntime(
   } = {},
 ) {
   const entries = params.entries ?? [];
-  let sessionSequence = 0;
+  const session = createCapturedPluginRegistration({ id: "codex" }).api.runtime.agent.session;
   const createSessionEntry = vi.fn(async (createParams: CreateSessionEntryParams) => {
-    const inputKey = createParams.key ?? "created";
     const agentId = createParams.agentId ?? "main";
-    const key = inputKey.startsWith("agent:") ? inputKey : `agent:${agentId}:${inputKey}`;
-    const existing = entries.find((candidate) => candidate.sessionKey === key);
-    let summary: SessionEntrySummary;
-    if (existing) {
-      const entry = existing.entry;
-      const initialHarnessId =
-        "agentHarnessId" in createParams.initialEntry
-          ? createParams.initialEntry.agentHarnessId
-          : undefined;
-      const initialMatches =
-        createParams.recoverMatchingInitialEntry === true &&
-        entry.initializationPending === true &&
-        entry.agentHarnessId === initialHarnessId &&
-        entry.modelSelectionLocked === createParams.initialEntry.modelSelectionLocked &&
-        JSON.stringify(entry.pluginExtensions) ===
-          JSON.stringify(createParams.initialEntry.pluginExtensions);
-      if (!initialMatches) {
-        throw new Error(`Session "${key}" does not match its trusted recovery state.`);
-      }
-      summary = existing;
-    } else {
-      sessionSequence += 1;
-      const sessionId = `openclaw-session-${sessionSequence}`;
-      const entry = {
-        sessionId,
-        sessionFile: `/tmp/${sessionId}.jsonl`,
-        ...createParams.initialEntry,
-        ...(createParams.afterCreate ? { initializationPending: true as const } : {}),
-      } as CreateSessionEntryResult["entry"];
-      summary = { sessionKey: key, entry };
-      entries.push(summary);
+    const storePath = resolveStorePath(createParams.cfg.session?.store, { agentId });
+    const key = createParams.key.startsWith("agent:")
+      ? createParams.key
+      : `agent:${agentId}:${createParams.key}`;
+    for (const summary of entries.filter((candidate) =>
+      candidate.sessionKey.startsWith(`agent:${agentId}:`),
+    )) {
+      await session.upsertSessionEntry({
+        sessionKey: summary.sessionKey,
+        storePath,
+        entry: { ...summary.entry, updatedAt: Date.now() },
+      });
     }
-    const entry = summary.entry;
-    const sessionId = entry.sessionId;
-    const result = { key, agentId, sessionId, entry };
-    try {
-      const finalPatch = await createParams.afterCreate?.(result);
-      if (existing && !finalPatch) {
-        throw new Error("session creation recovery requires a final patch");
-      }
-      if (finalPatch) {
-        entry.pluginExtensions = structuredClone(finalPatch.pluginExtensions);
-      }
-      delete entry.initializationPending;
-      if (params.failAfterCreate?.() === true) {
-        throw new Error("session finalization failed after binding commit");
-      }
-      return result;
-    } catch (error) {
-      const index = entries.indexOf(summary);
+    const refresh = () => {
+      const entry = session.getSessionEntry({
+        sessionKey: key,
+        storePath,
+        readConsistency: "latest",
+      });
+      const index = entries.findIndex((summary) => summary.sessionKey === key);
       if (index >= 0) {
         entries.splice(index, 1);
       }
-      throw error;
+      if (entry) {
+        entries.push({ sessionKey: key, entry });
+      }
+    };
+    try {
+      return await session.createSessionEntry({
+        ...createParams,
+        afterCreate: async (created) => {
+          refresh();
+          const patch = await createParams.afterCreate?.(created);
+          if (params.failAfterCreate?.()) {
+            throw new Error("session finalization failed after binding commit");
+          }
+          if (!patch) {
+            throw new Error("catalog fixture requires its initializer's final patch");
+          }
+          return patch;
+        },
+      });
+    } finally {
+      refresh();
     }
   });
   const patchSessionEntry = vi.fn(async (patchParams: PatchSessionEntryParams) => {
@@ -497,6 +579,7 @@ export function createRuntime(
     },
     agent: {
       session: {
+        getSessionEntry: session.getSessionEntry,
         createSessionEntry,
         listSessionEntries: vi.fn((listParams) => {
           const agentPrefix = listParams?.agentId ? `agent:${listParams.agentId}:` : undefined;
@@ -521,7 +604,8 @@ export function archiveTestSession(params: {
 }) {
   const archiveConfig = params.config ?? config;
   return archiveLocalCodexSession({
-    agentId: params.agentId ?? resolveSessionAgentIds({ config: archiveConfig }).sessionAgentId,
+    agentId:
+      params.agentId ?? resolveSessionAgentIdsStrict({ config: archiveConfig }).sessionAgentId,
     bindingStore: params.bindingStore ?? createCodexTestBindingStore(),
     config: archiveConfig,
     control: params.control,
@@ -544,12 +628,16 @@ export function createGatewayApi(runtime: PluginRuntime, apiConfig: OpenClawConf
 }
 
 export {
+  commandRpcMocks,
+  pinnedConnectionMocks,
+  transcriptMirrorMocks,
+  nodeHostMocks,
   fs,
   fsSync,
   os,
   path,
   resolveAgentDir,
-  resolveSessionAgentIds,
+  resolveSessionAgentIdsStrict,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
   resolveCodexAppServerUserHomeDir,
@@ -564,7 +652,7 @@ export {
   catalogError,
   parseCatalogPage,
   CODEX_TERMINAL_RESUME_COMMAND,
-  requireCatalogEligibleThread,
+  CODEX_TERMINAL_START_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
   createCodexSessionCatalogControlFactory,
   createCodexSessionCatalogNodeInvokePolicies,

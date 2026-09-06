@@ -5,6 +5,7 @@ export {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
+  seedQaSessionEntries,
   seedQaSessionTranscript,
 } from "./suite-runtime-agent-session.js";
 export {

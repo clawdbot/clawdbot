@@ -90,12 +90,19 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Web                     | Search the web, search X posts, or fetch readable page content                               | `web_search`, `x_search`, `web_fetch`                                                                               | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                                                                 |
 | Browser                 | Operate a browser session                                                                    | `browser`                                                                                                           | [Browser](/tools/browser)                                                                                              |
 | Operator UI             | Arrange connected Control UI panes, panels, and navigation                                   | `screen`                                                                                                            | [Screen](/tools/screen)                                                                                                |
+| Session progress        | Update the parent session's durable progress card; unavailable to sub-agents                 | `progress_card`                                                                                                     | [Progress card](/tools/progress-card)                                                                                  |
 | Messaging and channels  | Send replies or channel actions                                                              | `message`                                                                                                           | [Agent send](/tools/agent-send)                                                                                        |
 | Sessions and agents     | Inspect sessions, delegate work, orchestrate collectors, steer another run, or report status | `sessions_*`, `agents_wait`, `subagents`, `agents_list`, `session_status`, `get_goal`, `create_goal`, `update_goal` | [Goal](/tools/goal), [Swarm](/tools/swarm), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool)     |
 | Automation              | Schedule work or respond to background events                                                | `cron`, `heartbeat_respond`                                                                                         | [Automation](/automation)                                                                                              |
 | Gateway and nodes       | Inspect Gateway state or paired target devices                                               | `gateway`, `nodes`                                                                                                  | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                                                       |
 | Media                   | Analyze, generate, or speak media                                                            | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                           | [Media overview](/tools/media-overview)                                                                                |
 | Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search_code`, `tool_search`, `tool_describe`                                                  | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                       |
+
+The `edit` tool supports targeted formatting changes, including removing trailing
+spaces or replacing Unicode quotes, dashes, and spaces. These changes are applied
+even when the old and new text would compare equal after fuzzy normalization.
+Identical replacement requests and edits that produce unchanged content still
+report no changes.
 
 <Note>
 Code Mode and Tool Search are experimental OpenClaw agent surfaces. Codex
@@ -168,6 +175,10 @@ Choose the extension path by the job you need OpenClaw to do:
   contracts.
 
 ## Troubleshoot missing tools
+
+Configured `tools.exec` and `tools.fs` sections do not grant tool access. The
+profile migration warning suggests `alsoAllow` entries only when other active
+global, agent, and provider policies permit those tools.
 
 If the model cannot see or call a tool, start with the effective policy for
 the current turn:

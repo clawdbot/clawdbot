@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { logWarn } from "../logger.js";
+import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, SpawnSecretInput } from "../process/supervisor/types.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
+import { prepareNodeClaudeSkillSession } from "./claude-skill-session.js";
 import type { NodeHostClient } from "./client.js";
 import type { ClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
 import type { NodeInvokeRequestPayload, RunResult } from "./invoke-types.js";
@@ -37,6 +39,7 @@ export async function runClaudeCliNodeCommand(params: {
   secretInput?: SpawnSecretInput;
   timeoutMs: number | undefined;
   signal?: AbortSignal;
+  skillIo?: OpenClawPluginNodeHostCommandIo;
 }): Promise<RunResult> {
   const cancelledResult = (): RunResult => ({
     exitCode: 130,
@@ -51,12 +54,27 @@ export async function runClaudeCliNodeCommand(params: {
     return cancelledResult();
   }
   let promptDir: string | undefined;
+  let skillSession: Awaited<ReturnType<typeof prepareNodeClaudeSkillSession>> | undefined;
+  let cleanupSkillArtifacts: (() => Promise<void>) | undefined;
   let argv = params.argv;
   try {
-    if (params.request.systemPrompt !== undefined) {
+    if (params.request.skillRuntime) {
+      if (!params.skillIo) {
+        throw new Error("Upgrade and restart this node host for Claude skill resources.");
+      }
+      skillSession = await prepareNodeClaudeSkillSession(params.skillIo);
+      cleanupSkillArtifacts = skillSession.cleanup;
+      argv = [...argv, ...skillSession.argv];
+    }
+    const systemPrompt = skillSession
+      ? [skillSession.rewriteReferences(params.request.systemPrompt ?? ""), skillSession.catalog]
+          .filter(Boolean)
+          .join("\n\n")
+      : params.request.systemPrompt;
+    if (systemPrompt !== undefined) {
       promptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-prompt-"));
       const promptPath = path.join(promptDir, "system-prompt.md");
-      await fs.writeFile(promptPath, params.request.systemPrompt, { mode: 0o600 });
+      await fs.writeFile(promptPath, systemPrompt, { mode: 0o600 });
       argv = [...argv, "--append-system-prompt-file", promptPath];
     }
     if (params.signal?.aborted) {
@@ -80,6 +98,17 @@ export async function runClaudeCliNodeCommand(params: {
       idleTimeoutMs: params.request.idleTimeoutMs,
       onError: () => supervisor.cancel(runId),
     });
+    // The runtime owns one progress sequence for duplex invocations. Do not
+    // interleave a second raw stdout sequence with its framed messages.
+    let stdoutQueue = Promise.resolve();
+    const writeProgress = (text: string) => {
+      if (!skillSession) {
+        return progress.write(text);
+      }
+      stdoutQueue = stdoutQueue.then(() => skillSession!.writeStdout(text));
+      void stdoutQueue.catch(() => supervisor.cancel(runId));
+      return stdoutQueue;
+    };
     const abortRun = () => {
       cancelled = true;
       supervisor.cancel(runId);
@@ -126,7 +155,8 @@ export async function runClaudeCliNodeCommand(params: {
         cwd: params.cwd,
         env: params.env,
         exactEnv: true,
-        input: params.request.stdin ?? "",
+        input:
+          skillSession?.rewriteReferences(params.request.stdin ?? "") ?? params.request.stdin ?? "",
         secretInput: params.secretInput,
         timeoutMs: params.timeoutMs ?? params.request.timeoutMs,
         noOutputTimeoutMs: params.request.idleTimeoutMs,
@@ -138,28 +168,39 @@ export async function runClaudeCliNodeCommand(params: {
             captureTerminalLines(raw.subarray(retained.length), true);
           }
           if (retained.length === 0) {
-            progress.queueHeartbeat();
+            if (!skillSession) {
+              progress.queueHeartbeat();
+            }
             return;
           }
-          void progress.write(decoder.write(retained));
+          void writeProgress(decoder.write(retained));
         },
         onStderrRaw: (raw) => {
           retain(raw);
           stderr = truncateUtf8Suffix(`${stderr}${stderrDecoder.write(raw)}`, STDERR_TAIL_BYTES);
-          progress.queueHeartbeat();
+          if (!skillSession) {
+            progress.queueHeartbeat();
+          }
         },
       });
       if (params.signal?.aborted) {
         abortRun();
       }
       const run = await runPromise;
-      if (promptDir && run.waitForExtinction) {
+      if ((promptDir || cleanupSkillArtifacts) && run.waitForExtinction) {
         const ownedPromptDir = promptDir;
+        const ownedSkillCleanup = cleanupSkillArtifacts;
         promptDir = undefined;
+        cleanupSkillArtifacts = undefined;
         // Descendants may still own this file after their root result is already visible.
         void run
           .waitForExtinction()
-          .then(() => fs.rm(ownedPromptDir, { recursive: true, force: true }))
+          .then(async () => {
+            if (ownedPromptDir) {
+              await fs.rm(ownedPromptDir, { recursive: true, force: true });
+            }
+            await ownedSkillCleanup?.();
+          })
           .catch((error: unknown) => {
             logWarn(`Claude CLI system prompt cleanup failed: ${String(error)}`);
           });
@@ -172,7 +213,7 @@ export async function runClaudeCliNodeCommand(params: {
       progress.stopHeartbeats();
     }
 
-    void progress.write(decoder.end());
+    void writeProgress(decoder.end());
     terminalLineBuffer += terminalDecoder.end();
     stderr = truncateUtf8Suffix(`${stderr}${stderrDecoder.end()}`, STDERR_TAIL_BYTES);
     if (
@@ -183,8 +224,11 @@ export async function runClaudeCliNodeCommand(params: {
       terminalResultLine = terminalLineBuffer;
     }
     if (truncated && terminalResultLine) {
-      void progress.write(`\n${terminalResultLine}\n`);
+      void writeProgress(`\n${terminalResultLine}\n`);
     }
+    await stdoutQueue.catch((error: unknown) => {
+      runError = error instanceof Error ? error : new Error(String(error));
+    });
     await progress.flush();
     progress.stop();
 
@@ -217,8 +261,16 @@ export async function runClaudeCliNodeCommand(params: {
       truncated,
     };
   } finally {
-    if (promptDir) {
-      await fs.rm(promptDir, { recursive: true, force: true });
+    try {
+      await skillSession?.close();
+    } finally {
+      try {
+        await cleanupSkillArtifacts?.();
+      } finally {
+        if (promptDir) {
+          await fs.rm(promptDir, { recursive: true, force: true });
+        }
+      }
     }
   }
 }

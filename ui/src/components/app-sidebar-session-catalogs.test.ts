@@ -41,7 +41,7 @@ describe("formatSidebarTimestamp", () => {
 });
 
 describe("findCatalogSessionHovercardRow", () => {
-  it("distinguishes repository context from a plain workspace cwd", () => {
+  it("preserves adopted naming while distinguishing repository and workspace context", () => {
     const catalogSession = (threadId: string, name: string) => ({
       threadId,
       name,
@@ -62,9 +62,14 @@ describe("findCatalogSessionHovercardRow", () => {
           connected: true,
           sessions: [
             {
-              ...catalogSession("project", "Project"),
+              ...catalogSession("project", "Renamed upstream"),
+              sessionKey: "agent:main:adopted-project",
               cwd: "/work/openclaw",
               gitBranch: "feature/hovercard",
+            },
+            {
+              ...catalogSession("colored", "Colored CLI session"),
+              color: "cyan",
             },
             {
               ...catalogSession("workspace", "Workspace"),
@@ -80,16 +85,39 @@ describe("findCatalogSessionHovercardRow", () => {
       ],
     };
 
+    const colorInput = { catalogs: [catalog], sessionKey: "catalog:codex:gateway%3Acodex:colored" };
+    expect(findCatalogSessionHovercardRow(colorInput)).toMatchObject({
+      color: "cyan",
+      hasActiveRun: false,
+    });
+    // An adopted session's cleared color must not fall back to stale CLI metadata.
+    expect(
+      findCatalogSessionHovercardRow({
+        ...colorInput,
+        liveRow: { label: "Project", hasAutomation: false, hasActiveRun: false },
+      })?.color,
+    ).toBeUndefined();
+    expect(
+      findCatalogSessionHovercardRow({
+        ...colorInput,
+        liveRow: { label: "Project", color: "red", hasAutomation: false, hasActiveRun: false },
+      })?.color,
+    ).toBe("red");
     expect(
       findCatalogSessionHovercardRow({
         catalogs: [catalog],
-        sessionKey: "catalog:codex:gateway%3Acodex:project",
-      })?.workContext,
-    ).toEqual({
-      kind: "project",
-      name: "openclaw",
-      path: "/work/openclaw",
-      branch: "feature/hovercard",
+        sessionKey: "agent:main:adopted-project",
+        liveRow: { label: "Operator chosen label", hasAutomation: false, hasActiveRun: true },
+      }),
+    ).toMatchObject({
+      label: "Operator chosen label",
+      hasActiveRun: true,
+      workContext: {
+        kind: "project",
+        name: "openclaw",
+        path: "/work/openclaw",
+        branch: "feature/hovercard",
+      },
     });
     expect(
       findCatalogSessionHovercardRow({

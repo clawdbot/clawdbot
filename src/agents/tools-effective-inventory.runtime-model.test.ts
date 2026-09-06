@@ -68,22 +68,24 @@ describe("resolveEffectiveToolInventoryRuntimeModelContextAsync", () => {
   });
 
   it.each([
-    { owner: "request-owned", lease: runtimeMocks.requestLease },
-    { owner: "published", lease: runtimeMocks.publishedLease },
-  ])("prepares dynamic model context with a $owner runtime lease", async ({ lease }) => {
+    { owner: "request-owned", agentId: "main", lease: runtimeMocks.requestLease },
+    { owner: "published", agentId: "research", lease: runtimeMocks.publishedLease },
+  ])("prepares dynamic model context with a $owner runtime lease", async ({ lease, agentId }) => {
     runtimeMocks.acquire.mockResolvedValueOnce(lease);
     const { resolveEffectiveToolInventoryRuntimeModelContextAsync } =
       await import("./tools-effective-inventory.js");
     const cfg = makeOpenClawConfigFixture();
+    const agentDir = `/tmp/agents/${agentId}/agent`;
+    const workspaceDir = `/tmp/workspace-${agentId}`;
 
     await expect(
       resolveEffectiveToolInventoryRuntimeModelContextAsync({
         cfg,
-        agentId: "main",
-        agentDir: "/tmp/agents/main/agent",
-        workspaceDir: "/tmp/workspace-main",
-        modelProvider: "openai",
-        modelId: "chat-latest",
+        agentId,
+        agentDir,
+        workspaceDir,
+        modelProvider: " OpenAI ",
+        modelId: " chat-latest ",
       }),
     ).resolves.toMatchObject({
       modelApi: "openai-responses",
@@ -92,21 +94,23 @@ describe("resolveEffectiveToolInventoryRuntimeModelContextAsync", () => {
     expect(runtimeMocks.resolveModelAsync).toHaveBeenCalledWith(
       "openai",
       "chat-latest",
-      "/tmp/agents/main/agent",
+      agentDir,
       cfg,
       {
-        agentId: "main",
-        workspaceDir: "/tmp/workspace-main",
+        agentId,
+        workspaceDir,
         authStorage: lease.authStorage,
         modelRegistry: lease.modelRegistry,
         preparedModelRuntime: lease.snapshot,
       },
     );
     expect(runtimeMocks.acquire).toHaveBeenCalledWith({
-      agentId: "main",
-      agentDir: "/tmp/agents/main/agent",
+      agentId,
+      agentDir,
       config: cfg,
-      workspaceDir: "/tmp/workspace-main",
+      workspaceDir,
+      loadRuntimePlugins: true,
+      runtimePluginSelections: [{ provider: "openai", modelId: "chat-latest", agentId }],
     });
     expect(lease.release).toHaveBeenCalledTimes(1);
   });

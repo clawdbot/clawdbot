@@ -162,6 +162,7 @@ async function flushBufferedFinalAnswer(turn: Turn, currentPayloadVisible = fals
       controls.payload.text ?? "",
       controls.buttons,
       settlement?.onPlatformSendDispatch,
+      settlement?.assertPlatformSendAuthorized,
       settlement?.bindPendingFinalDelivery,
     );
     if (settlement) {
@@ -307,6 +308,7 @@ export async function deliverReply(
       turn.bufferedFinalSettlement = {
         visibleReplySent: blockDelivered,
         onPlatformSendDispatch: info.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
         bindPendingFinalDelivery: info.bindPendingFinalDelivery,
         resolve: resolveFinalization,
         reject: rejectFinalization,
@@ -369,16 +371,10 @@ export async function deliverReply(
       !turn.activeAnswerDraftIsToolProgressOnly &&
       !ownedByQueuedRotation &&
       segment.update.text.trimEnd() === turn.answerLane.lastPartialText.trimEnd();
-    const isDurableProgressCommentary =
-      turn.streamMode === "progress" &&
-      info.kind === "block" &&
-      effectivePayload.isCommentary === true;
-    // CLI finals exclude separately classified commentary, so it must outlive the progress draft.
     const suppressProgressAnswerBlock =
       turn.streamMode === "progress" &&
       info.kind === "block" &&
       segment.lane === "answer" &&
-      !isDurableProgressCommentary &&
       !reply.hasMedia &&
       !hasExecApprovalPayload(effectivePayload) &&
       telegramButtons === undefined;
@@ -389,7 +385,9 @@ export async function deliverReply(
         buttons: telegramButtons,
       };
       turn.activeAnswerDraftIsToolProgressOnly = false;
-      turn.progressCompositor.reset();
+      if (!suppressProgressAnswerBlock) {
+        turn.progressCompositor.resetActivity();
+      }
       blockDelivered = true;
       continue;
     }
@@ -406,7 +404,7 @@ export async function deliverReply(
         turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
       }
       turn.activeAnswerDraftIsToolProgressOnly = false;
-      turn.progressCompositor.reset();
+      turn.progressCompositor.resetActivity();
     }
     const isAskUserPayload = effectivePayload.channelData?.askUser !== undefined;
     const result =
@@ -417,6 +415,7 @@ export async function deliverReply(
             segment.update.text,
             telegramButtons,
             info.onPlatformSendDispatch,
+            info.assertPlatformSendAuthorized,
             info.bindPendingFinalDelivery,
           )
         : await turn.deliverLaneText({
@@ -426,8 +425,8 @@ export async function deliverReply(
             infoKind: info.kind,
             buttons: telegramButtons,
             ...(isAskUserPayload ? { finalizePreview: true } : {}),
-            allowStream: !isDurableProgressCommentary,
             onPlatformSendDispatch: info.onPlatformSendDispatch,
+            assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
           });
     const finalizedPreview =
@@ -484,6 +483,7 @@ export async function deliverReply(
       delivered = await sendPayload(turn, payloadWithoutReasoning, {
         durable: info.kind === "final",
         onPlatformSendDispatch: info.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
         bindPendingFinalDelivery: info.bindPendingFinalDelivery,
       });
     }
@@ -506,6 +506,7 @@ export async function deliverReply(
   const delivered = await sendPayload(turn, effectivePayload, {
     durable: info.kind === "final",
     onPlatformSendDispatch: info.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
     bindPendingFinalDelivery: info.bindPendingFinalDelivery,
   });
   if (info.kind === "final" && delivered) {

@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
-import { buildExecRunConfig, resolveExecBaseConfig } from "./agent-exec.js";
+import { buildExecRunConfig, resolveExecBaseConfig } from "./agent-exec-input.js";
 
 describe("agent exec configless workspace ownership", () => {
   it.each([

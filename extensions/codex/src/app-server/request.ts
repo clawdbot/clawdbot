@@ -27,6 +27,8 @@ type CodexAppServerClientRequestParams = {
   method: string;
   requestParams?: unknown;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sessionKey?: string;
   sessionId?: string;
@@ -48,7 +50,13 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
   }
   const timeoutMs = params.timeoutMs ?? 60_000;
   return await withTimeout(
-    params.client.request<T>(params.method, params.requestParams, { timeoutMs }),
+    params.client.request<T>(params.method, params.requestParams, {
+      timeoutMs,
+      signal: params.signal,
+      ...(params.assertCurrent
+        ? { assertCurrent: () => assertRequestOwnerCurrent(params.assertCurrent) }
+        : {}),
+    }),
     timeoutMs,
     `codex app-server ${params.method} timed out`,
   );
@@ -70,6 +78,7 @@ type CodexAppServerJsonClientOptions = Pick<
   sessionKey?: string;
   sessionId?: string;
   isolated?: boolean;
+  assertCurrent?: () => void;
 };
 
 /** Sends a typed Codex app-server request and returns the method-specific response shape. */
@@ -108,11 +117,23 @@ export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
   requestParams?: unknown;
 }) => Promise<T>;
 
-/** A scoped guard rejected the request before it reached the physical client. */
+/** A scoped guard rejected the request before a physical write. */
 export class CodexAppServerScopedRequestRejectedError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "CodexAppServerScopedRequestRejectedError";
+  }
+}
+
+// Preserve pre-write rejection identity so callers do not retire a healthy shared client.
+function assertRequestOwnerCurrent(assertCurrent?: () => void): void {
+  try {
+    assertCurrent?.();
+  } catch (cause) {
+    throw new CodexAppServerScopedRequestRejectedError(
+      cause instanceof Error ? cause.message : String(cause),
+      { cause },
+    );
   }
 }
 
@@ -258,6 +279,7 @@ export async function withCodexAppServerJsonClient<T>(
                 "Codex app-server request scope is closed",
               );
             }
+            assertRequestOwnerCurrent(params.assertCurrent);
           };
           try {
             assertCurrent();

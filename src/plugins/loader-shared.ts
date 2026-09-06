@@ -15,6 +15,7 @@ import {
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import {
   resolveEffectiveEnableState,
+  resolveEffectivePluginActivationState,
   type NormalizedPluginsConfig,
   type PluginActivationConfigSource,
   type PluginActivationState,
@@ -27,14 +28,20 @@ import {
   resetGlobalHookRunner,
 } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
-import { createPluginRecord } from "./loader-records.js";
+import type { PluginLoadCacheContext } from "./loader-load-context.js";
+import {
+  createPluginRecord,
+  formatAutoEnabledActivationReason,
+  markPluginActivationDisabled,
+} from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
 import {
   isPluginManifestInstallOwnerAmbiguous,
   resolvePluginManifestInstallOwner,
 } from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -42,7 +49,7 @@ import {
   rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { validatePluginSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -135,14 +142,14 @@ export function resolveAuthorizedDreamingSidecar(params: {
   return selectedEnableState.enabled ? { engineId, selectedMemoryPluginId } : null;
 }
 
-export function isAuthorizedDreamingSidecarPlugin(params: {
+function isAuthorizedDreamingSidecarPlugin(params: {
   sidecar: AuthorizedDreamingSidecar | null;
   pluginId: string;
 }): boolean {
   return params.sidecar?.engineId === params.pluginId;
 }
 
-export function matchesScopedPluginOrDreamingSidecar(params: {
+function matchesScopedPluginOrDreamingSidecar(params: {
   onlyPluginIdSet: ReadonlySet<string> | null;
   pluginId: string;
   sidecar: AuthorizedDreamingSidecar | null;
@@ -169,6 +176,7 @@ export function createPluginCandidatesFromManifestRegistry(
         source: record.source,
         ...(record.setupSource !== undefined ? { setupSource: record.setupSource } : {}),
         origin: record.origin,
+        ...(record.sourcePreferred ? { sourcePreferred: true as const } : {}),
         ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
         ...(record.format !== undefined ? { format: record.format } : {}),
         ...(record.bundleFormat !== undefined ? { bundleFormat: record.bundleFormat } : {}),
@@ -199,6 +207,7 @@ class PluginLoadFailureError extends Error {
 }
 
 export function validatePluginConfig(params: {
+  origin: PluginOrigin;
   schema?: Record<string, unknown>;
   cacheKey?: string;
   value?: unknown;
@@ -223,7 +232,8 @@ export function validatePluginConfig(params: {
     }
     return resultError(["<root>: config must be empty"]);
   }
-  const result = validateJsonSchemaValue({
+  const result = validatePluginSchemaValue({
+    origin: params.origin,
     schema,
     cacheKey: params.cacheKey ?? JSON.stringify(schema),
     value: value ?? {},
@@ -234,6 +244,24 @@ export function validatePluginConfig(params: {
     ? ok(result.value as Record<string, unknown> | undefined)
     : resultError(result.errors.map((error) => error.text));
 }
+
+// The empty-config shortcut answers without compiling the schema, so it is only sound for
+// schemas built purely from keywords it accounts for. An allowlist holds that invariant where
+// a denylist leaked every new keyword: an extra constraint, an unresolvable `$ref`, or an
+// unknown keyword now falls through to validatePluginSchemaValue, which owns the diagnostic.
+const EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS = new Set([
+  "type",
+  "additionalProperties",
+  "properties",
+  "title",
+  "description",
+  "$schema",
+  "$id",
+  "$comment",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+]);
 
 function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
   if (schema.type !== "object" || schema.additionalProperties !== false) {
@@ -248,50 +276,11 @@ function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean
   ) {
     return false;
   }
-  const hasConditional = "if" in schema && ("then" in schema || "else" in schema);
-  return !(
-    "required" in schema ||
-    "dependentRequired" in schema ||
-    "dependentSchemas" in schema ||
-    "dependencies" in schema ||
-    "minProperties" in schema ||
-    "allOf" in schema ||
-    "anyOf" in schema ||
-    "oneOf" in schema ||
-    "not" in schema ||
-    "patternProperties" in schema ||
-    hasConditional
-  );
-}
-
-export function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]): void {
-  diagnostics.push(...append);
-}
-
-export function pushPluginValidationError(params: {
-  registry: PluginRegistry;
-  seenIds: Map<string, PluginRecord["origin"]>;
-  pluginId: string;
-  origin: PluginRecord["origin"];
-  record: PluginRecord;
-  message: string;
-}): void {
-  params.record.status = "error";
-  params.record.error = params.message;
-  params.record.failedAt = new Date();
-  params.record.failurePhase = "validation";
-  params.registry.plugins.push(params.record);
-  params.seenIds.set(params.pluginId, params.origin);
-  params.registry.diagnostics.push({
-    level: "error",
-    pluginId: params.record.id,
-    source: params.record.source,
-    message: params.record.error,
-  });
+  return Object.keys(schema).every((keyword) => EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS.has(keyword));
 }
 
 /** Builds the common manifest-backed record shape used by runtime and CLI loaders. */
-export function createManifestPluginRecord(params: {
+function createManifestPluginRecord(params: {
   candidate: PluginCandidate;
   manifestRecord: PluginManifestRecord;
   enabled: boolean;
@@ -316,6 +305,7 @@ export function createManifestPluginRecord(params: {
     origin: candidate.origin,
     workspaceDir: candidate.workspaceDir,
     trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
+    trust: manifestRecord.trust,
     enabled: params.enabled,
     compat: collectPluginManifestCompatCodes(manifestRecord),
     activationState: params.activationState,
@@ -325,19 +315,100 @@ export function createManifestPluginRecord(params: {
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,
+    controlUi: manifestRecord.controlUi,
     mcpServers: manifestRecord.mcpServers,
   });
 }
 
-export function applyPluginManifestRecordDetails(
-  record: PluginRecord,
-  manifestRecord: PluginManifestRecord,
-): void {
+/** Prepares one candidate; import and registration policy stays with each loader. */
+export function preparePluginLoadRecord(params: {
+  candidate: PluginCandidate;
+  manifestRecord: PluginManifestRecord;
+  context: Pick<
+    PluginLoadCacheContext,
+    "cfg" | "normalized" | "activationSource" | "autoEnabledReasons"
+  >;
+  onlyPluginIdSet: ReadonlySet<string> | null;
+  dreamingSidecar: AuthorizedDreamingSidecar | null;
+  registry: Pick<PluginRegistry, "plugins">;
+  seenIds: ReadonlyMap<string, PluginRecord["origin"]>;
+}) {
+  const { candidate, manifestRecord, context, dreamingSidecar } = params;
+  const pluginId = manifestRecord.id;
+  const policyId = normalizePluginPolicyId(pluginId);
+  // Manifest filtering scopes diagnostics; this final guard also blocks imports
+  // and registration outside the requested snapshot.
+  if (
+    !matchesScopedPluginOrDreamingSidecar({
+      onlyPluginIdSet: params.onlyPluginIdSet,
+      pluginId,
+      sidecar: dreamingSidecar,
+    })
+  ) {
+    return null;
+  }
+  const isDreamingSidecar = isAuthorizedDreamingSidecarPlugin({
+    sidecar: dreamingSidecar,
+    pluginId,
+  });
+  const activationState = isDreamingSidecar
+    ? {
+        enabled: true,
+        activated: true,
+        explicitlyEnabled: false,
+        source: "auto" as const,
+        reason: `dreaming sidecar for selected memory slot "${dreamingSidecar?.selectedMemoryPluginId ?? ""}"`,
+      }
+    : resolveEffectivePluginActivationState({
+        id: pluginId,
+        origin: candidate.origin,
+        config: context.normalized,
+        rootConfig: context.cfg,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
+        activationSource: context.activationSource,
+        autoEnabledReason: formatAutoEnabledActivationReason(context.autoEnabledReasons[pluginId]),
+      });
+  const existingOrigin = params.seenIds.get(pluginId);
+  if (existingOrigin) {
+    const duplicate = createManifestPluginRecord({
+      candidate,
+      manifestRecord,
+      enabled: false,
+      activationState,
+    });
+    duplicate.status = "disabled";
+    duplicate.error = `overridden by ${existingOrigin} plugin`;
+    markPluginActivationDisabled(duplicate, duplicate.error);
+    params.registry.plugins.push(duplicate);
+    return null;
+  }
+  // Activation carries auto-enable provenance; enablement independently controls loading.
+  // An auto-enabled reason can activate a record without enabling its module load.
+  const enableState = isDreamingSidecar
+    ? { enabled: true }
+    : resolveEffectiveEnableState({
+        id: pluginId,
+        origin: candidate.origin,
+        config: context.normalized,
+        rootConfig: context.cfg,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
+        activationSource: context.activationSource,
+      });
+  const entry = context.normalized.entries[policyId];
+  const record = createManifestPluginRecord({
+    candidate,
+    manifestRecord,
+    enabled: enableState.enabled,
+    activationState,
+  });
   record.kind = manifestRecord.kind;
   record.configUiHints = manifestRecord.configUiHints;
   record.configJsonSchema = manifestRecord.configSchema;
   // Manifest ownership survives rollback of executable registrations.
   record.commandAliases = manifestRecord.commandAliases;
+  return { pluginId, policyId, isDreamingSidecar, activationState, enableState, entry, record };
 }
 
 export function applyManifestSnapshotMetadata(

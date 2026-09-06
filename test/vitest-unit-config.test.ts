@@ -1,5 +1,6 @@
 // Vitest unit config tests validate unit test project configuration.
 import { afterEach, describe, expect, it } from "vitest";
+import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import {
@@ -87,6 +88,49 @@ describe("unit vitest config", () => {
     expect(testConfig.include).toEqual(["src/media-generation/runtime-shared.test.ts"]);
     expect(testConfig.passWithNoTests).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "keeps routed unit configuration equivalent to CLI discovery with all files excluded=%s",
+    (excludeAll) => {
+      const targets = [
+        "src/node-host/node-worker-bundle-installer.test.ts",
+        "src/media-generation/runtime-shared.test.ts",
+      ];
+      const plans = buildVitestRunPlans([...targets, "--", "--coverage"]);
+      expect(plans).toHaveLength(1);
+      const plan = plans[0];
+      if (!plan) {
+        throw new Error("expected a default unit plan");
+      }
+      expect(plan.includePatterns).toEqual(targets);
+      expect(plan.forwardedArgs).toEqual(["--coverage", ...targets]);
+      const options = { argv: ["node", "vitest", "run", ...plan.forwardedArgs] };
+      const env = excludeAll
+        ? {
+            OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE: patternFiles.writePatternFile(
+              "exclude.json",
+              targets,
+            ),
+          }
+        : {};
+      const cliConfig = requireTestConfig(createUnitVitestConfigWithOptions(env, options));
+      const routedConfig = requireTestConfig(
+        createUnitVitestConfigWithOptions(
+          {
+            ...env,
+            OPENCLAW_VITEST_INCLUDE_FILE: patternFiles.writePatternFile(
+              "include.json",
+              plan.includePatterns,
+            ),
+          },
+          options,
+        ),
+      );
+      expect(routedConfig).toEqual(cliConfig);
+      expect(routedConfig.include).toEqual(targets);
+      expect(routedConfig.passWithNoTests).toBe(excludeAll ? true : undefined);
+    },
+  );
 
   it("lets root Vitest project runs skip unit files owned by excluded projects", () => {
     const unitConfig = createUnitVitestConfigWithOptions(

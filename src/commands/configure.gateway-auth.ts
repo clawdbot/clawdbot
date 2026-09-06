@@ -5,6 +5,7 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
+import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
@@ -33,18 +34,6 @@ type ProviderChoiceModelPrompt = {
   message?: string;
   loadCatalog?: boolean;
 };
-
-/** Reject undefined, empty, and common JS string-coercion artifacts for token auth. */
-function sanitizeTokenValue(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
-    return undefined;
-  }
-  return trimmed;
-}
 
 async function resolveProviderChoiceModelPrompt(params: {
   authChoice: string;
@@ -183,7 +172,10 @@ export function buildGatewayAuthConfig(params: {
       return { ...base, mode: "token", token: params.token };
     }
     // Keep token mode always valid: treat empty/undefined/"undefined"/"null" as missing and generate a token.
-    const token = sanitizeTokenValue(params.token) ?? randomToken();
+    const token =
+      typeof params.token === "string" && !isInvalidGatewayToken(params.token)
+        ? params.token.trim()
+        : randomToken();
     return { ...base, mode: "token", token };
   }
   if (params.mode === "password") {

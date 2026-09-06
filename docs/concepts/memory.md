@@ -219,6 +219,10 @@ OpenClaw runs a silent turn that reminds the agent to save important context
 to memory files. This is on by default; set
 `agents.defaults.compaction.memoryFlush.enabled: false` to turn it off.
 
+Memory flushing requires writable workspace access. Sessions whose sandbox
+requires read-only or no workspace access skip the flush, including sessions
+with a persisted sandbox requirement that overrides the agent's configuration.
+
 To keep that housekeeping turn on a local model, set an exact override that
 applies only to the memory-flush turn (it does not inherit the active
 session's model fallback chain):
@@ -255,9 +259,9 @@ owner or agent-derived items into long-term memory (`MEMORY.md`):
   job for a full dreaming sweep.
 - **Thresholded**: promotions must pass score, recall-frequency, and
   query-diversity gates.
-- **Consolidated**: a bounded subagent rewrite merges duplicates and
-  supersedes stale entries after the deterministic gate. Invalid or
-  unavailable rewrites use append-only fallback.
+- **Consolidated**: a tool-free completion selects merges and supersessions
+  after the deterministic gate. The memory writer composes the result from
+  validated source evidence; invalid or unavailable decisions use append-only fallback.
 - **Taint gated**: untrusted and system-derived candidates never enter the
   consolidation prompt or durable promotion path.
 - **Reviewable**: phase summaries and diary entries are written to
@@ -274,9 +278,10 @@ Dream Diary details.
 
 The dreaming system has two related review lanes:
 
-- **Live dreaming** works from the short-term dreaming store under
-  `memory/.dreams/` and is what the normal deep phase uses to decide what
-  graduates into `MEMORY.md`.
+- **Live dreaming** works from short-term dreaming state in SQLite plugin
+  storage and is what the normal deep phase uses to decide what graduates into
+  `MEMORY.md`. Doctor owns migration of legacy dreaming JSON state from
+  `memory/.dreams/`; run `openclaw doctor --fix` before using that old state.
 - **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
   standalone day files and writes structured review output into `DREAMS.md`.
 

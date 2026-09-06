@@ -21,7 +21,7 @@ describe("QA runtime-pair scenario catalog", () => {
           .length,
       ]),
     );
-    expect(laneCounts).toEqual({ core: 35, extended: 8, soak: 2 });
+    expect(laneCounts).toEqual({ core: 35, extended: 9, soak: 2 });
   });
 
   it("declares every release agentic scenario in the core lane", () => {

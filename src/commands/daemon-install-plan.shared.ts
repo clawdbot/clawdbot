@@ -25,8 +25,12 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
   runtimePath?: string;
+  wrapperPath?: string;
 }): Promise<{ devMode: boolean; runtimePath?: string }> {
   const devMode = params.devMode ?? resolveGatewayDevMode();
+  if (params.wrapperPath?.trim()) {
+    return { devMode, runtimePath: params.runtimePath };
+  }
   const runtimePath =
     params.runtimePath ??
     (params.runtime === "bun"

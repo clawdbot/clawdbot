@@ -28,11 +28,11 @@ async function runOpenClaw(
     VITEST: "",
   };
   try {
-    const result = await execFileAsync(
-      process.execPath,
-      ["--import", "tsx", "src/entry.ts", ...args],
-      { cwd: process.cwd(), env, maxBuffer: 1024 * 1024 },
-    );
+    const result = await execFileAsync(process.execPath, ["openclaw.mjs", ...args], {
+      cwd: process.cwd(),
+      env,
+      maxBuffer: 1024 * 1024,
+    });
     if (options?.expectFailure) {
       throw new Error(`expected command to fail: ${args.join(" ")}`);
     }

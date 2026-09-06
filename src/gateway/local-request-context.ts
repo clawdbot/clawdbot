@@ -8,6 +8,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
@@ -88,12 +89,16 @@ function createLocalGatewayRequestContext(
         getConfig: params.getRuntimeConfig,
       }),
   });
-  return {
+  const context: GatewayRequestContext = {
+    localEmbedded: true,
+    trackExecution: trackAsyncWork,
     deps: params.deps,
     configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    // Embedded calls have no running Gateway application owner.
+    isConfigReloadSettled: () => false,
     notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
@@ -168,6 +173,12 @@ function createLocalGatewayRequestContext(
     broadcastVoiceWakeRoutingChanged: () => {},
     unavailableGatewayMethods: new Set(),
   };
+  context.createAgentTurnFacade = async (principal) => {
+    const { createInternalAgentTurnFacade } =
+      await import("./agent-turn/internal-facade.runtime.js");
+    return createInternalAgentTurnFacade({ ...principal, getContext: () => context });
+  };
+  return context;
 }
 
 /** Runs code inside a local gateway request scope unless an outer scope already exists. */
@@ -176,14 +187,18 @@ export function withLocalGatewayRequestScope<T>(
   run: () => T,
 ): T {
   const existing = getPluginRuntimeGatewayRequestScope();
-  if (existing?.context) {
+  if (existing?.context || existing?.resolveGatewayContext) {
     return run();
   }
   const context = createLocalGatewayRequestContext(params);
+  // Session admission retains the instance binding after dropping request context.
+  const resolveGatewayContext = () => context;
+  context.resolveGatewayContext = resolveGatewayContext;
   return withPluginRuntimeGatewayRequestScope(
     {
       ...existing,
       context,
+      resolveGatewayContext,
       isWebchatConnect: existing?.isWebchatConnect ?? (() => false),
     },
     run,

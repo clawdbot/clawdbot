@@ -9,7 +9,7 @@ import type {
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { renderLearnMoreLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -137,9 +137,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
 
   override updated() {
     const snapshot = this.context.gateway.snapshot;
-    if (!this.context.agents.state.agentsList) {
-      void this.context.agents.ensureList();
-    }
     if (
       this.pendingImport &&
       (snapshot.phase !== "connected" ||
@@ -210,7 +207,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private refresh(): Promise<void> {
-    return this.planTask.run();
+    return this.currentAgentId()
+      ? this.planTask.run()
+      : this.context.agents.ensureList().then(() => undefined);
   }
 
   private selectAgent(agentId: string) {
@@ -517,8 +516,8 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       agents: listSelectableAgents(agentsList?.agents ?? []),
       selectedAgentId: agentId,
       plan: this.plan,
-      loading: this.loading,
-      error: this.error,
+      loading: this.loading || this.context.agents.state.agentsLoading,
+      error: (agentId ? null : this.context.agents.state.agentsError) ?? this.error,
       applyError: this.applyError,
       replaceExisting: this.replaceExisting,
       selectedByProvider: this.selectedByProvider,
@@ -579,14 +578,11 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       },
     });
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("memory-import")}</div>
-          <div class="page-subtitle">
-            ${subtitleForRoute("memory-import")} ${renderLearnMoreLink(MEMORY_IMPORT_DOCS_URL)}
-          </div>
-        </div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("memory-import"),
+        subtitle: html`${subtitleForRoute("memory-import")}
+        ${renderLearnMoreLink(MEMORY_IMPORT_DOCS_URL)}`,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

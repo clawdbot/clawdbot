@@ -12,6 +12,9 @@ import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
+  type UiSessionDefaultsHost,
 } from "./session-key.ts";
 
 export type SessionReconcileOptions = {
@@ -73,7 +76,10 @@ export function appendSessionResults(
 
 type SessionChangedEventInfo = {
   key: string;
+  reason: string | null;
+  sessionId?: string;
   updatedAt: number | null;
+  hasPermissionMode: boolean;
   thinkingLevel?: string | null;
   agentId: string | null;
   runId: string | null;
@@ -187,6 +193,37 @@ export function reconcileRosterPresentationMetadata(
     return reconciled;
   });
   return changed ? { ...incoming, sessions } : incoming;
+}
+
+export function preserveCurrentSessionRow(
+  result: SessionsListResult,
+  state: { result: SessionsListResult | null; agentId: string | null },
+  snapshot: UiSessionDefaultsHost & { sessionKey?: string },
+  backgroundHydrate: boolean,
+): SessionsListResult {
+  const currentKey = snapshot.sessionKey?.trim();
+  if (!currentKey) {
+    return result;
+  }
+  const parsedAgentId = parseAgentSessionKey(currentKey)?.agentId;
+  const currentAgentId = normalizeAgentId(
+    parsedAgentId ?? resolveUiSelectedGlobalAgentId(snapshot),
+  );
+  if (!parsedAgentId && normalizeAgentId(state.agentId ?? "") !== currentAgentId) {
+    return result;
+  }
+  const matchesCurrent = (row: GatewaySessionRow) =>
+    uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey, row.agentId);
+  const previousCurrentRow = state.result?.sessions.find(matchesCurrent);
+  if (
+    previousCurrentRow &&
+    (backgroundHydrate || previousCurrentRow.archived === true) &&
+    !result.sessions.some(matchesCurrent)
+  ) {
+    const sessions = [...result.sessions, previousCurrentRow];
+    return { ...result, count: sessions.length, sessions };
+  }
+  return result;
 }
 
 function stripThinkingMetadata<T extends ThinkingMetadataCarrier>(value: T): T {
@@ -322,7 +359,10 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
   return [
     {
       key,
+      reason,
+      sessionId: stringValue(recordValue(source, "sessionId")),
       updatedAt: typeof updatedAt === "number" ? updatedAt : null,
+      hasPermissionMode: Object.hasOwn(source, "permissionMode"),
       thinkingLevel:
         typeof thinkingLevel === "string"
           ? thinkingLevel
@@ -404,20 +444,12 @@ export function reconcileSessionChanged(
   ) {
     return { applied: false, key, agentId: null, result };
   }
-  if (reason === "delete" && !result) {
-    return {
-      applied: true,
-      key,
-      agentId: info.agentId,
-      deletedKey: key,
-      result,
-    };
-  }
-  if (!result) {
-    return { applied: false, result };
+  // Key-only notifications cannot identify which generation disappeared.
+  if (reason === "delete" && !info.sessionId) {
+    return { applied: false, key, agentId: info.agentId, result };
   }
   const selectedGlobalAgentId = info.agentId ?? options.selectedGlobalAgentId ?? null;
-  const existing = result.sessions.find((candidate) =>
+  const existing = result?.sessions.find((candidate) =>
     matchesExistingSession(
       candidate,
       { key, kind: "global", updatedAt: null },
@@ -426,8 +458,11 @@ export function reconcileSessionChanged(
   );
 
   if (reason === "delete") {
-    if (!existing) {
+    if (!result || !existing) {
       return { applied: true, result, key, agentId: info.agentId, deletedKey: key };
+    }
+    if (existing.sessionId !== info.sessionId) {
+      return { applied: false, result, key, agentId: info.agentId };
     }
     const sessions = result.sessions.filter((candidate) => candidate !== existing);
     return {
@@ -441,6 +476,9 @@ export function reconcileSessionChanged(
       },
       deletedKey: existing.key,
     };
+  }
+  if (!result) {
+    return { applied: false, result };
   }
   // The gateway wire folds cron/spawn-child into "direct" before projection
   // (session-utils-row.ts, #115299); cron detection is isCronSessionKey.
@@ -509,7 +547,7 @@ export function reconcileSessionChanged(
     return { applied: false, result };
   }
   const eventTs = typeof event.ts === "number" && Number.isFinite(event.ts) ? event.ts : null;
-  const timestamped = eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) };
+  const timestamped = eventTs !== null && eventTs > next.ts ? { ...next, ts: eventTs } : next;
   const previousOwner = existing.owner?.actor;
   const nextOwner = row.owner?.actor;
   const ownershipChanged =
@@ -583,14 +621,18 @@ export function reconcileSessionHistory(
   const nextDefaults = defaults
     ? preserveRicherThinkingMetadata(defaults, result.defaults)
     : result.defaults;
+  // Lineage and repeated events can supply the current defaults. Preserve
+  // result identity when nothing changes so shared subscribers stay quiet.
+  const resultWithDefaults =
+    nextDefaults === result.defaults ? result : { ...result, defaults: nextDefaults };
   if (preserveMatchingExistingRow && existing) {
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   if (isOlderSessionSnapshot(session, existing)) {
     return result;
   }
   if (isOutsideResultScope || (!existing && !isPersistedSessionRow(session))) {
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   const visibleKey = existing?.key ?? session.key;
   const visibleSession = preserveRosterPresentationMetadata(
@@ -601,19 +643,14 @@ export function reconcileSessionHistory(
     existing,
   );
   if (isStaleForActiveSession(visibleSession, existing)) {
-    // Keep result identity when nothing changed so the caller's
-    // result === state.result publish gate can skip a spurious re-render.
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   if (
     existing &&
     isShallowEqualSessionRow(visibleSession, existing) &&
     sessionMatchesArchivedFilter(visibleSession, archivedFilter)
   ) {
-    // The same event reconciled twice (capability handler + chat page) must
-    // no-op the second pass; a fresh array here defeats every downstream
-    // result === state.result publish gate and re-renders per event.
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   const sessions = sessionMatchesArchivedFilter(visibleSession, archivedFilter)
     ? [

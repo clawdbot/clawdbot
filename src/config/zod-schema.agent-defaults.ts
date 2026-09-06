@@ -5,7 +5,7 @@ import {
   HeartbeatSchema,
   AgentSandboxSchema,
   AgentContextLimitsSchema,
-  AgentModelRuntimeEntrySchema,
+  AgentModelMapSchema,
   AgentModelPolicySchema,
   AgentModelSchema,
   AgentToolModelSchema,
@@ -79,9 +79,10 @@ export const AgentDefaultsSchema = z
     pdfModel: AgentToolModelSchema.optional(),
     pdfMaxMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
-    models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
+    models: AgentModelMapSchema.optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
     workspace: z.string().optional(),
+    cwd: z.string().optional(),
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
     repoRoot: z.string().optional(),
@@ -232,7 +233,7 @@ export const AgentDefaultsSchema = z
           .max(5)
           .optional()
           .describe(
-            "Maximum nesting depth for sub-agent spawning. 1 = no nesting (default), 2 = sub-agents can spawn sub-sub-agents.",
+            "Maximum nesting depth for sub-agent spawning. Default: 5; 1 makes direct children leaves.",
           ),
         maxChildrenPerAgent: z
           .number()

@@ -30,7 +30,7 @@ describe("firecrawl tools", () => {
   const priorFetch = global.fetch;
   let fetchFirecrawlContent: typeof import("../api.js").fetchFirecrawlContent;
   let createFirecrawlWebSearchProvider: typeof import("./firecrawl-search-provider.js").createFirecrawlWebSearchProvider;
-  let createFirecrawlFreeWebSearchProvider: typeof import("./firecrawl-free-search-provider.js").createFirecrawlFreeWebSearchProvider;
+  let createFirecrawlFreeWebSearchProvider: typeof import("./firecrawl-search-provider.js").createFirecrawlFreeWebSearchProvider;
   let createFirecrawlWebFetchProvider: typeof import("./firecrawl-fetch-provider.js").createFirecrawlWebFetchProvider;
   let createFirecrawlSearchTool: typeof import("./firecrawl-search-tool.js").createFirecrawlSearchTool;
   let createFirecrawlScrapeTool: typeof import("./firecrawl-scrape-tool.js").createFirecrawlScrapeTool;
@@ -43,8 +43,7 @@ describe("firecrawl tools", () => {
     ({ fetchFirecrawlContent } = await import("../api.js"));
     ({ createFirecrawlWebFetchProvider } = await import("./firecrawl-fetch-provider.js"));
     ({ createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js"));
-    ({ createFirecrawlFreeWebSearchProvider } =
-      await import("./firecrawl-free-search-provider.js"));
+    ({ createFirecrawlFreeWebSearchProvider } = await import("./firecrawl-search-provider.js"));
     ({ createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js"));
     ({ createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js"));
     ({
@@ -875,30 +874,33 @@ describe("firecrawl tools", () => {
     });
   });
 
-  it.each(["paid", "free"] as const)(
-    "forwards exact cancellation through the registered %s web-search provider",
+  it.each(["paid", "free", "fetch"] as const)(
+    "forwards exact cancellation through the registered %s web provider",
     async (kind) => {
       const provider =
         kind === "paid"
           ? createFirecrawlWebSearchProvider()
-          : createFirecrawlFreeWebSearchProvider();
+          : kind === "free"
+            ? createFirecrawlFreeWebSearchProvider()
+            : createFirecrawlWebFetchProvider();
       const tool = provider.createTool({ config: { test: true } } as never);
       expect(tool).not.toBeNull();
       const controller = new AbortController();
+      const run = kind === "fetch" ? runFirecrawlScrape : runFirecrawlSearch;
+      const args =
+        kind === "fetch"
+          ? { url: "https://example.com/cancellation" }
+          : { query: `${kind} cancellation` };
 
-      await tool!.execute({ query: `${kind} cancellation` }, { signal: controller.signal });
+      await tool!.execute(args, { signal: controller.signal });
 
-      expect(runFirecrawlSearch).toHaveBeenCalledWith(
-        expect.objectContaining({ signal: controller.signal }),
-      );
+      expect(run).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
 
       const reason = new Error(`${kind} provider cancelled`);
       controller.abort(reason);
-      runFirecrawlSearch.mockClear();
-      await expect(
-        tool!.execute({ query: `${kind} cancelled` }, { signal: controller.signal }),
-      ).rejects.toBe(reason);
-      expect(runFirecrawlSearch).not.toHaveBeenCalled();
+      run.mockClear();
+      await expect(tool!.execute(args, { signal: controller.signal })).rejects.toBe(reason);
+      expect(run).not.toHaveBeenCalled();
     },
   );
 
@@ -1181,7 +1183,7 @@ describe("firecrawl tools", () => {
         query: "web search",
         count: 6.5,
       }),
-    ).rejects.toThrow("count must be an integer from 1 to 10");
+    ).rejects.toThrow(/^count must be an integer from 1 to 100$/);
     await expect(
       searchTool.execute("call-search-timeout", {
         query: "web search",

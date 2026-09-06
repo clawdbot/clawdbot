@@ -14,7 +14,7 @@ export {
   normalizeAccountId,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk/core";
-export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
+export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 export { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 export { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 export { detectBinary } from "openclaw/plugin-sdk/setup-tools";

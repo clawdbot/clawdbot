@@ -1,4 +1,5 @@
 // Verifies OSC8 hyperlink formatting for TUI terminal output.
+import { getOsc8LinkAtColumn } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { addOsc8Hyperlinks, extractUrls } from "./osc8-hyperlinks.js";
 
@@ -106,6 +107,27 @@ describe("extractUrls", () => {
 });
 
 describe("addOsc8Hyperlinks", () => {
+  it.each([
+    { name: "BEL", params: "", terminator: "\x07" },
+    { name: "ST with link identity", params: "id=docs", terminator: "\x1b\\" },
+  ])("preserves authored spans alongside unlinked URLs ($name)", ({ params, terminator }) => {
+    const label = "https://example.test/label";
+    const target = "https://example.test/destination";
+    const bare = "https://example.test/bare";
+    const prefix = "See ";
+    const authored = `\x1b]8;${params};${target}${terminator}\x1b[32m${label}\x1b[0m\x1b]8;;${terminator}`;
+    const line = `${prefix}${authored} then ${bare}`;
+
+    const [rendered] = addOsc8Hyperlinks([line], [target, bare]);
+
+    expect(rendered).toContain(authored);
+    expect(getOsc8LinkAtColumn(rendered!, prefix.length)).toBe(target);
+    expect(getOsc8LinkAtColumn(rendered!, prefix.length + label.length)).toBeUndefined();
+    expect(getOsc8LinkAtColumn(rendered!, prefix.length + label.length + " then ".length)).toBe(
+      bare,
+    );
+  });
+
   it("returns lines unchanged when no URLs", () => {
     const lines = ["Hello world", "No links here"];
     expect(addOsc8Hyperlinks(lines, [])).toEqual(lines);

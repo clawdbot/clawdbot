@@ -5,16 +5,13 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("opens a git-backed agent draft from the sidebar new-session action", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, { workspaceGit: true });
 
@@ -33,11 +30,7 @@ suite.define(() => {
   });
 
   it("waits for configured inference before sending the first chat turn", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       agentModel: "openai/startup-model",
@@ -53,6 +46,7 @@ suite.define(() => {
         },
       ],
       sessionKey: "global",
+      sessionScope: "global",
     });
 
     try {
@@ -91,7 +85,7 @@ suite.define(() => {
             },
           ],
         },
-        sessionId: "control-ui-e2e-session",
+        sessionId: "session:global",
         thinkingLevel: null,
       });
 
@@ -157,11 +151,7 @@ suite.define(() => {
   });
 
   it("paints startup history while canonical roster and metadata requests remain pending", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       agentModel: "openai/hydrated-model",
@@ -176,7 +166,7 @@ suite.define(() => {
               role: "assistant",
             },
           ],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         },
       },

@@ -12,6 +12,61 @@ const CACHE_VERSION =
     : URL_CACHE_VERSION) || "dev";
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 const CONTROL_CACHE_LIMIT = 3;
+const CLIENT_VERSION_TIMEOUT_MS = 1_000;
+
+function isControlUiChatClient(url) {
+  const clientUrl = new URL(url);
+  const scopeUrl = new URL(self.registration.scope);
+  const scopePath = scopeUrl.pathname.endsWith("/") ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
+  const chatPath = `${scopePath}chat`;
+  return (
+    clientUrl.origin === scopeUrl.origin &&
+    (clientUrl.pathname === scopeUrl.pathname ||
+      clientUrl.pathname === chatPath ||
+      clientUrl.pathname.startsWith(`${chatPath}/`))
+  );
+}
+
+async function markClientReload(client) {
+  const cache = await caches.open(CACHE_NAME);
+  const guardUrl = new URL(".__openclaw__/service-worker-reload", self.registration.scope);
+  guardUrl.searchParams.set("client", client.id);
+  const guardRequest = new Request(guardUrl);
+  if (await cache.match(guardRequest)) {
+    return null;
+  }
+  // Persist before navigation so repeated activation of the same build cannot
+  // loop a document that keeps receiving stale HTML.
+  await cache.put(guardRequest, new Response(CACHE_VERSION));
+  return { cache, guardRequest };
+}
+
+async function navigateSuspendedClient(client) {
+  const reloadClaim = await markClientReload(client);
+  if (!reloadClaim) {
+    return;
+  }
+  // Navigation can stay pending for the lifetime of a suspended document, so
+  // it must not keep the replacement service worker's activation alive.
+  void client.navigate(client.url).catch(() => {
+    // A suspended WebKit document can reject navigation. Release ownership so
+    // the next activation can retry instead of stranding this build forever.
+    void reloadClaim.cache.delete(reloadClaim.guardRequest).catch(() => undefined);
+  });
+}
+
+function readClientVersion(client) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const timeout = setTimeout(() => resolve(null), CLIENT_VERSION_TIMEOUT_MS);
+    channel.port1.addEventListener("message", (event) => {
+      clearTimeout(timeout);
+      resolve(typeof event.data?.version === "string" ? event.data.version : null);
+    });
+    channel.port1.start();
+    client.postMessage({ type: "sw-version-probe", version: CACHE_VERSION }, [channel.port2]);
+  });
+}
 
 // Minimal app-shell files to precache.
 const PRECACHE_URLS = ["./"];
@@ -39,17 +94,28 @@ self.addEventListener("activate", (event) => {
           controlKeys.filter((key) => !retained.has(key)).map((key) => caches.delete(key)),
         ),
       ]);
-      // Enumerate after claim so a concurrent reload receives the activation event
-      // instead of leaving the new document unaware of the replacement worker.
+      // A suspended mobile page can miss a one-shot update message. Current
+      // documents answer the probe; only stale or suspended chat documents reload.
       const windowClients = await self.clients.matchAll({
         type: "window",
         includeUncontrolled: true,
       });
 
-      for (const client of windowClients) {
-        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Service Worker Client.postMessage does not take targetOrigin.
-        client.postMessage({ type: "sw-updated", version: CACHE_VERSION });
-      }
+      await Promise.allSettled(
+        windowClients
+          .filter((client) => isControlUiChatClient(client.url))
+          .map(async (client) => {
+            const clientVersion = await readClientVersion(client);
+            if (clientVersion === CACHE_VERSION) {
+              return;
+            }
+            if (clientVersion !== null) {
+              client.postMessage({ type: "sw-updated", version: CACHE_VERSION }, []);
+              return;
+            }
+            await navigateSuspendedClient(client);
+          }),
+      );
     })(),
   );
 });
@@ -79,7 +145,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Cache-first for hashed assets; network-first for HTML/other.
+  // Cache-first for hashed assets; network-first for other paths. Versioned
+  // public URLs reuse the HTTP immutable cache; unversioned/custom files revalidate.
   if (url.pathname.includes("/assets/")) {
     event.respondWith(
       caches.match(event.request).then(
@@ -129,6 +196,7 @@ self.addEventListener("push", (event) => {
     icon: "./apple-touch-icon.png",
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
+    renotify: data.renotify === true,
     data: {
       url: data.url || self.registration.scope,
       explicitUrl: Boolean(data.url),

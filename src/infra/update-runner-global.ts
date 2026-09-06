@@ -11,6 +11,7 @@ import {
 import { resolveExtendedStablePackage } from "./update-check.js";
 import {
   createGlobalInstallEnv,
+  verifyPackageUpdateRecovery,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
   type GlobalInstallManager,
@@ -39,17 +40,7 @@ export async function runGlobalUpdate(params: {
   allowGatewayServiceRepair: boolean;
   allowGatewayActivation: boolean;
 }): Promise<UpdateRunResult> {
-  const {
-    opts,
-    pkgRoot,
-    globalManager,
-    runCommand,
-    timeoutMs,
-    startedAt,
-    beforeVersion,
-    allowGatewayServiceRepair,
-    allowGatewayActivation,
-  } = params;
+  const { opts, pkgRoot, globalManager, runCommand, timeoutMs, startedAt, beforeVersion } = params;
   const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
   if (channel === "extended-stable" && opts.tag !== undefined) {
     return {
@@ -57,6 +48,7 @@ export async function runGlobalUpdate(params: {
       mode: globalManager,
       root: pkgRoot,
       reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      recovery: await verifyPackageUpdateRecovery(pkgRoot),
       before: { version: beforeVersion },
       steps: [],
       durationMs: Date.now() - startedAt,
@@ -81,6 +73,7 @@ export async function runGlobalUpdate(params: {
       mode: globalManager,
       root: pkgRoot,
       reason: extendedStable.reason,
+      recovery: await verifyPackageUpdateRecovery(pkgRoot),
       before: { version: beforeVersion },
       steps: [],
       durationMs: Date.now() - startedAt,
@@ -116,16 +109,18 @@ export async function runGlobalUpdate(params: {
         stepIndex: 0,
         totalSteps: 1,
       }),
-    postVerifyStep: async (verifiedPackageRoot) => {
-      const doctorEntry = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
+    postVerifyStep: async (activePackageRoot) => {
+      const doctorEntry = await resolveGatewayInstallEntrypoint(activePackageRoot);
       if (!doctorEntry) {
         return null;
       }
       const doctorNodePath = await resolveStableNodePath(process.execPath);
-      const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
+      const candidateHostVersion = await readPackageVersion(activePackageRoot);
+      // A staged candidate must not mutate or activate the native service before
+      // its package rollback boundary commits.
       const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
         targetVersion: candidateHostVersion,
-        allowGatewayServiceRepair,
+        allowGatewayServiceRepair: false,
       });
       return await runStep({
         runCommand,
@@ -137,11 +132,11 @@ export async function runGlobalUpdate(params: {
           "--non-interactive",
           ...(doctorPolicy.fix ? ["--fix"] : []),
         ],
-        cwd: verifiedPackageRoot,
+        cwd: activePackageRoot,
         timeoutMs,
         env: buildUpdateDoctorEnv({
-          allowGatewayServiceRepair,
-          allowGatewayActivation,
+          allowGatewayServiceRepair: false,
+          allowGatewayActivation: false,
           serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
           compatibilityHostVersion: candidateHostVersion,
         }),
@@ -155,13 +150,14 @@ export async function runGlobalUpdate(params: {
   return {
     status: packageUpdate.failedStep ? "error" : "ok",
     mode: globalManager,
-    root: packageUpdate.verifiedPackageRoot ?? pkgRoot,
+    root: packageUpdate.activePackageRoot ?? undefined,
     reason: packageUpdate.failedStep
       ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
       : undefined,
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion },
     steps: packageUpdate.steps,
+    recovery: packageUpdate.recovery,
     durationMs: Date.now() - startedAt,
   };
 }

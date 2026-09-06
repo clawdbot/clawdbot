@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(),
   killProcessTree: vi.fn(),
   spawn: vi.fn(),
+  log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   defaultRuntime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -18,6 +19,8 @@ const mocks = vi.hoisted(() => ({
     exit: vi.fn(),
   },
 }));
+
+vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => mocks.log }));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -197,6 +200,32 @@ describe("runGmailService", () => {
     await vi.advanceTimersByTimeAsync(120_000);
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(3);
     expect(children.filter((child) => child.alive)).toHaveLength(1);
+  });
+
+  it("logs bounded registration failures and keeps serving and renewing", async () => {
+    mocks.runCommandWithTimeout.mockResolvedValue({
+      code: 124,
+      signal: "SIGTERM",
+      killed: true,
+      termination: "timeout",
+      stdout: `${"x".repeat(30_000)}\nregistration stdout tail`,
+      stderr: `${"noise\n".repeat(1000)}\u001b[31mregistration stderr tail\u001b[0m`,
+    });
+    await runGmailService({});
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(children.filter((child) => child.alive)).toHaveLength(1);
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(3);
+    expect(mocks.log.error).toHaveBeenCalledTimes(3);
+    for (const [message] of mocks.log.error.mock.calls) {
+      expect(message.length).toBeLessThan(2000);
+      expect(message).toContain("gog gmail watch start failed");
+      expect(message).toContain("registration stdout tail");
+      expect(message).toContain("registration stderr tail");
+      expect(message).toContain("termination=timeout");
+      expect(message).toContain("code=124");
+      expect(message).toContain("signal=SIGTERM");
+      expect(message).not.toContain("\u001b");
+    }
   });
 
   it("keeps renewal single-flight and cancels it on shutdown", async () => {

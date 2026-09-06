@@ -46,7 +46,6 @@ export NPM_CONFIG_PREFIX=/tmp/npm-prefix
 export PNPM_HOME=/tmp/pnpm-home
 export PATH="/tmp/npm-prefix/bin:/tmp/pnpm-home:$PATH"
 export CI=true
-export OPENCLAW_DISABLE_BUNDLED_PLUGINS=1
 export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_NO_PROMPT=1
 
@@ -87,6 +86,18 @@ if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm 
   exit 1
 fi
 package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"/tmp/npm-prefix/lib/node_modules/openclaw/package.json\", \"utf8\")).version")"
+# npm global tarball installs can retain the host platform package even with
+# --omit=optional. Relocate any such package so this lane deterministically
+# exercises the optional-free JavaScript fallback promised by that install mode.
+fs_safe_scope=/tmp/npm-prefix/lib/node_modules/openclaw/node_modules/@openclaw
+for platform_package in "$fs_safe_scope"/fs-safe-*; do
+  if [ -d "$platform_package" ]; then
+    mv "$platform_package" "$platform_package.omitted"
+  fi
+done
+node scripts/docker/verify-fs-safe-native.mjs \
+  --package-root /tmp/npm-prefix/lib/node_modules/openclaw \
+  --mode fallback
 OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
   node scripts/e2e/lib/package-compat.mjs "$package_version"
 )"
@@ -106,7 +117,7 @@ cleanup_registry() {
 trap cleanup_registry EXIT
 rm -f "$registry_port_file"
 OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version" \
-  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+  OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org}" \
   node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$registry_port_file" \
     openclaw \
@@ -157,9 +168,32 @@ status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
 STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
 
+assert_package_dry_run() {
+  local expected_kind="$1" expected_channel="$2"
+  shift 2
+  local preview
+  preview="$(openclaw update --dry-run --json --no-restart "$@")"
+  printf "%s\n" "$preview"
+  UPDATE_JSON="$preview" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+    assert-dry-run "$expected_kind" "$expected_channel"
+  node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
+}
+dev_channel_args=(--channel dev)
+# Legacy package acceptance permits missing channel persistence; keep its explicit switch.
+if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
+  echo "==> package dry-run channel and one-off tag precedence"
+  openclaw config set update.channel dev
+  assert_package_dry_run git dev
+  assert_package_dry_run git dev --channel dev
+  assert_package_dry_run git dev --channel dev --tag beta
+  assert_package_dry_run package dev --tag beta
+  assert_package_dry_run package stable --channel stable
+  dev_channel_args=()
+fi
+
 echo "==> package -> git dev channel"
 set +e
-dev_json="$(openclaw update --channel dev --yes --json --no-restart)"
+dev_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dev_status=$?
 set -e
 printf "%s\n" "$dev_json"

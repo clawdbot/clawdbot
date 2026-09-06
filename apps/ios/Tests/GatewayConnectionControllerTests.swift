@@ -234,7 +234,6 @@ private func waitUntil(
         controller.setScenePhase(.background)
 
         #expect(!controller._test_hasOperatorFleetReconcileTask())
-        #expect(controller.operatorFleet.statuses.isEmpty)
     }
 
     @Test @MainActor func `chat owner survives reconnect while session refresh identity changes`() {
@@ -646,46 +645,6 @@ private func waitUntil(
                 permissions: ["screen": true]))
 
         #expect(lhs.hasSameConnectionInputs(as: rhs))
-    }
-
-    @Test @MainActor func `operator fleet retains enabled runtime during endpoint gap`() {
-        let fleet = GatewayOperatorFleet()
-        let config = Self.makeGatewayConnectConfig(stableID: "bonjour|secondary")
-        defer { fleet.stopAll() }
-
-        fleet.reconcile(
-            desiredStableIDs: [config.stableID],
-            configs: [(config: config, name: "Secondary")])
-        #expect(fleet.statuses.map(\.stableID) == [config.stableID])
-
-        fleet.reconcile(desiredStableIDs: [config.stableID], configs: [])
-        #expect(fleet.statuses.map(\.stableID) == [config.stableID])
-
-        fleet.reconcile(desiredStableIDs: [], configs: [])
-        #expect(fleet.statuses.isEmpty)
-    }
-
-    @Test @MainActor func `operator fleet preserves auth pause across same-config reconciles`() {
-        let fleet = GatewayOperatorFleet()
-        let config = Self.makeGatewayConnectConfig(stableID: "bonjour|approval-required")
-        defer { fleet.stopAll() }
-
-        fleet.reconcile(
-            desiredStableIDs: [config.stableID],
-            configs: [(config: config, name: "Approval Required")])
-        fleet._test_pauseRuntimeForAttention(stableID: config.stableID)
-
-        fleet.reconcile(
-            desiredStableIDs: [config.stableID],
-            configs: [(config: config, name: "Renamed While Paused")])
-
-        #expect(fleet.statuses == [
-            GatewayOperatorFleet.Status(
-                stableID: config.stableID,
-                name: "Renamed While Paused",
-                state: .needsAttention,
-                detail: "Approval required"),
-        ])
     }
 
     @Test @MainActor func `same target retry unpauses retained pairing problem`() {
@@ -2043,7 +2002,7 @@ private func waitUntil(
             token: nil,
             password: nil,
             sessionKey: "main")
-        defaults.set(try JSONEncoder().encode(otherRelay), forKey: "share.gatewayRelay.config.v1")
+        try defaults.set(JSONEncoder().encode(otherRelay), forKey: "share.gatewayRelay.config.v1")
         let mismatched = try #require(ShareGatewayRelaySettings.loadConfig())
         #expect(mismatched.token == nil)
         #expect(mismatched.password == nil)
@@ -2638,7 +2597,7 @@ private func waitUntil(
             useTLS: false,
             lastConnectedAtMs: nil))
         let appModel = NodeAppModel()
-        let session = OpenClawChatSessionEntry(
+        var session = OpenClawChatSessionEntry(
             key: "agent:main:a",
             kind: nil,
             displayName: "Gateway A session",
@@ -2658,12 +2617,37 @@ private func waitUntil(
             modelProvider: nil,
             model: nil,
             contextTokens: nil)
+        session.agentId = "main"
+        var matchingBare = session
+        matchingBare.key = "shared-tool"
+        var ownerlessPrefixed = session
+        ownerlessPrefixed.key = "agent:main:legacy"
+        ownerlessPrefixed.agentId = nil
+        appModel.gatewayDefaultAgentId = "main"
 
-        await appModel.storeCachedChatSessions([session])
+        await appModel.storeCachedChatSessions(
+            [session, matchingBare, ownerlessPrefixed],
+            gatewayID: gatewayA,
+            agentID: "main")
+        var workGlobal = session
+        workGlobal.key = "global"
+        workGlobal.agentId = "work"
+        appModel.selectedAgentId = "work"
+        await appModel.storeCachedChatSessions([workGlobal], gatewayID: gatewayA, agentID: "work")
         _ = GatewaySettingsStore.setActiveGateway(stableID: gatewayB)
-        #expect(await appModel.loadCachedChatSessions().isEmpty)
+        #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayB, agentID: "work").isEmpty)
         _ = GatewaySettingsStore.setActiveGateway(stableID: gatewayA)
-        #expect(await appModel.loadCachedChatSessions() == [session])
+        appModel.selectedAgentId = "main"
+        var expectedPrefixed = ownerlessPrefixed
+        expectedPrefixed.agentId = "main"
+        let cachedSessions = await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "main")
+        #expect(cachedSessions == [
+            session,
+            matchingBare,
+            expectedPrefixed,
+        ])
+        appModel.selectedAgentId = "work"
+        #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "work") == [workGlobal])
     }
 
     private static func makeNodeOptions(

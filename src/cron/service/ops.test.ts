@@ -21,7 +21,6 @@ import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import * as runReceiptStore from "../store/run-receipt-store.js";
-import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
@@ -531,6 +530,7 @@ function createOkIsolatedCronState(params: {
     ...(params.triggersEnabled ? { cronConfig: { triggers: { enabled: true } } } : {}),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
+      delivered: true,
       ...(params.summary === undefined ? {} : { summary: params.summary }),
     })),
     ...(params.onEvent ? { onEvent: params.onEvent } : {}),
@@ -1019,18 +1019,19 @@ describe("cron service ops seam coverage", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const proposal = proposeCronRunRecovery(state, job.id, undefined, startedAt);
-    await saveCronJobsStoreWithTransactionHooks(
+    await cronStoreModule.saveCronJobsStore(
       storePath,
       { version: 1, jobs: [completedJob] },
-      undefined,
       {
-        afterWrite: (db) => {
-          runReceiptStore.finishCronRunReceiptInDatabase({
-            database: db,
-            handle: receipt,
-            status: "ok",
-            finishedAtMs: now,
-          });
+        transactionHooks: {
+          afterWrite: (db) => {
+            runReceiptStore.finishCronRunReceiptInDatabase({
+              database: db,
+              handle: receipt,
+              status: "ok",
+              finishedAtMs: now,
+            });
+          },
         },
       },
     );
@@ -1293,7 +1294,9 @@ describe("cron service ops seam coverage", () => {
         },
       });
       runOpenClawStateWriteTransaction(({ db }) => {
-        db.prepare("UPDATE task_runs SET ended_at = -1 WHERE run_id = ?").run(taskRunId);
+        db.prepare(
+          "UPDATE task_runs SET created_at = -1, started_at = -1, ended_at = -1, last_event_at = -1 WHERE run_id = ?",
+        ).run(taskRunId);
       });
 
       await start(state);
@@ -1357,6 +1360,8 @@ describe("cron service ops seam coverage", () => {
           job,
           status: "ok",
           completionStatus: "succeeded",
+          delivered: true,
+          deliveryStatus: "delivered",
           summary: "completed before restart",
           runAtMs: startedAt,
           durationMs: endedAt - startedAt,
@@ -1564,6 +1569,7 @@ describe("cron service ops seam coverage", () => {
           job,
           status: "error",
           error: "provider unavailable",
+          failureNotificationDelivery: { status: "unknown" },
           runAtMs: startedAt,
           durationMs: endedAt - startedAt,
           nextRunAtMs: now + 30 * 60_000,

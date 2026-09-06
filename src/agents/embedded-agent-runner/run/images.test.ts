@@ -430,6 +430,30 @@ describe("detectAndLoadPromptImages", () => {
     }
   });
 
+  it("keeps inline fact indexes aligned when an earlier attachment is suppressed", async () => {
+    const kept = {
+      type: "image" as const,
+      data: TINY_GIF_BUFFER.toString("base64"),
+      mimeType: "image/gif",
+    };
+    const result = await detectAndLoadPromptImages({
+      prompt: "describe the remaining image",
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+      existingImages: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }, kept],
+      media: [{ contentType: "image/png" }, { contentType: "image/gif" }],
+      mediaImageLayout: {
+        slots: [
+          { kind: "inline", factIndex: 0 },
+          { kind: "inline", factIndex: 1 },
+        ],
+        suppressedFactIndexes: [0],
+      },
+    });
+    expect(result.images).toEqual([kept]);
+    expect(result.imageFactIndexes).toEqual([1]);
+  });
+
   it("keeps distinct inline attachments with identical bytes", async () => {
     const pngB64 = TINY_PNG_BASE64;
     const image = { type: "image" as const, data: pngB64, mimeType: "image/png" };
@@ -758,59 +782,67 @@ describe("hydratePromptMediaMessages", () => {
     }
   });
 
-  it("preserves offloaded-before-inline order across serialize and restore", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replay-order-"));
-    const offloadedPath = path.join(workspaceDir, "offloaded.png");
-    const inlinePath = path.join(workspaceDir, "inline.gif");
-    await fs.writeFile(offloadedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    await fs.writeFile(inlinePath, TINY_GIF_BUFFER);
-    const inlineImage = {
-      type: "image" as const,
-      data: TINY_GIF_BUFFER.toString("base64"),
-      mimeType: "image/gif",
-    };
-    const runtime = attachRuntimePromptMediaFacts(
-      { role: "user" as const, content: [{ type: "text" as const, text: "compare" }, inlineImage] },
-      [{ path: offloadedPath, contentType: "image/png" }],
-      ["offloaded", "inline"],
-    ) as unknown as AgentMessage;
-    const persisted = buildPersistedUserTurnMessage({
-      text: "compare",
-      media: [
-        { path: offloadedPath, contentType: "image/png" },
-        { path: inlinePath, contentType: "image/gif" },
-      ],
-      mediaImageLayout: {
-        slots: [
-          { kind: "offloaded", factIndex: 0 },
-          { kind: "inline", factIndex: 1 },
+  it.each(["runtime", "recorder"] as const)(
+    "preserves offloaded-before-inline order across %s serialize and restore",
+    async (owner) => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replay-order-"));
+      const offloadedPath = path.join(workspaceDir, "offloaded.png");
+      const inlinePath = path.join(workspaceDir, "inline.gif");
+      await fs.writeFile(offloadedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+      await fs.writeFile(inlinePath, TINY_GIF_BUFFER);
+      const inlineImage = {
+        type: "image" as const,
+        data: TINY_GIF_BUFFER.toString("base64"),
+        mimeType: "image/gif",
+      };
+      const runtime = attachRuntimePromptMediaFacts(
+        {
+          role: "user" as const,
+          content: [{ type: "text" as const, text: "compare" }, inlineImage],
+        },
+        [{ path: offloadedPath, contentType: "image/png" }],
+        ["offloaded", "inline"],
+      ) as unknown as AgentMessage;
+      const persisted = buildPersistedUserTurnMessage({
+        text: "compare",
+        media: [
+          { path: offloadedPath, contentType: "image/png" },
+          { path: inlinePath, contentType: "image/gif" },
         ],
-      },
-    });
-    const serialized = JSON.stringify(
-      mergePreparedUserTurnMessageForRuntime({
-        runtimeMessage: runtime,
-        preparedMessage: persisted,
-      }),
-    );
-    const restored = JSON.parse(serialized) as AgentMessage;
-
-    try {
-      expect(readRuntimePromptImageOrder(restored)).toBeUndefined();
-      const result = await hydratePromptMediaMessages([restored], {
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        workspaceOnly: true,
+        mediaImageLayout: {
+          slots: [
+            { kind: "offloaded", factIndex: 0 },
+            { kind: "inline", factIndex: 1 },
+          ],
+        },
       });
-      expect((result[0] as unknown as { content?: unknown }).content).toEqual([
-        { type: "text", text: "compare" },
-        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
-        inlineImage,
-      ]);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
+      const serialized = JSON.stringify(
+        owner === "recorder"
+          ? persisted
+          : mergePreparedUserTurnMessageForRuntime({
+              runtimeMessage: runtime,
+              preparedMessage: persisted,
+            }),
+      );
+      const restored = JSON.parse(serialized) as AgentMessage;
+
+      try {
+        expect(readRuntimePromptImageOrder(restored)).toBeUndefined();
+        const result = await hydratePromptMediaMessages([restored], {
+          workspaceDir,
+          model: { input: ["text", "image"] },
+          workspaceOnly: true,
+        });
+        expect((result[0] as unknown as { content?: unknown }).content).toEqual([
+          { type: "text", text: "compare" },
+          { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+          inlineImage,
+        ]);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps duplicate fact slots across serialize and restore", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replay-duplicates-"));

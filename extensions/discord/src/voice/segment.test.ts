@@ -11,11 +11,12 @@ defineDiscordVoiceTests(
     createManager,
     entersStateMock,
     getSessionEntry,
-    getVoiceReceive,
+    getLastAudioPlayer,
+    receiveRecordedSpeech,
     lastTtsStreamArgs,
     loggerWarnMock,
     makeVoiceConfig,
-    processVoiceSegment,
+    receiveVoiceUtterance,
     textToSpeechMock,
     textToSpeechStreamMock,
   }) => {
@@ -50,11 +51,11 @@ defineDiscordVoiceTests(
 
       const client = createClientWithMember("u-guest", "Guest", "4321");
       const manager = createManager(
-        { groupPolicy: "open", allowFrom: ["discord:u-guest"] },
+        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-guest"] }),
         client,
         {},
       );
-      await processVoiceSegment(manager, "u-guest");
+      await receiveVoiceUtterance(manager, "u-guest");
 
       expect(lastTtsStreamArgs().channel).toBe("discord");
       expect(lastTtsStreamArgs().disableFallback).toBe(true);
@@ -100,11 +101,11 @@ defineDiscordVoiceTests(
       });
       const client = createClientWithMember("u-guest", "Guest", "4321");
       const manager = createManager(
-        { groupPolicy: "open", allowFrom: ["discord:u-guest"] },
+        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-guest"] }),
         client,
       );
 
-      await processVoiceSegment(manager, "u-guest");
+      await receiveVoiceUtterance(manager, "u-guest");
 
       await vi.waitFor(() =>
         expect(loggerWarnMock).toHaveBeenCalledWith(
@@ -143,6 +144,7 @@ defineDiscordVoiceTests(
         );
         await manager.join({ guildId: "g1", channelId: "1001" });
         const entry = getSessionEntry(manager);
+        const player = getLastAudioPlayer();
         entersStateMock.mockImplementation(async (_target, state, signal) => {
           if (state === (buffering ? "playing" : "idle")) {
             await new Promise<void>((_resolve, reject) => {
@@ -156,18 +158,13 @@ defineDiscordVoiceTests(
             });
           }
         });
-        entry.player.stop.mockImplementation(() => {
-          const idleHandler = entry.player.on.mock.calls.find(([event]) => event === "idle")?.[1];
+        player.stop.mockImplementation(() => {
+          const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1];
           idleHandler?.();
           return true;
         });
 
-        await getVoiceReceive(manager).processSegment({
-          entry,
-          wavPath: "/tmp/test.wav",
-          userId: "u-guest",
-          durationSeconds: 1.2,
-        });
+        await receiveRecordedSpeech(manager, undefined, entry, "u-guest");
         await vi.waitFor(() =>
           expect(entersStateMock).toHaveBeenCalledWith(
             entry.player,
@@ -180,7 +177,7 @@ defineDiscordVoiceTests(
         expect((await manager.leave({ guildId: "g1" })).ok).toBe(true);
         await entry.playbackQueue;
 
-        expect(entry.player.stop).toHaveBeenCalledOnce();
+        expect(player.stop).toHaveBeenCalledOnce();
         expect(release).toHaveBeenCalledOnce();
         expect(loggerWarnMock).not.toHaveBeenCalledWith(
           expect.stringContaining("discord voice: playback failed"),

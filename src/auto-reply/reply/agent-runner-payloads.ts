@@ -13,7 +13,6 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
-  appendReplyMediaFailureWarning,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -43,28 +42,13 @@ export function loadReplyPayloadsDedupeRuntime() {
 async function normalizeReplyPayloadMedia(params: {
   payload: ReplyPayload;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-  suppressMediaFailureWarning?: boolean;
 }): Promise<ReplyPayload> {
   if (!params.normalizeMediaPaths || !resolveSendableOutboundReplyParts(params.payload).hasMedia) {
     return params.payload;
   }
 
-  try {
-    const normalized = await params.normalizeMediaPaths(params.payload);
-    return copyReplyPayloadMetadata(params.payload, normalized);
-  } catch (err) {
-    logVerbose(`reply payload media normalization failed: ${String(err)}`);
-    // Preserve the text reply and drop unusable media so channels can still send the answer.
-    return copyReplyPayloadMetadata(params.payload, {
-      ...params.payload,
-      text: params.suppressMediaFailureWarning
-        ? params.payload.text
-        : appendReplyMediaFailureWarning(params.payload.text),
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-      audioAsVoice: false,
-    });
-  }
+  const normalized = await params.normalizeMediaPaths(params.payload);
+  return copyReplyPayloadMetadata(params.payload, normalized);
 }
 
 async function normalizeSentMediaUrlsForDedupe(params: {
@@ -270,7 +254,6 @@ export async function buildReplyPayloads(params: {
       const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
         payload: parsed.payload,
         normalizeMediaPaths: params.normalizeMediaPaths,
-        suppressMediaFailureWarning: parsed.isSilent,
       });
       if (parsed.isSilent) {
         mediaNormalizedPayload.text = undefined;

@@ -1,4 +1,4 @@
-import { expect } from "vitest";
+import { expect, it } from "vitest";
 import { sleep } from "../utils/sleep.js";
 import {
   startTuiFixture,
@@ -12,7 +12,55 @@ const RECONNECT_CASES = [
   { outcome: "active", marker: "PTY_RECONNECT_PARTIAL", activity: "streaming" },
 ] as const;
 
-export async function exerciseTuiReconnectOutcomes(timeoutMs: number): Promise<void> {
+export function registerTuiReconnectTests(timeouts: {
+  startupTimeoutMs: number;
+  testTimeoutMs: number;
+  startupTestTimeoutMs: number;
+}): void {
+  it(
+    "reconciles active, replacement, and terminal runs after reconnect history",
+    () => exerciseTuiReconnectOutcomes(35_000),
+    45_000,
+  );
+  it.each(
+    ["reconnect", "gap"].flatMap((recovery) => [
+      { recovery, membership: "replacement", activity: "idle" },
+      { recovery, membership: "concurrent", activity: "running" },
+      { recovery, membership: "unknown", activity: "running" },
+    ]),
+  )(
+    "reconciles $membership run membership before a replacement finishes after $recovery",
+    async ({ recovery, membership, activity }) => {
+      const fixture = await startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_DISCONNECT_REASON: "fixture transport loss",
+          OPENCLAW_TUI_PTY_RECONNECT_OUTCOME: recovery === "gap" ? "gap" : "replacement",
+          OPENCLAW_TUI_PTY_RECONNECT_MEMBERSHIP: membership,
+        },
+      });
+      try {
+        await fixture.run.waitForOutput("local ready", timeouts.startupTimeoutMs);
+        await fixture.run.write("reconnect terminal proof\r", { delay: false });
+        await fixture.run.waitForOutput("PTY_RECONNECT_PARTIAL", timeouts.testTimeoutMs);
+        await fixture.run.write("/gateway-status\r", { delay: false });
+        await fixture.run.waitForOutput("PTY_RECONNECT_REPLACEMENT", timeouts.testTimeoutMs);
+        await fixture.run.write("/gateway-status\r", { delay: false });
+        await waitForSynchronizedFrameRows(
+          fixture.run,
+          (rows) =>
+            rows.some((row) => row.includes("PTY_REPLACEMENT_FINAL")) &&
+            rows.some((row) => row.includes(`| ${activity}`) || row.includes(`${activity} •`)),
+          timeouts.testTimeoutMs,
+        );
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    timeouts.startupTestTimeoutMs,
+  );
+}
+
+async function exerciseTuiReconnectOutcomes(timeoutMs: number): Promise<void> {
   await Promise.all([
     ...RECONNECT_CASES.map(async ({ outcome, marker, activity }) => {
       const fixture = await startTuiFixture({

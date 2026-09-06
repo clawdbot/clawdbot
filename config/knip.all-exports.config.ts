@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
+import { vitestWorkerBuildEntries } from "../scripts/lib/vitest-worker-build-entries.mts";
 import productionConfig from "./knip.config.ts";
 
 const TEST_ENTRY_GLOB = "**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!";
@@ -39,6 +40,12 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+  // ExecHostTransportProofTests.swift launches this isolated native client by path.
+  "src/infra/exec-host.native.test-support.ts!",
+  // The Windows CLI lifetime test launches this isolated probe by path.
+  "test/helpers/openclaw-test-instance.cli.test-support.mjs!",
+  // The public QA Gateway child launches this transport proxy by path.
+  "test/fixtures/qa-gateway-rpc-proxy.mjs!",
   // Vitest loads these by configuration or module alias rather than imports.
   "test/setup*.ts!",
   "test/non-isolated-runner.ts!",
@@ -53,6 +60,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts!",
   // The Gateway/node MCP parity tests spawn this transport fixture by path.
   "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs!",
+  // The hot-reload scenario passes this isolated upstream preload to the Gateway CLI.
+  "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs!",
   // The identity scenario spawns this process-isolated repeated-turn driver by path.
   "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts!",
   // Invoked directly by the Docker image-auth scenario.
@@ -88,10 +97,18 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
+        // Path-launched workers need entries relative to their owning workspace;
+        // root entries cannot make a plugin's compiled child reachable to Knip.
+        ...Object.values(vitestWorkerBuildEntries).flatMap((source) => {
+          const relative = path.relative(workspace, source).replaceAll("\\", "/");
+          return relative.startsWith("../") ? [] : [`${relative}!`];
+        }),
         ...(workspace === "."
           ? [".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!", ...ROOT_TEST_ENTRY_GLOBS]
           : [
               TEST_ENTRY_GLOB,
+              // Vitest's root aliases execute these Discord-owned runtime adapters.
+              ...(workspace === "extensions/discord" ? ["test/*-runtime.ts!"] : []),
               // QA Lab loads these plugin fixtures by path during the Gateway
               // E2E, so nothing imports their entry files. Matched as a group:
               // a per-fixture list silently rots into a knip failure the next

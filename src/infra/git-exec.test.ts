@@ -1,9 +1,42 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as processExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
-import { requireGitCommand, requireGitCommandBuffer, requireGitCommandRaw } from "./git-exec.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import {
+  createGitCommandError,
+  executeGitCommand,
+  normalizeGitPathForFilesystem,
+  requireGitCommand,
+  requireGitCommandBuffer,
+  requireGitCommandRaw,
+} from "./git-exec.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("Git filesystem paths", () => {
+  it.each([
+    { input: "/c", expected: "C:\\" },
+    { input: "/C", expected: "C:\\" },
+    { input: "/c/", expected: "C:\\" },
+    { input: "/c/Users/example/repo", expected: "C:\\Users\\example\\repo" },
+    { input: "C:\\c\\Users\\example", expected: "C:\\c\\Users\\example" },
+    { input: "C:/Users/example", expected: "C:/Users/example" },
+    { input: "\\\\server\\share\\repo", expected: "\\\\server\\share\\repo" },
+    { input: "relative/repo", expected: "relative/repo" },
+    { input: "/cygdrive/c/repo", expected: "/cygdrive/c/repo" },
+    { input: "/workspace/repo", expected: "/workspace/repo" },
+    { input: "/rr", expected: "/rr" },
+  ])("normalizes only standard MSYS drive paths on Windows: $input", ({ input, expected }) => {
+    expect(normalizeGitPathForFilesystem(input, "win32")).toBe(expected);
+  });
+
+  it.each(["/c", "/C", "/c/", "/c/Users/example/repo"])(
+    "leaves MSYS-shaped text unchanged on non-Windows hosts: %s",
+    (input) => {
+      expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
+    },
+  );
+});
 
 const progress = Array.from({ length: 1000 }, (_, i) => `Updating files: ${i}/1000`).join("\r");
 const failure = {
@@ -14,6 +47,43 @@ const failure = {
   killed: false,
   termination: "exit",
 } satisfies SpawnResult;
+
+it.each(["maintenance.autoDetach", "gc.autoDetach"])(
+  "overrides %s only for an explicitly owned Git command",
+  async (key) => {
+    await withTestDir({ prefix: "openclaw-git-exec-maintenance-" }, async (root) => {
+      await requireGitCommand(root, ["init"]);
+      await requireGitCommand(root, ["config", key, "true"]);
+      const owned = await executeGitCommand(root, ["config", "--get", key], {
+        killProcessTree: true,
+      });
+      expect(owned.code).toBe(0);
+      expect(owned.stdout.trim()).toBe("false");
+      await expect(requireGitCommand(root, ["config", "--get", key])).resolves.toBe("true");
+    });
+  },
+);
+
+it.each([
+  { timeoutMs: undefined, seconds: 120 },
+  { timeoutMs: 300_000, seconds: 300 },
+])("reports the applied $seconds-second Git timeout", async ({ timeoutMs, seconds }) => {
+  const commandSpy = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
+    ...failure,
+    termination: "timeout",
+    code: 124,
+  });
+  const args = ["worktree", "add"];
+  const result = await executeGitCommand("/repo", args, { timeoutMs });
+  const label = `timed out after ${seconds} seconds`;
+  expect(createGitCommandError("git worktree add", result).message).toContain(label);
+  await expect(requireGitCommand("/repo", args, { timeoutMs })).rejects.toThrow(label);
+  expect(
+    commandSpy.mock.calls.map(([, options]) =>
+      typeof options === "number" ? options : options.timeoutMs,
+    ),
+  ).toEqual([seconds * 1000, seconds * 1000]);
+});
 
 describe.each([
   ["text", requireGitCommand],
@@ -39,6 +109,7 @@ describe.each([
       ...result,
       stdout: Buffer.from(result.stdout),
       stderr: Buffer.from(result.stderr),
+      code: result.termination === "exit" && !result.outputLimitExceeded ? result.code : null,
       termination: result.outputLimitExceeded
         ? "output-limit"
         : result.termination === "no-output-timeout"
@@ -78,6 +149,12 @@ describe.each([
 
   it.each([
     {
+      termination: "exit",
+      code: 128,
+      stdoutTruncatedBytes: 1,
+      expected: "exit code 128",
+    },
+    {
       termination: "timeout",
       signal: "SIGKILL",
       code: 124,
@@ -112,7 +189,7 @@ describe.each([
     },
   );
 
-  it.each(["", " \t\r\n", `${String.fromCharCode(27)}[0m`])(
+  it.each(["", " \t\r\n", `${String.fromCharCode(27)}[0m`, "progress\r \t"])(
     "uses stdout when stderr has no visible diagnostic: %j",
     async (stderr) => {
       failWith({ stderr, stdout: "error: cannot read index\n" });
@@ -121,26 +198,69 @@ describe.each([
   );
 });
 
-describe("successful Git output", () => {
+describe("required Git output", () => {
+  async function withGitBlob(
+    input: string | Buffer,
+    run: (root: string, args: string[]) => Promise<void>,
+  ) {
+    await withTestDir({ prefix: "openclaw-git-output-" }, async (root) => {
+      await requireGitCommand(root, ["init"]);
+      const oid = await requireGitCommand(root, ["hash-object", "-w", "--stdin"], { input });
+      await run(root, ["cat-file", "blob", oid]);
+    });
+  }
+
   it("keeps raw text byte-for-byte and preserves the trimmed text contract", async () => {
     const stdout = " \u001b[31mname\u001b[0m\rredraw\0\r\n ";
-    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
-      ...failure,
-      code: 0,
-      stdout,
+    await withGitBlob(stdout, async (root, args) => {
+      await expect(requireGitCommandRaw(root, args)).resolves.toBe(stdout);
+      await expect(requireGitCommand(root, args)).resolves.toBe(stdout.trim());
     });
-    await expect(requireGitCommandRaw("/repo", ["status"])).resolves.toBe(stdout);
-    await expect(requireGitCommand("/repo", ["status"])).resolves.toBe(stdout.trim());
   });
 
   it("keeps binary output including invalid UTF-8 and terminal control bytes", async () => {
     const stdout = Buffer.from([0, 255, 13, 10, 27, 91, 51, 49, 109, 32]);
-    vi.spyOn(processExec, "runCommandBuffered").mockResolvedValue({
+    await withGitBlob(stdout, async (root, args) => {
+      await expect(requireGitCommandBuffer(root, args)).resolves.toEqual(stdout);
+    });
+  });
+
+  it.each([
+    ["text", requireGitCommand],
+    ["raw", requireGitCommandRaw],
+    ["buffered", requireGitCommandBuffer],
+  ] as const)("rejects incomplete %s output from a real Git blob", async (_kind, requireGit) => {
+    const sentinel = "complete-git-output-leading-sentinel\0";
+    const blob = Buffer.alloc(17 * 1024 * 1024, "x");
+    blob.write(sentinel);
+    await withGitBlob(blob, async (root, args) => {
+      const outcome = await requireGit(root, args).then(
+        (stdout) => ({
+          kind: "returned",
+          bytes: Buffer.byteLength(stdout),
+          hasSentinel: stdout.includes(sentinel),
+        }),
+        (error: unknown) => ({
+          kind: "error",
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      expect(outcome).toEqual({
+        kind: "error",
+        message: expect.stringContaining("output limit exceeded"),
+      });
+    });
+  });
+
+  it("accepts complete text when only diagnostic stderr was truncated", async () => {
+    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
       ...failure,
       code: 0,
-      stdout,
-      stderr: Buffer.alloc(0),
+      stdout: "complete\n",
+      stderr: "progress tail",
+      stderrTruncatedBytes: 1,
     });
-    await expect(requireGitCommandBuffer("/repo", ["show"])).resolves.toEqual(stdout);
+    await expect(requireGitCommandRaw("/repo", ["status"])).resolves.toBe("complete\n");
+    await expect(requireGitCommand("/repo", ["status"])).resolves.toBe("complete");
   });
 });

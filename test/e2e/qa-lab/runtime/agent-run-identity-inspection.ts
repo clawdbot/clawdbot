@@ -11,10 +11,14 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const SCENARIO_ID = "agent-run-identity-inspection";
@@ -205,7 +209,7 @@ function assertProfilelessGatewayIdentityProjection(result: AuditRunInspectResul
   }
 }
 
-function findLocalRunId(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>) {
+function findLocalRunId(gateway: QaGatewayChild) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -236,7 +240,7 @@ function findLocalRunId(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>
   }
 }
 
-function inspectExecutionIdentityStorage(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>) {
+function inspectExecutionIdentityStorage(gateway: QaGatewayChild) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -260,10 +264,7 @@ function inspectExecutionIdentityStorage(gateway: Awaited<ReturnType<typeof star
   }
 }
 
-function inspectPersistedSessionCreator(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  sessionKey: string,
-) {
+function inspectPersistedSessionCreator(gateway: QaGatewayChild, sessionKey: string) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   const agentId = sessionKey.split(":")[1];
   if (!stateDir || !agentId) {
@@ -296,10 +297,7 @@ function inspectPersistedSessionCreator(
   }
 }
 
-async function runLocalTurn(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  message: string,
-) {
+async function runLocalTurn(gateway: QaGatewayChild, message: string) {
   await gateway.runCli([
     "agent",
     "--local",
@@ -317,10 +315,7 @@ async function runLocalTurn(
   ]);
 }
 
-function findRunExecutions(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  runId: string,
-) {
+function findRunExecutions(gateway: QaGatewayChild, runId: string) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -345,7 +340,7 @@ function findRunExecutions(
 }
 
 function assertPersistedContextBytes(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   runId: string,
   expectedContext: string,
 ): void {
@@ -356,7 +351,7 @@ function assertPersistedContextBytes(
 }
 
 async function runRepeatedIngressTurns(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   repoRoot: string,
   sessionId: string,
 ): Promise<void> {
@@ -400,9 +395,10 @@ async function runRepeatedIngressTurns(
 
 async function runProof(options: ProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -658,7 +654,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
     const repeatedDetails = `repeated run=${repeatedRunId} executions=${repeatedRows.map((row) => row.execution_id).join(",")}; exact selection passed`;
     return `local run=${runId}; profileless Gateway run=${profilelessRunId}; spoofed proxy headers rejected; ${repeatedDetails}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON and persisted bytes passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
   } finally {
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
   }
 }

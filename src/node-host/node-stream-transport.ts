@@ -1,15 +1,30 @@
 import net from "node:net";
-import { TLSSocket } from "node:tls";
+import type { Duplex } from "node:stream";
 import { WebSocket, type ClientOptions, type RawData } from "ws";
-import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import {
   buildCloudflareAccessHeaders,
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { applyGatewayWebSocketTlsPin } from "../../packages/gateway-client/src/websocket-transport.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
 const PAUSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 const RESUME_CHECK_MS = 25;
+const streamLog = createSubsystemLogger("node-host/stream");
+
+type NodeStreamCloseTrigger =
+  | "owner-abort"
+  | "target-close"
+  | "target-error"
+  | "websocket-close"
+  | "websocket-error"
+  | "send-error"
+  | "invalid-frame"
+  | "splice-unavailable"
+  | "startup-error";
+
+type NodeStreamDiagnostics = { trigger?: NodeStreamCloseTrigger };
 
 function websocketDataBuffer(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) {
@@ -40,63 +55,18 @@ function attachWebSocketUrl(params: {
   return url.toString();
 }
 
-function assertTlsSocketFingerprint(socket: TLSSocket, expectedRaw: string): void {
-  const expected = normalizeTlsFingerprint(expectedRaw);
-  const actual = normalizeTlsFingerprint(socket.getPeerCertificate().fingerprint256 ?? "");
-  if (!expected || !actual || actual !== expected) {
-    throw new Error("gateway TLS fingerprint mismatch");
-  }
-}
-
-function createPinnedRequestFinisher(
-  expected: string,
-): NonNullable<ClientOptions["finishRequest"]> {
-  return (request) => {
-    request.once("socket", (socket) => {
-      if (!(socket instanceof TLSSocket)) {
-        request.destroy(new Error("gateway TLS fingerprint mismatch"));
-        return;
-      }
-      socket.once("secureConnect", () => {
-        try {
-          assertTlsSocketFingerprint(socket, expected);
-          request.end();
-        } catch (error) {
-          request.destroy(error instanceof Error ? error : new Error(String(error)));
-        }
-      });
-    });
-  };
-}
-
 function websocketOptions(
-  url: string,
   tlsFingerprint?: string,
   cloudflareAccess?: CloudflareAccessCredentials,
 ): ClientOptions {
-  const edgeHeaders = cloudflareAccess
-    ? { headers: buildCloudflareAccessHeaders(cloudflareAccess) }
-    : {};
-  if (!url.startsWith("wss:") || !tlsFingerprint?.trim()) {
-    return { maxPayload: MAX_PAYLOAD_BYTES, ...edgeHeaders };
-  }
-  return {
+  const options: ClientOptions = {
     maxPayload: MAX_PAYLOAD_BYTES,
-    ...edgeHeaders,
-    rejectUnauthorized: false,
-    finishRequest: createPinnedRequestFinisher(tlsFingerprint),
+    ...(cloudflareAccess ? { headers: buildCloudflareAccessHeaders(cloudflareAccess) } : {}),
   };
-}
-
-function assertGatewayTlsFingerprint(socket: TLSSocket | undefined, expectedRaw?: string): void {
-  if (!expectedRaw?.trim()) {
-    return;
+  if (tlsFingerprint?.trim()) {
+    applyGatewayWebSocketTlsPin(options, tlsFingerprint);
   }
-  const expected = normalizeTlsFingerprint(expectedRaw);
-  const actual = normalizeTlsFingerprint(socket?.getPeerCertificate().fingerprint256 ?? "");
-  if (!expected || !actual || actual !== expected) {
-    throw new Error("gateway TLS fingerprint mismatch");
-  }
+  return options;
 }
 
 async function waitForSocketConnect(socket: net.Socket): Promise<void> {
@@ -127,38 +97,59 @@ async function sendAttachMetadata(
   }
 }
 
-function createNodeStreamSplice(params: { socket: net.Socket; ws: WebSocket; streamName: string }) {
+function createNodeStreamSplice(params: {
+  socket: Duplex;
+  ws: WebSocket;
+  streamName: string;
+  diagnostics: NodeStreamDiagnostics;
+}) {
   let resumeTimer: ReturnType<typeof setInterval> | undefined;
   let settled = false;
-  let finish!: (error?: Error) => void;
+  let finish!: (trigger: NodeStreamCloseTrigger, error?: Error) => void;
+  const resumeWebSocket = () => params.ws.resume();
+  const onMessage = (data: RawData, isBinary: boolean) => {
+    if (params.socket.destroyed || params.socket.writableEnded) {
+      return;
+    }
+    if (!isBinary) {
+      finish(
+        "invalid-frame",
+        new Error(`gateway sent non-binary ${params.streamName} stream data`),
+      );
+      return;
+    }
+    if (!params.socket.write(websocketDataBuffer(data))) {
+      params.ws.pause();
+    }
+  };
+  const stopInbound = () => {
+    params.ws.off("message", onMessage);
+    params.socket.off("drain", resumeWebSocket);
+    // A closed target cannot emit drain, but WebSocket close frames still need reads.
+    params.ws.resume();
+  };
   const done = new Promise<void>((resolve, reject) => {
-    finish = (error?: Error) => {
+    finish = (trigger, error) => {
       if (settled) {
         return;
       }
+      params.diagnostics.trigger ??= trigger;
       settled = true;
       clearInterval(resumeTimer);
+      stopInbound();
       if (error) {
         reject(error);
       } else {
         resolve();
       }
     };
-    params.ws.on("message", (data, isBinary) => {
-      if (!isBinary) {
-        finish(new Error(`gateway sent non-binary ${params.streamName} stream data`));
-        return;
-      }
-      if (!params.socket.write(websocketDataBuffer(data))) {
-        params.ws.pause();
-        params.socket.once("drain", () => params.ws.resume());
-      }
-    });
+    params.ws.on("message", onMessage);
+    params.socket.on("drain", resumeWebSocket);
     params.socket.on("data", (chunk) => {
       if (params.ws.readyState !== WebSocket.OPEN) {
         return;
       }
-      params.ws.send(chunk, { binary: true }, (error) => error && finish(error));
+      params.ws.send(chunk, { binary: true }, (error) => error && finish("send-error", error));
       if (params.ws.bufferedAmount <= PAUSE_BUFFERED_BYTES || resumeTimer) {
         return;
       }
@@ -172,17 +163,27 @@ function createNodeStreamSplice(params: { socket: net.Socket; ws: WebSocket; str
       }, RESUME_CHECK_MS);
       resumeTimer.unref?.();
     });
-    params.ws.once("close", () => finish());
-    params.ws.once("error", (error) => finish(error));
-    params.socket.once("close", () => finish());
-    params.socket.once("error", (error) => finish(error));
+    params.ws.once("close", () => finish("websocket-close"));
+    params.ws.once("error", (error) => finish("websocket-error", error));
+    params.socket.once("close", () => {
+      params.diagnostics.trigger ??= "target-close";
+      stopInbound();
+      if (params.socket.readableEnded && params.ws.readyState === WebSocket.OPEN) {
+        // Let the Gateway receive the last frames and close acknowledgement before
+        // the control-channel invocation can retire its desktop/portal stream.
+        params.ws.close();
+      } else {
+        finish("target-close");
+      }
+    });
+    params.socket.once("error", (error) => finish("target-error", error));
   });
   void done.catch(() => undefined);
   return {
     done,
     start() {
       if (params.socket.destroyed || params.ws.readyState !== WebSocket.OPEN) {
-        finish();
+        finish("splice-unavailable");
         return;
       }
       params.socket.resume();
@@ -198,38 +199,27 @@ export async function runNodeStreamTransport(params: {
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
   attachPath: string;
   expectedAttachPath: string;
-  port: number;
+  target: { stream: Duplex } | { port: number };
   metadata: Record<string, string | boolean>;
   streamName: string;
   signal: AbortSignal;
-  connectAfterGatewayAttach?: boolean;
   emitStatus?: (status: string) => Promise<void>;
 }): Promise<void> {
-  const socket = params.connectAfterGatewayAttach
-    ? new net.Socket()
-    : net.createConnection(params.port, "127.0.0.1");
+  const socket = "stream" in params.target ? params.target.stream : new net.Socket();
   // Loopback peers may send immediately; retain their first bytes until metadata is accepted.
   socket.pause();
-  const wsUrl = attachWebSocketUrl(params);
-  const ws = new WebSocket(
-    wsUrl,
-    websocketOptions(wsUrl, params.gatewayTlsFingerprint, params.gatewayCloudflareAccess),
-  );
-  let gatewayTlsSocket: TLSSocket | undefined;
-  ws.once("upgrade", (response) => {
-    if (response.socket instanceof TLSSocket) {
-      gatewayTlsSocket = response.socket;
-    }
-  });
+  const diagnostics: NodeStreamDiagnostics = {};
+  let ws: WebSocket | undefined;
   let aborted: boolean = params.signal.aborted;
   let resolveAbort!: () => void;
   const abort = new Promise<void>((resolve) => {
     resolveAbort = resolve;
   });
   const onAbort = () => {
+    diagnostics.trigger ??= "owner-abort";
     aborted = true;
     socket.destroy();
-    ws.terminate();
+    ws?.terminate();
     resolveAbort();
   };
   params.signal.addEventListener("abort", onAbort, { once: true });
@@ -237,38 +227,59 @@ export async function runNodeStreamTransport(params: {
     onAbort();
   }
   try {
-    if (params.connectAfterGatewayAttach) {
-      // Attach first so a refused target closes a claimed ticket instead of leaving it pending.
-      await Promise.race([waitForWebSocketOpen(ws), abort]);
-      if (!aborted) {
-        // Like Gateway-local portals, reach dev servers bound to either localhost family.
-        socket.connect({ port: params.port, host: "localhost", autoSelectFamily: true });
-        await Promise.race([waitForSocketConnect(socket), abort]);
-      }
-    } else {
-      await Promise.race([
-        Promise.all([waitForSocketConnect(socket), waitForWebSocketOpen(ws)]),
-        abort,
-      ]);
+    if (aborted) {
+      return;
+    }
+    ws = new WebSocket(
+      attachWebSocketUrl(params),
+      websocketOptions(params.gatewayTlsFingerprint, params.gatewayCloudflareAccess),
+    );
+    ws.once("error", () => {
+      diagnostics.trigger ??= "websocket-error";
+    });
+    ws.once("close", (closeCode) => {
+      // Owner teardown can also produce 1006; retain its earlier trigger separately.
+      streamLog.info("node stream closed", {
+        streamKind: params.streamName,
+        trigger: diagnostics.trigger ?? "websocket-close",
+        closeCode,
+      });
+    });
+    await Promise.race([waitForWebSocketOpen(ws), abort]);
+    if (aborted) {
+      return;
+    }
+    if ("port" in params.target && socket instanceof net.Socket) {
+      // Portals attach first so a refused target closes the claimed ticket.
+      socket.connect({ port: params.target.port, host: "localhost", autoSelectFamily: true });
+      await Promise.race([waitForSocketConnect(socket), abort]);
     }
     if (aborted) {
       return;
     }
-    assertGatewayTlsFingerprint(gatewayTlsSocket, params.gatewayTlsFingerprint);
+    if (socket.destroyed) {
+      throw socket.errored ?? new Error(`${params.streamName} stream target closed before attach`);
+    }
     ws.pause();
-    const splice = createNodeStreamSplice({ socket, ws, streamName: params.streamName });
+    const splice = createNodeStreamSplice({
+      socket,
+      ws,
+      streamName: params.streamName,
+      diagnostics,
+    });
     await sendAttachMetadata(ws, params.metadata);
     void params.emitStatus?.(`${params.streamName} stream attached\n`).catch(() => undefined);
     splice.start();
     await splice.done;
   } catch (error) {
+    diagnostics.trigger ??= "startup-error";
     if (!aborted) {
       throw error;
     }
   } finally {
     params.signal.removeEventListener("abort", onAbort);
     socket.destroy();
-    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
       ws.close();
     }
   }

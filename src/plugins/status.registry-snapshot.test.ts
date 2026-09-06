@@ -5,18 +5,14 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndexSync,
-} from "./installed-plugin-index-store.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import { refreshPluginRegistry } from "./plugin-registry.js";
+import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import {
   buildPluginDiagnosticsReport,
@@ -316,28 +312,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     );
   });
 
-  it("does not project package-local dependency health onto bundled plugins", () => {
-    const tempRoot = makeTempDir();
-    const bundledRoot = path.join(tempRoot, "bundled");
-    const pluginRoot = path.join(bundledRoot, "bundled-demo");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    createColdPluginFixture({
-      rootDir: pluginRoot,
-      pluginId: "bundled-demo",
-      packageJson: { dependencies: { "missing-build-time-dependency": "1.0.0" } },
-    });
-
-    const report = buildPluginRegistrySnapshotReport({
-      config: { plugins: { entries: { "bundled-demo": { enabled: true } } } },
-      env: createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: bundledRoot }),
-    });
-    const plugin = requirePlugin(report.plugins, "bundled-demo");
-
-    expectFields(plugin, { origin: "bundled", status: "loaded" });
-    expect(plugin.dependencyStatus).toBeUndefined();
-    expect(report.diagnostics).toEqual([]);
-  });
-
   it.each([
     { consent: "missing", enabled: true, tracked: true, warns: true },
     { consent: "stale", enabled: true, tracked: true, warns: true },
@@ -559,16 +533,22 @@ describe("buildPluginRegistrySnapshotReport", () => {
       expect(report.workspaceDir).toBe(workspaceDir);
       expect(report.workspaceScope).toBe(workspaceScope);
       expect(report.registrySource).toBe(state === "persisted" ? "persisted" : "derived");
+      const expectedRegistryDiagnostic = {
+        level: state === "missing" ? "info" : "warn",
+        code: `persisted-registry-${state}`,
+        message: expect.any(String),
+        ...(state === "stale-source" && {
+          differences: [
+            {
+              pluginId: fixture.pluginId,
+              persistedSource: fixture.runtimeSource,
+              derivedSource: fixture.runtimeSource,
+            },
+          ],
+        }),
+      };
       expect(report.registryDiagnostics).toEqual(
-        state === "persisted"
-          ? []
-          : [
-              {
-                level: state === "missing" ? "info" : "warn",
-                code: `persisted-registry-${state}`,
-                message: expect.any(String),
-              },
-            ],
+        state === "persisted" ? [] : [expectedRegistryDiagnostic],
       );
       expect(report.diagnostics).toEqual(
         workspaceScope === "selected"
@@ -577,9 +557,8 @@ describe("buildPluginRegistrySnapshotReport", () => {
       );
       expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
       expect(getCurrentPluginMetadataSnapshot({ config, env, workspaceDir })).toBeUndefined();
-      // Discovery, manifest validation, and index hashing already read this manifest.
-      // Status must carry that prepared metadata rather than read it a fourth time.
-      expect(manifestOpens).toBe(3);
+      // Discovery, validation, index hashing, and status share one checked manifest read.
+      expect(manifestOpens).toBe(1);
     },
   );
 

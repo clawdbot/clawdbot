@@ -1,11 +1,11 @@
 // Removes installed plugins and updates plugin index records.
-import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readOpenClawManagedNpmRootOverrides } from "../infra/npm-managed-root.js";
+import { pathMayExistSync } from "../infra/path-existence.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -28,7 +28,10 @@ import {
   removePluginInstallOwnerFromConfig,
   removePluginRuntimePolicyFromConfig,
 } from "./uninstall-package-config.js";
-import { resolvePluginPackageUninstallPlan } from "./uninstall-package-plan.js";
+import {
+  prepareConfigForDisabledPluginSet,
+  resolvePluginPackageUninstallPlan,
+} from "./uninstall-package-plan.js";
 
 export { resolveUninstallChannelConfigKeys } from "./uninstall-config.js";
 
@@ -37,7 +40,7 @@ type UninstallActions = PluginConfigUninstallActions & {
 };
 
 export const UNINSTALL_ACTION_LABELS = {
-  entry: "config entry",
+  entry: "plugin settings",
   install: "install record",
   allowlist: "allowlist entry",
   denylist: "denylist entry",
@@ -388,6 +391,12 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
     configActions[key] ||= ownerRemoval.actions[key];
   }
 
+  if (hasInstall && runtimePluginIds.length > 0) {
+    // Preserve explicit uninstall intent so remaining provider/model references do not
+    // make startup repair treat the now-missing package as required.
+    newConfig = prepareConfigForDisabledPluginSet(newConfig, runtimePluginIds);
+  }
+
   if (!hasEntry && !hasInstall && !hasUninstallAction(configActions)) {
     return { ok: false, error: `Plugin not found: ${pluginId}` };
   }
@@ -453,12 +462,7 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
 }
 
 export function pluginUninstallTargetExists(target: string): boolean {
-  try {
-    lstatSync(target);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
+  return pathMayExistSync(target);
 }
 
 function isOwnedNpmRemoval(removal: PluginUninstallDirectoryRemoval): boolean {

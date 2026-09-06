@@ -56,6 +56,17 @@ function comparableProviderMetadata(provider: ReturnType<typeof createOpenAIProv
 }
 
 describe("OpenAI plugin manifest", () => {
+  it("owns canonical OpenAI session route state for Doctor cleanup", () => {
+    expect(manifest.sessionRouteStateOwners).toEqual([
+      {
+        id: "openai",
+        label: "OpenAI",
+        providerIds: ["openai"],
+        authProfilePrefixes: ["openai:"],
+      },
+    ]);
+  });
+
   it("exposes only current OpenAI login choices", () => {
     const openAiLogin = manifest.providerAuthChoices?.find(
       (choice) => choice.choiceId === "openai",

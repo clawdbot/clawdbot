@@ -79,6 +79,9 @@ export function generationValidPrivateFieldsForSameSession(
     ...(existingEntry.pendingProjectGitUrl !== undefined
       ? { pendingProjectGitUrl: existingEntry.pendingProjectGitUrl }
       : {}),
+    ...(existingEntry.transcriptByteCompactionLatch
+      ? { transcriptByteCompactionLatch: existingEntry.transcriptByteCompactionLatch }
+      : {}),
     ...(existingEntry.sessionDiffBaselineCapture
       ? { sessionDiffBaselineCapture: existingEntry.sessionDiffBaselineCapture }
       : {}),

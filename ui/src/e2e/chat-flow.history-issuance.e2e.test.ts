@@ -1,27 +1,113 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  chatSessionListResponse,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 async function captureHistoryIssuanceProof(page: Page, name: string): Promise<void> {
-  const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+    ? suite.artifactDir
+    : undefined;
   if (!artifactDir) {
     return;
   }
-  await mkdir(artifactDir, { recursive: true });
   await page.screenshot({ fullPage: true, path: path.join(artifactDir, `${name}.png`) });
 }
 
 suite.define(() => {
+  it.each(["named", "short"] as const)(
+    "retains deferred history across %s chat canonicalization",
+    async (reference) => {
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+      const page = await context.newPage();
+      const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+      const marker = "The selected conversation survived canonical navigation.";
+      const gateway = await installMockGateway(page, {
+        sessionKey: "agent:main:main",
+        historyMessages: [{ role: "assistant", content: "Initial conversation." }],
+        sessionTranscripts: {
+          [sessionKey]: { messages: [{ role: "assistant", content: marker }] },
+        },
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([
+            {
+              key: sessionKey,
+              kind: "direct",
+              label: "Canonical history",
+              displayName: "Canonical history",
+              updatedAt: 1,
+            },
+          ]),
+          "sessions.resolve": {
+            ok: true,
+            key: sessionKey,
+            agentId: "main",
+            displayName: "Canonical history",
+          },
+        },
+      });
+      const referencePath = `chat/main/${reference === "named" ? "canonical-history" : "old-name-12345678"}`;
+      const canonicalPath = new URL("chat/main/canonical-history-12345678", suite.server.baseUrl)
+        .pathname;
+      try {
+        await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "domcontentloaded" });
+        await page
+          .locator(".chat-thread")
+          .getByText("Initial conversation.")
+          .waitFor({ state: "visible" });
+        const initialStartups = (await gateway.getRequests("chat.startup")).length;
+        await gateway.deferNext("chat.startup");
+        await page.evaluate((pathname) => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime: {
+              context: { navigate: (routeId: string, options: { pathname: string }) => void };
+            };
+          };
+          app.runtime.context.navigate("chat", { pathname });
+        }, new URL(referencePath, suite.server.baseUrl).pathname);
+        await gateway.waitForRequest("chat.startup", { after: initialStartups });
+        if (reference === "named") {
+          await page.waitForURL((url) => url.pathname === canonicalPath, {
+            waitUntil: "domcontentloaded",
+          });
+          expect(await gateway.getRequests("chat.startup")).toHaveLength(initialStartups + 1);
+        }
+        await gateway.resolveDeferred("chat.startup");
+        await page.waitForURL((url) => url.pathname === canonicalPath, {
+          waitUntil: "domcontentloaded",
+        });
+        await page
+          .locator(".chat-pane-cache__pane--active .chat-thread")
+          .getByText(marker)
+          .waitFor({ state: "visible" });
+        await page.waitForFunction(
+          (key) =>
+            [...document.querySelectorAll<HTMLElement>("openclaw-chat-pane")].some(
+              (pane) =>
+                pane.classList.contains("chat-pane-cache__pane--visible") &&
+                (pane as HTMLElement & { sessionKey?: string }).sessionKey === key,
+            ),
+          sessionKey,
+        );
+        expect(await gateway.getRequests("chat.startup")).toHaveLength(initialStartups + 1);
+        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(
+          reference === "named" ? 1 : 0,
+        );
+        await captureHistoryIssuanceProof(page, `canonical-${reference}-history`);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
   it("renders a failed history load in the transcript and retries it", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup"],
@@ -54,7 +140,9 @@ suite.define(() => {
       await historyError.getByRole("button", { name: "Retry" }).click();
       await gateway.waitForRequest("chat.startup", { after: 1 });
       await historyError.waitFor({ state: "detached" });
-      await page.locator(".chat-thread .chat-loading-skeleton").waitFor({ state: "visible" });
+      await page
+        .locator('.chat-thread openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
+        .waitFor({ state: "visible" });
       await gateway.resolveDeferred("chat.startup");
       await page
         .locator(".chat-thread")
@@ -70,11 +158,7 @@ suite.define(() => {
   });
 
   it("automatically resumes retryable history failures once after reconnect", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup"],
@@ -120,11 +204,7 @@ suite.define(() => {
     }
   });
   it("keeps cached history visible and actionable when a refresh fails", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       historyMessages: [

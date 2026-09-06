@@ -19,22 +19,38 @@ type AgentToolSurfacePlanParams = {
   agentId?: string;
   sessionKey?: string;
   forceDirectMessageTool: boolean;
-  model?: { compat?: unknown };
+  model?: { compat?: unknown; toolSearchMode?: "tools" | false };
+  modelProvider?: string;
+  modelId?: string;
+  codeModeOverride?: boolean | "auto";
   toolsEnabled: boolean;
   disableTools?: boolean;
   isRawModelRun: boolean;
   toolsAllow?: readonly string[];
   forceCodeModeControls?: boolean;
-  forceDirectTools?: boolean;
 };
 
 export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) {
-  const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
+  // Private completion replies have one message capability. Ordinary forced
+  // delivery keeps message direct while other tools can still use discovery.
+  const completionPrivateMessageOnly =
+    params.forceDirectMessageTool &&
+    params.toolsAllow?.length === 1 &&
+    normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "message";
+  const codeModeConfig = resolveCodeModeConfig(
+    params.config,
+    params.agentId,
+    params.modelProvider && params.modelId
+      ? { provider: params.modelProvider, modelId: params.modelId }
+      : undefined,
+  );
+  codeModeConfig.enabled = params.codeModeOverride ?? codeModeConfig.enabled;
   const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
-    forceDirectMessageTool: params.forceDirectMessageTool,
+    completionPrivateMessageOnly,
+    model: params.model,
   });
   const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
   const toolsAvailable =
@@ -43,25 +59,15 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     params.disableTools !== true &&
     !params.isRawModelRun &&
     params.toolsAllow?.length !== 0 &&
-    // Completion-private replies must never expose catalog controls that can
-    // invoke tools beyond their single directly visible message capability.
-    !(
-      params.forceDirectMessageTool &&
-      params.toolsAllow?.length === 1 &&
-      normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "message"
-    );
+    !completionPrivateMessageOnly;
   const codeModeControlsEnabled =
     toolsAvailable &&
-    params.forceDirectTools !== true &&
     // Restart recovery continues one provider turn. Keep its original control
     // schema even when the reloaded config disables Code Mode for new turns.
     (params.forceCodeModeControls === true ||
       isCodeModeEngagedForModel(codeModeConfig, params.model));
   const toolSearchControlsEnabled =
-    toolsAvailable &&
-    params.forceDirectTools !== true &&
-    !codeModeControlsEnabled &&
-    toolSearchConfig.enabled;
+    toolsAvailable && !codeModeControlsEnabled && toolSearchConfig.enabled;
   return {
     codeModeControlsEnabled,
     toolSearchControlsEnabled,
@@ -79,7 +85,6 @@ type ApplyAgentToolSurfaceCatalogParams = Omit<CodeModeCatalogParams, "directToo
   codeModeControlsEnabled: boolean;
   toolSearchConfig: ToolSearchConfig;
   forceDirectMessageTool: boolean;
-  forceCodeModeControls?: boolean;
 };
 
 export function applyAgentToolSurfaceCatalog({
@@ -87,7 +92,6 @@ export function applyAgentToolSurfaceCatalog({
   toolSearchConfig,
   toolSearchRuntimeConfig,
   forceDirectMessageTool,
-  forceCodeModeControls,
   ...catalogParams
 }: ApplyAgentToolSurfaceCatalogParams) {
   // When the message tool is the only reply path it must stay directly visible
@@ -98,7 +102,6 @@ export function applyAgentToolSurfaceCatalog({
       ...catalogParams,
       config: catalogParams.config,
       directToolNames,
-      forceEnabled: forceCodeModeControls,
     });
   }
   const applyCatalog =

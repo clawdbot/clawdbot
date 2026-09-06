@@ -176,6 +176,16 @@ describe("sqlite hot query plans", () => {
          WHERE status = ?
       `,
     });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_active",
+      sql: `
+        SELECT *
+          FROM session_nodes
+         WHERE archived_at IS NULL
+         ORDER BY session_key
+      `,
+    });
     const latestMessagePlan = explainQueryPlan(
       database.db,
       `
@@ -241,7 +251,7 @@ describe("sqlite hot query plans", () => {
     const rawDeltaPlan = explainQueryPlan(
       database.db,
       `
-        SELECT seq, LENGTH(CAST(event_json AS BLOB)) + 1 AS serialized_bytes
+        SELECT seq, OCTET_LENGTH(event_json) + 1 AS serialized_bytes
           FROM transcript_events
          WHERE session_id = ? AND seq > ?
          ORDER BY seq ASC
@@ -290,7 +300,7 @@ describe("sqlite hot query plans", () => {
       database.db,
       `
         SELECT active.event_seq, active.message_position,
-               LENGTH(CAST(event.event_json AS BLOB)) + 1 AS serialized_bytes
+               OCTET_LENGTH(event.event_json) + 1 AS serialized_bytes
           FROM session_transcript_active_events AS active
           JOIN transcript_events AS event
             ON event.session_id = active.session_id AND event.seq = active.event_seq

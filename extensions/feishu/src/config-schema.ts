@@ -1,6 +1,7 @@
 // Feishu helper module supports config schema behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
+  ContextVisibilityModeSchema,
   DmPolicySchema,
   GroupPolicySchema,
   ReplyToModeSchema,
@@ -58,7 +59,11 @@ const FeishuGroupPolicySchema = z.union([
 ]);
 const FeishuDomainSchema = z.union([
   z.enum(["feishu", "lark"]),
-  z.string().url().startsWith("https://"),
+  // Keep URL last for its JSON Schema format; regex flags are not exported.
+  z
+    .string()
+    .regex(/^[Hh][Tt][Tt][Pp][Ss]:\/\//)
+    .url(),
 ]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
 const FeishuWebhookPathSchema = z
@@ -236,6 +241,7 @@ const FeishuSharedConfigShape = {
   capabilities: z.array(z.string()).optional(),
   markdown: MarkdownConfigSchema,
   configWrites: z.boolean().optional(),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
   replyToMode: ReplyToModeSchema.optional(),
   responsePrefix: z.string().optional(),
   dmPolicy: DmPolicySchema.optional(),

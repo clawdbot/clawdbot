@@ -1,7 +1,11 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { describe, expect, it, vi } from "vitest";
 import { MAX_HOST_COUNT } from "./session-catalog-parsing.js";
+import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 import {
+  commandRpcMocks,
+  pinnedConnectionMocks,
   tempDirs,
   createCodexSessionCatalogControl,
   listCodexSessionCatalog,
@@ -21,7 +25,7 @@ import {
   os,
   path,
   resolveAgentDir,
-  resolveSessionAgentIds,
+  resolveSessionAgentIdsStrict,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
   resolveDefaultAgentDir,
@@ -35,103 +39,7 @@ import {
   createCodexSessionCatalogControlFactory,
   type CodexCatalogHome,
   type OpenClawConfig,
-  originalPath,
 } from "./session-catalog.test-helpers.js";
-
-const commandRpcMocks = vi.hoisted(() => ({
-  codexControlRequest: vi.fn(),
-}));
-const pinnedConnectionMocks = vi.hoisted(() => ({
-  client: { connectionId: "pinned-catalog-client" },
-  getClient: vi.fn(),
-  releaseClient: vi.fn(),
-  request: vi.fn(),
-}));
-const transcriptMirrorMocks = vi.hoisted(() => ({
-  importCodexThreadHistoryToTranscript: vi.fn(async () => ({
-    importedMessages: 0,
-    omittedMessages: 0,
-  })),
-}));
-const nodeHostMocks = vi.hoisted(() => ({
-  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
-  userShellPaths: new Map<string, string>(),
-}));
-
-vi.mock("./command-rpc.js", () => ({
-  codexControlRequest: commandRpcMocks.codexControlRequest,
-}));
-vi.mock("./app-server/request.js", () => ({
-  requestCodexAppServerClientJson: pinnedConnectionMocks.request,
-}));
-vi.mock("./app-server/shared-client.js", () => ({
-  getLeasedSharedCodexAppServerClient: pinnedConnectionMocks.getClient,
-  releaseLeasedSharedCodexAppServerClient: pinnedConnectionMocks.releaseClient,
-}));
-vi.mock("./app-server/transcript-mirror.js", () => ({
-  importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
-}));
-vi.mock("./session-catalog-pty.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-catalog-pty.runtime.js")>();
-  return {
-    ...actual,
-    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveNodeHostExecutable: (
-      command: string,
-      options: {
-        env?: NodeJS.ProcessEnv;
-        pathEnv?: string;
-        includeExtensionless?: boolean;
-        strategy: "direct" | "fallback" | "prefer";
-      },
-    ) => {
-      const env = options.env ?? process.env;
-      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
-      const direct = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      if (direct && options.strategy !== "prefer") {
-        return direct;
-      }
-      const shellPath = nodeHostMocks.userShellPaths.get(command);
-      if (!shellPath) {
-        return direct;
-      }
-      const shellExecutable = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv: shellPath,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      return shellExecutable
-        ? { executable: shellExecutable.executable, pathEnv: shellPath }
-        : direct;
-    },
-  };
-});
-
-beforeEach(() => {
-  nodeHostMocks.runNodePtyCommand.mockClear();
-  nodeHostMocks.userShellPaths.clear();
-  commandRpcMocks.codexControlRequest.mockReset();
-  pinnedConnectionMocks.getClient.mockReset();
-  pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
-  pinnedConnectionMocks.releaseClient.mockReset();
-  pinnedConnectionMocks.request.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockResolvedValue({
-    importedMessages: 0,
-    omittedMessages: 0,
-  });
-});
-
-afterEach(async () => {
-  process.env.PATH = originalPath;
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
 
 describe("Codex session catalog errors", () => {
   it("preserves fallback names returned by paired nodes", () => {
@@ -167,6 +75,85 @@ describe("Codex session catalog errors", () => {
 });
 
 describe("Codex supervision catalog", () => {
+  it("does not classify threads or request another page when retired during a local page", async () => {
+    const firstPage = createDeferred<CodexSessionCatalogPage>();
+    const pageStarted = createDeferred<void>();
+    const listPage = vi.fn(async ({ cursor }: { cursor?: string }) => {
+      if (cursor) {
+        return { sessions: [] };
+      }
+      pageStarted.resolve();
+      return firstPage.promise;
+    });
+    const mark = vi.fn(async () => undefined);
+    const bindingStore = Object.assign(createCodexTestBindingStore(), {
+      managedThreads: {
+        has: vi.fn(async () => false),
+        mark,
+        snapshot: vi.fn(async () => new Map<string, ReadonlySet<string>>()),
+      },
+    });
+    const home: CodexCatalogHome = {
+      sourceHomeId: "home-main",
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      label: "Main",
+      agentDir: "/agents/main",
+      appServer: {} as CodexCatalogHome["appServer"],
+      usesProcessHomeFallback: false,
+    };
+    const controller = new AbortController();
+    const listed = listCodexSessionCatalog({
+      bindingStore,
+      config,
+      runtime: createRuntime().runtime,
+      control: createControl({ listPage }),
+      localHomes: [home],
+      query: { hostIds: [CODEX_LOCAL_SESSION_HOST_ID] },
+      signal: controller.signal,
+    });
+    await pageStarted.promise;
+    controller.abort(new Error("catalog retired during page"));
+    firstPage.resolve({
+      sessions: [],
+      managedThreads: [{ threadId: "managed" }],
+      nextCursor: "next",
+    });
+    const result = await listed;
+    expect({ pages: listPage.mock.calls.length, marks: mark.mock.calls.length }).toEqual({
+      pages: 1,
+      marks: 0,
+    });
+    expect(result.hosts[0]?.error?.code).toBe("APP_SERVER_UNAVAILABLE");
+  });
+
+  it("does not start local hosts when retired during the managed-thread snapshot", async () => {
+    const snapshotResult = createDeferred<Map<string, ReadonlySet<string>>>();
+    const snapshot = vi.fn(() => snapshotResult.promise);
+    const bindingStore = Object.assign(createCodexTestBindingStore(), {
+      managedThreads: { has: vi.fn(async () => false), mark: vi.fn(), snapshot },
+    });
+    const listPage = vi.fn(async () => ({ sessions: [] }));
+    const controller = new AbortController();
+    const reason = new Error("catalog retired during snapshot");
+    const listed = listCodexSessionCatalog({
+      bindingStore,
+      config,
+      runtime: createRuntime().runtime,
+      control: createControl({ listPage }),
+      query: { hostIds: [CODEX_LOCAL_SESSION_HOST_ID] },
+      signal: controller.signal,
+      waitUntil: () => {
+        controller.signal.throwIfAborted();
+      },
+    }).catch((error: unknown) => error);
+    expect(snapshot).toHaveBeenCalledOnce();
+    controller.abort(reason);
+    snapshotResult.resolve(new Map());
+    const result = await listed;
+    expect(listPage).not.toHaveBeenCalled();
+    expect(result).toBe(reason);
+  });
+
   it("lists non-archived interactive threads without probing transcript previews", async () => {
     const pluginConfig = await normalizeCodexManifestConfig({
       supervision: { enabled: true },
@@ -262,7 +249,7 @@ describe("Codex supervision catalog", () => {
       ) => {
         if (!options.agentDir) {
           try {
-            resolveSessionAgentIds({ config: options.config });
+            resolveSessionAgentIdsStrict({ config: options.config });
           } catch (error) {
             throw new Error((error as { code?: string }).code ?? String(error), { cause: error });
           }
@@ -529,12 +516,22 @@ describe("Codex supervision catalog", () => {
     });
 
     await withEnvAsync({ CODEX_HOME: processCodexHome }, async () => {
-      const hosts = await getProvider()?.list({
+      const onHost = vi.fn();
+      const completions: Promise<void>[] = [];
+      const hosts = await getProvider()!.list({
         agentId: "beta",
         listNodes: async () => ({ nodes: [] }),
+        onHost,
+        waitUntil: (completion) => {
+          completions.push(completion);
+        },
       });
 
       expect(hosts).toHaveLength(3);
+      expect(completions).toHaveLength(3);
+      await Promise.all(completions);
+      expect(onHost).toHaveBeenCalledTimes(3);
+      expect(onHost.mock.calls.map(([host]) => host)).toEqual(expect.arrayContaining(hosts));
       expect(hosts?.every((host) => host.hostId.startsWith("gateway:local"))).toBe(true);
       expect(
         hosts?.every(
@@ -622,7 +619,7 @@ describe("Codex supervision catalog", () => {
       async () => new Map<string, ReadonlySet<string>>([["home-a", new Set(["thread-managed"])]]),
     );
     const bindingStore = Object.assign(createCodexTestBindingStore(), {
-      managedThreads: { mark: vi.fn(), snapshot },
+      managedThreads: { has: vi.fn(async () => false), mark: vi.fn(), snapshot },
     });
     const listPage = vi.fn(async (params?: { cursor?: string; limit?: number }) =>
       params?.cursor === "next"
@@ -706,6 +703,7 @@ describe("Codex supervision catalog", () => {
     const mark = vi.fn(async () => true);
     const bindingStore = Object.assign(createCodexTestBindingStore(), {
       managedThreads: {
+        has: vi.fn(async () => false),
         mark,
         snapshot: vi.fn(async () => new Map<string, ReadonlySet<string>>()),
       },

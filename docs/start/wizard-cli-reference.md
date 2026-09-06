@@ -15,7 +15,23 @@ commands), see [`openclaw onboard`](/cli/onboard).
 
 ## What the wizard does
 
-Local mode (default) walks you through:
+Fresh local guided onboarding shows a one-line pointer to the
+[security guide](/gateway/security) and one choice: **Quick start** or
+**Custom setup**. Quick start records the security acknowledgment; Custom setup
+shows the full security note and asks for confirmation. Quick start reuses
+detected AI access, verifies it, saves config, and opens the web
+dashboard with a foreground Gateway. It uses agent name `main` and full access,
+leaves telemetry consent unset, and skips route confirmation, memory import,
+and app recommendations. **Ctrl+C** stops the Gateway without removing config;
+`openclaw gateway install` enables background operation later.
+
+Custom setup keeps the full guided prompts. If quick start finds no usable
+route, it continues with manual provider setup and the remaining guided steps,
+including Gateway service installation. The quick-start defaults for agent name
+(`main`), access mode (full access), and telemetry (consent unset) stay.
+See [Guided default](/start/wizard#guided-default).
+
+The classic wizard (`openclaw onboard --classic`) in local mode walks you through:
 
 - Workspace location and bootstrap files
 - Model and auth setup (Anthropic, OpenAI Code subscription OAuth, xAI, OpenCode, custom endpoints, and more provider-owned auth flows)
@@ -30,6 +46,9 @@ Remote mode configures this machine to connect to a Gateway elsewhere. It does
 not install or modify anything on the remote host.
 
 ## Local flow details
+
+These steps describe the classic wizard. The guided quick-start lane is
+described [above](/start/wizard-cli-reference#what-the-wizard-does).
 
 <Steps>
   <Step title="Setup mode">
@@ -470,6 +489,15 @@ in [CLI automation](/start/wizard-cli-automation).
 - `wizard.status`
 
 Clients (macOS app and Control UI) can render steps without re-implementing onboarding logic.
+
+When setup admission is busy, `wizard.start` and the model setup start/activation
+methods return `UNAVAILABLE` with `details.code: "SETUP_ADMISSION_BUSY"`. This
+means that the requested operation did not begin: clients can retire that attempt
+and allow an explicit retry after the competing setup finishes. A terminal wizard
+`error` also ends that operation, but does not imply that earlier writes were
+rolled back. Generic request failures, timeouts, disconnects, and a missing wizard
+do not establish whether setup ran; clients must preserve that uncertainty rather
+than automatically retrying or claiming successful activation.
 
 ## Signal setup behavior
 

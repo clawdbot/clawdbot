@@ -1,4 +1,3 @@
-// Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
 import { CONTROL_UI_ROOT_PUBLIC_ASSETS } from "../../../src/gateway/control-ui-root-assets.js";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
@@ -78,6 +77,7 @@ const allowedAttrs = [
   "data-file-path",
   "data-link-favicon-host",
   "data-session-key",
+  "data-session-href",
   "data-table-interactions",
   "type",
   "aria-expanded",
@@ -553,7 +553,7 @@ export function toSanitizedMarkdownHtml(
   if (input.length > MARKDOWN_CACHE_MAX_CHARS) {
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
   const cached = getCachedMarkdown(cacheKey);
   if (cached !== null) {
     return cached;
@@ -572,22 +572,22 @@ function toEscapedPlainTextHtml(value: string, options: MarkdownRenderEnv): stri
   );
 }
 
-export function toStreamingMarkdownHtml(
+export function toStreamingMarkdownParts(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
   streamKey?: string,
-): string {
+): [stableHtml: string, tailHtml: string] {
   const renderOptions = normalizeMarkdownRenderOptions(options);
   const rawInput = normalizeMarkdownLineBreaks(
     stripUnsupportedCitationControlMarkers(markdownLocal),
   );
   if (isMarkdownBlockArtText(rawInput)) {
-    return renderSanitizedMarkdown(rawInput, renderOptions);
+    return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
   }
 
   const trimmedInput = rawInput.trim();
   if (!trimmedInput) {
-    return "";
+    return ["", ""];
   }
   const truncated = truncateText(trimmedInput, MARKDOWN_CHAR_LIMIT);
   const input = appendMarkdownTruncationNotice(truncated);
@@ -601,7 +601,7 @@ export function toStreamingMarkdownHtml(
   const streamingTail = input.slice(boundary);
   const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
   if (!streamingTail.trim()) {
-    return stableHtml;
+    return [stableHtml, ""];
   }
   const tailHtml =
     tailRepairStart === null
@@ -610,5 +610,5 @@ export function toStreamingMarkdownHtml(
           repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
           renderOptions,
         );
-  return `${stableHtml}${tailHtml}`;
+  return [stableHtml, tailHtml];
 }

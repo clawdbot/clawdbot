@@ -1,16 +1,17 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isPathInside } from "../../infra/path-safety.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
-  assertInsideWorkspace,
+  assertInsideSkillsRoot,
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { transitionPendingSkillProposalToStale } from "./apply-transition.js";
+import { resolveSkillProposalName } from "./frontmatter.js";
 import { dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
+import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import {
   SkillProposalDraftMissingError,
   readSkillProposal,
@@ -22,43 +23,29 @@ import { withSkillProposalCommitLock } from "./target-lock.js";
 import type { SkillProposalManifest, SkillProposalReadResult } from "./types.js";
 
 type SkillProposalScopeOptions = {
-  agentId?: string;
+  agentId: string;
   env?: NodeJS.ProcessEnv;
-  workspaceDir?: string;
+  config: OpenClawConfig;
 };
 
 type RequiredProposalReadOptions = {
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   reconcile?: boolean;
 };
 
-function storeOptions(env?: NodeJS.ProcessEnv) {
-  return env ? { env } : {};
-}
-
-function proposalScope(options: SkillProposalScopeOptions) {
-  return {
-    ...(options.agentId ? { agentId: options.agentId } : {}),
-    ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-  };
-}
-
 export async function listSkillProposals(
-  options: SkillProposalScopeOptions = {},
+  options: SkillProposalScopeOptions,
 ): Promise<SkillProposalManifest> {
-  const store = storeOptions(options.env);
-  const scope = proposalScope(options);
-  const manifest = await readSkillProposalManifest(store, scope);
+  const manifest = await readSkillProposalManifest(options, options);
   const missingDrafts = new Set<string>();
-  // Every reconciliation takes the same collection lease. Serialize them so a
-  // large manifest cannot make its own waiters exhaust the bounded lease wait.
+  // The agent collection lease bounds concurrent manifest reconciliation.
   for (const proposal of manifest.proposals) {
     if (proposal.kind !== "create" || proposal.status !== "pending") {
       continue;
     }
     let read: SkillProposalReadResult | null;
     try {
-      read = await readSkillProposal(proposal.id, store, scope);
+      read = await readSkillProposal(proposal.id, options, options, { config: options.config });
     } catch (error) {
       if (!(error instanceof SkillProposalDraftMissingError)) {
         throw error;
@@ -70,7 +57,7 @@ export async function listSkillProposals(
       await reconcilePendingCreateProposal(read, options);
     }
   }
-  const reconciled = await readSkillProposalManifest(store, scope);
+  const reconciled = await readSkillProposalManifest(options, options);
   // Freshly read manifest rows are locally owned; mark degraded entries in place.
   for (const proposal of reconciled.proposals) {
     if (missingDrafts.has(proposal.id)) {
@@ -83,12 +70,13 @@ export async function listSkillProposals(
 export async function getSkillProposalRunProgress(
   options: SkillProposalScopeOptions & { runId: string },
 ): Promise<{ mutationCount: number; proposalIds: string[] }> {
-  const store = storeOptions(options.env);
-  const manifest = await readSkillProposalManifest(store, options);
+  const manifest = await readSkillProposalManifest(options, options);
   const ids: string[] = [];
   let mutationCount = 0;
   for (const proposal of manifest.proposals) {
-    const record = await readSkillProposalRecord(proposal.id, store, options);
+    const record = await readSkillProposalRecord(proposal.id, options, options, {
+      config: options.config,
+    });
     if (!record) {
       continue;
     }
@@ -102,13 +90,9 @@ export async function getSkillProposalRunProgress(
 
 export async function inspectSkillProposal(
   proposalId: string,
-  options: SkillProposalScopeOptions = {},
+  options: SkillProposalScopeOptions,
 ): Promise<SkillProposalReadResult | null> {
-  const read = await readSkillProposal(
-    proposalId,
-    storeOptions(options.env),
-    proposalScope(options),
-  );
+  const read = await readSkillProposal(proposalId, options, options, { config: options.config });
   if (!read) {
     return null;
   }
@@ -116,55 +100,42 @@ export async function inspectSkillProposal(
 }
 
 export async function resolvePendingSkillProposal(input: {
-  agentId?: string;
+  agentId: string;
+  config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId?: string;
   name?: string;
   workspaceDir?: string;
 }): Promise<SkillProposalReadResult> {
-  const proposalId = normalizeOptionalString(input.proposalId);
-  if (proposalId) {
-    const direct = await reconcilePendingCreateProposal(
-      await readRequiredProposal(proposalId, input.workspaceDir, input.env, input.agentId),
-      input,
-    );
-    if (direct.record.status !== "pending") {
-      throw new Error(
-        `Only pending proposals can be revised. Current status: ${direct.record.status}.`,
-      );
+  let proposalId = normalizeOptionalString(input.proposalId);
+  if (!proposalId) {
+    const name = normalizeOptionalString(input.name);
+    if (!name) {
+      throw new Error("proposal_id or name required.");
     }
-    return direct;
-  }
-  const name = normalizeOptionalString(input.name);
-  if (!name) {
-    throw new Error("proposal_id or name required.");
-  }
-  const manifest = await listSkillProposals({
-    agentId: input.agentId,
-    workspaceDir: input.workspaceDir,
-    env: input.env,
-  });
-  const matches = manifest.proposals.filter(
-    (proposal) => proposal.status === "pending" && proposalMatchesName(proposal, name),
-  );
-  if (matches.length === 0) {
-    throw new Error(`No pending skill proposal matched: ${name}`);
-  }
-  if (matches.length > 1) {
-    const candidates = matches
-      .slice(0, 8)
-      .map((proposal) => `${proposal.id} (${proposal.skillKey})`)
-      .join(", ");
-    throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
+    const manifest = await listSkillProposals({
+      agentId: input.agentId,
+      env: input.env,
+      config: input.config,
+    });
+    const matches = manifest.proposals.filter(
+      (proposal) => proposal.status === "pending" && proposalMatchesName(proposal, name),
+    );
+    if (matches.length === 0) {
+      throw new Error(`No pending skill proposal matched: ${name}`);
+    }
+    if (matches.length > 1) {
+      const candidates = matches
+        .slice(0, 8)
+        .map((proposal) => `${proposal.id} (${resolveSkillProposalName(proposal.kind, proposal)})`)
+        .join(", ");
+      throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
+    }
+    proposalId = expectDefined(matches[0], "matches capture group 0").id;
   }
   const matched = await reconcilePendingCreateProposal(
-    await readRequiredProposal(
-      expectDefined(matches[0], "matches capture group 0").id,
-      input.workspaceDir,
-      input.env,
-      input.agentId,
-    ),
-    input,
+    await readRequiredProposal(proposalId, input.env, input.agentId, { config: input.config }),
+    { agentId: input.agentId, env: input.env, config: input.config },
   );
   if (matched.record.status !== "pending") {
     throw new Error(
@@ -176,18 +147,14 @@ export async function resolvePendingSkillProposal(input: {
 
 export async function readRequiredProposal(
   proposalId: string,
-  workspaceDir?: string,
-  env?: NodeJS.ProcessEnv,
-  agentId?: string,
-  readOptions: RequiredProposalReadOptions = {},
+  env: NodeJS.ProcessEnv | undefined,
+  agentId: string | undefined,
+  readOptions: RequiredProposalReadOptions,
 ): Promise<SkillProposalReadResult> {
   const read = await readSkillProposal(
     proposalId,
-    storeOptions(env),
-    {
-      ...(agentId ? { agentId } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    },
+    { env, agentId, config: readOptions.config },
+    { agentId },
     readOptions,
   );
   if (!read) {
@@ -200,35 +167,29 @@ async function reconcilePendingCreateProposal(
   read: SkillProposalReadResult,
   options: SkillProposalScopeOptions,
 ): Promise<SkillProposalReadResult> {
-  const workspaceDir = options.workspaceDir;
-  if (!workspaceDir || read.record.kind !== "create" || read.record.status !== "pending") {
+  if (read.record.kind !== "create" || read.record.status !== "pending") {
     return read;
   }
-  const resolvedWorkspaceDir = path.resolve(workspaceDir);
-  const resolvedTarget = path.resolve(read.record.target.skillFile);
-  // Agent-scoped reads intentionally include proposals bound to earlier workspaces.
-  // Only reconcile a target against the workspace that owns it.
-  if (
-    options.agentId &&
-    resolvedTarget !== resolvedWorkspaceDir &&
-    !isPathInside(resolvedWorkspaceDir, resolvedTarget)
-  ) {
-    return read;
-  }
-  const store = storeOptions(options.env);
-  const scope = proposalScope(options);
+  const workshopDir = resolveWorkshopSkillsDir(options.config, options.agentId, options.env);
   const reconciled = await withSkillProposalCommitLock(
-    workspaceDir,
     read.record,
     async () => {
-      const current = await readSkillProposal(read.record.id, store, scope, { reconcile: false });
+      const current = await readSkillProposal(read.record.id, options, options, {
+        config: options.config,
+        reconcile: false,
+      });
       if (!current || current.record.kind !== "create" || current.record.status !== "pending") {
         return { read: current ?? read };
       }
-      assertInsideWorkspace(workspaceDir, current.record.target.skillFile, "skill file");
-      if (await readSkillProposalRollback(current.record.id, store)) {
+      // Deferred proposals remain readable without access to their old targets.
+      // Collision reconciliation only operates inside the owned Workshop root.
+      if (
+        !isPathInside(workshopDir, current.record.target.skillFile) ||
+        (await readSkillProposalRollback(current.record.id, options))
+      ) {
         return { read: current };
       }
+      assertInsideSkillsRoot(workshopDir, current.record.target.skillFile, "skill file");
       const targetContent = await readWorkspaceSkillFile(current.record.target.skillFile);
       if (targetContent === null) {
         return { read: current };
@@ -237,8 +198,9 @@ async function reconcilePendingCreateProposal(
         record: current.record,
         reason: "Target skill was created after proposal creation.",
         input: {
-          workspaceDir,
-          ...(options.agentId ? { agentId: options.agentId } : {}),
+          workspaceDir: workshopDir,
+          agentId: options.agentId,
+          config: options.config,
           eventActor: { type: "system" },
           ...(options.env ? { env: options.env } : {}),
         },
@@ -252,14 +214,14 @@ async function reconcilePendingCreateProposal(
         transition,
       };
     },
-    store,
+    options,
   );
   if (reconciled.transition) {
     await dispatchSkillProposalChanged({
       event: reconciled.transition.event,
       record: reconciled.transition.record,
-      workspaceDir,
-      ...(options.agentId ? { agentId: options.agentId } : {}),
+      workspaceDir: workshopDir,
+      agentId: options.agentId,
     });
   }
   return reconciled.read;

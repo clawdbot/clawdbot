@@ -1,6 +1,8 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
@@ -10,30 +12,101 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
-  uiProofArtifactDir,
   waitForConfirmModal,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 async function confirmDelete(page: import("playwright").Page, proofName?: string) {
   const dialog = await waitForConfirmModal(page);
   if (proofName) {
-    await captureUiProof(page, proofName);
+    await captureUiProof(suite, page, proofName);
   }
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
 }
 
 suite.define(() => {
-  it("refreshes the archived sidebar after restoring a session during a stale roster load", async () => {
+  it("removes an agent-archived selected session without closing its transcript", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled ? { recordVideo: { dir: suite.artifactDir } } : {}),
     });
+    const page = await context.newPage();
+    const main = sessionRow("agent:main:main", "Main", 1);
+    const target = sessionRow("agent:main:archive-from-agent", "Archive from agent", 2);
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        { role: "assistant", content: [{ type: "text", text: "Work completed." }] },
+      ],
+      methodResponses: { "sessions.list": sessionsListResponse([main, target]) },
+      sessionArchiveFiltering: true,
+      sessionKey: main.key,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, target.key));
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`);
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      const notice = pane.locator(".agent-chat__disabled-banner");
+      await row.waitFor({ state: "visible" });
+      await pane.getByText("Work completed.", { exact: true }).waitFor();
+      await captureUiProof(suite, page, "agent-archive-before.png");
+
+      // The agent's deferred self-archive reaches clients as a committed patch,
+      // without running the sidebar menu's optimistic mutation path.
+      const archived = { ...target, archived: true, archivedAt: 3, updatedAt: 3 };
+      await gateway.setSessionsListResponse(sessionsListResponse([main, archived]));
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...archived,
+        agentId: "main",
+        sessionKey: target.key,
+        reason: "patch",
+      });
+      await notice.waitFor({ state: "visible" });
+      await captureUiProof(suite, page, "agent-archive-received.png");
+      await row.waitFor({ state: "detached", timeout: 10_000 });
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
+      await pane.getByText("Work completed.", { exact: true }).waitFor();
+      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+      await captureUiProof(suite, page, "agent-archive-after.png");
+
+      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page
+        .locator(".sidebar-session-sort-menu")
+        .getByRole("menuitemradio", { name: "Archived" })
+        .click();
+      await row.waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page
+        .locator(".sidebar-session-sort-menu")
+        .getByRole("menuitemradio", { name: "Active", exact: true })
+        .click();
+      await row.waitFor({ state: "detached" });
+
+      await gateway.setSessionsListResponse(sessionsListResponse([main, target]));
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...target,
+        agentId: "main",
+        sessionKey: target.key,
+        reason: "patch",
+        archived: false,
+        archivedAt: null,
+        updatedAt: 4,
+      });
+      await row.waitFor({ state: "visible" });
+      await notice.waitFor({ state: "detached" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("refreshes the archived sidebar after restoring a session during a stale roster load", async () => {
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const updatedAt = Date.parse("2026-07-01T16:00:00.000Z");
     const main = sessionRow("agent:main:main", "Main", updatedAt);
@@ -60,10 +133,10 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       const archivedRow = sidebar.locator(`[data-session-key="${archived.key}"]`);
       await archivedRow.waitFor({ state: "visible" });
-      await captureUiProof(page, "filtered-roster-forced-refresh-before.png");
+      await captureUiProof(suite, page, "filtered-roster-forced-refresh-before.png");
 
       const archivedRequests = async () =>
-        (await gateway.getRequests("sessions.list")).filter(
+        (await gateway.getRequests("sessions.list", rosterMatch)).filter(
           (request) => requireRecord(request.params).archived === true,
         );
       const initialRequests = (await archivedRequests()).length;
@@ -87,18 +160,14 @@ suite.define(() => {
 
       await expect.poll(archivedRequests).toHaveLength(initialRequests + 2);
       await archivedRow.waitFor({ state: "detached" });
-      await captureUiProof(page, "filtered-roster-forced-refresh-after.png");
+      await captureUiProof(suite, page, "filtered-roster-forced-refresh-after.png");
     } finally {
       await context.close();
     }
   });
 
   it("deletes every archived thread exactly once when the paged roster reorders", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const keys = ["agent:main:first", "agent:main:repeated", "agent:main:moved"];
     const archived = keys.map((key, index) =>
@@ -152,11 +221,7 @@ suite.define(() => {
   });
 
   it("never deletes a hidden thread selected before changing the roster search", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const alpha = "agent:main:alpha";
     const bravo = "agent:main:bravo";
@@ -210,11 +275,7 @@ suite.define(() => {
   });
 
   it("archives a session from the Sessions page context menu and kebab", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -270,7 +331,7 @@ suite.define(() => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -283,6 +344,7 @@ suite.define(() => {
       historyMessages: [
         { role: "assistant", content: [{ type: "text", text: "Research thread content" }] },
       ],
+      mainSessionKey: "agent:main:main",
       methodResponses: {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
@@ -298,7 +360,7 @@ suite.define(() => {
       const row = page.locator(`[data-session-key="${sessionKey}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await page.getByText("Research thread content").waitFor({ state: "visible" });
-      await captureUiProof(page, "archive-current-thread-before.png");
+      await captureUiProof(suite, page, "archive-current-thread-before.png");
       await row.hover();
       await row.getByRole("button", { name: "Open session menu" }).click();
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Archive session" }));
@@ -307,17 +369,17 @@ suite.define(() => {
       await expect.poll(() => row.count()).toBe(0);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await page.getByText("Research thread content").waitFor({ state: "visible" });
-      await captureUiProof(page, "archive-current-thread-pending.png");
+      await captureUiProof(suite, page, "archive-current-thread-pending.png");
 
       await gateway.resolveDeferred("sessions.patch");
       await expect.poll(() => row.count()).toBe(0);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await page.getByText("Research thread content").waitFor({ state: "visible" });
-      await captureUiProof(page, "archive-current-thread-complete.png");
+      await captureUiProof(suite, page, "archive-current-thread-complete.png");
     } finally {
       await context.close();
       if (proofVideo) {
-        await proofVideo.saveAs(path.join(uiProofArtifactDir, "archive-current-thread.webm"));
+        await proofVideo.saveAs(path.join(suite.artifactDir, "archive-current-thread.webm"));
       }
     }
   });
@@ -326,11 +388,7 @@ suite.define(() => {
   // The whole selection now crosses the Gateway once and settles from one list.
 
   it("archives a mixed active and idle sidebar multi-select in one RPC", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const batchKeys = ["agent:main:batch-a", "agent:main:batch-b", "agent:main:batch-c"] as const;
@@ -362,7 +420,7 @@ suite.define(() => {
       for (const key of batchKeys.slice(1)) {
         await rowFor(key).waitFor({ state: "visible" });
       }
-      const listCountBeforeBatch = (await gateway.getRequests("sessions.list")).length;
+      const listCountBeforeBatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
 
       for (const key of batchKeys) {
         await rowFor(key).click({ modifiers: ["Alt"] });
@@ -375,7 +433,7 @@ suite.define(() => {
       expect(
         await batchMenu.getByRole("menuitem", { name: `Delete ${batchKeys.length}…` }).isDisabled(),
       ).toBe(true);
-      await captureUiProof(page, "sidebar-multi-select-archive-menu.png");
+      await captureUiProof(suite, page, "sidebar-multi-select-archive-menu.png");
       await page.keyboard.press("A");
 
       const patchMany = await gateway.waitForRequest("sessions.patchMany");
@@ -392,7 +450,9 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.abort")).toEqual([]);
       expect(await gateway.getRequests("agent.wait")).toEqual([]);
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 10_000 })
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length, {
+          timeout: 10_000,
+        })
         .toBe(listCountBeforeBatch + 1);
       for (const key of batchKeys) {
         await rowFor(key).waitFor({ state: "detached" });
@@ -401,20 +461,18 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".app-toast").textContent())
         .toContain("Archived 3 sessions");
-      await captureUiProof(page, "sidebar-multi-select-archive-settled.png");
+      await captureUiProof(suite, page, "sidebar-multi-select-archive-settled.png");
       await page.waitForTimeout(500);
-      expect((await gateway.getRequests("sessions.list")).length).toBe(listCountBeforeBatch + 1);
+      expect((await gateway.getRequests("sessions.list", rosterMatch)).length).toBe(
+        listCountBeforeBatch + 1,
+      );
     } finally {
       await context.close();
     }
   });
 
   it("keeps the selected session through archive refreshes and restores the composer", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const sessionRows = Array.from({ length: 15 }, (_, index) => {
@@ -690,7 +748,7 @@ suite.define(() => {
       await expect.poll(() => progressCard.count()).toBe(0);
       const archiveEvent = activePane.locator(".chat-notice", { hasText: "Archived by Mira" });
       await archiveEvent.waitFor({ state: "visible", timeout: 10_000 });
-      await captureUiProof(page, "archive-attribution-notice-after.png");
+      await captureUiProof(suite, page, "archive-attribution-notice-after.png");
       await expect
         .poll(() => activePane.locator(".chat-bubble", { hasText: "Archived by Mira" }).count())
         .toBe(0);
@@ -730,11 +788,7 @@ suite.define(() => {
   });
 
   it("keeps archive state after navigating away and back", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const main = sessionRow("agent:main:main", "Main", baseTime);
@@ -792,7 +846,7 @@ suite.define(() => {
       await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
 
       await gateway.setMethodResponse("sessions.list", sessionsListResponse([main, target]));
-      let listRequestCount = (await gateway.getRequests("sessions.list")).length;
+      let listRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.emitGatewayEvent("sessions.changed", {
         ...target,
         updatedAt: baseTime + 1_000,
@@ -800,7 +854,7 @@ suite.define(() => {
         sessionKey: target.key,
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestCount);
 
       await gateway.setMethodResponse(
@@ -811,7 +865,7 @@ suite.define(() => {
           { ...archived, archived: false, updatedAt: baseTime + 3_000 },
         ]),
       );
-      listRequestCount = (await gateway.getRequests("sessions.list")).length;
+      listRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.emitGatewayEvent("sessions.changed", {
         ...target,
         updatedAt: baseTime + 2_000,
@@ -819,7 +873,7 @@ suite.define(() => {
         sessionKey: target.key,
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestCount);
 
       await page.goBack();
@@ -835,11 +889,7 @@ suite.define(() => {
   });
 
   it("recovers a deleted active chat without repeatedly resolving its missing session", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const routeErrors: string[] = [];
     page.on("console", (message) => {
@@ -868,12 +918,14 @@ suite.define(() => {
         .locator(".agent-chat__input textarea")
         .waitFor({ state: "visible", timeout: 10_000 });
 
-      const requestsBeforeDeletion = (await gateway.getRequests("sessions.list")).length;
-      await gateway.setMethodResponse("sessions.list", sessionsListResponse([mainSession]));
+      const requestsBeforeDeletion = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
+      await gateway.setSessionsListResponse(sessionsListResponse([mainSession]));
       await gateway.emitGatewayEvent("sessions.changed", {
         agentId: "main",
         reason: "delete",
         sessionKey: deletedKey,
+        sessionId: `session:${deletedKey}`,
       });
 
       await expect
@@ -890,36 +942,38 @@ suite.define(() => {
         .locator(".agent-chat__input textarea")
         .waitFor({ state: "visible", timeout: 10_000 });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(requestsBeforeDeletion);
       await expect
         .poll(
           async () => {
-            const count = (await gateway.getRequests("sessions.list")).length;
+            const count = (await gateway.getRequests("sessions.list", rosterMatch)).length;
             await new Promise((resolve) => {
               setTimeout(resolve, 350);
             });
-            return (await gateway.getRequests("sessions.list")).length - count;
+            return (await gateway.getRequests("sessions.list", rosterMatch)).length - count;
           },
           { timeout: 5_000 },
         )
         .toBe(0);
 
-      const settledRequestCount = (await gateway.getRequests("sessions.list")).length;
-      await expectRequestCountStable(gateway, "sessions.list", settledRequestCount);
+      const settledRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await expectRequestCountStable(
+        gateway,
+        "sessions.list",
+        settledRequestCount,
+        500,
+        rosterMatch,
+      );
       expect(routeErrors).toEqual([]);
-      await captureUiProof(page, "deleted-active-session-fallback.png");
+      await captureUiProof(suite, page, "deleted-active-session-fallback.png");
     } finally {
       await context.close();
     }
   });
 
   it("archive-gates a row-menu delete and keeps the row when the Gateway reports no deletion", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const key = "agent:main:research";
     const gateway = await installMockGateway(page, {

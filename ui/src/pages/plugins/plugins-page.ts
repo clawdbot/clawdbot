@@ -30,6 +30,7 @@ import {
 } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
+import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
 import { PluginsConsentController } from "./plugins-consent-controller.ts";
 import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
 import type { PluginsHubTab } from "./plugins-hub.ts";
@@ -82,7 +83,6 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private debouncedSearchQuery = "";
   @state() private busy: Record<string, boolean> = {};
   @state() private messages: Record<string, PluginRowMessage> = {};
-  @state() private pendingRemoval: Record<string, boolean> = {};
   @state() private detail: {
     pluginId: string;
     inspection: PluginsInspectResult | null;
@@ -105,9 +105,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.result = null;
       this.error = null;
       this.messages = {};
-      this.pendingRemoval = {};
       this.pageNotice = null;
-      this.mcpController.resetMessage();
     },
     invalidateRequests: (change) =>
       this.invalidateRequests(change.snapshot.phase !== "connected" || !change.snapshot.client),
@@ -246,7 +244,7 @@ class PluginsPage extends OpenClawLightDomElement {
     ) {
       this.resetPluginIcons();
       this.busy = {};
-      this.mcpController.resetBusy();
+      this.mcpController.resetFeedback();
       this.debouncedSearchQuery = "";
     }
     if (shouldRefreshAfterChange) {
@@ -267,11 +265,10 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private applyRouteData() {
     const data = this.routeData;
-    this.routeDataConsumed = true;
     if (!data) {
-      this.ensureInitialData();
       return;
     }
+    this.routeDataConsumed = true;
     const urlTab = pluginsHubTabForRoute(data.location, this.context.basePath);
     if (urlTab !== this.activeTab) {
       this.changeTab(urlTab);
@@ -464,7 +461,10 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private get loading(): boolean {
-    return this.gateway.connected && this.catalogTask.status === TaskStatus.PENDING;
+    return (
+      this.gateway.connected &&
+      (!this.routeDataConsumed || this.catalogTask.status === TaskStatus.PENDING)
+    );
   }
 
   private get searchResults(): PluginSearchResult[] | null {
@@ -490,16 +490,15 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private ensureInitialData() {
+    // The route owns initial loading; a warm page module can render before its data arrives.
     if (
+      !this.routeDataConsumed ||
       !this.gateway.connected ||
       !this.gateway.client ||
       this.loading ||
       this.result ||
       this.error
     ) {
-      return;
-    }
-    if (this.routeData && !this.routeDataConsumed) {
       return;
     }
     void this.refreshCatalog();
@@ -608,16 +607,6 @@ class PluginsPage extends OpenClawLightDomElement {
     this.messages = next;
   }
 
-  private setPendingRemoval(key: string, value: boolean) {
-    const next = { ...this.pendingRemoval };
-    if (value) {
-      next[key] = true;
-    } else {
-      delete next[key];
-    }
-    this.pendingRemoval = next;
-  }
-
   private applyMutationResult(result: PluginMutationResult) {
     this.invalidatePluginIcon(result.plugin.id);
     this.replaceResult(withPlugin(this.result, result.plugin), true);
@@ -659,11 +648,11 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private async uninstall(pluginId: string, rowKey: string): Promise<void> {
+    const name = this.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
     await this.consentController.runMutation(
       rowKey,
       (client) => uninstallPlugin(client, pluginId),
       async (result, refreshError, client, _isCurrent, isLatest) => {
-        this.setPendingRemoval(rowKey, false);
         // Removal hides its row, so keep the restart reminder on the page.
         if (isLatest()) {
           this.pageNotice = {
@@ -679,6 +668,7 @@ class PluginsPage extends OpenClawLightDomElement {
         }
         await this.refreshCatalogAfterMutation(client);
       },
+      { confirm: () => confirmPluginUninstall(name) },
     );
   }
 
@@ -690,6 +680,7 @@ class PluginsPage extends OpenClawLightDomElement {
         onSelect: (tab) => this.selectHubTab(tab),
       })}
       ${renderSettingsWorkspace(html`
+        <openclaw-plugin-manager></openclaw-plugin-manager>
         ${renderPlugins({
           connected: this.gateway.connected,
           loading: this.loading,
@@ -703,7 +694,6 @@ class PluginsPage extends OpenClawLightDomElement {
           searchError: this.searchError,
           busy: this.busy,
           messages: this.messages,
-          pendingRemoval: this.pendingRemoval,
           detailPluginId: this.detail?.pluginId ?? null,
           detailInspection: this.detail?.inspection ?? null,
           detailInspectionError: this.detail?.error ?? null,
@@ -731,8 +721,6 @@ class PluginsPage extends OpenClawLightDomElement {
           onConfirmConsent: () => this.consentController.confirm(),
           onRetryConsentInspection: () => void this.consentController.inspect(),
           onDismissMessage: (rowKey) => this.setMessage(rowKey, null),
-          onRequestUninstall: (rowKey) => this.setPendingRemoval(rowKey, true),
-          onCancelUninstall: (rowKey) => this.setPendingRemoval(rowKey, false),
           onUninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),
           onSearchClawHub: (query) => this.openClawHubSearch(query),
         })}

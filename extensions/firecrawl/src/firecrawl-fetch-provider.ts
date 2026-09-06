@@ -16,7 +16,8 @@ export function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin {
     createTool: ({ config }) => ({
       description: "Fetch a page using Firecrawl.",
       parameters: {},
-      execute: async (args) => {
+      execute: async (args, executionContext) => {
+        executionContext?.signal?.throwIfAborted();
         const url = typeof args.url === "string" ? args.url : "";
         const extractMode = args.extractMode === "text" ? "text" : "markdown";
         const maxChars = readPositiveIntegerParam(args, "maxChars");
@@ -32,6 +33,7 @@ export function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin {
           extractMode,
           access: "keyless",
           maxChars,
+          ...(executionContext?.signal ? { signal: executionContext.signal } : {}),
           ...(proxy ? { proxy } : {}),
           ...(storeInCache !== undefined ? { storeInCache } : {}),
         });

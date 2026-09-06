@@ -6,18 +6,20 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { openClawStateDatabaseCache } from "../../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
-  getOpenClawStateDatabaseIfOpen,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
 import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
   TranscriptStopRequest,
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
-import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
+import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const tempDirs = createTempDirTracker();
 const capturedText = "Private captured decision: keep these notes out of operator logs.";
@@ -33,8 +35,13 @@ afterEach(() => {
 describe("transcripts auto-start stop reporting", () => {
   it.each([
     { name: "export failure", blocked: true, outcome: "ok", manual: false },
-    { name: "fulfilled provider warning", blocked: false, outcome: "warn", manual: false },
-    { name: "both warnings", blocked: true, outcome: "warn", manual: false },
+    { name: "returned provider failure", blocked: false, outcome: "warn", manual: false },
+    {
+      name: "terminal receipt with export warning",
+      blocked: true,
+      outcome: "terminal-warning",
+      manual: false,
+    },
     { name: "healthy stop", blocked: false, outcome: "ok", manual: false },
     { name: "thrown provider error", blocked: false, outcome: "throw", manual: false },
     {
@@ -43,25 +50,26 @@ describe("transcripts auto-start stop reporting", () => {
       outcome: "ok",
       manual: true,
     },
-    {
-      name: "manual both warnings then skipped auto-stop",
-      blocked: true,
-      outcome: "warn",
-      manual: true,
-    },
   ])("$name preserves state and finishes siblings", async ({ blocked, outcome, manual }) => {
     const stateDir = await fs.realpath(tempDirs.make("openclaw-transcripts-auto-stop-"));
     const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = path.resolve(resolveOpenClawStateSqlitePath(options.env));
     const exportRoot = path.join(stateDir, "transcripts");
     const store = new TranscriptsStore(exportRoot, options);
     const requests = new Map<string, TranscriptStartRequest>();
     const subjectId = "subject";
     const ids = [subjectId, "healthy-sibling"];
     const gates = new Map(ids.map((id) => [id, createDeferred()]));
+    const needsRetry = outcome === "warn" || outcome === "throw";
+    let cleanupFails = outcome !== "ok";
     const stop = vi.fn(async ({ sessionId }: TranscriptStopRequest) => {
-      if (sessionId === subjectId) {
-        if (outcome === "throw" && stop.mock.calls.length === 1) {
+      if (sessionId === subjectId && cleanupFails) {
+        if (outcome === "throw") {
           throw new Error(providerError);
+        }
+        if (outcome === "terminal-warning") {
+          await requests.get(sessionId)!.onStatus?.({ active: false });
+          return { ok: false as const, error: providerError };
         }
         if (outcome === "warn") {
           return { ok: false as const, error: providerError };
@@ -137,20 +145,13 @@ describe("transcripts auto-start stop reporting", () => {
             summary: { utteranceCount: 1 },
           });
           expect(result.details).not.toHaveProperty("summaryPath");
-          if (outcome === "warn") {
-            expect(result.details).toHaveProperty("providerStopError", providerError);
-          } else {
-            expect(result.details).not.toHaveProperty("providerStopError");
-          }
+          expect(result.details).not.toHaveProperty("providerStopError");
         }
         await expect(service.stop()).resolves.toBeUndefined();
         expect(stop.mock.calls.map(([request]) => request.sessionId)).toEqual(ids);
         const warnings = logger.warn.mock.calls.map(([message]) => message);
-        await service.stop();
-        expect(stop).toHaveBeenCalledTimes(2);
-        expect(logger.warn.mock.calls.map(([message]) => message)).toEqual(warnings);
-
-        const database = getOpenClawStateDatabaseIfOpen(options)!;
+        const database =
+          openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath)!;
         expect(database.db.isOpen).toBe(true);
         expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
         expect(database.db.isOpen).toBe(false);
@@ -158,7 +159,7 @@ describe("transcripts auto-start stop reporting", () => {
         for (const id of ids) {
           const stored = (await reopened.readSession(id))!;
           const summary = await reopened.readSummary(stored);
-          if (id === subject.sessionId && outcome === "throw") {
+          if (id === subject.sessionId && needsRetry) {
             expect(stored.stoppedAt).toBeUndefined();
             expect(summary).toEqual({});
             continue;
@@ -178,13 +179,12 @@ describe("transcripts auto-start stop reporting", () => {
             ).toContain(capturedText);
           }
         }
-        expect(getOpenClawStateDatabaseIfOpen(options)).not.toBe(database);
+        expect(
+          openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath),
+        ).not.toBe(database);
         await expect(execute("status")).resolves.toMatchObject({
           details: {
-            active:
-              outcome === "throw"
-                ? [expect.objectContaining({ sessionId: subject.sessionId })]
-                : [],
+            active: needsRetry ? [expect.objectContaining({ sessionId: subject.sessionId })] : [],
           },
         });
 
@@ -203,7 +203,7 @@ describe("transcripts auto-start stop reporting", () => {
           }
           if (outcome !== "ok") {
             expect(logged).toContain("fixture stop failure");
-            expect(logged).toMatch(outcome === "throw" ? /stop failed/ : /provider stop failed/);
+            expect(logged).toMatch(/stop failed/);
           }
           for (const warning of warnings) {
             expect(warning.length).toBeLessThanOrEqual(2_200);
@@ -214,12 +214,20 @@ describe("transcripts auto-start stop reporting", () => {
             expect(warning).not.toContain('"transcript":');
           }
         }
+        cleanupFails = false;
+        await service.stop();
+        expect(stop.mock.calls.map(([request]) => request.sessionId)).toEqual(
+          needsRetry ? [...ids, subjectId] : ids,
+        );
+        expect(logger.warn.mock.calls.map(([message]) => message)).toEqual(warnings);
+        await expect(execute("status")).resolves.toMatchObject({ details: { active: [] } });
       } finally {
+        cleanupFails = false;
         for (const gate of gates.values()) {
           gate.resolve();
         }
         await service.stop();
-        // Thrown provider stops retain capture ownership; clean up via the public tool.
+        // Provider failures retain capture ownership; recover before fixture teardown.
         for (const id of requests.keys()) {
           await execute("stop", id);
         }

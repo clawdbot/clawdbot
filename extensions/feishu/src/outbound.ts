@@ -9,7 +9,6 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveLegacyInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -43,16 +42,16 @@ import {
   shouldSuppressFeishuTextForVoiceMedia,
   type SendMediaResult,
 } from "./media.js";
-import {
-  readNativeFeishuCardJson,
-  resolveFeishuCardTemplate,
-  sanitizeNativeFeishuCard,
-} from "./native-card.js";
+import { readNativeFeishuCardJson } from "./native-card.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationFallback,
-  buildFeishuPresentationCardElements,
-  isFeishuCardWithinEnvelope,
+  buildFeishuPayloadCard,
+  consumeFeishuPresentationFallbackMarker,
+  FEISHU_PRESENTATION_CAPABILITIES,
+  markRenderedFeishuCard,
+  readNativeFeishuCard,
+  renderFeishuPresentationPayload,
   renderFeishuPresentationFallbackText,
   resolveFeishuRichReply,
 } from "./presentation-card.js";
@@ -69,8 +68,6 @@ import {
   type CardHeaderConfig,
 } from "./send.js";
 
-const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
-const FEISHU_PRESENTATION_FALLBACK_MARKER = "__openclawPresentationFallback";
 // Carries the direct-send upload-failure policy through the presentation
 // fallback delivery path. The normal `sendMedia` branch sets
 // `propagateMediaUploadFailure` directly; the presentation-fallback branch
@@ -134,30 +131,6 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
 
 function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
-}
-
-function markRenderedFeishuCard(card: Record<string, unknown>): Record<string, unknown> {
-  Object.defineProperty(card, RENDERED_FEISHU_CARD, {
-    value: true,
-    enumerable: false,
-  });
-  return card;
-}
-
-function readNativeFeishuCard(payload: { channelData?: Record<string, unknown> }) {
-  const feishuData = payload.channelData?.feishu;
-  if (!isRecord(feishuData)) {
-    return undefined;
-  }
-  const card = feishuData.card ?? feishuData.interactiveCard;
-  if (!isRecord(card)) {
-    return undefined;
-  }
-  if ((card as { [RENDERED_FEISHU_CARD]?: true })[RENDERED_FEISHU_CARD] === true) {
-    return card;
-  }
-  const sanitizedCard = sanitizeNativeFeishuCard(card);
-  return sanitizedCard ? markRenderedFeishuCard(sanitizedCard) : undefined;
 }
 
 type FeishuOutboundPayload = Parameters<
@@ -224,35 +197,6 @@ function partialFeishuSendError(error: unknown, results: readonly FeishuReplyDel
   });
 }
 
-function consumeFeishuPresentationFallbackMarker(payload: FeishuOutboundPayload): {
-  payload: FeishuOutboundPayload;
-  presentationFallback?: { hasVisibleContent: boolean };
-} {
-  const feishuData = isRecord(payload.channelData?.feishu) ? payload.channelData.feishu : undefined;
-  const presentationFallback = feishuData?.[FEISHU_PRESENTATION_FALLBACK_MARKER];
-  if (
-    !isRecord(presentationFallback) ||
-    typeof presentationFallback.hasVisibleContent !== "boolean"
-  ) {
-    return { payload };
-  }
-  const nextFeishuData = { ...feishuData };
-  delete nextFeishuData[FEISHU_PRESENTATION_FALLBACK_MARKER];
-  const nextChannelData = { ...payload.channelData };
-  if (Object.keys(nextFeishuData).length > 0) {
-    nextChannelData.feishu = nextFeishuData;
-  } else {
-    delete nextChannelData.feishu;
-  }
-  return {
-    payload: {
-      ...payload,
-      channelData: Object.keys(nextChannelData).length > 0 ? nextChannelData : undefined,
-    },
-    presentationFallback: { hasVisibleContent: presentationFallback.hasVisibleContent },
-  };
-}
-
 // Reads (without consuming) the direct-send upload-failure policy stamped on
 // the payload by the presentation-fallback branch. Unlike the presentation
 // fallback marker this is not consumed: a fallback payload may fan out
@@ -277,118 +221,6 @@ function buildFeishuPropagationOnlyChannelData(
   }
   return {
     feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
-  };
-}
-
-function buildFeishuPayloadCard(params: {
-  payload: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
-  text?: string;
-  identity?: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["identity"];
-}): Record<string, unknown> | undefined {
-  const nativeCard = readNativeFeishuCard(params.payload);
-  if (nativeCard) {
-    assertFeishuCardWithinEnvelope(nativeCard, "Feishu native card");
-    return nativeCard;
-  }
-
-  const rawText = params.text ?? params.payload.text;
-  const textCard = readNativeFeishuCardJson(rawText);
-  const { interactive, presentation } = resolveFeishuRichReply(params.payload);
-  if (!presentation) {
-    if (!textCard) {
-      return undefined;
-    }
-    assertFeishuCardWithinEnvelope(textCard, "Feishu native card");
-    return markRenderedFeishuCard(textCard);
-  }
-
-  const text = textCard
-    ? undefined
-    : resolveLegacyInteractiveTextFallback({
-        text: rawText,
-        interactive,
-      });
-  const elements = buildFeishuPresentationCardElements({ presentation, fallbackText: text });
-
-  const identityTitle = resolveFeishuIdentityHeaderTitle(params.identity);
-  const title = presentation?.title ?? identityTitle;
-  const template = resolveFeishuCardTemplate(
-    presentation?.tone === "danger"
-      ? "red"
-      : presentation?.tone === "warning"
-        ? "orange"
-        : presentation?.tone === "success"
-          ? "green"
-          : "blue",
-  );
-
-  const card = markRenderedFeishuCard({
-    schema: "2.0",
-    config: { width_mode: "fill" },
-    ...(title
-      ? {
-          header: {
-            title: { tag: "plain_text", content: title },
-            template: template ?? "blue",
-          },
-        }
-      : {}),
-    body: { elements },
-  });
-  return isFeishuCardWithinEnvelope(card) ? card : undefined;
-}
-
-function renderFeishuPresentationPayload({
-  payload,
-  presentation,
-  ctx,
-}: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0]) {
-  const textCard = readNativeFeishuCardJson(payload.text);
-  const { fallbackText, fallbackHasCommand } = buildFeishuPresentationFallback({
-    text: textCard ? undefined : payload.text,
-    presentation,
-    textFormat: parseFeishuCommentTarget(ctx.to) ? "plain" : "markdown",
-  });
-  const card = buildFeishuPayloadCard({
-    payload,
-    text: payload.text,
-    identity: ctx.identity,
-  });
-  const existingFeishuData = isRecord(payload.channelData?.feishu)
-    ? payload.channelData.feishu
-    : undefined;
-  if (!card) {
-    // Core strips presentation from this post-queue transport copy. Preserve its
-    // own visible contribution separately from prose already delivered by streaming.
-    return {
-      ...payload,
-      text: fallbackText,
-      channelData: {
-        ...payload.channelData,
-        feishu: {
-          ...existingFeishuData,
-          [FEISHU_PRESENTATION_FALLBACK_MARKER]: {
-            hasVisibleContent: Boolean(
-              renderFeishuPresentationFallbackText({ presentation }).trim(),
-            ),
-          },
-          ...(fallbackHasCommand ? { fallbackHasCommand: true } : {}),
-        },
-      },
-    };
-  }
-  // Core consumes presentation before sendPayload; carry the fallback fact.
-  return {
-    ...payload,
-    text: fallbackText,
-    channelData: {
-      ...payload.channelData,
-      feishu: {
-        ...existingFeishuData,
-        card,
-        ...(fallbackHasCommand ? { fallbackHasCommand: true } : {}),
-      },
-    },
   };
 }
 
@@ -682,26 +514,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunker: chunkFeishuMarkdown,
   chunkerMode: "markdown",
   textChunkLimit: FEISHU_TEXT_CHUNK_LIMIT,
-  presentationCapabilities: {
-    supported: true,
-    buttons: true,
-    selects: false,
-    context: true,
-    divider: true,
-    limits: {
-      actions: {
-        maxActions: 20,
-        maxActionsPerRow: 5,
-        maxLabelLength: 40,
-        maxValueBytes: 1024,
-      },
-      text: {
-        maxLength: FEISHU_TEXT_CHUNK_LIMIT,
-        encoding: "characters",
-        markdownDialect: "markdown",
-      },
-    },
-  },
+  presentationCapabilities: FEISHU_PRESENTATION_CAPABILITIES,
   renderPresentation: renderFeishuPresentationPayload,
   sendPayload: async (ctx) => {
     const { payload, presentationFallback } = consumeFeishuPresentationFallbackMarker(ctx.payload);

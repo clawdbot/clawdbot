@@ -40,6 +40,48 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("returns raw discovery for the host to merge with materialized config", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "anthropic.claude-opus-4-7",
+              object: "model",
+              input_modalities: ["text", "image"],
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+
+    const result = await provider.catalog?.run({
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock-mantle": {
+              baseUrl: "https://explicit.example.test/v1",
+              models: [{ id: "anthropic.claude-opus-4-7", input: ["text"] }],
+            },
+          },
+        },
+      },
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "test-token",
+        AWS_REGION: "us-east-1",
+      },
+    } as never);
+
+    if (!result || !("provider" in result)) {
+      throw new Error("expected single provider catalog result");
+    }
+    expect(result.provider.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/v1");
+    expect(result.provider.models[0]?.input).toEqual(["text", "image"]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("registers with correct provider ID and label", async () => {
     const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
     expect(provider.id).toBe("amazon-bedrock-mantle");

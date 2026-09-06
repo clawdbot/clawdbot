@@ -25,17 +25,17 @@ import re
 import urllib.request
 
 preferred_names = [
-    "MinGit-2.55.0.4-64-bit.zip",
-    "MinGit-2.55.0.4-arm64.zip",
+    "MinGit-2.55.0.5-64-bit.zip",
+    "MinGit-2.55.0.5-arm64.zip",
 ]
 fallback_assets = {
-    "MinGit-2.55.0.4-arm64.zip": {
-        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.4/MinGit-2.55.0.4-arm64.zip",
-        "digest": "sha256:033eb6b927d804558ae479a6ae6c6ed86da42cabc0d424844a3e108c780a58cc",
+    "MinGit-2.55.0.5-arm64.zip": {
+        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/MinGit-2.55.0.5-arm64.zip",
+        "digest": "sha256:05843f9d6e60306c3ab886799e2c67200caab921571f10512df3493049179ddb",
     },
-    "MinGit-2.55.0.4-64-bit.zip": {
-        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.4/MinGit-2.55.0.4-64-bit.zip",
-        "digest": "sha256:4e03f94c2ffbf70be337e005cee02661c732dbfc81031a078bda9299b9a7d644",
+    "MinGit-2.55.0.5-64-bit.zip": {
+        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/MinGit-2.55.0.5-64-bit.zip",
+        "digest": "sha256:56d7b226b7693196cfc71fef26568f536c4a021ab6c37ff2db4287bed908e96e",
     },
 }
 

@@ -1,6 +1,8 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
+import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
+import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
 import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
 import {
   handleInlineSlashArgKeydown,
@@ -14,6 +16,7 @@ type ComposerKeyDownDeps = {
   props: ChatComposerProps;
   skillMenuHost: SkillMenuHost;
   slashMenuHost: SlashMenuHost;
+  mentionMenuHost: HumanMentionMenuHost;
   requestUpdate: () => void;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
@@ -21,6 +24,7 @@ type ComposerKeyDownDeps = {
   syncDraftAfterSend: (target: HTMLTextAreaElement | null) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
+  goalComposer: GoalComposerController;
 };
 
 export function createComposerKeyDownHandler({
@@ -28,6 +32,7 @@ export function createComposerKeyDownHandler({
   props,
   skillMenuHost,
   slashMenuHost,
+  mentionMenuHost,
   requestUpdate,
   sendShortcut,
   canSubmitDraft,
@@ -35,6 +40,7 @@ export function createComposerKeyDownHandler({
   syncDraftAfterSend,
   showAbortableUi,
   alternateFollowUpMode,
+  goalComposer,
 }: ComposerKeyDownDeps): (event: KeyboardEvent) => void {
   return (event) => {
     // The handler only ever binds to the composer textarea; narrowing here
@@ -44,6 +50,27 @@ export function createComposerKeyDownHandler({
       return;
     }
     if (state.composerComposing || event.isComposing || event.keyCode === 229) {
+      return;
+    }
+
+    if (state.mentionMenu.handleKeydown(event, mentionMenuHost, requestUpdate)) {
+      return;
+    }
+
+    if (goalComposer.active) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        goalComposer.cancel();
+      } else if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        (sendShortcut === "enter" || event.metaKey || event.ctrlKey) &&
+        canSubmitDraft(target.value)
+      ) {
+        event.preventDefault();
+        commitDraft(target.value);
+        void goalComposer.submit(event);
+      }
       return;
     }
 
@@ -94,6 +121,7 @@ export function createComposerKeyDownHandler({
       event.key === "Escape" &&
       !state.skillMenuOpen &&
       !state.slashMenuOpen &&
+      !state.mentionMenu.open &&
       !props.replyTarget &&
       !state.dictation?.active &&
       showAbortableUi &&
@@ -106,6 +134,11 @@ export function createComposerKeyDownHandler({
 
     const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
     if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
+      // Holding send is one action, even after the draft clears into the queue.
+      if (event.repeat) {
+        event.preventDefault();
+        return;
+      }
       const attachments = props.getAttachments?.() ?? props.attachments ?? [];
       const hasComposedContent = Boolean(target.value.trim() || attachments.length);
       if (!hasComposedContent) {
@@ -133,7 +166,7 @@ export function createComposerKeyDownHandler({
       commitDraft(target.value);
       const followUpModeOverride =
         (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
-      props.onSend(followUpModeOverride, event);
+      void props.onSend(followUpModeOverride, event);
       syncDraftAfterSend(target);
     }
   };

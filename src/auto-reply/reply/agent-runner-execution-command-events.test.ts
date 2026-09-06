@@ -9,7 +9,7 @@ import {
 } from "./agent-runner-execution.test-support.js";
 import type { EmbeddedAgentParams } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: command events", () => {
   it("forwards plan, approval, command output, and patch events", async () => {

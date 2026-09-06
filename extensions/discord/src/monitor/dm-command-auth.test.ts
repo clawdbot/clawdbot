@@ -5,6 +5,37 @@ import {
   resolveDiscordTextCommandAccess,
 } from "./dm-command-auth.js";
 
+const participantResolutions = vi.hoisted(
+  () =>
+    [] as Array<
+      ReturnType<
+        NonNullable<
+          import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressIdentityDescriptor["resolveParticipant"]
+        >
+      >
+    >,
+);
+vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>();
+  return {
+    ...actual,
+    defineStableChannelIngressIdentity: (
+      params: Parameters<typeof actual.defineStableChannelIngressIdentity>[0],
+    ) => {
+      const identity = actual.defineStableChannelIngressIdentity(params);
+      return {
+        ...identity,
+        resolveParticipant: (subject) => {
+          const participant = identity.resolveParticipant?.(subject);
+          participantResolutions.push(participant);
+          return participant;
+        },
+      } satisfies typeof identity;
+    },
+  };
+});
+
 const canViewDiscordGuildChannelMock = vi.hoisted(() => vi.fn());
 type DiscordDmIngressAccess = Awaited<ReturnType<typeof resolveDiscordDmCommandAccess>>;
 
@@ -351,3 +382,32 @@ describe("resolveDiscordDmCommandAccess", () => {
     expect(dmCommandAuthorized(result)).toBe(false);
   });
 });
+
+it.each(["user", "bot", "pluralkit-member", undefined] as const)(
+  "keeps Discord participant kind %s separate without guessing",
+  async (participantKind) => {
+    participantResolutions.length = 0;
+    await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "open",
+      configuredAllowFrom: ["*"],
+      sender: {
+        id: "123",
+        ...(participantKind === "pluralkit-member"
+          ? { isPluralKit: true }
+          : { authorKind: participantKind }),
+      },
+      allowNameMatching: false,
+      readStoreAllowFrom: async () => [],
+    });
+    expect(participantResolutions).toEqual([
+      participantKind
+        ? {
+            domain: participantKind === "pluralkit-member" ? "pluralkit" : "discord",
+            idKind: participantKind,
+            id: "123",
+          }
+        : undefined,
+    ]);
+  },
+);

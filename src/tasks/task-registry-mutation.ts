@@ -21,6 +21,7 @@ import {
   addOwnerKeyIndex,
   addParentFlowIdIndex,
   addRelatedSessionKeyIndex,
+  bumpTaskRegistryRevision,
   deleteOwnerKeyIndex,
   deleteParentFlowIdIndex,
   deleteRelatedSessionKeyIndex,
@@ -124,7 +125,7 @@ function scheduleTaskFlowSyncRetry(task: TaskRecord, operation: string, attempt 
         });
         scheduleTaskFlowSyncRetry(current, operation, attempt + 1);
       }
-    }).catch((error: unknown) => {
+    }, "tasks:mutation").catch((error: unknown) => {
       taskRegistryLog.warn("Failed to admit parent flow sync retry from task", {
         operation,
         taskId,
@@ -156,11 +157,17 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   if (!current) {
     return null;
   }
-  const next = normalizeTaskTimestamps({
+  const updated = {
     ...current,
     ...patch,
     ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
-  });
+  };
+  const becomesTerminal =
+    !isTerminalTaskStatus(current.status) && isTerminalTaskStatus(updated.status);
+  if (becomesTerminal && patch.endedAt === undefined) {
+    updated.endedAt = patch.lastEventAt ?? Date.now();
+  }
+  const next = normalizeTaskTimestamps(updated);
   if (Object.hasOwn(patch, "error") && patch.error === undefined) {
     delete next.error;
   }
@@ -172,14 +179,14 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
     next.cleanupAfter = resolveTaskCleanupAfter({ ...next, createdAt });
   }
   const sessionIndexChanged =
+    normalizeOptionalString(current.requesterSessionKey) !==
+      normalizeOptionalString(next.requesterSessionKey) ||
     normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
     normalizeOptionalString(current.childSessionKey) !==
       normalizeOptionalString(next.childSessionKey);
   const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
   ensureLinkedTaskFlowRegistryReady(current);
   ensureLinkedTaskFlowRegistryReady(next);
-  const becomesTerminal =
-    !isTerminalTaskStatus(current.status) && isTerminalTaskStatus(next.status);
   if (becomesTerminal) {
     flushTaskActivity(taskId);
   }
@@ -189,6 +196,7 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
     return null;
   }
   tasks.set(taskId, next);
+  bumpTaskRegistryRevision();
   if (becomesTerminal) {
     clearTaskActivity(taskId);
   }
@@ -224,7 +232,10 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
 }
 
 /** Publishes a record already committed by a cross-owner shared-state transaction. */
-export function publishTaskRecordAfterAtomicStore(record: TaskRecord): TaskRecord {
+export function publishTaskRecordAfterAtomicStore(
+  record: TaskRecord,
+  options?: { syncTaskFlow?: boolean; deferredObserverEvents?: Array<() => void> },
+): TaskRecord {
   const next = normalizeTaskTimestamps(cloneTaskRecord(record));
   const current = tasks.get(next.taskId);
   const becomesTerminal =
@@ -240,6 +251,7 @@ export function publishTaskRecordAfterAtomicStore(record: TaskRecord): TaskRecor
     deleteRelatedSessionKeyIndex(next.taskId, current);
   }
   tasks.set(next.taskId, next);
+  bumpTaskRegistryRevision();
   if (becomesTerminal) {
     clearTaskActivity(next.taskId);
   }
@@ -247,12 +259,20 @@ export function publishTaskRecordAfterAtomicStore(record: TaskRecord): TaskRecor
   addParentFlowIdIndex(next.taskId, next);
   addRelatedSessionKeyIndex(next.taskId, next);
   rebuildRunIdIndex();
-  syncFlowFromTaskAfterTaskMutation(next, "atomic completion admission");
-  emitTaskRegistryObserverEvent(() => ({
-    kind: "upserted",
-    task: cloneTaskRecord(next),
-    ...(current ? { previous: cloneTaskRecord(current) } : {}),
-  }));
+  if (options?.syncTaskFlow !== false) {
+    syncFlowFromTaskAfterTaskMutation(next, "atomic completion admission");
+  }
+  const emit = () =>
+    emitTaskRegistryObserverEvent(() => ({
+      kind: "upserted",
+      task: cloneTaskRecord(next),
+      ...(current ? { previous: cloneTaskRecord(current) } : {}),
+    }));
+  if (options?.deferredObserverEvents) {
+    options.deferredObserverEvents.push(emit);
+  } else {
+    emit();
+  }
   return cloneTaskRecord(next);
 }
 

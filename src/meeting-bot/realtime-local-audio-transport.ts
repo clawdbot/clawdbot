@@ -6,6 +6,7 @@ import { onDecodedOutput } from "../process/decoded-output.js";
 import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-energy.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
+import { splitCommandArgv } from "./command-argv.js";
 import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
@@ -56,14 +57,6 @@ type OutputWriteWaiter = {
   release: () => void;
 };
 
-function splitCommand(argv: string[]): { command: string; args: string[] } {
-  const [command, ...args] = argv;
-  if (!command) {
-    throw new Error("audio bridge command must not be empty");
-  }
-  return { command, args };
-}
-
 function attachStderrLineLogger(params: {
   stderr: BridgeProcess["stderr"];
   logger: RuntimeLogger;
@@ -108,8 +101,8 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   audioFormat?: MeetingRealtimeAudioFormat;
   spawn?: MeetingRealtimeAudioSpawn;
 }): MeetingRealtimeAudioTransport {
-  const input = splitCommand(params.inputCommand);
-  const output = splitCommand(params.outputCommand);
+  const input = splitCommandArgv(params.inputCommand, "audio bridge command");
+  const output = splitCommandArgv(params.outputCommand, "audio bridge command");
   const spawnFn: MeetingRealtimeAudioSpawn =
     params.spawn ?? ((command, args, options) => spawn(command, args, options));
   const spawnOutputProcess = () =>
@@ -320,7 +313,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       if (bargeInInputProcess || stopped) {
         return;
       }
-      const command = splitCommand(params.bargeInInputCommand ?? []);
+      const command = splitCommandArgv(params.bargeInInputCommand ?? [], "audio bridge command");
       const bargeInGate = createSpeechThresholdGate({
         rmsThreshold: params.bargeInRmsThreshold,
         peakThreshold: params.bargeInPeakThreshold,

@@ -51,6 +51,7 @@ openclaw tui --local
 
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
+- On terminals with hyperlink support, Markdown links open their authored destination, including wrapped links and URL-shaped labels.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
 - Footer: agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver.
 - Input: text editor with autocomplete.
@@ -83,6 +84,8 @@ openclaw tui --local
 - Session picker: shows up to 50 sessions for the current agent updated in the last 7 days. Use `/session <key>` to jump to an older known session.
 - Settings (`/settings`): toggle tool output expansion and thinking visibility. This panel does not control delivery.
 
+Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter; press again to close it.
+
 ## Keyboard shortcuts
 
 - Enter: send message
@@ -97,6 +100,10 @@ openclaw tui --local
 - Ctrl+T: toggle thinking visibility (reloads history)
 
 ## Slash commands
+
+Multiline input follows the normal chat path instead of the TUI's local command
+dispatcher. Pasting `/exit` with a trailing newline keeps the TUI open. Shared
+chat commands such as `/stop` and `/btw` retain their normal meaning.
 
 Core:
 
@@ -135,6 +142,8 @@ Session lifecycle:
 - `/stop` (stop the active or queued run)
 - `/settings`
 - `/exit` (or `/quit`)
+
+When the current session is reset, the TUI confirms it after refreshing the transcript, including resets initiated by another client.
 
 Local mode only:
 
@@ -226,7 +235,9 @@ Tips:
 ## History + streaming
 
 - On connect, the TUI loads the latest history (default 200 messages).
+- Reconnect and event-gap recovery reconcile active runs with history, retaining concurrent and newly observed runs without reviving runs that exact history has excluded.
 - Streaming responses update in place until finalized.
+- Failed assistant attachments show an actionable warning alongside any reply text. Attachment summaries use generic media kinds without exposing filenames or source URLs.
 - Messages sent to the same session from another client appear automatically.
 - The TUI also listens to agent tool events for richer tool cards.
 

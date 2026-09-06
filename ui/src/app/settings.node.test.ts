@@ -12,6 +12,7 @@ import {
 } from "../test-helpers/settings-node.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
+  loadGatewaySessionSelection,
   loadSettings,
   persistSessionToken,
   resolvePageGatewaySettings,
@@ -26,6 +27,19 @@ describe("resolveApplicationStartupSettings", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("clears a cached shared token when the native dashboard selects browser identity", () => {
+    const gatewayUrl = "wss://gateway.example";
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token: null };
+    const startup = resolveApplicationStartupSettings(
+      makeUiSettings(gatewayUrl, { token: "shared-owner-token" }),
+      { pathname: "/chat", search: "", hash: "" },
+    );
+
+    expect(startup.settings.gatewayUrl).toBe(gatewayUrl);
+    expect(startup.settings.token).toBe("");
+    expect(startup.password).toBeNull();
   });
 
   it("strips fragment bootstrap tokens without persisting them", () => {
@@ -55,6 +69,54 @@ describe("resolveApplicationStartupSettings", () => {
     expect(startup.pendingBootstrapToken).toBe("boot-456");
     expect(startup.pendingBootstrapProfile).toBeNull();
     expect(startup.location).toEqual({ pathname: "/dash", search: "", hash: "" });
+  });
+
+  it("re-scopes the selected token when native auth changes only the Gateway and password", () => {
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+      gatewayUrl: "wss://gateway-b.example",
+      password: "next-password",
+    };
+    const initial = makeUiSettings("wss://gateway-a.example", { token: "old-token" });
+
+    const startup = resolveApplicationStartupSettings(initial, {
+      pathname: "/",
+      search: "",
+      hash: "",
+    });
+
+    expect(startup.settings.token).toBe("");
+    expect(startup.password).toBe("next-password");
+  });
+
+  it("carries a bounded native client identity into gateway startup", () => {
+    Object.assign(window, {
+      __OPENCLAW_NATIVE_CONTROL_AUTH__: {
+        gatewayUrl: "wss://gateway.example",
+        client: {
+          id: "openclaw-ios",
+          mode: "ui",
+          platform: "iOS 27.0.0",
+          deviceFamily: "iPhone",
+          instanceId: "ios-installation",
+          scopes: ["operator.read", "operator.write"],
+        },
+      },
+    });
+
+    const startup = resolveApplicationStartupSettings(makeUiSettings("wss://gateway.example"), {
+      pathname: "/chat",
+      search: "",
+      hash: "",
+    });
+
+    expect(startup.nativeClient).toEqual({
+      clientName: "openclaw-ios",
+      mode: "ui",
+      platform: "iOS 27.0.0",
+      deviceFamily: "iPhone",
+      instanceId: "ios-installation",
+      scopes: ["operator.read", "operator.write"],
+    });
   });
 });
 
@@ -355,6 +417,7 @@ describe("loadSettings default gateway URL derivation", () => {
       token: "",
       sessionKey: "agent:test_old:main",
       lastActiveSessionKey: "agent:test_old:main",
+      selectedAgentId: " OpenClaw ",
       theme: "claw",
       themeMode: "system",
       chatShowThinking: true,
@@ -368,6 +431,12 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(settings.gatewayUrl).toBe(gwUrl);
     expect(settings.sessionKey).toBe("agent:test_old:main");
     expect(settings.lastActiveSessionKey).toBe("agent:test_old:main");
+    expect(settings.selectedAgentId).toBe("openclaw");
+    expect(loadGatewaySessionSelection(gwUrl)).toEqual({
+      sessionKey: "agent:test_old:main",
+      lastActiveSessionKey: "agent:test_old:main",
+      selectedAgentId: "openclaw",
+    });
   });
 
   it("caps persisted session scopes to the most recent gateways", () => {

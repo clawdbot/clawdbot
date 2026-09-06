@@ -121,7 +121,7 @@ export const zh_TW = {
       enable: "為 {cli} 啟用 {shell} shell completion？",
       installed: "Shell completion 已安裝。{reloadHint}",
       profileNotWritable:
-        "Shell completion 未變更：{profile} 無法寫入。請對可寫入的 profile 檔案執行 `{command}`。",
+        "Shell completion 自動安裝失敗（權限或唯讀錯誤位置：{profile}）。僅在目前的 {shell} 工作階段中啟用補全，請執行：\n{command}",
       reloadPowerShell: "重新啟動 shell 或執行：{command}",
       reloadShell: "重新啟動 shell 或執行：source {profile}",
       title: "Shell completion",
@@ -279,6 +279,24 @@ export const zh_TW = {
       websocketUrl: "Gateway WebSocket URL",
     },
     guided: {
+      quickstartSilentFailures: "{count} 個偵測到的選項未回應；將繼續使用已驗證的存取方式。",
+      laneQuestion: "你想如何開始？",
+      laneSecurityLine:
+        "OpenClaw 執行的 AI 代理程式擁有這台機器的實際存取權限。安全指南：https://docs.openclaw.ai/gateway/security",
+      laneQuickLabel: "快速開始（建議）",
+      laneQuickHint: "尋找此機器上的 AI 存取方式，驗證後開啟網頁儀表板。",
+      laneCustomLabel: "自訂設定",
+      laneCustomHint: "逐項選擇所有設定選項。",
+      quickstartRoute: "正在使用 {label}。你可以稍後在儀表板或設定精靈中變更。",
+      quickstartManual:
+        '快速開始未找到可用的 AI 存取方式。將繼續手動設定供應商；保留快速開始的預設設定（代理程式 "main"、完整存取）。',
+      quickstartDashboard: "儀表板：{url}",
+      quickstartForeground: "閘道正在前景執行。按 Ctrl+C 停止。",
+      quickstartBackground: "如需日後讓閘道在背景持續執行，請執行：openclaw gateway install",
+      quickstartReopen: "執行 openclaw 開啟 TUI，或執行 openclaw dashboard 重新開啟網頁儀表板。",
+      quickstartBrowserUnavailable: "瀏覽器交接未完成。閘道仍在執行；準備好後請開啟儀表板。",
+      quickstartGatewayPending:
+        "閘道尚無法連線。請保持此終端機開啟，並執行 openclaw gateway status 檢查啟動狀態。",
       accessFullHint: "建議。我會尋找這台機器上既有的 AI 應用程式與金鑰並逐一測試。",
       accessFullLabel: "完整存取 — 自動找出一切",
       accessGuardedHint: "尋找前我會先徵求你的同意，你也可以手動設定。",

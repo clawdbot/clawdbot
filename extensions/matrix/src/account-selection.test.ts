@@ -110,24 +110,36 @@ describe("matrix account selection", () => {
     expect(requiresExplicitMatrixDefaultAccount(cfg, env)).toBe(false);
   });
 
-  it('uses the "default" Matrix account when mixed default and named env-backed accounts exist', () => {
-    const keys = getMatrixScopedEnvVarNames("team-ops");
-    const cfg: OpenClawConfig = {
-      channels: {
-        matrix: {},
-      },
-    };
-    const env = {
-      MATRIX_HOMESERVER: "https://matrix.example.org",
-      MATRIX_ACCESS_TOKEN: "default-secret",
-      [keys.homeserver]: "https://matrix.example.org",
-      [keys.accessToken]: "team-secret",
-    } satisfies NodeJS.ProcessEnv;
+  it.each([
+    ["default-secret", "team-secret", ["default", "team-ops"], "default"],
+    [undefined, "team-secret", ["team-ops"], "team-ops"],
+    ["", "team-secret", ["team-ops"], "team-ops"],
+    [" \t ", "team-secret", ["team-ops"], "team-ops"],
+    ["default-secret", undefined, ["default"], "default"],
+    ["default-secret", "", ["default"], "default"],
+    ["default-secret", " \t ", ["default"], "default"],
+    [" \t ", " \t ", ["default"], "default"],
+  ] as const)(
+    "selects accounts for global/scoped tokens %j / %j",
+    (globalToken, scopedToken, ids, defaultId) => {
+      const keys = getMatrixScopedEnvVarNames("team-ops");
+      const cfg: OpenClawConfig = {
+        channels: {
+          matrix: {},
+        },
+      };
+      const env = {
+        MATRIX_HOMESERVER: "https://matrix.example.org",
+        MATRIX_ACCESS_TOKEN: globalToken,
+        [keys.homeserver]: "https://matrix.example.org",
+        [keys.accessToken]: scopedToken,
+      } satisfies NodeJS.ProcessEnv;
 
-    expect(resolveConfiguredMatrixAccountIds(cfg, env)).toEqual(["default", "team-ops"]);
-    expect(resolveMatrixDefaultOrOnlyAccountId(cfg, env)).toBe("default");
-    expect(requiresExplicitMatrixDefaultAccount(cfg, env)).toBe(false);
-  });
+      expect(resolveConfiguredMatrixAccountIds(cfg, env)).toEqual(ids);
+      expect(resolveMatrixDefaultOrOnlyAccountId(cfg, env)).toBe(defaultId);
+      expect(requiresExplicitMatrixDefaultAccount(cfg, env)).toBe(false);
+    },
+  );
 
   it("discovers default Matrix accounts backed only by global env vars", () => {
     const cfg: OpenClawConfig = {};

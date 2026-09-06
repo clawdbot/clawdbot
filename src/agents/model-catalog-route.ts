@@ -6,6 +6,10 @@ import {
 } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import {
+  PREPARED_THINKING_POLICY,
+  type ThinkingCatalogPolicyCarrier,
+} from "../plugins/provider-thinking-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
@@ -46,10 +50,6 @@ type ModelCatalogLogicalOverrides = Partial<
   >
 >;
 
-function normalizeExactModelId(value: string): string {
-  return splitTrailingAuthProfile(value).model.trim().toLowerCase();
-}
-
 /** Reads explicit logical capability overrides without re-resolving auth. */
 export function resolveConfiguredModelCatalogOverrides(params: {
   cfg: OpenClawConfig;
@@ -61,14 +61,13 @@ export function resolveConfiguredModelCatalogOverrides(params: {
   if (!providerConfig) {
     return undefined;
   }
-  const configuredIdentity = params.policy?.resolveIdentity(params.entry);
   const normalizeConfiguredModelId = (modelId: string) =>
     params.policy?.resolveIdentity({ provider: params.entry.provider, id: modelId })?.key ??
-    normalizeExactModelId(modelId);
+    modelId.trim();
   const model = resolveMergedModelProviderModels({
     models: providerConfig.models,
     normalizeModelId: normalizeConfiguredModelId,
-  }).get(configuredIdentity?.key ?? normalizeExactModelId(params.entry.id));
+  }).get(normalizeConfiguredModelId(params.entry.id));
   const overrides: ModelCatalogLogicalOverrides = {
     ...(model?.name ? { name: model.name } : {}),
     ...(model?.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
@@ -155,30 +154,32 @@ export function projectModelCatalogEntryForRoute(params: {
   if (params.projection.kind === "unmanaged") {
     return applyLogicalOverrides(params.entry, params.overrides);
   }
-  const identity = params.projection.policy.resolveIdentity(params.entry) ?? {
-    id: splitTrailingAuthProfile(params.entry.id).model,
-    key: `${normalizeProviderId(params.entry.provider)}/${normalizeExactModelId(params.entry.id)}`,
-  };
+  const id =
+    params.projection.policy.resolveIdentity(params.entry)?.id ??
+    splitTrailingAuthProfile(params.entry.id).model;
   if (params.projection.kind === "unresolved") {
     return applyLogicalOverrides(
-      logicalIdentity(params.entry, identity.id, params.entry.name),
+      logicalIdentity(params.entry, id, params.entry.name),
       params.overrides,
     );
   }
 
   const { policy, route } = params.projection;
-  const donor = findModelCatalogRouteDonor({
-    entry: params.entry,
-    route,
-    policy,
-    catalog: params.catalog,
-  });
+  const donor: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier) | undefined =
+    findModelCatalogRouteDonor({
+      entry: params.entry,
+      route,
+      policy,
+      catalog: params.catalog,
+    });
   const projected = logicalIdentity(
     params.entry,
-    identity.id,
+    id,
     donor?.name ?? params.entry.name,
     donor ?? params.entry,
   );
+  // Only the selected physical donor can supply its prepared policy owner.
+  const thinkingPolicy = donor?.[PREPARED_THINKING_POLICY];
   return applyLogicalOverrides(
     {
       ...projected,
@@ -188,6 +189,10 @@ export function projectModelCatalogEntryForRoute(params: {
       ...(donor?.contextTokens !== undefined ? { contextTokens: donor.contextTokens } : {}),
       ...(donor?.reasoning !== undefined ? { reasoning: donor.reasoning } : {}),
       ...(donor?.thinkingLevelMap ? { thinkingLevelMap: donor.thinkingLevelMap } : {}),
+      ...(donor?.thinkingPolicyProvider
+        ? { thinkingPolicyProvider: donor.thinkingPolicyProvider }
+        : {}),
+      ...(thinkingPolicy !== undefined ? { [PREPARED_THINKING_POLICY]: thinkingPolicy } : {}),
       ...(donor?.input !== undefined ? { input: donor.input } : {}),
     },
     params.overrides,

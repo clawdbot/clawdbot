@@ -194,6 +194,7 @@ class CuaMcpProxyClient {
   private readonly ready: Promise<void>;
   private nextId = 0;
   private stdout = Buffer.alloc(0);
+  private stdoutBytes = 0;
   private stderr = Buffer.alloc(0);
   private available = false;
   private failure: Error | undefined;
@@ -258,6 +259,8 @@ class CuaMcpProxyClient {
     this.stopped = true;
     this.available = false;
     this.rejectPending(driverUnavailable("CUA MCP proxy is stopping"));
+    this.stdout = Buffer.alloc(0);
+    this.stdoutBytes = 0;
     this.child.stdin.end();
     if (await this.waitForExit(MCP_SHUTDOWN_TIMEOUT_MS)) {
       return;
@@ -339,18 +342,26 @@ class CuaMcpProxyClient {
     if (this.failure || this.stopped) {
       return;
     }
-    this.stdout = Buffer.concat([this.stdout, chunk]);
-    if (this.stdout.length > MAX_MCP_LINE_BYTES) {
+    // Preserve the existing pre-drain cap for the entire delivered stdout chunk.
+    if (this.stdoutBytes + chunk.length > MAX_MCP_LINE_BYTES) {
       this.fail(driverProtocolError("CUA MCP response exceeded the line-size limit"));
       return;
     }
-    while (true) {
-      const newline = this.stdout.indexOf(0x0a);
+    let start = 0;
+    while (start < chunk.length) {
+      const newline = chunk.indexOf(0x0a, start);
       if (newline < 0) {
+        this.appendStdout(chunk.subarray(start));
         return;
       }
-      const line = this.stdout.subarray(0, newline);
-      this.stdout = this.stdout.subarray(newline + 1);
+      let line = chunk.subarray(start, newline);
+      start = newline + 1;
+      if (this.stdoutBytes > 0) {
+        this.appendStdout(line);
+        line = this.stdout.subarray(0, this.stdoutBytes);
+        this.stdout = Buffer.alloc(0);
+        this.stdoutBytes = 0;
+      }
       if (line.length === 0) {
         continue;
       }
@@ -387,6 +398,18 @@ class CuaMcpProxyClient {
     }
   }
 
+  private appendStdout(chunk: Buffer): void {
+    const required = this.stdoutBytes + chunk.length;
+    if (required > this.stdout.length) {
+      const capacity = Math.min(MAX_MCP_LINE_BYTES, Math.max(required, this.stdout.length * 2));
+      const stdout = Buffer.allocUnsafe(capacity);
+      this.stdout.copy(stdout, 0, 0, this.stdoutBytes);
+      this.stdout = stdout;
+    }
+    chunk.copy(this.stdout, this.stdoutBytes);
+    this.stdoutBytes = required;
+  }
+
   private fail(error: Error): void {
     if (this.failure || this.stopped) {
       return;
@@ -394,6 +417,8 @@ class CuaMcpProxyClient {
     this.failure = error;
     this.available = false;
     this.rejectPending(error);
+    this.stdout = Buffer.alloc(0);
+    this.stdoutBytes = 0;
     this.child.kill("SIGTERM");
   }
 

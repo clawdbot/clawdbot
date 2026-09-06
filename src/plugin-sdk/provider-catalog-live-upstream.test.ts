@@ -92,6 +92,27 @@ describe("shared upstream provider metadata catalogs", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("contextualizes malformed upstream JSON while retaining its parser cause", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuard: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response("{invalid json"),
+      finalUrl: "https://models.opencode.ai/api.json",
+      release,
+    }));
+
+    const error = await getCachedUpstreamProviderCatalog({
+      endpoint: "https://models.opencode.ai/api.json",
+      providerId: "opencode",
+      fetchGuard,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toMatchObject({
+      message: "upstream-provider-catalog: malformed JSON response",
+      cause: expect.any(SyntaxError) as unknown,
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["modern tiers", { tiers: [UPSTREAM_CONTEXT_TIER] }, true],
     ["legacy tier", { context_over_200k: UPSTREAM_TIER_COST }, true],

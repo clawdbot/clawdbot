@@ -14,7 +14,7 @@ import {
 } from "./backup-shared.js";
 import { prepareBackupArchive } from "./backup-verify.js";
 import { isPathWithin } from "./cleanup-utils.js";
-import { resolveUpgradeConfigSnapshot } from "./doctor/shared/automatic-upgrade-config-repair.js";
+import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
 
 const BACKUP_RESTORE_WARNINGS = [
   "Restoring an archive is time travel: every restored state surface rolls back to the archive timestamp.",
@@ -54,7 +54,7 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
     );
   }
   const configSnapshot = await readConfigFileSnapshot({ observe: false });
-  const discoverySnapshot = resolveUpgradeConfigSnapshot(configSnapshot);
+  const discoverySnapshot = resolveStartupConfigSnapshot(configSnapshot);
   if (!discoverySnapshot) {
     return;
   }

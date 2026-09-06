@@ -13,12 +13,13 @@ import type {
   SetManagerSessionState,
   WithManagerSessionActor,
 } from "./manager.types.js";
-import { normalizeActorKey, requireReadySessionMeta } from "./manager.utils.js";
+import { acpSessionActorKey, requireReadySessionMeta } from "./manager.utils.js";
 
 /** Cancels either the active ACP turn or the idle runtime handle for a session. */
 export async function runManagerCancelSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId: string;
   reason?: string;
   expectedRunId?: string;
   expectedInstanceId?: string;
@@ -29,7 +30,7 @@ export async function runManagerCancelSession(params: {
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   setSessionState: SetManagerSessionState;
 }): Promise<void> {
-  const actorKey = normalizeActorKey(params.sessionKey);
+  const actorKey = acpSessionActorKey(params);
   const activeTurn = params.activeTurnBySession.get(actorKey);
   const expectedRunId = params.expectedRunId?.trim();
   const expectedInstanceId = params.expectedInstanceId?.trim();
@@ -47,7 +48,7 @@ export async function runManagerCancelSession(params: {
     if (!expectedOwnerKey) {
       return;
     }
-    const resolution = params.resolveSession({ cfg: params.cfg, sessionKey: params.sessionKey });
+    const resolution = params.resolveSession(params);
     const entry = resolution.kind === "ready" ? resolution.entry : undefined;
     const ownerKey = entry?.spawnedBy?.trim() || entry?.parentSessionKey?.trim();
     if (ownerKey !== expectedOwnerKey) {
@@ -67,7 +68,7 @@ export async function runManagerCancelSession(params: {
     return;
   }
 
-  await params.withSessionActor(params.sessionKey, async () => {
+  await params.withSessionActor(params, async () => {
     // The actor wait may admit queued work. Recheck exact authority only after
     // that wait, immediately before the idle-handle cancellation boundary.
     requireExpectedTurn(params.activeTurnBySession.get(actorKey));
@@ -75,11 +76,13 @@ export async function runManagerCancelSession(params: {
     const resolution = params.resolveSession({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
     });
     const resolvedMeta = requireReadySessionMeta(resolution);
     const { runtime, handle } = await params.ensureRuntimeHandle({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       meta: resolvedMeta,
     });
     try {
@@ -91,6 +94,7 @@ export async function runManagerCancelSession(params: {
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
+        agentId: params.agentId,
         state: "idle",
         clearLastError: true,
       });
@@ -99,6 +103,7 @@ export async function runManagerCancelSession(params: {
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
+        agentId: params.agentId,
         state: "error",
         lastError: acpError.message,
       });

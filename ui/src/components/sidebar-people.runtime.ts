@@ -1,4 +1,5 @@
 import { nothing, render } from "lit";
+import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -56,10 +57,8 @@ export class SidebarPeopleRuntime {
   handleEvent(event: Event, bootstrapStartedAt?: number): void {
     const row =
       event.target instanceof Element
-        ? event.target.closest<HTMLElement>(".sidebar-online__row")
+        ? event.target.closest<HTMLElement>("[data-person-card]")
         : null;
-    const details =
-      event.target instanceof Element && event.target.closest(".sidebar-online__details");
     if (event.type === "keydown" && event instanceof KeyboardEvent) {
       if (event.key === "Tab" && !event.shiftKey && event.target === this.active?.trigger) {
         const first = this.portal.focusables()[0];
@@ -82,10 +81,6 @@ export class SidebarPeopleRuntime {
       return;
     }
     if (event.type === "click") {
-      if (!details) {
-        this.close();
-        return;
-      }
       if (this.active?.row === row && this.portal.explicitHold) {
         this.close();
         return;
@@ -115,7 +110,7 @@ export class SidebarPeopleRuntime {
       if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) {
         return;
       }
-      this.portal.schedulePointerExit(event, row);
+      this.portal.schedulePointerExit();
     } else if (event.type === "focusin" && !this.suppressFocus) {
       this.activate(row, 0);
       this.portal.focusInside = true;
@@ -135,9 +130,9 @@ export class SidebarPeopleRuntime {
   }
 
   private activate(row: HTMLElement, delay: number): void {
-    const id = row.querySelector<HTMLElement>("[data-online-user-id]")?.dataset.onlineUserId;
-    const trigger = row.querySelector<HTMLElement>(".sidebar-online__details");
-    if (!id || !trigger || !this.host.connected) {
+    const trigger = row.querySelector<HTMLElement>("[data-person-card-trigger]") ?? row;
+    const id = trigger.dataset.personCardKey;
+    if (!id || !this.host.connected) {
       return;
     }
     if (this.active?.id === id && this.active.row === row) {
@@ -180,7 +175,8 @@ export class SidebarPeopleRuntime {
       active.client === gateway.snapshot.client &&
       active.scope === this.scope() &&
       this.host.contains(active.row) &&
-      !this.host.collapsedSessionSections.has("online"),
+      (active.row.dataset.personCardSection === undefined ||
+        !this.host.collapsedSessionSections.has(active.row.dataset.personCardSection)),
     );
   }
 
@@ -205,11 +201,31 @@ export class SidebarPeopleRuntime {
       presenceEntries: readPresenceEntries(data.presencePayload),
       presenceInstanceId: data.presenceInstanceId,
     });
-    const user = projectOnlinePresenceViewers(
+    let user = projectOnlinePresenceViewers(
       data.presencePayload,
-      self?.id,
+      self,
       data.presenceInstanceId,
-    ).find((person) => person.id === active.id);
+    ).find((person) => presenceUserKey(person) === active.id);
+    if (!user && active.id.startsWith("profile:")) {
+      const profileId = active.id.slice("profile:".length);
+      const actor = [data.sessionsResult, ...Object.values(data.sessionResultsByAgent)]
+        .flatMap((result) => result?.sessions ?? [])
+        .flatMap((row) => [row.owner?.actor, row.createdActor])
+        .find(
+          (candidate) =>
+            candidate?.identity?.type === "profile" && candidate.identity.id === profileId,
+        );
+      if (actor) {
+        user = {
+          id: profileId,
+          identity: { type: "profile", id: profileId },
+          name: actor.label,
+          avatarUrl: actor.avatarUrl,
+          watchedSessions: [],
+          entries: [],
+        };
+      }
+    }
     if (!user) {
       this.close();
       return;

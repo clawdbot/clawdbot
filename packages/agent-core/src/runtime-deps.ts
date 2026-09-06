@@ -1,5 +1,5 @@
 // Agent Core module implements runtime deps behavior.
-import type { CompleteSimpleFn, StreamFn } from "@openclaw/llm-core";
+import type { CompleteSimpleFn, StreamFn, Usage } from "@openclaw/llm-core";
 
 /** Runtime functions injected by host packages so agent-core stays provider-agnostic. */
 export interface AgentCoreRuntimeDeps {
@@ -12,7 +12,10 @@ export interface AgentCoreRuntimeDeps {
 /** Runtime dependency subset required by streaming agent loops. */
 export type AgentCoreStreamRuntimeDeps = Pick<AgentCoreRuntimeDeps, "streamSimple">;
 /** Runtime dependency subset required by summarization helpers. */
-export type AgentCoreCompletionRuntimeDeps = Pick<AgentCoreRuntimeDeps, "completeSimple">;
+export type AgentCoreCompletionRuntimeDeps = Pick<AgentCoreRuntimeDeps, "completeSimple"> & {
+  /** Internal host sink for usage from auxiliary model completions. */
+  internalUsageSink?: (usage: Usage) => void;
+};
 
 function missingRuntimeDep(name: keyof AgentCoreRuntimeDeps): Error {
   return new Error(

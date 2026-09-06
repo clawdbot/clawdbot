@@ -242,8 +242,12 @@ export async function resolveOutboundSessionRoute(
     ? (params.cfg.session?.dmScope ?? "main")
     : (params.cfg.session?.groupScope ?? "per-group");
   const bindingScope = isDirect ? bindingRoute.dmScope : bindingRoute.groupScope;
-  return bindingScope !== globalScope &&
-    normalizeAgentId(bindingRoute.agentId) === normalizeAgentId(params.agentId)
+  if (normalizeAgentId(bindingRoute.agentId) !== normalizeAgentId(params.agentId)) {
+    // Another agent owns the canonical inbound session. Keep the transport
+    // route, but never authorize this agent-local candidate as exact.
+    return { ...route, recipientSessionExact: false };
+  }
+  return bindingScope !== globalScope
     ? rebaseOutboundSessionRoute(route, bindingRoute.sessionKey)
     : route;
 }

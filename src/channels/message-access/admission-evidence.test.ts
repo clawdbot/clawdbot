@@ -12,9 +12,9 @@ import {
   copyChannelParticipantAdmissionEvidence,
   readChannelContextAdmissionEvidence,
   readChannelContextGatewayContextResolver,
-  registerChannelAdmissionEvidenceOwner,
   type ChannelAdmissionEvidence,
 } from "./admission-evidence.js";
+import { registerChannelIngressHostOwner } from "./ingress-host-owner.js";
 import { resolveStableChannelMessageIngress } from "./runtime.js";
 
 async function buildAdmittedContext(
@@ -32,7 +32,7 @@ async function buildAdmittedContext(
     isLive: () => true,
     resolveGatewayContext,
   };
-  const dispose = registerChannelAdmissionEvidenceOwner(owner);
+  const dispose = registerChannelIngressHostOwner(owner);
   const channelIngress = await resolveStableChannelMessageIngress({
     channelId: "test",
     accountId: "acct:primary",
@@ -370,7 +370,7 @@ describe("channel admission evidence", () => {
   it("keeps ordinary public and ownerless host builders non-authoritative", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     const owner = { channelId: "public-test", record: {}, epoch: {}, isLive: () => true };
-    const dispose = registerChannelAdmissionEvidenceOwner(owner);
+    const dispose = registerChannelIngressHostOwner(owner);
     try {
       const ingress = await resolveStableChannelMessageIngress({
         channelId: "public-test",

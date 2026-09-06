@@ -133,7 +133,7 @@ describe("screenshotWithLabelsViaPlaywright (fullpage)", () => {
 describe("screenshotWithLabelsViaPlaywright (element/ref)", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("uses refLocator.screenshot for ref mode and projects relative to element", async () => {
+  it("captures the resolved ref element and projects relative to it", async () => {
     const evaluate = evaluateMockReturning({ x: 0, y: 0 });
     // First call resolves the element rect (container), second resolves e1 annotation bbox.
     const boundingBox = vi
@@ -142,7 +142,14 @@ describe("screenshotWithLabelsViaPlaywright (element/ref)", () => {
       .mockResolvedValueOnce({ x: 60, y: 110, width: 30, height: 20 });
     const elementScreenshot = vi.fn(async () => Buffer.from("ELEM"));
     setPwToolsCoreCurrentPage({ evaluate, screenshot: vi.fn() });
-    setPwToolsCoreCurrentRefLocator({ boundingBox, screenshot: elementScreenshot });
+    setPwToolsCoreCurrentRefLocator({
+      boundingBox,
+      elementHandle: async () => ({
+        screenshot: elementScreenshot,
+        scrollIntoViewIfNeeded: async () => {},
+        dispose: async () => {},
+      }),
+    });
 
     const result = await mod.screenshotWithLabelsViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",

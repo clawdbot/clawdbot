@@ -5,21 +5,42 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 const CHILD_READY_TIMEOUT_MS = 45_000;
 const TEST_TIMEOUT_MS = 60_000;
+const CHILD_CLOSE_TIMEOUT_MS = 5_000;
 const RELEASE_DELAY_MS = 400;
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const children = new Set<ChildProcess>();
+const tempDirs = createTempDirTracker();
+const children = new Map<ChildProcess, Promise<unknown[]>>();
 
-afterEach(() => {
-  for (const child of children) {
+function ownChild(child: ChildProcess): Promise<unknown[]> {
+  const closed = once(child, "close");
+  children.set(child, closed);
+  void closed.catch(() => {});
+  return closed;
+}
+
+async function cleanupFixtures() {
+  for (const child of children.keys()) {
     child.kill("SIGKILL");
   }
+  const results = await withTestTimeout(
+    Promise.allSettled(children.values()),
+    CHILD_CLOSE_TIMEOUT_MS,
+    "direct-stop fixture children did not close; retaining their temporary directories",
+  );
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length) {
+    throw new AggregateError(errors, "direct-stop fixture cleanup failed; retaining state");
+  }
   children.clear();
-});
+  tempDirs.cleanup();
+}
+
+afterEach(cleanupFixtures);
 
 const moduleUrl = (relativePath: string) => pathToFileURL(path.resolve(relativePath)).href;
 
@@ -30,15 +51,18 @@ const childScript = `
   import { createChannelIngressQueue } from ${JSON.stringify(moduleUrl("src/channels/message/ingress-queue.ts"))};
   import {
     clearActiveEmbeddedRun,
-    getActiveEmbeddedRunCount,
     setActiveEmbeddedRun,
   } from ${JSON.stringify(moduleUrl("src/agents/embedded-agent-runner/runs.ts"))};
+  import { getActiveEmbeddedRunCount } from ${JSON.stringify(moduleUrl("src/agents/embedded-agent-runner/active-run-projections.ts"))};
   import { runGatewayLoop } from ${JSON.stringify(moduleUrl("src/cli/gateway-cli/run-loop.ts"))};
   import { getActiveGatewayRootWorkCount } from ${JSON.stringify(moduleUrl("src/process/gateway-work-admission.ts"))};
 
   const tracePath = process.argv[1];
   const stateDir = process.argv[2];
-  const trace = (line) => fs.appendFileSync(tracePath, line + "\\n");
+  const trace = (line) => {
+    fs.appendFileSync(tracePath, line + "\\n");
+    process.stdout.write("process proof: " + line + "\\n");
+  };
   const keepAlive = setInterval(() => {}, 1_000);
   const queue = createChannelIngressQueue({
     channelId: "process-proof",
@@ -127,9 +151,34 @@ function readTrace(tracePath: string): string[] {
 describe("runGatewayLoop direct-stop active work", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
 
-  posixIt(
-    "waits for a rootless adopted channel run before close after an OS SIGTERM",
-    async () => {
+  posixIt("joins forced child cleanup before deleting its fixture directory", async () => {
+    const fixtureDir = tempDirs.make("openclaw-direct-stop-failure-");
+    const child = spawn(
+      process.execPath,
+      ["-e", 'process.stdout.write("ready"); setInterval(() => {}, 1_000)'],
+      { stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const closed = ownChild(child);
+    let rootExistsAtClose = false;
+    child.once("close", () => {
+      rootExistsAtClose = fs.existsSync(fixtureDir);
+    });
+    await withTestTimeout(
+      once(child.stdout!, "data"),
+      CHILD_READY_TIMEOUT_MS,
+      "forced cleanup fixture did not start",
+    );
+
+    await cleanupFixtures();
+
+    expect(await closed).toEqual([null, "SIGKILL"]);
+    expect(rootExistsAtClose).toBe(true);
+    expect(fs.existsSync(fixtureDir)).toBe(false);
+  });
+
+  posixIt.each([false, true])(
+    "reports and drains a rootless adopted channel run after OS SIGTERM (trace=%s)",
+    async (traceEnabled) => {
       const fixtureDir = tempDirs.make("openclaw-direct-stop-active-work-");
       const stateDir = path.join(fixtureDir, "state");
       const homeDir = path.join(fixtureDir, "home");
@@ -149,13 +198,17 @@ describe("runGatewayLoop direct-stop active work", () => {
             NODE_OPTIONS: undefined,
             OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
             OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_GATEWAY_RESTART_TRACE: traceEnabled ? "1" : undefined,
             VITEST: undefined,
           },
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
-      children.add(child);
+      // Register close before readiness: failed startup still owns both output streams.
+      const exited = ownChild(child);
+      const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
+      child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
       child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
 
       await vi.waitFor(
@@ -166,9 +219,7 @@ describe("runGatewayLoop direct-stop active work", () => {
         },
         { timeout: CHILD_READY_TIMEOUT_MS, interval: 25 },
       );
-      const exited = once(child, "exit") as Promise<
-        [code: number | null, signal: NodeJS.Signals | null]
-      >;
+      // The exit event can precede the final stdout data; close joins both streams.
       expect(child.kill("SIGTERM")).toBe(true);
 
       const exit = await exited;
@@ -183,6 +234,22 @@ describe("runGatewayLoop direct-stop active work", () => {
       expect(trace.indexOf("signal:SIGTERM")).toBeLessThan(trace.indexOf("embedded-completed"));
       expect(trace.indexOf("embedded-completed")).toBeLessThan(trace.indexOf("gateway-close"));
       expect(trace.indexOf("gateway-close")).toBeLessThan(trace.indexOf("process-exit:0"));
+      const output = Buffer.concat(stdout).toString("utf8");
+      expect(output).toContain("embeddedRuns=1");
+      expect(output.indexOf("embeddedRuns=1")).toBeLessThan(
+        output.indexOf("process proof: embedded-completed"),
+      );
+      expect(output).toContain("active-work drain settled; beginning server close");
+      expect(output.indexOf("active-work drain settled; beginning server close")).toBeLessThan(
+        output.indexOf("process proof: gateway-close"),
+      );
+      if (traceEnabled) {
+        expect(output).toContain("restart trace: stop.signal.received ");
+        expect(output).toContain("restart trace: stop.drain.begin ");
+        expect(output).toContain("restart trace: stop.drain ");
+      } else {
+        expect(output).not.toContain("restart trace:");
+      }
     },
     TEST_TIMEOUT_MS,
   );

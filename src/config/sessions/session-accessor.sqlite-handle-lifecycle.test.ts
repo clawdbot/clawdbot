@@ -12,11 +12,15 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  loadTranscriptEventsSync,
+  patchSessionEntryCore,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
   withTranscriptWriteLock,
 } from "./session-accessor.js";
 import { readSessionTranscriptMessageEventPage } from "./session-accessor.sqlite-active-events.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -25,6 +29,7 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "./store-writer-state.js";
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   afterMaterialize: undefined as (() => void) | undefined,
@@ -65,6 +70,45 @@ describe("SQLite session handle lifecycle", () => {
     archiveMaterializationHook.afterMaterialize = undefined;
     closeOpenClawAgentDatabasesForTest();
   });
+
+  it.each([0, 1])(
+    "releases a transcript read after JSON parsing fails at row %i",
+    async (index) => {
+      const events = [
+        { type: "message", id: "first", message: { role: "user", content: "first" } },
+        { type: "message", id: "second", message: { role: "assistant", content: "second" } },
+        { type: "message", id: "third", message: { role: "user", content: "third" } },
+      ];
+      await replaceTranscriptEvents(scope, events);
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+      const row = database.db
+        .prepare(
+          "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT 1 OFFSET ?",
+        )
+        .get(scope.sessionId, index) as { seq: number; event_json: string };
+      const update = database.db.prepare(
+        "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = ?",
+      );
+      update.run("{malformed", scope.sessionId, row.seq);
+
+      expect(() => loadTranscriptEventsSync(scope)).toThrow(SyntaxError);
+      expect(database.db.isTransaction).toBe(false);
+      // A leaked iterator can retain a read lock even after the transaction rolls back.
+      expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+        busy: 0,
+      });
+
+      update.run(row.event_json, scope.sessionId, row.seq);
+      expect(loadTranscriptEventsSync(scope)).toEqual(events);
+      await appendTranscriptMessage(scope, {
+        message: { role: "assistant", content: "after failure" },
+      });
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        ...events,
+        expect.objectContaining({ message: expect.objectContaining({ content: "after failure" }) }),
+      ]);
+    },
+  );
 
   it.each(["events", "message facts"])(
     "reads %s after a locked callback loses its handle",
@@ -109,6 +153,52 @@ describe("SQLite session handle lifecycle", () => {
     );
   });
 
+  it("does not run automatic maintenance on a replacement database handle", async () => {
+    const staleDashboardScope = {
+      ...scope,
+      sessionId: "stale-dashboard",
+      sessionKey: "agent:main:dashboard:stale",
+    };
+    replaceSessionEntrySync(staleDashboardScope, {
+      sessionId: staleDashboardScope.sessionId,
+      updatedAt: 1,
+    });
+    let markWriterStarted!: () => void;
+    const writerStarted = new Promise<void>((resolve) => {
+      markWriterStarted = resolve;
+    });
+    let releaseWriter!: () => void;
+    const writerRelease = new Promise<void>((resolve) => {
+      releaseWriter = resolve;
+    });
+    const blockedWrite = patchSessionEntryCore(
+      scope,
+      async () => {
+        markWriterStarted();
+        await writerRelease;
+        return { label: "replacement handle write" };
+      },
+      { skipMaintenance: true },
+    );
+    await writerStarted;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const drains = [...SQLITE_SESSION_WRITER_QUEUES.values()].flatMap((queue) =>
+      queue.drainPromise ? [queue.drainPromise] : [],
+    );
+    expect(drains).not.toHaveLength(0);
+
+    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+    const replacement = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    releaseWriter();
+    await Promise.all([blockedWrite, ...drains]);
+
+    expect(replacement.db.isOpen).toBe(true);
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
+    expect(loadSessionEntry(staleDashboardScope)?.archivedAt).toBeUndefined();
+  });
+
   it("commits a lifecycle projection after its async builder loses the cached handle", async () => {
     await expect(
       applySessionEntryLifecycleMutation({
@@ -126,6 +216,28 @@ describe("SQLite session handle lifecycle", () => {
       }),
     ).resolves.toMatchObject({ afterCount: 1 });
     expect(loadSessionEntry(scope)).toMatchObject({ label: "built after close" });
+  });
+
+  it("revalidates label ownership after the planning handle closes", async () => {
+    await applySessionEntryCanonicalReplacements({
+      storePath: scope.storePath,
+      sessionKeys: [scope.sessionKey],
+      includeLabelOwners: "Renamed",
+      update: async ([snapshot]) => {
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        return {
+          result: undefined,
+          replacements: [
+            {
+              entry: { ...snapshot!.entry, label: "Renamed" },
+              sessionKey: scope.sessionKey,
+              previousSessionKeys: [],
+            },
+          ],
+        };
+      },
+    });
+    expect(loadSessionEntry(scope)?.label).toBe("Renamed");
   });
 
   it("waits for projection repair after its polling handle closes", async () => {
@@ -160,7 +272,11 @@ describe("SQLite session handle lifecycle", () => {
     let stalledWorker: Worker | undefined;
     startSessionTranscriptIndexReconcile({
       ...databaseOptions,
-      createWorker: () => {
+      createWorker: (filename, options) => {
+        // Stall the planner only; let its recovery worker finish real cleanup.
+        if (stalledWorker) {
+          return new Worker(filename, options);
+        }
         stalledWorker = new Worker("setInterval(() => {}, 1_000)", { eval: true });
         return stalledWorker;
       },

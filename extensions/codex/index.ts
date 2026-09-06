@@ -33,6 +33,7 @@ import {
   type StoredCodexAppServerBinding,
 } from "./src/app-server/session-binding-store.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client.js";
+import { createCodexAppServerProcessReaperService } from "./src/app-server/transport-process-registration.js";
 import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.js";
 import { createCodexCommand } from "./src/commands.js";
 import { codexConversationBindingRuntime } from "./src/conversation-binding.js";
@@ -68,6 +69,9 @@ export default definePluginEntry({
   id: "codex",
   name: "Codex",
   description: "Codex app-server harness and native session supervision.",
+  reload: {
+    noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
+  },
   register(api) {
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.
@@ -110,6 +114,7 @@ export default definePluginEntry({
         onGenerationChange: retireSharedCodexAppServerClientsBeforeDesktopGeneration,
       }),
     );
+    api.registerService(createCodexAppServerProcessReaperService());
     if (appServerConfig?.transport === "websocket") {
       api.registerService(
         createCodexAppServerConnectionHealthService({
@@ -152,9 +157,10 @@ export default definePluginEntry({
       }));
     const lazyManagedThreadStateStore: Pick<
       PluginStateSyncKeyedStore<StoredCodexManagedThread>,
-      "entries" | "registerIfAbsent"
+      "entries" | "lookup" | "registerIfAbsent"
     > = {
       entries: () => openManagedThreadStateStore().entries(),
+      lookup: (key) => openManagedThreadStateStore().lookup(key),
       registerIfAbsent: (key, value) => openManagedThreadStateStore().registerIfAbsent(key, value),
     };
     const bindingStore = createLazyCodexAppServerBindingStore(
@@ -163,6 +169,7 @@ export default definePluginEntry({
     );
     registerCodexCliMetadata(api);
     const sessionCatalogControlFactory = createCodexSessionCatalogControl({
+      managedThreads: bindingStore.managedThreads,
       config: api.config as OpenClawConfig,
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
@@ -350,28 +357,6 @@ export default definePluginEntry({
     api.onConversationBindingResolved?.((event) =>
       codexConversationBindingRuntime.handleBindingResolved(event, { bindingStore }),
     );
-    api.on("after_compaction", async (event, ctx) => {
-      const previousSessionId = event.previousSessionId?.trim();
-      const sessionId = ctx.sessionId?.trim();
-      if (!previousSessionId || !sessionId || previousSessionId === sessionId) {
-        return;
-      }
-      const config = resolveCurrentConfig();
-      const sessionKey = ctx.sessionKey?.trim();
-      const { sessionBindingIdentity } = await import("./src/app-server/session-binding.js");
-      const identity = sessionBindingIdentity({
-        sessionId,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
-        ...(config ? { config } : {}),
-      });
-      const adopted = await bindingStore.adoptSessionGeneration(identity, previousSessionId);
-      if (adopted === "conflict") {
-        api.logger.warn?.(
-          `codex: could not adopt compacted session generation ${sessionId} (${adopted}); secondary native compaction will skip`,
-        );
-      }
-    });
     api.on("session_end", async (event, ctx) => {
       if (!event.reason || !ENDED_SESSION_REASONS.has(event.reason)) {
         return;

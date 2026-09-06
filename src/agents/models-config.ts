@@ -314,6 +314,8 @@ function prepareModelsConfigContext(
   return {
     cfg,
     discoveryAuthConfig: resolved.discoveryAuthConfig,
+    // Native readiness belongs to the captured auth inputs, not the catalog's env clone.
+    discoveryAuthEnv: options.env ?? process.env,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
     env,

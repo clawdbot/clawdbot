@@ -8,7 +8,7 @@ import {
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { createManagedWorktreeOwnerProtection } from "../../agents/worktrees/owner-protection.js";
+import { createManagedWorktreeOwnerPolicy } from "../../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
   resolveWorktreeCleanupLimits,
@@ -156,7 +156,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         true,
         await service.gc({
           limits,
-          shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
+          ...createManagedWorktreeOwnerPolicy(cfg),
         }),
         undefined,
       );

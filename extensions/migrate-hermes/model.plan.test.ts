@@ -237,4 +237,37 @@ describe("Hermes migration model planning", () => {
       }),
     );
   });
+
+  it.each([
+    ["main/model", "imported/model", "skipped"],
+    ["imported/model", "research/model", "conflict"],
+  ])(
+    "checks the selected agent model instead of the default (%s, %s)",
+    async (main, model, status) => {
+      const root = testWorkspace.dir;
+      const source = path.join(root, "hermes");
+      const workspaceDir = path.join(root, "workspace");
+      await writeFile(path.join(source, "config.yaml"), "model: imported/model\n");
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: { workspace: workspaceDir },
+          entries: {
+            main: { default: true, model: main },
+            research: { workspace: workspaceDir, model },
+          },
+        },
+      };
+      const plan = await buildHermesMigrationProvider().plan(
+        makeContext({
+          source,
+          stateDir: path.join(root, "state"),
+          workspaceDir,
+          config,
+          targetAgentId: "research",
+        }),
+      );
+      expect(plan.items[0]?.status).toBe(status);
+      expect(plan.items[0]?.target).toContain("research");
+    },
+  );
 });

@@ -18,6 +18,9 @@ const normalizeIdentity = (value: string | undefined): string | undefined =>
   value?.trim() || undefined;
 
 export function resolveReceiptSourceId(result: MessageReceiptInputResult): string | undefined {
+  if (result.outcome === "not_sent") {
+    return undefined;
+  }
   return (
     normalizeIdentity(result.messageId) ??
     (result.receipt ? resolveMessageReceiptPrimaryId(result.receipt) : undefined) ??
@@ -40,9 +43,10 @@ export function createMessageReceiptFromOutboundResults(params: {
   replyToId?: string;
   sentAt?: number;
 }): MessageReceipt {
+  const sentResults = params.results.filter((result) => result.outcome !== "not_sent");
   const requestedThreadId = normalizeIdentity(params.threadId);
   const providerThreadIds = normalizeUniqueStringEntries(
-    params.results.flatMap(({ receipt }) =>
+    sentResults.flatMap(({ receipt }) =>
       receipt?.parts.length
         ? receipt.parts.flatMap(
             (part) => normalizeIdentity(part.threadId) ?? normalizeIdentity(receipt.threadId) ?? [],
@@ -52,7 +56,7 @@ export function createMessageReceiptFromOutboundResults(params: {
   );
   const aggregateThreadId =
     providerThreadIds.length > 1 ? undefined : (providerThreadIds[0] ?? requestedThreadId);
-  const parts = params.results.flatMap((result, resultIndex) => {
+  const parts = sentResults.flatMap((result, resultIndex) => {
     if (result.receipt) {
       const receiptThreadId = normalizeIdentity(result.receipt.threadId) ?? requestedThreadId;
       if (result.receipt.parts.length === 0) {
@@ -94,7 +98,7 @@ export function createMessageReceiptFromOutboundResults(params: {
     ];
   });
   const platformMessageIds: string[] = [];
-  for (const result of params.results) {
+  for (const result of sentResults) {
     if (result.receipt) {
       appendUnique(platformMessageIds, result.receipt.primaryPlatformMessageId);
       for (const platformMessageId of result.receipt.platformMessageIds) {
@@ -107,7 +111,7 @@ export function createMessageReceiptFromOutboundResults(params: {
     }
     appendUnique(platformMessageIds, resolveReceiptSourceId(result));
   }
-  const firstNestedReceipt = params.results.find((result) => result.receipt)?.receipt;
+  const firstNestedReceipt = sentResults.find((result) => result.receipt)?.receipt;
   return {
     ...(platformMessageIds[0] ? { primaryPlatformMessageId: platformMessageIds[0] } : {}),
     platformMessageIds,

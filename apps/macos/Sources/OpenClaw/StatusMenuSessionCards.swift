@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import SwiftUI
 
 @MainActor
@@ -56,6 +57,10 @@ struct StatusSessionCard: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: self.row.color)
+                .padding(.leading, 4)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(self.row.label)
     }
@@ -86,7 +91,7 @@ struct StatusApprovalCard: View {
                 Spacer(minLength: 4)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let seconds = max(0, Int(ceil(self.expirationDate.timeIntervalSince(context.date))))
-                    Text(String(localized: "\(seconds)s"))
+                    Text(String(format: String(localized: "%llds"), seconds))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: 48, alignment: .trailing)

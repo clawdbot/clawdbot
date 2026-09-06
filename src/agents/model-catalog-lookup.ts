@@ -11,6 +11,7 @@ import { isModelThinkingFormat, type ModelCompatConfig } from "../config/types.m
 import type { Model } from "../llm/types.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import { canonicalizeProviderModelId } from "./provider-model-route.js";
 
 type ModelThinkingCompat = {
@@ -79,7 +80,9 @@ function prepareModelThinkingCapability(params: {
 /** Resolves prepared thinking metadata only for the exact final model route and harness. */
 export function resolvePreparedModelThinkingCompat(params: {
   capability?: PreparedModelThinkingCapability;
-  model: Pick<Model, "provider" | "id" | "api" | "baseUrl">;
+  model: Pick<Model, "provider" | "id" | "api" | "baseUrl"> & {
+    compat?: Model["compat"] | ModelThinkingCompat;
+  };
   agentRuntime: string;
 }): ModelThinkingCompat | undefined {
   const capability = params.capability;
@@ -88,12 +91,29 @@ export function resolvePreparedModelThinkingCompat(params: {
   }
   const runtimeModelId = canonicalizeProviderModelId(capability.provider, params.model.id);
   const preparedModelId = canonicalizeProviderModelId(capability.provider, capability.modelId);
-  return normalizeProviderId(params.model.provider) === capability.provider &&
-    runtimeModelId === preparedModelId &&
-    normalizeLowercaseStringOrEmpty(params.agentRuntime) === capability.agentRuntime &&
-    (!capability.route || modelTransportRoutesMatch(params.model, capability.route))
-    ? capability.compat
-    : undefined;
+  if (
+    normalizeProviderId(params.model.provider) !== capability.provider ||
+    runtimeModelId !== preparedModelId ||
+    normalizeLowercaseStringOrEmpty(params.agentRuntime) !== capability.agentRuntime ||
+    (capability.route && !modelTransportRoutesMatch(params.model, capability.route))
+  ) {
+    return undefined;
+  }
+  const { compat, route } = capability;
+  const efforts = compat.supportedReasoningEfforts;
+  if (route || efforts === undefined) {
+    return compat;
+  }
+  // "none" disables reasoning; it is not an enabled effort tier. Harness-wide
+  // tiers may cross auth routes, but only the selected route can allow "none".
+  const routeEfforts = projectModelThinkingCompat(params.model.compat)?.supportedReasoningEfforts;
+  const enabledEfforts = efforts?.filter((effort) => effort !== "none");
+  return {
+    ...compat,
+    supportedReasoningEfforts: routeEfforts?.includes("none")
+      ? ["none", ...(enabledEfforts ?? [])]
+      : (enabledEfforts ?? efforts),
+  };
 }
 
 /** Projects the prepared capabilities needed by one selected run candidate. */
@@ -115,25 +135,32 @@ export function prepareModelRunCapabilities(
 
 /** Returns whether a catalog entry declares support for an input modality. */
 export function modelSupportsInput(
-  entry: ModelCatalogEntry | undefined,
+  entry: { input?: readonly ModelInputType[] } | undefined,
   input: ModelInputType,
 ): boolean {
   return entry?.input?.includes(input) ?? false;
 }
 
-/** Finds a provider-qualified model entry in a catalog. */
-export function findModelInCatalog(
-  catalog: ModelCatalogEntry[],
+/** Prefers canonical identity; the shipped SDK's case-insensitive fallback must be unique. */
+export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" | "id">>(
+  catalog: readonly T[],
   provider: string,
   modelId: string,
-): ModelCatalogEntry | undefined {
+): T | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  return catalog.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider &&
-      normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
+  const providerCatalog = catalog.filter(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider,
   );
+  const identity = resolveModelCatalogIdentityKey({ provider, id: modelId.trim() });
+  const exact = providerCatalog.find((entry) => resolveModelCatalogIdentityKey(entry) === identity);
+  if (exact) {
+    return exact;
+  }
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const matches = providerCatalog.filter(
+    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /** Finds a model entry, requiring uniqueness when provider is omitted. */
@@ -151,9 +178,14 @@ export function findModelCatalogEntry(
     return findModelInCatalog(catalog, provider, modelId);
   }
 
-  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  const matches = catalog.filter(
-    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
+  const exact = catalog.filter(
+    (entry) =>
+      resolveModelCatalogIdentityKey(entry) ===
+      resolveModelCatalogIdentityKey({ provider: entry.provider, id: modelId }),
   );
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const matches = exact.length
+    ? exact
+    : catalog.filter((entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId);
   return matches.length === 1 ? matches[0] : undefined;
 }

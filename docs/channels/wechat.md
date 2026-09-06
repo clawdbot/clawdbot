@@ -103,7 +103,7 @@ The plugin checks the host OpenClaw version at startup.
 
 | Plugin line | OpenClaw version                                                | npm tag  |
 | ----------- | --------------------------------------------------------------- | -------- |
-| `2.x`       | `>=2026.5.12` (current 2.4.6; early 2.x accepted `>=2026.3.22`) | `latest` |
+| `2.x`       | `>=2026.5.12` (current 2.4.8; early 2.x accepted `>=2026.3.22`) | `latest` |
 | `1.x`       | `>=2026.1.0 <2026.3.22`                                         | `legacy` |
 
 If the plugin reports that your OpenClaw version is too old, either update
@@ -111,6 +111,15 @@ OpenClaw or install the legacy plugin line:
 
 ```bash
 openclaw plugins install @tencent-weixin/openclaw-weixin@legacy
+```
+
+Plugin 2.4.6 imports the retired `openclaw/plugin-sdk/channel-runtime` path and
+cannot load on OpenClaw 2026.8.1. If startup reports that this subpath is not
+exported, update to plugin 2.4.8, which uses the available SDK path:
+
+```bash
+openclaw plugins update @tencent-weixin/openclaw-weixin@2.4.8
+openclaw gateway restart
 ```
 
 ## Sidecar process

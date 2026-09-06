@@ -267,9 +267,6 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     if (input.proofId !== undefined && !proofId) {
       throw new Error("proofId must be a non-empty string.");
     }
-    if (proofId && !proofInput) {
-      throw new Error("proof is required when proofId is provided.");
-    }
     const proof = proofInput ? normalizeProofInput(proofInput, now) : undefined;
     const artifacts = Array.isArray(input.artifacts)
       ? input.artifacts
@@ -315,7 +312,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                 { id: randomUUID(), body: summary, createdAt: now },
               ].slice(-MAX_CARD_COMMENTS)
             : metadata.comments,
-          proof: proof ? appendCompletionProof(metadata.proof, proof, proofId) : metadata.proof,
+          proof: appendCompletionProof(metadata.proof, proof, proofId),
           artifacts: artifacts.length
             ? [...(metadata.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
             : metadata.artifacts,
@@ -326,7 +323,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       },
       {
         enforceStatusHolds: true,
-        ...(proof ? { preserveProofId: proofId ?? proof.id } : {}),
+        preserveProofId: proofId ?? proof?.id,
       },
     );
   }

@@ -99,10 +99,10 @@ Grant this plugin access to conversation hooks in `openclaw.json`:
 }
 ```
 
-Merge that entry into your existing config, then restart and inspect:
+Merge that entry into your existing config, then let the default hybrid reload
+mode apply it and inspect:
 
 ```bash
-openclaw gateway restart
 openclaw plugins inspect hook-demo --runtime --json
 ```
 
@@ -118,7 +118,8 @@ the field is only the sender's raw text.
 
 Hook registration does not bypass plugin loading rules. The plugin must be
 loaded and enabled; `plugins.enabled`, `plugins.allow`, and `plugins.deny` still
-apply. Restart the Gateway after changing plugin code or hook configuration.
+apply. Restart the Gateway after changing plugin code. With the default hybrid
+reload mode, hook policy changes hot-reload the existing plugin runtime.
 
 - Non-bundled plugins need explicit
   `plugins.entries.<id>.hooks.allowConversationAccess: true` for
@@ -194,6 +195,7 @@ modifications explicitly instead of relying on in-place mutation.
 | `registrationId`        | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
 | `timeoutMs`             | Per-handler asynchronous await budget. Expiry applies the hook's failure policy below; it does not cancel the handler or its side effects. Omit to use the runner's default, if any.                                                                   |
 | `eligibleTriggers`      | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
+| `eligibleDispatchKinds` | For `reply_dispatch` only, limits host dispatch to `agent`, `acp`, or both. Omit to handle all dispatch kinds.                                                                                                                                         |
 | `requiresToolAuthority` | For `before_prompt_build` only, runs the handler after the host finalizes the current turn's tool surface and supplies ephemeral `ctx.toolAuthority`. Use this for context retrieval that must follow tool policy.                                     |
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
@@ -698,7 +700,7 @@ harness-native shell. It receives:
 - `event.sessionKey`
 - `event.toolName`, currently always `"exec"`
 - `event.host`, one of `"gateway"`, `"sandbox"`, or `"node"`
-- context fields such as `ctx.agentId`, `ctx.sessionKey`,
+- context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.messageProvider`, and `ctx.channelId`
 
 Return a `Record<string, string>` to merge into the exec environment. Handlers
@@ -779,6 +781,8 @@ For multiple registrations, the first defined provider/model override and
 restrictions intersect. A nested ordinary `before_prompt_build` dispatch on
 the same runner is skipped while its outer dispatch is active; other hook
 families and independent turns remain available.
+
+Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
 
 ### Authorized prompt enrichment
 
@@ -995,6 +999,10 @@ approval resumes, policy summaries, background monitor
 deltas, and command continuations that should be visible to the model on the
 next turn but should not become permanent system prompt text.
 
+Pass `agentId` with an unscoped `sessionKey`, such as `global`, when multiple
+agents are configured. Enqueueing, consumption, and plugin session state stay in
+that agent's store; the owner selector is not part of the persisted injection.
+
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
 `restart`. The host removes the owning plugin's persistent session extension
@@ -1018,6 +1026,42 @@ claim, not an API for rewriting outbound or inbound content.
 message context and a host dispatcher, and a handled result reports
 `queuedFinal` and delivery `counts`. Use `before_agent_reply` for a simple
 synthetic reply, and the sending hooks below to transform outgoing payloads.
+
+Runtime takeovers should forward `ctx.onAgentRunStart`,
+`ctx.userTurnTranscriptRecorder`, and optional
+`ctx.prepareAssistantTranscriptMessage` to their runtime helper. The ACP dispatch
+helper forwards all three automatically. Share the recorder so the runtime and
+Gateway do not append the same user turn independently; mark runtime
+persistence only after a successful transcript write.
+
+The host-provided preparer records display ownership before the canonical
+assistant append, using original runtime text captured before transcript-only
+hooks. It preserves raw content and IDs and grants no file access or write
+authority. Keep it in process and bound to its owning turn; after that turn
+aborts, is replaced, or completes, it returns the message unchanged.
+
+The optional third `onAgentRunStart` argument can offer
+`completionSource: "reply-dispatch"` with a `getResult()` callback. The host must
+return `"reply-dispatch"` synchronously to accept completion ownership; observers
+and other callback results leave lifecycle completion unchanged. Wrappers must
+forward every callback argument and its return value. After dispatch settles,
+`getResult()` supplies the canonical `terminalOutcome` and, when an
+assistant write succeeded, its `assistantTranscript` receipt (target, message
+ID, idempotency key, and optional projection anchor). The host then emits one
+chat completion from the delivered, post-hook payloads while retaining runtime
+lifecycle events. A receipt prevents a duplicate append; it does not authorize
+writes to a replaced session. Omit this declaration for runtimes whose event
+stream already owns chat completion.
+
+Use `eligibleDispatchKinds: ["acp"]` for an ACP-only dispatcher. The host
+classifies the resolved target, including conversation bindings, and passes
+`ctx.dispatchKind` as `acp` or `agent`. Stored ACP metadata and ACP session keys
+both select `acp`; a missing ACP binding does not fall back to agent dispatch.
+The host applies the same eligibility check before invocation and when deciding
+whether a hook prevents durable chat admission. An ACP-only hook therefore
+does not block ordinary agent sessions. Omitted, empty, malformed, or partly
+unknown eligibility lists remain unrestricted. Missing or unknown dispatch
+context also keeps the hook eligible.
 
 Use message hooks for channel-level routing and delivery policy:
 

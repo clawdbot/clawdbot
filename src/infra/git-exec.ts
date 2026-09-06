@@ -1,83 +1,97 @@
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { runCommandBuffered, runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import path from "node:path";
+import { createCommandError } from "../process/command-error.js";
+import type { SpawnResult } from "../process/exec-result.js";
+import { runCommandBuffered, runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 
 export const GIT_TIMEOUT_MS = 120_000;
+
+type GitCommandResult = SpawnResult & { timeoutMs: number };
+
+export function normalizeGitPathForFilesystem(
+  value: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== "win32") {
+    return value;
+  }
+  // Translate only path-typed Git output at its filesystem boundary. Native
+  // paths must stay untouched because C:\c\... can be a real Windows path.
+  const match = /^\/([a-zA-Z])(?:\/(.*))?$/.exec(value);
+  const drive = match?.[1];
+  if (!drive) {
+    return value;
+  }
+  return path.win32.normalize(`${drive.toUpperCase()}:/${match[2] ?? ""}`);
+}
+
+export function withForegroundGitMaintenance(argv: string[]): string[] {
+  // Maintenance and legacy auto-GC must stay in their cancellable process tree.
+  return argv[0] === "git"
+    ? ["git", "-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false", ...argv.slice(1)]
+    : argv;
+}
 
 export async function executeGitCommand(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
-): Promise<SpawnResult> {
-  return await runCommandWithTimeout(["git", "-C", cwd, ...args], {
-    timeoutMs: GIT_TIMEOUT_MS,
-    env: options.env,
-    input: options.input,
-  });
+  options: Pick<
+    CommandOptions,
+    "env" | "input" | "timeoutMs" | "signal" | "killProcessTree" | "maxOutputBytes"
+  > = {},
+): Promise<GitCommandResult> {
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
+  const argv = ["git", "-C", cwd, ...args];
+  const result = await runCommandWithTimeout(
+    options.killProcessTree ? withForegroundGitMaintenance(argv) : argv,
+    { ...options, timeoutMs },
+  );
+  return { ...result, timeoutMs };
 }
 
 export function createGitCommandError(
   command: string,
-  result: SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>,
+  result: (SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>) & { timeoutMs?: number },
 ): Error {
-  const output = stripAnsi(result.stderr.toString()).trim() || stripAnsi(result.stdout.toString());
-  // Git progress redraws use CR, not LF. Keep the last frame of each line,
-  // including an unfinished redraw, without changing successful command output.
-  const normalized = output
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => line.replace(/\r+$/, "").split("\r").at(-1) ?? "")
-    .join("\n")
-    .trim();
-  const tail = normalized.split("\n").slice(-12).join("\n");
-  const omitted = tail.length < normalized.length || tail.length > 2000;
-  const detail = `${omitted ? "…\n" : ""}${sliceUtf16Safe(tail, -2000)}`;
-  const reasons: string[] = [];
-  const timedOut = result.termination === "timeout";
-  if (timedOut) {
-    reasons.push(`timed out after ${GIT_TIMEOUT_MS / 1000} seconds`);
-  } else if (result.termination === "no-output-timeout") {
-    reasons.push("timed out waiting for output");
-  } else if (
-    result.termination === "output-limit" ||
-    ("outputLimitExceeded" in result && result.outputLimitExceeded)
-  ) {
-    reasons.push("output limit exceeded");
+  // Buffered Git uses the fixed default; text results carry their applied budget.
+  const error = createCommandError(command, result, {
+    timeoutMs: result.timeoutMs ?? GIT_TIMEOUT_MS,
+  });
+  if (result.termination === "timeout") {
+    error.message += "\nCheck repository access and disk space.";
   }
-  if (result.signal) {
-    reasons.push(`signal ${result.signal}`);
-  } else if (result.termination === "signal" && reasons.length === 0) {
-    reasons.push("terminated");
-  }
-  if (reasons.length === 0 && result.code !== null) {
-    reasons.push(`exit code ${result.code}`);
-  }
-  const label = truncateUtf16Safe(stripAnsi(command).replace(/[\r\n]+/g, " "), 256);
-  const reason = reasons.length > 0 ? ` (${reasons.join("; ")})` : "";
-  const nextStep = timedOut ? "\nCheck repository access and disk space." : "";
-  return new Error(`${label} failed${reason}${detail ? `:\n${detail}` : ""}${nextStep}`);
+  return error;
 }
 
 export async function requireGitCommand(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
+  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array; timeoutMs?: number } = {},
 ): Promise<string> {
-  const result = await executeGitCommand(cwd, args, options);
-  if (result.code !== 0) {
-    throw createGitCommandError(`git ${args.join(" ")}`, result);
-  }
-  return result.stdout.trim();
+  return (await requireGitCommandRaw(cwd, args, options)).trim();
 }
 
 export async function requireGitCommandRaw(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
+  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array; timeoutMs?: number } = {},
 ): Promise<string> {
-  const result = await executeGitCommand(cwd, args, options);
+  return requireGitCommandOutput(
+    `git ${args.join(" ")}`,
+    await executeGitCommand(cwd, args, options),
+  );
+}
+
+export function requireGitCommandOutput(
+  command: string,
+  result: GitCommandResult,
+  createError: (command: string, result: GitCommandResult) => Error = createGitCommandError,
+): string {
+  // Required stdout is data, not a diagnostic tail; a clean exit cannot make it complete.
+  if (result.code === 0 && result.stdoutTruncatedBytes) {
+    throw createError(command, { ...result, code: null, outputLimitExceeded: true });
+  }
   if (result.code !== 0) {
-    throw createGitCommandError(`git ${args.join(" ")}`, result);
+    throw createError(command, result);
   }
   return result.stdout;
 }

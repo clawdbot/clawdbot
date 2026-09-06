@@ -1,9 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntryReadOnly,
+  loadTranscriptEventsSync,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { loadCliSessionHistoryMessages } from "../cli-runner/session-history.js";
+import type { RunCliAgentParams } from "../cli-runner/types.js";
+import { SessionManager } from "../sessions/index.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
-import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn());
@@ -14,6 +25,7 @@ const resolveCliRuntimeExecutionProvider = vi.hoisted(() => vi.fn());
 const runCliAgent = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntimeForSessionKey = vi.hoisted(() => vi.fn());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore,
@@ -39,17 +51,29 @@ const transcriptRecorder = vi.hoisted(() => ({
   flushAssistantSnapshot: vi.fn(),
   finalize: vi.fn(async () => undefined),
 }));
-const createCliDispatchTranscriptRecorder = vi.hoisted(() => vi.fn(() => transcriptRecorder));
+const createCliDispatchTranscriptRecorder = vi.hoisted(() =>
+  vi.fn<typeof import("./cli-backend-dispatch-transcript.js").createCliDispatchTranscriptRecorder>(
+    () => transcriptRecorder,
+  ),
+);
 vi.mock("./cli-backend-dispatch-transcript.js", () => ({
   createCliDispatchTranscriptRecorder,
 }));
 
-function baseRunParams(overrides: Partial<RunEmbeddedAgentParams> = {}): RunEmbeddedAgentParams {
+type CliDispatchParams = Parameters<typeof runEmbeddedAgentViaCliBackendIfEligible>[0];
+
+function baseRunParams(overrides: Partial<CliDispatchParams> = {}): CliDispatchParams {
   const runId = overrides.runId ?? "run-cli-dispatch-test";
   return {
     admittedRunContext: createTestAdmittedRunContext(runId),
     sessionId: "recall-session",
     sessionKey: "agent:main:recall",
+    sessionTarget: {
+      agentId: "main",
+      sessionId: overrides.sessionId ?? "recall-session",
+      sessionKey: overrides.sessionKey ?? "agent:main:recall",
+      storePath: "/tmp/recall/openclaw-agent.sqlite",
+    },
     sessionFile: "/tmp/recall/session.jsonl",
     workspaceDir: "/tmp/recall/workspace",
     prompt: "recall prompt",
@@ -213,7 +237,7 @@ describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
 });
 
 describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
-  const runGate = (overrides: Partial<RunEmbeddedAgentParams> = {}) =>
+  const runGate = (overrides: Partial<CliDispatchParams> = {}) =>
     runEmbeddedAgentViaCliBackendIfEligible(baseRunParams(overrides));
 
   it("returns undefined without the opt-in", async () => {
@@ -336,9 +360,69 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
 });
 
 describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
+  it("reads and mirrors the dispatched turn in the selected custom SQLite store", async () => {
+    const dir = tempDirs.make("cli-dispatch-history-");
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "recall-session",
+      sessionKey: "agent:main:recall",
+      storePath: path.join(dir, "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(sessionTarget, {
+      sessionId: sessionTarget.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(sessionTarget, {
+      message: { role: "user", content: "persisted prior context", timestamp: 1 },
+      cwd: dir,
+    });
+    const actualRecorder = await vi.importActual<
+      typeof import("./cli-backend-dispatch-transcript.js")
+    >("./cli-backend-dispatch-transcript.js");
+    createCliDispatchTranscriptRecorder.mockImplementationOnce(
+      actualRecorder.createCliDispatchTranscriptRecorder,
+    );
+    runCliAgent.mockImplementationOnce(async (cliParams: RunCliAgentParams) => {
+      expect
+        .soft(await loadCliSessionHistoryMessages({ sessionTarget: cliParams.sessionTarget }))
+        .toEqual(
+          expect.arrayContaining([expect.objectContaining({ content: "persisted prior context" })]),
+        );
+      return cliRunResult();
+    });
+
+    await runEmbeddedAgentViaCliBackendIfEligible(
+      baseRunParams({ sessionTarget, workspaceDir: dir }),
+    );
+
+    expect(loadTranscriptEventsSync(sessionTarget)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "user",
+            content: [{ type: "text", text: "recall prompt" }],
+          }),
+        }),
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "assistant",
+            content: [{ type: "text", text: "recall summary" }],
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("maps the embedded run onto a one-shot restricted CLI run", async () => {
     runCliAgent.mockResolvedValue(cliRunResult());
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "recall-session",
+      sessionKey: "agent:main:recall",
+      storePath: "/tmp/recall/custom/openclaw-agent.sqlite",
+    };
     const params = baseRunParams({
+      sessionTarget,
       toolsAllow: ["memory_search", "memory_get", "notes_retrieve_context"],
     });
 
@@ -347,6 +431,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(result?.payloads?.[0]?.text).toBe("recall summary");
     expect(runCliAgent).toHaveBeenCalledTimes(1);
     const cliParams = runCliAgent.mock.calls[0]?.[0];
+    expect(cliParams?.sessionTarget).toBe(sessionTarget);
     expect(cliParams).toMatchObject({
       provider: "claude-cli",
       model: "claude-opus-4-8",
@@ -395,7 +480,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   ] as const)("refuses dispatch for %s", async (_label, overrides) => {
     expect(
       await runEmbeddedAgentViaCliBackendIfEligible(
-        baseRunParams(overrides as Partial<RunEmbeddedAgentParams>),
+        baseRunParams(overrides as Partial<CliDispatchParams>),
       ),
     ).toBeUndefined();
     expect(runCliAgent).not.toHaveBeenCalled();
@@ -432,7 +517,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   it("forwards execution phases from the CLI backend", async () => {
     const onExecutionPhase = vi.fn();
     runCliAgent.mockImplementation(
-      async (cliParams: { onExecutionPhase?: RunEmbeddedAgentParams["onExecutionPhase"] }) => {
+      async (cliParams: { onExecutionPhase?: CliDispatchParams["onExecutionPhase"] }) => {
         cliParams.onExecutionPhase?.({
           phase: "model_call_started",
           provider: "anthropic",
@@ -623,4 +708,49 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     const result = await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams());
     expect(result?.meta.agentMeta?.cliSessionBinding).toBeUndefined();
   });
+});
+
+describe("detached CLI transcript ownership", () => {
+  it.each([false, true])(
+    "does not mirror a detached turn into durable metadata (existing: %s)",
+    async (existing) => {
+      const root = tempDirs.make("openclaw-detached-cli-");
+      const storePath = path.join(root, "final", "openclaw-agent.sqlite");
+      const params = baseRunParams({
+        agentId: "main",
+        sessionPersistence: "detached",
+        sessionManager: SessionManager.inMemory(root),
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "recall-session",
+          sessionKey: "agent:main:recall",
+          storePath,
+        },
+      });
+      if (existing) {
+        await upsertSessionEntryCore(params.sessionTarget, {
+          sessionId: params.sessionId,
+          updatedAt: 1,
+          liveModelSwitchPending: true,
+        });
+      }
+      const before = loadSessionEntryReadOnly(params.sessionTarget);
+      const recorder = await vi.importActual<typeof import("./cli-backend-dispatch-transcript.js")>(
+        "./cli-backend-dispatch-transcript.js",
+      );
+      createCliDispatchTranscriptRecorder.mockImplementationOnce(
+        recorder.createCliDispatchTranscriptRecorder,
+      );
+      await expect(runEmbeddedAgentViaCliBackendIfEligible(params)).resolves.toMatchObject({
+        payloads: [{ text: "recall summary" }],
+      });
+      expect(runCliAgent).toHaveBeenCalledOnce();
+      expect(loadSessionEntryReadOnly(params.sessionTarget)).toEqual(before);
+      if (!existing) {
+        await expect(fs.access(path.dirname(storePath))).rejects.toThrow();
+      } else {
+        expect(loadTranscriptEventsSync(params.sessionTarget)).toEqual([]);
+      }
+    },
+  );
 });

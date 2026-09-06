@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHostWorkspaceEditTool, createHostWorkspaceWriteTool } from "./agent-tools.read.js";
+import { createApplyPatchTool } from "./apply-patch.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 describe("unrestricted host tool writes", () => {
   let tempDir = "";
@@ -22,6 +24,82 @@ describe("unrestricted host tool writes", () => {
     await fs.writeFile(filePath, content);
     return filePath;
   }
+
+  it.each(
+    (["write", "edit", "apply_patch"] as const).flatMap((kind) =>
+      (["aborted", "revoked", "replaced", "active"] as const).map((authority) => ({
+        kind,
+        authority,
+      })),
+    ),
+  )(
+    "checks $authority authority for $kind after asynchronous file preparation",
+    async ({ kind, authority }) => {
+      const filePath = await createFile("original content\n");
+      const generation = new AbortController();
+      const originalClaim = {};
+      let currentClaim: object | undefined = originalClaim;
+      let prepared = false;
+      const realOpen = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
+        const handle = await realOpen(target, flags as never, mode as never);
+        if (String(target) === filePath && flags === "r+") {
+          const read = handle.read.bind(handle);
+          handle.read = (async (...args: Parameters<typeof read>) => {
+            const result = await read(...args);
+            prepared = true;
+            if (authority === "aborted") {
+              generation.abort(new Error("Permission change"));
+            } else if (authority === "revoked") {
+              currentClaim = undefined;
+            } else if (authority === "replaced") {
+              currentClaim = {};
+            }
+            return result;
+          }) as typeof handle.read;
+        }
+        return handle;
+      });
+      const options = { workspaceOnly: false, abortSignal: generation.signal };
+      const execute = () => {
+        if (kind === "apply_patch") {
+          return createApplyPatchTool({ cwd: tempDir, ...options }).execute("permission-write", {
+            input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-original content\n+replacement content\n*** End Patch`,
+          });
+        }
+        const tool =
+          kind === "write"
+            ? createHostWorkspaceWriteTool(tempDir, options)
+            : createHostWorkspaceEditTool(tempDir, options);
+        const input =
+          kind === "write"
+            ? { path: filePath, content: "replacement content\n" }
+            : { path: filePath, edits: [{ oldText: "original", newText: "replacement" }] };
+        return tool.execute("permission-write", input);
+      };
+
+      const pending = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:source-file-authority",
+          receiptAuthority: () => currentClaim === originalClaim,
+        },
+        execute,
+      );
+      if (authority === "active") {
+        await expect(pending).resolves.toBeDefined();
+      } else {
+        await expect(pending).rejects.toThrow(
+          authority === "aborted" ? "Permission change" : "authority is no longer active",
+        );
+      }
+      expect(prepared).toBe(true);
+      expect(generation.signal.aborted).toBe(authority === "aborted");
+      expect(await fs.readFile(filePath, "utf8")).toBe(
+        authority === "active" ? "replacement content\n" : "original content\n",
+      );
+    },
+  );
 
   function failExtensionWrites(filePath: string, originalByteLength: number) {
     const realOpen = fs.open.bind(fs);
@@ -228,6 +306,18 @@ describe("unrestricted host tool writes", () => {
     await tool.execute("call-1", { path: filePath, content: "short\n" });
 
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("short\n");
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("writes %s content", async (_label, content) => {
+    const filePath = await createFile("replace me\n");
+
+    const tool = createHostWorkspaceWriteTool(tempDir);
+    await tool.execute("call-1", { path: filePath, content });
+
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(content);
   });
 
   it("truncates to empty when an edit removes all content", async () => {

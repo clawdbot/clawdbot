@@ -17,6 +17,8 @@ import type {
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
 
 export type InternalRealtimeVoiceProviderCapabilities = RealtimeVoiceProviderCapabilities & {
+  /** Model-specific voice choices; the provider's voices remain the default catalog. */
+  voicesByModel?: Record<string, readonly string[]>;
   /** The provider owns agent delegation instead of exposing client-side function tools. */
   handlesAgentConsult?: boolean;
   /** The provider can keep browser media direct while exposing its control wire to Gateway. */
@@ -46,6 +48,7 @@ type InternalRealtimeVoiceProviderApi = {
     agentId?: string;
     /** Effective per-session model after request overrides. */
     model?: string;
+    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
   }) => InternalRealtimeVoiceProviderCapabilities;
   isGatewayRelayConfigured?: (ctx: {
     cfg?: OpenClawConfig;
@@ -101,6 +104,7 @@ export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(params: {
   providerConfig: RealtimeVoiceProviderConfig;
   agentId?: string;
   model?: string;
+  clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
 }): InternalRealtimeVoiceProviderCapabilities | undefined {
   return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveBrowserSessionCapabilities?.(
     {
@@ -108,6 +112,7 @@ export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(params: {
       providerConfig: params.providerConfig,
       agentId: params.agentId,
       model: params.model,
+      ...(params.clientControl ? { clientControl: params.clientControl } : {}),
     },
   );
 }

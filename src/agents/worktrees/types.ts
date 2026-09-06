@@ -43,10 +43,14 @@ export type CreateManagedWorktreeParams = {
   /** Derived default name; collisions receive a stable numeric suffix. */
   suggestedName?: string;
   baseRef?: string;
+  /** Verified immutable checkout point when baseRef retains the publication target. */
+  checkoutCommit?: string;
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;
   // Repository Git hooks are always disabled; only the setup script runs repo-local code.
   runSetupScript?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (phase: "checkout" | "setup") => void;
   /** Synchronous caller-authority guard checked at allocation commit boundaries. */
   commitGuard?: () => void;
 };

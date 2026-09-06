@@ -47,8 +47,11 @@ function shouldWarnCodexThreadLifecycleTimingSummary(
   summary: CodexThreadLifecycleTimingSummary,
   options: CodexThreadLifecycleTimingOptions = {},
 ): boolean {
-  const totalThresholdMs = options.totalThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS;
-  const stageThresholdMs = options.stageThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS;
+  const detailed = options.enabled || options.log?.isEnabled?.("trace");
+  const totalThresholdMs =
+    options.totalThresholdMs ?? (detailed ? CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS : 10_000);
+  const stageThresholdMs =
+    options.stageThresholdMs ?? (detailed ? CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS : 5_000);
   return (
     summary.totalMs >= totalThresholdMs ||
     summary.spans.some((span) => span.durationMs >= stageThresholdMs)
@@ -79,18 +82,6 @@ export function createCodexThreadLifecycleTimingTracker(
   options: CodexThreadLifecycleTimingOptions = {},
 ): CodexThreadLifecycleTimingTracker {
   const log = options.log ?? embeddedAgentLog;
-  if (!options.enabled && log.isEnabled?.("trace") !== true) {
-    return {
-      async measure(_name, run) {
-        return await run();
-      },
-      measureSync(_name, run) {
-        return run();
-      },
-      mark() {},
-      logSummary() {},
-    };
-  }
 
   const now = options.now ?? Date.now;
   const startedAt = now();
@@ -134,7 +125,7 @@ export function createCodexThreadLifecycleTimingTracker(
         return;
       }
       const summary = snapshot();
-      const shouldWarn = shouldWarnCodexThreadLifecycleTimingSummary(summary, options);
+      const shouldWarn = shouldWarnCodexThreadLifecycleTimingSummary(summary, { ...options, log });
       if (!shouldWarn && !log.isEnabled?.("trace")) {
         return;
       }

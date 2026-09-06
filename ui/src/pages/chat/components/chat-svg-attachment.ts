@@ -2,7 +2,7 @@ import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
-import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
+import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
@@ -13,7 +13,6 @@ type SvgRenderSource = {
   url: string;
   retainCount: number;
   retired: boolean;
-  revokeOnRetire: boolean;
 };
 
 function isCrossOriginHttpSource(source: string): boolean {
@@ -82,7 +81,7 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
 
   private retireSource(source: SvgRenderSource): void {
     source.retired = true;
-    if (source.revokeOnRetire && source.retainCount === 0) {
+    if (source.retainCount === 0) {
       URL.revokeObjectURL(source.url);
     }
   }
@@ -106,7 +105,7 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
       }
       released = true;
       source.retainCount = Math.max(0, source.retainCount - 1);
-      if (source.revokeOnRetire && source.retired && source.retainCount === 0) {
+      if (source.retired && source.retainCount === 0) {
         URL.revokeObjectURL(source.url);
       }
     };
@@ -166,7 +165,6 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
         url: blobUrl,
         retainCount: 0,
         retired: false,
-        revokeOnRetire: true,
       };
     } catch {
       if (version === this.loadVersion) {
@@ -204,21 +202,14 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
 
   override render() {
     if (this.failed) {
-      return html`<div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
-        ?data-openable=${Boolean(this.onExpand)}
-        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.onExpand)}
-      >
-        ${renderAttachmentCardHeader({
-          kind: "document",
-          label: this.label,
-          mimeType: this.mimeType,
-          sizeBytes: this.sizeBytes,
-          downloadHref: this.downloadHref,
-          onExpand: this.onExpand,
-          visualMode: "large-placeholder",
-        })}
-      </div>`;
+      return renderCompactAttachmentCard({
+        kind: "document",
+        label: this.label,
+        mimeType: this.mimeType,
+        sizeBytes: this.sizeBytes,
+        downloadHref: this.downloadHref,
+        onExpand: this.onExpand,
+      });
     }
     const renderSource = this.renderSource;
     if (!renderSource) {

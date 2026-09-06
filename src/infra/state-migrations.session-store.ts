@@ -48,7 +48,7 @@ import {
   isSurfaceGroupKey,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
-import type { SessionStoreAliasPlan } from "./state-migrations.types.js";
+import type { MigrationMessages, SessionStoreAliasPlan } from "./state-migrations.types.js";
 
 export function isLegacyDefaultMainAliasKey(key: string, mainKey: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(key.trim());
@@ -600,9 +600,10 @@ export async function migrateOrphanedSessionKeys(params: {
   env?: NodeJS.ProcessEnv;
   additionalAgentIds?: readonly string[];
   legacySessionSurfaces: PreparedLegacySessionSurfaces | (() => PreparedLegacySessionSurfaces);
-}): Promise<{ changes: string[]; warnings: string[] }> {
+}): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const recoverableWarnings: string[] = [];
   const env = params.env ?? process.env;
   let preparedLegacySessionSurfaces: PreparedLegacySessionSurfaces | undefined;
   const resolveLegacySessionSurfaces = () =>
@@ -635,7 +636,8 @@ export async function migrateOrphanedSessionKeys(params: {
   const storeAliasCandidates = new Map<string, Set<string>>();
   const addToStoreMap = (p: string, id: string) => {
     try {
-      if (!fs.statSync(p, { throwIfNoEntry: false })?.isFile()) {
+      // Exact SQLite locators are canonical databases, never legacy JSON sources.
+      if (p.endsWith(".sqlite") || !fs.statSync(p, { throwIfNoEntry: false })?.isFile()) {
         return;
       }
     } catch {
@@ -723,7 +725,10 @@ export async function migrateOrphanedSessionKeys(params: {
     }
     const legacySessionSurfaces = resolveLegacySessionSurfaces();
     if (legacySessionSurfaces.failures.length > 0) {
-      return { changes, warnings: [...warnings, ...legacySessionSurfaces.failures] };
+      return {
+        changes,
+        warnings: [...warnings, ...recoverableWarnings, ...legacySessionSurfaces.failures],
+      };
     }
     // A physical store can have several owners. Canonicalize valid scoped rows
     // within their declared owner on every pass so iteration order cannot move
@@ -780,7 +785,7 @@ export async function migrateOrphanedSessionKeys(params: {
       totalLegacy += legacyKeys.length;
     }
     if (preservedAmbiguousKeyCount > 0) {
-      warnings.push(
+      recoverableWarnings.push(
         `Preserved ${preservedAmbiguousKeyCount} ambiguous session key(s) in potentially shared store ${storePath}`,
       );
     }
@@ -802,7 +807,13 @@ export async function migrateOrphanedSessionKeys(params: {
     }
   }
 
-  return { changes, warnings };
+  return {
+    changes,
+    warnings: [...warnings, ...recoverableWarnings],
+    ...(warnings.length === 0 && recoverableWarnings.length > 0
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
+  };
 }
 
 export async function migrateLegacyAcpSessionMetadata(params: {
@@ -1025,7 +1036,7 @@ function resolveLegacyAcpMetadataSessionStoreTargets(
   const agentsDirs = new Set<string>([path.join(stateDir, "agents")]);
   const targets = new Map<string, { agentId: string; storePath: string }>();
   const addTarget = (agentId: string, storePath: string) => {
-    if (!isManagedLegacySessionStorePathSafe(storePath)) {
+    if (storePath.endsWith(".sqlite") || !isManagedLegacySessionStorePathSafe(storePath)) {
       return;
     }
     const agentsDir = resolveAgentsDirFromSessionStorePath(storePath);

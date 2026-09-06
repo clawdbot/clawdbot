@@ -63,19 +63,22 @@ describe("worker placement startup cleanup ownership", () => {
     );
     const cleanupStarted = createDeferredCore();
     const releaseCleanup = createDeferredCore();
-    const resolveWorkspacePath = vi.fn(async ({ sessionId }: { sessionId: string }) => {
+    const resolveWorkspace = vi.fn(async ({ sessionId }: { sessionId: string }) => {
       cleanupStarted.resolve();
       await releaseCleanup.promise;
-      return path.join(workerEnvironmentSupport.testState.root, sessionId);
+      return {
+        kind: "local" as const,
+        path: path.join(workerEnvironmentSupport.testState.root, sessionId),
+      };
     });
     const recovery = createPlacementRecoveryActions({
       placements,
       environments,
       failure: createPlacementFailureActions({ placements, environments }),
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      resolveWorkspacePath,
+      resolveWorkspace,
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
     });
     const starting = recovery.reconcile("startup");
     let sweeping: Promise<void> | undefined;
@@ -86,18 +89,18 @@ describe("worker placement startup cleanup ownership", () => {
           cleanupStarted.promise.then(() => "cleanup"),
         ]),
       ).toBe("ready");
-      expect(resolveWorkspacePath).not.toHaveBeenCalled();
+      expect(resolveWorkspace).not.toHaveBeenCalled();
       await recovery.reconcileActive("worker-debris-0");
-      expect(resolveWorkspacePath).not.toHaveBeenCalled();
+      expect(resolveWorkspace).not.toHaveBeenCalled();
 
       sweeping = recovery.reconcileActive();
       await cleanupStarted.promise;
-      expect(resolveWorkspacePath).toHaveBeenCalledOnce();
+      expect(resolveWorkspace).toHaveBeenCalledOnce();
       releaseCleanup.resolve();
       await sweeping;
-      expect(resolveWorkspacePath).toHaveBeenCalledTimes(50);
+      expect(resolveWorkspace).toHaveBeenCalledTimes(50);
       await recovery.reconcileActive();
-      expect(resolveWorkspacePath).toHaveBeenCalledTimes(50);
+      expect(resolveWorkspace).toHaveBeenCalledTimes(50);
       expect(placements.list()).toEqual(before);
     } finally {
       releaseCleanup.resolve();
@@ -211,6 +214,7 @@ describe("worker placement startup cleanup ownership", () => {
         sweep: vi.fn().mockResolvedValue(undefined),
       });
       const runtime = createGatewayWorkerPlacementRuntime({
+        cancelSessionWork: vi.fn(async () => {}),
         placements,
         environments,
         gatewayNamespace: "gateway-test",
@@ -250,16 +254,17 @@ describe("worker placement startup cleanup ownership", () => {
   it("becomes ready before failed-placement lease adoption and drains its exact teardown", async () => {
     const environmentId = "worker-startup-indeterminate";
     const operationId = "provision:startup-indeterminate";
-    const releaseProvision = createDeferredCore();
-    const provisionStarted = createDeferredCore();
-    const provision = vi.fn(async () => {
-      provisionStarted.resolve();
-      await releaseProvision.promise;
-      return { leaseId: "lease-startup-adopted", ssh: workerEnvironmentSupport.SSH_ENDPOINT };
+    const releaseResolution = createDeferredCore();
+    const resolutionStarted = createDeferredCore();
+    const resolveAllocation = vi.fn(async () => {
+      resolutionStarted.resolve();
+      await releaseResolution.promise;
+      return { leaseId: "lease-startup-adopted", sharedHost: false };
     });
+    const provision = vi.fn();
     const destroy = vi.fn(async () => {});
     const environments = workerEnvironmentSupport.createService(
-      workerEnvironmentSupport.createProvider({ provision, destroy }),
+      workerEnvironmentSupport.createProvider({ provision, resolveAllocation, destroy }),
     );
     const intent = workerEnvironmentSupport.testState.store.createIntent({
       environmentId,
@@ -312,6 +317,7 @@ describe("worker placement startup cleanup ownership", () => {
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     const runtime = createGatewayWorkerPlacementRuntime({
+      cancelSessionWork: vi.fn(async () => {}),
       placements,
       environments,
       gatewayNamespace: "gateway-test",
@@ -330,14 +336,14 @@ describe("worker placement startup cleanup ownership", () => {
     try {
       const first = await Promise.race([
         starting.then((sidecar) => ({ kind: "ready" as const, sidecar })),
-        provisionStarted.promise.then(() => ({ kind: "provision" as const })),
+        resolutionStarted.promise.then(() => ({ kind: "resolution" as const })),
       ]);
       expect(first.kind).toBe("ready");
       if (first.kind !== "ready" || !first.sidecar) {
         throw new Error("worker startup did not reach readiness before provider adoption");
       }
-      await provisionStarted.promise;
-      expect(provision).toHaveBeenCalledWith({ region: "test" }, operationId, undefined);
+      await resolutionStarted.promise;
+      expect(resolveAllocation).toHaveBeenCalledExactlyOnceWith({ region: "test" }, operationId);
       expect(workerEnvironmentSupport.testState.store.get(environmentId)).toMatchObject({
         state: "provisioning",
         leaseId: null,
@@ -352,10 +358,13 @@ describe("worker placement startup cleanup ownership", () => {
       expect(stopped).toBe(false);
       expect(destroy).not.toHaveBeenCalled();
 
-      releaseProvision.resolve();
+      releaseResolution.resolve();
       await stopping;
 
-      expect(destroy).toHaveBeenCalledWith({
+      expect(provision).not.toHaveBeenCalled();
+      expect(workerEnvironmentSupport.testState.prepareInstallation).not.toHaveBeenCalled();
+      expect(workerEnvironmentSupport.testState.bootstrapWorker).not.toHaveBeenCalled();
+      expect(destroy).toHaveBeenCalledExactlyOnceWith({
         leaseId: "lease-startup-adopted",
         profile: { region: "test" },
       });
@@ -364,7 +373,7 @@ describe("worker placement startup cleanup ownership", () => {
         leaseId: "lease-startup-adopted",
       });
     } finally {
-      releaseProvision.resolve();
+      releaseResolution.resolve();
       await starting.catch(() => undefined);
       await registeredSidecar?.stop();
     }

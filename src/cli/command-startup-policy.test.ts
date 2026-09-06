@@ -1,6 +1,6 @@
 // Command startup policy tests cover which CLI commands require startup side effects.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "./command-catalog.js";
 import { resolveCliExecutionStartupContext } from "./command-execution-startup.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
@@ -18,11 +18,6 @@ function resolvePolicy(params: {
 }
 
 describe("command-startup-policy", () => {
-  afterEach(() => {
-    vi.doUnmock("./command-path-policy.js");
-    vi.resetModules();
-  });
-
   it("resolves config guard policy for Commander and invocation-aware commands", () => {
     for (const commandPath of [
       ["backup", "create"],
@@ -50,6 +45,7 @@ describe("command-startup-policy", () => {
       ["hooks", "check"],
       ["memory", "search"],
       ["memory", "status"],
+      ["gateway", "stop"],
       ["gateway", "diagnostics", "export"],
       ["gateway", "stability"],
       ["gateway", "usage-cost"],
@@ -164,27 +160,34 @@ describe("command-startup-policy", () => {
   });
 
   it("skips when-suppressed guards only for suppressed output", async () => {
-    vi.doMock("./command-path-policy.js", () => ({
-      resolveCliCommandPathPolicy: () => ({
-        configGuard: "when-suppressed",
-        loadPlugins: "never",
-        pluginRegistry: { scope: "all" },
-        ownsProtocolStdout: false,
-        hideBanner: false,
-        ensureCliPath: true,
-        networkProxy: "default",
-      }),
-    }));
-    const { resolveCliStartupPolicy: resolveWithSuppressedGuard } = await importFreshModule<
-      typeof import("./command-startup-policy.js")
-    >(import.meta.url, "./command-startup-policy.js?when-suppressed");
+    vi.resetModules();
+    try {
+      vi.doMock("./command-path-policy.js", () => ({
+        resolveCliCommandPathPolicy: () => ({
+          configGuard: "when-suppressed",
+          loadPlugins: "never",
+          pluginRegistry: { scope: "all" },
+          ownsProtocolStdout: false,
+          hideBanner: false,
+          ensureCliPath: true,
+          networkProxy: "default",
+        }),
+      }));
+      const { resolveCliStartupPolicy: resolveWithSuppressedGuard } = await importFreshModule<
+        typeof import("./command-startup-policy.js")
+      >(import.meta.url, "./command-startup-policy.js?when-suppressed");
 
-    expect(
-      resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: false }).skipConfigGuard,
-    ).toBe(false);
-    expect(
-      resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: true }).skipConfigGuard,
-    ).toBe(true);
+      expect(
+        resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: false })
+          .skipConfigGuard,
+      ).toBe(false);
+      expect(
+        resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: true }).skipConfigGuard,
+      ).toBe(true);
+    } finally {
+      vi.doUnmock("./command-path-policy.js");
+      vi.resetModules();
+    }
   });
 
   it("matches plugin preload policy", () => {
@@ -393,6 +396,9 @@ describe("command-startup-policy", () => {
     expect(policy.hideBanner).toBe(true);
     expect(policy.loadPlugins).toBe(false);
     expect(policy.suppressDoctorStdout).toBe(true);
+    expect(policy.validateConfigOnly).toBe(true);
+    expect(policy.skipConfigGuard).toBe(false);
+    expect(resolvePolicy({ commandPath: ["node", "run"] }).validateConfigOnly).toBeUndefined();
   });
 
   it("isolates cloud worker startup", () => {

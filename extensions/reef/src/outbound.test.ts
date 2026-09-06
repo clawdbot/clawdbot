@@ -135,7 +135,8 @@ describe("reefOutboundAdapter", () => {
       guard: classifier,
       audit: new MemoryAuditStore(new Uint8Array(32).fill(9)),
       replay: new MemoryReplayStore(),
-      reviews: {} as never,
+      // The send path consults the review store before classifying.
+      reviews: { lookupDecision: async () => "none", request: async () => undefined } as never,
       delivered: {} as never,
       authoritySignal: firstAuthority.signal,
       onIngress: async () => {},

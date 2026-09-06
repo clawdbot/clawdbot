@@ -1,6 +1,13 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  withOpenClawAgentDatabaseReadOnly,
+  type OpenClawAgentReadOnlyDatabase,
+} from "../../state/openclaw-agent-db-readonly.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationIdentity, ConversationKind } from "./conversation-identity.js";
 import {
@@ -149,102 +156,145 @@ function mapConversationRow(row: {
 
 function selectConversationRows(
   scope: ConversationRegistryScope,
-  options: { channel?: string; conversationRef?: string; limit?: number } = {},
+  options: {
+    channel?: string;
+    conversationRef?: string;
+    limit?: number;
+    primarySession?: { sessionId: string; sessionKey: string };
+    currentBindingOnly?: boolean;
+  } = {},
 ): ConversationRecord[] {
   const resolved = resolveSqliteReadScope({
     agentId: scope.agentId,
     ...(scope.env ? { env: scope.env } : {}),
     ...(scope.storePath ? { storePath: scope.storePath } : {}),
   });
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const db = getSessionKysely(database.db);
-  let query = db
-    .selectFrom("conversations as c")
-    .leftJoin("session_conversations as sc", "sc.conversation_id", "c.conversation_id")
-    .leftJoin("session_windows as s", "s.session_id", "sc.session_id")
-    // Historical windows retain address activity, while session_nodes owns
-    // the current session binding after reset/rebind.
-    .leftJoin("session_nodes as sn", "sn.session_key", "s.session_key")
-    .select([
-      "c.conversation_id",
-      "c.channel",
-      "c.account_id",
-      "c.kind",
-      "c.peer_id",
-      "c.delivery_target",
-      "c.parent_conversation_id",
-      "c.thread_id",
-      "c.native_channel_id",
-      "c.native_direct_user_id",
-      "c.label",
-      "c.created_at as conversation_created_at",
-      "c.updated_at as conversation_updated_at",
-      "sc.role",
-      "sc.route_context_json",
-      "sc.first_seen_at",
-      "sc.last_seen_at",
-      "s.session_id as associated_session_id",
-      "sn.current_session_id as current_session_id",
-      "sn.entry_json as current_entry_json",
-      "sn.session_key as current_session_key",
-    ]);
-  const channel = normalizeOptionalLowercaseString(options.channel);
-  if (channel) {
-    query = query.where("c.channel", "=", channel);
-  }
-  if (options.conversationRef) {
-    query = query.where(
-      "c.conversation_id",
-      "=",
-      normalizeConversationRef(options.conversationRef),
-    );
-  }
-  const rows = executeSqliteQuerySync(
-    database.db,
-    query
-      .orderBy((eb) => eb.fn.coalesce("sc.last_seen_at", "c.updated_at"), "desc")
-      .orderBy("sn.updated_at", "desc"),
-  ).rows;
-  const unique = new Map<string, MappedConversationRow>();
-  for (const row of rows) {
-    const mapped = mapConversationRow(row);
-    if (!mapped) {
-      continue;
+  const databaseOptions = toDatabaseOptions(resolved);
+  const readRows = (database: OpenClawAgentReadOnlyDatabase): ConversationRecord[] => {
+    const db = getSessionKysely(database.db);
+    let query = db
+      .selectFrom("conversations as c")
+      .leftJoin("session_conversations as sc", "sc.conversation_id", "c.conversation_id")
+      .leftJoin("session_windows as s", "s.session_id", "sc.session_id")
+      // Historical windows retain address activity, while session_nodes owns
+      // the current session binding after reset/rebind.
+      .leftJoin("session_nodes as sn", "sn.session_key", "s.session_key")
+      .select([
+        "c.conversation_id",
+        "c.channel",
+        "c.account_id",
+        "c.kind",
+        "c.peer_id",
+        "c.delivery_target",
+        "c.parent_conversation_id",
+        "c.thread_id",
+        "c.native_channel_id",
+        "c.native_direct_user_id",
+        "c.label",
+        "c.created_at as conversation_created_at",
+        "c.updated_at as conversation_updated_at",
+        "sc.role",
+        "sc.route_context_json",
+        "sc.first_seen_at",
+        "sc.last_seen_at",
+        "s.session_id as associated_session_id",
+        "sn.current_session_id as current_session_id",
+        "sn.entry_json as current_entry_json",
+        "sn.session_key as current_session_key",
+      ]);
+    const channel = normalizeOptionalLowercaseString(options.channel);
+    if (channel) {
+      query = query.where("c.channel", "=", channel);
     }
-    const existing = unique.get(mapped.record.conversationRef);
-    if (!existing) {
-      unique.set(mapped.record.conversationRef, mapped);
-      continue;
+    if (options.conversationRef) {
+      query = query.where(
+        "c.conversation_id",
+        "=",
+        normalizeConversationRef(options.conversationRef),
+      );
     }
-    if (
-      !existing.associationIsCurrent &&
-      mapped.associationIsCurrent &&
-      mapped.record.sessionId &&
-      mapped.record.sessionKey &&
-      mapped.record.role
-    ) {
-      // Keep the newest address activity while carrying forward the live binding
-      // when a newer historical association has no current session entry.
-      const {
-        routeContext: _staleRouteContext,
-        routeContextObserved: _staleRouteContextObserved,
-        ...existingRecord
-      } = existing.record;
-      unique.set(mapped.record.conversationRef, {
-        associationIsCurrent: true,
-        record: {
-          ...existingRecord,
-          sessionId: mapped.record.sessionId,
-          sessionKey: mapped.record.sessionKey,
-          role: mapped.record.role,
-          ...(mapped.record.routeContextObserved ? { routeContextObserved: true as const } : {}),
-          ...(mapped.record.routeContext ? { routeContext: mapped.record.routeContext } : {}),
-        },
-      });
+    if (options.primarySession) {
+      // The window's primary pointer, not address recency, owns this route.
+      // Require its current node so reset/deleted sessions cannot lend old facts.
+      query = query
+        .where("s.session_id", "=", options.primarySession.sessionId)
+        .where("s.session_key", "=", options.primarySession.sessionKey)
+        .where("sn.current_session_id", "=", options.primarySession.sessionId)
+        .where("sn.entry_valid", "=", 1)
+        .whereRef("s.primary_conversation_id", "=", "c.conversation_id")
+        .where("sc.role", "=", "primary");
     }
+    if (options.currentBindingOnly) {
+      // Native controls need the current owner, not an address's historical activity.
+      // Related rows refresh when a session moves to another conversation.
+      query = query
+        .whereRef("s.session_id", "=", "sn.current_session_id")
+        .where("sn.entry_valid", "=", 1)
+        .where((eb) =>
+          eb.or([
+            eb("sc.role", "=", "participant"),
+            eb.and([
+              eb("sc.role", "=", "primary"),
+              eb("s.primary_conversation_id", "=", eb.ref("c.conversation_id")),
+            ]),
+          ]),
+        );
+    }
+    const rows = executeSqliteQuerySync(
+      database.db,
+      query
+        .orderBy((eb) => eb.fn.coalesce("sc.last_seen_at", "c.updated_at"), "desc")
+        .orderBy("sn.updated_at", "desc"),
+    ).rows;
+    const unique = new Map<string, MappedConversationRow>();
+    for (const row of rows) {
+      const mapped = mapConversationRow(row);
+      if (!mapped) {
+        continue;
+      }
+      const existing = unique.get(mapped.record.conversationRef);
+      if (!existing) {
+        unique.set(mapped.record.conversationRef, mapped);
+        continue;
+      }
+      if (
+        !existing.associationIsCurrent &&
+        mapped.associationIsCurrent &&
+        mapped.record.sessionId &&
+        mapped.record.sessionKey &&
+        mapped.record.role
+      ) {
+        // Keep the newest address activity while carrying forward the live binding
+        // when a newer historical association has no current session entry.
+        const {
+          routeContext: _staleRouteContext,
+          routeContextObserved: _staleRouteContextObserved,
+          ...existingRecord
+        } = existing.record;
+        unique.set(mapped.record.conversationRef, {
+          associationIsCurrent: true,
+          record: {
+            ...existingRecord,
+            sessionId: mapped.record.sessionId,
+            sessionKey: mapped.record.sessionKey,
+            role: mapped.record.role,
+            ...(mapped.record.routeContextObserved ? { routeContextObserved: true as const } : {}),
+            ...(mapped.record.routeContext ? { routeContext: mapped.record.routeContext } : {}),
+          },
+        });
+      }
+    }
+    const values = [...unique.values()].map(({ record }) => record);
+    return options.limit === undefined ? values : values.slice(0, options.limit);
+  };
+  const held = getOpenClawAgentDatabaseIfOpen(databaseOptions);
+  // Commit guards must see the owning transaction's rows without opening a
+  // separate connection that would hide uncommitted conversation changes.
+  if (held?.db.isTransaction) {
+    return readRows(held);
   }
-  const values = [...unique.values()].map(({ record }) => record);
-  return options.limit === undefined ? values : values.slice(0, options.limit);
+  const read = withOpenClawAgentDatabaseReadOnly(readRows, databaseOptions);
+  return read.found ? read.value : [];
 }
 
 /** Catalogs routable addresses without creating model-context sessions. */
@@ -284,4 +334,29 @@ export function resolveConversation(
     conversationRef: normalizeConversationRef(conversationRef),
     limit: 1,
   })[0];
+}
+
+/** Reads only an authoritative association on an address's current session window. */
+export function resolveCurrentConversationSession(
+  scope: ConversationRegistryScope,
+  conversationRef: string,
+): { sessionKey: string; sessionId: string } | undefined {
+  const [conversation] = selectConversationRows(scope, {
+    conversationRef: normalizeConversationRef(conversationRef),
+    currentBindingOnly: true,
+    limit: 1,
+  });
+  return conversation?.sessionKey && conversation.sessionId
+    ? { sessionKey: conversation.sessionKey, sessionId: conversation.sessionId }
+    : undefined;
+}
+
+/** Reads only the primary address bound to this exact current session window. */
+export function resolveCurrentSessionPrimaryConversation(
+  scope: ConversationRegistryScope & { sessionId: string; sessionKey: string },
+): ConversationRecord | undefined {
+  const [conversation] = selectConversationRows(scope, { primarySession: scope });
+  return conversation?.sessionId === scope.sessionId && conversation.sessionKey === scope.sessionKey
+    ? conversation
+    : undefined;
 }

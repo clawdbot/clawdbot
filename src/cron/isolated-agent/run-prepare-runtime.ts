@@ -6,6 +6,7 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -29,6 +30,11 @@ export type RunCronAgentTurnParams = {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
+  /** Host-only root for system-owned turns; never persisted in cron state. */
+  executionRoot?: string;
+  /** Explicit instruction set for a host-owned turn, including an empty review context. */
+  skillsSnapshot?: SkillSnapshot;
 };
 
 export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {
@@ -41,6 +47,25 @@ export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): stri
 export type WithRunSession = (
   result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
 ) => RunCronAgentTurnResult;
+
+const CRON_EXECUTION_ROOT_RUNTIME_ERROR =
+  "collection review requires the embedded agent runtime; the configured CLI runtime cannot be rooted at the Workshop directory";
+
+export class CronExecutionRootRuntimeError extends Error {
+  constructor() {
+    super(CRON_EXECUTION_ROOT_RUNTIME_ERROR);
+    this.name = "CronExecutionRootRuntimeError";
+  }
+}
+
+export function assertCronExecutionRootRuntime(
+  executionRoot: string | undefined,
+  runtime: string,
+): void {
+  if (executionRoot && runtime !== "openclaw") {
+    throw new CronExecutionRootRuntimeError();
+  }
+}
 
 const sessionAccessorRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
@@ -80,6 +105,7 @@ export async function resolveCronAuthSelection(params: {
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
+  configuredProfileId?: string;
   harnessRuntime: Parameters<
     CronAuthProfileRuntime["resolveSessionAuthSelection"]
   >[0]["harnessRuntime"];
@@ -101,6 +127,7 @@ export async function resolveCronAuthSelection(params: {
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
+    ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
     harnessRuntime: params.harnessRuntime,
     agentDir: params.agentDir,
     sessionEntry: params.cronSession.sessionEntry,

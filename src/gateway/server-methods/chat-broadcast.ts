@@ -9,7 +9,7 @@ type ChatBroadcastContext = Pick<
   GatewayRequestContext,
   "broadcast" | "nodeSendToSession" | "agentRunSeq"
 > &
-  Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
+  Partial<Pick<GatewayRequestContext, "getRuntimeConfig" | "chatRunState">>;
 
 type SideResultPayload = {
   kind: "btw";
@@ -93,16 +93,25 @@ type ChatBroadcastParams = {
 };
 
 type ChatTerminal =
-  | { state: "final"; message?: Record<string, unknown> }
-  | { state: "error"; errorMessage?: string };
+  | { state: "final" | "aborted"; message?: Record<string, unknown>; stopReason?: string }
+  | { state: "error"; errorMessage?: string; stopReason?: string; errorKind?: "timeout" };
 
-function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void {
+export function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void {
   const seq = nextChatSeq(params.context, params.runId);
   const payloadAgentId = parseAgentSessionKey(params.sessionKey) ? undefined : params.agentId;
   const terminal =
-    params.state === "final"
-      ? { state: params.state, message: projectChatDisplayMessage(params.message) }
-      : { state: params.state, errorMessage: params.errorMessage };
+    params.state !== "error"
+      ? {
+          state: params.state,
+          message: projectChatDisplayMessage(params.message),
+          ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+        }
+      : {
+          state: params.state,
+          errorMessage: params.errorMessage,
+          ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+          ...(params.errorKind ? { errorKind: params.errorKind } : {}),
+        };
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
@@ -110,7 +119,9 @@ function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void
     seq,
     ...terminal,
   };
+  const group = params.context.chatRunState?.runs.get(params.runId)?.liveTextGroup?.signal;
   params.context.broadcast("chat", payload, {
+    ...(group ? { liveText: { group } } : {}),
     sessionKeys: resolveChatSessionKeys({
       context: params.context,
       sessionKey: params.sessionKey,
@@ -174,7 +185,9 @@ export function broadcastSideResult(params: {
   });
 }
 
-export function broadcastChatError(params: ChatBroadcastParams & { errorMessage?: string }): void {
+export function broadcastChatError(
+  params: ChatBroadcastParams & Omit<Extract<ChatTerminal, { state: "error" }>, "state">,
+): void {
   broadcastChatTerminal({ ...params, state: "error" });
 }
 

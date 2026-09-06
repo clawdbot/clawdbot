@@ -1,4 +1,5 @@
 /** Builds and revalidates system.run approval plans for cwd and executable paths. */
+import fs from "node:fs";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
@@ -92,13 +93,16 @@ export function hardenApprovedExecutionPaths(params: {
   return { ok: true, argv, argvChanged: true, cwd: hardenedCwd, approvedCwdSnapshot };
 }
 
-export function buildSystemRunApprovalPlan(params: {
-  command?: unknown;
-  rawCommand?: unknown;
-  cwd?: unknown;
-  agentId?: unknown;
-  sessionKey?: unknown;
-}): { ok: true; plan: SystemRunApprovalPlan } | { ok: false; message: string } {
+export function buildSystemRunApprovalPlan(
+  params: {
+    command?: unknown;
+    rawCommand?: unknown;
+    cwd?: unknown;
+    agentId?: unknown;
+    sessionKey?: unknown;
+  },
+  bindApproval = true,
+): { ok: true; plan: SystemRunApprovalPlan } | { ok: false; message: string } {
   const command = resolveSystemRunCommandRequest({
     command: params.command,
     rawCommand: params.rawCommand,
@@ -109,17 +113,29 @@ export function buildSystemRunApprovalPlan(params: {
   if (command.argv.length === 0) {
     return { ok: false, message: "command required" };
   }
-  if (command.shellPayload === null && isBlockedShellWrapperCommand(command.argv)) {
+  if (bindApproval && command.shellPayload === null && isBlockedShellWrapperCommand(command.argv)) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
     };
   }
+  let cwd = normalizeNullableString(params.cwd) ?? undefined;
+  if (!bindApproval) {
+    // Ordinary execution follows aliases once; approval binding keeps its stricter path checks.
+    try {
+      cwd = fs.realpathSync(cwd ?? process.cwd());
+    } catch {
+      return {
+        ok: false,
+        message: "SYSTEM_RUN_DENIED: working directory does not exist or is inaccessible",
+      };
+    }
+  }
   const hardening = hardenApprovedExecutionPaths({
-    approvedByAsk: true,
+    approvedByAsk: bindApproval,
     argv: command.argv,
     shellCommand: command.shellPayload,
-    cwd: normalizeNullableString(params.cwd) ?? undefined,
+    cwd,
   });
   if (!hardening.ok) {
     return hardening;
@@ -129,11 +145,13 @@ export function buildSystemRunApprovalPlan(params: {
     command.previewText?.trim() && command.previewText.trim() !== commandText
       ? command.previewText.trim()
       : null;
-  const mutableFileOperand = resolveMutableFileOperandSnapshotSync({
-    argv: hardening.argv,
-    cwd: hardening.cwd,
-    shellCommand: command.shellPayload,
-  });
+  const mutableFileOperand = bindApproval
+    ? resolveMutableFileOperandSnapshotSync({
+        argv: hardening.argv,
+        cwd: hardening.cwd,
+        shellCommand: command.shellPayload,
+      })
+    : { ok: true as const, snapshot: null };
   if (!mutableFileOperand.ok) {
     return mutableFileOperand;
   }

@@ -130,14 +130,20 @@
   --exec-highlight: #f97316;
   --moon-highlight: #fef3c7;
   --moon-base: #fbbf24;
-  --workshop-warm: #ff8a5c;
-  --workshop-teal: #14b8a6;
-  --workshop-cyan: #0891b2;
 
   /* Provider and product brand colors never follow the active UI theme. */
   --brand-codex: #10a37f;
   --brand-claude: #d97757;
   --brand-google: #4285f4;
+
+  --session-color-red: #f07878;
+  --session-color-blue: #72a7ed;
+  --session-color-green: #69bf8a;
+  --session-color-yellow: #dcc365;
+  --session-color-purple: #b595e8;
+  --session-color-orange: #eaa36a;
+  --session-color-pink: #df8cb9;
+  --session-color-cyan: #66bccb;
 
   --control-ui-environment-teal: #14b8a6;
   --control-ui-environment-teal-ink: #5eead4;
@@ -222,6 +228,7 @@
   /* Typography */
   --mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-shortcut: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Symbol", sans-serif;
   /* Claw's own face (fonts/instrument-sans.css, loaded by app/typography.ts); the
      stack keeps system fallbacks so a failed font load degrades gracefully. */
   --font-body: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -300,6 +307,7 @@
   --menu-item-radius: var(--radius-sm);
   --menu-item-height: 28px;
   --menu-padding: 4px;
+  --menu-selected: color-mix(in srgb, var(--text) 8%, transparent);
 
   /* Transitions - Crisp and responsive */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -386,7 +394,6 @@
   .chat-bubble.chat-bubble,
   .chat-pr.chat-pr,
   .nav-item.nav-item,
-  .list-item.list-item,
   .sidebar-recent-session.sidebar-recent-session,
   .settings-sidebar__item.settings-sidebar__item,
   .btn.btn,
@@ -568,6 +575,15 @@
   --accent-2-muted: rgba(13, 148, 136, 0.75);
   --accent-2-subtle: rgba(13, 148, 136, 0.08);
 
+  --session-color-red: #c74646;
+  --session-color-blue: #376fbd;
+  --session-color-green: #328452;
+  --session-color-yellow: #9a791b;
+  --session-color-purple: #8652ba;
+  --session-color-orange: #bb681f;
+  --session-color-pink: #b34885;
+  --session-color-cyan: #258394;
+
   --control-ui-environment-teal-ink: #115e59;
   --control-ui-environment-amber-ink: #92400e;
   --control-ui-environment-purple-ink: #6b21a8;
@@ -695,12 +711,22 @@ body {
   letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
-  /* App chrome behaves like native controls: dragging across labels, tiles,
-     and navigation must not create accidental text selections. Text-entry
-     surfaces and document-like content opt back in below or in route CSS. */
-  user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Keep page text and document links selectable, including anchors with button
+   roles; suppress accidental drag selections on controls and navigation. */
+button,
+select,
+summary,
+[role="button"]:not(a),
+[role="tab"],
+.btn,
+.settings-row--toggle,
+.sidebar,
+.settings-sidebar {
+  user-select: none;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -768,6 +794,11 @@ openclaw-app {
   position: relative;
   z-index: 1;
   height: 100%;
+}
+
+/* Empty contribution hosts must not add layout boxes before the plugin runtime loads. */
+openclaw-plugin-contributions {
+  display: contents;
 }
 
 @media (display-mode: standalone) {
@@ -878,8 +909,10 @@ wa-dropdown-item[type="checkbox"] {
 /* Web Awesome owns these popup panels in shadow DOM, so shared tokens enter
    through exported parts; feature styles continue to own content geometry. */
 wa-dropdown::part(menu),
+wa-dropdown-item::part(submenu),
 wa-popover::part(body),
 wa-select::part(listbox) {
+  background: var(--popover);
   border-color: var(--overlay-border);
   box-shadow: var(--overlay-shadow);
 }
@@ -897,6 +930,15 @@ select {
 input[type="checkbox"],
 input[type="radio"] {
   accent-color: var(--accent);
+}
+
+/* Typing into a native control whose face carries `calt` corrupts already-typed
+   glyphs, and the damage survives caret moves and blur; important because
+   feature-local `font:` shorthands reset font-variant. Editors that own their
+   text layer keep theirs, so a file reads the same viewed or edited. */
+input,
+textarea {
+  font-variant-ligatures: no-contextual !important;
 }
 
 input,
@@ -1019,6 +1061,18 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   }
 }
 
+/* Sweep a 200%-wide text-clipped gradient with matching end stops one full
+   period per cycle so the loop wraps seamlessly. Consumers set the gradient,
+   duration, and easing. */
+@keyframes text-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
 /* Skeleton loading primitives */
 .skeleton {
   position: relative;
@@ -1037,6 +1091,9 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
     transparent 75%
   );
   content: "";
+  /* Rest offscreen: with reduced motion the animation collapses to one instant
+     iteration, and without this the highlight band would settle over the block. */
+  transform: translateX(-100%);
   animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
   will-change: transform;
 }
@@ -1044,10 +1101,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
 .skeleton-line {
   height: 14px;
   border-radius: var(--radius-sm);
-}
-
-.skeleton-line--short {
-  width: 40%;
 }
 
 .skeleton-line--medium {
@@ -1069,6 +1122,17 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  wa-dropdown,
+  wa-popover,
+  wa-select {
+    --show-duration: 0ms;
+    --hide-duration: 0ms;
+  }
+
+  .chat-controls__inline-select[open] > wa-popup::part(popup) {
+    animation: none !important;
+  }
+
   *,
   *::before,
   *::after {
@@ -1087,4 +1151,15 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
 
 :focus:not(:focus-visible) {
   outline: none;
+}
+
+.session-color-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-inline-end: 6px;
+  border-radius: var(--radius-full);
+  background: var(--session-color);
+  vertical-align: middle;
 }

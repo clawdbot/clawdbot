@@ -1,12 +1,12 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_RESET_TRIGGERS } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isResetAuthorizedForContext } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext } from "../templating.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { CURRENT_MESSAGE_MARKER, HISTORY_CONTEXT_MARKER } from "./history.js";
 import { stripMentions } from "./mentions.js";
-import { isResetAuthorizedForContext } from "./reset-authorization.js";
 
 type ResolvedSessionResetCommand = {
   matchedResetTriggerLower?: string;

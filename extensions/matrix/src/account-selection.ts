@@ -17,7 +17,11 @@ import {
   resolveMatrixAccountStringValues,
   type MatrixResolvedStringField,
 } from "./auth-precedence.js";
-import { getMatrixScopedEnvVarNames, listMatrixEnvAccountIds } from "./env-vars.js";
+import { listMatrixEnvAccountIds } from "./env-vars.js";
+import {
+  resolveGlobalMatrixEnvConfig,
+  resolveScopedMatrixEnvConfig,
+} from "./matrix/client/env-auth.js";
 
 type MatrixTopologyStringSources = Partial<Record<MatrixResolvedStringField, string>>;
 
@@ -42,36 +46,6 @@ function resolveMatrixChannelStringSources(
     password: readConfiguredMatrixSecretSource(entry.password),
     deviceId: readConfiguredMatrixString(entry.deviceId),
     deviceName: readConfiguredMatrixString(entry.deviceName),
-  };
-}
-
-function readEnvMatrixString(env: NodeJS.ProcessEnv, key: string): string {
-  return normalizeOptionalString(env[key]) ?? "";
-}
-
-function resolveScopedMatrixEnvStringSources(
-  accountId: string,
-  env: NodeJS.ProcessEnv,
-): MatrixTopologyStringSources {
-  const keys = getMatrixScopedEnvVarNames(accountId);
-  return {
-    homeserver: readEnvMatrixString(env, keys.homeserver),
-    userId: readEnvMatrixString(env, keys.userId),
-    accessToken: readEnvMatrixString(env, keys.accessToken),
-    password: readEnvMatrixString(env, keys.password),
-    deviceId: readEnvMatrixString(env, keys.deviceId),
-    deviceName: readEnvMatrixString(env, keys.deviceName),
-  };
-}
-
-function resolveGlobalMatrixEnvStringSources(env: NodeJS.ProcessEnv): MatrixTopologyStringSources {
-  return {
-    homeserver: readEnvMatrixString(env, "MATRIX_HOMESERVER"),
-    userId: readEnvMatrixString(env, "MATRIX_USER_ID"),
-    accessToken: readEnvMatrixString(env, "MATRIX_ACCESS_TOKEN"),
-    password: readEnvMatrixString(env, "MATRIX_PASSWORD"),
-    deviceId: readEnvMatrixString(env, "MATRIX_DEVICE_ID"),
-    deviceName: readEnvMatrixString(env, "MATRIX_DEVICE_NAME"),
   };
 }
 
@@ -103,9 +77,9 @@ function resolveEffectiveMatrixAccountSources(params: {
   const normalizedAccountId = normalizeAccountId(params.accountId);
   return resolveMatrixAccountStringValues({
     accountId: normalizedAccountId,
-    scopedEnv: resolveScopedMatrixEnvStringSources(normalizedAccountId, params.env),
+    scopedEnv: resolveScopedMatrixEnvConfig(normalizedAccountId, params.env),
     channel: resolveMatrixChannelStringSources(params.channel),
-    globalEnv: resolveGlobalMatrixEnvStringSources(params.env),
+    globalEnv: resolveGlobalMatrixEnvConfig(params.env),
   });
 }
 

@@ -858,21 +858,17 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       };
       authorityValid = false;
     });
-    let guardCalls = 0;
     let authorityValid = true;
-    const authorityCommit = async <T>(effect: () => Promise<T> | T): Promise<T> => {
-      guardCalls += 1;
+    const beforePersistentApply = () => {
       if (!authorityValid) {
         throw new Error("verified inference binding changed");
       }
-      return await effect();
     };
 
     await expect(
-      applySystemAgentSetup(baseParams({ expectedInferenceRoute }), { commit: authorityCommit }),
+      applySystemAgentSetup(baseParams({ expectedInferenceRoute }), { beforePersistentApply }),
     ).rejects.toThrow("verified inference binding changed");
 
-    expect(guardCalls).toBe(3);
     expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
     expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
   });
@@ -954,6 +950,33 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     const marker = gateway.status === "failed" ? gateway.error : "SUPERVISOR_MODE=external";
     expect(result.gateway).toEqual(gateway);
     expect(result.lines.join("\n")).toContain(marker);
+    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { reason: "explicit", installDaemon: false, line: "Gateway: will run in the foreground." },
+    {
+      reason: "systemd-unavailable",
+      installDaemon: false,
+      line: "Gateway: will run in the foreground.",
+    },
+    {
+      reason: "explicit",
+      installDaemon: undefined,
+      line: "Gateway: service install skipped — say `start gateway` when you want it running.",
+    },
+  ])("reports $reason service setup with installDaemon=$installDaemon", async (scenario) => {
+    const gateway = { status: "skipped", reason: scenario.reason };
+    mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
+    const result = await applySystemAgentSetup(
+      baseParams({ surface: "cli", installDaemon: scenario.installDaemon }),
+    );
+
+    expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
+      expect.objectContaining({ opts: { installDaemon: scenario.installDaemon } }),
+    );
+    expect(result.gateway).toEqual(gateway);
+    expect(result.lines).toContain(scenario.line);
     expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
   });
 

@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import type { createQaGatewayChild, QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -12,7 +12,6 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { DeviceIdentity } from "../../../../src/infra/device-identity.js";
-import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
@@ -24,12 +23,11 @@ import {
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../../../src/infra/node-runner-inventory.js";
-import { handleInvoke, type NodeInvokeRequestPayload } from "../../../../src/node-host/invoke.js";
-import { NodeWorkerBundleInstaller } from "../../../../src/node-host/node-worker-bundle-installer.js";
+import type { NodeInvokeRequestPayload } from "../../../../src/node-host/invoke.js";
+import type { NodeWorkerBundleInstaller } from "../../../../src/node-host/node-worker-bundle-installer.js";
 import type { NodeWorkerContainerEngine } from "../../../../src/node-host/node-worker-container-engine.js";
-import { parseNodeWorkerLaunchInput } from "../../../../src/node-host/node-worker-supervisor-contract.js";
-import { createNodeWorkerSupervisor } from "../../../../src/node-host/node-worker-supervisor.js";
-import { NodeWorkerWorkspaceRuntime } from "../../../../src/node-host/node-worker-workspace.js";
+import type { createNodeWorkerSupervisor } from "../../../../src/node-host/node-worker-supervisor.js";
+import type { NodeWorkerWorkspaceRuntime } from "../../../../src/node-host/node-worker-workspace.js";
 import { VERSION } from "../../../../src/version.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 
@@ -50,7 +48,7 @@ async function waitUntil<T>(read: () => Promise<T | undefined>): Promise<T> {
   throw new Error("timed out waiting for paired worker node state");
 }
 
-export type WireGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
+export type WireGateway = QaGatewayChild;
 type WireGatewayEvent = { event: string; payload?: unknown };
 export type WireNodeRead = {
   nodeId: string;
@@ -148,6 +146,7 @@ export async function connectWireClient(params: {
   onEvent?: (event: WireGatewayEvent) => void;
   timeoutMs?: number;
 }): Promise<GatewayClient> {
+  const { GatewayClient } = await import("openclaw/plugin-sdk/gateway-runtime");
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
     const finish = (error?: Error) => {
@@ -304,6 +303,23 @@ export type PairedNodeWorkerHost = {
 export async function createPairedNodeWorkerHost(
   options: WireWorkerHostOptions,
 ): Promise<PairedNodeWorkerHost> {
+  // Publishing a Git workspace needs no node runtime. Load host dependencies
+  // only when this fixture actually owns a paired worker.
+  const [
+    { loadOrCreateDeviceIdentity },
+    { handleInvoke },
+    { NodeWorkerBundleInstaller },
+    { parseNodeWorkerLaunchInput },
+    { createNodeWorkerSupervisor },
+    { NodeWorkerWorkspaceRuntime },
+  ] = await Promise.all([
+    import("../../../../src/infra/device-identity.js"),
+    import("../../../../src/node-host/invoke.js"),
+    import("../../../../src/node-host/node-worker-bundle-installer.js"),
+    import("../../../../src/node-host/node-worker-supervisor-contract.js"),
+    import("../../../../src/node-host/node-worker-supervisor.js"),
+    import("../../../../src/node-host/node-worker-workspace.js"),
+  ]);
   const label = options.label ?? "node";
   const nodeStateDir = path.join(options.root, `${label}-state`);
   const nodeHostRoot = path.join(nodeStateDir, "node-host");
@@ -509,6 +525,7 @@ export async function createPairedNodeWorkerHost(
 }
 
 export async function startPairedNodeWorkerGateway(params: {
+  owner: ReturnType<typeof createQaGatewayChild>;
   providerBaseUrl: string;
   executionIdentity?: boolean;
   repoRoot?: string;
@@ -517,7 +534,7 @@ export async function startPairedNodeWorkerGateway(params: {
   controlUiEnabled?: boolean;
   fullAccess?: boolean;
 }): Promise<WireGateway> {
-  return await startQaGatewayChild({
+  return await params.owner.start({
     repoRoot: params.repoRoot ?? process.cwd(),
     useRepoCli: params.useRepoCli ?? true,
     providerBaseUrl: `${params.providerBaseUrl}/v1`,

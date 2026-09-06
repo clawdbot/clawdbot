@@ -27,6 +27,9 @@ async function buildDaemonStatusSummary(
   const service = serviceLabel === "gateway" ? resolveGatewayService() : resolveNodeService();
   const fallbackLabel = serviceLabel === "gateway" ? "Daemon" : "Node";
   const summary = await readServiceStatusSummary(service, fallbackLabel, timeoutMs);
+  const runtime = summary.runtime?.inspectionFailure
+    ? { ...summary.runtime, detail: `${summary.runtime.detail}; retry with openclaw status --deep` }
+    : summary.runtime;
   const loaded =
     summary.loadState.status === "unknown" ? null : summary.loadState.status === "loaded";
   return {
@@ -37,8 +40,8 @@ async function buildDaemonStatusSummary(
     managedByOpenClaw: summary.managedByOpenClaw,
     externallyManaged: summary.externallyManaged,
     loadedText: summary.loadedText,
-    runtime: summary.runtime,
-    runtimeShort: formatDaemonRuntimeShort(summary.runtime),
+    runtime,
+    runtimeShort: formatDaemonRuntimeShort(runtime),
     layout: summary.layout,
     wrapperPath: summary.wrapperPath,
   };

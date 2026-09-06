@@ -1,7 +1,9 @@
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 /** Result types returned by isolated cron agent runs. */
 import type {
   CronDeliveryTrace,
+  CronResolvedDeliveryState,
   CronNextCheckProposal,
   CronRunOutcome,
   CronRunTelemetry,
@@ -14,14 +16,13 @@ export type CronAgentAdmissionDisposition = "session-conflict" | "rejected";
 export type RunCronAgentTurnResult = {
   /** Typed pre-run rejection so callers never infer admission state from error prose. */
   admissionDisposition?: CronAgentAdmissionDisposition;
+  /** Delivery fact authored by the dispatcher, separate from execution status. */
+  deliveryState?: CronResolvedDeliveryState;
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
-  /**
-   * `true` when the isolated runner already handled the run's user-visible
-   * delivery outcome, either through runner fallback delivery, explicit
-   * suppression, or a matching message-tool send that already reached the
-   * target.
-   */
+  /** Terminal model-reply fact without exposing reply text. */
+  replyDisposition?: AgentRunTerminalReplySnapshot["disposition"];
+  /** Confirmed target delivery, including matching message-tool sends; unknown is omitted. */
   delivered?: boolean;
   /**
    * `true` when cron attempted announce/direct delivery for this run.

@@ -1,5 +1,9 @@
 export type ChatSplitPane = { id: string; sessionKey: string };
 
+export interface SessionSplitHost extends HTMLElement {
+  readonly sessionSplitAvailable: boolean;
+}
+
 export type ChatSplitColumn = {
   id: string;
   panes: ChatSplitPane[];

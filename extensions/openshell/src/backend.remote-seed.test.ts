@@ -116,17 +116,15 @@ describe("openshell remote-mode seed across gateway restart", () => {
 
     const execSpec = await backend.buildExecSpec({ command: "pwd", env: {}, usePty: false });
 
-    const uploads = seedUploadCalls();
-    expect(uploads.length).toBeGreaterThan(0);
-    expect(uploads[0]?.[0]).toMatchObject({
-      args: expect.arrayContaining([expect.stringMatching(/\/seed\.txt$/), "/sandbox/"]),
-    });
-    await backend.finalizeExec?.({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: execSpec.finalizeToken,
-    });
+    try {
+      const uploads = seedUploadCalls();
+      expect(uploads.length).toBeGreaterThan(0);
+      expect(uploads[0]?.[0]).toMatchObject({
+        args: expect.arrayContaining([expect.stringMatching(/\/seed\.txt$/), "/sandbox/"]),
+      });
+    } finally {
+      await finalize(backend, execSpec.finalizeToken);
+    }
   });
 
   it("never re-seeds when a managed root already holds content", async () => {
@@ -134,17 +132,15 @@ describe("openshell remote-mode seed across gateway restart", () => {
 
     const execSpec = await backend.buildExecSpec({ command: "pwd", env: {}, usePty: false });
 
-    expect(seedUploadCalls()).toHaveLength(0);
-    const wipeCalls = sdkMocks.runSshSandboxCommand.mock.calls.filter(([params]) =>
-      String(params.remoteCommand).includes("rm -rf"),
-    );
-    expect(wipeCalls).toHaveLength(0);
-    await backend.finalizeExec?.({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: execSpec.finalizeToken,
-    });
+    try {
+      expect(seedUploadCalls()).toHaveLength(0);
+      const wipeCalls = sdkMocks.runSshSandboxCommand.mock.calls.filter(([params]) =>
+        String(params.remoteCommand).includes("rm -rf"),
+      );
+      expect(wipeCalls).toHaveLength(0);
+    } finally {
+      await finalize(backend, execSpec.finalizeToken);
+    }
   });
 
   it.each(["same handle", "another handle"])(
@@ -160,20 +156,21 @@ describe("openshell remote-mode seed across gateway restart", () => {
         env: {},
         usePty: false,
       });
-      let secondExec: Awaited<ReturnType<SandboxBackendHandle["buildExecSpec"]>> | undefined;
-      const secondPreparation = second
-        .buildExecSpec({ command: "write-file", env: {}, usePty: false })
-        .then((prepared) => {
-          secondExec = prepared;
-          return prepared;
-        });
+      const secondPreparation = second.buildExecSpec({
+        command: "write-file",
+        env: {},
+        usePty: false,
+      });
       try {
-        await vi.waitFor(() => expect(secondExec).toBeDefined());
+        await secondPreparation;
         expect(seedUploadCalls()).toHaveLength(0);
       } finally {
-        await finalize(first, firstExec.finalizeToken);
-        const prepared = await secondPreparation;
-        await finalize(second, prepared.finalizeToken);
+        try {
+          await finalize(first, firstExec.finalizeToken);
+        } finally {
+          const prepared = await secondPreparation;
+          await finalize(second, prepared.finalizeToken);
+        }
       }
     },
   );
@@ -234,33 +231,46 @@ describe("openshell remote-mode seed across gateway restart", () => {
       return { code: 0, stdout: "", stderr: "" };
     });
     const firstPreparation = first.buildExecSpec({ command: "first", env: {}, usePty: false });
-    await seedStarted.promise;
-    let secondStarted = false;
-    const secondPreparation = second
-      .buildExecSpec({ command: "second", env: {}, usePty: false })
-      .then((prepared) => {
-        secondStarted = true;
-        return prepared;
-      });
+    let secondPreparation: typeof firstPreparation | undefined;
+    let preparationsSettled: Promise<PromiseSettledResult<Awaited<typeof firstPreparation>>[]> =
+      Promise.allSettled([firstPreparation]);
     try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(
-        cliMocks.runOpenShellCli.mock.calls.filter(([params]) => params.args[1] === "get"),
-      ).toHaveLength(1);
-      expect(secondStarted).toBe(false);
-    } finally {
-      releaseSeed.resolve();
-    }
-    const firstExec = await firstPreparation;
-    try {
-      await vi.waitFor(() => expect(secondStarted).toBe(true));
+      await Promise.race([seedStarted.promise, firstPreparation]);
+      let secondStarted = false;
+      secondPreparation = second
+        .buildExecSpec({ command: "second", env: {}, usePty: false })
+        .then((prepared) => {
+          secondStarted = true;
+          return prepared;
+        });
+      preparationsSettled = Promise.allSettled([firstPreparation, secondPreparation]);
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(
+          cliMocks.runOpenShellCli.mock.calls.filter(([params]) => params.args[1] === "get"),
+        ).toHaveLength(1);
+        expect(secondStarted).toBe(false);
+      } finally {
+        releaseSeed.resolve();
+      }
+      await firstPreparation;
+      await secondPreparation;
       expect(seedUploadCalls()).toHaveLength(1);
     } finally {
-      await finalize(first, firstExec.finalizeToken);
-      const secondExec = await secondPreparation;
-      await finalize(second, secondExec.finalizeToken);
+      // An assertion or preparation failure must not leave work using a deleted workspace.
+      releaseSeed.resolve();
+      try {
+        const firstExec = await firstPreparation;
+        await finalize(first, firstExec.finalizeToken);
+      } finally {
+        await preparationsSettled;
+        const secondExec = await secondPreparation;
+        if (secondExec) {
+          await finalize(second, secondExec.finalizeToken);
+        }
+      }
     }
   });
 });

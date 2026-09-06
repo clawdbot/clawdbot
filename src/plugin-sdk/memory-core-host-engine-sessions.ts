@@ -5,6 +5,7 @@ import {
   listSessionTranscriptInstances,
   type SessionTranscriptInstance,
 } from "../config/sessions/session-accessor.js";
+import type { SessionParticipantIdentity } from "../config/sessions/session-participant-identity.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 export { loadArchivedSessions };
@@ -17,27 +18,19 @@ export {
   isQueryStopWordToken,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
-  listSessionFilesForAgent,
   listSessionTranscriptCorpusEntriesForAgent,
-  loadDreamingNarrativeTranscriptPathSetForAgent,
-  loadSessionTranscriptClassificationForAgent,
-  normalizeSessionTranscriptPathForComparison,
   parseCanonicalSessionSyncTargetFromPath,
   parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
-  resolveSessionFileForSyncTarget,
-  resolveSessionIdentityForTranscriptFile,
+  readTranscriptStatsBatchReadOnlySync,
   sessionPathForFile,
   sessionPathForSessionIdentity,
   statSessionEntrySync,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 export type {
   BuildSessionEntryOptions,
-  ResolvedMemorySessionSyncTarget,
-  ResolvedSessionTranscriptIdentity,
   SessionFileEntry,
   SessionFileState,
-  SessionTranscriptClassification,
   SessionTranscriptCorpusEntry,
   SessionTranscriptCorpusOptions,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
@@ -52,7 +45,7 @@ export type MemorySessionTarget = {
   accountId: string | null;
   chatType: string | null;
   createdAt?: number;
-  participantIds: string[];
+  participants: SessionParticipantIdentity[];
 };
 
 export type MemorySessionSelectors = {
@@ -66,7 +59,7 @@ export type MemorySessionSelectors = {
 
 function projectSessionMetadata(
   instance: SessionTranscriptInstance,
-  participantIds: string[] = [],
+  participants: SessionParticipantIdentity[] = [],
 ): MemorySessionTarget {
   return {
     agentId: instance.agentId,
@@ -74,7 +67,7 @@ function projectSessionMetadata(
     sessionKey: instance.sessionKey,
     resolution: "live",
     ...instance.sourceMetadata,
-    participantIds,
+    participants,
   };
 }
 
@@ -119,22 +112,22 @@ export function resolveMemorySessionTargets(params: MemorySessionSelectors): Mem
         left.sessionId.localeCompare(right.sessionId),
     );
   for (const instance of instances) {
-    const participantIds = [
-      ...new Set((participantRecords.get(instance.sessionKey) ?? []).map(({ actor }) => actor.id)),
-    ].toSorted();
+    const identities = (participantRecords.get(instance.sessionKey) ?? []).map(
+      ({ identity }) => identity,
+    );
     const source = instance.sourceMetadata.hookExternalContentSource;
     if (
       !sessionIds.includes(instance.sessionId) &&
       !sessionIds.includes(instance.sessionKey) &&
       !(source && hookSources.includes(source)) &&
-      !participantIds.some((id) => participants.includes(id))
+      !identities.some((identity) => participants.includes(identity.id))
     ) {
       continue;
     }
     resolvedSelectors.add(instance.sessionId);
     resolvedSelectors.add(instance.sessionKey);
     if (since === undefined || instance.sourceMetadata.createdAt >= since) {
-      targets.set(instance.sessionId, projectSessionMetadata(instance, participantIds));
+      targets.set(instance.sessionId, projectSessionMetadata(instance, identities));
     }
   }
   for (const archive of loadArchivedSessions({ ...params, sessionIds })) {
@@ -153,7 +146,7 @@ export function resolveMemorySessionTargets(params: MemorySessionSelectors): Mem
       accountId: null,
       chatType: null,
       createdAt: archive.createdAt,
-      participantIds: [],
+      participants: [],
     });
   }
   for (const sessionId of sessionIds) {
@@ -166,7 +159,7 @@ export function resolveMemorySessionTargets(params: MemorySessionSelectors): Mem
         channel: null,
         accountId: null,
         chatType: null,
-        participantIds: [],
+        participants: [],
       });
     }
   }

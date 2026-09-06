@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasRecallIntent, shouldEscalateRecall } from "./escalation.js";
+import { hasRecallIntent, resolveRecallEscalationDecision } from "./escalation.js";
 
 describe("active-memory escalation", () => {
   it.each([
@@ -165,70 +165,70 @@ describe("active-memory escalation", () => {
 
   it("requires recall intent and a weak deterministic lane in escalate mode", () => {
     expect(
-      shouldEscalateRecall({
+      resolveRecallEscalationDecision({
         mode: "escalate",
         message: "What did we decide last time?",
         hasStrongLaneOneHit: false,
       }),
-    ).toBe(true);
+    ).toBe("recall");
     expect(
-      shouldEscalateRecall({
+      resolveRecallEscalationDecision({
         mode: "escalate",
         message: "What did we decide last time?",
         hasStrongLaneOneHit: true,
       }),
-    ).toBe(false);
+    ).toBe("strong-lane-one-hit");
     expect(
-      shouldEscalateRecall({
+      resolveRecallEscalationDecision({
         mode: "escalate",
         message: "Explain the current configuration",
         hasStrongLaneOneHit: false,
       }),
-    ).toBe(false);
+    ).toBe("no-recall-intent");
     expect(
-      shouldEscalateRecall({
+      resolveRecallEscalationDecision({
         mode: "escalate",
         message: "你还记得我们上次讨论的数据库配置吗？",
         hasStrongLaneOneHit: false,
       }),
-    ).toBe(true);
+    ).toBe("recall");
     expect(
-      shouldEscalateRecall({
+      resolveRecallEscalationDecision({
         mode: "escalate",
         message: "你还记得我们上次讨论的数据库配置吗？",
         hasStrongLaneOneHit: true,
       }),
-    ).toBe(false);
+    ).toBe("strong-lane-one-hit");
   });
 
   it("preserves always mode and disables escalation in off mode", () => {
     expect(
-      shouldEscalateRecall({
+      resolveRecallEscalationDecision({
         mode: "always",
         message: "No recall phrasing here",
         hasStrongLaneOneHit: true,
       }),
-    ).toBe(true);
+    ).toBe("recall");
     expect(
-      shouldEscalateRecall({
+      resolveRecallEscalationDecision({
         mode: "off",
         message: "Do you remember this?",
         hasStrongLaneOneHit: false,
       }),
-    ).toBe(false);
+    ).toBe("mode-off");
     expect(
-      shouldEscalateRecall({
+      resolveRecallEscalationDecision({
         mode: "always",
         message: "记住这个配置",
         hasStrongLaneOneHit: true,
       }),
-    ).toBe(true);
+    ).toBe("recall");
     expect(
-      shouldEscalateRecall({
+      resolveRecallEscalationDecision({
         mode: "off",
         message: "你还记得我们上次讨论的数据库配置吗？",
         hasStrongLaneOneHit: false,
       }),
-    ).toBe(false);
+    ).toBe("mode-off");
   });
 });

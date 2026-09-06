@@ -1,6 +1,7 @@
 /**
  * Builds scoped message-action discovery inputs for embedded-agent tool setup.
  */
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /**
@@ -13,6 +14,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 export function buildEmbeddedMessageActionDiscoveryInput(params: {
   cfg?: OpenClawConfig;
   channel: string;
+  chatType?: ChatType | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;
@@ -26,6 +28,7 @@ export function buildEmbeddedMessageActionDiscoveryInput(params: {
   return {
     cfg: params.cfg,
     channel: params.channel,
+    ...(params.chatType ? { chatType: params.chatType } : {}),
     currentChannelId: params.currentChannelId ?? undefined,
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,

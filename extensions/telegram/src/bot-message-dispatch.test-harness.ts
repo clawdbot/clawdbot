@@ -65,6 +65,7 @@ const buildModelsProviderDataHoisted = vi.hoisted(() =>
     providers: [],
     resolvedDefault: { provider: "openai", model: "gpt-test" },
     modelNames: new Map<string, string>(),
+    modelCatalog: [],
   })),
 );
 const listSkillCommandsForAgentsHoisted = vi.hoisted(() => vi.fn(() => []));
@@ -235,6 +236,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
                 const providerInfo = {
                   ...info,
                   onPlatformSendDispatch: async () => undefined,
+                  assertPlatformSendAuthorized: () => undefined,
                 };
                 return delivery.deliverWithProviderMessageSending(payload, providerInfo);
               },
@@ -274,7 +276,8 @@ vi.mock("./bot/delivery.replies.js", () => ({
   emitTelegramMessageSentHooks: emitTelegramMessageSentHooksHoisted,
 }));
 
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async () => ({
+  buildInlineKeyboard: (await import("./inline-keyboard.js")).buildInlineKeyboard,
   createForumTopicTelegram: createForumTopicTelegramHoisted,
   deleteMessageTelegram: deleteMessageTelegramHoisted,
   editForumTopicTelegram: editForumTopicTelegramHoisted,
@@ -442,12 +445,6 @@ function resetTelegramDispatchTestState() {
     created: true,
   });
   enqueueSystemEvent.mockResolvedValue(undefined);
-  buildModelsProviderData.mockResolvedValue({
-    byProvider: new Map<string, Set<string>>(),
-    providers: [],
-    resolvedDefault: { provider: "openai", model: "gpt-test" },
-    modelNames: new Map<string, string>(),
-  });
   listSkillCommandsForAgents.mockReturnValue([]);
   createChannelMessageReplyPipeline.mockReturnValue({
     responsePrefix: undefined,
@@ -538,6 +535,7 @@ export function telegramProgressPreview(_plainText: string, html: string) {
   return {
     text: html.replaceAll("\n", "<br>"),
     parseMode: "HTML" as const,
+    complete: true as const,
   };
 }
 

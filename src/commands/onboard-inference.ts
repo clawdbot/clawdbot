@@ -12,6 +12,7 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryLoadActivatedBundledPluginPublicSurfaceModule } from "../plugin-sdk/facade-runtime.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../system-agent/probes.js";
 import {
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -78,21 +79,29 @@ function detectCliCredentialState(params: {
   return params.platform === "darwin" ? undefined : false;
 }
 
-type CliAuthKind = "api-key" | "chatgpt-subscription" | "claude-subscription";
-type CliLoginState = { credentials: boolean | undefined; authKind?: CliAuthKind };
+type CliAuthKind = "api-key" | "chatgpt-subscription" | "claude-subscription" | "token";
+type CliLoginState = {
+  credentials: boolean | undefined;
+  authKind?: CliAuthKind;
+  email?: string;
+};
 
 const CLI_AUTH_KIND_LABEL: Record<CliAuthKind, string> = {
   "api-key": "API key (usage-billed)",
-  "chatgpt-subscription": "ChatGPT subscription",
-  "claude-subscription": "Claude subscription",
+  "chatgpt-subscription": "ChatGPT account",
+  "claude-subscription": "Claude account",
+  token: "OAuth token",
 };
 
 function describeCliDetail(state: CliLoginState, loginHint: string): string {
   if (state.authKind) {
-    return `logged in · ${CLI_AUTH_KIND_LABEL[state.authKind]}`;
+    const account =
+      state.authKind === "chatgpt-subscription" || state.authKind === "claude-subscription";
+    const identity = account ? ` · ${state.email || "email unavailable"}` : "";
+    return `logged in · ${CLI_AUTH_KIND_LABEL[state.authKind]}${identity}`;
   }
   if (state.credentials === true) {
-    return "logged in";
+    return "logged in · authentication method unavailable";
   }
   if (state.credentials === false) {
     return `installed, not logged in — ${loginHint}, then check again`;
@@ -126,27 +135,85 @@ async function classifyCodexLoginStatus(
 }
 
 async function detectClaudeLoginState(
-  probe: typeof probeLocalCommand,
+  _probe: typeof probeLocalCommand,
   command: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<CliLoginState> {
-  const status = await probe(command, ["auth", "status", "--text"], { timeoutMs: 3_000 });
-  if (status.timedOut) {
+  type ClaudeAuthFacade = {
+    probeClaudeCliAuthStatus: (params: {
+      command: string;
+      env: NodeJS.ProcessEnv;
+    }) => Promise<
+      | { status: "available"; authMethod?: string; email?: string }
+      | { status: "missing" | "unreadable" }
+    >;
+  };
+  try {
+    const facade = await tryLoadActivatedBundledPluginPublicSurfaceModule<ClaudeAuthFacade>({
+      dirName: "anthropic",
+      artifactBasename: "cli-auth-api.js",
+      env,
+    });
+    const status = await facade?.probeClaudeCliAuthStatus({ command, env });
+    if (status?.status !== "available") {
+      return { credentials: status?.status === "missing" ? false : undefined };
+    }
+    switch (status.authMethod) {
+      case "claude.ai":
+        return { credentials: true, authKind: "claude-subscription", email: status.email };
+      case "api_key":
+      case "api_key_helper":
+        return { credentials: true, authKind: "api-key" };
+      case "oauth_token":
+        return { credentials: true, authKind: "token" };
+      default:
+        return { credentials: true };
+    }
+  } catch {
     return { credentials: undefined };
   }
-  if (status.error) {
-    return { credentials: false };
-  }
-  const method = status.version?.replace(/^Login method:\s*/iu, "").trim();
-  return {
-    credentials: true,
-    ...(method
-      ? {
-          authKind: /api\s*key/iu.test(method)
-            ? ("api-key" as const)
-            : ("claude-subscription" as const),
-        }
-      : {}),
+}
+
+async function readCodexNativeLoginState(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): Promise<CliLoginState | undefined> {
+  type CodexAuthFacade = {
+    readCodexCliAccount: (params: {
+      command: string;
+      env: NodeJS.ProcessEnv;
+    }) => Promise<
+      | { type: "apiKey" }
+      | { type: "chatgpt"; email?: string }
+      | { type: "none"; requiresOpenaiAuth: boolean }
+      | { type: "unknown" }
+      | null
+    >;
   };
+  try {
+    const facade = await tryLoadActivatedBundledPluginPublicSurfaceModule<CodexAuthFacade>({
+      dirName: "openai",
+      artifactBasename: "cli-auth-api.js",
+      env,
+    });
+    const account = await facade?.readCodexCliAccount({ command, env });
+    switch (account?.type) {
+      case "apiKey":
+        return { credentials: true, authKind: "api-key" };
+      case "chatgpt":
+        return { credentials: true, authKind: "chatgpt-subscription", email: account.email };
+      case "none":
+        return { credentials: account.requiresOpenaiAuth ? false : undefined };
+      case "unknown":
+        return { credentials: undefined };
+      case undefined:
+        return undefined;
+    }
+  } catch {
+    // Older CLIs can still report their login method when account/read is unavailable.
+    // A separate saved token never proves which account the native runtime selected.
+  }
+  return undefined;
 }
 
 // Deliberately boolean-shaped: this signature is reachable from the exported
@@ -283,7 +350,7 @@ export async function detectInferenceBackends(
   if (claudeProbe.found && !claudeProbe.timedOut) {
     const loginState = options.deps?.detectClaudeLoginState
       ? await options.deps.detectClaudeLoginState(probe, claudeProbe.command)
-      : await detectClaudeLoginState(probe, claudeProbe.command);
+      : await detectClaudeLoginState(probe, claudeProbe.command, env);
     const credentials = loginState.credentials;
     if (credentials === true && loginState.authKind === "claude-subscription") {
       subscriptionPromotionEligibleCliKinds.add("claude-cli");
@@ -301,22 +368,27 @@ export async function detectInferenceBackends(
     const codexCredential = readCodex();
     const loginState: CliLoginState = options.deps?.detectCodexLoginState
       ? { credentials: await options.deps.detectCodexLoginState(probe, codexProbe.command) }
-      : options.deps?.readCodexCliCredentials
-        ? {
-            credentials: detectCliCredentialState({
-              probe: codexProbe,
-              hasStoredCredentials: codexCredential !== null,
-              platform,
-            }),
-            ...(codexCredential?.type === "oauth"
-              ? { authKind: "chatgpt-subscription" as const }
-              : {}),
-          }
-        : await classifyCodexLoginStatus(probe, codexProbe.command);
+      : ((await readCodexNativeLoginState(codexProbe.command, env)) ??
+        (options.deps?.readCodexCliCredentials
+          ? {
+              credentials: detectCliCredentialState({
+                probe: codexProbe,
+                hasStoredCredentials: codexCredential !== null,
+                platform,
+              }),
+              ...(codexCredential?.type === "oauth"
+                ? { authKind: "chatgpt-subscription" as const }
+                : {}),
+            }
+          : await classifyCodexLoginStatus(probe, codexProbe.command)));
     const credentials = loginState.credentials;
     // Promote only prompt-free ChatGPT OAuth tokens. Status-only logins may be metered;
     // keychain-only ChatGPT users conservatively stay usable in the fallback tier.
-    if (credentials === true && codexCredential?.type === "oauth") {
+    if (
+      credentials === true &&
+      loginState.authKind === "chatgpt-subscription" &&
+      codexCredential?.type === "oauth"
+    ) {
       subscriptionPromotionEligibleCliKinds.add("codex-cli");
     }
     cliCandidates.push({

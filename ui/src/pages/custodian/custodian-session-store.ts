@@ -1,10 +1,7 @@
-import {
-  readSystemAgentInferenceUnavailableErrorDetails,
-  type SystemAgentChatParams,
-  type SystemAgentChatResult,
-} from "@openclaw/gateway-protocol";
+import type { SystemAgentChatParams, SystemAgentChatResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { CustodianTurnAdmission } from "../../components/custodian-alert-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { performCustodianAgentHandoff } from "./custodian-navigation.ts";
@@ -26,13 +23,13 @@ import {
 import * as eventNudgeState from "./event-nudge.ts";
 import {
   custodianChatParams,
+  custodianFailure,
   hasCustodianUserInput,
-  isCustodianSessionInvalidatedError,
   type CustodianSessionVariant,
 } from "./session-lifecycle.ts";
-import { parseCustodianQuestion } from "./structured-question.ts";
 import {
-  createCustodianAssistantMessage,
+  createCustodianMessage,
+  createCustodianReplyMessage,
   custodianErrorMessage,
   CustodianTranscriptLoader,
   hasUnresolvedCustodianQuestion,
@@ -41,15 +38,12 @@ import {
 } from "./transcript.ts";
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 type StoreListener = () => void;
-type CustodianSetupIssue = "missing" | "unavailable";
 
 /** One process-local conversation owner shared by the full page and dock surface. */
 export class CustodianSessionStore {
   messages: CustodianMessage[] = [];
-  input = "";
   sending = false;
   sensitive = false;
   wizardInputPending = false;
@@ -58,7 +52,6 @@ export class CustodianSessionStore {
   questionReplyUncertain = false;
   error: string | null = null;
   transcript = new CustodianTranscriptLoader(() => this.emit());
-  setupIssue: CustodianSetupIssue | null = null;
   dismissedQuestions = new Set<string>();
   answeredQuestions = new Set<string>();
   activeClient: GatewayBrowserClient | null = null;
@@ -69,6 +62,8 @@ export class CustodianSessionStore {
   earlierBoundaryAfterId: number | null = null;
   abandonedTurnOutcomeUnknown = false;
 
+  private inferenceState: "unverified" | "ready" = "unverified";
+  private inputDrafts = { ordinary: { value: "" }, sensitive: { value: "" } };
   private context: ApplicationContext | null = null;
   private variant: CustodianSessionVariant = "caretaker";
   private sessionVariant: CustodianSessionVariant | null = null;
@@ -134,9 +129,25 @@ export class CustodianSessionStore {
     this.emit();
   }
 
+  get input(): string {
+    return this.inputDrafts[this.sensitive ? "sensitive" : "ordinary"].value;
+  }
+
+  set input(value: string) {
+    this.inputDrafts[this.sensitive ? "sensitive" : "ordinary"] = { value };
+  }
+
   setInput(value: string): void {
     this.input = value;
     this.emit();
+  }
+
+  private resetPromptInput(sensitive: boolean): void {
+    // Retire prompt input at admission or replacement, even if the reply fails.
+    // Ordinary composer drafts survive explicit actions and prompt replacement.
+    this.inputDrafts.sensitive = { value: "" };
+    [this.wizardValue, this.wizardSecretVisible] = [undefined, false];
+    this.sensitive = sensitive;
   }
 
   setWizardValue(value: unknown): void {
@@ -190,7 +201,17 @@ export class CustodianSessionStore {
   }
 
   get setupRequired(): boolean {
-    return this.setupIssue !== null;
+    return this.configuredInferenceState === "required";
+  }
+
+  get canSend(): boolean {
+    return (
+      this.activeClient !== null &&
+      this.chatAvailable &&
+      !this.sending &&
+      this.configuredInferenceState === "ready" &&
+      this.inferenceState === "ready"
+    );
   }
 
   get wizardCancelAvailable(): boolean {
@@ -201,32 +222,36 @@ export class CustodianSessionStore {
     const client = this.activeClient;
     const params = this.retryParams;
     if (client && params && !hasCustodianUserInput(params) && this.chatAvailable && !this.sending) {
-      void this.initializeSession(client, params);
+      void this.initializeSession(client, params, false);
     }
   }
 
   async send(
-    text = this.input,
+    text?: string,
     display?: string,
     questionReply = this.hasUnresolvedQuestion(),
+    admission?: CustodianTurnAdmission,
   ): Promise<eventNudgeState.CustodianSendOutcome> {
     // Trim decides emptiness only; sensitive values may carry meaningful whitespace.
-    const message = this.sensitive ? text : text.trim();
+    const input = text ?? this.input;
+    const message = this.sensitive ? input : input.trim();
     const client = this.activeClient;
-    if (!message.trim() || !client || !this.chatAvailable || this.sending || this.setupRequired) {
+    if (!message.trim() || !client || !this.canSend) {
       this.emit();
       return "rejected";
     }
     const displayText = this.sensitive ? t("custodian.sensitiveReply") : (display ?? message);
-    return await this.sendUserTurn(
-      client,
-      {
-        sessionId: this.sessionId,
-        ...custodianChatParams(this.variant, message),
-      },
-      displayText,
-      questionReply,
-    );
+    const params = { sessionId: this.sessionId, ...custodianChatParams(this.variant, message) };
+    return await this.sendUserTurn(client, params, displayText, questionReply, () => {
+      if (admission && (!admission.isCurrent() || !admission.admit())) {
+        return false;
+      }
+      // Explicit actions do not submit the operator's unsent composer draft.
+      if (text === undefined) {
+        this.input = "";
+      }
+      return true;
+    });
   }
 
   private async sendUserTurn(
@@ -234,28 +259,33 @@ export class CustodianSessionStore {
     params: SystemAgentChatParams,
     displayText: string,
     questionReply: boolean,
+    admit?: () => boolean,
   ): Promise<eventNudgeState.CustodianSendOutcome> {
     const questionState = [this.answeredQuestions, this.questionReplyUncertain] as const;
-    if (questionReply) {
-      this.questionReplyUncertain = true;
-    }
-    this.abandonedTurnOutcomeUnknown = false;
-    this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
-    this.messages = [
-      ...this.messages,
-      {
-        id: this.nextMessageId++,
-        role: "user",
-        text: displayText,
-        at: Date.now(),
-        question: null,
-        step: null,
-      },
-    ];
-    this.input = "";
-    this.emit();
-    const reply = this.requestReply(client, params);
-    const replyEpoch = this.requestEpoch;
+    let replyEpoch: number | undefined;
+    const reply = this.requestReply(client, params, () => {
+      const ordinaryDraft = this.inputDrafts.ordinary;
+      if (admit && !admit()) {
+        return false;
+      }
+      const consumedDraft = this.inputDrafts.ordinary;
+      this.resetPromptInput(this.sensitive);
+      replyEpoch = this.requestEpoch;
+      if (questionReply) {
+        this.questionReplyUncertain = true;
+      }
+      this.abandonedTurnOutcomeUnknown = false;
+      this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
+      const message = createCustodianMessage(this.nextMessageId++, "user", displayText);
+      this.messages = [...this.messages, message];
+      return () => {
+        this.messages = this.messages.filter((entry) => entry !== message);
+        this.answeredQuestions = questionState[0];
+        if (ordinaryDraft !== consumedDraft && this.inputDrafts.ordinary === consumedDraft) {
+          this.inputDrafts.ordinary = ordinaryDraft;
+        }
+      };
+    });
     const outcome = await reply;
     if (questionReply && this.requestEpoch === replyEpoch) {
       this.questionReplyUncertain = eventNudgeState.questionUncertainty(questionState[1], outcome);
@@ -338,7 +368,7 @@ export class CustodianSessionStore {
     }
     const submission = custodianWizardSubmission(message.step, value);
     const client = this.activeClient;
-    if (!submission || !client || !this.chatAvailable || this.sending || this.setupRequired) {
+    if (!submission || !client || !this.canSend) {
       this.emit();
       return;
     }
@@ -358,10 +388,8 @@ export class CustodianSessionStore {
       !step ||
       !this.wizardInputPending ||
       !client ||
-      !this.chatAvailable ||
-      !this.wizardCancelAvailable ||
-      this.sending ||
-      this.setupRequired
+      !this.canSend ||
+      !this.wizardCancelAvailable
     ) {
       this.emit();
       return;
@@ -374,11 +402,11 @@ export class CustodianSessionStore {
     );
   }
 
-  exitSetup(): void {
+  exitSetup(destination: "chat" | "model-setup" | "profile" = "chat"): void {
     // Leaving setup revokes navigation authority from every in-flight reply.
     // The destination surface separately decides whether to retain or rotate context.
     this.revokeNavigationAuthority();
-    this.context?.navigate("chat");
+    this.context?.navigate(destination);
   }
 
   private revokeNavigationAuthority(): void {
@@ -396,29 +424,20 @@ export class CustodianSessionStore {
     return ++this.requestEpoch;
   }
 
-  openModelSetup(): void {
-    this.revokeNavigationAuthority();
-    this.context?.navigate("model-setup");
-  }
-
   private emit(): void {
     for (const listener of this.listeners) {
       listener();
     }
   }
 
-  private startSession(
-    client: GatewayBrowserClient,
-    variant: CustodianSessionVariant,
-    loadTranscript: boolean,
-  ): void {
-    this.sessionVariant = variant;
+  private startSession(client: GatewayBrowserClient, loadTranscript: boolean): void {
+    this.sessionVariant = this.variant;
     this.sessionClient = client;
     this.sessionOwnershipKey = this.sessionOwner.key(this.context?.gateway ?? null);
     this.sessionStarted = true;
     void this.initializeSession(
       client,
-      { sessionId: this.sessionId, ...custodianChatParams(variant) },
+      { sessionId: this.sessionId, ...custodianChatParams(this.variant) },
       loadTranscript,
     );
   }
@@ -442,24 +461,13 @@ export class CustodianSessionStore {
     this.abandonedTurnOutcomeUnknown = true;
   }
 
-  private restartVolatileSession(
-    client: GatewayBrowserClient,
-    variant: CustodianSessionVariant,
-    rotateSessionId: boolean,
-  ): void {
-    if (rotateSessionId) {
-      this.replaceSessionId();
-    }
+  private restartVolatileSession(client: GatewayBrowserClient): void {
+    this.replaceSessionId();
     this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
-    this.retryParams = null;
-    this.input = "";
-    this.wizardValue = undefined;
-    this.wizardSecretVisible = false;
-    this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
-    this.error = null;
-    this.setupIssue = null;
+    this.resetPromptInput(false);
+    this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
-    this.startSession(client, variant, false);
+    this.startSession(client, false);
   }
 
   private synchronizeClient(): void {
@@ -565,11 +573,7 @@ export class CustodianSessionStore {
     if (configuredInferenceState === "required") {
       this.sessionStarted = false;
       this.clearConversation();
-      this.setupIssue = "missing";
       return;
-    }
-    if (inferenceStateChanged) {
-      this.setupIssue = null;
     }
     if (this.sessionStarted) {
       if (!this.retryParams) {
@@ -578,7 +582,7 @@ export class CustodianSessionStore {
       return;
     }
     this.clearConversation();
-    this.startSession(client, this.variant, true);
+    this.startSession(client, true);
   }
 
   private async initializeSession(
@@ -588,6 +592,7 @@ export class CustodianSessionStore {
   ): Promise<void> {
     const epoch = this.advanceRequestEpoch();
     this.sending = true;
+    this.inferenceState = "unverified";
     this.error = null;
     this.retryParams = params;
     this.emit();
@@ -634,26 +639,27 @@ export class CustodianSessionStore {
     this.retryParams = null;
     this.error = null;
     this.transcript.reset();
-    this.setupIssue = null;
-    this.input = "";
-    [this.wizardValue, this.wizardSecretVisible] = [undefined, false];
-    this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
+    this.inferenceState = "unverified";
+    this.inputDrafts.ordinary = { value: "" };
+    this.resetPromptInput(false);
+    this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;
   }
 
   private async requestReply(
     client: GatewayBrowserClient,
     params: SystemAgentChatParams,
+    admit?: () => false | (() => void),
   ): Promise<eventNudgeState.CustodianSendOutcome> {
     const context = this.context;
     if (!context) {
       return "rejected";
     }
-    const snapshot = context.gateway.snapshot;
-    if (
-      snapshot.client !== client ||
-      !canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")
-    ) {
+    const canRequest = () =>
+      client === this.activeClient &&
+      context.gateway.snapshot.client === client &&
+      canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin");
+    if (!canRequest()) {
       return "rejected";
     }
     this.requestAbort?.abort();
@@ -661,30 +667,37 @@ export class CustodianSessionStore {
     this.requestAbort = requestAbort;
     const epoch = this.advanceRequestEpoch();
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
+    let rollbackUnsent: false | (() => void) | undefined;
     this.sending = true;
     this.error = null;
-    if (hasCustodianUserInput(params)) {
-      this.setupIssue = null;
-    }
     this.retryParams = params;
     this.emit();
     try {
-      const result = await client.request<SystemAgentChatResult>("openclaw.chat", params, {
+      if (epoch !== this.requestEpoch || !canRequest() || (rollbackUnsent = admit?.()) === false) {
+        if (this.retryParams === params) {
+          this.retryParams = null;
+        }
+        return "rejected";
+      }
+      // Admission publishes the turn; dispatch before observers can rotate its owner.
+      const pending = client.request<SystemAgentChatResult>("openclaw.chat", params, {
         timeoutMs: SYSTEM_AGENT_CHAT_TIMEOUT_MS,
-        onSent: () => (delivery = "sent"),
+        onSent: () => {
+          delivery = "sent";
+        },
         signal: requestAbort.signal,
       });
+      this.emit();
+      const result = await pending;
       delivery = "received";
       if (epoch !== this.requestEpoch || client !== this.activeClient) {
         return "sent";
       }
       this.replaceSessionId(result.sessionId);
-      this.sensitive = result.sensitive === true;
+      this.resetPromptInput(result.sensitive === true);
       this.wizardInputPending = result.wizardInputPending === true;
       this.retryParams = null;
-      this.setupIssue = null;
-      const step = result.step ?? null;
-      const question = step ? null : parseCustodianQuestion(result.question);
+      this.inferenceState = "ready";
       if (this.rejoinBarrierPending && !hasCustodianUserInput(params)) {
         // Rejoin barrier: this input-free request queued behind any in-flight
         // turn on the Gateway's per-session queue, so refreshing here shows
@@ -697,19 +710,15 @@ export class CustodianSessionStore {
           return "sent";
         }
       }
-      this.wizardValue = step ? initialCustodianWizardValue(step) : undefined;
-      this.wizardSecretVisible = false;
-      const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
-      if (!silentReply || question || step) {
-        const message = createCustodianAssistantMessage(
-          this.nextMessageId++,
-          silentReply ? "" : result.reply,
-          question,
-          step,
-        );
+      this.wizardValue = result.step ? initialCustodianWizardValue(result.step) : undefined;
+      const message = createCustodianReplyMessage(this.nextMessageId, result);
+      if (message) {
+        this.nextMessageId += 1;
         this.messages = [...this.messages, message];
       }
-      if (result.action === "open-agent") {
+      if (result.handoff?.kind === "model-accounts") {
+        this.exitSetup("profile");
+      } else if (result.action === "open-agent") {
         const handoff = await performCustodianAgentHandoff({
           context,
           ...(result.agentId ? { agentId: result.agentId } : {}),
@@ -725,19 +734,21 @@ export class CustodianSessionStore {
       return "sent";
     } catch (error) {
       if (epoch === this.requestEpoch && client === this.activeClient) {
+        // Only a known-unsent turn may restore its unchanged draft; newer edits,
+        // receipts, sensitive input and replacement conversations stay untouched.
+        if (delivery === "unsent" && rollbackUnsent) {
+          rollbackUnsent();
+        }
         this.error = custodianErrorMessage(error);
-        const details =
-          error && typeof error === "object" ? (error as { details?: unknown }).details : undefined;
-        this.setupIssue =
-          readSystemAgentInferenceUnavailableErrorDetails(details) !== undefined
-            ? this.configuredInferenceState === "required"
-              ? "missing"
-              : "unavailable"
-            : null;
-        const sessionInvalidated = isCustodianSessionInvalidatedError(error);
+        const { inferenceUnavailable, sessionInvalidated } = custodianFailure(error);
+        if (inferenceUnavailable) {
+          this.inferenceState = "unverified";
+          // Recheck the runtime without replaying a user turn that may have reached the Gateway.
+          this.retryParams = { sessionId: this.sessionId, ...custodianChatParams(this.variant) };
+        }
         if (sessionInvalidated && hasCustodianUserInput(params)) {
           // Retained transcript rows are display context only; the next turn needs a fresh id.
-          this.restartVolatileSession(client, this.variant, true);
+          this.restartVolatileSession(client);
           this.error = t("custodian.sessionRestarted", { error: custodianErrorMessage(error) });
         } else if (sessionInvalidated) {
           this.replaceSessionId();

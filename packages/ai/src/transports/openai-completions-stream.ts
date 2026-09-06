@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessageEvent, Model } from "@openclaw/llm-core";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
@@ -57,6 +58,7 @@ type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> 
 type CompletionsStreamOptions = {
   signal?: AbortSignal;
   emitReasoning?: boolean;
+  strictReasoningTags?: boolean;
   firstEventTimeoutMs?: number;
   abortFirstEventStream?: (reason: Error) => void;
   onFirstEventTimeout?: (reason: Error) => void;
@@ -107,6 +109,9 @@ export async function processCompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
   const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
   const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
+  if (options?.strictReasoningTags) {
+    reasoningTagTextPartitioner.markStrict();
+  }
   type ToolCallBlock = {
     type: "toolCall";
     id: string;
@@ -195,7 +200,7 @@ export async function processCompletionsStream(
       contentBlockIndices.set(currentBlock, output.content.length - 1);
       pushStreamEvent({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
     }
-    currentBlock.thinking += reasoningDelta.text;
+    appendAssistantThinking(currentBlock, reasoningDelta.text);
     pushStreamEvent({
       type: "thinking_delta",
       contentIndex: blockIndex(),
@@ -653,6 +658,9 @@ export async function processCompletionsStream(
       await cooperativeScheduler.afterEvent();
     }
   }
+  // The SDK can end an aborted SSE iterator normally; cancellation must win
+  // before buffered terminal markers can promote provisional tool calls.
+  throwIfModelStreamAborted(options?.signal);
   if (!finishReason && (directMode || options?.sawStreamDONE?.() === false)) {
     throw new Error("Stream ended without finish_reason");
   }
@@ -700,10 +708,6 @@ export async function processCompletionsStream(
   }
 }
 
-function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
-  return options?.reasoningEffort ?? options?.reasoning ?? "high";
-}
-
 export function shouldEmitOpenAICompletionsReasoning(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
@@ -711,7 +715,7 @@ export function shouldEmitOpenAICompletionsReasoning(
   if (!model.reasoning) {
     return false;
   }
-  const effort = resolveOpenAICompletionsReasoningEffort(options);
+  const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
   if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
     return false;
   }

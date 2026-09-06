@@ -92,6 +92,12 @@ input.on("line", (line) => {
     case "account/login/start":
       sendResult(message.id, { type: message.params?.type });
       return;
+    case "config/read":
+      sendResult(message.id, { config: {}, origins: {}, layers: [] });
+      return;
+    case "configRequirements/read":
+      sendResult(message.id, { requirements: null });
+      return;
     case "account/read":
       sendResult(message.id, {
         account: {

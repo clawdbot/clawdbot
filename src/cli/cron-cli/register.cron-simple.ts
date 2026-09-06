@@ -4,6 +4,7 @@ import {
   resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { resolveCronCompletionStatus } from "../../cron/completion-status.js";
 import type { CronRunLogEntry } from "../../cron/run-log-types.js";
@@ -11,6 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { sleep } from "../../utils/sleep.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { parseTimeoutMs } from "../parse-timeout.js";
 import { findCronJobByIdOrName } from "./list-jobs.js";
@@ -33,11 +35,6 @@ type CronRunCommandResult = {
   enqueued?: boolean;
   runId?: string;
 };
-
-type CronRunLogEntryResult = Pick<
-  CronRunLogEntry,
-  "status" | "completionStatus" | "delivered" | "deliveryStatus"
->;
 
 function parseCronRunWaitDuration(raw: unknown, label: string): number {
   const input =
@@ -65,7 +62,7 @@ async function waitForCronRunCompletion(params: {
   runId: string;
   timeoutMs: number;
   pollIntervalMs: number;
-}): Promise<CronRunLogEntryResult> {
+}): Promise<CronRunLogEntry> {
   // Poll the task ledger rather than cron.run because completion state is written asynchronously.
   const startedAt = performance.now();
   let hasPolled = false;
@@ -86,7 +83,7 @@ async function waitForCronRunCompletion(params: {
       id: params.jobId,
       runId: params.runId,
       limit: 1,
-    })) as { entries?: CronRunLogEntryResult[] };
+    })) as { entries?: CronRunLogEntry[] };
     const entry = page.entries?.[0];
     if (entry?.status === "ok" || entry?.status === "error" || entry?.status === "skipped") {
       return entry;
@@ -199,16 +196,25 @@ export function registerCronSimpleCommands(cron: Command) {
   addGatewayClientOptions(
     createCronOutputCommand(cron, "runs")
       .description("Show automation run history")
-      .requiredOption("--id <id>", "Job id")
+      .argument("[id]", "Job id")
+      .option("--id <id>", "Job id (alternative to positional argument)")
       .option("--run-id <runId>", "Filter by cron run id")
       .option("--limit <n>", "Max entries (default 50)", "50")
-      .action(async (opts) => {
+      .action(async (idArg, opts) => {
         try {
+          const argId = normalizeOptionalString(idArg);
+          const flagId = normalizeOptionalString(opts.id);
+          if (argId && flagId && argId !== flagId) {
+            throw new Error(`Conflicting job ids: positional "${argId}" and --id "${flagId}".`);
+          }
+          const id = argId ?? flagId;
+          if (!id) {
+            throw new Error("Missing job id. Pass it positionally or with --id.");
+          }
           const limit = parseStrictPositiveInteger(opts.limit ?? "50");
           if (limit === undefined) {
             throw new Error("Invalid --limit (must be a positive integer).");
           }
-          const id = String(opts.id);
           if (typeof opts.runId === "string" && !opts.runId.trim()) {
             throw new Error("--run-id must not be blank");
           }
@@ -282,11 +288,10 @@ export function registerCronSimpleCommands(cron: Command) {
               completionStatus,
               run: completedRun,
             });
-            defaultRuntime.exit(completionStatus === "succeeded" ? 0 : 1);
-            return;
+            exitCliAfterOutput(defaultRuntime, completionStatus === "succeeded" ? 0 : 1);
           }
           printCronJson(res);
-          defaultRuntime.exit(result?.ok && (result?.ran || result?.enqueued) ? 0 : 1);
+          exitCliAfterOutput(defaultRuntime, result?.ok && (result.ran || result.enqueued) ? 0 : 1);
         } catch (err) {
           handleCronCliError(err);
         }

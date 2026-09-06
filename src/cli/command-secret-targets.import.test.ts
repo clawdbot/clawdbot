@@ -63,7 +63,7 @@ describe("command secret targets module import", () => {
     const mod = await import("./command-secret-targets.js");
 
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
-    const ids = mod.getAgentRuntimeCommandSecretTargetIds();
+    const ids = mod.getAgentRuntimeCommandSecretTargetIds({ config: {} });
     expect(ids.has("memory.search.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.example.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.example.config.other.apiKey")).toBe(false);

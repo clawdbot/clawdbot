@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import { releaseChatMediaResourceSubscriber, type AttachmentItem } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -62,10 +63,15 @@ afterEach(() => {
 
 describe("attachment sidebar source ownership", () => {
   it.each([
-    ["sample-image.png", "image/png"],
-    ["photo.jpg", "image/jpeg"],
-  ])("renders document-shaped %s attachments as expandable images", (label, mimeType) => {
-    const source = `https://example.com/${label}`;
+    ["sample-image.png", "image/png", "https://example.com/sample-image.png"],
+    ["photo.jpg", "image/jpeg", "https://example.com/photo.jpg"],
+    ["photo.png", "application/octet-stream", `${window.location.origin}/download/opaque`],
+    [
+      "photo",
+      "application/octet-stream; charset=binary",
+      `${window.location.origin}/download/photo.png`,
+    ],
+  ])("renders document-shaped %s attachments as expandable images", (label, mimeType, source) => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenImage = vi.fn();
     render(
@@ -90,34 +96,86 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
-  it("keeps a raster filename image-shaped when its source URL is opaque", () => {
-    const source = `${window.location.origin}/download/opaque`;
-    const container = document.body.appendChild(document.createElement("div"));
-    const onOpenImage = vi.fn();
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "document",
-              label: "photo.png",
-              mimeType: "application/octet-stream",
-              url: source,
-            },
-          },
-        ],
-        { onOpenImage },
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
-    expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(source);
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
-    expect(onOpenImage).toHaveBeenCalledWith(expect.objectContaining({ src: source }));
-    container.remove();
-  });
+  it.each([
+    { kind: "image", outcome: "offline" },
+    { kind: "document", outcome: "offline" },
+    { kind: "image", outcome: "missing" },
+    { kind: "document", outcome: "denied" },
+  ] as const)(
+    "handles $outcome renewal after a local $kind raster has loaded",
+    async ({ kind, outcome }) => {
+      vi.useFakeTimers();
+      const availableResponse = (mediaTicket: string) =>
+        Response.json({
+          available: true,
+          mediaTicket,
+          mediaTicketExpiresAt: new Date(Date.now() + 31_000).toISOString(),
+        });
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(availableResponse("loaded"));
+      vi.stubGlobal("fetch", fetchMock);
+      const container = document.body.appendChild(document.createElement("div"));
+      onTestFinished(() => {
+        render(null, container);
+      });
+      const attachment: AttachmentItem = {
+        type: "attachment",
+        attachment: {
+          kind,
+          label: "photo.png",
+          mimeType: "image/png",
+          url: `/tmp/openclaw/${crypto.randomUUID()}.png`,
+        },
+      };
+      const rerender = () =>
+        render(
+          renderAssistantAttachments([attachment], {
+            authToken: "test-token",
+            onRequestUpdate: rerender,
+          }),
+          container,
+        );
+      subscribers.add(rerender);
+      rerender();
+      await vi.advanceTimersByTimeAsync(0);
+      const displayed = expectDefined(container.querySelector("img"), "loaded raster image");
+      expect(displayed.getAttribute("src")).toContain("mediaTicket=loaded");
+      Object.defineProperty(displayed, "naturalWidth", { value: 1 });
+      displayed.dispatchEvent(new Event("load"));
+      if (outcome === "offline") {
+        fetchMock.mockRejectedValue(new TypeError("Gateway offline"));
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(container.querySelector("img")).toBe(displayed);
+        await vi.advanceTimersByTimeAsync(20_001);
+        expect(container.querySelector("img")).toBe(displayed);
+        expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+      } else {
+        const retryable = outcome === "missing";
+        fetchMock.mockResolvedValueOnce(
+          Response.json({ available: false, reason: "Attachment removed", retryable }),
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(container.querySelector("img")).toBeNull();
+        displayed.dispatchEvent(new Event("load"));
+        displayed.dispatchEvent(new Event("error"));
+        expect(container.querySelector("img")).toBeNull();
+        const retry = container.querySelector<HTMLButtonElement>(
+          ".chat-assistant-attachment-card__retry",
+        );
+        if (outcome === "missing") {
+          expect(container.textContent).toContain("Attachment removed");
+          fetchMock.mockResolvedValueOnce(availableResponse("recovered"));
+          expectDefined(retry, "Retry action for a recoverable missing image").click();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(container.querySelector("img")?.getAttribute("src")).toContain(
+            "mediaTicket=recovered",
+          );
+        } else {
+          expect(container.textContent).toContain("Unavailable");
+          expect(retry).toBeNull();
+        }
+      }
+    },
+  );
 
   it("routes an SVG filename with an opaque source through the bounded SVG renderer", () => {
     const container = document.body.appendChild(document.createElement("div"));
@@ -166,32 +224,6 @@ describe("attachment sidebar source ownership", () => {
 
     expect(container.querySelector("openclaw-chat-svg-attachment")).toBeNull();
     expect(container.querySelector(".chat-assistant-attachment-card")).not.toBeNull();
-    container.remove();
-  });
-
-  it("infers a raster URL when generic MIME includes parameters", () => {
-    const source = `${window.location.origin}/download/photo.png`;
-    const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "document",
-              label: "photo",
-              mimeType: "application/octet-stream; charset=binary",
-              url: source,
-            },
-          },
-        ],
-        {},
-      ),
-      container,
-    );
-
-    expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(source);
-    expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
     container.remove();
   });
 
@@ -678,7 +710,6 @@ describe("attachment sidebar source ownership", () => {
     subscribers.add(sidebarUpdate);
     const runtime = {
       connectionEpoch: 1,
-      localMediaPreviewRoots: [],
       resolveArtifactDownload,
     };
     expect(sidebarContent?.resolveSource?.(sidebarUpdate, runtime)?.src).toBe(firstTicket);
@@ -730,14 +761,12 @@ describe("attachment sidebar source ownership", () => {
     expect(
       sidebarContent?.resolveSource?.(sidebarUpdate, {
         connectionEpoch: 1,
-        localMediaPreviewRoots: [],
         resolveArtifactDownload: firstResolver,
       })?.src,
     ).toBe(firstTicket);
     expect(
       sidebarContent?.resolveSource?.(sidebarUpdate, {
         connectionEpoch: 2,
-        localMediaPreviewRoots: [],
         resolveArtifactDownload: secondResolver,
       }),
     ).toBeNull();
@@ -746,7 +775,6 @@ describe("attachment sidebar source ownership", () => {
     expect(
       sidebarContent?.resolveSource?.(sidebarUpdate, {
         connectionEpoch: 2,
-        localMediaPreviewRoots: [],
         resolveArtifactDownload: secondResolver,
       })?.src,
     ).toBe(secondTicket);
@@ -755,8 +783,62 @@ describe("attachment sidebar source ownership", () => {
   });
 
   it.each([
-    ["audio", "recording.mp3", "audio/mpeg"],
-    ["video", "demo.mp4", "video/mp4"],
+    ["audio", "recording.mp3", "audio/mpeg", "openclaw-chat-audio-player", undefined],
+    ["audio", "recording.ogg", "audio/ogg", "openclaw-chat-audio-player", "transcode"],
+    ["audio", "recording.m4a", "audio/x-m4a", "openclaw-chat-audio-player", undefined],
+    ["audio", "recording.flac", "audio/flac", "openclaw-chat-audio-player", "transcode"],
+    ["video", "demo.mp4", "video/mp4", "openclaw-chat-video-player", undefined],
+    ["video", "demo.webm", "video/webm", "openclaw-chat-video-player", "transcode"],
+  ] as const)(
+    "renders %s attachment %s with inline playback",
+    (kind, label, mimeType, player, requestedPlayback) => {
+      const source = `https://example.com/${label}`;
+      const playback = requestedPlayback ?? "native";
+      const container = document.body.appendChild(document.createElement("div"));
+      const onOpenSidebar = vi.fn();
+      render(
+        renderAssistantAttachments(
+          [
+            {
+              type: "attachment",
+              attachment: { kind, label, mimeType, playback, url: source },
+            },
+          ],
+          {},
+          onOpenSidebar,
+        ),
+        container,
+      );
+
+      const mediaPlayer = container.querySelector(player);
+      expect(mediaPlayer).toMatchObject({ playback, sourceIdentity: source, src: source });
+      container.remove();
+    },
+  );
+
+  it.each([
+    ["audio", "unsafe.mp3", "audio/mpeg", "javascript:alert(1)"],
+    ["video", "unsafe.mp4", "video/mp4", "data:text/html;base64,PHNjcmlwdD4="],
+  ] as const)("blocks unsafe %s player source %s", (kind, label, mimeType, url) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [{ type: "attachment", attachment: { kind, label, mimeType, url } }],
+        {},
+      ),
+      container,
+    );
+
+    expect(container.querySelector("openclaw-chat-audio-player")).toBeNull();
+    expect(container.querySelector("openclaw-chat-video-player")).toBeNull();
+    expect(container.querySelector("audio, video")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
+    expect(container.textContent).toContain(label);
+    container.remove();
+  });
+
+  it.each([
     ["document", "preview.html", "text/html"],
     ["document", "brief.pdf", "application/pdf"],
     ["document", "rows.csv", "text/csv"],
@@ -795,7 +877,53 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
-  it("keeps normalized base64 audio compact with download and Files actions", () => {
+  it("renders named attachment failures with separable status and reason text", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment_error",
+            attachment: {
+              code: "unsupported-format",
+              kind: "document",
+              label: "settings.toml",
+            },
+          },
+        ],
+        {},
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-assistant-attachment-card__title")?.textContent).toBe(
+      "settings.toml",
+    );
+    expect(container.querySelectorAll(".chat-assistant-attachment-card")).toHaveLength(1);
+    expect(container.querySelector(".chat-assistant-attachment-card--definitive")).not.toBeNull();
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__status-badge")?.textContent,
+    ).toBe("Not sent");
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__status-separator")?.textContent,
+    ).toBe("·");
+    expect(
+      container
+        .querySelector(".chat-assistant-attachment-card__status-separator")
+        ?.getAttribute("aria-hidden"),
+    ).toBe("true");
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__status-reason")?.textContent,
+    ).toBe("Rejected by the local attachment allowlist. Send a supported file type.");
+    expect(
+      container.querySelector(
+        ".chat-assistant-attachment-card__download, .chat-assistant-attachment-card__expand, .chat-assistant-attachment-card__retry",
+      ),
+    ).toBeNull();
+    container.remove();
+  });
+
+  it("renders normalized base64 audio with inline playback and Files actions", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenSidebar = vi.fn();
     render(
@@ -817,13 +945,16 @@ describe("attachment sidebar source ownership", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
-    expect(container.querySelector("audio, openclaw-chat-audio-player")).toBeNull();
-    const download = container.querySelector<HTMLAnchorElement>(
-      ".chat-assistant-attachment-card__download",
-    );
-    expect(download?.href).toBe("data:audio/wav;base64,UklGRg==");
-    container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+    const player = container.querySelector("openclaw-chat-audio-player");
+    expect(player).toMatchObject({
+      label: "inline.wav",
+      mimeType: "audio/wav",
+      onExpand: expect.any(Function),
+      sourceIdentity: "data:audio/wav;base64,UklGRg==",
+      src: "data:audio/wav;base64,UklGRg==",
+    });
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
+    (player as HTMLElement & { onExpand: () => void }).onExpand();
     expect(onOpenSidebar).toHaveBeenCalledWith(
       expect.objectContaining({
         attachmentKind: "audio",
@@ -834,7 +965,7 @@ describe("attachment sidebar source ownership", () => {
   });
 
   it("resolves an open local sidebar attachment with the current runtime credentials", async () => {
-    const source = "/tmp/openclaw/clip.mp4";
+    const source = "/tmp/openclaw/clip.mp3";
     const container = document.body.appendChild(document.createElement("div"));
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const token = new Headers(init?.headers).get("Authorization")?.replace("Bearer ", "") ?? "";
@@ -857,16 +988,15 @@ describe("attachment sidebar source ownership", () => {
             {
               type: "attachment",
               attachment: {
-                kind: "video",
-                label: "clip.mp4",
-                mimeType: "video/mp4",
+                kind: "audio",
+                label: "clip.mp3",
+                mimeType: "audio/mpeg",
                 url: source,
               },
             },
           ],
           {
             authToken: "token-A",
-            localMediaPreviewRoots: ["/tmp/openclaw"],
             onRequestUpdate: transcriptUpdate,
           },
           (content) => {
@@ -891,7 +1021,6 @@ describe("attachment sidebar source ownership", () => {
           onRequestUpdate: () => void,
           runtime: {
             authToken?: string | null;
-            localMediaPreviewRoots: readonly string[];
             resourceBasePath?: string;
           },
         ) => { src: string; authToken?: string | null } | null)
@@ -900,7 +1029,6 @@ describe("attachment sidebar source ownership", () => {
     expect(
       resolveSource?.(sidebarUpdate, {
         authToken: "token-B",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
       }),
     ).toBeNull();
     await flushAttachmentResolution();
@@ -908,7 +1036,6 @@ describe("attachment sidebar source ownership", () => {
     expect(
       resolveSource?.(sidebarUpdate, {
         authToken: "token-B",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
       }),
     ).toEqual(
       expect.objectContaining({

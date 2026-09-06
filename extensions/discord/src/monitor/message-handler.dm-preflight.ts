@@ -68,6 +68,7 @@ export async function resolveDiscordDmPreflightAccess(params: {
         name: params.sender.name,
         tag: params.sender.tag,
         isPluralKit: params.sender.isPluralKit,
+        authorKind: params.author.bot ? "bot" : "user",
       },
       allowNameMatching: params.allowNameMatching,
       cfg: params.preflight.cfg,

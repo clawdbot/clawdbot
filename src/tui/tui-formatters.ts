@@ -1,7 +1,9 @@
+import { asOptionalObjectRecord as asMessageRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Formats terminal-safe strings for TUI messages and status surfaces.
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { appendReplyMediaFailures, type ReplyMediaFailure } from "../auto-reply/reply-payload.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { SessionGoal } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -9,7 +11,7 @@ import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
-import { formatTokenCount } from "../utils/usage-format.js";
+import { formatTokenCount } from "../utils/token-format.js";
 import type { SessionInfo } from "./tui-types.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
@@ -316,25 +318,12 @@ export function resolveFinalAssistantText(params: {
   finalText?: string | null;
   streamedText?: string | null;
   errorMessage?: string | null;
-  attachmentText?: string | null;
+  message?: unknown;
 }) {
-  const finalText = params.finalText ?? "";
-  if (finalText.trim()) {
-    return finalText;
-  }
-  const streamedText = params.streamedText ?? "";
-  if (streamedText.trim()) {
-    return streamedText;
-  }
-  const errorMessage = params.errorMessage ?? "";
-  if (errorMessage.trim()) {
-    return formatRawAssistantErrorForUi(errorMessage);
-  }
-  const attachmentText = params.attachmentText ?? "";
-  if (attachmentText.trim()) {
-    return attachmentText;
-  }
-  return "(no output)";
+  const contentText =
+    [params.finalText, params.streamedText].find((text) => text?.trim()) ??
+    (params.errorMessage?.trim() ? formatRawAssistantErrorForUi(params.errorMessage) : "");
+  return formatTuiAssistantContent(params.message, contentText) || "(no output)";
 }
 
 export function composeThinkingAndContent(params: {
@@ -354,13 +343,6 @@ export function composeThinkingAndContent(params: {
   }
 
   return parts.join("\n\n").trim();
-}
-
-function asMessageRecord(message: unknown): Record<string, unknown> | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  return message as Record<string, unknown>;
 }
 
 type TuiAttachmentKind = "image" | "audio" | "video" | "file" | "media";
@@ -416,7 +398,7 @@ function resolvePersistedTuiAttachmentKind(
 }
 
 /** Render assistant attachments without exposing their sources or capability URLs. */
-export function extractAssistantAttachmentText(message: unknown): string {
+function extractAssistantAttachmentText(message: unknown): string {
   const record = asMessageRecord(message);
   if (!record) {
     return "";
@@ -446,6 +428,29 @@ export function extractAssistantAttachmentText(message: unknown): string {
       : []),
   ];
   return legacyMedia.map(() => "Attached media").join("\n");
+}
+
+function formatTuiAssistantContent(message: unknown, contentText: string): string {
+  const content = asMessageRecord(message)?.content;
+  const failures: ReplyMediaFailure[] = [];
+  for (const block of Array.isArray(content) ? content : []) {
+    const entry = asMessageRecord(block);
+    const attachment =
+      entry?.type === "attachment_error" ? asMessageRecord(entry.attachment) : undefined;
+    const code = attachment?.code;
+    const kind = attachment?.kind;
+    if (
+      (code === "file-not-found" || code === "unsupported-format" || code === "delivery-failed") &&
+      (kind === "image" || kind === "audio" || kind === "video" || kind === "document")
+    ) {
+      // Assistant attachment labels can contain private paths or capability URLs.
+      // Reuse the actionable receipt wording, but keep the TUI's generic labels.
+      failures.push({ code, kind, label: `${kind === "document" ? "file" : kind} attachment` });
+    }
+  }
+  return (
+    appendReplyMediaFailures(contentText || extractAssistantAttachmentText(message), failures) ?? ""
+  );
 }
 
 function resolveMessageRecord(
@@ -651,8 +656,9 @@ export function extractTextFromMessage(
     return composeThinkingAndContent({
       thinkingText: extractThinkingFromMessage(record),
       contentText:
-        contentText ||
-        (opts?.includeAttachments !== false ? extractAssistantAttachmentText(record) : ""),
+        opts?.includeAttachments !== false
+          ? formatTuiAssistantContent(record, contentText)
+          : contentText,
       showThinking: opts?.includeThinking ?? false,
     });
   }

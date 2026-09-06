@@ -76,11 +76,11 @@ async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
     async (state) => {
       const root = state.stateDir;
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskFlowRegistryForTests();
+      resetTaskFlowRegistryForTests({ persist: false });
       try {
         return await run(root);
       } finally {
-        resetTaskFlowRegistryForTests();
+        resetTaskFlowRegistryForTests({ persist: false });
       }
     },
   );
@@ -104,7 +104,7 @@ describe("task-flow-registry store runtime", () => {
   afterEach(() => {
     vi.useRealTimers();
     restoreOriginalStateDir();
-    resetTaskFlowRegistryForTests();
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("does not create shared state for a read-only flow snapshot", async () => {
@@ -184,8 +184,6 @@ describe("task-flow-registry store runtime", () => {
 
   it("rejects corrupt persisted flow rows during sqlite restore", async () => {
     await withFlowRegistryTempDir(async () => {
-      resetTaskFlowRegistryForTests();
-
       const created = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/corrupt-flow",
@@ -203,13 +201,14 @@ describe("task-flow-registry store runtime", () => {
       expect(() => loadTaskFlowRegistryStateFromSqlite()).toThrow(
         "Invalid persisted task flow status",
       );
+      expect(() => loadTaskFlowRegistryStateFromSqliteReadOnly()).toThrow(
+        "Invalid persisted task flow status",
+      );
     });
   });
 
   it("drops invalid requester origins during sqlite restore", async () => {
     await withFlowRegistryTempDir(async () => {
-      resetTaskFlowRegistryForTests();
-
       const created = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/invalid-origin-flow",
@@ -237,8 +236,6 @@ describe("task-flow-registry store runtime", () => {
 
   it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {
     await withFlowRegistryTempDir(async () => {
-      resetTaskFlowRegistryForTests();
-
       const created = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/persisted-flow",
@@ -282,8 +279,6 @@ describe("task-flow-registry store runtime", () => {
 
   it("round-trips explicit json null through sqlite", async () => {
     await withFlowRegistryTempDir(async () => {
-      resetTaskFlowRegistryForTests();
-
       const created = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/null-roundtrip",
@@ -303,8 +298,6 @@ describe("task-flow-registry store runtime", () => {
 
   it("prunes large sqlite snapshots without binding every flow id at once", async () => {
     await withFlowRegistryTempDir(async () => {
-      resetTaskFlowRegistryForTests();
-
       const flows = new Map<string, TaskFlowRecord>();
       for (let index = 0; index < 1_200; index++) {
         const flow: TaskFlowRecord = {
@@ -337,6 +330,7 @@ describe("task-flow-registry store runtime", () => {
       expect(restored.flows.size).toBe(1_100);
       expect(restored.flows.has("flow-large-0")).toBe(false);
       expect(restored.flows.has("flow-large-1199")).toBe(true);
+      expect(loadTaskFlowRegistryStateFromSqliteReadOnly()).toEqual(restored);
       expect(
         openOpenClawStateDatabase()
           .db.prepare(
@@ -443,8 +437,6 @@ describe("task-flow-registry store runtime", () => {
       return;
     }
     await withFlowRegistryTempDir(async () => {
-      resetTaskFlowRegistryForTests();
-
       createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/secured-flow",

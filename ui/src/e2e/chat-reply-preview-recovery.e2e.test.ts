@@ -1,12 +1,15 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -30,10 +33,10 @@ suite.define(() => {
   ])(
     "settles a $name without repeatedly loading the reply preview",
     async ({ artifact, response }) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-      }
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-reply-preview-recovery", artifactRoot)
+        : undefined;
       const context = await suite.newBrowserContext({
         locale: "en-US",
         ...(artifactDir
@@ -58,7 +61,7 @@ suite.define(() => {
 
       let firstCount = 0;
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-preview"));
         const reply = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
         await reply.waitFor({ state: "visible" });
         expect(await reply.textContent()).toContain("Replying to message");
@@ -75,7 +78,6 @@ suite.define(() => {
           await page
             .locator(".chat-pane-cache__pane--active")
             .getByRole("alert")
-            .locator("summary")
             .getByText("The original message is unavailable.", { exact: true })
             .waitFor();
           await expectRequestCountStable(gateway, "chat.message.get", 1);
@@ -107,11 +109,7 @@ suite.define(() => {
   it.each(["temporary failure", "previous success", "not found"] as const)(
     "refreshes a reply preview after reconnect from $0 and keeps source navigation working",
     async (initial) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const source = {
         role: "assistant",
@@ -119,14 +117,21 @@ suite.define(() => {
         timestamp: 1_800_000_000_000,
         __openclaw: { id: "reconnect-source", seq: 1 },
       };
+      // Deep enough that the source's page sits beyond the upward-prefetch
+      // reach; the refresh must come from chat.message.get, not a loaded row.
+      const interveningCount = 60;
       const reply = {
         role: "user",
         content: [{ type: "text", text: "A follow-up question after reconnect." }],
-        timestamp: 1_800_000_000_017,
-        __openclaw: { id: "reconnect-reply", seq: 17, replyToId: "reconnect-source" },
+        timestamp: 1_800_000_000_001 + interveningCount,
+        __openclaw: {
+          id: "reconnect-reply",
+          seq: interveningCount + 2,
+          replyToId: "reconnect-source",
+        },
       };
       const messages = [
-        ...Array.from({ length: 15 }, (_, index) => ({
+        ...Array.from({ length: interveningCount }, (_, index) => ({
           role: index % 2 === 0 ? "assistant" : "user",
           content: [{ type: "text", text: `Conversation entry ${index + 2}.` }],
           timestamp: 1_800_000_000_001 + index,
@@ -158,7 +163,7 @@ suite.define(() => {
                 response: {
                   messages: [source],
                   hasMore: false,
-                  totalMessages: 17,
+                  totalMessages: messages.length + 1,
                   sessionId: "reply-preview-history",
                 },
               },
@@ -168,15 +173,16 @@ suite.define(() => {
             messages,
             hasMore: true,
             nextOffset: messages.length,
-            totalMessages: 17,
+            totalMessages: messages.length + 1,
             sessionId: "reply-preview-history",
           },
         },
         sessionKey: "agent:main:reply-reconnect",
+        sessions: [{ key: "agent:main:reply-reconnect", sessionId: "reply-preview-history" }],
       });
 
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-reconnect"));
         const preview = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
         await preview.waitFor();
         await gateway.waitForRequest("chat.message.get");

@@ -1,8 +1,9 @@
-// Control UI E2E proves dashboard tabs do not multiply server-owned session-list demand.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+// Control UI E2E proves dashboard tabs do not multiply server-owned session-list demand.
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   waitForControlUiRoute,
@@ -16,11 +17,11 @@ const suite = createControlUiE2eSuite({
 
 const DASHBOARD_REQUEST_PARAMS = {
   archived: "all",
-  boardFace: "dashboard",
   configuredAgentsOnly: true,
+  hasBoard: true,
   includeGlobal: true,
   includeUnknown: true,
-  limit: 50,
+  limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const;
 
 function sessionsResult(key: string, label: string, updatedAt: number) {
@@ -45,8 +46,8 @@ function isDashboardRequest(request: { params?: unknown }): boolean {
   return (
     typeof request.params === "object" &&
     request.params !== null &&
-    "boardFace" in request.params &&
-    request.params.boardFace === "dashboard"
+    "hasBoard" in request.params &&
+    request.params.hasBoard === true
   );
 }
 
@@ -60,8 +61,7 @@ async function requestCounts(gateways: MockGatewayControls[]) {
 
 suite.define(() => {
   it("shows failed dashboard refreshes beside retained rows and retries the same query", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/dashboard-refresh-errors");
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("dashboard-refresh-errors");
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1440 } });
     const page = await context.newPage();
     try {
@@ -71,7 +71,7 @@ suite.define(() => {
           "sessions.list": {
             cases: [
               {
-                match: { boardFace: "dashboard" },
+                match: { hasBoard: true },
                 response: sessionsResult(key, "Deploy monitor", 1),
               },
             ],
@@ -82,7 +82,7 @@ suite.define(() => {
       const dashboards = page.locator("openclaw-dashboards-page");
       await dashboards.getByText("Deploy monitor", { exact: true }).waitFor();
       const before = (await gateway.getRequests("sessions.list")).filter(isDashboardRequest);
-      await gateway.deferNext("sessions.list", { boardFace: "dashboard" });
+      await gateway.deferNext("sessions.list", { hasBoard: true });
       await gateway.emitGatewayEvent("sessions.changed", {
         agentId: "main",
         key,
@@ -103,7 +103,8 @@ suite.define(() => {
         retryable: true,
       });
       // Confirm the real store consumed the failed wire response before capturing the UI.
-      await page.waitForFunction(() => {
+      // The predicate runs in the page, so the limit crosses as an argument.
+      await page.waitForFunction((rosterLimit) => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
           runtime?: {
             context: {
@@ -120,13 +121,13 @@ suite.define(() => {
         const appContext = app.runtime?.context;
         return (
           appContext?.sessions.listSnapshot({
-            limit: 50,
-            boardFace: "dashboard",
+            limit: rosterLimit,
+            hasBoard: true,
             archivedFilter: "all",
             agentId: appContext.agentSelection.state.scopeId ?? undefined,
           }).error === "Dashboard refresh unavailable"
         );
-      });
+      }, SIDEBAR_SESSION_ROSTER_LIMIT);
       await page.screenshot({ path: path.join(artifactDir, "refresh-failed.png") });
       expect(await dashboards.getByText("Deploy monitor", { exact: true }).isVisible()).toBe(true);
       expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
@@ -139,7 +140,7 @@ suite.define(() => {
       await gateway.setMethodResponse("sessions.list", {
         cases: [
           {
-            match: { boardFace: "dashboard" },
+            match: { hasBoard: true },
             response: sessionsResult(key, "Updated deploy monitor", 2),
           },
         ],
@@ -165,7 +166,7 @@ suite.define(() => {
           "sessions.list": {
             cases: [
               {
-                match: { boardFace: "dashboard" },
+                match: { hasBoard: true },
                 response: {
                   __mockError: { code: "UNAVAILABLE", message: "Dashboard list unavailable" },
                 },
@@ -184,7 +185,7 @@ suite.define(() => {
       expect(await dashboards.locator("[data-dashboards-empty]").count()).toBe(0);
       const emptyResult = { ...sessionsResult("", "", 1), count: 0, sessions: [] };
       await gateway.setMethodResponse("sessions.list", {
-        cases: [{ match: { boardFace: "dashboard" }, response: emptyResult }],
+        cases: [{ match: { hasBoard: true }, response: emptyResult }],
       });
       await dashboards.getByRole("button", { name: "Retry", exact: true }).click();
       await dashboards.locator("[data-dashboards-empty]").waitFor();
@@ -213,7 +214,7 @@ suite.define(() => {
             "sessions.list": {
               cases: [
                 {
-                  match: { archived: "all", boardFace: "dashboard" },
+                  match: { archived: "all", hasBoard: true },
                   response: sessionsResult(`agent:main:dashboard-${index}`, dashboardLabel, index),
                 },
               ],
@@ -227,9 +228,19 @@ suite.define(() => {
 
       await Promise.all(
         tabs.map(async ({ gateway, page }) => {
-          await page.goto(suite.server.baseUrl);
+          // Chat hydrates its own Swarm child roster; start without that unrelated demand.
+          await page.goto(`${suite.server.baseUrl}new`);
           const canonical = await gateway.waitForRequest("sessions.list");
-          expect(isDashboardRequest(canonical)).toBe(false);
+          expect(canonical.params).toEqual({
+            agentId: "main",
+            configuredAgentsOnly: true,
+            includeDerivedTitles: true,
+            includeGlobal: true,
+            includeLastMessage: true,
+            includeUnknown: true,
+            limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+          });
+          await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
           await page.waitForFunction(() => {
             const app = document.querySelector("openclaw-app") as HTMLElement & {
               runtime?: { context: { agents: { state: { agentsList: unknown } } } };
@@ -301,7 +312,7 @@ suite.define(() => {
           await gateway.setMethodResponse("sessions.list", {
             cases: [
               {
-                match: { archived: "all", boardFace: "dashboard" },
+                match: { archived: "all", hasBoard: true },
                 response: sessionsResult(
                   `agent:main:updated-dashboard-${index + 1}`,
                   updatedDashboardLabel,

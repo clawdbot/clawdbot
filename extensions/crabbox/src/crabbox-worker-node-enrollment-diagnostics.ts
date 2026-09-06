@@ -2,8 +2,8 @@ import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import { CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
-const NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS = 60_000;
 const MAX_NODE_ENROLLMENT_EVIDENCE_BYTES = 2_048;
 
 export async function collectCrabboxNodeEnrollmentEvidence(params: {
@@ -22,8 +22,8 @@ export async function collectCrabboxNodeEnrollmentEvidence(params: {
       binary: params.binary,
       input: [
         `state_dir="$HOME/.openclaw/cloud-workers/${params.id}"`,
-        'printf "package-spec="',
-        'if [ -s "$state_dir/package-spec" ]; then head -c 256 "$state_dir/package-spec"; else printf absent; fi',
+        'printf "node-runtime="',
+        'if [ -L "$state_dir/runtime" ]; then readlink "$state_dir/runtime"; else printf absent; fi',
         'printf " node-pid="',
         'if [ -s "$state_dir/node.pid" ] && kill -0 "$(head -c 32 "$state_dir/node.pid")" 2>/dev/null; then printf alive; else printf dead-or-absent; fi',
         'printf " node.log tail: "',
@@ -32,7 +32,7 @@ export async function collectCrabboxNodeEnrollmentEvidence(params: {
       runCommand: params.runCommand,
       ...(params.signal ? { signal: params.signal } : {}),
       // The enrollment deadline has already elapsed; diagnostics need their own bounded budget.
-      timeoutMs: NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS,
+      timeoutMs: CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS,
     });
     if (result.termination !== "exit" || result.code !== 0) {
       throw crabboxCommandError("enrollment diagnostics", result);

@@ -10,16 +10,10 @@ import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
-  getReusableCatalogSnapshotCountForTest,
   isDirectVisibleCatalogTool,
   resolveCatalog,
 } from "./tool-search-catalog.js";
-import {
-  appendToolSearchCodeStderrTail,
-  readToolSearchCode,
-  runCodeMode,
-  runCodeModeChild,
-} from "./tool-search-code-mode.js";
+import { readToolSearchCode, runCodeMode, runCodeModeChild } from "./tool-search-code-mode.js";
 import {
   isToolSearchCodeModeSupported,
   resolveToolSearchConfig,
@@ -57,11 +51,8 @@ import {
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 export {
-  addClientToolsToToolCatalog,
-  applyToolCatalogCompaction,
   clearToolSearchCatalog,
   collectUniqueCatalogToolNames,
-  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
   restrictToolSearchCatalog,
@@ -71,8 +62,6 @@ export {
   buildToolSchemaDirectoryPrompt,
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
-export { ToolSearchRuntime } from "./tool-search-runtime.js";
-export { projectToolSearchTargetTranscriptMessages } from "./tool-search-transcript.js";
 export {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -84,7 +73,6 @@ export type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
   ToolSearchConfig,
-  ToolSearchTargetTranscriptProjection,
   ToolSearchToolContext,
 } from "./tool-search-types.js";
 
@@ -178,30 +166,27 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
   let truncated = bounded.some((result) => result.truncated);
   const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
   while (JSON.stringify(render(), null, 2).length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
-    const removable = bounded
-      .map((result, index) => ({
-        index,
-        rank: result.candidates.length,
-        candidate: result.candidates.at(-1),
-      }))
-      .filter(
-        (item): item is { index: number; rank: number; candidate: ToolSearchCandidate } =>
-          item.candidate !== undefined,
-      )
-      .toSorted(
-        (a, b) =>
-          b.rank - a.rank ||
-          JSON.stringify(b.candidate).length - JSON.stringify(a.candidate).length ||
-          a.index - b.index,
-      )[0];
+    let removable: ToolSearchBatchGroup | undefined;
+    for (const group of bounded) {
+      if (group.candidates.length === 0) {
+        continue;
+      }
+      // Keep the earlier request on exact ties, matching the batch's stable order.
+      if (
+        !removable ||
+        group.candidates.length > removable.candidates.length ||
+        (group.candidates.length === removable.candidates.length &&
+          JSON.stringify(group.candidates.at(-1)).length >
+            JSON.stringify(removable.candidates.at(-1)).length)
+      ) {
+        removable = group;
+      }
+    }
     if (!removable) {
       break;
     }
-    const group = bounded[removable.index];
-    group?.candidates.pop();
-    if (group) {
-      group.truncated = true;
-    }
+    removable.candidates.pop();
+    removable.truncated = true;
     truncated = true;
   }
   return render();
@@ -401,7 +386,17 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             signal,
             onUpdate,
           });
-          const wrappedResult = formatToolSearchControlResult(callResult, runtime, toolCallId);
+          const { id, name, source } = callResult.tool;
+          // Invocation results need identity, not another copy of the discovery metadata.
+          // Keep full metadata in details for callers and the unchanged target result on both surfaces.
+          const wrappedResult = {
+            ...formatToolSearchControlResult(
+              { tool: { id, name, source }, result: callResult.result },
+              runtime,
+              toolCallId,
+            ),
+            details: callResult,
+          };
           const failureKind = resolveToolResultFailureKind(callResult.result);
           if (!failureKind) {
             return wrappedResult;
@@ -418,7 +413,6 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
 }
 
 const testing = {
-  getReusableCatalogSnapshotCountForTest,
   maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
   resolveToolSearchConfig,
   isToolSearchCodeModeSupported,
@@ -426,7 +420,6 @@ const testing = {
   setToolSearchMinCodeTimeoutMsForTest,
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,
-  appendToolSearchCodeStderrTail,
   runCodeModeChild,
 };
 

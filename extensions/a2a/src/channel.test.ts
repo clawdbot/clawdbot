@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -14,34 +13,21 @@ function parseA2aOutboundBody(body: BodyInit | null | undefined): Record<string,
   return JSON.parse(body) as Record<string, unknown>;
 }
 
-const a2aManifest = JSON.parse(
-  readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
-) as {
-  channelConfigs: {
-    a2a: {
-      schema: Parameters<typeof validateJsonSchemaValue>[0]["schema"];
-      uiHints: Record<string, { sensitive?: boolean }>;
-    };
-  };
-};
-
+// Cold (discovery-time) validation uses the zod-derived generated bundled
+// channel metadata, which the generator builds from this same config-schema
+// module — the manifest carries no schema copy to drift (see #131292).
 function assertConfigAcceptance(value: unknown, expected: boolean, label: string): void {
   const runtime = a2aPluginConfigSchema.runtime;
   if (!runtime) {
     throw new Error("expected A2A runtime config schema");
   }
   expect(runtime.safeParse(value).success, `${label}: runtime`).toBe(expected);
-  for (const [schemaName, schema] of [
-    ["runtime-json", a2aPluginConfigSchema.schema],
-    ["cold-manifest", a2aManifest.channelConfigs.a2a.schema],
-  ] as const) {
-    const result = validateJsonSchemaValue({
-      cacheKey: `a2a.channel.config.${schemaName}`,
-      schema,
-      value,
-    });
-    expect(result.ok, `${label}: ${schemaName}`).toBe(expected);
-  }
+  const result = validateJsonSchemaValue({
+    cacheKey: "a2a.channel.config.runtime-json",
+    schema: a2aPluginConfigSchema.schema,
+    value,
+  });
+  expect(result.ok, `${label}: runtime-json`).toBe(expected);
 }
 
 describe("A2A channel configuration", () => {
@@ -66,8 +52,6 @@ describe("A2A channel configuration", () => {
     );
     expect(a2aPluginConfigSchema.uiHints?.["peers.*.token"]?.sensitive).toBe(true);
     expect(a2aPluginConfigSchema.uiHints?.["peers.*.outboundToken"]?.sensitive).toBe(true);
-    expect(a2aManifest.channelConfigs.a2a.uiHints["peers.*.token"]?.sensitive).toBe(true);
-    expect(a2aManifest.channelConfigs.a2a.uiHints["peers.*.outboundToken"]?.sensitive).toBe(true);
   });
 
   it.each([

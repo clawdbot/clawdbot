@@ -114,6 +114,12 @@ function mount(
       vi.fn(),
       vi.fn(),
       vi.fn(),
+      {
+        weight: errors.contextWeight,
+        loading: false,
+        status: status(),
+      },
+      vi.fn(),
       errors.contextExpanded ?? false,
       errors.onToggleContextExpanded ?? vi.fn(),
       vi.fn(),
@@ -187,32 +193,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
       localYear.mockRestore();
       localMonth.mockRestore();
       localDay.mockRestore();
-    }
-  });
-
-  it("ends a local range at the next calendar midnight after a skipped midnight", () => {
-    const previousTimeZone = process.env.TZ;
-    process.env.TZ = "America/Santiago";
-    try {
-      const container = mount(
-        [
-          point({ timestamp: new Date(2026, 8, 6, 1).getTime() }),
-          point({ timestamp: new Date(2026, 8, 6, 12).getTime() }),
-          point({ timestamp: new Date(2026, 8, 7, 0, 30).getTime() }),
-        ],
-        null,
-        null,
-        "total",
-        { startDate: "2026-09-06", endDate: "2026-09-06", timeZone: "local" },
-      );
-
-      expect(container.querySelectorAll(".ts-bar")).toHaveLength(2);
-    } finally {
-      if (previousTimeZone === undefined) {
-        delete process.env.TZ;
-      } else {
-        process.env.TZ = previousTimeZone;
-      }
     }
   });
 

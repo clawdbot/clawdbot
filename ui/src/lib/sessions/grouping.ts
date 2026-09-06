@@ -1,6 +1,11 @@
 // Pure grouping helpers for the sessions table "Group by" modes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import {
+  checkoutDisplayName,
+  foldWorktreeCheckoutPath,
+  sessionActorGroupId,
+} from "./catalog-project-grouping.ts";
 import { moveSessionOrderEntry, normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
 
@@ -34,9 +39,12 @@ export type SidebarSessionSection<Row> = {
     | "work"
     | `category:${string}`
     | `person:${string}`
+    | `project:${string}`
     | `catalog:${string}`;
   category?: string;
-  personOwner?: { type: string; id: string; label?: string; avatarUrl?: string };
+  personOwner?: NonNullable<GatewaySessionRow["owner"]>["actor"] & { id: string };
+  /** Repo/workspace section (project grouping); `path` disambiguates same-named repos. */
+  project?: { name: string; path: string };
   /** Built-in smart group-conversation section (kind "group" rows). */
   groups?: boolean;
   /** Built-in smart coding section (worktree/exec-node/ACP sessions). */
@@ -123,36 +131,38 @@ export function normalizeSessionsGroupBy(raw: unknown): SessionsGroupBy {
   return SESSION_GROUP_MODES.includes(raw as SessionsGroupBy) ? (raw as SessionsGroupBy) : "none";
 }
 
-function dateBucketId(updatedAt: number | null | undefined, now: number): string {
-  if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || updatedAt <= 0) {
-    return UNGROUPED_ID;
-  }
+function createDateGroupResolver(now: number): (row: GatewaySessionRow) => string {
   const today = new Date(now);
   // Calendar midnights can be 23 or 25 hours apart across daylight-saving changes.
   const startOfDay = (daysAgo: number) =>
     new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysAgo).getTime();
-  if (updatedAt >= startOfDay(0)) {
-    return "today";
-  }
-  if (updatedAt >= startOfDay(1)) {
-    return "yesterday";
-  }
-  if (updatedAt >= startOfDay(6)) {
-    return "week";
-  }
-  return "older";
+  const startOfToday = startOfDay(0);
+  const startOfYesterday = startOfDay(1);
+  const startOfWeek = startOfDay(6);
+  return ({ updatedAt }) => {
+    if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || updatedAt <= 0) {
+      return UNGROUPED_ID;
+    }
+    if (updatedAt >= startOfToday) {
+      return "today";
+    }
+    if (updatedAt >= startOfYesterday) {
+      return "yesterday";
+    }
+    return updatedAt >= startOfWeek ? "week" : "older";
+  };
 }
 
 function sessionRowChannel(row: GatewaySessionRow): string {
   return row.channel ?? parseSessionKeyParts(row.key)?.channel ?? UNGROUPED_ID;
 }
 
-function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy, now: number): string {
+function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy): string {
   switch (mode) {
     case "category":
       return row.category?.trim() ?? UNGROUPED_ID;
     case "person":
-      return row.owner?.actor.id?.trim() || UNGROUPED_ID;
+      return sessionActorGroupId(row.owner?.actor);
     case "channel":
       return sessionRowChannel(row);
     case "kind":
@@ -161,8 +171,6 @@ function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy, no
       // parseSessionKeyParts only matches channel-style keys; plain agent
       // sessions like "agent:main:main" need the agent:<id>:<rest> parser.
       return parseAgentSessionKey(row.key)?.agentId ?? UNGROUPED_ID;
-    case "date":
-      return dateBucketId(row.updatedAt, now);
     default:
       return UNGROUPED_ID;
   }
@@ -180,9 +188,13 @@ export function groupSessionRows(params: {
   now?: number;
 }): SessionRowGroup[] {
   const now = params.now ?? Date.now();
+  const groupId =
+    params.mode === "date"
+      ? createDateGroupResolver(now)
+      : (row: GatewaySessionRow) => resolveSessionGroupId(row, params.mode);
   const byId = new Map<string, GatewaySessionRow[]>();
   for (const row of params.rows) {
-    const id = resolveSessionGroupId(row, params.mode, now);
+    const id = groupId(row);
     const bucket = byId.get(id);
     if (bucket) {
       bucket.push(row);
@@ -195,16 +207,18 @@ export function groupSessionRows(params: {
 }
 
 /** How the sidebar buckets non-pinned rows before its built-in smart zones. */
-export type SidebarSessionsGrouping = "category" | "person" | "none";
+export type SidebarSessionsGrouping = "category" | "person" | "project" | "none";
 
 export function normalizeSidebarSessionsGrouping(raw: unknown): SidebarSessionsGrouping {
-  return raw === "none" || raw === "person" ? raw : "category";
+  return raw === "none" || raw === "person" || raw === "project" ? raw : "category";
 }
 
 type SidebarGroupableRow = {
   pinned?: boolean;
   category?: string | null;
-  owner?: { actor: { type: string; id?: string; label?: string; avatarUrl?: string } };
+  owner?: GatewaySessionRow["owner"];
+  /** Resolved repo/workspace of the session's checkout (project grouping). */
+  workContext?: { path: string };
   /** Session kind from the gateway row; "group" rows form the Groups zone. */
   kind?: string;
   /** Session bound to a managed worktree or exec node (Coding zone). */
@@ -231,11 +245,14 @@ export function categoryClearReturnsToGroups(
  * new ones alphabetical), other sessions ("ungrouped"),
  * group conversations, then coding (worktree/exec-node/ACP). An explicit user
  * category wins over the smart group/coding classification so manual curation
- * sticks. `grouping: "none"` only disables categories; the kind-based Groups
- * and Coding zones always split so chat threads stay readable. The coding
- * section is always emitted (even empty) so its ordered position remains a
- * stable sibling of any catalog sections. Groups also stays visible while a
- * categorized group row can deterministically return there.
+ * sticks. `grouping: "none"` is a flat list: every non-pinned row lands in
+ * "ungrouped" with no smart zones. `grouping: "project"` buckets rows by their
+ * resolved work checkout (alphabetical, ahead of the stored zones) and leaves
+ * checkout-less rows in their smart zones, mirroring how "person" treats
+ * ownerless rows. The coding section is always emitted (even empty) so its
+ * ordered position remains a stable sibling of any catalog sections. Groups
+ * also stays visible while a categorized group row can deterministically
+ * return there.
  */
 export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   rows: readonly Row[],
@@ -255,6 +272,7 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   const categories = new Map<string, Row[]>();
   const knownGroups: string[] = [];
   const people = new Map<string, SidebarSessionSection<Row>>();
+  const projects = new Map<string, SidebarSessionSection<Row>>();
   if (grouping === "category") {
     for (const name of options.knownGroups ?? []) {
       const trimmed = name.trim();
@@ -269,21 +287,40 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       pinned.push(row);
       continue;
     }
+    if (grouping === "none") {
+      threads.push(row);
+      continue;
+    }
+    // Fold worktree checkouts into their origin repo so gateway sessions and
+    // the harness catalogs agree on what one project is.
+    const projectPath =
+      grouping === "project" && row.workContext
+        ? foldWorktreeCheckoutPath(row.workContext.path)
+        : null;
+    if (projectPath) {
+      const projectSection = projects.get(projectPath);
+      if (projectSection) {
+        projectSection.rows.push(row);
+      } else {
+        projects.set(projectPath, {
+          id: `project:${projectPath}`,
+          project: { name: checkoutDisplayName(projectPath), path: projectPath },
+          rows: [row],
+        });
+      }
+      continue;
+    }
     const owner = grouping === "person" ? row.owner?.actor : undefined;
-    const ownerId = owner?.id?.trim();
-    if (owner && ownerId) {
-      const personSection = people.get(ownerId);
+    const ownerId = owner?.identity?.id;
+    const ownerKey = sessionActorGroupId(owner);
+    if (owner && ownerId && ownerKey) {
+      const personSection = people.get(ownerKey);
       if (personSection) {
         personSection.rows.push(row);
       } else {
-        people.set(ownerId, {
-          id: `person:${ownerId}`,
-          personOwner: {
-            type: owner.type,
-            id: ownerId,
-            ...(owner.label ? { label: owner.label } : {}),
-            ...(owner.avatarUrl ? { avatarUrl: owner.avatarUrl } : {}),
-          },
+        people.set(ownerKey, {
+          id: `person:${ownerKey}`,
+          personOwner: { ...owner, id: ownerId },
           rows: [row],
         });
       }
@@ -319,13 +356,33 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       const leftOwner = left.personOwner!;
       const rightOwner = right.personOwner!;
       const leftRank =
-        leftOwner.id === options.selfOwnerId ? 0 : leftOwner.type === "agent" ? 2 : 1;
+        leftOwner.identity?.type === "agent"
+          ? 2
+          : leftOwner.identity?.type === "profile" && leftOwner.id === options.selfOwnerId
+            ? 0
+            : 1;
       const rightRank =
-        rightOwner.id === options.selfOwnerId ? 0 : rightOwner.type === "agent" ? 2 : 1;
+        rightOwner.identity?.type === "agent"
+          ? 2
+          : rightOwner.identity?.type === "profile" && rightOwner.id === options.selfOwnerId
+            ? 0
+            : 1;
       return (
         leftRank - rightRank ||
         (leftOwner.label || leftOwner.id).localeCompare(rightOwner.label || rightOwner.id) ||
         leftOwner.id.localeCompare(rightOwner.id)
+      );
+    }),
+  );
+  // Alphabetical and ahead of the stored zones: project sections have no
+  // persisted order, so a stable name sort keeps them findable.
+  sections.push(
+    ...[...projects.values()].toSorted((left, right) => {
+      const leftProject = left.project!;
+      const rightProject = right.project!;
+      return (
+        leftProject.name.localeCompare(rightProject.name) ||
+        leftProject.path.localeCompare(rightProject.path)
       );
     }),
   );
@@ -348,9 +405,10 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
     ...new Set((options.catalogIds ?? []).map((catalogId) => catalogId.trim()).filter(Boolean)),
   ];
   orderedSections.push(
-    ...catalogIds.map(
-      (catalogId): SidebarSessionSection<Row> => ({ id: `catalog:${catalogId}`, rows: [] }),
-    ),
+    ...catalogIds.map((catalogId): SidebarSessionSection<Row> => ({
+      id: `catalog:${catalogId}`,
+      rows: [],
+    })),
   );
   if (options.sectionOrder) {
     const sectionsById = new Map(orderedSections.map((section) => [section.id, section]));

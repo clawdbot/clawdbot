@@ -61,6 +61,19 @@ describe("hover marquee", () => {
     expect(label.style.getPropertyValue("--hover-marquee-duration")).toBe("300ms");
   });
 
+  it("supports a faster delayed reveal beyond a faded edge", () => {
+    const { row, label } = buildRow({ textWidth: 320, labelWidth: 180 });
+    label.dataset.hoverMarqueeDelay = "250";
+    label.dataset.hoverMarqueeExtraShift = "18";
+    enter(row);
+    expect(label.style.getPropertyValue("--hover-marquee-shift")).toBe("-158px");
+    expect(label.style.getPropertyValue("--hover-marquee-duration")).toBe("1975ms");
+    vi.advanceTimersByTime(249);
+    expect(label.classList.contains("hover-marquee--scrolling")).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(label.classList.contains("hover-marquee--scrolling")).toBe(true);
+  });
+
   it("leaves labels that fit untouched", () => {
     const { row, label } = buildRow({ textWidth: 120, labelWidth: 180 });
     enter(row);
@@ -76,7 +89,7 @@ describe("hover marquee", () => {
     }).not.toThrow();
   });
 
-  it("remeasures an active marquee when its available width changes", () => {
+  it("remeasures any active marquee host when its available width changes", () => {
     let resizeCallback: ResizeObserverCallback | undefined;
     class TestResizeObserver implements ResizeObserver {
       constructor(callback: ResizeObserverCallback) {
@@ -95,7 +108,6 @@ describe("hover marquee", () => {
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     let labelWidth = 180;
     const row = document.createElement("div");
-    row.className = "session-row-host";
     Object.defineProperty(row, "matches", {
       value: (selector: string) => selector === ":hover",
     });

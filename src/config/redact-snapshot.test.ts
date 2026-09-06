@@ -50,13 +50,20 @@ function expectGatewayAuthFieldValue(
 }
 
 describe("redactConfigSnapshot", () => {
-  it("does not expose internal plugin metadata snapshot fields", () => {
+  it.each([true, false])("omits private snapshot fields when valid=%s", (valid) => {
+    const token = "synthetic-canonical-token-canary";
+    const preMigrationToken = "synthetic-pre-migration-token-canary";
     const snapshot = {
       ...makeSnapshot({
+        gateway: { auth: { token } },
         plugins: {
           allow: ["demo"],
         },
       }),
+      valid,
+      sourceConfigBeforeMigrations: makeSnapshot({
+        gateway: { auth: { token: preMigrationToken } },
+      }).sourceConfig,
       pluginMetadataSnapshot: {
         manifestRegistry: {
           plugins: [
@@ -70,11 +77,60 @@ describe("redactConfigSnapshot", () => {
         },
       },
     };
+    const original = structuredClone(snapshot);
 
     const result = redactConfigSnapshot(snapshot);
+    const serialized = JSON.stringify(result);
 
+    expect(serialized).not.toContain(preMigrationToken);
+    expect(serialized).not.toContain(token);
+    expect(serialized).not.toContain("/private/plugin/root");
+    expect("sourceConfigBeforeMigrations" in result).toBe(false);
     expect("pluginMetadataSnapshot" in result).toBe(false);
+    expect(result).toMatchObject({ path: snapshot.path, hash: "abc123", exists: true, valid });
+    const expectedConfig = valid
+      ? { gateway: { auth: { token: REDACTED_SENTINEL } }, plugins: { allow: ["demo"] } }
+      : {};
+    expect(result.config).toEqual(expectedConfig);
+    expect(result.sourceConfig).toEqual(expectedConfig);
+    expect(snapshot).toEqual(original);
   });
+
+  it.each([true, false])(
+    "omits pre-migration credentials without mutating source (valid=%s)",
+    (valid) => {
+      const source = makeSnapshot({
+        channels: { discord: { token: "synthetic-discord-token" } },
+        models: {
+          providers: {
+            inline: { apiKey: "synthetic-provider-key", models: [] },
+            referenced: {
+              apiKey: { source: "env", provider: "default", id: "SYNTHETIC_PROVIDER_KEY" },
+              models: [],
+            },
+          },
+        },
+      });
+      const snapshot = {
+        ...makeSnapshot({}),
+        valid,
+        sourceConfigBeforeMigrations: source.sourceConfig,
+      };
+      const before = structuredClone(snapshot);
+
+      const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+
+      expect(snapshot).toEqual(before);
+      expect(result).not.toHaveProperty("sourceConfigBeforeMigrations");
+      for (const secret of [
+        "synthetic-discord-token",
+        "synthetic-provider-key",
+        "SYNTHETIC_PROVIDER_KEY",
+      ]) {
+        expect(JSON.stringify(result)).not.toContain(secret);
+      }
+    },
+  );
 
   it("redacts common secret field patterns across config sections", () => {
     const snapshot = makeSnapshot({
@@ -209,46 +265,50 @@ describe("redactConfigSnapshot", () => {
 
   it("redacts and restores MCP SSE header values from schema hints", () => {
     const hints = buildConfigSchemaCore().uiHints;
-    const snapshot = makeSnapshot({
+    expect(hints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
+    const editable = {
+      enabled: false,
+      url: "http://127.0.0.1:19999/mcp",
+      headers: { "X-Empty": "", "X-Blank": "   ", "X-Env": "${MCP_HEADER}" },
+    };
+    const protectedServer = {
+      ...editable,
+      headers: { Authorization: "synthetic-header-value", "X-Test": "ok" },
+    };
+    const config = { mcp: { servers: { editable, protected: protectedServer } } };
+    const snapshot = makeSnapshot(config);
+    const result = redactConfigSnapshot(snapshot, hints);
+    const expected = {
       mcp: {
         servers: {
-          remote: {
-            url: "https://example.com/mcp",
-            headers: {
-              Authorization: "Bearer secret-token",
-              "X-Test": "ok",
-            },
+          editable,
+          protected: {
+            ...protectedServer,
+            headers: { Authorization: REDACTED_SENTINEL, "X-Test": REDACTED_SENTINEL },
           },
         },
       },
+    };
+
+    for (const projection of [
+      result.config,
+      result.parsed,
+      result.sourceConfig,
+      result.resolved,
+      result.runtimeConfig,
+    ]) {
+      expect(projection).toEqual(expected);
+    }
+    expect(result.raw).toBe(JSON.stringify(expected));
+    expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+
+    const servers = expectDefined(result.config.mcp?.servers, "redacted MCP servers");
+    const renamed = {
+      mcp: { servers: { renamed: servers.editable, protected: servers.protected } },
+    };
+    expect(restoreRedactedValues(renamed, config, hints)).toEqual({
+      mcp: { servers: { renamed: editable, protected: protectedServer } },
     });
-
-    const result = redactConfigSnapshot(snapshot, hints);
-    const servers = (result.config.mcp as { servers: Record<string, Record<string, unknown>> })
-      .servers;
-    expect(
-      (
-        expectDefined(servers.remote, "servers.remote test invariant").headers as Record<
-          string,
-          string
-        >
-      ).Authorization,
-    ).toBe(REDACTED_SENTINEL);
-    expect(
-      expectDefined(
-        (
-          expectDefined(servers.remote, "servers.remote test invariant").headers as Record<
-            string,
-            string
-          >
-        )["X-Test"],
-        '(servers.remote.headers as Record<string, string>)["X-Test"] test invariant',
-      ),
-    ).toBe(REDACTED_SENTINEL);
-
-    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
-    expect(restored.mcp.servers.remote.headers.Authorization).toBe("Bearer secret-token");
-    expect(restored.mcp.servers.remote.headers["X-Test"]).toBe("ok");
   });
 
   it("redacts sensitive auth material from MCP SSE URLs", () => {
@@ -742,24 +802,30 @@ describe("redactConfigSnapshot", () => {
     expect(restored).toEqual(snapshot.config);
   });
 
-  it("does not mangle raw when a sensitive field value is empty string", () => {
-    const config = {
-      gateway: { auth: { token: "" } },
-      other: "",
-    };
-    const raw = '{ "gateway": { "auth": { "token": "" } }, "other": "" }';
-    const snapshot = makeSnapshot(config, raw);
-    const result = redactConfigSnapshot(snapshot);
-    expect(result.config.gateway?.auth?.token).toBe(REDACTED_SENTINEL);
+  it.each([
+    { kind: "empty", value: "" },
+    { kind: "whitespace", value: "   " },
+    { kind: "environment reference", value: "${GATEWAY_TOKEN}" },
+  ])("does not mangle raw when a sensitive field is $kind", ({ value }) => {
+    const config = { gateway: { auth: { token: value } }, other: value };
+    const raw = JSON.stringify(config);
+    const result = redactConfigSnapshot(makeSnapshot(config, raw));
+    expect(result.config).toEqual(config);
     expect(result.raw).toBe(raw);
-    expect((result.raw ?? "").split(REDACTED_SENTINEL).length).toBe(1);
+    expect(restoreRedactedValues(result.config, config)).toEqual(config);
   });
 
-  it("redacts parsed and resolved objects", () => {
-    const snapshot = makeSnapshot({
+  it("redacts each projection without using its secrets to rewrite another projection", () => {
+    const config = {
       channels: { discord: { token: "MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe.FgH" } },
       gateway: { auth: { token: "supersecrettoken123456" } },
-    });
+      meta: { lastTouchedVersion: "resolved-only-value migration-only-value" },
+    };
+    const snapshot = {
+      ...makeSnapshot(config, JSON.stringify(config)),
+      resolved: { ...config, gateway: { auth: { token: "resolved-only-value" } } },
+      sourceConfigBeforeMigrations: { gateway: { auth: { token: "migration-only-value" } } },
+    };
     const result = redactConfigSnapshot(snapshot);
     const parsed = result.parsed as Record<string, Record<string, Record<string, string>>>;
     const sourceConfig = result.sourceConfig as Record<
@@ -785,6 +851,8 @@ describe("redactConfigSnapshot", () => {
     expect(runtimeDiscord.token).toBe(REDACTED_SENTINEL);
     expect(result.sourceConfig).toBe(result.resolved);
     expect(result.runtimeConfig).toBe(result.config);
+    expect(result).not.toHaveProperty("sourceConfigBeforeMigrations");
+    expect(result.raw).toContain('"lastTouchedVersion":"resolved-only-value migration-only-value"');
   });
 
   it("handles null raw gracefully", () => {

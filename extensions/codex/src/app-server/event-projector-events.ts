@@ -14,6 +14,7 @@ import {
   itemName,
   itemStatus,
   itemTitle,
+  matchesCodexSnapshotTurn,
   shouldSynthesizeToolProgressForItem,
 } from "./event-projector-items.js";
 import {
@@ -92,6 +93,13 @@ function normalizeApprovalReviewStatus(status: string | undefined): string | und
 
 const GUARDIAN_TIMEOUT_WARNING =
   "Automatic approval review timed out while evaluating the requested approval.";
+
+// These routine Codex diagnostics lack structured codes. Match complete templates so only
+// host-managed notices stay log-only and other actionable warnings still reach chat.
+const LOG_ONLY_CODEX_WARNING_PATTERNS = [
+  /^Configured service tier `[^`\r\n]+` is not advertised as supported for model `[^`\r\n]+` and will be omitted from requests\.$/,
+  /^Code Mode is enabled in configuration, but model `[^`\r\n]+` does not advertise Code Mode support\. This may degrade model performance\. Disable `features\.code_mode` and `features\.code_mode_only`, or select a model whose metadata enables Code Mode\.$/,
+];
 
 export function projectNormalizedToolItem(params: {
   phase: "start" | "result";
@@ -275,13 +283,7 @@ export class CodexEventProjection {
     const summary = readString(params, "summary") ?? readString(params, "message");
     const details = readString(params, "details");
     const message = [summary, details].filter(Boolean).join("\n");
-    // Codex's unsupported_service_tier_warning has no structured code. Match its
-    // complete template so this routine diagnostic stays log-only, not other warnings.
-    if (
-      /^Configured service tier `[^`\r\n]+` is not advertised as supported for model `[^`\r\n]+` and will be omitted from requests\.$/.test(
-        message,
-      )
-    ) {
+    if (LOG_ONLY_CODEX_WARNING_PATTERNS.some((pattern) => pattern.test(message))) {
       embeddedAgentLog.warn(message);
     } else if (message) {
       this.emitAgentEvent({ stream: "notice", data: { phase: "warning", message } });
@@ -298,6 +300,20 @@ export class CodexEventProjection {
         data: { fromModel, toModel, ...(reason ? { reason } : {}) },
       });
     }
+  }
+
+  handleRetry(params: JsonObject): void {
+    const rateLimited =
+      isJsonObject(params.error) && params.error.codexErrorInfo === "rateLimitExceeded";
+    this.emitAgentEvent({
+      stream: "run_status",
+      data: {
+        phase: "retrying",
+        message: rateLimited
+          ? "Rate limited. The provider is retrying."
+          : "Connection interrupted. The provider is retrying.",
+      },
+    });
   }
 
   flushPendingGuardianWarning(): void {
@@ -366,29 +382,86 @@ export class CodexEventProjection {
     if (!item) {
       return;
     }
-    const kind = itemKind(item);
+    const activity = item.type === "subAgentActivity";
+    // Activity notifications complete immediately, even when they announce a worker starting.
+    if (activity && params.phase === "start") {
+      return;
+    }
+    const subagent = activity || item.type === "collabAgentToolCall";
+    const kind = subagent ? "tool" : itemKind(item);
     if (!kind) {
       return;
     }
-    const name = itemName(item);
+    const name = subagent ? "subagents" : itemName(item);
     const args = itemToolArgs(item);
     const commandBearing = isCommandBearingToolItem(item, args);
-    const meta = itemMeta(item, this.toolProgress.toolProgressDetailMode());
+    const subagentStatus = readString(item, activity ? "kind" : "status");
+    // Messaging can queue without starting a turn; it does not own the worker's live row.
+    const interaction = activity && subagentStatus === "interacted";
+    const status =
+      subagent && subagentStatus === "interrupted"
+        ? "failed"
+        : activity
+          ? subagentStatus === "completed" || interaction
+            ? "completed"
+            : "running"
+          : params.phase === "start"
+            ? "running"
+            : itemStatus(item);
+    const meta = subagent
+      ? [
+          interaction ? "message sent" : activity ? subagentStatus : status,
+          readString(item, activity ? "agentPath" : "tool"),
+        ]
+          .filter(Boolean)
+          .join(": ")
+      : itemMeta(item, this.toolProgress.toolProgressDetailMode());
     const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
     this.emitAgentEvent({
       stream: "item",
       data: {
-        itemId: item.id,
+        itemId:
+          activity && !interaction
+            ? `subagent:${readString(item, "agentThreadId") ?? item.id}`
+            : item.id,
         phase: params.phase,
         kind,
         title: itemTitle(item),
-        status: params.phase === "start" ? "running" : itemStatus(item),
+        status,
         ...(name ? { name } : {}),
         ...(meta ? { meta } : {}),
         ...(commandBearing ? { commandBearing: true } : {}),
         ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
       },
     });
+  }
+
+  async emitSnapshotOnlyNativeToolProgress(params: {
+    item: CodexThreadItem;
+    activeItemIds: Set<string>;
+    completedItemIds: Set<string>;
+    isActive: () => boolean;
+  }): Promise<void> {
+    const { item, activeItemIds, completedItemIds, isActive } = params;
+    if (
+      !shouldSynthesizeToolProgressForItem(item) ||
+      !matchesCodexSnapshotTurn(item, this.turnId) ||
+      completedItemIds.has(item.id) ||
+      itemStatus(item) === "running"
+    ) {
+      return;
+    }
+    if (!activeItemIds.has(item.id)) {
+      this.emitStandardItemEvent({ phase: "start", item });
+      await this.emitNormalizedToolItemEvent({ phase: "start", item });
+    }
+    if (!isActive()) {
+      return;
+    }
+    activeItemIds.delete(item.id);
+    this.emitStandardItemEvent({ phase: "end", item });
+    await this.emitNormalizedToolItemEvent({ phase: "result", item });
+    completedItemIds.add(item.id);
   }
 
   async emitNormalizedToolItemEvent(params: {

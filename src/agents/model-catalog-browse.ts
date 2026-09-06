@@ -17,7 +17,7 @@ import {
  * Loads the model catalog shape used by browse/list commands without letting optional
  * provider discovery stall the CLI path.
  */
-const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
+export const MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
 
 /** Visible model subset requested by model browse callers. */
 export type ModelCatalogBrowseView = "default" | "configured" | "provider-config" | "all";
@@ -65,10 +65,7 @@ export function modelCatalogBrowseRequiresFullDiscovery(params: {
 }
 
 function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
-  return (
-    clampTimerTimeoutMs(value, 1) ??
-    resolveTimerTimeoutMs(DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS, 1)
-  );
+  return clampTimerTimeoutMs(value, 1) ?? resolveTimerTimeoutMs(MODEL_CATALOG_BROWSE_TIMEOUT_MS, 1);
 }
 
 /** Loads an explicit logical/physical catalog snapshot for route-aware browse surfaces. */
@@ -78,7 +75,7 @@ export async function loadPreparedModelCatalogSnapshotForBrowse(params: {
   view?: ModelCatalogBrowseView;
   /** Never starts provider discovery; a completed generation cache may still be reused. */
   preparedOnly?: boolean;
-  /** Replaces the completed generation cache when discovery is otherwise required. */
+  /** Replaces the completed full-catalog generation. */
   refresh?: boolean;
   loadCatalog: (params: { readOnly: boolean; refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
   timeoutFullDiscovery?: boolean;
@@ -88,11 +85,12 @@ export async function loadPreparedModelCatalogSnapshotForBrowse(params: {
   const view = params.view ?? "default";
   const requiresFullDiscovery =
     params.preparedOnly !== true &&
-    modelCatalogBrowseRequiresFullDiscovery({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      view,
-    });
+    (params.refresh === true ||
+      modelCatalogBrowseRequiresFullDiscovery({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        view,
+      }));
   // Implicit inventory reads stay bounded; explicit refreshes complete unless their caller
   // explicitly requests a full-discovery deadline.
   const shouldTimeoutFullDiscovery =

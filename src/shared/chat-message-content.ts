@@ -89,7 +89,7 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
   if (!Array.isArray(entry.content)) {
     return undefined;
   }
-  const explicitPhases = new Set<AssistantPhase>();
+  let explicitPhase: AssistantPhase | undefined;
   for (const block of entry.content) {
     if (!block || typeof block !== "object") {
       continue;
@@ -100,10 +100,13 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
     }
     const phase = parseAssistantTextSignature(record)?.phase;
     if (phase) {
-      explicitPhases.add(phase);
+      if (explicitPhase && explicitPhase !== phase) {
+        return undefined;
+      }
+      explicitPhase = phase;
     }
   }
-  return explicitPhases.size === 1 ? [...explicitPhases][0] : undefined;
+  return explicitPhase;
 }
 
 /** Finds assistant phase metadata on event payloads that may wrap message-like records. */
@@ -141,32 +144,12 @@ export function extractAssistantTextForPhase(
   const entry = message as { text?: unknown; content?: unknown; phase?: unknown };
   const messagePhase = normalizeAssistantPhase(entry.phase);
   const phase = options?.phase;
-  const shouldIncludeContent = (resolvedPhase?: AssistantPhase) => {
-    if (phase) {
-      return resolvedPhase === phase;
-    }
-    return resolvedPhase === undefined;
-  };
   const sanitizeText = options?.sanitizeText;
   const joinWith = options?.joinWith ?? "\n";
   const sanitizeBlockText = (text: string) => (sanitizeText ? sanitizeText(text) : text);
-  const normalizeJoinedText = (text: string) => {
-    const normalized = text.trim();
-    return normalized || undefined;
-  };
-
-  if (typeof entry.text === "string") {
-    if (!shouldIncludeContent(messagePhase)) {
-      return undefined;
-    }
-    return normalizeJoinedText(sanitizeBlockText(entry.text));
-  }
-
-  if (typeof entry.content === "string") {
-    if (!shouldIncludeContent(messagePhase)) {
-      return undefined;
-    }
-    return normalizeJoinedText(sanitizeBlockText(entry.content));
+  const inlineText = typeof entry.text === "string" ? entry.text : entry.content;
+  if (typeof inlineText === "string") {
+    return messagePhase === phase ? sanitizeBlockText(inlineText).trim() || undefined : undefined;
   }
 
   if (!Array.isArray(entry.content)) {
@@ -189,30 +172,26 @@ export function extractAssistantTextForPhase(
     return undefined;
   }
 
-  const parts = entry.content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return null;
-      }
-      const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
-      if (!isAssistantTextContentBlockType(record.type) || typeof record.text !== "string") {
-        return null;
-      }
-      const signature = parseAssistantTextSignature(record);
-      const resolvedPhase =
-        signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
-      if (!shouldIncludeContent(resolvedPhase)) {
-        return null;
-      }
+  const parts: string[] = [];
+  for (const block of entry.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
+    if (!isAssistantTextContentBlockType(record.type) || typeof record.text !== "string") {
+      continue;
+    }
+    const resolvedPhase =
+      parseAssistantTextSignature(record)?.phase ??
+      (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
+    if (resolvedPhase === phase) {
       const sanitized = sanitizeBlockText(record.text);
-      return sanitized.trim() ? sanitized : null;
-    })
-    .filter((value): value is string => typeof value === "string");
-
-  if (parts.length === 0) {
-    return undefined;
+      if (sanitized.trim()) {
+        parts.push(sanitized);
+      }
+    }
   }
-  return normalizeJoinedText(parts.join(joinWith));
+  return parts.join(joinWith).trim() || undefined;
 }
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */

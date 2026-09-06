@@ -1,6 +1,5 @@
 import { Buffer } from "node:buffer";
 import { resolve as resolveFilePath } from "node:path";
-import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
@@ -11,6 +10,7 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import type { OpenClawPluginApi } from "./api.js";
 import type { MemoryConfig } from "./config.js";
 
@@ -497,15 +497,12 @@ export function buildMemoryRecallUnavailableResult(error: string): AgentToolResu
   unavailable: true;
   error: string;
 }> {
-  return {
-    content: [{ type: "text", text: "Memory recall is unavailable right now." }],
-    details: {
-      count: 0,
-      disabled: true,
-      unavailable: true,
-      error,
-    },
-  };
+  return textResult("Memory recall is unavailable right now.", {
+    count: 0,
+    disabled: true,
+    unavailable: true,
+    error,
+  });
 }
 
 export class MemoryRecallEmbeddingError extends Error {
@@ -567,13 +564,6 @@ type EmbeddingCreateResponse = {
 };
 
 export function normalizeEmbeddingVector(value: unknown): number[] {
-  if (Array.isArray(value)) {
-    if (!value.every((item) => typeof item === "number" && Number.isFinite(item))) {
-      throw new Error("Embedding response contains non-numeric values");
-    }
-    return value;
-  }
-
   if (typeof value === "string") {
     const canonicalEmbedding = canonicalizeBase64(value);
     if (!canonicalEmbedding) {
@@ -588,8 +578,14 @@ export function normalizeEmbeddingVector(value: unknown): number[] {
     for (let offset = 0; offset < bytes.byteLength; offset += Float32Array.BYTES_PER_ELEMENT) {
       floats.push(view.getFloat32(offset, true));
     }
-    return floats;
+    return normalizeEmbeddingVector(floats);
   }
 
-  throw new Error("Embedding response is missing a vector");
+  if (!Array.isArray(value)) {
+    throw new Error("Embedding response is missing a vector");
+  }
+  if (!value.every((item) => typeof item === "number" && Number.isFinite(item))) {
+    throw new Error("Embedding response contains non-numeric values");
+  }
+  return value;
 }

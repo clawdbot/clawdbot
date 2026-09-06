@@ -1,6 +1,9 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 // Npm Package Lock Generator tests cover transient npm package-lock behavior.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   applyPackageExtensionPeerMetadata,
   collectOverrideViolations,
@@ -23,6 +26,9 @@ import {
   shouldUseLegacyPeerDepsForNpmLock,
   npmLockPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-package-lock.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("generate-npm-package-lock", () => {
   function repoRelativePath(value: string): string {
@@ -93,6 +99,7 @@ describe("generate-npm-package-lock", () => {
     expect(
       normalizeOverrides({
         "openclaw@2026.5.28>undici": "8.5.0",
+        "parent>unused-adapter": "-",
         tar: 7.5,
       }),
     ).toEqual({
@@ -102,6 +109,22 @@ describe("generate-npm-package-lock", () => {
       tar: "7.5",
     });
   });
+
+  it.each([false, true])(
+    "retains parent and child overrides during normalization (childrenFirst=%s)",
+    (childrenFirst) => {
+      const entries = [
+        ["parent", "1.2.3"],
+        ["parent>child", "2.0.0"],
+        ["parent>sibling", "3.0.0"],
+      ];
+      expect(
+        normalizeOverrides(Object.fromEntries(childrenFirst ? entries.toReversed() : entries)),
+      ).toEqual({
+        parent: { ".": "1.2.3", child: "2.0.0", sibling: "3.0.0" },
+      });
+    },
+  );
 
   it("rejects short flag package selectors before resolving npm-lock targets", () => {
     expect(() => resolvePackageDirs(["--package-dir", "-h"])).toThrow(
@@ -312,6 +335,264 @@ describe("generate-npm-package-lock", () => {
       },
     ]);
   });
+
+  it.each([false, true, "range"])(
+    "preserves child override policies when a direct dependency is bound to a local artifact (qualified=%s)",
+    (qualified) => {
+      const artifact = {
+        name: "patched",
+        version: "1.0.0",
+        spec: "file:./patched.tgz",
+        integrity: "sha512-local",
+      };
+      const manifest = {
+        dependencies: { patched: "1.0.0" },
+        overrides: qualified
+          ? { "patched@1.0.0": { scopedChild: "3.0.0" }, patched: { child: "2.0.0" } }
+          : { patched: { child: "2.0.0" }, "patched@1.0.0": { scopedChild: "3.0.0" } },
+      };
+      const policy = qualified
+        ? { "patched@1.0.0": { ".": qualified === "range" ? "^1.0.0" : "1.0.0", child: "2.0.0" } }
+        : { patched: "1.0.0" };
+      const normalized = packageJsonForNpmLock(manifest, policy, [artifact]);
+      expect(normalized.overrides).toEqual({
+        "patched@1.0.0": {
+          ".": "$patched",
+          child: "2.0.0",
+          ...(qualified ? { scopedChild: "3.0.0" } : {}),
+        },
+        patched: { ...(qualified ? {} : { ".": "1.0.0" }), child: "2.0.0" },
+      });
+      expect(packageJsonForNpmLock(normalized, policy, [artifact])).toEqual(normalized);
+      expect(manifest.dependencies.patched).toBe("1.0.0");
+    },
+  );
+
+  it("preserves wildcard child policies for prerelease artifacts", () => {
+    const artifact = {
+      name: "patched",
+      version: "1.0.0-beta.1",
+      spec: "file:./patched.tgz",
+      integrity: "sha512-local",
+    };
+    const normalized = packageJsonForNpmLock(
+      {
+        dependencies: { patched: artifact.version },
+        overrides: { "patched@*": { ".": "*", child: "2.0.0" } },
+      },
+      {},
+      [artifact],
+    );
+    expect(normalized.overrides).toMatchObject({
+      "patched@1.0.0-beta.1": { ".": "$patched", child: "2.0.0" },
+    });
+  });
+
+  it.each(["conflicting", "disjoint"])(
+    "keeps shadowed exact children out of artifact normalization reentry (%s)",
+    (scenario) => {
+      const artifact = {
+        name: "patched",
+        version: "1.0.0",
+        spec: "file:./patched.tgz",
+        integrity: "sha512-local",
+      };
+      const manifest = {
+        dependencies: { patched: "1.0.0" },
+        overrides: { "patched@^1.0.0": { ".": "1.0.0", child: "2.0.0" } },
+      };
+      const policy = {
+        "patched@1.0.0": {
+          ".": "1.0.0",
+          [scenario === "conflicting" ? "child" : "shadowedChild"]: "3.0.0",
+        },
+      };
+      const normalized = packageJsonForNpmLock(manifest, policy, [artifact]);
+      expect(normalized.overrides).toMatchObject({
+        "patched@1.0.0": { ".": "$patched", child: "2.0.0" },
+      });
+      expect(packageJsonForNpmLock(normalized, policy, [artifact])).toEqual(normalized);
+    },
+  );
+
+  it("does not treat an ordinary dependency reference as a normalized artifact", () => {
+    expect(() =>
+      packageJsonForNpmLock(
+        {
+          dependencies: { patched: "1.0.0" },
+          overrides: { "patched@1.0.0": { ".": "$patched", child: "2.0.0" } },
+        },
+        { "patched@1.0.0": { ".": "1.0.0", child: "3.0.0" } },
+        [
+          {
+            name: "patched",
+            version: "1.0.0",
+            spec: "file:./patched.tgz",
+            integrity: "sha512-local",
+          },
+        ],
+      ),
+    ).toThrow("overrides.child conflicts");
+  });
+
+  it.each(["^2.0.0", "npm:other@1.0.0"])(
+    "rejects an incompatible artifact own override (%s)",
+    (spec) => {
+      expect(() =>
+        packageJsonForNpmLock(
+          { dependencies: { patched: "1.0.0" } },
+          { "patched@1.0.0": { ".": spec } },
+          [
+            {
+              name: "patched",
+              version: "1.0.0",
+              spec: "file:./patched.tgz",
+              integrity: "sha512-local",
+            },
+          ],
+        ),
+      ).toThrow("local package artifact conflicts with override");
+    },
+  );
+
+  it("keeps registry integrity checks outside the bound direct artifact occurrence", () => {
+    const artifact = {
+      name: "patched",
+      version: "1.0.0",
+      spec: "file:./patched.tgz",
+      integrity: "sha512-local",
+    };
+    expect(
+      collectPnpmLockViolations(
+        {
+          packages: {
+            "node_modules/patched": { version: "1.0.0", integrity: artifact.integrity },
+            "node_modules/parent/node_modules/patched": {
+              version: "1.0.0",
+              integrity: artifact.integrity,
+            },
+            "node_modules/sibling": { version: "1.0.0", integrity: "sha512-tampered" },
+          },
+        },
+        new Set(["patched@1.0.0", "sibling@1.0.0"]),
+        new Map([
+          ["patched@1.0.0", new Set(["sha512-registry"])],
+          ["sibling@1.0.0", new Set(["sha512-sibling"])],
+        ]),
+        [artifact],
+      ),
+    ).toEqual([
+      {
+        path: "node_modules/parent/node_modules/patched",
+        packageKey: "patched@1.0.0",
+        actualIntegrity: "sha512-local",
+        expectedIntegrities: ["sha512-registry"],
+      },
+      {
+        path: "node_modules/sibling",
+        packageKey: "sibling@1.0.0",
+        actualIntegrity: "sha512-tampered",
+        expectedIntegrities: ["sha512-sibling"],
+      },
+    ]);
+  });
+
+  it.each(["valid", "tampered", "wrong-version", "outside-root", "symlink-escape"])(
+    "validates real local dependency tarballs before accepting npm locks (%s)",
+    (scenario) => {
+      const root = tempDirs.make("openclaw-npm-patched-lock-");
+      const source = path.join(root, "source");
+      const packageDir = path.join(root, "plugin");
+      mkdirSync(source);
+      mkdirSync(packageDir);
+      writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
+      writeFileSync(
+        path.join(root, "pnpm-lock.yaml"),
+        JSON.stringify({
+          packages: { "fixture-dep@1.0.0": { resolution: { integrity: "sha512-registry" } } },
+        }),
+      );
+      writeFileSync(
+        path.join(source, "package.json"),
+        JSON.stringify({
+          name: "fixture-dep",
+          version: scenario === "wrong-version" ? "2.0.0" : "1.0.0",
+          main: "index.js",
+        }),
+      );
+      writeFileSync(path.join(source, "index.js"), "module.exports = 2;\n");
+      const pack = spawnSync(
+        "npm",
+        ["pack", "--json", "--ignore-scripts", "--pack-destination", packageDir],
+        { cwd: source, encoding: "utf8" },
+      );
+      expect(pack.status, pack.stderr).toBe(0);
+      const packed = JSON.parse(pack.stdout);
+      const [{ filename }] = Array.isArray(packed) ? packed : Object.values(packed);
+      const tarball = path.join(packageDir, filename);
+      const integrity = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
+      if (scenario === "tampered") {
+        writeFileSync(tarball, "tampered");
+      }
+      if (scenario === "symlink-escape") {
+        const outside = path.join(root, "outside");
+        mkdirSync(outside);
+        writeFileSync(path.join(outside, filename), readFileSync(tarball));
+        symlinkSync(outside, path.join(packageDir, "linked"), "junction");
+      }
+      const artifact = {
+        name: "fixture-dep",
+        version: "1.0.0",
+        spec:
+          scenario === "outside-root"
+            ? `file:../plugin/${filename}`
+            : scenario === "symlink-escape"
+              ? `file:./linked/${filename}`
+              : `file:./${filename}`,
+        integrity,
+      };
+      writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: "fixture-plugin",
+          version: "1.0.0",
+          dependencies: { "fixture-dep": "1.0.0" },
+          ...(scenario === "wrong-version"
+            ? { overrides: { "fixture-dep": { child: "2.0.0" } } }
+            : {}),
+        }),
+      );
+      const script = `import { generateNpmPackageLock } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)}; console.log(generateNpmPackageLock(${JSON.stringify(packageDir)}, { localPackageArtifacts: ${JSON.stringify([artifact])} }));`;
+      const result = spawnSync(
+        process.execPath,
+        ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root },
+        },
+      );
+      if (scenario === "valid") {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout).packages["node_modules/fixture-dep"]).toMatchObject({
+          version: "1.0.0",
+          integrity,
+        });
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          scenario === "tampered"
+            ? "local package artifact integrity mismatch"
+            : scenario === "wrong-version"
+              ? "violates workspace overrides: node_modules/fixture-dep locked 2.0.0, expected 1.0.0"
+              : scenario === "symlink-escape"
+                ? "local package artifact escapes package root"
+                : "invalid local package artifact",
+        );
+      }
+      expect(readFileSync(path.join(source, "index.js"), "utf8")).toBe("module.exports = 2;\n");
+    },
+  );
 
   it("normalizes npm patch-version metadata drift", () => {
     expect(

@@ -108,11 +108,9 @@ struct PeekabooBridgeHostCoordinatorTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_PEEKABOO_HANDSHAKE_CLI"] != nil))
     func `embedded runtime serves an exact socket handshake`() async throws {
         let cliPath = try #require(ProcessInfo.processInfo.environment["OPENCLAW_PEEKABOO_HANDSHAKE_CLI"])
-        let socketPath = "/tmp/oc-pb-\(UUID().uuidString).sock"
-        defer {
-            try? FileManager.default.removeItem(atPath: socketPath)
-            try? FileManager.default.removeItem(atPath: "\(socketPath).lock")
-        }
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let socketPath = root.appendingPathComponent("bridge.sock").path
 
         let coordinator = PeekabooBridgeHostCoordinator(
             runtimeFactory: {
@@ -126,26 +124,32 @@ struct PeekabooBridgeHostCoordinatorTests {
             aliasManager: .init(targetSocketPath: socketPath, aliasSocketPaths: []))
         await coordinator.setEnabled(true)
 
-        let result = try await Task.detached {
-            let process = Process()
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.executableURL = URL(fileURLWithPath: cliPath)
-            process.arguments = ["bridge", "status", "--bridge-socket", socketPath, "--json"]
-            process.standardOutput = stdout
-            process.standardError = stderr
-            try process.run()
-            process.waitUntilExit()
-            return ProcessResult(
-                status: process.terminationStatus,
-                stdout: String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
-                stderr: String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
-        }.value
+        let result: ProcessResult
+        do {
+            result = try await Task.detached {
+                let process = Process()
+                let stdout = Pipe()
+                let stderr = Pipe()
+                process.executableURL = URL(fileURLWithPath: cliPath)
+                process.arguments = ["bridge", "status", "--bridge-socket", socketPath, "--json"]
+                process.standardOutput = stdout
+                process.standardError = stderr
+                try process.run()
+                process.waitUntilExit()
+                return ProcessResult(
+                    status: process.terminationStatus,
+                    stdout: String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
+                    stderr: String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+            }.value
+        } catch {
+            await coordinator.shutdown()
+            throw error
+        }
+        await coordinator.shutdown()
         #expect(result.status == 0, Comment(rawValue: result.stderr))
         #expect(result.stdout.replacingOccurrences(of: "\\/", with: "/").contains(socketPath))
         #expect(result.stdout.contains("backgroundBridgeHost"))
 
-        await coordinator.shutdown()
         #expect(!FileManager.default.fileExists(atPath: socketPath))
     }
 

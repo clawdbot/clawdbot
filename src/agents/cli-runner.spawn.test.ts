@@ -23,6 +23,7 @@ import {
   startDiagnosticRunActivityTracking,
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
   buildPreparedCliRunContext,
   captureModelCallDiagnostics,
@@ -39,16 +40,20 @@ import {
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
 import { logCliInvocation } from "./cli-runner/execute-logging.js";
-import { executePreparedCliRun } from "./cli-runner/execute.js";
+import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner/execute.js";
 import {
   buildCliExecLogLine,
   createManagedRun,
+  createSuccessfulProcessExit,
   setCliRunnerExecuteTestDeps,
   supervisorSpawnMock,
+  wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
 import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
 // Approval behavior is injected below; loading its gateway/tool graph here is incidental.
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
@@ -209,7 +214,9 @@ describe("runCliAgent spawn path", () => {
     expect(logLine).not.toContain("claude-session-secret");
   });
 
-  it("streams a node-placed Claude resume through the normal JSONL parser", async () => {
+  it("streams a node-placed Claude resume through the normal JSONL parser", async ({
+    onTestFinished,
+  }) => {
     const writeSystemPrompt = vi.fn(writeCliSystemPromptFile);
     let toolAvailability: unknown = "unset";
     const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
@@ -296,6 +303,14 @@ describe("runCliAgent spawn path", () => {
     context.params.claimCliSessionFork = vi.fn(async () => true);
     context.params.persistCliSessionForkSuccessor = vi.fn(async () => {});
 
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      context.params.runId,
+      "main",
+      "cli-node-resume-test",
+    );
+    onTestFinished(admission.close);
+    context.params.admittedRunContext = await admission.admit("embedded");
     const output = await executePreparedCliRun(context, "source-node-session");
 
     expect(output).toMatchObject({ text: "node answer", sessionId: "forked-node-session" });
@@ -1547,12 +1562,14 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
-  it("captures a runtime artifact for a strict CLI credential", async () => {
+  it("captures a runtime artifact while preserving a strict CLI shim invocation", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-strict-artifact-"));
+    const implementation = path.join(dir, "2.1.205");
     const executable = path.join(dir, "claude-fixture");
     try {
-      await fs.copyFile(process.execPath, executable);
-      await fs.chmod(executable, 0o755);
+      await fs.copyFile(process.execPath, implementation);
+      await fs.chmod(implementation, 0o755);
+      await fs.symlink(implementation, executable);
       mockSuccessfulCliRun(CLAUDE_OK_JSONL);
       const context = buildPreparedCliRunContext({
         backend: { command: executable },
@@ -1570,8 +1587,9 @@ describe("runCliAgent spawn path", () => {
 
       expect(context.runtimeArtifactFingerprint).toMatch(/^[a-f0-9]{64}$/u);
       expect(context.runtimeOwnerFingerprint).toBeUndefined();
-      const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
-      expect(input.argv?.[0]).toBe(await fs.realpath(executable));
+      const input = mockCallArg(supervisorSpawnMock) as { argv?: string[]; argv0?: string };
+      expect(input.argv?.[0]).toBe(await fs.realpath(implementation));
+      expect(input.argv0).toBe(executable);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -1940,16 +1958,7 @@ describe("runCliAgent spawn path", () => {
           result: "Hello world",
         }) + "\n",
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     try {
@@ -1990,16 +1999,7 @@ describe("runCliAgent spawn path", () => {
           }),
         ].join("\n") + "\n",
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     try {
@@ -2047,16 +2047,7 @@ describe("runCliAgent spawn path", () => {
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({
       provider: "codex-cli",

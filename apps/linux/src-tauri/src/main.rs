@@ -12,7 +12,6 @@ mod gateway_sleep_logind_listener;
 mod gateway_ws;
 mod installer;
 mod notify;
-mod operation_executor;
 mod pending_approvals;
 mod quickchat;
 mod quickchat_widgets;
@@ -21,7 +20,7 @@ mod tray;
 mod updater;
 
 use cli::{CliError, OpenClawCli};
-use gateway::{GatewayAction, GatewaySnapshot};
+use gateway::{GatewayAction, GatewaySnapshot, ReadyGateway};
 use gateway_operation_queue::{GatewayOperation, GatewayOperationQueue};
 use installer::InstallChannel;
 use remote_gateway::RemoteGatewayRequest;
@@ -41,16 +40,6 @@ use tauri_plugin_opener::OpenerExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
-const EXTERNAL_LINK_INIT_SCRIPT: &str = r#"document.addEventListener("click", (event) => {
-  const link = event.target?.closest?.('a[target="_blank"]');
-  if (!link) return;
-  try {
-    const destination = new URL(link.href, location.href);
-    if (destination.protocol === "http:" || destination.protocol === "https:") {
-      link.target = "_self";
-    }
-  } catch {}
-}, true);"#;
 fn external_browser_url_allowed(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
         && url.has_host()
@@ -103,29 +92,6 @@ fn open_external_browser(app: &AppHandle, url: &Url) {
     {
         eprintln!("Could not open the external sign-in page.");
     }
-}
-
-fn permit_main_navigation(app: &AppHandle, target: &Url) -> bool {
-    let current = app
-        .get_webview("main")
-        .and_then(|webview| webview.url().ok());
-    let Some(current) = current else {
-        return true;
-    };
-    let returns_to_local_shell = app.try_state::<DesktopState>().is_some_and(|state| {
-        let local = &state.inner.local_url;
-        target.scheme() == local.scheme()
-            && target.host_str() == local.host_str()
-            && target.port_or_known_default() == local.port_or_known_default()
-    });
-    if !matches!(current.scheme(), "http" | "https")
-        || target.origin() == current.origin()
-        || returns_to_local_shell
-    {
-        return true;
-    }
-    open_external_browser(app, target);
-    false
 }
 
 fn is_active_onboarding_url(url: &Url) -> bool {
@@ -456,22 +422,25 @@ impl DesktopState {
                 return self.connect_remote_locked(app, remote);
             }
         }
-        let cli = match self.resolve_cli() {
-            Ok(cli) => cli,
-            Err(CliError::Missing) => {
-                app.state::<gateway_ws::GatewayClient>()
-                    .clear_configuration(app);
-                let snapshot = GatewaySnapshot::missing_cli();
-                self.update_tray(&snapshot);
-                return Ok(snapshot);
-            }
-            Err(error) => return Err(error.to_string()),
-        };
+        let cli = self.resolve_cli();
         if !explicit_local && !remote_gateway::has_configured_gateway()? {
-            let snapshot = GatewaySnapshot::unconfigured();
+            // First-run setup belongs to the pending bootstrap reply. Navigating
+            // here replaces its WebView and loses the local/remote choice.
+            let snapshot = match cli {
+                Ok(_) => GatewaySnapshot::unconfigured(),
+                Err(CliError::Missing) => GatewaySnapshot::missing_cli(),
+                Err(error) => return Err(error.to_string()),
+            };
             self.update_tray(&snapshot);
             return Ok(snapshot);
         }
+        let cli = match cli {
+            Ok(cli) => cli,
+            Err(CliError::Missing) => {
+                return self.show_missing_cli(app, explicit_local, None);
+            }
+            Err(error) => return Err(error.to_string()),
+        };
         if explicit_local {
             self.inner
                 .remote_tunnel
@@ -480,14 +449,7 @@ impl DesktopState {
                 .take();
         }
         let ready = gateway::ensure_ready(&cli)?;
-        app.state::<gateway_ws::GatewayClient>()
-            .configure(app, ready.gateway_ws.clone());
-        let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
-        self.update_tray(&ready.snapshot);
-        if navigated {
-            self.start_watchdog(app.clone());
-        }
-        Ok(ready.snapshot)
+        self.finish_local_connection(app, cli, ready)
     }
 
     pub fn install_cli(
@@ -538,18 +500,10 @@ impl DesktopState {
         let ready = gateway::ensure_ready(&cli).map_err(|error| {
             format!("OpenClaw is installed, but connecting to the Gateway failed: {error}")
         })?;
-        app.state::<gateway_ws::GatewayClient>()
-            .configure(app, ready.gateway_ws.clone());
-        let navigated = self
-            .navigate_local(app, &ready.dashboard_url, false, None, true, true)
+        self.finish_local_connection(app, cli, ready)
             .map_err(|error| {
                 format!("OpenClaw is installed, but opening the Gateway dashboard failed: {error}")
-            })?;
-        self.update_tray(&ready.snapshot);
-        if navigated {
-            self.start_watchdog(app.clone());
-        }
-        Ok(ready.snapshot)
+            })
     }
 
     pub fn gateway_action(
@@ -576,19 +530,42 @@ impl DesktopState {
         }
 
         let ready = gateway::dashboard(&cli, snapshot)?;
+        self.finish_local_connection(app, cli, ready)
+    }
+
+    fn finish_local_connection(
+        &self,
+        app: &AppHandle,
+        cli: OpenClawCli,
+        ready: ReadyGateway,
+    ) -> Result<GatewaySnapshot, String> {
         app.state::<gateway_ws::GatewayClient>()
-            .configure(app, ready.gateway_ws.clone());
+            .configure(app, ready.gateway_ws);
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
-            self.start_watchdog(app.clone());
+            self.start_watchdog(app.clone(), cli);
         }
         Ok(ready.snapshot)
     }
 
     pub fn connect_explicit_local(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
-        // The click returns immediately; a later remote selection still wins while connect runs.
-        self.show_local(app, "reconnecting", true, None)?;
+        let mut navigation = self
+            .inner
+            .navigation
+            .lock()
+            .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?;
+        navigation.permit_local(true, None);
+        // First-run setup owns the pending bootstrap reply. Replacing its page
+        // drops the error callback and leaves a reconnect screen with no watchdog.
+        if !self.main_window_has_local_content(&main_window(app)?) {
+            let mut url = self.inner.local_url.clone();
+            url.query_pairs_mut()
+                .clear()
+                .append_pair("mode", "reconnecting");
+            self.navigate_locked(app, url, false)?;
+        }
+        drop(navigation);
         self.connect_selected(app, true)
     }
 
@@ -633,7 +610,7 @@ impl DesktopState {
             (None, remote_gateway::normalize_gateway_url(raw)?)
         };
         remote_gateway::resolve_remote_tls_fingerprint(&mut request, &gateway_url)?;
-        let target = remote_gateway::dashboard_url(&gateway_url, None)?;
+        let target = remote_gateway::dashboard_url(&gateway_url)?;
         let script = native_auth_initialization_script(&target, &gateway_url, &request)?;
         remote_gateway::save_config_at(&remote_gateway::config_path()?, &request, &gateway_url)?;
         *active_tunnel = tunnel;
@@ -692,11 +669,8 @@ impl DesktopState {
             .close()
             .map_err(|_| "Could not replace the Gateway dashboard view.".to_string())?;
         let browser_app = app.clone();
-        let navigation_app = app.clone();
         let builder = WebviewBuilder::new("main", WebviewUrl::External(dashboard))
             .initialization_script(script)
-            .initialization_script(EXTERNAL_LINK_INIT_SCRIPT)
-            .on_navigation(move |target| permit_main_navigation(&navigation_app, target))
             .on_new_window(move |url, _features| {
                 open_external_browser(&browser_app, &url);
                 NewWindowResponse::Deny
@@ -708,10 +682,7 @@ impl DesktopState {
         {
             navigation.remote_dashboard = false;
             let browser_app = app.clone();
-            let navigation_app = app.clone();
             let restore = WebviewBuilder::new("main", WebviewUrl::App("index.html".into()))
-                .initialization_script(EXTERNAL_LINK_INIT_SCRIPT)
-                .on_navigation(move |target| permit_main_navigation(&navigation_app, target))
                 .on_new_window(move |url, _features| {
                     open_external_browser(&browser_app, &url);
                     NewWindowResponse::Deny
@@ -746,7 +717,14 @@ impl DesktopState {
     }
 
     pub(crate) fn resolve_cli(&self) -> Result<OpenClawCli, CliError> {
-        if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
+        if let Some(cli) = self
+            .inner
+            .cli
+            .lock()
+            .expect("CLI mutex poisoned")
+            .clone()
+            .filter(OpenClawCli::is_available)
+        {
             return Ok(cli);
         }
         let cli = OpenClawCli::discover()?;
@@ -777,6 +755,35 @@ impl DesktopState {
         }
     }
 
+    fn show_missing_cli(
+        &self,
+        app: &AppHandle,
+        force: bool,
+        expected_generation: Option<u64>,
+    ) -> Result<GatewaySnapshot, String> {
+        let snapshot = GatewaySnapshot::missing_cli();
+        let navigation = self.show_local(app, "missingCli", force, expected_generation);
+        if !local_recovery_owns_gateway(&navigation) {
+            return Ok(snapshot);
+        }
+        app.state::<gateway_ws::GatewayClient>()
+            .clear_configuration(app);
+        self.update_tray(&snapshot);
+        navigation.map(|_| snapshot)
+    }
+
+    fn show_cli_recovery_error(&self, app: &AppHandle, generation: u64, error: CliError) {
+        let mut snapshot = GatewaySnapshot::missing_cli();
+        snapshot.status = "CLI unavailable".to_string();
+        snapshot.detail = Some(error.to_string());
+        let navigation = self.show_local(app, "error", false, Some(generation));
+        if local_recovery_owns_gateway(&navigation) {
+            app.state::<gateway_ws::GatewayClient>()
+                .clear_configuration(app);
+            self.update_tray(&snapshot);
+        }
+    }
+
     fn poll_pending_approvals(&self, app: &AppHandle, cli: &OpenClawCli, generation: u64) {
         let pending = match pending_approvals::fetch(cli) {
             Ok(pending) => pending,
@@ -793,7 +800,7 @@ impl DesktopState {
             .pending_approvals
             .lock()
             .expect("pending approval mutex poisoned")
-            .update(&pending);
+            .update(pending);
         if let Some(tray) = self
             .inner
             .tray
@@ -860,22 +867,6 @@ impl DesktopState {
         Ok(true)
     }
 
-    pub fn navigate_remote(&self, app: &AppHandle, target: Url) -> Result<(), String> {
-        let mut navigation = self
-            .inner
-            .navigation
-            .lock()
-            .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?;
-        let window = main_window(app)?;
-        navigation.select_remote();
-        if let Err(error) = window.navigate(target) {
-            navigation.remote_dashboard = false;
-            return Err(format!("Could not open remote Gateway: {error}"));
-        }
-        tray::show_window(app);
-        Ok(())
-    }
-
     fn show_local(
         &self,
         app: &AppHandle,
@@ -902,7 +893,7 @@ impl DesktopState {
             .is_ok_and(|navigation| navigation.watchdog_is_current(generation))
     }
 
-    fn start_watchdog(&self, app: AppHandle) {
+    fn start_watchdog(&self, app: AppHandle, mut cli: OpenClawCli) {
         let generation = {
             let Ok(mut navigation) = self.inner.navigation.lock() else {
                 return;
@@ -919,9 +910,6 @@ impl DesktopState {
                 return;
             }
             let Ok(_operation) = state.inner.operation.try_lock() else {
-                continue;
-            };
-            let Ok(cli) = state.resolve_cli() else {
                 continue;
             };
             let snapshot = match gateway::status(&cli) {
@@ -958,6 +946,19 @@ impl DesktopState {
                     return;
                 }
                 if let Ok(_operation) = state.inner.operation.try_lock() {
+                    if !cli.is_available() {
+                        match state.resolve_cli() {
+                            Ok(discovered) => cli = discovered,
+                            Err(error) => {
+                                if matches!(error, CliError::Missing) {
+                                    let _ = state.show_missing_cli(&app, false, Some(generation));
+                                } else {
+                                    state.show_cli_recovery_error(&app, generation, error);
+                                }
+                                return;
+                            }
+                        }
+                    }
                     let snapshot = match gateway::status(&cli) {
                         Ok(snapshot) => snapshot,
                         Err(error) => GatewaySnapshot::reconnecting(error),
@@ -1011,9 +1012,16 @@ fn local_mode(snapshot: &GatewaySnapshot) -> &'static str {
     }
 }
 
+fn local_recovery_owns_gateway(navigation: &Result<bool, String>) -> bool {
+    !matches!(navigation, Ok(false))
+}
+
 #[cfg(test)]
 mod navigation_tests {
-    use super::{is_active_onboarding_url, is_release_version, NavigationState, Url};
+    use super::{
+        is_active_onboarding_url, is_release_version, local_recovery_owns_gateway, NavigationState,
+        Url,
+    };
 
     #[test]
     fn only_active_onboarding_preserves_the_dashboard_during_reconnect() {
@@ -1095,6 +1103,15 @@ mod navigation_tests {
 
         assert!(!navigation.permit_local(false, None));
         assert!(navigation.remote_dashboard);
+    }
+
+    #[test]
+    fn local_recovery_clears_retained_gateway_unless_remote_navigation_won() {
+        assert!(local_recovery_owns_gateway(&Ok(true)));
+        assert!(local_recovery_owns_gateway(&Err(
+            "local navigation failed".to_string()
+        )));
+        assert!(!local_recovery_owns_gateway(&Ok(false)));
     }
 
     #[test]
@@ -1246,7 +1263,12 @@ fn main() {
         builder
     };
     let builder = notify::register(builder)
-        .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                // Dashboard links use the native handler; its renderer has no opener IPC grant.
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(
@@ -1265,10 +1287,7 @@ fn main() {
             .cloned()
             .expect("tauri.conf.json must define the main window");
         let browser_app = app.handle().clone();
-        let navigation_app = app.handle().clone();
         let window = WebviewWindowBuilder::from_config(app.handle(), &window_config)?
-            .initialization_script(EXTERNAL_LINK_INIT_SCRIPT)
-            .on_navigation(move |target| permit_main_navigation(&navigation_app, target))
             .on_new_window(move |url, _features| {
                 open_external_browser(&browser_app, &url);
                 NewWindowResponse::Deny
@@ -1354,6 +1373,10 @@ fn main() {
             if window.label() == quickchat::QUICKCHAT_LABEL {
                 match event {
                     tauri::WindowEvent::Focused(false) => {
+                        // GTK queues focus events; a stale blur must not hide a refocused window.
+                        if cfg!(target_os = "linux") && window.is_focused().unwrap_or(false) {
+                            return;
+                        }
                         quickchat::request_hide(window.app_handle());
                         return;
                     }

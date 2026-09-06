@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
@@ -50,6 +51,8 @@ import {
   getRuntimeConfigWriteApplication,
 } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+
+export { createConfigIO };
 
 export function clearConfigCache(): void {
   // Compat shim: runtime snapshot is the only in-process cache now.
@@ -118,11 +121,13 @@ export async function readBestEffortConfig(options?: {
   isolateEnv?: boolean;
   observe?: boolean;
   skipPluginValidation?: boolean;
+  pluginValidation?: ConfigSnapshotReadOptions["pluginValidation"];
 }): Promise<OpenClawConfig> {
   return await createConfigIO({
     ...(options?.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
     ...(options?.observe === false ? { observe: false } : {}),
-    ...(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+    pluginValidation:
+      options?.pluginValidation ?? (options?.skipPluginValidation ? "skip" : undefined),
   }).readBestEffortConfig();
 }
 
@@ -246,6 +251,41 @@ export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFile
   return await readConfigFileSnapshotForWrite();
 }
 
+function pruneUnauthoredRuntimeDeletions(
+  patch: unknown,
+  source: unknown,
+  candidate: unknown,
+): void {
+  // Replacing an authored scalar or explicitly submitting an empty object is
+  // intent, not an incidental removal of runtime-only state.
+  if (
+    !isRecord(patch) ||
+    (source !== undefined && !isRecord(source)) ||
+    (isRecord(candidate) && Object.keys(candidate).length === 0)
+  ) {
+    return;
+  }
+  const sourceRecord = isRecord(source) ? source : undefined;
+  const candidateRecord = isRecord(candidate) ? candidate : undefined;
+  for (const [key, value] of Object.entries(patch)) {
+    const sourceValue =
+      sourceRecord && Object.hasOwn(sourceRecord, key) ? sourceRecord[key] : undefined;
+    if (value === null && sourceValue === undefined) {
+      delete patch[key];
+      continue;
+    }
+    if (!isRecord(value) || Object.keys(value).length === 0) {
+      continue;
+    }
+    const candidateValue =
+      candidateRecord && Object.hasOwn(candidateRecord, key) ? candidateRecord[key] : undefined;
+    pruneUnauthoredRuntimeDeletions(value, sourceValue, candidateValue);
+    if (Object.keys(value).length === 0) {
+      delete patch[key];
+    }
+  }
+}
+
 export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
@@ -271,6 +311,9 @@ export async function writeConfigFile(
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
   if (hadBothSnapshots) {
     const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
+    // Removing a runtime-only field must not mint empty source parents. Keep
+    // explicitly submitted empty objects and the separate file-default projection.
+    pruneUnauthoredRuntimeDeletions(runtimePatch, runtimeConfigSourceSnapshot, cfg);
     nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
   }
   const baseSnapshotRead = options.baseSnapshot
@@ -286,30 +329,23 @@ export async function writeConfigFile(
   let runtimePreflightResult: unknown;
   let managedPreparedCandidates = new Map<symbol, RuntimeConfigWritePreparedCandidate>();
   const writeResult = await io.writeConfigFile(nextCfg, {
+    // Preserve caller policy and provenance; runtime-owned fields take precedence below.
+    ...options,
     baseSnapshot,
     basePluginMetadataSnapshot: baseSnapshotRead.pluginMetadataSnapshot,
-    assertConfigPathForWrite: options.assertConfigPathForWrite,
     envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
       actualConfigPath: io.configPath,
       expectedConfigPath: options.expectedConfigPath,
       envSnapshotForRestore: options.envSnapshotForRestore,
     }),
     unsetPaths: resolveManagedUnsetPathsForWrite(options.unsetPaths),
-    explicitSetPaths: options.explicitSetPaths,
     explicitSetValueSource: options.explicitSetPaths
       ? (options.explicitSetValueSource ?? cfg)
       : undefined,
-    allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
-    allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
-    afterWrite: options.afterWrite,
-    allowDestructiveWrite: options.allowDestructiveWrite,
-    allowConfigSizeDrop: options.allowConfigSizeDrop,
-    skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
-    skipOutputLogs: options.skipOutputLogs,
-    skipPluginValidation: options.skipPluginValidation,
-    preservedLegacyRootKeys: options.preservedLegacyRootKeys,
-    lastTouchedVersionOverride: options.lastTouchedVersionOverride,
     preCommitRuntimePreflight: async (sourceConfig) => {
+      // A failed canonical reread must retain the actual resolved write payload,
+      // including writer metadata, rather than the caller's runtime-shaped input.
+      nextCfg = sourceConfig;
       if (deferRuntimeActivation) {
         managedPreparedCandidates = await preflightManagedRuntimeConfigWrite(
           io.configPath,

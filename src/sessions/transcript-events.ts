@@ -58,6 +58,15 @@ export function attachSessionTranscriptRunId<T>(message: T, runId: string | null
   };
 }
 
+/** Reads the run identity persisted on a transcript row, when one was attached. */
+export function readSessionTranscriptRunId(message: unknown): string | undefined {
+  if (!isRecord(message)) {
+    return undefined;
+  }
+  const metadata = isRecord(message["__openclaw"]) ? message["__openclaw"] : {};
+  return normalizeOptionalString(metadata["runId"]);
+}
+
 /** Correlates only terminal assistant rows with the run that actually produced them. */
 export function resolveTerminalAssistantTranscriptRunId(
   message: unknown,

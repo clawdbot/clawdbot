@@ -82,6 +82,8 @@ final class VoiceWakeTester {
         }
 
         let granted = try await Self.ensurePermissions()
+        // The test panel may close while a system permission prompt is open.
+        try Task.checkCancellation()
         guard granted else {
             throw NSError(
                 domain: "VoiceWakeTester",

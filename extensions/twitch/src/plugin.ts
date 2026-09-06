@@ -42,7 +42,7 @@ import {
 import { twitchMessageAdapter, twitchOutbound } from "./outbound.js";
 import { probeTwitch } from "./probe.js";
 import { resolveTwitchTargets } from "./resolver.js";
-import { twitchSetupContract, twitchSetupWizard } from "./setup-surface.js";
+import { twitchSetupPlugin } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
 import type {
   ChannelLogSink,
@@ -81,6 +81,17 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         console.warn,
       ),
     },
+    threading: {
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const channel = normalizeTwitchMessagingTarget(target);
+        return (
+          Boolean(channel) &&
+          [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+            (current) => current != null && normalizeTwitchMessagingTarget(current) === channel,
+          )
+        );
+      },
+    },
     outbound: twitchOutbound,
     base: {
       id: "twitch",
@@ -92,12 +103,18 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         blurb: "Twitch chat integration",
         aliases: ["twitch-chat"],
       },
-      setupContract: twitchSetupContract,
-      setupWizard: twitchSetupWizard,
+      setupContract: twitchSetupPlugin.setupContract,
+      setupWizard: twitchSetupPlugin.setupWizard,
+      reload: twitchSetupPlugin.reload,
       capabilities: {
         chatTypes: ["group"],
       },
       messaging: {
+        normalizeTarget: normalizeTwitchMessagingTarget,
+        targetResolver: {
+          looksLikeId: (input) => Boolean(normalizeTwitchMessagingTarget(input)),
+          hint: "<channel-name>",
+        },
         inferTargetChatType: ({ to }) => (normalizeTwitchMessagingTarget(to) ? "group" : undefined),
         resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
           const channel = normalizeTwitchMessagingTarget(target);

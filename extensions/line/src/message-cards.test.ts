@@ -12,7 +12,7 @@ import {
   uriAction,
   type Action,
 } from "./actions.js";
-import { registerLineCardCommand } from "./card-command.js";
+import { handleLineCardCommand } from "./card-command.js";
 import {
   createActionCard,
   createImageCard,
@@ -89,12 +89,7 @@ const lineTemplateMessageScenarios = [
 async function runLineFlexCardCommand(
   args: string,
 ): Promise<{ altText: string; contents: messagingApi.FlexContainer }> {
-  const result = (await registerCommandWithHandler((command: unknown) => {
-    const { handler } = command as {
-      handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-    };
-    return handler({ channel: "line", args });
-  })) as {
+  const result = (await handleLineCardCommand(args)) as {
     channelData: {
       line: { flexMessage: { altText: string; contents: messagingApi.FlexContainer } };
     };
@@ -495,16 +490,9 @@ describe("action label/data surrogate-safe truncation", () => {
   });
 
   it("/card action command visibly disables overlong callback data", async () => {
-    const registerCommand = (command: unknown) => {
-      const { handler } = command as {
-        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-      };
-      return handler({
-        channel: "line",
-        args: `action "Menu" "Body" --actions "${labelWithEmoji}|k=${"d".repeat(297)}😀"`,
-      });
-    };
-    const result = (await registerCommandWithHandler(registerCommand)) as {
+    const result = (await handleLineCardCommand(
+      `action "Menu" "Body" --actions "${labelWithEmoji}|k=${"d".repeat(297)}😀"`,
+    )) as {
       channelData: {
         line: {
           flexMessage: {
@@ -570,15 +558,9 @@ describe("action label/data surrogate-safe truncation", () => {
 
   it("/card buttons retains the template-specific 20-character action label limit", async () => {
     const label = "x".repeat(40);
-    const result = (await registerCommandWithHandler((command: unknown) => {
-      const { handler } = command as {
-        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-      };
-      return handler({
-        channel: "line",
-        args: `buttons "Menu" "Body" --actions "${label}|/status"`,
-      });
-    })) as {
+    const result = (await handleLineCardCommand(
+      `buttons "Menu" "Body" --actions "${label}|/status"`,
+    )) as {
       channelData: {
         line: { templateMessage: Parameters<typeof buildTemplateMessageFromPayload>[0] };
       };
@@ -694,16 +676,9 @@ describe("action label/data surrogate-safe truncation", () => {
   });
 
   it("/card receipt preserves a provider-valid Unicode alternative-text boundary", async () => {
-    const registerCommand = (command: unknown) => {
-      const { handler } = command as {
-        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-      };
-      return handler({
-        channel: "line",
-        args: `receipt "R" "${"a".repeat(395)}:😀x" --total "$30"`,
-      });
-    };
-    const result = (await registerCommandWithHandler(registerCommand)) as {
+    const result = (await handleLineCardCommand(
+      `receipt "R" "${"a".repeat(395)}:😀x" --total "$30"`,
+    )) as {
       channelData: { line: { flexMessage: { altText: string } } };
     };
     const altText = result.channelData.line.flexMessage.altText;
@@ -1066,15 +1041,3 @@ describe("action label/data surrogate-safe truncation", () => {
     }
   });
 });
-
-async function registerCommandWithHandler(
-  runHandler: (command: unknown) => Promise<unknown>,
-): Promise<unknown> {
-  let result: unknown;
-  registerLineCardCommand({
-    registerCommand(command: unknown) {
-      result = runHandler(command);
-    },
-  } as never);
-  return result;
-}

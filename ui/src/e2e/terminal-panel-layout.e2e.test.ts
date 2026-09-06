@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiTerminalReady,
@@ -16,13 +16,18 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
 
-const screenshotDir = process.env.OPENCLAW_TERMINAL_LAYOUT_SCREENSHOT_DIR?.trim();
+const screenshotDirParent = process.env.OPENCLAW_TERMINAL_LAYOUT_SCREENSHOT_DIR?.trim();
+let screenshotDir: string | undefined;
+beforeEach(() => {
+  screenshotDir = screenshotDirParent
+    ? createControlUiE2eArtifactDir("terminal-panel-layout", screenshotDirParent)
+    : undefined;
+});
 
 async function captureLayout(page: Page, theme: string, state: string): Promise<void> {
   if (!screenshotDir) {
     return;
   }
-  await fs.mkdir(screenshotDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     caret: "hide",

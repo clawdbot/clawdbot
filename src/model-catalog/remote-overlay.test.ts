@@ -3,10 +3,7 @@ import {
   getRemoteModelCatalogPricing,
   getRemoteModelCatalogProviderOverlay,
 } from "./remote-overlay.js";
-import {
-  resetRemoteModelCatalogOverlayForTest,
-  setRemoteModelCatalogOverlaySourcesForTest,
-} from "./remote-overlay.test-support.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "./remote-overlay.test-support.js";
 
 const mocks = {
   builtAt: vi.fn<() => number | undefined>(),
@@ -23,7 +20,6 @@ const bundle = {
 };
 
 beforeEach(() => {
-  resetRemoteModelCatalogOverlayForTest();
   mocks.builtAt.mockReset().mockReturnValue(100);
   mocks.read.mockReset().mockReturnValue({
     bundle_json: JSON.stringify(bundle),
@@ -37,7 +33,6 @@ beforeEach(() => {
 
 afterEach(() => {
   setRemoteModelCatalogOverlaySourcesForTest();
-  resetRemoteModelCatalogOverlayForTest();
 });
 
 describe("remote model catalog overlay", () => {
@@ -59,10 +54,12 @@ describe("remote model catalog overlay", () => {
       ),
     ).toBeUndefined();
     expect(mocks.read).not.toHaveBeenCalled();
-    resetRemoteModelCatalogOverlayForTest();
     mocks.builtAt.mockReturnValue(200);
     expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
-    resetRemoteModelCatalogOverlayForTest();
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: mocks.builtAt,
+      readStoredCatalog: mocks.read,
+    });
     mocks.builtAt.mockReturnValue(undefined);
     expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
   });

@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveBundledChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-bundled.js";
+import { resolveDiscoveredChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-discovery.js";
 import { resolveSingleAccountPromotion } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -154,8 +154,11 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     const promotion = resolveSingleAccountPromotion({
       channelKey: channelId,
       channel: rawChannel,
-      resolveBundledSurface: resolveBundledChannelSetupPromotionSurface,
+      resolveBundledSurface: (key) => resolveDiscoveredChannelSetupPromotionSurface(key, cfg),
     });
+    if (promotion.kind === "preserve-root") {
+      continue;
+    }
     // Defer only undeclared keys outside generic + legacy coverage. A partial
     // accounts.default would make later runs skip and permanently strand them at root.
     if (promotion.shouldDeferPromotion) {
@@ -1085,27 +1088,21 @@ function resolveConfiguredOllamaModelNumCtxBudget(params: {
   provider: Record<string, unknown>;
   providerNumCtxApplies: boolean;
 }): number | undefined {
+  // Current caps already drive native requests; an explicit pin would override later cap changes.
+  if (normalizeConfiguredPositiveInteger(params.model.contextTokens) !== undefined) {
+    return undefined;
+  }
   const modelContextWindow = normalizeConfiguredPositiveInteger(params.model.contextWindow);
-  if (modelContextWindow !== undefined) {
-    return modelContextWindow;
-  }
-
   const providerContextWindow = normalizeConfiguredPositiveInteger(params.provider.contextWindow);
-  if (providerContextWindow !== undefined) {
-    return params.providerNumCtxApplies ? undefined : providerContextWindow;
+  if (modelContextWindow !== undefined || providerContextWindow !== undefined) {
+    return modelContextWindow ?? (params.providerNumCtxApplies ? undefined : providerContextWindow);
   }
-
-  const modelMaxTokens = normalizeConfiguredPositiveInteger(params.model.maxTokens);
-  if (modelMaxTokens !== undefined) {
-    return modelMaxTokens;
-  }
-
-  const providerMaxTokens = normalizeConfiguredPositiveInteger(params.provider.maxTokens);
-  if (providerMaxTokens !== undefined) {
-    return params.providerNumCtxApplies ? undefined : providerMaxTokens;
-  }
-
-  return undefined;
+  return (
+    normalizeConfiguredPositiveInteger(params.model.maxTokens) ??
+    (params.providerNumCtxApplies
+      ? undefined
+      : normalizeConfiguredPositiveInteger(params.provider.maxTokens))
+  );
 }
 
 function resolveConfiguredOllamaProviderNumCtxBudget(
@@ -1117,30 +1114,17 @@ function resolveConfiguredOllamaProviderNumCtxBudget(
   );
 }
 
-function isNativeOllamaProviderConfig(
-  _providerId: string,
-  provider: Record<string, unknown>,
-): boolean {
-  const providerApi = normalizeOptionalLowercaseString(provider.api);
-  return providerApi === "ollama";
+function isNativeOllamaProviderConfig(provider: Record<string, unknown>): boolean {
+  return normalizeOptionalLowercaseString(provider.api) === "ollama";
 }
 
-function isNativeOllamaModelConfig(params: {
-  providerId: string;
-  provider: Record<string, unknown>;
-  model: Record<string, unknown>;
-}): boolean {
-  const modelApi = normalizeOptionalLowercaseString(params.model.api);
-  if (modelApi) {
-    return modelApi === "ollama";
-  }
-
-  const providerApi = normalizeOptionalLowercaseString(params.provider.api);
-  if (providerApi) {
-    return providerApi === "ollama";
-  }
-
-  return false;
+function isNativeOllamaModelConfig(
+  provider: Record<string, unknown>,
+  model: Record<string, unknown>,
+): boolean {
+  const api =
+    normalizeOptionalLowercaseString(model.api) || normalizeOptionalLowercaseString(provider.api);
+  return api === "ollama";
 }
 
 function hasConfiguredOllamaProviderNumCtx(provider: Record<string, unknown>): boolean {
@@ -1153,7 +1137,7 @@ function applyLegacyOllamaProviderNumCtxParams(params: {
   provider: Record<string, unknown>;
   changes: string[];
 }): { provider: Record<string, unknown>; changed: boolean } {
-  if (!isNativeOllamaProviderConfig(params.providerId, params.provider)) {
+  if (!isNativeOllamaProviderConfig(params.provider)) {
     return { provider: params.provider, changed: false };
   }
 
@@ -1203,13 +1187,17 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
     if (!Array.isArray(rawModels)) {
       continue;
     }
-    const providerParams = applyLegacyOllamaProviderNumCtxParams({
-      providerId,
-      provider: rawProvider,
-      changes,
-    });
+    // A new provider-wide pin would also override current caps, including API-overridden rows.
+    // Migrate uncapped native siblings individually while keeping authored provider pins intact.
+    const hasRuntimeCaps = rawModels.some(
+      (model) =>
+        isRecord(model) && normalizeConfiguredPositiveInteger(model.contextTokens) !== undefined,
+    );
+    const providerParams = hasRuntimeCaps
+      ? { provider: rawProvider, changed: false }
+      : applyLegacyOllamaProviderNumCtxParams({ providerId, provider: rawProvider, changes });
     const providerNumCtxApplies =
-      isNativeOllamaProviderConfig(providerId, providerParams.provider) &&
+      isNativeOllamaProviderConfig(providerParams.provider) &&
       hasConfiguredOllamaProviderNumCtx(providerParams.provider);
     if (rawModels.length === 0) {
       if (!providerParams.changed) {
@@ -1225,13 +1213,7 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       if (!isRecord(model)) {
         return model;
       }
-      if (
-        !isNativeOllamaModelConfig({
-          providerId,
-          provider: providerParams.provider,
-          model,
-        })
-      ) {
+      if (!isNativeOllamaModelConfig(providerParams.provider, model)) {
         return model;
       }
 

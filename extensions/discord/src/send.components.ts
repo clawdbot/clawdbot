@@ -7,7 +7,7 @@ import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { hasNonEmptyString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
   buildDiscordComponentMessage,
@@ -128,25 +128,11 @@ function getClassicDiscordMessageDecision(
 }
 
 function collapseClassicComponentText(spec: DiscordComponentMessageSpec): string {
-  const parts: string[] = [];
-  const addPart = (value: string | undefined) => {
-    if (typeof value !== "string") {
-      return;
-    }
-    const trimmed = value.trim();
-    if (!trimmed || parts.includes(trimmed)) {
-      return;
-    }
-    parts.push(trimmed);
-  };
-
-  addPart(spec.text);
-  for (const block of spec.blocks ?? []) {
-    if (block.type === "text") {
-      addPart(block.text);
-    }
-  }
-  return parts.join("\n\n");
+  const parts = [
+    spec.text,
+    ...(spec.blocks ?? []).flatMap((block) => (block.type === "text" ? [block.text] : [])),
+  ];
+  return uniqueStrings(parts.filter(hasNonEmptyString)).join("\n\n");
 }
 
 type DiscordComponentSendOpts = {
@@ -172,6 +158,7 @@ type DiscordComponentSendOpts = {
   /** Persist the concrete platform send before component bookkeeping can fail. */
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
@@ -282,7 +269,7 @@ export async function sendDiscordComponentMessage(
       token: opts.token,
       rest: opts.rest,
       mediaUrl: opts.mediaUrl,
-      filename: opts.filename,
+      filename: opts.filename?.trim() || extractComponentAttachmentNames(spec)[0],
       mediaLocalRoots: opts.mediaLocalRoots,
       mediaReadFile: opts.mediaReadFile,
       mediaAccess: opts.mediaAccess,
@@ -294,6 +281,7 @@ export async function sendDiscordComponentMessage(
       chunkMode: opts.chunkMode,
       onDeliveryResult: opts.onDeliveryResult,
       onPlatformSendDispatch: opts.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
       ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
     });
   }
@@ -326,6 +314,7 @@ export async function sendDiscordComponentMessage(
     result = (await request(
       async () => {
         await opts.onPlatformSendDispatch?.();
+        opts.assertPlatformSendAuthorized?.();
         return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
           body,
         });

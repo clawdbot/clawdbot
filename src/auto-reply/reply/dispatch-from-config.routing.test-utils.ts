@@ -5,6 +5,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  acpMocks,
   askUserMocks,
   createDispatcher,
   emptyConfig,
@@ -341,8 +342,20 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.currentEntry = {
       sessionId: "background-child",
       spawnedBy: "agent:main:parent",
-      acp: { backend: "codex" },
     };
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      agentId: "main",
+      sessionKey: "agent:main:background-child",
+      entry: sessionStoreMocks.currentEntry,
+      acp: {
+        backend: "acpx",
+        agent: "fixture",
+        runtimeSessionName: "background-child",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 1,
+      },
+    });
     const dispatcher = createDispatcher();
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await requireBlockReplyHandler(opts?.onBlockReply)(
@@ -1147,7 +1160,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps tool-error fallbacks available when verbose is disabled during the run", async () => {
+  it("hides failed tool progress when verbose is disabled during the run", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -1161,14 +1174,11 @@ describe("dispatchReplyFromConfig", () => {
       From: "whatsapp:group:789@g.us",
       SessionKey: "agent:main:whatsapp:group:789@g.us",
     });
-    let receivedOptions: GetReplyOptions | undefined;
-
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      receivedOptions = opts;
       const onToolResult = requireToolResultHandler(opts?.onToolResult);
       sessionStoreMocks.currentEntry = {
         verboseLevel: "off",
@@ -1185,7 +1195,6 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { suppressDefaultToolProgressMessages: true },
     });
 
-    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });

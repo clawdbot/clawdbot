@@ -9,10 +9,11 @@ import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase } from "./lib/npm-publish-plan.mjs";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
-  LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "./lib/package-dist-inventory.ts";
+import { collectForbiddenPackedPathErrors } from "./lib/packed-cargo-policy.mts";
+import { isRecord } from "./lib/record-shared.mjs";
 import {
   compareReleaseVersions as compareReleaseVersionsBase,
   collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
@@ -72,63 +73,6 @@ const REQUIRED_PACKED_PATHS = [
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
-const FORBIDDEN_PACKED_PATH_RULES = [
-  ...LOCAL_BUILD_METADATA_DIST_PATHS.map((prefix) => ({
-    prefix,
-    describe: (packedPath: string) =>
-      `npm package must not include local build metadata "${packedPath}".`,
-  })),
-  {
-    prefix: "docs/.generated/",
-    describe: (packedPath: string) =>
-      `npm package must not include generated docs artifact "${packedPath}".`,
-  },
-  {
-    prefix: "docs/channels/qa-channel.md",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel docs "${packedPath}".`,
-  },
-  {
-    prefix: "dist/extensions/qa-channel/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/extensions/qa-lab/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA lab artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/plugin-sdk/extensions/qa-channel/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel type artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/plugin-sdk/extensions/qa-lab/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA lab type artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/plugin-sdk/qa-channel.",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/plugin-sdk/qa-channel-protocol.",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/qa-runtime-",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA runtime chunk "${packedPath}".`,
-  },
-  {
-    prefix: "qa/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA suite artifact "${packedPath}".`,
-  },
-] as const;
 const FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS = [
   "//#region extensions/qa-lab/",
   "qa-channel/runtime-api.js",
@@ -518,13 +462,10 @@ function runNpmCommand(args: string[]): string {
   });
 }
 
-type NpmPackFileEntry = {
-  path?: string;
-};
-
-type NpmPackResult = {
+export type NpmPackResult = {
   filename?: string;
-  files?: NpmPackFileEntry[];
+  files?: { path: string }[];
+  unpackedSize?: number;
 };
 
 type ExecFailure = Error & {
@@ -574,11 +515,19 @@ export function parseNpmPackJsonOutput(stdout: string): NpmPackResult[] | null {
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate) as unknown;
-      const entries = resolveNpmJsonEntries(parsed).filter(
-        (entry): entry is NpmPackResult =>
-          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
-      );
-      if (entries.length > 0) {
+      const entries = resolveNpmJsonEntries(parsed);
+      if (
+        entries.length > 0 &&
+        entries.every(
+          (entry): entry is NpmPackResult =>
+            isRecord(entry) &&
+            (entry.filename === undefined || typeof entry.filename === "string") &&
+            (entry.unpackedSize === undefined || typeof entry.unpackedSize === "number") &&
+            (entry.files === undefined ||
+              (Array.isArray(entry.files) &&
+                entry.files.every((file) => isRecord(file) && typeof file.path === "string"))),
+        )
+      ) {
         return entries;
       }
     } catch {
@@ -667,19 +616,7 @@ function collectNpmLockErrors(): string[] {
   }
 }
 
-export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
-  const errors: string[] = [];
-  for (const packedPath of paths) {
-    const matchedRule = FORBIDDEN_PACKED_PATH_RULES.find((rule) =>
-      packedPath.startsWith(rule.prefix),
-    );
-    if (!matchedRule) {
-      continue;
-    }
-    errors.push(matchedRule.describe(packedPath));
-  }
-  return errors.toSorted((left, right) => left.localeCompare(right));
-}
+export { collectForbiddenPackedPathErrors } from "./lib/packed-cargo-policy.mts";
 
 export function collectForbiddenPackedContentErrors(
   paths: Iterable<string>,

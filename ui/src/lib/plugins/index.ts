@@ -87,6 +87,7 @@ export async function runPluginConfigMutation<T>(
   runtimeConfig: Pick<RuntimeConfigCapability, "runExternalMutation">,
   expectedClient: GatewayBrowserClient,
   task: (client: GatewayBrowserClient) => Promise<T>,
+  options: { canDispatch?: () => boolean; dispatchError?: string } = {},
 ): Promise<{ value: T; refreshError: string | null }> {
   let taskError: Error | undefined;
   const mutation = await runtimeConfig.runExternalMutation(async (client) => {
@@ -100,7 +101,7 @@ export async function runPluginConfigMutation<T>(
       taskError = error instanceof Error ? error : new Error(String(error));
       throw taskError;
     }
-  });
+  }, options);
   if (!mutation.ok) {
     throw taskError ?? new Error(mutation.error);
   }

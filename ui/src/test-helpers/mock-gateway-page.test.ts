@@ -1,5 +1,8 @@
 import { expect } from "vitest";
-import { createControlUiMockGatewayInitScript } from "./control-ui-e2e.ts";
+import {
+  createControlUiMockGatewayInitScript,
+  createControlUiMockSameOriginGatewayScript,
+} from "./control-ui-e2e.ts";
 import { mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
 it("keeps serialized Gateway globals and storage out of the host realm", ({ gatewayPage }) => {
@@ -21,6 +24,14 @@ it("keeps serialized Gateway globals and storage out of the host realm", ({ gate
   ).toBeDefined();
   expect(descriptors()).toEqual(before);
   expect(Object.entries(sessionStorage)).toEqual(hostStorage);
+});
+
+it("binds standalone mock pages to their serving Gateway", ({ gatewayPage }) => {
+  gatewayPage.execute(createControlUiMockSameOriginGatewayScript());
+
+  expect(gatewayPage.window["__OPENCLAW_NATIVE_CONTROL_AUTH__"]).toEqual({
+    gatewayUrl: "ws://mock-control-ui",
+  });
 });
 
 it("retires queued Gateway work and listeners when its page closes", async ({ gatewayPage }) => {
@@ -45,7 +56,7 @@ it("retires queued Gateway work and listeners when its page closes", async ({ ga
   });
   expect(socket.readyState).toBe(window.WebSocket.OPEN);
   const responses: string[] = [];
-  socket.addEventListener("message", (event) => responses.push(String(event.data)));
+  socket.addEventListener("message", (event: MessageEvent) => responses.push(String(event.data)));
   socket.send(
     JSON.stringify({
       type: "req",

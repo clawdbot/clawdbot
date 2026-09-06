@@ -217,7 +217,7 @@ export async function sandboxExplainCommand(
   const workspaceLayout = resolveSandboxWorkspaceLayoutPaths({
     cfg: sandboxCfg,
     agentId: resolvedAgentId,
-    sandboxPrincipalId: sandboxRuntime.sandboxPrincipalId,
+    isolationSubject: sandboxRuntime.isolationSubject,
     rawSessionKey:
       sessionKey === "global"
         ? buildAgentMainSessionKey({

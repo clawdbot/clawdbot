@@ -244,28 +244,31 @@ describe("openai transport stream", () => {
     expect(params.instructions).toBe("system");
   });
 
-  it("embeds the system prompt back in input for a route that opts out of instructions", () => {
-    const params = buildOpenAIResponsesParams(
-      {
-        id: "custom-model",
-        name: "Custom Model",
-        api: "openai-responses",
-        provider: "custom-provider",
-        baseUrl: "https://proxy.example.com/v1",
-        compat: { supportsInstructions: false },
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } as never,
-      emptyContext(),
-      undefined,
-    ) as { instructions?: string; input?: Array<{ role?: string }> };
+  it.each([
+    { supportsDeveloperRole: undefined, role: "developer" },
+    { supportsDeveloperRole: true, role: "developer" },
+    { supportsDeveloperRole: false, role: "system" },
+  ])(
+    "keeps the $role prompt role when instructions are disabled",
+    ({ supportsDeveloperRole, role }) => {
+      const params = buildOpenAIResponsesParams(
+        makeResponsesModel({
+          id: "custom-model",
+          provider: "custom-provider",
+          baseUrl: "https://proxy.example.com/v1",
+          compat: { supportsInstructions: false, supportsDeveloperRole },
+        }),
+        emptyContext(),
+        undefined,
+      ) as { instructions?: string; input?: Array<{ role?: string; content?: unknown }> };
 
-    expect(params).not.toHaveProperty("instructions");
-    expect(params.input?.[0]?.role).toBe("system");
-  });
+      expect(params).not.toHaveProperty("instructions");
+      expect(params.input?.[0]).toMatchObject({
+        role,
+        content: [{ type: "input_text", text: "system" }],
+      });
+    },
+  );
 
   it("embeds the system prompt in input by default for an unverified custom proxy route", () => {
     const params = buildOpenAIResponsesParams(
@@ -286,7 +289,7 @@ describe("openai transport stream", () => {
     ) as { instructions?: string; input?: Array<{ role?: string }> };
 
     expect(params).not.toHaveProperty("instructions");
-    expect(params.input?.[0]?.role).toBe("system");
+    expect(params.input?.[0]?.role).toBe("developer");
   });
 
   it("carries the system prompt via instructions for an unverified proxy route with an explicit opt-in", () => {
@@ -324,7 +327,7 @@ describe("openai transport stream", () => {
     ) as { instructions?: string; input?: Array<{ role?: string }> };
 
     expect(params).not.toHaveProperty("instructions");
-    expect(params.input?.[0]?.role).toBe("system");
+    expect(params.input?.[0]?.role).toBe("developer");
   });
 
   it("embeds the system prompt in input by default for a bundled-but-unverified named route (OpenCode)", () => {
@@ -340,7 +343,7 @@ describe("openai transport stream", () => {
     ) as { instructions?: string; input?: Array<{ role?: string }> };
 
     expect(params).not.toHaveProperty("instructions");
-    expect(params.input?.[0]?.role).toBe("system");
+    expect(params.input?.[0]?.role).toBe("developer");
   });
 
   it("embeds the system prompt in input by default for Azure OpenAI, unlike native OpenAI", () => {
@@ -356,6 +359,6 @@ describe("openai transport stream", () => {
     ) as { instructions?: string; input?: Array<{ role?: string }> };
 
     expect(params).not.toHaveProperty("instructions");
-    expect(params.input?.[0]?.role).toBe("system");
+    expect(params.input?.[0]?.role).toBe("developer");
   });
 });

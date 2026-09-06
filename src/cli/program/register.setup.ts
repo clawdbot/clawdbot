@@ -3,7 +3,6 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { rejectOnboardingOption } from "../../commands/onboard-options.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions, listExplicitOptionFlagsExcept } from "../command-options.js";
@@ -92,6 +91,7 @@ async function runOnboardingEntry(
   if (options.baseline) {
     const unsupportedOptions = listExplicitOptionFlagsExcept(commandRuntime, BASELINE_OPTION_NAMES);
     if (unsupportedOptions.length > 0) {
+      const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
       const message = `--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`;
       rejectOnboardingOption({ json: options.json === true }, runtime, message);
       return;
@@ -103,7 +103,7 @@ async function runOnboardingEntry(
     );
     return;
   }
-  const onboardingOptions = resolveOnboardCommandOptions(options, commandRuntime, runtime);
+  const onboardingOptions = await resolveOnboardCommandOptions(options, commandRuntime, runtime);
   if (!onboardingOptions) {
     return;
   }

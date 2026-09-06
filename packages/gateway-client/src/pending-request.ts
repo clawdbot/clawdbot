@@ -2,6 +2,7 @@ import type { ErrorShape, ResponseFrame } from "@openclaw/gateway-protocol";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
+  retainGatewayResponsePayload,
   type GatewayProtocolRequestOptions,
 } from "./protocol-request.js";
 import { resolveSafeTimeoutDelayMs } from "./timeouts.js";
@@ -45,7 +46,7 @@ type GatewayPendingRequestsOptions = {
 
 /** Owns request deadlines, correlation, settlement, and generation-scoped IDs. */
 export class GatewayPendingRequests {
-  private readonly pending = new Map<string, GatewayPendingRequest>();
+  private pending = new Map<string, GatewayPendingRequest>();
   private requestSequence = 0;
 
   constructor(private readonly opts: GatewayPendingRequestsOptions) {}
@@ -55,7 +56,12 @@ export class GatewayPendingRequests {
   }
 
   get hasUnboundedPending(): boolean {
-    return [...this.pending.values()].some((pending) => pending.unbounded);
+    for (const pending of this.pending.values()) {
+      if (pending.unbounded) {
+        return true;
+      }
+    }
+    return false;
   }
 
   request<T>(
@@ -156,7 +162,7 @@ export class GatewayPendingRequests {
       return;
     }
     const status = (frame.payload as { status?: unknown } | undefined)?.status;
-    if (pending.expectFinal && status === "accepted") {
+    if (frame.ok && pending.expectFinal && status === "accepted") {
       if (!pending.acceptedNotified) {
         pending.acceptedNotified = true;
         this.invoke("accepted", () => pending.onAccepted?.(frame.payload));
@@ -171,15 +177,16 @@ export class GatewayPendingRequests {
       return;
     }
     this.finishTiming(frame.id, pending, false, frame.error?.code);
-    pending.reject(
+    const error =
       this.opts.createRequestError?.(frame.error ?? {}) ??
-        new GatewayProtocolRequestError(frame.error ?? {}),
-    );
+      new GatewayProtocolRequestError(frame.error ?? {});
+    retainGatewayResponsePayload(error, frame.payload);
+    pending.reject(error);
   }
 
   flush(error: Error): void {
-    const retired = [...this.pending];
-    this.pending.clear();
+    const retired = this.pending;
+    this.pending = new Map();
     // Timing observers can reconnect synchronously, so detach the entire old
     // generation and reset its sequence before running any caller-owned code.
     this.requestSequence = 0;
@@ -203,21 +210,15 @@ export class GatewayPendingRequests {
   ): void {
     const endedAtMs = this.opts.nowMs();
     try {
-      const onTiming = this.opts.onTiming;
-      if (onTiming === undefined || onTiming === null) {
-        return;
-      }
-      Reflect.apply(onTiming, this.opts, [
-        {
-          id,
-          method: pending.method,
-          ok,
-          durationMs: Math.max(0, endedAtMs - pending.startedAtMs),
-          startedAtMs: pending.startedAtMs,
-          endedAtMs,
-          errorCode,
-        },
-      ]);
+      this.opts.onTiming?.({
+        id,
+        method: pending.method,
+        ok,
+        durationMs: Math.max(0, endedAtMs - pending.startedAtMs),
+        startedAtMs: pending.startedAtMs,
+        endedAtMs,
+        errorCode,
+      });
     } catch (error) {
       this.opts.onCallbackError?.("request timing", error);
     }

@@ -18,7 +18,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
-import { listSessionsFromStore } from "./session-utils.js";
+import { listSessionFixture } from "./session-list.test-support.js";
 
 const TELEGRAM_DIRECT_KEY = "agent:main:telegram:direct:7463849194";
 
@@ -107,7 +107,7 @@ describe("Telegram direct session recreation after delete", () => {
       session: { ...cfg.session, store: storePath },
     } satisfies OpenClawConfig;
     const loaded = loadCombinedSessionStoreForGatewayCore(runtimeCfg, { agentId: "main" });
-    const listed = listSessionsFromStore({
+    const listed = await listSessionFixture({
       cfg: runtimeCfg,
       storePath: loaded.storePath,
       store: loaded.store,

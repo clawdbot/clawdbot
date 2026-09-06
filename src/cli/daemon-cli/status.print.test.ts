@@ -94,7 +94,8 @@ vi.mock("../../infra/wsl.js", () => ({
   isWSLEnv: isWSLEnvMock,
 }));
 
-vi.mock("./shared.js", () => ({
+vi.mock("./shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared.js")>()),
   createCliStatusTextStyles: () => ({
     rich: false,
     label: (text: string) => text,
@@ -107,7 +108,6 @@ vi.mock("./shared.js", () => ({
   filterDaemonEnv: () => ({}),
   formatRuntimeStatus: () => "running (pid 8000)",
   resolveRuntimeStatusColor: () => "",
-  renderRuntimeHints: () => [],
   safeDaemonEnv: () => [],
 }));
 
@@ -149,6 +149,7 @@ describe("printDaemonStatus", () => {
         environment: { OPENCLAW_GATEWAY_TOKEN: "managed-base-gateway-token" },
       },
       managedOverrides: { launcher: "command", environment: { keys: ["OPENCLAW_GATEWAY_TOKEN"] } },
+      definitionPaths: ["/etc/systemd/user/private-definition.conf"],
       reloadPending: true,
     };
     for (const server of servers) {
@@ -176,6 +177,7 @@ describe("printDaemonStatus", () => {
     for (const [payload] of runtime.writeJson.mock.calls) {
       expect(payload).not.toHaveProperty("service.command.managedDefinition");
       expect(payload).not.toHaveProperty("service.command.managedOverrides");
+      expect(payload).not.toHaveProperty("service.command.definitionPaths");
       expect(payload).toHaveProperty("service.command.reloadPending", true);
       expect(JSON.stringify(payload)).not.toContain("gateway-token");
     }
@@ -251,7 +253,7 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Host desktop: managed · failed: startxfce4 not installed");
   });
 
-  it("prints the applied Gateway heap limit and derivation", () => {
+  it("distinguishes configured controls, installer recommendation, and unmeasured runtime", () => {
     printDaemonStatus(
       {
         service: {
@@ -260,7 +262,8 @@ describe("printDaemonStatus", () => {
           loadedText: "loaded",
           notLoadedText: "not loaded",
           gatewayHeap: {
-            appliedMiB: 6144,
+            nodeOptions: "--max-old-space-size=6144",
+            execArgv: [],
             maxOldSpaceSizeMiB: 4096,
             availableMemoryMiB: 8192,
             memorySource: "constrained",
@@ -274,9 +277,13 @@ describe("printDaemonStatus", () => {
       { json: false },
     );
 
-    expectMockLineContains(runtime.log, "Gateway heap: 6144 MiB");
-    expectMockLineContains(runtime.log, "adaptive default 4096 MiB");
-    expectMockLineContains(runtime.log, "8192 MiB constrained memory");
+    expectMockLineContains(
+      runtime.log,
+      "Gateway heap: service NODE_OPTIONS: --max-old-space-size=6144",
+    );
+    expectMockLineContains(runtime.log, "installer recommendation: 4096 MiB old space");
+    expectMockLineContains(runtime.log, "8192 MiB constrained capacity");
+    expectMockLineContains(runtime.log, "runtime V8 ceiling: not measured");
   });
 
   it.skipIf(process.platform !== "win32")(
@@ -609,7 +616,7 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("Gateway port 18789 is not listening");
   });
 
-  it("prints GUI-session wording before generic missing-supervision wording", () => {
+  it("prints GUI-session recovery guidance for the service profile", () => {
     printDaemonStatus(
       {
         service: {
@@ -619,10 +626,10 @@ describe("printDaemonStatus", () => {
           notLoadedText: "not loaded",
           runtime: {
             status: "unknown",
-            missingSupervision: true,
             missingGuiSession: true,
             detail: "Bootstrap failed: 125: Domain does not support specified action",
           },
+          command: { programArguments: [], environment: { OPENCLAW_PROFILE: "work" } },
         },
         extraServices: [],
       },
@@ -630,8 +637,8 @@ describe("printDaemonStatus", () => {
     );
 
     expectMockLineContains(runtime.error, "macOS has no usable GUI session");
-    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
-    expect(errors).not.toContain("launchd has no loaded job");
+    expectMockLineContains(runtime.error, "logged-in macOS GUI session");
+    expectMockLineContains(runtime.error, "openclaw --profile work gateway restart");
   });
 
   it("prints probe kind and capability separately", () => {
@@ -1107,6 +1114,12 @@ describe("printDaemonStatus", () => {
               source: "npm",
               packageName: "@openclaw/brave-plugin",
               spec: "@openclaw/brave-plugin@2026.6.9",
+              targetResolution: {
+                status: "resolved",
+                packageName: "@openclaw/brave-plugin",
+                requestedTarget: "2026.6.10-beta.1",
+                version: "2026.6.10-beta.1",
+              },
             },
           ],
         },
@@ -1121,6 +1134,49 @@ describe("printDaemonStatus", () => {
       "openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1",
     );
     expectMockLineContains(runtime.log, "openclaw gateway restart");
+  });
+
+  it("fails loudly without an install command when npm cannot resolve a pinned target", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loadState: { status: "loaded" },
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.7.1-2",
+          drifts: [
+            {
+              pluginId: "brave",
+              installedVersion: "2026.7.1-beta.2",
+              gatewayVersion: "2026.7.1-2",
+              source: "npm",
+              packageName: "@openclaw/brave-plugin",
+              spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
+              targetResolution: {
+                status: "unresolved",
+                packageName: "@openclaw/brave-plugin",
+                requestedTarget: "2026.7.1",
+                error: "npm registry did not resolve @openclaw/brave-plugin@2026.7.1: HTTP 404",
+              },
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false, deep: true },
+    );
+
+    expectMockLineContains(runtime.error, "Plugin repair target resolution failed");
+    expectMockLineContains(runtime.error, "HTTP 404");
+    const output = [runtime.log, runtime.error]
+      .flatMap((mock) => mock.mock.calls.map(([line]) => line))
+      .join("\n");
+    expect(output).not.toContain("openclaw plugins update");
+    expect(output).not.toContain("openclaw gateway restart");
   });
 
   it("does not print systemd user-service hints when a gateway responds", () => {

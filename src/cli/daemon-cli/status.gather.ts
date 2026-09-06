@@ -5,12 +5,11 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import JSON5 from "json5";
 import type { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
-  createConfigIO,
+  isDefaultInstallIdentity,
   resolveConfigPath,
   resolveGatewayPort,
   resolveStateDir,
-} from "../../config/config.js";
-import { isDefaultInstallIdentity } from "../../config/paths.js";
+} from "../../config/paths.js";
 import type {
   OpenClawConfig,
   ConfigFileSnapshot,
@@ -23,6 +22,7 @@ import { inspectGatewayHeapLimit, type GatewayHeapLimitReport } from "../../daem
 import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
+import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -56,6 +56,7 @@ import {
   readGatewayRestartHandoffSync,
   type GatewayRestartHandoff,
 } from "../../infra/restart-handoff.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import {
   inspectWindowsGatewayFirewall,
   type WindowsGatewayFirewallDiagnostic,
@@ -64,13 +65,15 @@ import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-record-reader.js";
 import {
   detectPluginVersionDrift,
+  hasOfficialPluginVersionCandidates,
   type PluginVersionDriftReport,
+  type PluginVersionRestartReadiness,
 } from "../../plugins/plugin-version-drift.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
+import { normalizeListenerAddress, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
 type ConfigSummary = {
@@ -134,6 +137,7 @@ type CliStatusSummary = {
 type GatewayConnectFailureKind = ReturnType<typeof classifyGatewayConnectFailure>["kind"];
 
 const loadGatewayProbeAuthModule = createLazyPromise(() => import("../../gateway/probe-auth.js"));
+const loadConfigIoRuntime = createLazyPromise(() => import("../../config/io.runtime.js"));
 const loadDaemonInspectModule = createLazyPromise(() => import("../../daemon/inspect.js"));
 const loadLaunchdModule = createLazyPromise(() => import("../../daemon/launchd.js"));
 const loadServiceAuditModule = createLazyPromise(() => import("../../daemon/service-audit.js"));
@@ -167,8 +171,15 @@ async function readFastStatusConfig(configPath: string): Promise<StatusConfigRea
   let raw: string;
   try {
     raw = await fs.readFile(configPath, "utf8");
-  } catch {
-    return null;
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+      return null;
+    }
+    return {
+      summary: { path: configPath, exists: false, valid: true },
+      cfg: {},
+      mode: "fast",
+    };
   }
 
   let parsed: unknown;
@@ -209,6 +220,7 @@ async function readFullStatusConfig(params: {
   configPath: string;
   pluginValidation?: "full" | "skip";
 }): Promise<StatusConfigRead> {
+  const { createConfigIO } = await loadConfigIoRuntime();
   const io = createConfigIO({
     env: params.env,
     configPath: params.configPath,
@@ -303,6 +315,7 @@ export type DaemonStatus = {
   lastError?: string;
   rpc?: {
     ok: boolean;
+    gatewayReached?: true;
     kind?: "connect" | "read";
     capability?: string;
     auth?: {
@@ -336,6 +349,8 @@ export type DaemonStatus = {
    * without a corresponding `openclaw plugins update`.
    */
   pluginVersionDrift?: PluginVersionDriftReport;
+  /** Doctor-only comparison against the installed service package a restart will load. */
+  pluginVersionRestartReadiness?: PluginVersionRestartReadiness;
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
@@ -404,7 +419,7 @@ async function resolveGatewayStatusSummary(params: {
   rpcUrlOverride?: string;
   localPortOverride?: number;
 }): Promise<ResolvedGatewayStatus> {
-  const portFromArgs = parsePortFromArgs(params.commandProgramArguments);
+  const portFromArgs = parseTcpPortFromArgs(params.commandProgramArguments);
   const daemonPort =
     params.localPortOverride ??
     portFromArgs ??
@@ -568,6 +583,7 @@ export async function gatherDaemonStatus(
     requireRpc?: boolean;
     deep?: boolean;
     allowExecSecretRefs?: boolean;
+    pluginVersionTarget?: "running" | "restart";
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
   const localPortOverride = resolveGatewayLocalPortOverride(opts.rpc);
@@ -589,15 +605,14 @@ export async function gatherDaemonStatus(
     !isGatewayExternallySupervised(process.env);
   const targetServiceCommand = useNativeServiceTargetContext ? command : null;
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
-  const configAudit: ServiceConfigAudit = command
-    ? await loadServiceAuditModule().then(({ auditGatewayServiceConfig }) =>
-        auditGatewayServiceConfig({
-          env: process.env,
-          command,
-          timeoutMs,
-        }),
-      )
-    : { ok: true, issues: [] satisfies ServiceConfigAudit["issues"] };
+  const configAudit: ServiceConfigAudit = await loadServiceAuditModule().then(
+    ({ auditGatewayServiceConfig }) =>
+      auditGatewayServiceConfig({
+        env: process.env,
+        command,
+        timeoutMs,
+      }),
+  );
   const {
     mergedDaemonEnv,
     cliCfg,
@@ -658,12 +673,12 @@ export async function gatherDaemonStatus(
       : [];
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
-  const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
-  const tlsRuntime = shouldUseLocalTlsRuntime
-    ? await loadGatewayTlsModule().then(({ loadGatewayTlsRuntime }) =>
-        loadGatewayTlsRuntime(daemonCfg.gateway?.tls),
-      )
-    : undefined;
+  const localCertificate =
+    opts.probe && !probeUrlOverride && tlsEnabled
+      ? await loadGatewayTlsModule().then(({ inspectGatewayTlsCertificate }) =>
+          inspectGatewayTlsCertificate(daemonCfg.gateway?.tls),
+        )
+      : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
   let allowRpcConfigCredentials = true;
@@ -709,10 +724,9 @@ export async function gatherDaemonStatus(
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
           config: daemonCfg,
-          tlsFingerprint:
-            shouldUseLocalTlsRuntime && tlsRuntime?.enabled
-              ? tlsRuntime.fingerprintSha256
-              : undefined,
+          tlsFingerprint: localCertificate?.ok
+            ? localCertificate.value.fingerprintSha256
+            : undefined,
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
@@ -757,27 +771,79 @@ export async function gatherDaemonStatus(
       })) ?? undefined;
   }
 
-  // Plugin version drift detection.
-  // Compares active official external plugins against the *running* local
-  // gateway version reported by the probe handshake, falling back to the
-  // invoking CLI VERSION only when no gateway version is available. Reading
-  // records with the merged daemon environment inspects the managed service's
+  // Plugin version drift detection. Status compares with the running Gateway;
+  // Doctor can request the installed service version that a restart will load.
+  // Reading records with the merged daemon environment inspects the managed service's
   // profile/state dir, so remote/explicit URL probes need remote-owned
   // diagnostics instead.
-  // Best-effort: unreadable install records omit this advisory report.
+  // Status omits unreadable advisory data; Doctor reports restart readiness as unresolved.
+  // Registry repair lookups belong to deep-status and Doctor command owners;
+  // readiness, support, and triage must not wait for the public registry.
   let pluginVersionDrift: PluginVersionDriftReport | undefined;
+  let pluginVersionRestartReadiness: PluginVersionRestartReadiness | undefined;
   if (shouldInspectLocalGateway) {
-    try {
-      const installRecords = await loadInstalledPluginIndexInstallRecords({
+    const loadInstallRecords = () =>
+      loadInstalledPluginIndexInstallRecords({
         env: mergedDaemonEnv as NodeJS.ProcessEnv,
       });
-      pluginVersionDrift = detectPluginVersionDrift({
-        gatewayVersion: gatewayVersion ?? VERSION,
-        installRecords,
-        config: daemonCfg,
-      });
+    try {
+      if (opts.pluginVersionTarget === "restart") {
+        const runningGatewayVersion = gatewayVersion ?? undefined;
+        if (!useNativeServiceTargetContext || (!targetServiceCommand && !loaded)) {
+          // Only the authoritative loaded native service can define restart readiness.
+        } else {
+          const installRecords = await loadInstallRecords();
+          if (hasOfficialPluginVersionCandidates({ installRecords, config: daemonCfg })) {
+            if (!targetServiceCommand) {
+              pluginVersionRestartReadiness = {
+                status: "unresolved",
+                reason:
+                  "Gateway service command is unavailable, so the post-restart OpenClaw version is unknown.",
+                ...(runningGatewayVersion ? { runningGatewayVersion } : {}),
+              };
+            } else {
+              const layout = await summarizeGatewayServiceLayout(targetServiceCommand);
+              if (!layout?.packageVersion) {
+                pluginVersionRestartReadiness = {
+                  status: "unresolved",
+                  reason:
+                    "Gateway service package version is unavailable, so the post-restart OpenClaw version is unknown.",
+                  ...(runningGatewayVersion ? { runningGatewayVersion } : {}),
+                };
+              } else {
+                const report = detectPluginVersionDrift({
+                  gatewayVersion: layout.packageVersion,
+                  installRecords,
+                  config: daemonCfg,
+                });
+                pluginVersionRestartReadiness = {
+                  status: "resolved",
+                  report,
+                  ...(runningGatewayVersion ? { runningGatewayVersion } : {}),
+                };
+              }
+            }
+          }
+        }
+      } else {
+        const installRecords = await loadInstallRecords();
+        pluginVersionDrift = detectPluginVersionDrift({
+          gatewayVersion: gatewayVersion ?? VERSION,
+          installRecords,
+          config: daemonCfg,
+        });
+      }
     } catch {
-      pluginVersionDrift = undefined;
+      if (opts.pluginVersionTarget === "restart") {
+        pluginVersionRestartReadiness = {
+          status: "unresolved",
+          reason:
+            "Plugin restart readiness could not be inspected, so post-restart compatibility is unknown.",
+          ...(gatewayVersion ? { runningGatewayVersion: gatewayVersion } : {}),
+        };
+      } else {
+        pluginVersionDrift = undefined;
+      }
     }
   }
 
@@ -796,10 +862,21 @@ export async function gatherDaemonStatus(
       notLoadedText: service.notLoadedText,
       targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",
       command,
-      runtime,
+      runtime: runtime?.inspectionFailure
+        ? {
+            ...runtime,
+            detail: `${runtime.detail}; retry with openclaw gateway status --deep`,
+          }
+        : runtime,
       configAudit,
       ...(command
-        ? { gatewayHeap: inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS) }
+        ? {
+            gatewayHeap: inspectGatewayHeapLimit(
+              command.environment?.NODE_OPTIONS,
+              {},
+              command.programArguments,
+            ),
+          }
         : {}),
       ...(restartHandoff ? { restartHandoff } : {}),
       ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),
@@ -842,6 +919,7 @@ export async function gatherDaemonStatus(
       : {}),
     extraServices,
     ...(pluginVersionDrift ? { pluginVersionDrift } : {}),
+    ...(pluginVersionRestartReadiness ? { pluginVersionRestartReadiness } : {}),
   };
 }
 

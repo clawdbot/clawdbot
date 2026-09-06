@@ -345,16 +345,27 @@ struct MacRealtimeTalkAudioCaptureTests {
             terminals: [kAudioStreamTerminalTypeHeadphones])
     }
 
+    @MainActor
     private func waitForHandledCallback(_ stream: AsyncStream<Void>) async throws {
-        let handled = try await AsyncTimeout.withTimeout(
-            seconds: 1,
-            onTimeout: { CancellationError() },
-            operation: {
-                for await _ in stream.prefix(1) {
-                    return true
-                }
-                return false
-            })
+        // Delivery and its watchdog share the callback's executor. A busy MainActor
+        // must not let a detached timeout outrun an already queued callback.
+        let delivery = Task { @MainActor in
+            var iterator = stream.makeAsyncIterator()
+            return await iterator.next() != nil
+        }
+        let watchdog = Task { @MainActor in
+            try await Task.sleep(for: .seconds(1))
+            delivery.cancel()
+        }
+        defer {
+            watchdog.cancel()
+            delivery.cancel()
+        }
+        let handled = await withTaskCancellationHandler {
+            await delivery.value
+        } onCancel: {
+            delivery.cancel()
+        }
         #expect(handled)
     }
 }

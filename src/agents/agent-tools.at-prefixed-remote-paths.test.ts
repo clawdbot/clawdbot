@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readMemoryArtifactProvenance } from "../memory/memory-artifact-provenance.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   createSandboxedEditTool,
   createSandboxedReadTool,
@@ -10,6 +14,8 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
+import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
@@ -32,6 +38,11 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
       await fs.writeFile(path.join(remoteRoot, "@notes.md"), "literal original", "utf8");
       await fs.writeFile(path.join(remoteRoot, "notes.md"), "sibling original", "utf8");
       await fs.writeFile(path.join(remoteRoot, "reference.md"), "reference", "utf8");
+      await fs.writeFile(path.join(remoteRoot, "obsolete.md"), "obsolete", "utf8");
+      await fs.writeFile(path.join(remoteRoot, "move-source.md"), "move source", "utf8");
+      await fs.writeFile(path.join(remoteRoot, "@replace-absent.md"), "old literal", "utf8");
+      await fs.writeFile(path.join(remoteRoot, "@replace-present.md"), "old literal", "utf8");
+      await fs.writeFile(path.join(remoteRoot, "replace-present.md"), "sibling", "utf8");
       await fs.mkdir(path.join(remoteRoot, "@projects"));
       await fs.mkdir(path.join(remoteRoot, "projects"));
       await fs.writeFile(path.join(remoteRoot, "projects", "new.md"), "sibling child", "utf8");
@@ -172,6 +183,139 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
       await expect(fs.readFile(path.join(remoteRoot, "notes.md"), "utf8")).resolves.toBe(
         "sibling original",
       );
+      await createApplyPatchTool({ cwd: hostRoot, sandbox: { root: hostRoot, bridge } }).execute(
+        "remote-at-shorthand-patch",
+        {
+          input: [
+            "*** Begin Patch",
+            "*** Update File: @reference.md",
+            "@@",
+            "-reference",
+            "+reference patched",
+            "*** Add File: @added.md",
+            "+added",
+            "*** Delete File: @obsolete.md",
+            "*** Update File: @move-source.md",
+            "*** Move to: @moved.md",
+            "@@",
+            "-move source",
+            "+move target",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      );
+      await expect(fs.readFile(path.join(remoteRoot, "reference.md"), "utf8")).resolves.toBe(
+        "reference patched",
+      );
+      await expect(fs.readFile(path.join(remoteRoot, "added.md"), "utf8")).resolves.toBe("added\n");
+      await expect(fs.stat(path.join(remoteRoot, "obsolete.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.stat(path.join(remoteRoot, "move-source.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.readFile(path.join(remoteRoot, "moved.md"), "utf8")).resolves.toBe(
+        "move target",
+      );
+      await createApplyPatchTool({ cwd: hostRoot, sandbox: { root: hostRoot, bridge } }).execute(
+        "remote-at-replace-patch",
+        {
+          input: [
+            "*** Begin Patch",
+            "*** Delete File: @replace-absent.md",
+            "*** Add File: @replace-absent.md",
+            "+new literal",
+            "*** Delete File: @replace-present.md",
+            "*** Add File: @replace-present.md",
+            "+new literal",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      );
+      await expect(fs.readFile(path.join(remoteRoot, "@replace-absent.md"), "utf8")).resolves.toBe(
+        "new literal\n",
+      );
+      await expect(fs.stat(path.join(remoteRoot, "replace-absent.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.readFile(path.join(remoteRoot, "@replace-present.md"), "utf8")).resolves.toBe(
+        "new literal\n",
+      );
+      await expect(fs.readFile(path.join(remoteRoot, "replace-present.md"), "utf8")).resolves.toBe(
+        "sibling",
+      );
+      await withStateDirEnv("openclaw-remote-provenance-", async () => {
+        const relativePath = "memory/quarantine.md";
+        const memoryPath = path.posix.join(containerWorkdir, relativePath);
+        const memoryWriteProvenance = createMemoryWriteProvenanceObserver({
+          mutationRoot: hostRoot,
+          workspaceDir: hostRoot,
+          resolvePath: (filePath) =>
+            resolveSandboxFileIdentity({ bridge, cwd: hostRoot, filePath }),
+          resolveOriginClass: () => "untrusted",
+        });
+        const toolOptions = { root: hostRoot, bridge, memoryWriteProvenance };
+        const memoryWrite = guard(createSandboxedWriteTool(toolOptions));
+        const expectQuarantine = async (content: string) => {
+          await expect(
+            readMemoryArtifactProvenance({ workspaceDir: hostRoot, relativePath }),
+          ).resolves.toMatchObject({
+            originClass: "untrusted",
+            fileHash: createHash("sha256").update(content).digest("hex"),
+          });
+          await expect(fs.readFile(path.join(remoteRoot, relativePath), "utf8")).resolves.toBe(
+            content,
+          );
+        };
+        try {
+          await memoryWrite.execute("remote-memory-write", {
+            path: memoryPath,
+            content: "written",
+          });
+          await expectQuarantine("written");
+          await guard(createSandboxedEditTool(toolOptions)).execute("remote-memory-edit", {
+            path: memoryPath,
+            edits: [{ oldText: "written", newText: "edited" }],
+          });
+          await expectQuarantine("edited");
+          await createApplyPatchTool({
+            cwd: hostRoot,
+            sandbox: { root: hostRoot, bridge },
+            memoryWriteProvenance,
+          }).execute("remote-memory-patch", {
+            input: [
+              "*** Begin Patch",
+              `*** Update File: ${memoryPath}`,
+              "@@",
+              "-edited",
+              "+patched",
+              "*** End Patch",
+            ].join("\n"),
+          });
+          await expectQuarantine("patched");
+          await wrapToolMemoryFlushAppendOnlyWrite(memoryWrite, {
+            root: hostRoot,
+            relativePath,
+            containerWorkdir,
+            sandbox: { root: hostRoot, bridge },
+            memoryWriteProvenance,
+          }).execute("remote-memory-flush", { path: memoryPath, content: "flushed" });
+          await expectQuarantine("patched\nflushed");
+          if (fixture === "Linux shell") {
+            await fs.symlink(
+              path.join(remoteRoot, "memory"),
+              path.join(remoteRoot, "journal-alias"),
+            );
+            await memoryWrite.execute("remote-memory-alias", {
+              path: path.posix.join(containerWorkdir, "journal-alias/quarantine.md"),
+              content: "aliased",
+            });
+            await expectQuarantine("aliased");
+          }
+        } finally {
+          resetPluginStateStoreForTests();
+        }
+      });
       await expect(fs.stat(path.join(hostRoot, "@notes.md"))).rejects.toMatchObject({
         code: "ENOENT",
       });

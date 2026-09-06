@@ -34,7 +34,8 @@ vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: mocks.loadPluginManifestRegistryCore,
 }));
 
-vi.mock("../../plugins/manifest.js", () => ({
+vi.mock("../../plugins/manifest.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/manifest.js")>()),
   loadPluginManifest: vi.fn(),
 }));
 
@@ -71,11 +72,16 @@ const unconfiguredProvider = {
   staticCatalog: { run: vi.fn() },
 };
 
-function createMetadataSnapshot(pluginIds: string[]): PluginMetadataSnapshot {
+function createMetadataSnapshot(
+  pluginIds: string[],
+  withDiscoveryEntry = true,
+): PluginMetadataSnapshot {
   const plugins = pluginIds.map((id) => ({
     id,
     origin: "bundled" as const,
-    providerDiscoverySource: `/fixtures/${id}/provider-discovery.ts`,
+    ...(withDiscoveryEntry
+      ? { providerDiscoverySource: `/fixtures/${id}/provider-discovery.ts` }
+      : {}),
   }));
   return {
     index: {
@@ -286,33 +292,58 @@ describe("prepared bundled provider static catalogs", () => {
     expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
   });
 
-  it("runs hooks omitted from a configured-only prepared catalog on full load", async () => {
-    mocks.runProviderStaticCatalog.mockResolvedValue({ marker: "full-static-result" });
-    mocks.normalizePluginDiscoveryResult.mockReturnValue({
-      google: {
-        models: [{ id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 }],
-      },
-    });
+  it.each(["prepared", "registered"])(
+    "uses %s static hooks without a discovery entry",
+    async (source) => {
+      mocks.runProviderStaticCatalog.mockResolvedValue({ marker: "full-static-result" });
+      mocks.normalizePluginDiscoveryResult.mockReturnValue({
+        google: {
+          models: [{ id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 }],
+        },
+      });
 
+      await expect(
+        loadBundledProviderStaticCatalogContextModels({
+          cfg,
+          metadataSnapshot: createMetadataSnapshot(["google"], false),
+          registeredProviders:
+            source === "registered"
+              ? [
+                  {
+                    pluginId: "google",
+                    provider: { ...provider, pluginId: "not-the-owner" },
+                    source: "fixture",
+                  },
+                ]
+              : [],
+          preparedStaticProviderCatalog: {
+            providers: source === "prepared" ? [provider] : [],
+            entries: [],
+          },
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          id: "gemini-3.1-pro-preview",
+          provider: "google",
+        }),
+      ]);
+      expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
+      expect(mocks.runProviderStaticCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ provider }),
+      );
+      expect(mocks.runProviderStaticCatalog).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not activate an unknown runtime-only plugin to collect static rows", async () => {
     await expect(
       loadBundledProviderStaticCatalogContextModels({
         cfg,
-        metadataSnapshot: createMetadataSnapshot(["google"]),
-        preparedStaticProviderCatalog: {
-          providers: [provider],
-          entries: [],
-        },
+        metadataSnapshot: createMetadataSnapshot(["google"], false),
       }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        id: "gemini-3.1-pro-preview",
-        provider: "google",
-      }),
-    ]);
+    ).resolves.toEqual([]);
     expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
-    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ provider }),
-    );
+    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
   });
 
   it("discovers unconfigured providers when the full catalog is requested", async () => {

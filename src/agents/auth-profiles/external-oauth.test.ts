@@ -323,7 +323,11 @@ describe("auth external oauth helpers", () => {
       expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]?.type).toBe(
         "oauth",
       );
-      expect(listener).toHaveBeenCalledWith({ agentDir, affectsInheritedStores: false });
+      expect(listener).toHaveBeenCalledWith({
+        agentDir,
+        affectsInheritedStores: false,
+        profileSetChanged: true,
+      });
     } finally {
       unregister();
     }

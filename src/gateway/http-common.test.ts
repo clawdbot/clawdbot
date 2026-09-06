@@ -1,7 +1,7 @@
 // HTTP common tests cover JSON/text response helpers, auth failures, security
 // headers, SSE headers, body parsing, and disconnect diagnostics.
 import { EventEmitter } from "node:events";
-import { ServerResponse, type IncomingMessage } from "node:http";
+import { createServer, ServerResponse, type IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onDiagnosticEvent,
@@ -253,52 +253,57 @@ describe("readJsonBodyOrError", () => {
     expect(readJsonBodyMock).toHaveBeenCalledWith(req, 1024);
   });
 
-  it("responds with 413 when the body is too large", async () => {
-    readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "payload too large" });
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
-    const { res, end } = makeMockHttpResponse();
-    const req = makeRequest({ "content-length": "2048" });
-    const result = await readJsonBodyOrError(req, res, 1024);
-    stop();
-    expect(result).toBeUndefined();
-    expect(res.statusCode).toBe(413);
-    expect(end).toHaveBeenCalledWith(
-      JSON.stringify({
-        error: { message: "Payload too large", type: "invalid_request_error" },
-      }),
-    );
-    const event = events.find((entry) => entry.type === "payload.large");
-    expect(event?.surface).toBe("gateway.http.json");
-    expect(event?.action).toBe("rejected");
-    expect(event?.bytes).toBe(2048);
-    expect(event?.limitBytes).toBe(1024);
-    expect(event?.reason).toBe("json_body_limit");
-    expect(req.destroy).not.toHaveBeenCalled();
-    res.emit("finish");
-    expect(req.destroy).not.toHaveBeenCalled();
-    res.emit("close");
-    expect(req.destroy).toHaveBeenCalledOnce();
-  });
-
-  it("responds with 408 when the request body times out", async () => {
-    readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "request body timeout" });
-    const { res, end } = makeMockHttpResponse();
-    const req = makeRequest();
-    const result = await readJsonBodyOrError(req, res, 1024);
-    expect(result).toBeUndefined();
-    expect(res.statusCode).toBe(408);
-    expect(end).toHaveBeenCalledWith(
-      JSON.stringify({
-        error: { message: "Request body timeout", type: "invalid_request_error" },
-      }),
-    );
-    expect(req.destroy).not.toHaveBeenCalled();
-    res.emit("finish");
-    expect(req.destroy).not.toHaveBeenCalled();
-    res.emit("close");
-    expect(req.destroy).toHaveBeenCalledOnce();
-  });
+  it.each([
+    { error: "payload too large", status: 413, message: "Payload too large" },
+    { error: "request body timeout", status: 408, message: "Request body timeout" },
+  ])(
+    "delivers the complete $status response and preserves diagnostics",
+    async ({ error, status, message }) => {
+      readJsonBodyMock.mockResolvedValueOnce({ ok: false, error });
+      const events: DiagnosticEventPayload[] = [];
+      const stop = onDiagnosticEvent((event) => events.push(event));
+      const tasks: Promise<unknown>[] = [];
+      const server = createServer((req, res) => {
+        setDefaultSecurityHeaders(res);
+        tasks.push(readJsonBodyOrError(req, res, 1024));
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("missing listener");
+      }
+      try {
+        const response = await fetch(`http://127.0.0.1:${address.port}/`, {
+          method: "POST",
+          body: "x".repeat(2048),
+        });
+        expect(response.status).toBe(status);
+        expect(response.headers.get("connection")).toBe("close");
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(await response.json()).toEqual({
+          error: { message, type: "invalid_request_error" },
+        });
+        if (status === 413) {
+          expect(events.find((entry) => entry.type === "payload.large")).toMatchObject({
+            surface: "gateway.http.json",
+            action: "rejected",
+            bytes: 2048,
+            limitBytes: 1024,
+            reason: "json_body_limit",
+          });
+        }
+      } finally {
+        stop();
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+        await Promise.all(tasks);
+      }
+    },
+  );
 
   it("responds with 400 for other parse failures", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "bad json" });
@@ -510,13 +515,23 @@ describe("watchClientDisconnect", () => {
     expect(typeof resOnCall[1]).toBe("function");
   });
 
-  it("cleanup detaches the close listener from each socket", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, null);
-    const controller = new AbortController();
-    const cleanup = watchClientDisconnect(req, res, controller);
-    expect(socket.listenerCount("close")).toBe(1);
-    cleanup();
-    expect(socket.listenerCount("close")).toBe(0);
-  });
+  it.each(["cleanup", "response completion"])(
+    "keeps completed work un-aborted after %s",
+    (phase) => {
+      const socket = new EventEmitter();
+      const { req, res } = makeMockHttpReqRes(socket, null);
+      const controller = new AbortController();
+      const cleanup = watchClientDisconnect(req, res, controller);
+      expect(socket.listenerCount("close")).toBe(1);
+      if (phase === "cleanup") {
+        cleanup();
+      } else {
+        res.emit("finish");
+      }
+      expect(socket.listenerCount("close")).toBe(0);
+      socket.emit("close");
+      expect(controller.signal.aborted).toBe(false);
+      res.emit("close");
+    },
+  );
 });

@@ -3,7 +3,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { z } from "zod";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
-import { closeRequestAfterResponse } from "../infra/http-body.js";
+import {
+  clearHttpResponseRepresentationHeaders,
+  sendHttpRequestRejection,
+} from "../infra/http-request-lifecycle.js";
 import {
   logRejectedLargePayload,
   parseContentLengthHeader,
@@ -21,12 +24,15 @@ import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
  */
 export function setDefaultSecurityHeaders(
   res: ServerResponse,
-  opts?: { strictTransportSecurity?: string },
+  opts?: { strictTransportSecurity?: string | false },
 ) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
-  const strictTransportSecurity = opts?.strictTransportSecurity;
+  const strictTransportSecurity =
+    typeof opts?.strictTransportSecurity === "string"
+      ? opts.strictTransportSecurity.trim()
+      : undefined;
   if (typeof strictTransportSecurity === "string" && strictTransportSecurity.length > 0) {
     res.setHeader("Strict-Transport-Security", strictTransportSecurity);
   }
@@ -38,20 +44,7 @@ export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
     return;
   }
   if (!res.headersSent) {
-    // Replace representation metadata, not request-owned security or CORS headers.
-    for (const header of [
-      "Content-Encoding",
-      "Content-Disposition",
-      "Content-Range",
-      "Content-Language",
-      "Content-Location",
-      "ETag",
-      "Last-Modified",
-      "Transfer-Encoding",
-      "Trailer",
-    ]) {
-      res.removeHeader(header);
-    }
+    clearHttpResponseRepresentationHeaders(res);
     res.setHeader("Cache-Control", "no-store");
     res.statusMessage = "Internal Server Error";
     respondPlainText(res, 500, res.statusMessage);
@@ -176,17 +169,21 @@ export async function readJsonBodyOrError(
         reason: "json_body_limit",
         ...(contentLength !== undefined ? { bytes: contentLength } : {}),
       });
-      closeRequestAfterResponse(req, res);
-      sendJson(res, 413, {
-        error: { message: "Payload too large", type: "invalid_request_error" },
-      });
-      return undefined;
     }
-    if (body.error === "request body timeout") {
-      closeRequestAfterResponse(req, res);
-      sendJson(res, 408, {
-        error: { message: "Request body timeout", type: "invalid_request_error" },
-      });
+    if (body.error === "payload too large" || body.error === "request body timeout") {
+      const tooLarge = body.error === "payload too large";
+      await sendHttpRequestRejection(
+        req,
+        res,
+        tooLarge ? 413 : 408,
+        JSON.stringify({
+          error: {
+            message: tooLarge ? "Payload too large" : "Request body timeout",
+            type: "invalid_request_error",
+          },
+        }),
+        "application/json; charset=utf-8",
+      );
       return undefined;
     }
     sendInvalidRequest(res, body.error);
@@ -233,20 +230,29 @@ export function watchClientDisconnect(
   if (sockets.length === 0) {
     return () => {};
   }
+  const stopWatchingDisconnect = () => {
+    for (const socket of sockets) {
+      socket.off("close", handleClose);
+    }
+    res.off("finish", stopWatchingDisconnect);
+  };
   const handleClose = () => {
+    stopWatchingDisconnect();
     onDisconnect?.();
     if (!abortController.signal.aborted) {
       abortController.abort(new ClientDisconnectError());
     }
   };
   const stopWatchingResponseErrors = () => {
+    stopWatchingDisconnect();
     res.off("error", handleClose);
     res.off("close", stopWatchingResponseErrors);
   };
-  // Finalizers release socket watchers before res.end(); keep its error
-  // listener until close so a failed flush cannot become process-fatal.
+  // Completed responses release socket watchers; keep response errors handled
+  // until close so a failed flush cannot become process-fatal.
   res.on("error", handleClose);
   res.once("close", stopWatchingResponseErrors);
+  res.once("finish", stopWatchingDisconnect);
   if (res.destroyed || sockets.some((socket) => socket.destroyed)) {
     handleClose();
     return () => {};
@@ -254,9 +260,5 @@ export function watchClientDisconnect(
   for (const socket of sockets) {
     socket.on("close", handleClose);
   }
-  return () => {
-    for (const socket of sockets) {
-      socket.off("close", handleClose);
-    }
-  };
+  return stopWatchingDisconnect;
 }

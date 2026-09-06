@@ -192,6 +192,12 @@ Gateway approval resolution is guarded by the dedicated `operator.approvals` sco
 You can forward exec approval prompts to any chat channel (including plugin channels) and approve
 them with `/approve`. This uses the normal outbound delivery pipeline.
 
+For a command the user has authorized, the agent requests execution through the tool first. The
+execution host decides whether an approval is needed. The agent relays an `/approve` command only
+from an actual pending approval, using the exact request ID and reply instructions. A bare
+`/approve` or an invented ID cannot approve a command. An `allow-once` grant covers only its
+specific command; subsequent commands receive their own policy decision.
+
 Config:
 
 ```json5

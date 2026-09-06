@@ -18,6 +18,7 @@ import {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
+  seedQaSessionEntries,
   seedQaSessionTranscript,
 } from "./suite-runtime-agent-session.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -277,6 +278,72 @@ describe("qa suite runtime agent session helpers", () => {
     await expect(
       fs.stat(path.join(tempRoot, "state", "agents", "qa", "sessions", `${sessionId}.jsonl`)),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("seeds multi-agent session entries through the canonical accessor", async () => {
+    const tempRoot = await makeTempDir("qa-session-entry-seed-");
+    const parentSessionKey = "agent:qa:main";
+
+    await seedQaSessionEntries(
+      {
+        gateway: { tempRoot },
+      } as never,
+      [
+        {
+          agentId: "qa",
+          sessionKey: parentSessionKey,
+          entry: {
+            sessionId: "session-main",
+            updatedAt: 300,
+          },
+        },
+        {
+          agentId: "qa",
+          sessionKey: "agent:qa:subagent:child",
+          entry: {
+            sessionId: "session-child",
+            updatedAt: 200,
+            spawnedBy: parentSessionKey,
+            status: "done",
+            endedAt: 250,
+          },
+        },
+        {
+          agentId: "claude",
+          sessionKey: "agent:claude:acp:child",
+          entry: {
+            sessionId: "session-acp-child",
+            updatedAt: 100,
+            parentSessionKey,
+          },
+        },
+      ],
+    );
+
+    await expect(
+      readRawQaSessionStore({ gateway: { tempRoot } } as never, { agentId: "qa" }),
+    ).resolves.toMatchObject({
+      [parentSessionKey]: {
+        sessionId: "session-main",
+        updatedAt: 300,
+      },
+      "agent:qa:subagent:child": {
+        sessionId: "session-child",
+        updatedAt: 200,
+        spawnedBy: parentSessionKey,
+        status: "done",
+        endedAt: 250,
+      },
+    });
+    await expect(
+      readRawQaSessionStore({ gateway: { tempRoot } } as never, { agentId: "claude" }),
+    ).resolves.toMatchObject({
+      "agent:claude:acp:child": {
+        sessionId: "session-acp-child",
+        updatedAt: 100,
+        parentSessionKey,
+      },
+    });
   });
 
   it("reports bounded persisted compaction summaries", async () => {
@@ -796,6 +863,35 @@ describe("qa suite runtime agent session helpers", () => {
       name: "exec",
       timestamp: 64,
       toolCallId: "call-64",
+    });
+  });
+
+  it("reports current-source delivery facts from runtime-only tool result details", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-current-source-");
+    const sessionKey = "agent:qa:current-source";
+    const sessionId = "session-current-source";
+    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    await appendQaTranscriptMessage({
+      tempRoot,
+      sessionKey,
+      sessionId,
+      message: {
+        role: "toolResult",
+        toolCallId: "message-1",
+        toolName: "message",
+        content: [{ type: "text", text: '{"ok":true}' }],
+        details: {
+          sourceReplyRoute: "current-source",
+          receipt: { threadId: "thread-1" },
+        },
+        isError: false,
+      },
+    });
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey),
+    ).resolves.toMatchObject({
+      currentSourceToolDeliveries: [{ toolName: "message", threadId: "thread-1" }],
     });
   });
 

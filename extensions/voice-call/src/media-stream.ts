@@ -24,8 +24,9 @@ import {
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { type RawData, WebSocket, WebSocketServer } from "ws";
+import type { RawData } from "ws";
 import { canonicalizeVoiceCallMediaBase64 } from "./media-base64.js";
+import { WebSocket, WebSocketServer } from "./websocket.js";
 
 /**
  * Configuration for the media stream handler.
@@ -50,15 +51,15 @@ export interface MediaStreamConfig {
   /** Validate whether to accept a media stream for the given call ID. Missing validator rejects. */
   shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
   /** Callback when transcript is received */
-  onTranscript?: (callId: string, transcript: string) => void;
+  onTranscript?: (callId: string, transcript: string, streamSid: string) => void;
   /** Callback for partial transcripts (streaming UI) */
-  onPartialTranscript?: (callId: string, partial: string) => void;
+  onPartialTranscript?: (callId: string, partial: string, streamSid: string) => void;
   /** Callback when stream connects */
   onConnect?: (callId: string, streamSid: string) => void;
   /** Callback when realtime transcription is ready for the stream */
   onTranscriptionReady?: (callId: string, streamSid: string) => void;
   /** Callback when speech starts (barge-in) */
-  onSpeechStart?: (callId: string) => void;
+  onSpeechStart?: (callId: string, streamSid: string) => void;
   /** Callback when stream disconnects */
   onDisconnect?: (callId: string, streamSid: string) => void;
   /** Callback for common Talk events emitted by the telephony STT/TTS adapter. */
@@ -401,7 +402,7 @@ export class MediaStreamHandler {
             payload: { callId: callSid, streamSid, text: partial, role: "user" },
           });
         }
-        this.config.onPartialTranscript?.(callSid, partial);
+        this.config.onPartialTranscript?.(callSid, partial, streamSid);
       },
       onTranscript: (transcript) => {
         const session = this.sessions.get(streamSid);
@@ -420,14 +421,14 @@ export class MediaStreamHandler {
             payload: { callId: callSid, streamSid, text: transcript, role: "user" },
           });
         }
-        this.config.onTranscript?.(callSid, transcript);
+        this.config.onTranscript?.(callSid, transcript, streamSid);
       },
       onSpeechStart: () => {
         const session = this.sessions.get(streamSid);
         if (session) {
           this.ensureActiveTurn(session);
         }
-        this.config.onSpeechStart?.(callSid);
+        this.config.onSpeechStart?.(callSid, streamSid);
       },
       onError: (error) => {
         console.warn("[MediaStream] Transcription session error:", error.message);

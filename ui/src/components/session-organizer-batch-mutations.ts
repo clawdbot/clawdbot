@@ -23,10 +23,7 @@ export type SessionActionRow = Pick<
 
 export type SessionActionHost = Pick<
   SessionOrganizerControllerHost,
-  | "pruneSidebarSessionEntry"
-  | "replaceCurrentSession"
-  | "selectSession"
-  | "sidebarSessionStatusFilter"
+  "pruneSidebarSessionEntry" | "selectSession" | "sidebarSessionStatusFilter"
 > & {
   readonly sessionData: Pick<
     SessionOrganizerControllerHost["sessionData"],

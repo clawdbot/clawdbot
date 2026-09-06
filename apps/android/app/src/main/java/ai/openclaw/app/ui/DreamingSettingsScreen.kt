@@ -6,7 +6,6 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.ui.design.ClawPanel
-import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatusRow
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
@@ -39,9 +38,7 @@ internal fun DreamingSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
-  val summary by viewModel.dreamingSummary.collectAsState()
-  val refreshing by viewModel.dreamingRefreshing.collectAsState()
-  val errorText by viewModel.dreamingErrorText.collectAsState()
+  val state by viewModel.dreamingState.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
 
   LaunchedEffect(isConnected) {
@@ -56,34 +53,18 @@ internal fun DreamingSettingsScreen(
     icon = Icons.Default.Storage,
     onBack = onBack,
   ) {
-    SettingsMetricPanel(
-      rows =
-        listOf(
-          SettingsMetric(nativeString("Status"), if (summary.enabled) nativeString("On") else nativeString("Off")),
-          SettingsMetric(nativeString("Waiting"), summary.shortTermCount.toString()),
-          SettingsMetric(nativeString("Signals"), summary.totalSignalCount.toString()),
-          SettingsMetric(nativeString("Next Cycle"), formatDreamingNextRun(summary.nextRunAtMs)),
-        ),
-    )
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawSecondaryButton(
-        text = if (refreshing) nativeString("Refreshing") else nativeString("Refresh"),
-        onClick = viewModel::refreshDreaming,
-        enabled = isConnected && !refreshing,
-        modifier = Modifier.weight(1f),
+    SettingsRefreshControls(isConnected, state.refreshing, state.errorText, viewModel::refreshDreaming)
+    SettingsSummaryContent(state, isConnected, nativeString("Connect the gateway to load dreaming.")) { summary ->
+      SettingsMetricPanel(
+        rows =
+          listOf(
+            SettingsMetric(nativeString("Status"), if (summary.enabled) nativeString("On") else nativeString("Off")),
+            SettingsMetric(nativeString("Waiting"), summary.shortTermCount.toString()),
+            SettingsMetric(nativeString("Signals"), summary.totalSignalCount.toString()),
+            SettingsMetric(nativeString("Next Cycle"), formatDreamingNextRun(summary.nextRunAtMs)),
+          ),
       )
-    }
-    errorText?.let { error ->
-      ClawPanel {
-        Text(text = error, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
-    }
-    when {
-      !isConnected ->
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load dreaming."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      else -> DreamingPanel(summary = summary)
+      DreamingPanel(summary = summary)
     }
   }
 }

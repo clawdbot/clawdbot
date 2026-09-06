@@ -3,24 +3,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
-import {
-  deliveryContextFromSession,
-  sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
-import { isSystemEventProvider } from "./effective-reply-route.js";
 import type { ExecOverrides } from "./get-reply-run.types.js";
-import {
-  resolvePersistedPromptProvider,
-  resolvePersistedPromptSurface,
-} from "./prompt-session-context.js";
 
 const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
@@ -179,79 +169,6 @@ export function resolvePromptSilentReplyConversationType(params: {
   return undefined;
 }
 
-export function resolvePromptSessionContextForSystemEvent(params: {
-  sessionCtx: TemplateContext;
-  sessionEntry?: SessionEntry;
-  ctx?: Pick<MsgContext, "Provider">;
-  isHeartbeat?: boolean;
-}): TemplateContext {
-  const { sessionCtx, sessionEntry } = params;
-  const isSystemEvent =
-    params.isHeartbeat === true ||
-    isSystemEventProvider(params.ctx?.Provider) ||
-    isSystemEventProvider(sessionCtx.Provider);
-  if (!isSystemEvent || !sessionEntry) {
-    return sessionCtx;
-  }
-
-  const origin = sessionDeliveryOrigin(sessionEntry);
-  const deliveryContext = deliveryContextFromSession(sessionEntry);
-  const persistedChatType =
-    normalizeChatType(sessionEntry.chatType) ?? normalizeChatType(origin?.chatType);
-  const liveChatType = normalizeChatType(sessionCtx.ChatType);
-  const effectiveChatType = liveChatType ?? persistedChatType;
-  const persistedProvider = resolvePersistedPromptProvider(sessionEntry);
-  const persistedSurface = resolvePersistedPromptSurface(sessionEntry);
-  const liveProvider = normalizeOptionalString(sessionCtx.Provider);
-  const liveSurface = normalizeOptionalString(sessionCtx.Surface);
-  const nextProvider =
-    liveProvider && !isSystemEventProvider(liveProvider)
-      ? liveProvider
-      : (persistedProvider ?? liveProvider);
-  const nextSurface =
-    liveSurface && !isSystemEventProvider(liveSurface)
-      ? liveSurface
-      : (persistedSurface ?? liveSurface);
-
-  const next: TemplateContext = { ...sessionCtx };
-  let changed = false;
-  const setIfMissing = <K extends keyof TemplateContext>(key: K, value: TemplateContext[K]) => {
-    if (next[key] != null && next[key] !== "") {
-      return;
-    }
-    if (value == null || value === "") {
-      return;
-    }
-    next[key] = value;
-    changed = true;
-  };
-  const setIfChanged = <K extends keyof TemplateContext>(key: K, value: TemplateContext[K]) => {
-    if (value == null || value === "" || next[key] === value) {
-      return;
-    }
-    next[key] = value;
-    changed = true;
-  };
-
-  setIfChanged("Provider", nextProvider);
-  setIfChanged("Surface", nextSurface);
-  setIfMissing("ChatType", persistedChatType);
-  if (effectiveChatType === "group" || effectiveChatType === "channel") {
-    setIfMissing("GroupSubject", normalizeOptionalString(sessionEntry.subject));
-    setIfMissing("GroupChannel", normalizeOptionalString(sessionEntry.groupChannel));
-    setIfMissing("GroupSpace", normalizeOptionalString(sessionEntry.space));
-  }
-  setIfMissing("OriginatingChannel", persistedProvider);
-  setIfMissing("OriginatingTo", normalizeOptionalString(deliveryContext?.to ?? origin?.to));
-  setIfMissing(
-    "AccountId",
-    normalizeOptionalString(deliveryContext?.accountId ?? origin?.accountId),
-  );
-  setIfMissing("MessageThreadId", deliveryContext?.threadId ?? origin?.threadId);
-
-  return changed ? next : sessionCtx;
-}
-
 export function buildExecOverridePromptHint(params: {
   execOverrides?: ExecOverrides;
   elevatedLevel: ElevatedLevel;
@@ -314,18 +231,6 @@ export function loadAgentRunnerRuntime() {
 
 export function loadSessionUpdatesRuntime() {
   return sessionUpdatesRuntimeLoader.load();
-}
-
-export function stripPromptThinkingDirectives(body: string): string {
-  return body
-    .split("\n")
-    .map((line) =>
-      line
-        .replace(/(^|\s)\/(?:thinking|think|t)(?=$|\s|:)(?:\s*:\s*|\s+)?[A-Za-z-]*/gi, "$1")
-        .replace(/[ \t]{2,}/g, " ")
-        .trimEnd(),
-    )
-    .join("\n");
 }
 
 export function hasInboundHistoryBody(ctx: TemplateContext): boolean {

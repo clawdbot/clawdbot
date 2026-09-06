@@ -72,7 +72,11 @@ without editing the file.
 
 ## Profiler flags
 
-Profiler flags gate lightweight timing spans; they add no overhead when off.
+Slow reply preparation and Codex startup are logged at the default log level
+without profiler flags: a stage taking at least 5 seconds or a tracked total
+taking at least 10 seconds emits a warning. Fast paths remain quiet. Profiler
+flags lower the timing thresholds to 500 milliseconds per stage and 1 second
+total, and enable additional detail.
 
 Enable all profiler-gated spans for one gateway run:
 
@@ -149,6 +153,12 @@ process ids, phase names, span names, durations, plugin ids, dependency
 counts, event-loop delay samples, provider operation names, child-process exit
 state, and startup error names/messages. Treat timeline files as local
 diagnostics artifacts; review before sharing them outside your machine.
+
+Timeline writes batch adjacent events with the same destination into a bounded
+64 KiB buffer, flushed on the next event-loop turn, at capacity, or on normal
+process exit. Event timestamps reflect emission time. Writes remain best-effort;
+a forced kill can lose pending output. External harnesses should read the final
+artifact after the process exits and must not truncate it while the process runs.
 
 ## Where logs go
 

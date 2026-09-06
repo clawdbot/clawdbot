@@ -163,6 +163,7 @@ async function sendZalouserMediaFromContext({
     mediaUrl,
     mediaLocalRoots,
     mediaReadFile,
+    mediaMaxBytes: account.mediaMaxBytes,
     textMode: "markdown",
     textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
     textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
@@ -455,9 +456,19 @@ export const zalouserPairingTextAdapter = {
   idLabel: "zalouserUserId",
   message: "Your pairing request has been approved.",
   normalizeAllowEntry: createPairingPrefixStripper(/^(zalouser|zlu):/i),
-  notify: async ({ cfg, id, message }: { cfg: OpenClawConfig; id: string; message: string }) => {
+  notify: async ({
+    cfg,
+    id,
+    message,
+    accountId,
+  }: {
+    cfg: OpenClawConfig;
+    id: string;
+    message: string;
+    accountId?: string;
+  }) => {
     const { sendMessageZalouser } = await loadZalouserChannelRuntime();
-    const account = resolveZalouserAccountSync({ cfg });
+    const account = resolveZalouserAccountSync({ cfg, accountId });
     const authenticated = await checkZcaAuthenticated(account.profile);
     if (!authenticated) {
       throw new Error("Zalouser not authenticated");

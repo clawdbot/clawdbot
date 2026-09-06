@@ -37,7 +37,7 @@ import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 /**
  * The whole first-run setup as one approved operation: the user says "yes" in
  * the conversation and this applies model + workspace + quickstart gateway
- * defaults, seeds workspace bootstrap files, and (on the CLI surface) installs
+ * defaults, seeds workspace bootstrap files, and (on the CLI surface) optionally installs
  * and starts the gateway service. No interactive prompts may occur here —
  * everything uses quickstart defaults, so the conversation stays the only UI.
  */
@@ -73,6 +73,7 @@ export type SystemAgentSetupApplyParams = {
   assertCommitPreconditions?: (sourceConfig: OpenClawConfig) => void;
   /** Resume an interrupted local installation without restarting a running Gateway. */
   resume?: boolean;
+  installDaemon?: boolean;
   surface: "cli" | "gateway";
   runtime: RuntimeEnv;
 };
@@ -88,8 +89,8 @@ export type SystemAgentSetupApplyResult = {
 };
 
 type SystemAgentSetupApplyHooks = {
-  /** Host-owned authority seam; called at every persistent setup boundary. */
-  commit<T>(effect: () => Promise<T> | T): Promise<T>;
+  /** Revalidate the original host authority at each owner's persistent boundary. */
+  beforePersistentApply?: () => void;
 };
 
 /** Prompter for quickstart-only flows: notes go to the log, prompts fail loud. */
@@ -162,9 +163,7 @@ export async function applySystemAgentSetup(
     runtime,
   } = params;
   const hasExpectedConfigHash = Object.hasOwn(params, "expectedConfigHash");
-  const commit: SystemAgentSetupApplyHooks["commit"] = hooks
-    ? async (effect) => await hooks.commit(effect)
-    : async (effect) => await effect();
+  const beforePersistentApply = hooks?.beforePersistentApply;
   const [
     { readSetupConfigFileSnapshot, resolveQuickstartGatewayDefaults },
     onboardHelpers,
@@ -269,16 +268,15 @@ export async function applySystemAgentSetup(
   let expectedWriteHash = expectedConfigHash;
   if (startedWithoutAuthoredRoster) {
     const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
-    const created = await commit(
-      async () =>
-        await ensureOnboardingAgent({
-          config: onboardingSourceConfig,
-          workspace: setupWorkspace,
-          baseConfig: onboardingSourceConfig,
-          firstAgent: params.firstAgent ?? { name: "main" },
-          expectedConfigHash: configHashBefore ?? null,
-        }),
-    );
+    beforePersistentApply?.();
+    const created = await ensureOnboardingAgent({
+      config: onboardingSourceConfig,
+      workspace: setupWorkspace,
+      baseConfig: onboardingSourceConfig,
+      firstAgent: params.firstAgent ?? { name: "main" },
+      expectedConfigHash: configHashBefore ?? null,
+      beforePersistentApply,
+    });
     if (!created.createdAgent || !created.configHash) {
       throw new Error(
         "OpenClaw did not create the approved first agent because the roster changed. Retry setup.",
@@ -389,71 +387,71 @@ export async function applySystemAgentSetup(
       settings: gateway.settings,
     };
   };
-  const committed = await commit(
-    async () =>
-      await transformConfigWithPendingPluginInstalls({
-        afterWrite: { mode: "auto" },
-        writeOptions: { auditOrigin: "system-agent", allowConfigSizeDrop: false },
-        transform: async (currentConfig, context) => {
-          const currentSnapshot = requireValidSystemAgentSetupSnapshot(context.snapshot);
-          if (
-            (hasExpectedConfigHash || startedWithoutAuthoredRoster) &&
-            context.previousHash !== expectedWriteHash
-          ) {
-            throw new Error(
-              "OpenClaw config changed while AI access was being tested. Try setup again.",
-            );
-          }
-          await assertVerifiedRoute(context.snapshot);
-          assertExpectedTarget(currentSnapshot.runtimeConfig);
+  beforePersistentApply?.();
+  const committed = await transformConfigWithPendingPluginInstalls({
+    afterWrite: { mode: "auto" },
+    writeOptions: {
+      auditOrigin: "system-agent",
+      allowConfigSizeDrop: false,
+      assertConfigPathForWrite: beforePersistentApply,
+    },
+    transform: async (currentConfig, context) => {
+      const currentSnapshot = requireValidSystemAgentSetupSnapshot(context.snapshot);
+      if (
+        (hasExpectedConfigHash || startedWithoutAuthoredRoster) &&
+        context.previousHash !== expectedWriteHash
+      ) {
+        throw new Error(
+          "OpenClaw config changed while AI access was being tested. Try setup again.",
+        );
+      }
+      await assertVerifiedRoute(context.snapshot);
+      assertExpectedTarget(currentSnapshot.runtimeConfig);
 
-          // Rebuild config and Gateway settings from the same locked snapshot.
-          // A retry can preserve unrelated concurrent edits without carrying
-          // stale settings from the losing attempt into service setup or probes.
-          const setupCandidate = await buildSetupCandidate(
-            currentConfig,
-            startedWithoutAuthoredRoster
-              ? false
-              : hasResolvedRosterBeforeMigrations(context.snapshot),
+      // Rebuild config and Gateway settings from the same locked snapshot.
+      // A retry can preserve unrelated concurrent edits without carrying
+      // stale settings from the losing attempt into service setup or probes.
+      const setupCandidate = await buildSetupCandidate(
+        currentConfig,
+        startedWithoutAuthoredRoster ? false : hasResolvedRosterBeforeMigrations(context.snapshot),
+      );
+      const finalizedConfig = finalizeConfig
+        ? finalizeConfig(setupCandidate.nextConfig, currentSnapshot.sourceConfig)
+        : setupCandidate.nextConfig;
+      const expectedSourceRoute = verifiedRoute
+        ? await projectDefaultInferenceRoute(finalizedConfig)
+        : undefined;
+      if (
+        verifiedRoute &&
+        (!verifiedRoute.route ||
+          !expectedSourceRoute?.route ||
+          !sameSetupConfiguredRoute(expectedSourceRoute.route, verifiedRoute.route, false))
+      ) {
+        throw new Error(
+          "The setup candidate no longer preserves the exact verified inference route, so it was not saved. Retry setup from the current OpenClaw session.",
+        );
+      }
+      // This is the auth/config operation's linearization point. Never hold
+      // the synchronous cross-store guard across async config I/O.
+      if (assertCommitPreconditions) {
+        assertCommitPreconditions(currentSnapshot.sourceConfig);
+        if (
+          resolveUserPath(resolveSystemTarget(finalizedConfig).workspaceDir) !==
+          resolveUserPath(setupWorkspace)
+        ) {
+          throw new Error(
+            "Another onboarding run owns a different workspace. Retry onboarding with its approved workspace.",
           );
-          const finalizedConfig = finalizeConfig
-            ? finalizeConfig(setupCandidate.nextConfig, currentSnapshot.sourceConfig)
-            : setupCandidate.nextConfig;
-          const expectedSourceRoute = verifiedRoute
-            ? await projectDefaultInferenceRoute(finalizedConfig)
-            : undefined;
-          if (
-            verifiedRoute &&
-            (!verifiedRoute.route ||
-              !expectedSourceRoute?.route ||
-              !sameSetupConfiguredRoute(expectedSourceRoute.route, verifiedRoute.route, false))
-          ) {
-            throw new Error(
-              "The setup candidate no longer preserves the exact verified inference route, so it was not saved. Retry setup from the current OpenClaw session.",
-            );
-          }
-          // This is the auth/config operation's linearization point. Never hold
-          // the synchronous cross-store guard across async config I/O.
-          if (assertCommitPreconditions) {
-            assertCommitPreconditions(currentSnapshot.sourceConfig);
-            if (
-              resolveUserPath(resolveSystemTarget(finalizedConfig).workspaceDir) !==
-              resolveUserPath(setupWorkspace)
-            ) {
-              throw new Error(
-                "Another onboarding run owns a different workspace. Retry onboarding with its approved workspace.",
-              );
-            }
-          }
-          return {
-            nextConfig: finalizedConfig,
-            result: {
-              settings: setupCandidate.settings,
-            },
-          };
+        }
+      }
+      return {
+        nextConfig: finalizedConfig,
+        result: {
+          settings: setupCandidate.settings,
         },
-      }),
-  );
+      };
+    },
+  });
   const nextConfig = committed.nextConfig;
   const setupResult = committed.result;
   const settings = setupResult?.settings;
@@ -498,19 +496,13 @@ export async function applySystemAgentSetup(
     effect: () => Promise<T>,
     onFailure: (error: unknown) => void,
   ): Promise<T | undefined> => {
-    let effectStarted = false;
+    beforePersistentApply?.();
     try {
-      return await commit(async () => {
-        effectStarted = true;
-        return await effect();
-      });
+      return await effect();
     } catch (error) {
-      // The config commit is the success boundary, so effect failures are
-      // visible but recoverable. A stale authority failure happens before the
-      // effect starts and must stop every remaining continuation.
-      if (!effectStarted) {
-        throw error;
-      }
+      // Owners can reject after async preparation. Never turn lost authority
+      // into a recoverable post-config warning or continue subsequent effects.
+      beforePersistentApply?.();
       onFailure(error);
       return undefined;
     }
@@ -523,6 +515,7 @@ export async function applySystemAgentSetup(
         agentId: effectiveAgentId,
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+        beforePersistentApply,
       }),
     (error) => lines.push(`Workspace files: ${formatErrorMessage(error)}`),
   );
@@ -532,6 +525,7 @@ export async function applySystemAgentSetup(
   await runCommittedFollowUp(
     async () => {
       const { updateExecApprovals } = await import("../infra/exec-approvals.js");
+      beforePersistentApply?.();
       await updateExecApprovals({
         update: (approvals) =>
           approvals.agents?.openclaw
@@ -556,6 +550,7 @@ export async function applySystemAgentSetup(
       async () => {
         const { refreshPluginRegistryAfterConfigMutation } =
           await import("../plugins/registry-refresh.js");
+        beforePersistentApply?.();
         await refreshPluginRegistryAfterConfigMutation({
           config: nextConfig,
           reason: "source-changed",
@@ -572,15 +567,15 @@ export async function applySystemAgentSetup(
 
   let gateway: GatewayServiceSetupOutcome = { status: "ready", action: "reused" };
   if (surface === "cli") {
-    // The gateway daemon runs outside this process; install/start it so
-    // channels and apps have a live gateway. Inside the gateway process
-    // (macOS app chat) the app owns the service lifecycle.
+    // CLI setup owns service installation unless its caller will host the
+    // foreground Gateway. App chat leaves the lifecycle with its host.
     await runCommittedFollowUp(
       async () => {
         const { ensureGatewayServiceForOnboarding } = await import("../wizard/setup.finalize.js");
+        beforePersistentApply?.();
         const serviceSetup = await ensureGatewayServiceForOnboarding({
           flow: "quickstart",
-          opts: {},
+          opts: { installDaemon: params.installDaemon },
           nextConfig,
           settings,
           prompter,
@@ -625,6 +620,8 @@ export async function applySystemAgentSetup(
           }
         } else if (gateway.reason === "external") {
           lines.push(`Gateway: ${formatExternalSupervisorActionRequired("start the gateway")}`);
+        } else if (params.installDaemon === false) {
+          lines.push("Gateway: will run in the foreground.");
         } else {
           lines.push(
             "Gateway: service install skipped — say `start gateway` when you want it running.",

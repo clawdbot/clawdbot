@@ -4,6 +4,7 @@ read_when:
   - You need a durable record of what the Gateway did without storing content
   - You are deciding whether to enable message lifecycle auditing
   - You need to explain what audit records do and do not prove
+  - You are changing or reviewing execution identity, admission provenance, or decision receipts
 title: "Audit history"
 ---
 
@@ -223,7 +224,7 @@ conflicts and definitive no-ops. These mechanics are `attribution-only`; the
 public generic display remains unverified rather than presenting their private
 reason or target as trusted evidence.
 
-Direct session-sharing methods and `/dock-*` commands do not admit model runs,
+Direct session-sharing methods do not admit model runs,
 so they do not synthesize run selectors. Sharing events preserve a verified
 profile actor when one exists; an expected but unresolved profile is reported
 as unknown, while omitted principal evidence is unattributed. Neither state is
@@ -233,8 +234,7 @@ real principal id, `addedByState: "unknown"` reports explicit principal-less
 evidence, and omission means no actor evidence was supplied. Internal storage
 markers are never returned by the Gateway. Beta-only `local-operator` and
 `operator.admin` member-attribution values are discarded as absent evidence;
-they are not migrated or presented as principals. Docking retains its normal
-visible command result and session-route update without run-audit attribution.
+they are not migrated or presented as principals.
 
 For an admitted run with message auditing enabled, run inspection also adapts
 the outbound message lifecycle. It deterministically merges the lazy progress
@@ -454,7 +454,7 @@ Outbound `queued` and `platform-started` records live in the narrowly owned
 `outbound_message_progress` table. The table is created idempotently only on
 the first enabled progress write, remains absent after startup, read-only
 inspection, disabled collection, and terminal-only delivery, and does not
-advance the current state schema version 9. Missing under read-only inspection means no
+advance the state schema version. Missing under read-only inspection means no
 retained progress. It is capped at 200,000 rows with the same 30-day retention.
 Terminal `message.outbound.finished` rows stay in `audit_events`, so a compatible
 older Gateway can open and use the database while ignoring the additive table.
@@ -528,6 +528,56 @@ correlation alone.
   exact match, or a typed ambiguous candidate page with an empty display array
   when a run has multiple executions. Raw owner receipts remain private to the
   aggregation and storage owners.
+
+## Maintainer invariants
+
+Changes to identity producers, storage, and inspection must preserve these
+boundaries alongside the operator behavior above:
+
+- Only byte-identical canonical replay is idempotent. Retries, fallbacks, and
+  recovery reuse the original admission identity.
+- The parent approval row is the sole authorization owner. Its optional identity
+  companion persists identity only for an exact host-validated source-run binding
+  under explicit collection opt-in; disabled and unbound paths leave the table
+  absent. It must not change approval decisions when provenance is missing,
+  deleted, or corrupt. Do not add eager creation, late binding, dual writes,
+  fallback readers, sidecars, or schema-version workarounds. Changes require
+  older-reader open/use and candidate-reopen proof.
+- Invoker evidence is tri-state: tagged principal-bearing input is `present`,
+  tagged principal-less input is `unknown`, and omission alone is `absent`.
+  Validate the closed raw variant before projection or field dropping; reject
+  malformed, mixed, untagged, or extra-field input instead of normalizing it.
+- Generic decision facts require an explicit product-boundary producer and an
+  operator retention opt-in. The 30-day bound does not authorize default
+  collection. Producers use admission's shared `AuditEventWriter` FIFO; never
+  write the generic store directly, create another writer/key, or pseudonymize
+  locally. The writer alone HMAC-projects raw references before persistence.
+- `enforced` receipt coverage is diagnostic, not authority: emit it only when
+  the owner changed the outcome and the exact context/execution/run tuple
+  validates. After awaited work, synchronously revalidate the exact live owner
+  immediately before the sink, with no intervening await. Stale, released,
+  replaced, or throwing authority emits no receipt, not `unknown`. Same-run
+  wrappers compose owner predicates; distinct admitted runs start new predicate
+  roots. Insufficient decision evidence remains `unknown`.
+- Display trust comes from owner-held call-path provenance, never
+  receipt-controlled `source.owner` or prose. Pair every selected owner row or
+  event with its required opaque selector from the same query/page result.
+  Never derive or requery selectors from private receipt, resolution, or event
+  identifiers, or drop corrupt, oversized, or unlinked outcomes.
+- Admission validates a recursively owned, enumerable, accessor-free data
+  snapshot constructed from descriptors before schema checks or ordinary
+  property reads. Inherited properties are absent; accessors never run.
+  Admission may only validate, bound, freeze, and enqueue: no synchronous
+  SQLite, schema, filesystem, HMAC-key, or readiness work. Audit failure never
+  delays or aborts execution.
+- Public Plugin SDK ingress strips private recovery/admission authority,
+  including JavaScript extra and inherited properties.
+- Host-minted participant evidence is redeemed once against the finalized
+  context and exact plugin record/lifecycle epoch. Mixed participants may remove
+  sender-derived authority only; never widen or erase independent tools, grants,
+  routing, or approval authority.
+- Ask before changing reader scope, default-off collection, retained fields,
+  the 30-day cutoff, maintenance/row bounds, or schema/protocol contracts.
 
 ## Related
 

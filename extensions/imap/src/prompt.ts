@@ -1,4 +1,5 @@
 import type { ParsedMail } from "mailparser";
+import { truncateUtf8Prefix, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ImapAccountConfig } from "./config.js";
 
 export function renderImapPrompt(
@@ -6,8 +7,8 @@ export function renderImapPrompt(
   account: Pick<ImapAccountConfig, "includeBody" | "maxBytes">,
   sourceTruncated = false,
 ): string {
-  const body = account.includeBody ? (mail.text ?? mail.textAsHtml ?? "") : "";
-  const snippet = body.replace(/\s+/gu, " ").slice(0, 240);
+  const body = account.includeBody ? (mail.text ?? "") : "";
+  const snippet = truncateUtf16Safe(body.replace(/\s+/gu, " "), 240);
   const attachments = mail.attachments.flatMap((attachment) =>
     attachment.filename ? [attachment.filename] : [],
   );
@@ -19,15 +20,10 @@ export function renderImapPrompt(
     ...(attachments.length ? [`Attachments: ${attachments.join(", ")}`] : []),
     ...(body ? [body] : []),
   ].join("\n");
-  const bytes = Buffer.from(text);
-  if (bytes.byteLength <= account.maxBytes && !sourceTruncated) {
+  if (Buffer.byteLength(text) <= account.maxBytes && !sourceTruncated) {
     return text;
   }
   const marker = "\n[truncated: email content exceeded the configured byte limit]";
   const available = Math.max(0, account.maxBytes - Buffer.byteLength(marker));
-  let prefix = bytes.subarray(0, available).toString("utf8");
-  while (Buffer.byteLength(prefix) > available) {
-    prefix = prefix.slice(0, -1);
-  }
-  return `${prefix}${marker}`;
+  return `${truncateUtf8Prefix(text, available)}${marker}`;
 }

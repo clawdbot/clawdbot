@@ -66,13 +66,9 @@ export const BOUNDARY_CHECKS = (
     ["lint:tmp:no-raw-channel-fetch", "pnpm", ["run", "lint:tmp:no-raw-channel-fetch"]],
     ["lint:tmp:no-raw-http2-imports", "pnpm", ["run", "lint:tmp:no-raw-http2-imports"]],
     ["lint:agent:ingress-owner", "pnpm", ["run", "lint:agent:ingress-owner"]],
+    // This full-root pass runs all four focused rules, including the narrower
+    // HTTP/window.open guards and both public assertion aliases.
     ["lint:no-chained-type-assertions", "pnpm", ["run", "lint:no-chained-type-assertions"]],
-    ["lint:no-widen-then-assert", "pnpm", ["run", "lint:no-widen-then-assert"]],
-    [
-      "lint:plugins:no-register-http-handler",
-      "pnpm",
-      ["run", "lint:plugins:no-register-http-handler"],
-    ],
     [
       "lint:plugins:no-monolithic-plugin-sdk-entry-imports",
       "pnpm",
@@ -115,7 +111,6 @@ export const BOUNDARY_CHECKS = (
       "pnpm",
       ["run", "lint:extensions:telegram-grammy-types"],
     ],
-    ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
     ["native-state-schema-version", "node", ["scripts/check-native-state-schema-version.mjs"]],
   ] satisfies Array<[label: string, command: string, args: string[]]>
 ).map(([label, command, args]) => ({ label, command, args }));
@@ -213,6 +208,7 @@ export function parseShardSelection(value: unknown) {
 export function selectChecksForShard(
   checks: BoundaryCheck[],
   shardSpec: string | BoundaryShard | BoundaryShard[] | null,
+  coreTestBoundaryOwner: "additional" | "test-types" = "additional",
 ) {
   const shards =
     typeof shardSpec === "string"
@@ -222,11 +218,11 @@ export function selectChecksForShard(
         : shardSpec
           ? [shardSpec]
           : null;
-  if (!shards || shards.length === 0) {
-    return checks;
-  }
-  return checks.filter((_check, index) =>
-    shards.some((shard) => index % shard.count === shard.index),
+  // Transfer only this obligation, after partitioning so other checks keep their owner.
+  return checks.filter(
+    (check, index) =>
+      (!shards?.length || shards.some((shard) => index % shard.count === shard.index)) &&
+      (coreTestBoundaryOwner !== "test-types" || check.label !== "lint:tmp:tsgo-core-boundary"),
   );
 }
 
@@ -593,6 +589,7 @@ Runs supplemental architecture and boundary checks with bounded concurrency.
 
 Options:
   --shard <spec>    Run only checks selected by one or more N/TOTAL shard specs
+  --core-test-boundary-owner=test-types  The required type job owns the core graph boundary
   -h, --help        Show this help
 `;
 }
@@ -600,8 +597,13 @@ Options:
 export function parseCliArgs(args: string[], env: NodeJS.ProcessEnv = process.env) {
   let shardSpec = env.OPENCLAW_ADDITIONAL_BOUNDARY_SHARD ?? "";
   let help = false;
+  let coreTestBoundaryOwner: "additional" | "test-types" = "additional";
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
+    if (arg === "--core-test-boundary-owner=test-types") {
+      coreTestBoundaryOwner = "test-types";
+      continue;
+    }
     if (arg === "-h" || arg === "--help") {
       help = true;
       continue;
@@ -625,7 +627,7 @@ export function parseCliArgs(args: string[], env: NodeJS.ProcessEnv = process.en
     }
     throw new Error(`Unknown argument: ${arg}`);
   }
-  return { help, shardSpec };
+  return { help, shardSpec, coreTestBoundaryOwner };
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
@@ -654,7 +656,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES",
       );
       const shards = parseShardSelection(cliArgs.shardSpec);
-      const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);
+      const checks = selectChecksForShard(BOUNDARY_CHECKS, shards, cliArgs.coreTestBoundaryOwner);
       if (shards) {
         process.stdout.write(
           `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shards.map((shard) => shard.label).join(",")})\n`,

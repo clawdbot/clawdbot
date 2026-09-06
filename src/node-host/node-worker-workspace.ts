@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { takeWorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
@@ -9,7 +10,8 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import {
   NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
   NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
-  parseNodeWorkerWorkspaceExecResult,
+  NODE_WORKSPACE_DRAIN_COMMAND,
+  projectNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
@@ -17,6 +19,8 @@ import type {
   NodeWorkerWorkspaceRetainInput,
   NodeWorkerWorkspaceRetainResult,
 } from "../worker/node-workspace-retain-protocol.js";
+import { isWorkspaceInspectionCommand } from "../worker/workspace-inspection-protocol.js";
+import { inspectSessionWorkspace } from "../worker/workspace-inspection.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import {
   type NodeWorkerTransferGateway,
@@ -24,6 +28,8 @@ import {
   serializeNodeWorkerWorkspace,
 } from "./node-worker-transfer-client.js";
 import {
+  assertWorkspaceArgv,
+  ensureContainedDirectory,
   hashNodeWorkerWorkspaceComponent as hashPathComponent,
   nodeWorkerWorkspaceGenerationKey as workspaceGenerationKey,
   nodeWorkerWorkspaceLaunchGenerationKey as launchGenerationKey,
@@ -32,29 +38,16 @@ import {
   parseNodeWorkerWorkspaceTransferGeneration as parseTransferArtifactGeneration,
   resolveNodeManagedWorkspaceIdentity,
   type NodeWorkerManagedWorkspaceRequest,
+  type NodeWorkerWorkspaceLaunchReference,
+  type NodeWorkerWorkspaceSession as WorkspaceSession,
 } from "./node-worker-workspace-identity.js";
+import { runNodeWorkerWorkspaceSeed } from "./node-worker-workspace-seeds.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const WORKSPACE_RETENTION_DELETE_LIMIT = 256;
 const ENVIRONMENT_HASH_PATTERN = /^[a-f0-9]{16}$/u;
 const SESSION_HASH_PATTERN = /^[a-f0-9]{32}$/u;
 const MANIFEST_FILE_PATTERN = /^[a-f0-9]{64}\.json$/u;
-
-type NodeWorkerWorkspaceLaunchReference = {
-  gatewayNamespace: string;
-  environmentId: string;
-  sessionId: string;
-  ownerEpoch: number;
-};
-
-type WorkspaceSession = {
-  gatewayNamespace: string;
-  environmentHash: string;
-  sessionHash: string;
-  workspacesRoot: string;
-  environmentRoot: string;
-  sessionRoot: string;
-};
 
 type AcceptedRetainSnapshot = {
   controllerId: string;
@@ -158,87 +151,6 @@ async function removeIfEmpty(target: string): Promise<void> {
   }
 }
 
-function ensureContainedDirectory(parent: string, name: string): string {
-  const candidate = path.join(parent, name);
-  fs.mkdirSync(candidate, { recursive: true });
-  const stats = fs.lstatSync(candidate);
-  const resolved = fs.realpathSync.native(candidate);
-  if (stats.isSymbolicLink() || !stats.isDirectory() || !isPathInside(parent, resolved)) {
-    throw new Error("INVALID_REQUEST: node worker workspace path escaped its owner root");
-  }
-  return resolved;
-}
-
-function resolveArgumentPath(workspaceDir: string, arg: string): string | undefined {
-  if (path.isAbsolute(arg)) {
-    return arg;
-  }
-  if (arg.startsWith(".") || arg.includes("/") || (path.sep === "\\" && arg.includes("\\"))) {
-    return path.resolve(workspaceDir, arg);
-  }
-  return undefined;
-}
-
-function assertWorkspaceArgv(workspaceDir: string, argv: readonly string[]): void {
-  // This private transport owns cwd and direct path operands; it is not the user-facing
-  // system.run policy domain, so absolute/relative escapes must never cross its workspace.
-  for (const [index, arg] of argv.entries()) {
-    // Canonical workspace helpers travel as the source operand to `node -e`.
-    // Treating JavaScript slash characters as host paths rejects the shipped scripts.
-    if (index > 0 && argv[index - 1] === "-e" && path.basename(argv[0] ?? "") === "node") {
-      continue;
-    }
-    const candidate = resolveArgumentPath(workspaceDir, arg);
-    if (!candidate) {
-      continue;
-    }
-    let resolved = candidate;
-    try {
-      resolved = fs.realpathSync.native(candidate);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-    if (resolved !== workspaceDir && !isPathInside(workspaceDir, resolved)) {
-      throw new Error("INVALID_REQUEST: workspace command argv resolves outside its workspace");
-    }
-  }
-}
-
-function projectWorkspaceResult(
-  workspaceDir: string,
-  result: Awaited<ReturnType<typeof runCommandWithTimeout>>,
-): NodeWorkerWorkspaceExecResult {
-  const projected = {
-    workspaceDir,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    code: result.code,
-    signal: result.signal,
-    killed: result.killed,
-    termination: result.termination,
-    ...(result.stdoutTruncatedBytes === undefined
-      ? {}
-      : { stdoutTruncatedBytes: result.stdoutTruncatedBytes }),
-    ...(result.stderrTruncatedBytes === undefined
-      ? {}
-      : { stderrTruncatedBytes: result.stderrTruncatedBytes }),
-    ...(result.noOutputTimedOut === undefined ? {} : { noOutputTimedOut: result.noOutputTimedOut }),
-    ...(result.outputLimitExceeded === undefined
-      ? {}
-      : { outputLimitExceeded: result.outputLimitExceeded }),
-    ...(result.outputErrorStream === undefined
-      ? {}
-      : { outputErrorStream: result.outputErrorStream }),
-  };
-  const parsed = parseNodeWorkerWorkspaceExecResult(projected);
-  if (!parsed) {
-    throw new Error("node worker workspace result violated its bounded contract");
-  }
-  return parsed;
-}
-
 function buildAcceptedSnapshot(input: NodeWorkerWorkspaceRetainInput): AcceptedRetainSnapshot {
   const retainedGenerations = new Set<string>();
   const manifestsBySession = new Map<string, Set<string> | null>();
@@ -277,6 +189,7 @@ function buildAcceptedSnapshot(input: NodeWorkerWorkspaceRetainInput): AcceptedR
 /** Runs trusted worker transport commands only from a node-owned session workspace. */
 export class NodeWorkerWorkspaceRuntime {
   private readonly root: string;
+  private readonly seedsRoot: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly retainQueue = new KeyedAsyncQueue();
   private readonly acceptedSnapshots = new Map<string, AcceptedRetainSnapshot>();
@@ -294,6 +207,9 @@ export class NodeWorkerWorkspaceRuntime {
     );
     fs.mkdirSync(configuredRoot, { recursive: true });
     this.root = fs.realpathSync.native(configuredRoot);
+    // Git artifacts are machine caches, outside the per-lease state scrub boundary.
+    const home = env.HOME ?? env.USERPROFILE ?? os.homedir();
+    this.seedsRoot = path.resolve(home, ".openclaw-worker", "git-seeds");
     this.env = {
       ...snapshotNodeWorkerEnv(env),
       GCM_INTERACTIVE: "Never",
@@ -647,13 +563,27 @@ export class NodeWorkerWorkspaceRuntime {
     const finishOperation = this.beginWorkspaceOperation(input.gatewayNamespace, generationKey);
     try {
       return await serializeNodeWorkerWorkspace(sessionRootCandidate, async () => {
+        if (input.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND) {
+          signal?.throwIfAborted();
+          return projectNodeWorkerWorkspaceExecResult(
+            path.join(sessionRootCandidate, String(input.generation)),
+            {
+              stdout: "drained\n",
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+              termination: "exit",
+            },
+          );
+        }
         const gatewayRoot = ensureContainedDirectory(this.root, input.gatewayNamespace);
         const workspacesRoot = ensureContainedDirectory(gatewayRoot, "workspaces");
         const environmentRoot = ensureContainedDirectory(workspacesRoot, environmentHash);
         const sessionRoot = ensureContainedDirectory(environmentRoot, sessionHash);
         const workspaceName = String(input.generation);
         const workspacePath = path.join(sessionRoot, workspaceName);
-        if (input.transfer || input.resetWorkspace) {
+        if (input.transfer || input.resetWorkspace || input.seed) {
           try {
             const stats = fs.lstatSync(workspacePath);
             const resolved = fs.realpathSync.native(workspacePath);
@@ -670,6 +600,27 @@ export class NodeWorkerWorkspaceRuntime {
             }
           }
         }
+        if (input.seed) {
+          if (input.seed.action === "apply") {
+            await removeOwnedDirectory(this.root, workspacePath);
+            ensureContainedDirectory(sessionRoot, workspaceName);
+          }
+          const stdout = await runNodeWorkerWorkspaceSeed({
+            seedsRoot: this.seedsRoot,
+            gatewayNamespace: input.gatewayNamespace,
+            workspaceDir: workspacePath,
+            seed: input.seed,
+            signal,
+          });
+          return projectNodeWorkerWorkspaceExecResult(workspacePath, {
+            stdout: `${stdout}\n`,
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+          });
+        }
         if (input.transfer) {
           if (input.resetWorkspace) {
             throw new Error("INVALID_REQUEST: workspace transfer owns its atomic replacement");
@@ -679,6 +630,8 @@ export class NodeWorkerWorkspaceRuntime {
           }
           const hashMemo = takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey);
           const stdout = await runNodeWorkerWorkspaceTransfer({
+            seedsRoot: this.seedsRoot,
+            gatewayNamespace: input.gatewayNamespace,
             gatewayUrl: gateway.url,
             gatewayTlsFingerprint: gateway.tlsFingerprint,
             gatewayCloudflareAccess: gateway.cloudflareAccess,
@@ -691,8 +644,13 @@ export class NodeWorkerWorkspaceRuntime {
           });
           // A snapshot sent before this transfer knows only the old base. Keep the latest
           // result across command gaps; supersede it on transfer or drop it with its generation.
-          this.latestTransferredManifest.set(generationKey, stdout);
-          return projectWorkspaceResult(workspacePath, {
+          if (
+            !(input.transfer.direction === "download" && input.transfer.attachments) &&
+            !(input.transfer.direction === "upload" && input.transfer.publicationBaseCommit)
+          ) {
+            this.latestTransferredManifest.set(generationKey, stdout);
+          }
+          return projectNodeWorkerWorkspaceExecResult(workspacePath, {
             stdout: `${stdout}\n`,
             stderr: "",
             code: 0,
@@ -700,6 +658,31 @@ export class NodeWorkerWorkspaceRuntime {
             killed: false,
             termination: "exit",
           });
+        }
+        if (isWorkspaceInspectionCommand(input.argv)) {
+          const stat = fs.lstatSync(workspacePath, { throwIfNoEntry: false });
+          if (!stat?.isDirectory() || stat.isSymbolicLink()) {
+            throw new Error("INVALID_REQUEST: workspace inspection root is unavailable");
+          }
+          const workspaceDir = fs.realpathSync.native(workspacePath);
+          if (!isPathInside(sessionRoot, workspaceDir)) {
+            throw new Error("INVALID_REQUEST: workspace inspection root is unavailable");
+          }
+          const stdout = await inspectSessionWorkspace(workspaceDir, input.input, () =>
+            signal?.throwIfAborted(),
+          );
+          return projectNodeWorkerWorkspaceExecResult(
+            workspaceDir,
+            {
+              stdout,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+              termination: "exit",
+            },
+            input.argv,
+          );
         }
         if (input.resetWorkspace) {
           // Reset never accepts a caller path: only the identity-derived workspace can be removed.
@@ -725,7 +708,7 @@ export class NodeWorkerWorkspaceRuntime {
           },
           terminateOnOutputLimit: true,
         });
-        return projectWorkspaceResult(workspaceDir, result);
+        return projectNodeWorkerWorkspaceExecResult(workspaceDir, result);
       });
     } finally {
       finishOperation();

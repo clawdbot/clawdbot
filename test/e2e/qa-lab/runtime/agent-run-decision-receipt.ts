@@ -9,7 +9,10 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
@@ -17,6 +20,7 @@ import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "../../../../src/plugin-sdk/gateway-runtime.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const SCENARIO_ID = "agent-run-decision-receipt";
@@ -58,10 +62,7 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function findApprovalRunId(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  approvalId: string,
-): string {
+function findApprovalRunId(gateway: QaGatewayChild, approvalId: string): string {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -94,9 +95,7 @@ function findApprovalRunId(
   }
 }
 
-function assertNoGenericApprovalDuplicate(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-): void {
+function assertNoGenericApprovalDuplicate(gateway: QaGatewayChild): void {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -128,10 +127,7 @@ function assertNoGenericApprovalDuplicate(
   }
 }
 
-function readApprovalToolCallRef(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  approvalId: string,
-): string {
+function readApprovalToolCallRef(gateway: QaGatewayChild, approvalId: string): string {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -180,7 +176,7 @@ function requireDeniedApproval(result: AuditRunInspectResult) {
 }
 
 async function waitForPendingApproval(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   agentFailure: () => string | undefined,
 ): Promise<string> {
   const deadline = Date.now() + 30_000;
@@ -199,9 +195,7 @@ async function waitForPendingApproval(
   throw new Error("trusted agent exec approval did not become pending");
 }
 
-async function startApprovalRoute(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-): Promise<GatewayClient> {
+async function startApprovalRoute(gateway: QaGatewayChild): Promise<GatewayClient> {
   let resolveConnected!: () => void;
   let rejectConnected!: (error: Error) => void;
   const connected = new Promise<void>((resolve, reject) => {
@@ -237,10 +231,11 @@ async function startApprovalRoute(
 
 async function runProof(options: ProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let approvalRoute: GatewayClient | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -388,7 +383,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
     return `run=${runId}; denied approval projected before/after Gateway replacement; result sha256=${sha256(serialized)}`;
   } finally {
     await approvalRoute?.stopAndWait().catch(() => approvalRoute?.stop());
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
   }
 }

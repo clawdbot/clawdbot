@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -23,6 +24,11 @@ vi.mock("../../plugins/runtime.js", () => ({
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly,
+}));
+// HOME policy uses the real home path, but this fixture must not open its profile database.
+vi.mock("../../state/user-profiles.js", () => ({
+  getUserProfileRole: vi.fn(() => null),
+  hasMultipleSessionSharingIdentities: vi.fn(() => false),
 }));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
@@ -74,6 +80,7 @@ function withProfile<T>(profile: string | undefined, run: () => Promise<T>): Pro
 describe("session catalog Gateway HOME isolation", () => {
   beforeEach(() => {
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
+    markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
     hoisted.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
   });
 

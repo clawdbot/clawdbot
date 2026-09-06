@@ -34,6 +34,7 @@ import {
   addParentFlowIdIndex,
   addRelatedSessionKeyIndex,
   addRunIdIndex,
+  bumpTaskRegistryRevision,
   emitTaskRegistryObserverEvent,
   ensureTaskRegistryReady,
   getTasksByRunScope,
@@ -280,6 +281,7 @@ export function createTaskRecord(params: {
     return null;
   }
   tasks.set(taskId, record);
+  bumpTaskRegistryRevision();
   if (requesterOrigin) {
     taskDeliveryStates.set(taskId, deliveryState!);
   }

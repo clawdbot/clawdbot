@@ -1,5 +1,5 @@
 /** Managed node-host install plan builder. */
-import { resolveNodeProgramArguments } from "../daemon/program-args.js";
+import { OPENCLAW_WRAPPER_ENV_KEY, resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
 import {
@@ -44,13 +44,16 @@ export async function buildNodeInstallPlan(params: {
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
   runtimePath?: string;
+  wrapperPath?: string;
   warn?: DaemonInstallWarnFn;
 }): Promise<NodeInstallPlan> {
+  const wrapperPath = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
     devMode: params.devMode,
     runtimePath: params.runtimePath,
+    wrapperPath,
   });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,
@@ -64,6 +67,7 @@ export async function buildNodeInstallPlan(params: {
     dev: devMode,
     runtime: params.runtime,
     runtimePath,
+    wrapperPath,
   });
 
   await emitDaemonInstallRuntimeWarning({

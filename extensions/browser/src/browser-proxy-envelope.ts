@@ -159,7 +159,8 @@ export function parseBrowserProxyRoute(value: unknown): BrowserProxyRoute | unde
   if (
     route.status !== "resolved" ||
     typeof route.profile !== "string" ||
-    !route.profile.trim() ||
+    !route.profile ||
+    route.profile.trim() !== route.profile ||
     (route.driver !== "openclaw" &&
       route.driver !== "existing-session" &&
       route.driver !== "extension")
@@ -168,7 +169,8 @@ export function parseBrowserProxyRoute(value: unknown): BrowserProxyRoute | unde
   }
   return {
     status: "resolved",
-    profile: route.profile.trim(),
+    // This is execution identity, not user input; normalization could name another profile.
+    profile: route.profile,
     driver: route.driver,
   };
 }

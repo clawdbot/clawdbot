@@ -544,7 +544,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     expect(documentHandle.dispose).toHaveBeenCalledOnce();
   });
 
-  it("keeps the request guard alive until an aborted hover actually settles", async () => {
+  it("joins an aborted native hover before returning and releasing its request guard", async () => {
     const ctrl = new AbortController();
     const started = createDeferred<void>();
     const hover = createDeferred<void>();
@@ -572,13 +572,21 @@ describe("pw-tools-core browser SSRF guards", () => {
       signal: ctrl.signal,
     });
     await started.promise;
+    let settled = false;
+    void task
+      .finally(() => {
+        settled = true;
+      })
+      .catch(() => {});
     ctrl.abort(new Error("aborted by test"));
 
-    await expect(task).rejects.toThrow("aborted by test");
+    await Promise.resolve();
+    expect(settled).toBe(false);
     expect(guardSettled).toBe(false);
 
     hover.resolve();
-    await vi.waitFor(() => expect(guardSettled).toBe(true));
+    await expect(task).rejects.toThrow("aborted by test");
+    expect(guardSettled).toBe(true);
   });
 
   it("lets a request-policy denial observed before abort win", async () => {
@@ -732,8 +740,10 @@ describe("pw-tools-core browser SSRF guards", () => {
     expect(settled).toBe(false);
 
     policy.resolve();
-    await expect(task).rejects.toThrow("aborted while policy pending");
+    await Promise.resolve();
+    expect(settled).toBe(false);
     hover.resolve();
+    await expect(task).rejects.toThrow("aborted while policy pending");
   });
 
   it("quarantines immediately when a preserved denied source later becomes unsafe", async () => {
@@ -841,7 +851,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
   });
 
-  it("quarantines a late unpreserved policy failure after abort already returned", async () => {
+  it("quarantines a late unpreserved policy failure before returning cancellation", async () => {
     const ctrl = new AbortController();
     const started = createDeferred<void>();
     const hover = createDeferred<void>();
@@ -871,9 +881,8 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
     await started.promise;
     ctrl.abort(new Error("aborted by test"));
-    await expect(task).rejects.toThrow("aborted by test");
-
     hover.resolve();
+    await expect(task).rejects.toBe(blocked);
     await vi.waitFor(() =>
       expect(sessionMocks.quarantineBlockedNavigationTarget).toHaveBeenCalledWith({
         cdpUrl: "http://127.0.0.1:18792",
@@ -886,12 +895,15 @@ describe("pw-tools-core browser SSRF guards", () => {
   it("preserves SSRF policy when aborting a pending click", async () => {
     const ctrl = new AbortController();
     const clickStarted = createDeferred<void>();
+    const click = createDeferred<void>();
+    let nativeSignal: AbortSignal | undefined;
     installInteractionPage(
       { url: vi.fn(() => "https://example.com") },
       {
-        click: vi.fn(() => {
+        click: vi.fn((options: { signal?: AbortSignal }) => {
+          nativeSignal = options.signal;
           clickStarted.resolve();
-          return new Promise(() => {});
+          return click.promise;
         }),
       },
     );
@@ -906,14 +918,20 @@ describe("pw-tools-core browser SSRF guards", () => {
 
     await clickStarted.promise;
     ctrl.abort(new Error("aborted by test"));
+    expect(nativeSignal?.aborted).toBe(true);
+    click.reject(
+      Object.assign(new Error("cancelled", { cause: nativeSignal?.reason }), {
+        name: "AbortError",
+      }),
+    );
 
     await expect(task).rejects.toThrow("aborted by test");
-    expect(sessionMocks.forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "tab-1",
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-      reason: "click aborted",
-    });
+    expect(sessionMocks.forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
+    expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      }),
+    );
   });
 
   it.each([
@@ -965,10 +983,10 @@ describe("pw-tools-core browser SSRF guards", () => {
 
     await started.promise;
     ctrl.abort(new Error("aborted by test"));
-    await expect(task).rejects.toThrow("aborted by test");
-
+    expect(guardSettled).toBe(false);
     firstStepPending.resolve();
-    await vi.waitFor(() => expect(guardSettled).toBe(true));
+    await expect(task).rejects.toThrow("aborted by test");
+    expect(guardSettled).toBe(true);
     expect(type).not.toHaveBeenCalled();
     expect(press).not.toHaveBeenCalled();
   });

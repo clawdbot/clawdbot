@@ -1,4 +1,3 @@
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkBlocker,
@@ -60,10 +59,6 @@ export function createSafeGatewayRestartPreflight(
 ): SafeGatewayRestartPreflight {
   const snapshot = createGatewayActiveWorkSnapshot({
     ...inspectors,
-    // Restart RPC preflight itself owns a root. Count every other admitted
-    // handoff so signal emission cannot split spawn from durable ownership.
-    getRootRequests:
-      inspectors.getRootRequests ?? (() => getActiveGatewayRootWorkCount({ excludeCurrent: true })),
     getSessionAdmissions: () => 0,
     getSessionMutations: () => 0,
     getChatRuns: () => 0,

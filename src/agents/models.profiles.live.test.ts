@@ -27,7 +27,6 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   readLiveTestConfig,
-  requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
@@ -1711,7 +1710,7 @@ describeLive("live models (profile keys)", () => {
         logProgress("[live-models] loading model registry");
         const modelRegistry = await withLiveStageTimeout(
           Promise.resolve().then(() =>
-            discoverModels(authStorage, agentDir, { normalizeModels: false }),
+            discoverModels(authStorage, agentDir, { config: cfg, normalizeModels: false }),
           ),
           "[live-models] load model registry",
         );
@@ -1754,6 +1753,8 @@ describeLive("live models (profile keys)", () => {
         model: Model;
         apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModelCore>>;
       }> = [];
+      let scopedModelCount = 0;
+      let eligibleModelCount = 0;
 
       for (const model of models) {
         if (shouldSuppressBuiltInModelCore({ provider: model.provider, id: model.id })) {
@@ -1766,6 +1767,7 @@ describeLive("live models (profile keys)", () => {
         if (!targetMatcher.matchesModel(model.provider, model.id)) {
           continue;
         }
+        scopedModelCount += 1;
         if (!filter && useSmall) {
           if (!isSmallLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
@@ -1788,20 +1790,18 @@ describeLive("live models (profile keys)", () => {
           ) {
             continue;
           }
-          if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id })) {
+          if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id, config: cfg })) {
             continue;
           }
         }
+        eligibleModelCount += 1;
         try {
           const apiKeyInfo = await resolveLiveModelApiKeyInfo({
             model,
             cfg,
             requireProfileKeys: REQUIRE_PROFILE_KEYS,
           });
-          if (
-            requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
-            !apiKeyInfo.source.startsWith("profile:")
-          ) {
+          if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
             skipped.push({
               model: id,
               reason: `non-profile credential source: ${apiKeyInfo.source}`,
@@ -1809,7 +1809,7 @@ describeLive("live models (profile keys)", () => {
             continue;
           }
           candidates.push({
-            model: normalizeDiscoveredAgentModel(model, agentDir),
+            model: normalizeDiscoveredAgentModel(model, agentDir, { config: cfg }),
             apiKeyInfo,
           });
         } catch (err) {
@@ -1818,14 +1818,18 @@ describeLive("live models (profile keys)", () => {
       }
 
       if (candidates.length === 0) {
-        if (useExplicit) {
-          const skippedPreview =
-            skipped.length > 0 ? `\nSkipped candidates:\n${formatSkippedPreview(skipped, 8)}` : "";
-          throw new Error(
-            `[live-models] explicit model selection matched no runnable models.${skippedPreview}`,
-          );
+        const selection = useExplicit
+          ? "explicit model selection"
+          : providers?.size
+            ? `explicit provider selection (${[...providers].join(", ")})`
+            : "model selection";
+        const skippedPreview =
+          skipped.length > 0 ? `\nSkipped candidates:\n${formatSkippedPreview(skipped, 8)}` : "";
+        const reason = `${selection} matched no runnable models (discovered=${scopedModelCount}, eligible=${eligibleModelCount}, unavailable=${skipped.length}).${skippedPreview}`;
+        if (useExplicit || providers?.size) {
+          throw new Error(`[live-models] ${reason}`);
         }
-        logProgress("[live-models] no API keys found; skipping");
+        logProgress(`[live-models] ${reason}; skipping`);
         return;
       }
       if (useExplicit && explicitRefs.length > 0) {

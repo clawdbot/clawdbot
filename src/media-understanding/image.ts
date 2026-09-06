@@ -504,6 +504,7 @@ async function describeImagesWithModelInternal(
       model: requestModel,
       cfg: resolvedRuntimeContext?.cfg ?? params.cfg,
       agentDir: resolvedRuntimeContext?.agentDir ?? params.agentDir,
+      wrapProviderStream: true,
       ...(resolvedRuntimeContext?.workspaceDir
         ? { workspaceDir: resolvedRuntimeContext.workspaceDir }
         : params.workspaceDir

@@ -1,10 +1,10 @@
-// Telegram tests cover bot.create telegram bot.channel post media plugin behavior.
-import { setTimeout as delay } from "node:timers/promises";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   telegramBotInfoForTest,
@@ -156,24 +156,30 @@ function createChannelPostContext(params: {
   };
 }
 
-async function flushChannelPostMediaGroup(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
-  const flushTimer = resolveFlushTimerForDelay(
-    setTimeoutSpy,
-    TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
-  );
-  expect(flushTimer).toBeTypeOf("function");
-  await flushTimer?.();
-  await delay(75);
-}
-
-async function flushChannelPostMediaGroupForDelay(
+async function flushChannelPostMediaGroup(
   setTimeoutSpy: ReturnType<typeof vi.spyOn>,
-  delayMs: number,
+  completionTimeoutMs = 75,
+  delayMs: number = TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
 ) {
   const flushTimer = resolveFlushTimerForDelay(setTimeoutSpy, delayMs);
   expect(flushTimer).toBeTypeOf("function");
-  await flushTimer?.();
-  await delay(75);
+  const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+  let completion: Promise<unknown> | undefined;
+  try {
+    // These timers synchronously admit work, then discard the real queue promise.
+    flushTimer?.();
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    const queued = enqueueSpy.mock.results[0];
+    if (queued?.type === "return") {
+      completion = queued.value;
+    }
+  } finally {
+    enqueueSpy.mockRestore();
+  }
+  expect(completion).toBeDefined();
+  await withTimeout(Promise.resolve(completion), completionTimeoutMs, {
+    message: `Telegram buffered flush for the ${delayMs} ms timer did not complete`,
+  });
 }
 
 async function queueChannelPostAlbum(
@@ -450,10 +456,9 @@ describe("createTelegramBot channel_post media", () => {
         secondMessageId: 202,
       });
       expect(replySpy).not.toHaveBeenCalled();
-      await flushChannelPostMediaGroup(setTimeoutSpy);
-      await waitForTelegramMockCalls(replySpy, 1);
+      await flushChannelPostMediaGroup(setTimeoutSpy, 3_075);
 
-      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+      expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replyPayload() as { Body?: string };
       expect(payload.Body).toContain("album caption");
     } finally {
@@ -498,9 +503,9 @@ describe("createTelegramBot channel_post media", () => {
       });
 
       expect(replySpy).not.toHaveBeenCalled();
-      await flushChannelPostMediaGroupForDelay(setTimeoutSpy, TEXT_FRAGMENT_COALESCE_TEST_GAP_MS);
+      await flushChannelPostMediaGroup(setTimeoutSpy, 1_075, TEXT_FRAGMENT_COALESCE_TEST_GAP_MS);
 
-      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+      expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replyPayload() as { RawBody?: string };
       expect(payload.RawBody).toContain(part1.slice(0, 32));
       expect(payload.RawBody).toContain(part2.slice(0, 32));
@@ -958,7 +963,8 @@ describe("createTelegramBot channel_post media", () => {
         }),
       );
       expect(runs.map(({ deferredWork }) => Boolean(deferredWork))).toEqual([true, true]);
-      await flushChannelPostMediaGroup(setTimeoutSpy);
+      // Replay participant processing already uses the overall test timeout.
+      await flushChannelPostMediaGroup(setTimeoutSpy, 0);
       expect(await Promise.all(runs.map(({ deferredWork }) => deferredWork!.task))).toEqual([
         { kind: "failed-retryable", error: expect.any(MediaFetchError) },
         { kind: "failed-retryable", error: expect.any(MediaFetchError) },
@@ -996,8 +1002,7 @@ describe("createTelegramBot channel_post media", () => {
         firstMessageId,
         secondMessageId: firstMessageId + 1,
       });
-      await flushChannelPostMediaGroup(setTimeoutSpy);
-      await waitForTelegramMockCalls(replySpy, 1);
+      await flushChannelPostMediaGroup(setTimeoutSpy, 2_075);
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       expect(replyPayload()).toMatchObject({
@@ -1039,12 +1044,10 @@ describe("createTelegramBot channel_post media", () => {
         secondGetFileResult: {},
       });
       expect(replySpy).not.toHaveBeenCalled();
-      await flushChannelPostMediaGroup(setTimeoutSpy);
+      await flushChannelPostMediaGroup(setTimeoutSpy, 1_075);
 
-      await vi.waitFor(() =>
-        expect(runtimeError).toHaveBeenCalledWith(
-          expect.stringContaining("media group handler failed"),
-        ),
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("media group handler failed"),
       );
       expect(runtimeError).toHaveBeenCalledWith(
         expect.stringContaining("Telegram getFile returned no file_path"),

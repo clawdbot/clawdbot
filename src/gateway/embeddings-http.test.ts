@@ -40,6 +40,7 @@ let createEmbeddingProviderMock: ReturnType<
       provider: string;
       model: string;
       agentDir?: string;
+      dimensions?: number;
       acquireLocalService?: unknown;
     }) => Promise<{
       provider: {
@@ -168,6 +169,7 @@ beforeAll(async () => {
         provider: options.provider ?? "openai",
         model: options.model,
         agentDir: options.agentDir,
+        dimensions: options.dimensions,
         acquireLocalService: localServiceOptions.acquireLocalService,
       });
       return result;
@@ -362,6 +364,33 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       resetConfigRuntimeState();
     }
   });
+
+  it.each([
+    { enabled: false, dimensions: 8, expected: 8 },
+    { enabled: true, dimensions: 8, expected: 8 },
+    { enabled: false, dimensions: undefined, expected: undefined },
+    { enabled: true, dimensions: undefined, expected: 16 },
+  ])(
+    "passes dimensions=$dimensions with memory search enabled=$enabled",
+    async ({ enabled, dimensions, expected }) => {
+      const configPath = createConfigIO().configPath;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ memory: { search: { enabled, outputDimensionality: 16 } } }),
+      );
+      resetConfigRuntimeState();
+
+      const res = await postEmbeddings({
+        model: "openclaw/default",
+        input: "hello",
+        dimensions,
+      });
+
+      await expectDefaultEmbeddingResponse(res);
+      expect(createEmbeddingProviderMock.mock.calls.at(-1)?.[0].dimensions).toBe(expected);
+    },
+  );
 
   it("passes provider aliases and local-service acquisition to memory adapters", async () => {
     const configPath = createConfigIO().configPath;

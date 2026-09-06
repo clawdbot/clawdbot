@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -15,6 +16,7 @@ export type ChatModelPickerOption = {
   contextTokens?: number;
   contextWindow?: number;
   disabled?: boolean;
+  unavailableReason?: ModelCatalogEntry["unavailableReason"];
   isDefault: boolean;
   label: string;
   provider: string;
@@ -96,35 +98,46 @@ export function renderChatModelPickerOption(params: {
     params.entry.value === params.selectedModelValue ||
     (params.entry.isDefault && params.selectedModelValue === "");
   const modelLabel = formatModelLabel(params.entry);
-  const modelMeta = [
-    formatModelContextMeta(params.entry),
-    params.entry.agentRuntimeId ? formatAgentRuntimeLabel(params.entry.agentRuntimeId) : "",
-    params.entry.disabled ? t("modelSetup.candidates.signInNeeded") : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const needsAuth =
+    params.entry.disabled &&
+    (params.entry.unavailableReason === "missing-auth" ||
+      params.entry.unavailableReason === "auth-failed");
+  const onModelSetup = needsAuth ? params.onModelSetup : undefined;
+  const modelMeta = needsAuth
+    ? ""
+    : [
+        formatModelContextMeta(params.entry),
+        params.entry.agentRuntimeId ? formatAgentRuntimeLabel(params.entry.agentRuntimeId) : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+  const accessibleStatus = needsAuth ? t("modelSetup.candidates.signInNeeded") : "";
   const option = html`<button
-    class="chat-controls__inline-select-option chat-controls__model-option ${selected
-      ? "chat-controls__inline-select-option--selected"
-      : ""}"
+    class="chat-controls__inline-select-option chat-controls__model-option ${
+      selected ? "chat-controls__inline-select-option--selected" : ""
+    }"
     data-chat-model-option=${params.entry.value}
     data-chat-model-default=${params.entry.isDefault ? "true" : nothing}
     data-chat-model-index=${params.index}
-    data-chat-model-keywords=${params.entry.isDefault
-      ? t("chat.modelControls.default").toLocaleLowerCase()
-      : nothing}
+    data-chat-model-keywords=${
+      params.entry.isDefault ? t("chat.modelControls.default").toLocaleLowerCase() : nothing
+    }
     data-chat-model-name=${modelLabel.toLocaleLowerCase()}
     data-chat-model-provider-label=${providerDisplayLabel(
       params.entry.provider,
     ).toLocaleLowerCase()}
     role="option"
     aria-selected=${selected ? "true" : "false"}
-    aria-label=${params.entry.supportsTools === false
-      ? `${modelLabel}. ${t("chat.modelControls.chatOnlyHelp")}`
-      : modelLabel}
+    aria-label=${[
+      modelLabel,
+      accessibleStatus,
+      params.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "",
+    ]
+      .filter(Boolean)
+      .join(". ")}
     type="button"
-    ?disabled=${params.disabled || (params.entry.disabled && !params.onModelSetup)}
-    data-chat-model-setup=${params.entry.disabled && params.onModelSetup ? "true" : nothing}
+    ?disabled=${params.disabled || (params.entry.disabled && !onModelSetup)}
+    data-chat-model-setup=${onModelSetup ? "true" : nothing}
     @mouseenter=${(event: MouseEvent) =>
       params.onHighlight(event.currentTarget as HTMLButtonElement)}
     @click=${(event: MouseEvent) => {
@@ -132,7 +145,7 @@ export function renderChatModelPickerOption(params: {
       // Setup instead of silently ignoring the click on a disabled button.
       if (params.entry.disabled) {
         event.stopPropagation();
-        params.onModelSetup?.();
+        onModelSetup?.();
         return;
       }
       params.onSelect(params.entry, event);
@@ -144,28 +157,46 @@ export function renderChatModelPickerOption(params: {
     <span class="chat-controls__model-option-copy">
       <span class="chat-controls__model-option-title">
         <span class="chat-controls__model-option-name">${modelLabel}</span>
-        ${params.entry.isDefault
-          ? html`<span
-              class="chat-controls__model-state-label chat-controls__model-state-label--default"
-              >${t("chat.modelControls.default")}</span
-            >`
-          : nothing}
-        ${modelMeta
-          ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
-          : nothing}
-        ${params.entry.supportsTools === false
-          ? html`<span class="chat-controls__model-chat-only-info" aria-hidden="true"
-              >${icons.info}</span
-            >`
-          : nothing}
+        ${
+          params.entry.isDefault
+            ? html`<span
+                class="chat-controls__model-state-label chat-controls__model-state-label--default"
+                >${t("chat.modelControls.default")}</span
+              >`
+            : nothing
+        }
+        ${
+          modelMeta
+            ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
+            : nothing
+        }
+        ${
+          needsAuth
+            ? html`<span
+                class="chat-controls__model-option-auth-warning"
+                data-chat-model-auth-warning
+              >
+                ${icons.alertTriangle}<span>${accessibleStatus}</span>
+              </span>`
+            : nothing
+        }
+        ${
+          params.entry.supportsTools === false
+            ? html`<span class="chat-controls__model-chat-only-info" aria-hidden="true"
+                >${icons.info}</span
+              >`
+            : nothing
+        }
       </span>
     </span>
     <span class="chat-controls__model-option-action">
-      ${selected
-        ? html`<span class="chat-controls__inline-select-check" aria-hidden="true"
-            >${icons.check}</span
-          >`
-        : html`<kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>`}
+      ${
+        selected
+          ? html`<span class="chat-controls__inline-select-check" aria-hidden="true"
+              >${icons.check}</span
+            >`
+          : html`<kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>`
+      }
     </span>
   </button>`;
   return params.entry.supportsTools === false

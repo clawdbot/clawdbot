@@ -1,12 +1,12 @@
 // Resolve Openclaw Package Candidate tests cover resolve openclaw package candidate script behavior.
 import { execFile, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertExpectedSha256ForTest,
   cleanupPackageSourceWorktreeForTest,
@@ -23,6 +23,14 @@ import {
   runCommandForTest,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mts";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
@@ -48,13 +56,11 @@ async function missing(file: string): Promise<boolean> {
 async function createPackageTarball(
   dir: string,
   buildInfo?: string | { commit: string },
+  version = "2026.8.1",
 ): Promise<string> {
   const root = path.join(dir, "package");
   await mkdir(path.join(root, "dist"), { recursive: true });
-  await writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.8.1" }),
-  );
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw", version }));
   if (buildInfo !== undefined) {
     await writeFile(
       path.join(root, "dist", "build-info.json"),
@@ -136,63 +142,6 @@ async function withArtifactFixtureCommands<T>(
     delete process.env.FAKE_GIT_LOG;
     delete process.env.FAKE_NODE_LOG;
   }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (existsSync(filePath)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timeout waiting for ${filePath}`);
-}
-
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`process still alive: ${pid}`);
-}
-
-async function waitForExit(
-  child: ReturnType<typeof spawn>,
-  timeoutMs: number,
-): Promise<{ signal: NodeJS.Signals | null; status: number | null }> {
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("timeout waiting for child exit")),
-      timeoutMs,
-    );
-    child.on("close", (status, signal) => {
-      clearTimeout(timeout);
-      resolve({ signal, status });
-    });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
 }
 
 afterEach(async () => {
@@ -421,6 +370,74 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(readFile(path.join(dir, "openclaw-current.tgz"), "utf8")).resolves.toBe("package");
   });
 
+  it("keeps the first packed identity when a moving npm tag changes", async () => {
+    const dir = autoTempDirs.make("openclaw-package-moving-tag-");
+    const binDir = path.join(dir, "bin");
+    const outputDir = path.join(dir, "output");
+    const firstTarball = await createPackageTarball(path.join(dir, "first"), undefined, "2026.8.1");
+    const secondTarball = await createPackageTarball(
+      path.join(dir, "second"),
+      undefined,
+      "2026.9.1",
+    );
+    const countPath = path.join(dir, "pack-count");
+    await mkdir(binDir);
+    await writeFile(
+      path.join(binDir, "npm"),
+      `#!/bin/sh
+set -e
+count="$(cat "$FAKE_PACK_COUNT" 2>/dev/null || printf 0)"
+count=$((count + 1))
+printf '%s' "$count" > "$FAKE_PACK_COUNT"
+source="$FAKE_FIRST_TARBALL"
+version=2026.8.1
+if [ "$count" -gt 1 ]; then
+  source="$FAKE_SECOND_TARBALL"
+  version=2026.9.1
+fi
+cp "$source" "$FAKE_PACK_OUTPUT/openclaw-$version.tgz"
+printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
+`,
+    );
+    await chmod(path.join(binDir, "npm"), 0o755);
+    await mkdir(outputDir);
+    const runner = resolveNpmPackageCandidatePackRunner("openclaw@beta", outputDir, {
+      env: {
+        ...process.env,
+        FAKE_FIRST_TARBALL: firstTarball,
+        FAKE_PACK_COUNT: countPath,
+        FAKE_PACK_OUTPUT: outputDir,
+        FAKE_SECOND_TARBALL: secondTarball,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      execPath: path.join(binDir, "node"),
+      existsSync: () => false,
+      platform: process.platform,
+    });
+
+    const packOutput = await runCommandForTest(runner.command, runner.args, {
+      capture: true,
+      env: runner.env,
+    });
+    const candidate = await moveNewestPackedTarballForTest(
+      outputDir,
+      packOutput,
+      "openclaw-current.tgz",
+    );
+    const packageJson = await new Promise<string>((resolve, reject) => {
+      execFile("tar", ["-xOf", candidate, "package/package.json"], (error, stdout) => {
+        if (error) {
+          reject(toLintErrorObject(error, "Non-Error rejection"));
+          return;
+        }
+        resolve(stdout);
+      });
+    });
+
+    expect(JSON.parse(packageJson)).toMatchObject({ name: "openclaw", version: "2026.8.1" });
+    await expect(readFile(countPath, "utf8")).resolves.toBe("1");
+  });
+
   it("reads npm 12 name-keyed package candidate filenames", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-"));
     tempDirs.push(dir);
@@ -532,36 +549,43 @@ describe("resolve-openclaw-package-candidate", () => {
       return;
     }
 
-    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-runner-timeout-"));
-    tempDirs.push(dir);
+    const dir = autoTempDirs.make("openclaw-package-runner-timeout-");
     const childPidPath = path.join(dir, "child.pid");
-    let childPid: number | undefined;
-
-    try {
-      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
-      const parentScript = [
-        "const { spawn } = require('node:child_process');",
-        "const fs = require('node:fs');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
-        "setInterval(() => {}, 1000);",
-      ].join("");
-
-      const timeoutAssertion = expect(
+    const childScript = [
+      "process.on('SIGTERM', () => {});",
+      "setInterval(() => {}, 1000);",
+      `require('node:fs').writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+    ].join("\n");
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const releaseAndWait = startProcessWatchdogFixture(() =>
+      expect(
         runCommandForTest(process.execPath, ["-e", parentScript], {
-          env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
           killAfterMs: 25,
           timeoutMs: 500,
         }),
-      ).rejects.toThrow(/timed out after 500ms/u);
-
-      await waitForFile(childPidPath, 2_000);
-      childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
-      await timeoutAssertion;
+      ).rejects.toThrow(/timed out after 500ms/u),
+    );
+    const killSpy = vi.spyOn(process, "kill");
+    let childPid: number | undefined;
+    try {
+      childPid = await waitForPidFile(childPidPath, 2_000);
+      expect(isProcessAlive(childPid)).toBe(true);
+      await releaseAndWait();
+      expect(killSpy).toHaveBeenCalledWith(expect.any(Number), "SIGKILL");
       await waitForDead(childPid, 2_000);
     } finally {
-      if (childPid !== undefined && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
+      try {
+        await releaseAndWait();
+      } finally {
+        killSpy.mockRestore();
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
+          await waitForDead(childPid, 2_000);
+        }
       }
     }
   });
@@ -571,36 +595,39 @@ describe("resolve-openclaw-package-candidate", () => {
       return;
     }
 
-    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-runner-grace-"));
-    tempDirs.push(dir);
+    const dir = autoTempDirs.make("openclaw-package-runner-grace-");
     const childPidPath = path.join(dir, "child.pid");
     const cleanupPath = path.join(dir, "child.cleanup");
-    let childPid: number | undefined;
-
-    try {
-      const childScript = [
-        "const fs = require('node:fs');",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-        "process.on('SIGTERM', () => {",
-        `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean'); process.exit(0); }, 75);`,
-        "});",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-
-      const timeoutAssertion = expect(
+    const childScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {",
+      `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean'); process.exit(0); }, 75);`,
+      "});",
+      "setInterval(() => {}, 1000);",
+      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+    ].join("\n");
+    const releaseAndWait = startProcessWatchdogFixture(() =>
+      expect(
         runCommandForTest(process.execPath, ["-e", childScript], {
           killAfterMs: Number.MAX_SAFE_INTEGER,
           timeoutMs: 500,
         }),
-      ).rejects.toThrow(/timed out after 500ms/u);
-
-      await waitForFile(childPidPath, 2_000);
-      childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
-      await timeoutAssertion;
+      ).rejects.toThrow(/timed out after 500ms/u),
+    );
+    let childPid: number | undefined;
+    try {
+      childPid = await waitForPidFile(childPidPath, 2_000);
+      await releaseAndWait();
       expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
+      await waitForDead(childPid, 2_000);
     } finally {
-      if (childPid !== undefined && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
+      try {
+        await releaseAndWait();
+      } finally {
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
+          await waitForDead(childPid, 2_000);
+        }
       }
     }
   });
@@ -610,54 +637,50 @@ describe("resolve-openclaw-package-candidate", () => {
       return;
     }
 
-    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-runner-timeout-clean-"));
-    tempDirs.push(dir);
+    const dir = autoTempDirs.make("openclaw-package-runner-timeout-clean-");
     const childPidPath = path.join(dir, "child.pid");
-    const readyPath = path.join(dir, "child.ready");
     const cleanupPath = path.join(dir, "child.cleanup");
-
     const childScript = [
       "const fs = require('node:fs');",
       "process.on('SIGTERM', () => {",
-      "  fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_CLEANUP, 'clean');",
-      "  setTimeout(() => process.exit(0), 25);",
+      "  setTimeout(() => {",
+      `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean');`,
+      "    process.exit(0);",
+      "  }, 25);",
       "});",
-      "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_READY, 'ready');",
       "setInterval(() => {}, 1000);",
-    ].join("");
+      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+    ].join("\n");
     const parentScript = [
       "const { spawn } = require('node:child_process');",
-      "const fs = require('node:fs');",
-      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {`,
-      "  stdio: 'ignore',",
-      "  env: {",
-      "    ...process.env,",
-      "    OPENCLAW_TEST_CHILD_CLEANUP: process.env.OPENCLAW_TEST_CHILD_CLEANUP,",
-      "    OPENCLAW_TEST_CHILD_READY: process.env.OPENCLAW_TEST_CHILD_READY,",
-      "  },",
-      "});",
-      "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
       "process.on('SIGTERM', () => process.exit(0));",
+      `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
       "setInterval(() => {}, 1000);",
-    ].join("");
-
-    const timeoutAssertion = expect(
-      runCommandForTest(process.execPath, ["-e", parentScript], {
-        env: {
-          ...process.env,
-          OPENCLAW_TEST_CHILD_CLEANUP: cleanupPath,
-          OPENCLAW_TEST_CHILD_PID: childPidPath,
-          OPENCLAW_TEST_CHILD_READY: readyPath,
-        },
-        killAfterMs: 250,
-        timeoutMs: 250,
-      }),
-    ).rejects.toThrow(/timed out after 250ms/u);
-
-    await waitForFile(readyPath, 2_000);
-    await timeoutAssertion;
-
-    expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
+    ].join("\n");
+    const releaseAndWait = startProcessWatchdogFixture(() =>
+      expect(
+        runCommandForTest(process.execPath, ["-e", parentScript], {
+          killAfterMs: 250,
+          timeoutMs: 250,
+        }),
+      ).rejects.toThrow(/timed out after 250ms/u),
+    );
+    let childPid: number | undefined;
+    try {
+      childPid = await waitForPidFile(childPidPath, 2_000);
+      await releaseAndWait();
+      expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
+      await waitForDead(childPid, 2_000);
+    } finally {
+      try {
+        await releaseAndWait();
+      } finally {
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
+          await waitForDead(childPid, 2_000);
+        }
+      }
+    }
   });
 
   it("forwards external termination to package runner process groups", async () => {
@@ -665,52 +688,66 @@ describe("resolve-openclaw-package-candidate", () => {
       return;
     }
 
-    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-runner-signal-"));
-    tempDirs.push(dir);
+    const dir = autoTempDirs.make("openclaw-package-runner-signal-");
     const childPidPath = path.join(dir, "child.pid");
+    const killPath = path.join(dir, "child.kill");
     const scriptUrl = pathToFileURL(
       path.resolve("scripts/resolve-openclaw-package-candidate.mts"),
     ).href;
+    const childScript = [
+      "process.on('SIGTERM', () => {});",
+      "setInterval(() => {}, 1000);",
+      `require('node:fs').writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+    ].join("\n");
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const runnerScript = [
+      "import fs from 'node:fs';",
+      "const kill = process.kill.bind(process);",
+      "process.kill = (pid, signal) => {",
+      "  const result = kill(pid, signal);",
+      `  if (signal === 'SIGKILL') fs.writeFileSync(${JSON.stringify(killPath)}, signal);`,
+      "  return result;",
+      "};",
+      `const { runCommandForTest } = await import(${JSON.stringify(scriptUrl)});`,
+      `await runCommandForTest(process.execPath, ['-e', ${JSON.stringify(parentScript)}], { timeoutMs: 60000 });`,
+    ].join("\n");
+    const runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "ignore", "pipe"],
+    });
     let childPid: number | undefined;
-    let runnerPid: number | undefined;
-
     try {
-      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
-      const parentScript = [
-        "const { spawn } = require('node:child_process');",
-        "const fs = require('node:fs');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
-        "setInterval(() => {}, 1000);",
-      ].join("");
-      // Accelerate only the module-level 5s forwarded-signal failsafe in this disposable runner.
-      const runnerScript = [
-        "const realSetTimeout = globalThis.setTimeout;",
-        "globalThis.setTimeout = (callback, delay, ...args) =>",
-        "  realSetTimeout(callback, delay === 5000 ? 25 : delay, ...args);",
-        `const { runCommandForTest } = await import(${JSON.stringify(scriptUrl)});`,
-        `await runCommandForTest(process.execPath, ['-e', ${JSON.stringify(parentScript)}], { timeoutMs: 60000 });`,
-      ].join("\n");
-      const runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
-        cwd: process.cwd(),
-        env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-        stdio: ["ignore", "ignore", "pipe"],
-      });
-      runnerPid = runner.pid;
-
-      await waitForFile(childPidPath, 2_000);
-      childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+      childPid = await waitForPidFile(childPidPath, 2_000);
+      expect(isProcessAlive(childPid)).toBe(true);
+      const closed = waitForChildClose(runner, 7_000);
       runner.kill("SIGTERM");
-      const result = await waitForExit(runner, 7_000);
-
-      expect(result).toEqual({ signal: null, status: 143 });
+      await expect(closed).resolves.toEqual({ signal: null, code: 143 });
+      expect(readFileSync(killPath, "utf8")).toBe("SIGKILL");
       await waitForDead(childPid, 2_000);
     } finally {
-      if (runnerPid !== undefined && isProcessAlive(runnerPid)) {
-        process.kill(runnerPid, "SIGKILL");
-      }
-      if (childPid !== undefined && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
+      try {
+        if (runner.pid && isProcessAlive(runner.pid)) {
+          const closed = waitForChildClose(runner, 7_000);
+          // Let the runner clean its detached group even if readiness failed.
+          runner.kill("SIGTERM");
+          try {
+            await closed;
+          } finally {
+            if (isProcessAlive(runner.pid)) {
+              runner.kill("SIGKILL");
+              await waitForDead(runner.pid, 2_000);
+            }
+          }
+        }
+      } finally {
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
+          await waitForDead(childPid, 2_000);
+        }
       }
     }
   });

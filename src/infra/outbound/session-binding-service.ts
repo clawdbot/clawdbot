@@ -23,6 +23,7 @@ import type {
   SessionBindingErrorCode,
   SessionBindingPlacement,
   SessionBindingRecord,
+  SessionBindingScope,
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
@@ -32,7 +33,7 @@ export type {
   SessionBindingBindInput,
   SessionBindingPlacement,
   SessionBindingRecord,
-  SessionBindingUnbindInput,
+  SessionBindingScope,
 } from "./session-binding.types.js";
 
 class SessionBindingError extends Error {
@@ -59,7 +60,7 @@ export type SessionBindingService = {
   getCapabilities: (params: { channel: string; accountId: string }) => SessionBindingCapabilities;
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
-  touch: (bindingId: string, at?: number) => void;
+  touch: (bindingId: string, at?: number, scope?: SessionBindingScope) => void;
   unbind: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
 
@@ -191,7 +192,11 @@ function resolveAdapterForChannelAccount(params: {
   );
 }
 
-function getActiveRegisteredAdapters(): SessionBindingAdapter[] {
+function getActiveRegisteredAdapters(scope?: SessionBindingScope): SessionBindingAdapter[] {
+  if (scope) {
+    const adapter = resolveAdapterForChannelAccount(scope);
+    return adapter ? [adapter] : [];
+  }
   return [...ADAPTERS_BY_CHANNEL_ACCOUNT.values()]
     .map((registrations) => registrations.at(-1)?.normalizedAdapter ?? null)
     .filter((adapter): adapter is SessionBindingAdapter => Boolean(adapter));
@@ -203,7 +208,11 @@ function dedupeBindings(records: SessionBindingRecord[]): SessionBindingRecord[]
     if (!record?.bindingId) {
       continue;
     }
-    byId.set(record.bindingId, record);
+    // Adapter-local ids can coincide across channels/accounts; keep every owner visible.
+    byId.set(
+      JSON.stringify([buildChannelAccountKey(record.conversation), record.bindingId]),
+      record,
+    );
   }
   return [...byId.values()];
 }
@@ -331,19 +340,23 @@ function createDefaultSessionBindingService(): SessionBindingService {
       }
       return adapter.resolveByConversation(normalized);
     },
-    touch: (bindingId, at) => {
+    touch: (bindingId, at, scope) => {
       const normalizedBindingId = bindingId.trim();
       if (!normalizedBindingId) {
         return;
       }
-      for (const adapter of getActiveRegisteredAdapters()) {
+      const adapters = getActiveRegisteredAdapters(scope);
+      for (const adapter of adapters) {
         adapter.touch?.(normalizedBindingId, at);
       }
-      touchGenericCurrentConversationBinding(normalizedBindingId, at);
+      if (!scope || adapters.length === 0) {
+        touchGenericCurrentConversationBinding(normalizedBindingId, at, scope);
+      }
     },
     unbind: async (input) => {
       const removed: SessionBindingRecord[] = [];
-      for (const adapter of getActiveRegisteredAdapters()) {
+      const adapters = getActiveRegisteredAdapters(input.scope);
+      for (const adapter of adapters) {
         if (!adapter.unbind) {
           continue;
         }
@@ -352,7 +365,9 @@ function createDefaultSessionBindingService(): SessionBindingService {
           removed.push(...entries);
         }
       }
-      removed.push(...(await unbindGenericCurrentConversationBindings(input)));
+      if (!input.scope || adapters.length === 0) {
+        removed.push(...(await unbindGenericCurrentConversationBindings(input)));
+      }
       return dedupeBindings(removed);
     },
   };

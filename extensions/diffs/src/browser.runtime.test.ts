@@ -1,6 +1,6 @@
 // Diffs tests cover browser plugin behavior.
 import fs from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -10,6 +10,7 @@ import type {
   PluginBlobStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
@@ -230,6 +231,36 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(launchMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["config", "runtimeConfig"] as const)(
+    "uses explicit tool %s for viewer links and screenshot browser selection",
+    async (configField) => {
+      const processConfig: OpenClawConfig = {
+        gateway: { publicOrigin: "https://process.example" },
+        browser: { executablePath: path.join(rootDir, "unavailable-browser") },
+      };
+      const explicitConfig: OpenClawConfig = {
+        gateway: { publicOrigin: "https://explicit.example" },
+        browser: { executablePath: process.execPath },
+      };
+      const { render } = createRegistrationHarness({
+        pluginConfig: {},
+        currentConfig: () => processConfig,
+      });
+      launchMock.mockResolvedValue(createMockBrowser([]));
+
+      const { details } = await render({ config: processConfig, [configField]: explicitConfig });
+
+      expect
+        .soft(String(details.viewerUrl))
+        .toContain("https://explicit.example/plugins/diffs/view/");
+      expect(details.fileError).toBeUndefined();
+      expect(launchMock).toHaveBeenCalledWith(
+        expect.objectContaining({ executablePath: process.execPath }),
+      );
+      await expect(fs.readFile(String(details.filePath), "utf8")).resolves.toBe("png");
+    },
+  );
+
   it("renders PDF output when format is pdf", async () => {
     const { pages, screenshotter } = await createScreenshotterHarness();
     const pdfPath = path.join(rootDir, "preview.pdf");
@@ -394,21 +425,63 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 });
 
+function createRegistrationHarness(params: {
+  pluginConfig: Record<string, unknown>;
+  currentConfig: () => OpenClawConfig;
+}) {
+  const registered: {
+    tool?: Parameters<OpenClawPluginApi["registerTool"]>[0];
+    httpHandler?: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]["handler"];
+  } = {};
+  const on = vi.fn();
+  const blobStore = createMemoryBlobStore();
+  const api = createTestPluginApi({
+    id: "diffs",
+    name: "Diffs",
+    description: "Diffs",
+    source: "test",
+    config: { gateway: { port: 18789, bind: "loopback" } },
+    pluginConfig: params.pluginConfig,
+    runtime: {
+      config: { current: params.currentConfig },
+      state: { openBlobStore: () => blobStore },
+    } as never,
+    registerTool(tool) {
+      registered.tool = tool;
+    },
+    registerHttpRoute(route) {
+      registered.httpHandler = route.handler;
+    },
+    on,
+  });
+  registerDiffsPlugin(api);
+  const registration = expectDefined(registered.tool, "registered diffs tool");
+  const handleRequest = expectDefined(registered.httpHandler, "registered diffs HTTP handler");
+
+  return {
+    on,
+    handleRequest,
+    render: async (context: OpenClawPluginToolContext) => {
+      const tool = expectDefined(
+        typeof registration === "function" ? registration(context) : registration,
+        "diffs tool for context",
+      );
+      if (Array.isArray(tool)) {
+        throw new Error("expected one registered diffs tool");
+      }
+      const result = await tool.execute("tool-1", { before: "one\n", after: "two\n" });
+      const details = expectDefined(asOptionalRecord(result.details), "diffs tool details");
+      const viewerPath = details.viewerPath;
+      if (typeof viewerPath !== "string") {
+        throw new Error("expected a diff viewer path");
+      }
+      return { details, viewerPath };
+    },
+  };
+}
+
 describe("diffs plugin registration", () => {
   it("uses live runtime tool config through the registered tool factory", async () => {
-    type RegisteredTool = {
-      execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
-    };
-    type HttpRouteHandler = (
-      req: IncomingMessage,
-      res: ServerResponse,
-    ) => boolean | Promise<boolean>;
-    type RegisteredHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
-
-    let registeredToolFactory:
-      | ((ctx: OpenClawPluginToolContext) => RegisteredTool | RegisteredTool[] | null | undefined)
-      | undefined;
-    let registeredHttpRouteHandler: HttpRouteHandler | undefined;
     let configFile: OpenClawConfig = {
       gateway: {
         port: 18789,
@@ -432,20 +505,8 @@ describe("diffs plugin registration", () => {
           },
         },
       },
-    } as OpenClawConfig;
-    const blobStore = createMemoryBlobStore();
-
-    const api = createTestPluginApi({
-      id: "diffs",
-      name: "Diffs",
-      description: "Diffs",
-      source: "test",
-      config: {
-        gateway: {
-          port: 18789,
-          bind: "loopback",
-        },
-      },
+    };
+    const { render, handleRequest } = createRegistrationHarness({
       pluginConfig: {
         viewerBaseUrl: "https://startup.example.com/openclaw",
         defaults: {
@@ -458,22 +519,8 @@ describe("diffs plugin registration", () => {
           lineSpacing: 2,
         },
       },
-      runtime: {
-        config: {
-          current: () => configFile,
-        },
-        state: { openBlobStore: () => blobStore },
-      } as never,
-      registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
-        registeredToolFactory = typeof tool === "function" ? tool : () => tool;
-      },
-      registerHttpRoute(params: RegisteredHttpRouteParams) {
-        registeredHttpRouteHandler = params.handler as HttpRouteHandler;
-      },
-      on: vi.fn(),
+      currentConfig: () => configFile,
     });
-
-    registerDiffsPlugin(api as unknown as OpenClawPluginApi);
 
     configFile = {
       ...configFile,
@@ -495,22 +542,16 @@ describe("diffs plugin registration", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    };
 
-    const registeredTool = registeredToolFactory?.({
+    const { details, viewerPath } = await render({
       agentId: "main",
       sessionId: "session-456",
       messageChannel: "discord",
       agentAccountId: "default",
-    }) as RegisteredTool | undefined;
-    const result = await registeredTool?.execute?.("tool-1", {
-      before: "one\n",
-      after: "two\n",
     });
-    const details = (result as { details?: Record<string, unknown> } | undefined)?.details;
-    const viewerPath = String(details?.viewerPath);
     const res = createMockServerResponse();
-    const handled = await registeredHttpRouteHandler?.(
+    const handled = await handleRequest(
       localReq({
         method: "GET",
         url: viewerPath,
@@ -519,7 +560,7 @@ describe("diffs plugin registration", () => {
     );
 
     expect(handled).toBe(true);
-    expect(String(details?.viewerUrl)).toContain("https://live.example.com/gateway");
+    expect(String(details.viewerUrl)).toContain("https://live.example.com/gateway");
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain('body data-theme="dark"');
     expect(String(res.body)).toContain('"backgroundEnabled":true');
@@ -530,20 +571,6 @@ describe("diffs plugin registration", () => {
   });
 
   it("uses live runtime viewer-access config through the registered HTTP handler", async () => {
-    type RegisteredTool = {
-      execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
-    };
-    type HttpRouteHandler = (
-      req: IncomingMessage,
-      res: ServerResponse,
-    ) => boolean | Promise<boolean>;
-    type RegisteredHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
-
-    let registeredToolFactory:
-      | ((ctx: OpenClawPluginToolContext) => RegisteredTool | RegisteredTool[] | null | undefined)
-      | undefined;
-    let registeredHttpRouteHandler: HttpRouteHandler | undefined;
-    const on = vi.fn();
     let configFile: OpenClawConfig = {
       gateway: {
         port: 18789,
@@ -560,20 +587,8 @@ describe("diffs plugin registration", () => {
           },
         },
       },
-    } as OpenClawConfig;
-    const blobStore = createMemoryBlobStore();
-
-    const api = createTestPluginApi({
-      id: "diffs",
-      name: "Diffs",
-      description: "Diffs",
-      source: "test",
-      config: {
-        gateway: {
-          port: 18789,
-          bind: "loopback",
-        },
-      },
+    };
+    const { on, render, handleRequest } = createRegistrationHarness({
       pluginConfig: {
         defaults: {
           mode: "view",
@@ -588,22 +603,8 @@ describe("diffs plugin registration", () => {
           allowRemoteViewer: true,
         },
       },
-      runtime: {
-        config: {
-          current: () => configFile,
-        },
-        state: { openBlobStore: () => blobStore },
-      } as never,
-      registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
-        registeredToolFactory = typeof tool === "function" ? tool : () => tool;
-      },
-      registerHttpRoute(params: RegisteredHttpRouteParams) {
-        registeredHttpRouteHandler = params.handler as HttpRouteHandler;
-      },
-      on,
+      currentConfig: () => configFile,
     });
-
-    registerDiffsPlugin(api as unknown as OpenClawPluginApi);
 
     expect(on).toHaveBeenCalledTimes(1);
     const [hookName, beforePromptBuild] = firstMockCall(on, "plugin hook registration");
@@ -628,21 +629,14 @@ describe("diffs plugin registration", () => {
     expect(promptResult?.prependSystemContext).not.toMatch(/\bmessage\b|\bcanvas\b/i);
     expect(promptResult?.prependContext).toBeUndefined();
 
-    const registeredTool = registeredToolFactory?.({
+    const { details, viewerPath } = await render({
       agentId: "main",
       sessionId: "session-123",
       messageChannel: "discord",
       agentAccountId: "default",
-    }) as RegisteredTool | undefined;
-    const result = await registeredTool?.execute?.("tool-1", {
-      before: "one\n",
-      after: "two\n",
     });
-    const viewerPath = String(
-      (result as { details?: Record<string, unknown> } | undefined)?.details?.viewerPath,
-    );
     const res = createMockServerResponse();
-    const handled = await registeredHttpRouteHandler?.(
+    const handled = await handleRequest(
       localReq({
         method: "GET",
         url: viewerPath,
@@ -652,14 +646,12 @@ describe("diffs plugin registration", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect((result as { details?: Record<string, unknown> } | undefined)?.details?.context).toEqual(
-      {
-        agentId: "main",
-        sessionId: "session-123",
-        messageChannel: "discord",
-        agentAccountId: "default",
-      },
-    );
+    expect(details.context).toEqual({
+      agentId: "main",
+      sessionId: "session-123",
+      messageChannel: "discord",
+      agentAccountId: "default",
+    });
 
     configFile = {
       ...configFile,
@@ -674,10 +666,10 @@ describe("diffs plugin registration", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    };
 
     const proxiedRes = createMockServerResponse();
-    const proxiedHandled = await registeredHttpRouteHandler?.(
+    const proxiedHandled = await handleRequest(
       localReq({
         method: "GET",
         url: viewerPath,
@@ -693,19 +685,6 @@ describe("diffs plugin registration", () => {
   });
 
   it("fails closed for remote viewer access when the live diffs plugin entry is removed", async () => {
-    type RegisteredTool = {
-      execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
-    };
-    type HttpRouteHandler = (
-      req: IncomingMessage,
-      res: ServerResponse,
-    ) => boolean | Promise<boolean>;
-    type RegisteredHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
-
-    let registeredToolFactory:
-      | ((ctx: OpenClawPluginToolContext) => RegisteredTool | RegisteredTool[] | null | undefined)
-      | undefined;
-    let registeredHttpRouteHandler: HttpRouteHandler | undefined;
     let configFile: OpenClawConfig = {
       gateway: {
         port: 18789,
@@ -722,65 +701,32 @@ describe("diffs plugin registration", () => {
           },
         },
       },
-    } as OpenClawConfig;
-    const blobStore = createMemoryBlobStore();
-
-    const api = createTestPluginApi({
-      id: "diffs",
-      name: "Diffs",
-      description: "Diffs",
-      source: "test",
-      config: {
-        gateway: {
-          port: 18789,
-          bind: "loopback",
-        },
-      },
+    };
+    const { render, handleRequest } = createRegistrationHarness({
       pluginConfig: {
         security: {
           allowRemoteViewer: true,
         },
       },
-      runtime: {
-        config: {
-          current: () => configFile,
-        },
-        state: { openBlobStore: () => blobStore },
-      } as never,
-      registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
-        registeredToolFactory = typeof tool === "function" ? tool : () => tool;
-      },
-      registerHttpRoute(params: RegisteredHttpRouteParams) {
-        registeredHttpRouteHandler = params.handler as HttpRouteHandler;
-      },
-      on: vi.fn(),
+      currentConfig: () => configFile,
     });
 
-    registerDiffsPlugin(api as unknown as OpenClawPluginApi);
-
-    const registeredTool = registeredToolFactory?.({
+    const { viewerPath } = await render({
       agentId: "main",
       sessionId: "session-789",
       messageChannel: "discord",
       agentAccountId: "default",
-    }) as RegisteredTool | undefined;
-    const result = await registeredTool?.execute?.("tool-1", {
-      before: "one\n",
-      after: "two\n",
     });
-    const viewerPath = String(
-      (result as { details?: Record<string, unknown> } | undefined)?.details?.viewerPath,
-    );
 
     configFile = {
       ...configFile,
       plugins: {
         entries: {},
       },
-    } as OpenClawConfig;
+    };
 
     const proxiedRes = createMockServerResponse();
-    const proxiedHandled = await registeredHttpRouteHandler?.(
+    const proxiedHandled = await handleRequest(
       localReq({
         method: "GET",
         url: viewerPath,

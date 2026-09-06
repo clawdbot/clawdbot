@@ -1,3 +1,5 @@
+import { controlUiWorkerActivationRetires } from "../build-info.ts";
+
 function waitForReplacementWorker(worker: ServiceWorker): Promise<boolean> {
   if (worker.state === "activated" || worker.state === "redundant") {
     return Promise.resolve(worker.state === "activated");
@@ -16,9 +18,10 @@ function waitForReplacementWorker(worker: ServiceWorker): Promise<boolean> {
 }
 
 /**
- * Rechecks the incumbent worker after a Gateway reconnect. A deployment can
- * restart the Gateway without changing the package version, so the socket's
- * version handshake alone cannot retire an already-open document.
+ * Reports whether a service worker update retires this document, so callers can
+ * hold work back for the reload it is about to take. A deployment can restart
+ * the Gateway without changing the package version, so the socket's version
+ * handshake alone cannot retire an already-open document.
  */
 export async function refreshControlUiServiceWorker(): Promise<boolean> {
   const serviceWorker =
@@ -41,12 +44,34 @@ export async function refreshControlUiServiceWorker(): Promise<boolean> {
     registration.waiting ??
     (registration.active && registration.active !== incumbent ? registration.active : null);
   if (pendingReplacement) {
-    return waitForReplacementWorker(pendingReplacement);
+    return replacementRetiresDocument(serviceWorker, pendingReplacement);
   }
   await registration.update();
   const replacement =
     registration.installing ??
     registration.waiting ??
     (registration.active !== incumbent ? registration.active : null);
-  return replacement ? waitForReplacementWorker(replacement) : false;
+  return replacement ? replacementRetiresDocument(serviceWorker, replacement) : false;
+}
+
+async function replacementRetiresDocument(
+  serviceWorker: ServiceWorkerContainer,
+  worker: ServiceWorker,
+): Promise<boolean> {
+  // `activate` announces the served build before the worker reports `activated`
+  // (ui/public/sw.js), so listening from here catches the only signal that
+  // separates a replacement which reloads this document from one that does not.
+  // Activation alone cannot: a worker serving this document's own build
+  // activates whenever the document reloaded onto the new bundle first, and
+  // calling that a pending reload strands every fenced caller for good.
+  let retiresDocument = false;
+  const onWorkerMessage = (event: MessageEvent) => {
+    retiresDocument ||= controlUiWorkerActivationRetires(event.data);
+  };
+  serviceWorker.addEventListener("message", onWorkerMessage);
+  try {
+    return (await waitForReplacementWorker(worker)) && retiresDocument;
+  } finally {
+    serviceWorker.removeEventListener("message", onWorkerMessage);
+  }
 }

@@ -1,6 +1,5 @@
 // Browser tests cover browser cli state.option collisions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as parentCoreApiModule from "../core-api.js";
 import * as browserCliResizeModule from "./browser-cli-resize.js";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
 import * as cliCoreApiModule from "./core-api.js";
@@ -15,7 +14,7 @@ vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.
 vi.spyOn(browserCliResizeModule, "runBrowserResizeWithOutput").mockImplementation(
   mocks.runBrowserResizeWithOutput,
 );
-vi.spyOn(parentCoreApiModule, "runCommandWithRuntime").mockImplementation(
+vi.spyOn(cliCoreApiModule, "runCommandWithRuntime").mockImplementation(
   async (_runtime, action, onError) => {
     try {
       await action();

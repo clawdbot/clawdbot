@@ -70,7 +70,8 @@ vi.mock("../../global-state.js", () => ({
   setVerbose: mocks.setVerboseMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -389,6 +390,15 @@ describe("agent command registration", () => {
       },
       runtime,
     );
+  });
+
+  it("documents set-identity --workspace as a locator", () => {
+    const program = new Command();
+    registerAgentsCommands(program);
+    const agents = program.commands.find((command) => command.name() === "agents");
+    const setIdentity = agents?.commands.find((command) => command.name() === "set-identity");
+    const help = setIdentity?.helpInformation() ?? "";
+    expect(help.replace(/\s+/g, " ")).toContain("does not change the stored workspace");
   });
 
   it("documents bind accountId resolution behavior in help text", () => {

@@ -1,6 +1,5 @@
 /** Tests inbound envelope formatting, timestamps, and sender labels. */
 import { describe, expect, it } from "vitest";
-import { withEnv } from "../test-utils/env.js";
 import {
   formatAgentEnvelope,
   formatAgentEnvelopeTimestamp,
@@ -10,20 +9,18 @@ import {
 
 describe("formatAgentEnvelope", () => {
   it("includes channel, from, ip, host, and timestamp", () => {
-    withEnv({ TZ: "UTC" }, () => {
-      const ts = Date.UTC(2025, 0, 2, 3, 4, 5); // 2025-01-02T03:04:05Z
-      const body = formatAgentEnvelope({
-        channel: "WebChat",
-        from: "user1",
-        host: "mac-mini",
-        ip: "10.0.0.5",
-        timestamp: ts,
-        envelope: { timezone: "utc" },
-        body: "hello",
-      });
-
-      expect(body).toBe("[WebChat user1 mac-mini 10.0.0.5 Thu 2025-01-02T03:04:05Z] hello");
+    const ts = Date.UTC(2025, 0, 2, 3, 4, 5); // 2025-01-02T03:04:05Z
+    const body = formatAgentEnvelope({
+      channel: "WebChat",
+      from: "user1",
+      host: "mac-mini",
+      ip: "10.0.0.5",
+      timestamp: ts,
+      envelope: { timezone: "utc" },
+      body: "hello",
     });
+
+    expect(body).toBe("[WebChat user1 mac-mini 10.0.0.5 Thu 2025-01-02T03:04:05Z] hello");
   });
 
   it("formats timestamps in local timezone by default", () => {
@@ -39,17 +36,15 @@ describe("formatAgentEnvelope", () => {
   });
 
   it("formats timestamps in UTC when configured", () => {
-    withEnv({ TZ: "America/Los_Angeles" }, () => {
-      const ts = Date.UTC(2025, 0, 2, 3, 4, 5); // 2025-01-02T03:04:05Z (19:04:05 PST)
-      const body = formatAgentEnvelope({
-        channel: "WebChat",
-        timestamp: ts,
-        envelope: { timezone: "utc" },
-        body: "hello",
-      });
-
-      expect(body).toBe("[WebChat Thu 2025-01-02T03:04:05Z] hello");
+    const ts = Date.UTC(2025, 0, 2, 3, 4, 5); // 2025-01-02T03:04:05Z
+    const body = formatAgentEnvelope({
+      channel: "WebChat",
+      timestamp: ts,
+      envelope: { timezone: "utc" },
+      body: "hello",
     });
+
+    expect(body).toBe("[WebChat Thu 2025-01-02T03:04:05Z] hello");
   });
 
   it("formats timestamps in user timezone when configured", () => {

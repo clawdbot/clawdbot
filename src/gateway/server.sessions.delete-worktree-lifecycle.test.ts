@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { SessionsDeleteResult } from "../../packages/gateway-protocol/src/index.js";
 import {
   getRegistryWorktree,
@@ -15,43 +15,169 @@ import {
   resolveWorktreeIdForPath,
 } from "../agents/worktrees/run-lease.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../agents/worktrees/service.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../config/sessions/store-writer-state.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
+  loadSeededTranscriptEvents,
   sessionStoreEntry,
-  setupGatewaySessionsHandlerTestHarness,
   threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
+import {
+  initializeRemoteBackedGitWorkspace,
+  setupGatewaySessionsWorktreeTestHarness,
+} from "./test/server-sessions.worktree-fixture.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const { createSessionStoreDir, createArchiveWorktreeFixture } =
+  setupGatewaySessionsWorktreeTestHarness();
 const execFileAsync = promisify(execFile);
 
-async function initializeRemoteBackedGitWorkspace(root: string): Promise<string> {
-  const workspace = path.join(root, "workspace");
-  const remote = path.join(root, "remote.git");
-  await fs.mkdir(workspace, { recursive: true });
-  await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
-  await execFileAsync("git", ["-C", workspace, "config", "user.name", "OpenClaw Test"]);
-  await execFileAsync("git", [
-    "-C",
-    workspace,
-    "config",
-    "user.email",
-    "openclaw-test@example.invalid",
-  ]);
-  await fs.writeFile(path.join(workspace, "README.md"), "base\n");
-  await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
-  await execFileAsync("git", ["-C", workspace, "commit", "-m", "initial"]);
-  await execFileAsync("git", ["clone", "--bare", workspace, remote]);
-  await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", remote]);
-  await execFileAsync("git", ["-C", workspace, "push", "-u", "origin", "main"]);
-  return await fs.realpath(workspace);
-}
+test.each(["none", "restore-failed", "placement-changed"] as const)(
+  "inbound admission restores the archived worktree before opening its session (failure=%s)",
+  async (failure) => {
+    const fixture = await createArchiveWorktreeFixture();
+    const { key, sessionId, storePath, worktree, workspace } = fixture;
+    await fs.writeFile(path.join(worktree.path, "draft.txt"), "inbound restore keeps work\n");
+    await managedWorktrees.remove({ id: worktree.id, reason: "session-archive" });
+    await patchSessionEntryCore(
+      { storePath, sessionKey: key },
+      (entry) => ({
+        ...entry!,
+        archivedAt: 1,
+      }),
+      { skipMaintenance: true },
+    );
+    const [
+      { createDispatchReplyOperationCoordinator },
+      { createReplyDispatcher },
+      { buildTestCtx },
+    ] = await Promise.all([
+      import("../auto-reply/reply/dispatch-from-config.lifecycle.js"),
+      import("../auto-reply/reply/reply-dispatcher.js"),
+      import("../auto-reply/reply/test-ctx.js"),
+    ]);
+    const placements =
+      failure === "placement-changed" ? createWorkerSessionPlacementStore() : undefined;
+    const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
+    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+    onTestFinished(async () => {
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+    });
+    const coordinator = createDispatchReplyOperationCoordinator({
+      agentId: "main",
+      cfg: { agents: { defaults: { workspace } } },
+      ctx: buildTestCtx({
+        SessionKey: key,
+        Body: "Continue this task",
+        CommandSource: undefined,
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "discord" },
+      }),
+      dispatcher,
+      dispatchOperationSessionKey: key,
+      operationSessionStoreEntry: {
+        storePath,
+        entry: loadSessionEntry({ storePath, sessionKey: key }),
+      },
+      sessionWorkerPlacementContext: placements
+        ? { workerSessionPlacementService: placements }
+        : {},
+      resolveOperationExpectedSessionId: () => sessionId,
+    });
+    const restore =
+      failure === "restore-failed"
+        ? vi
+            .spyOn(managedWorktrees, "restore")
+            .mockRejectedValueOnce(new Error("worktree checkout unavailable"))
+        : undefined;
+    const worktreeLifecycle = await import("../sessions/session-worktree-lifecycle.js");
+    const synchronize = worktreeLifecycle.synchronizeSessionWorktreeArchive;
+    const sqliteScope = resolveSqliteScope({ storePath, sessionKey: key });
+    const writerQueuePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(sqliteScope));
+    const writerStarted = createDeferredCore();
+    const releaseWriter = createDeferredCore();
+    let heldWriter: Promise<void> | undefined;
+    let admission: ReturnType<typeof coordinator.ensureDispatchReplyOperation> | undefined;
+    const placementChange = placements
+      ? vi
+          .spyOn(worktreeLifecycle, "synchronizeSessionWorktreeArchive")
+          .mockImplementationOnce(async (params) => {
+            const assertCurrent = await synchronize(params);
+            heldWriter = runExclusiveSqliteSessionWrite(sqliteScope, async () => {
+              writerStarted.resolve();
+              await releaseWriter.promise;
+            });
+            await writerStarted.promise;
+            return assertCurrent;
+          })
+      : undefined;
+    try {
+      admission = coordinator.ensureDispatchReplyOperation("pre_dispatch");
+      void admission.catch(() => {});
+      if (failure === "placement-changed") {
+        // Advance placement only after the restored session waits behind a real SQLite writer.
+        await Promise.race([writerStarted.promise, admission]);
+        expect(heldWriter).toBeDefined();
+        await vi.waitFor(() => {
+          expect(SQLITE_SESSION_WRITER_QUEUES.get(writerQueuePath)?.pending.length).toBe(1);
+        });
+        expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(true);
+        placements!.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
+        // A stopped replacement is eligible, but cannot reuse preparation owned by the prior placement.
+        placements!.fail({ sessionId, expectedGeneration: 1, recoveryError: "preparation failed" });
+        releaseWriter.resolve();
+        await heldWriter;
+        await expect(admission).rejects.toThrow("changed before mutation");
+        expect(placements?.get(sessionId)).toMatchObject({
+          state: "failed",
+          generation: 2,
+          environmentId: null,
+        });
+        expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
+        await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
+          "inbound restore keeps work\n",
+        );
+      } else if (failure === "restore-failed") {
+        await expect(admission).rejects.toThrow(/worktree/i);
+        expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
+        await expect(fs.access(worktree.path)).rejects.toThrow();
+      } else {
+        await expect(admission).resolves.toEqual({ status: "ready" });
+        await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
+          "inbound restore keeps work\n",
+        );
+        expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
+      }
+      await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
+        transcript,
+      );
+    } finally {
+      releaseWriter.resolve();
+      await heldWriter;
+      await admission?.catch(() => {});
+      placementChange?.mockRestore();
+      restore?.mockRestore();
+      coordinator.completeDispatchReplyOperation();
+      await coordinator.releasePreDispatchLifecycleAdmission();
+      expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(false);
+    }
+  },
+);
 
 test("sessions.create only allocates worktrees for lifecycle-manageable agent owners", async () => {
   const openClawState = await createOpenClawTestState({

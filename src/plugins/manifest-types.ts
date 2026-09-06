@@ -1,3 +1,4 @@
+import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ConfigUiPresentation } from "../shared/config-ui-hints-types.js";
@@ -32,6 +33,7 @@ export type PluginDiagnosticCode =
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
   | "plugin-verification"
+  | "sdk-incompatible"
   | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
@@ -41,6 +43,12 @@ export type PluginDiagnostic = {
   pluginId?: string;
   source?: string;
   code?: PluginDiagnosticCode;
+  sdkCompatibility?: {
+    seam: string;
+    coreVersion: string;
+    builtWithOpenClawVersion?: string;
+    nestedSdk: boolean;
+  };
 };
 
 export type PluginManifestChannelConfig = {
@@ -73,22 +81,8 @@ export type PluginManifestModelSupport = {
 
 export type PluginManifestModelCatalog = ModelCatalog;
 
-export type PluginManifestModelPricingModelIdTransform = "version-dots";
-
-export type PluginManifestModelPricingSource = {
-  provider?: string;
-  passthroughProviderModel?: boolean;
-  modelIdTransforms?: PluginManifestModelPricingModelIdTransform[];
-};
-
-export type PluginManifestModelPricingProvider = {
-  external?: boolean;
-  openRouter?: PluginManifestModelPricingSource | false;
-  liteLLM?: PluginManifestModelPricingSource | false;
-};
-
 export type PluginManifestModelPricing = {
-  providers?: Record<string, PluginManifestModelPricingProvider>;
+  providers?: Record<string, ModelPricingProvider>;
 };
 
 export type PluginManifestModelIdPrefixRule = {
@@ -243,7 +237,18 @@ export type PluginManifestDoctorContract = {
    * Removal plan: remove the module fallback in OpenClaw 2027.1 after external plugins migrate.
    */
   sessionRouteStateOwners?: boolean;
-  stateMigrations?: boolean;
+  /**
+   * Ordered migration identities that a candidate-bundled manifest exposes to read-only
+   * planning without importing the Doctor contract. External installed artifacts remain
+   * deferred until candidate staging binds their content identity.
+   */
+  stateMigrations?:
+    | boolean
+    | Array<{
+        id: string;
+        doctorOnly?: true;
+        phase?: "after-session-repair";
+      }>;
 };
 
 export type PluginManifestQaRunner = {
@@ -276,6 +281,14 @@ export type PluginManifestDashboard = {
   actionVerbs?: PluginManifestDashboardActionVerb[];
 };
 
+/** Built browser assets activated by the trusted native Control UI host. */
+export type PluginManifestControlUi = {
+  /** JavaScript entry in a dedicated dist subdirectory, relative to the plugin root. */
+  entry: string;
+  /** Stylesheets in the same asset directory, loaded before activation. */
+  styles?: string[];
+};
+
 export type PluginManifestMcpServer = Record<string, unknown>;
 
 export type PluginManifestConfigLiteral = string | number | boolean | null;
@@ -299,7 +312,7 @@ export type PluginManifestSecretInputPath = {
   /** Expected resolved type for SecretRef materialization. */
   expected?: "string";
   /** Runtime owner kind used to isolate this surface when resolution fails. */
-  ownerKind?: "route";
+  ownerKind?: "capability" | "route";
 };
 
 export type PluginManifestSecretInputContracts = {
@@ -364,6 +377,8 @@ export type PluginManifest = {
    * auth/catalog discovery. It should not import the full plugin runtime.
    */
   providerCatalogEntry?: string;
+  /** Lightweight capability descriptor collections; omitted families retain register() discovery. */
+  capabilityCatalogEntry?: string;
   /**
    * Cheap model-family ownership metadata used before plugin runtime loads.
    * Use this for shorthand model refs that omit an explicit provider prefix.
@@ -418,12 +433,15 @@ export type PluginManifest = {
   setup?: PluginManifestSetup;
   /** Doctor contract surfaces available without loading the plugin artifact. */
   doctorContract?: PluginManifestDoctorContract;
+  /** Whether the plugin public API registers structured health checks. */
+  doctorHealthChecks?: boolean;
   /** Static ownership metadata for doctor session-route state repairs. */
   sessionRouteStateOwners?: DoctorSessionRouteStateOwner[];
   /** Cheap QA runner metadata exposed before plugin runtime loads. */
   qaRunners?: PluginManifestQaRunner[];
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
+  controlUi?: PluginManifestControlUi;
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];
@@ -431,8 +449,6 @@ export type PluginManifest = {
   description?: string;
   /** Optional presentation hints for plugin catalog surfaces. */
   catalog?: PluginManifestCatalog;
-  /** Optional HTTPS URL for marketplace/catalog card artwork. */
-  icon?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
   /**
@@ -590,6 +606,8 @@ export type PluginManifestProviderAuthChoice = {
   cliDescription?: string;
   /** One pasted secret plus provider defaults is sufficient for app-guided setup. */
   appGuidedSecret?: boolean;
+  /** Interactive method stages one inline credential without host login imports or persistence. */
+  personalAccount?: boolean;
   /** Short provider-owned command label for starting app-guided setup. */
   appGuidedActionLabel?: string;
   /** Provider-owned interactive login that native setup clients can render generically. */

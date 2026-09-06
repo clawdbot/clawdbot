@@ -248,7 +248,7 @@ function buildReactionSchema() {
     remove: Type.Optional(Type.Boolean()),
     trackToolCalls: Type.Optional(
       Type.Boolean({
-        description: "Use reacted current message for tool-progress reactions.",
+        description: "Use the reacted message for this turn's status reaction lifecycle.",
       }),
     ),
     track_tool_calls: Type.Optional(

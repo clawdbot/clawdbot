@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
   controlUiSessionPath,
@@ -13,11 +14,7 @@ const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it("lets a newer durable prompt and file beat a stale navigation handoff", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const sessionKey = "agent:main:existing-session";
       const staleText = "stale draft from the first page";
@@ -46,7 +43,7 @@ suite.define(() => {
         .locator(".agent-chat__photo-input")
         .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
       await pageA.getByRole("button", { name: `Open image ${staleFileName}` }).waitFor();
-      await captureUiProof(pageA, "new-session-draft-before-navigation.png");
+      await captureUiProof(suite, pageA, "new-session-draft-before-navigation.png");
 
       await existingSession.click();
       await pageA.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
@@ -64,7 +61,7 @@ suite.define(() => {
         .locator(".agent-chat__photo-input")
         .setInputFiles(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
       await pageB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
-      await waitForCommittedNewSessionDraft(pageB, durableText, 1);
+      await waitForCommittedNewSessionDraft(pageB, durableText, [durableFileName]);
       await pageB.reload();
       await expect.poll(() => messageB.inputValue()).toBe(durableText);
       await pageB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
@@ -82,7 +79,7 @@ suite.define(() => {
       await expect(
         pageA.getByRole("button", { name: `Open image ${staleFileName}` }).count(),
       ).resolves.toBe(0);
-      await captureUiProof(pageA, "new-session-draft-restored.png");
+      await captureUiProof(suite, pageA, "new-session-draft-restored.png");
       await pageA.close();
 
       const freshPage = await context.newPage();

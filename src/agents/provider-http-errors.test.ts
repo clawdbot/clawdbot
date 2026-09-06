@@ -323,6 +323,51 @@ describe("provider error utils", () => {
     );
   });
 
+  it("redacts reflected request credentials before extracting provider error metadata", async () => {
+    const credential = 'opaque +17/GLASS~MOTH%"tail';
+    const encoded = encodeURIComponent(credential);
+    const response = new Response(
+      JSON.stringify({
+        error: {
+          message: `Proxy rejected ${"x".repeat(195)} ${credential}`,
+          code: encoded,
+          type: credential,
+        },
+      }),
+      { status: 401, headers: { "x-request-id": encoded } },
+    );
+
+    const error = await createProviderHttpError(response, "Provider request failed", {
+      requestHeaders: { "X-Proxy-Auth": credential },
+    });
+
+    expect(error).toMatchObject({
+      status: 401,
+      code: "***",
+      errorCode: "***",
+      errorType: "***",
+      requestId: "***",
+    });
+    for (const representation of [credential, encoded, credential.slice(0, 6)]) {
+      expect(error.message).not.toContain(representation);
+      expect((error as ProviderHttpError).errorBody).not.toContain(representation);
+    }
+  });
+
+  it("redacts a reflected credential cut by the error body byte limit", async () => {
+    const credential = `opaque-prefix-${"q".repeat(16 * 1024)}-suffix`;
+    const response = new Response(`Proxy rejected ${credential}`, { status: 401 });
+
+    const error = await createProviderHttpError(response, "Provider request failed", {
+      requestHeaders: new Headers({ "X-Proxy-Auth": credential }),
+    });
+
+    expect(error).toMatchObject({
+      message: "Provider request failed (401): Proxy rejected ***",
+      errorBody: "Proxy rejected ***",
+    });
+  });
+
   it("wraps malformed successful JSON responses with provider labels", async () => {
     const response = new Response("{ nope", {
       status: 200,
@@ -332,6 +377,18 @@ describe("provider error utils", () => {
     await expect(readProviderJsonResponse(response, "Provider catalog failed")).rejects.toThrow(
       "Provider catalog failed: malformed JSON response",
     );
+  });
+
+  it("does not retain reflected credentials in malformed JSON causes", async () => {
+    const credential = "opaque-credential";
+    const response = new Response(credential, { status: 200 });
+    const error = await readProviderJsonResponse(response, "Provider response failed", {
+      requestHeaders: { "X-Proxy-Auth": credential },
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ message: "Provider response failed: malformed JSON response" });
+    expect(String((error as Error).cause)).not.toContain(credential);
   });
 
   it("parses well-formed JSON responses under the byte cap", async () => {
@@ -357,6 +414,29 @@ describe("provider error utils", () => {
       }),
     ).rejects.toThrow("Provider catalog failed: JSON response exceeds 2048 bytes");
 
+    expect(streamed.getReadCount()).toBeLessThan(20);
+  });
+
+  it("honors custom JSON overflow errors and stops reading", async () => {
+    const streamed = createStreamingJsonResponse({
+      chunkCount: 20,
+      chunkSize: 1024,
+    });
+    const sentinel = new Error("custom overflow");
+    const onOverflow = vi.fn(() => sentinel);
+
+    const error = await readProviderJsonResponse(streamed.response, "Provider catalog failed", {
+      maxBytes: 2048,
+      onOverflow,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBe(sentinel);
+    expect(onOverflow).toHaveBeenCalledOnce();
+    expect(onOverflow).toHaveBeenCalledWith({
+      size: 3072,
+      maxBytes: 2048,
+      res: streamed.response,
+    });
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 

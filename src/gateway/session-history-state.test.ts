@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { projectChatDisplayMessagesWithState } from "./chat-display-projection.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
@@ -384,6 +385,26 @@ describe("SessionHistorySseState", () => {
     expect(oldest.nextCursor).toBeUndefined();
   });
 
+  test("closes interleaved pages across unsequenced rows without admitting older duplicate groups", () => {
+    const messages = [1, 2, 2, 3, undefined, 4, 3, 4].map((seq, index) => ({
+      role: "assistant" as const,
+      content: textContent(`Projected row ${index}`),
+      __openclaw: seq === undefined ? undefined : { seq },
+    }));
+    const { history } = buildSessionHistorySnapshot({
+      rawMessages: [],
+      projection: {
+        ...projectChatDisplayMessagesWithState([]),
+        messages,
+      },
+      limit: 1,
+    });
+
+    expect(history.messages).toEqual(messages.slice(3));
+    expect(history.nextCursor).toBe("3");
+    expect(history.hasMore).toBe(true);
+  });
+
   test("keeps commentary fallback rows reachable across cursor pages and SSE state", () => {
     const rawMessages = [
       userTextMessage("check the workspace", 1),
@@ -515,7 +536,6 @@ describe("SessionHistorySseState", () => {
           {
             type: "attachment",
             attachment: {
-              url: "/tmp/tts.mp3",
               kind: "audio",
               label: "tts.mp3",
               mimeType: "audio/mpeg",
@@ -755,7 +775,7 @@ describe("SessionHistorySseState", () => {
             {
               type: "text",
               text: [
-                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=webchat sourceTool=subagent_announce isUser=false",
+                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce isUser=false",
                 "This content was routed by OpenClaw from another session or internal tool.",
                 "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
                 "subagent completion payload",
@@ -775,6 +795,49 @@ describe("SessionHistorySseState", () => {
     });
 
     expectOnlyAssistantText(snapshot, "clean child result", 2);
+  });
+
+  test("drops generated media completion wakes while retaining final media", () => {
+    const assistantReply = {
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: "Created." },
+        {
+          type: "image" as const,
+          source: { type: "url" as const, url: "/api/chat/media/outgoing/generated.png" },
+        },
+      ],
+      __openclaw: { seq: 2 },
+    };
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: [
+                "A background task completed. Use this result to reply normally.",
+                "session_key: image_generate:task-123",
+                'path="/root/.openclaw/media/tool-image-generation/private.png"',
+              ].join("\n"),
+            },
+          ],
+          provenance: {
+            kind: "inter_session",
+            sourceChannel: "internal",
+            sourceSessionKey: "image_generate:task-123",
+            sourceTool: "image_generate",
+          },
+          __openclaw: { seq: 1 },
+        },
+        assistantReply,
+      ],
+    });
+
+    expect(snapshot.history.messages).toEqual([assistantReply]);
+    expect(JSON.stringify(snapshot.history.messages)).not.toContain("image_generate:task-123");
+    expect(JSON.stringify(snapshot.history.messages)).not.toContain("/root/.openclaw/media");
   });
 
   test("hides heartbeat prompt and ok acknowledgements from visible history", () => {

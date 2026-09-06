@@ -1,11 +1,14 @@
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
-  loadDeliveryQueueEntry,
-  upsertDeliveryQueueEntry,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { loadDeliveryQueueEntryInDatabase } from "./delivery-queue-sqlite-bound.js";
+import {
+  upsertDeliveryQueueEntryInDatabase,
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.js";
+import { hasLiveDeliveryQueueClaim } from "./delivery-queue-sqlite.types.js";
 import { generateSecureUuid } from "./secure-random.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 type PlatformClaimParams = {
   queueName: string;
@@ -16,7 +19,7 @@ type PlatformClaimParams = {
   reconciledPlatformSendStartedAt?: number;
 };
 
-export const PLATFORM_SEND_OWNER_LEASE_MS = 30_000;
+export const PLATFORM_SEND_OWNER_LEASE_MS = 60_000;
 
 /** Creates the owner published atomically with an immediate live delivery. */
 export function createInitialDeliveryProducerClaim(now = Date.now()) {
@@ -36,17 +39,20 @@ export function transitionOwnedDeliveryQueueEntry(
     queueName: string;
     id: string;
     stateDir?: string;
+    database?: OpenClawStateDatabase;
     platformSendAttemptId: string | null;
   },
-  transition: (entry: DeliveryQueueEntryState) => void,
+  // Unlike void, undefined rejects async callbacks before they can escape the transaction.
+  transition: (entry: DeliveryQueueEntryState, database: OpenClawStateDatabase) => undefined,
 ): boolean {
-  const database = openOpenClawStateDatabase({
-    env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
-  });
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
-      const entry = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const entry = loadDeliveryQueueEntryInDatabase(
+        database,
+        params.queueName,
+        params.id,
+        "pending",
+      );
       if (!entry) {
         return false;
       }
@@ -58,11 +64,14 @@ export function transitionOwnedDeliveryQueueEntry(
       ) {
         return false;
       }
-      transition(entry);
+      transition(entry, database);
       return true;
     },
     {
-      databaseLabel: "openclaw-state",
+      database: params.database,
+      env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
+    },
+    {
       operationLabel: `mutate owned ${params.queueName} delivery platform send`,
     },
   );
@@ -73,15 +82,14 @@ function transitionDeliveryQueueEntryPlatformSend(
   operation: "claim" | "promote" | "dispatch",
   transition: (entry: DeliveryQueueEntryState, now: number) => DeliveryQueueEntryState | undefined,
 ): boolean {
-  // State-database opens reuse the canonical path-owned connection, so both
-  // existing queue primitives execute inside this same IMMEDIATE transaction.
-  const database = openOpenClawStateDatabase({
-    env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
-  });
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
-      const current = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const current = loadDeliveryQueueEntryInDatabase(
+        database,
+        params.queueName,
+        params.id,
+        "pending",
+      );
       if (!current) {
         return false;
       }
@@ -97,16 +105,20 @@ function transitionDeliveryQueueEntryPlatformSend(
       }
       const updated = transition(current, Date.now());
       return updated
-        ? upsertDeliveryQueueEntry({
-            queueName: params.queueName,
-            entry: updated,
-            stateDir: params.stateDir,
-            updatePendingOnly: true,
-          })
+        ? upsertDeliveryQueueEntryInDatabase(
+            {
+              queueName: params.queueName,
+              entry: updated,
+              updatePendingOnly: true,
+            },
+            database,
+          )
         : false;
     },
     {
-      databaseLabel: "openclaw-state",
+      env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
+    },
+    {
       operationLabel: `${operation} ${params.queueName} delivery platform send`,
     },
   );
@@ -153,41 +165,38 @@ export function renewDeliveryQueueEntryPlatformSendLease(
     claimId: string;
   },
 ): number | undefined {
-  const database = openOpenClawStateDatabase({
-    env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
-  });
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
-      const entry = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const entry = loadDeliveryQueueEntryInDatabase(
+        database,
+        params.queueName,
+        params.id,
+        "pending",
+      );
       const now = Date.now();
-      const exactOwner =
-        entry?.recoveryState === "producer_claimed"
-          ? entry.producerClaimId === params.claimId
-          : (entry?.recoveryState === "send_attempt_started" ||
-              entry?.recoveryState === "unknown_after_send") &&
-            entry.platformSendAttemptId === params.claimId;
       if (
         !entry ||
         entry.requiresProducerClaim !== true ||
-        !exactOwner ||
-        typeof entry.availableAt !== "number" ||
-        entry.availableAt <= now
+        !hasLiveDeliveryQueueClaim(entry, params.claimId, now)
       ) {
         return undefined;
       }
       const expiresAt = now + PLATFORM_SEND_OWNER_LEASE_MS;
-      return upsertDeliveryQueueEntry({
-        queueName: params.queueName,
-        entry: { ...entry, availableAt: expiresAt },
-        stateDir: params.stateDir,
-        updatePendingOnly: true,
-      })
+      return upsertDeliveryQueueEntryInDatabase(
+        {
+          queueName: params.queueName,
+          entry: { ...entry, availableAt: expiresAt },
+          updatePendingOnly: true,
+        },
+        database,
+      )
         ? expiresAt
         : undefined;
     },
     {
-      databaseLabel: "openclaw-state",
+      env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
+    },
+    {
       operationLabel: `renew ${params.queueName} delivery platform send`,
     },
   );
@@ -202,9 +211,7 @@ export function promoteDeliveryQueueEntryPlatformSend(
 ): boolean {
   return transitionDeliveryQueueEntryPlatformSend(params, "promote", (entry, now) =>
     entry.recoveryState === "producer_claimed" &&
-    entry.producerClaimId === params.claimId &&
-    typeof entry.availableAt === "number" &&
-    entry.availableAt > now
+    hasLiveDeliveryQueueClaim(entry, params.claimId, now)
       ? {
           ...entry,
           // Only an explicitly leased owner keeps its cross-process fence;
@@ -231,18 +238,7 @@ export function dispatchDeliveryQueueEntryPlatformSend(
   },
 ): boolean {
   return transitionDeliveryQueueEntryPlatformSend(params, "dispatch", (entry, now) => {
-    const producerOwned =
-      entry.recoveryState === "producer_claimed" &&
-      entry.producerClaimId === params.claimId &&
-      typeof entry.availableAt === "number" &&
-      entry.availableAt > now;
-    const attemptOwned =
-      (entry.recoveryState === "send_attempt_started" ||
-        entry.recoveryState === "unknown_after_send") &&
-      entry.platformSendAttemptId === params.claimId &&
-      (entry.requiresProducerClaim !== true ||
-        (typeof entry.availableAt === "number" && entry.availableAt > now));
-    if (!producerOwned && !attemptOwned) {
+    if (!hasLiveDeliveryQueueClaim(entry, params.claimId, now)) {
       return undefined;
     }
     return {
@@ -251,7 +247,7 @@ export function dispatchDeliveryQueueEntryPlatformSend(
       // atomically; later batch dispatches retain stronger unknown-after-send evidence.
       availableAt:
         entry.requiresProducerClaim === true
-          ? producerOwned
+          ? entry.recoveryState === "producer_claimed"
             ? now + PLATFORM_SEND_OWNER_LEASE_MS
             : entry.availableAt
           : undefined,

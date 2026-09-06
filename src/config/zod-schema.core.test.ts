@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GroupChatSchema } from "./zod-schema.core.js";
+import { GroupChatSchema, MentionPatternsPolicySchema } from "./zod-schema.core.js";
 
 describe("GroupChatSchema", () => {
   it("accepts historyLimit: 0", () => {
@@ -15,5 +15,17 @@ describe("GroupChatSchema", () => {
   it("rejects a negative historyLimit", () => {
     const result = GroupChatSchema.unwrap().safeParse({ historyLimit: -1 });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("MentionPatternsPolicySchema", () => {
+  it("accepts the canonical policy object", () => {
+    expect(MentionPatternsPolicySchema.safeParse({ mode: "allow", denyIn: ["room"] }).success).toBe(
+      true,
+    );
+  });
+
+  it("rejects a bare pattern array", () => {
+    expect(MentionPatternsPolicySchema.safeParse(["openclaw"]).success).toBe(false);
   });
 });

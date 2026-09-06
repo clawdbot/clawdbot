@@ -28,12 +28,14 @@ export function renderAppliedRevisionDiff(previousBody: string, body: string) {
   }
   return html`
     <div class="sw-diff">
-      ${result.kind === "complete"
-        ? html`<p class="sw-diff__stat">
-            <span class="sw-diff__stat-add">+${result.stat.added}</span>
-            <span class="sw-diff__stat-del">-${result.stat.removed}</span>
-          </p>`
-        : html`<p class="sw-muted sw-diff__notice">${t("skillWorkshop.diff.truncated")}</p>`}
+      ${
+        result.kind === "complete"
+          ? html`<p class="sw-diff__stat">
+              <span class="sw-diff__stat-add">+${result.stat.added}</span>
+              <span class="sw-diff__stat-del">-${result.stat.removed}</span>
+            </p>`
+          : html`<p class="sw-muted sw-diff__notice">${t("skillWorkshop.diff.truncated")}</p>`
+      }
       <div class="sw-diff__rows">${result.lines.map(renderDiffRow)}</div>
     </div>
   `;

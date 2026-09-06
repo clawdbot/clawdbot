@@ -94,16 +94,19 @@ extension NodeAppModel {
         archived: Bool = false,
         allowCachedFallback: Bool = true) async throws -> ChatSessionRosterSnapshot
     {
+        let sourceGatewayID = self.chatTranscriptCacheGatewayID
+        let sourceAgentID = self.chatDeliveryAgentId
         guard self.isLocalChatFixtureEnabled || self.isOperatorGatewayConnected else {
             guard allowCachedFallback else { throw URLError(.notConnectedToInternet) }
             return await ChatSessionRosterSnapshot(
-                sessions: archived ? [] : self.loadCachedChatSessions(),
+                sessions: archived ? [] : self.loadCachedChatSessions(
+                    gatewayID: sourceGatewayID,
+                    agentID: sourceAgentID),
                 isCached: true,
                 isComplete: false)
         }
 
         do {
-            let sourceGatewayID = self.chatTranscriptCacheGatewayID
             let snapshot: ChatSessionRosterSnapshot
             if self.isLocalChatFixtureEnabled {
                 let response = try await self.makeChatTransport().listSessions(limit: limit, archived: archived)
@@ -124,11 +127,14 @@ extension NodeAppModel {
                         limit: limit,
                         search: nil,
                         archived: archived,
+                        agentID: sourceAgentID,
                         offset: offset)
                     let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
                     return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
                 }
-                guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) else {
+                guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID),
+                      self.chatDeliveryAgentId == sourceAgentID
+                else {
                     throw CancellationError()
                 }
             }
@@ -136,9 +142,13 @@ extension NodeAppModel {
             if !archived {
                 // An interrupted page must not replace a more complete offline roster.
                 if snapshot.isComplete {
-                    await self.storeCachedChatSessions(snapshot.sessions)
+                    await self.storeCachedChatSessions(
+                        snapshot.sessions,
+                        gatewayID: sourceGatewayID,
+                        agentID: sourceAgentID)
                     if let sourceGatewayID,
-                       !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
+                       !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) ||
+                       self.chatDeliveryAgentId != sourceAgentID
                     {
                         throw CancellationError()
                     }
@@ -149,7 +159,9 @@ extension NodeAppModel {
             throw CancellationError()
         } catch {
             guard allowCachedFallback, !archived else { throw error }
-            let cached = await self.loadCachedChatSessions()
+            let cached = await self.loadCachedChatSessions(
+                gatewayID: sourceGatewayID,
+                agentID: sourceAgentID)
             guard !cached.isEmpty else { throw error }
             return ChatSessionRosterSnapshot(sessions: cached, isCached: true, isComplete: false)
         }
@@ -460,7 +472,8 @@ final class RootSidebarModel {
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
                 observerDigest: digest,
-                to: self.sessions)
+                to: self.sessions,
+                activeAgentId: appModel.chatDeliveryAgentId)
         case .seqGap:
             await self.refreshSessions(appModel: appModel)
             return true
@@ -533,48 +546,16 @@ final class RootSidebarModel {
     }
 
     private func loadCronJobs(appModel: NodeAppModel) async -> [CronJob]? {
-        let pageLimit = 5
-        let jobLimit = 1000
-        var jobs: [CronJob] = []
-        var seenJobIDs: Set<String> = []
-        var expectedIdentity: CronJobsSnapshotIdentity?
-        var offset = 0
-        for _ in 0..<pageLimit {
+        let snapshot = await CronJobsListLite.collect(maximumPageCount: 5, maximumJobCount: 1000) { offset in
             let paramsJSON = "{\"includeDisabled\":true,\"limit\":200,\"offset\":\(offset)," +
                 "\"sortBy\":\"name\",\"sortDir\":\"asc\"}"
-            let page = await self.request(
+            return await self.request(
                 CronJobsListLite.self,
                 appModel: appModel,
                 method: "cron.list",
                 paramsJSON: paramsJSON)
-            guard let page,
-                  let identity = cronJobsSnapshotIdentity(page: page, maximumCount: jobLimit)
-            else { return nil }
-            if let expectedIdentity, identity != expectedIdentity {
-                return nil
-            }
-            expectedIdentity = identity
-            let pageJobIDs = Set(page.jobs.map(\.id))
-            guard pageJobIDs.count == page.jobs.count,
-                  seenJobIDs.isDisjoint(with: pageJobIDs)
-            else { return nil }
-            seenJobIDs.formUnion(pageJobIDs)
-            jobs.append(contentsOf: page.jobs)
-            guard jobs.count <= jobLimit else { return nil }
-            if let total = identity.total {
-                guard total >= jobs.count else { return nil }
-                if jobs.count == total {
-                    guard !page.hasMore else { return nil }
-                    return jobs
-                }
-            }
-            guard page.hasMore else { return jobs }
-            guard let nextOffset = nextCronJobsListOffset(page: page, currentOffset: offset),
-                  nextOffset <= jobLimit
-            else { return nil }
-            offset = nextOffset
         }
-        return nil
+        return snapshot?.jobs
     }
 
     private func request<T: Decodable>(

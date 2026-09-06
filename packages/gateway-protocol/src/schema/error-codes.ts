@@ -25,6 +25,9 @@ export {
   type ProjectCloneFailureCause,
   type UnknownAgentIdErrorDetails,
   type WizardNotFoundErrorDetails,
+  type SetupAdmissionBusyErrorDetails,
+  type GitHubPublicationSelectionRejectedErrorDetails,
+  readGitHubPublicationSelectionRejectedError,
   readCronJobNotFoundError,
   isMcpAppViewExpiredError,
   readMissingScopeError,
@@ -64,6 +67,15 @@ export const UnknownAgentIdErrorDetailsSchema = closedObject({
   agentId: NonEmptyString,
 });
 
+export const SetupAdmissionBusyErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY),
+});
+
+export const GitHubPublicationSelectionRejectedErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED),
+  idempotencyKey: NonEmptyString,
+});
+
 export const WizardNotFoundErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.WIZARD_NOT_FOUND),
 });
@@ -94,6 +106,8 @@ export const GatewayErrorDetailsSchema = Type.Union([
   ProjectCloneErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
+  SetupAdmissionBusyErrorDetailsSchema,
+  GitHubPublicationSelectionRejectedErrorDetailsSchema,
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

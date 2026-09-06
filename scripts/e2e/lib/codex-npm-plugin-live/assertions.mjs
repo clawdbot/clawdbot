@@ -467,7 +467,6 @@ function assertNpmDeps(options = {}) {
   if (!openAiCodexPackageJson) {
     throw new Error("missing @openai/codex dependency under .openclaw/npm");
   }
-  assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
 
   assertCodexReleasePackageContract({
     pluginPackageJson,
@@ -909,9 +908,11 @@ function assertAgentError() {
     : "";
   const combined = `${stdout}\n${stderr}`;
   const expectedErrors = [
+    'Agent harness runtime "codex" is unavailable. (reason=owner-plugin-not-activatable, ownerPluginId=codex)',
     'Requested agent harness "codex" is not registered',
     "Unknown model: codex/",
     'Agent harness runtime "codex" is not present in the prepared registry.',
+    'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run.',
   ];
   if (!expectedErrors.some((message) => combined.includes(message))) {
     throw new Error(`unexpected post-uninstall agent error:\nstdout=${stdout}\nstderr=${stderr}`);

@@ -1,5 +1,6 @@
 // Openai provider module implements model/runtime integration.
 import path from "node:path";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ImageGenerationOutputFormat,
@@ -11,7 +12,6 @@ import {
   resolveInlineImageJsonResponseMaxBytes,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   resolveClosestSize,
   resolveGeneratedMediaMaxBytes,
@@ -86,7 +86,6 @@ const OPENAI_FLEXIBLE_IMAGE_MODELS = [
   DEFAULT_OPENAI_IMAGE_MODEL,
   "gpt-image-2-2026-04-21",
 ] as const;
-const log = createSubsystemLogger("image-generation/openai");
 
 const AZURE_HOSTNAME_SUFFIXES = [
   ".openai.azure.com",
@@ -402,22 +401,6 @@ function hasCodexResponseTransportProfileConfigured(req: {
   );
 }
 
-function resolveOpenAIImageAuthProvider(req: {
-  cfg?: OpenClawConfig;
-  authStore?: AuthProfileStore;
-  agentDir?: string;
-}): string {
-  const providerConfig = req.cfg?.models?.providers?.openai;
-  if (providerConfig?.apiKey !== undefined || providerConfig?.auth === "api-key") {
-    return "openai";
-  }
-  const store = resolveRequestAuthStore(req);
-  if (!store) {
-    return "openai";
-  }
-  return "openai";
-}
-
 function hasExplicitOpenAIImageApiKeyConfig(cfg: OpenClawConfig | undefined): boolean {
   const providerConfig = cfg?.models?.providers?.openai;
   return providerConfig?.apiKey !== undefined || providerConfig?.auth === "api-key";
@@ -472,19 +455,6 @@ function forceOpenAIImageApiKeyAuth(cfg: OpenClawConfig | undefined): OpenClawCo
       },
     },
   };
-}
-
-async function resolveOpenAIImageAuth(req: {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-}) {
-  return await resolveOptionalApiKeyForProvider({
-    provider: resolveOpenAIImageAuthProvider(req),
-    cfg: req.cfg,
-    agentDir: req.agentDir,
-    store: req.authStore,
-  });
 }
 
 function isCodexSubscriptionAuthMode(mode: unknown): boolean {
@@ -758,11 +728,13 @@ async function resolveOptionalApiKeyForProvider(
   }
 }
 
-function logCodexImageAuthSelected(params: {
+async function logCodexImageAuthSelected(params: {
   req: Parameters<ImageGenerationProvider["generateImage"]>[0];
   authMode?: unknown;
   timeoutMs: number;
 }) {
+  const { createSubsystemLogger } = await import("openclaw/plugin-sdk/logging-core");
+  const log = createSubsystemLogger("image-generation/openai");
   const model = resolveOpenAIImageRequestModel(params.req, {
     allowTransparentDefaultReroute: true,
   });
@@ -952,7 +924,12 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             : null;
       }
       if (useCodexResponseTransportRoute) {
-        const codexAuth = await resolveOpenAIImageAuth(req);
+        const codexAuth = await resolveOptionalApiKeyForProvider({
+          provider: "openai",
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          store: req.authStore,
+        });
         if (!codexAuth?.apiKey) {
           throw new Error("OpenAI Codex OAuth missing");
         }
@@ -960,7 +937,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           preResolvedImageAuth = codexAuth;
         } else {
           const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
-          logCodexImageAuthSelected({ req, authMode: codexAuth.mode, timeoutMs });
+          await logCodexImageAuthSelected({ req, authMode: codexAuth.mode, timeoutMs });
           return generateOpenAICodexImage({ req, apiKey: codexAuth.apiKey });
         }
       }
@@ -984,7 +961,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       ) {
         if (publicOpenAIBaseUrl) {
           const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
-          logCodexImageAuthSelected({ req, authMode: imageAuth.mode, timeoutMs });
+          await logCodexImageAuthSelected({ req, authMode: imageAuth.mode, timeoutMs });
           return generateOpenAICodexImage({ req, apiKey: imageAuth.apiKey });
         }
         imageAuth = undefined;
@@ -1044,7 +1021,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
               const mimeType = image.mimeType?.trim() || DEFAULT_OUTPUT_MIME;
               form.append(
                 "image[]",
-                new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
+                new Blob([bufferToBlobPart(image.buffer)], { type: mimeType }),
                 inferImageUploadFileName({
                   fileName: image.fileName,
                   mimeType,

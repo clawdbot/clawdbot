@@ -1,5 +1,5 @@
 ---
-summary: "Adds the QA Channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw QA synthetic channel plugin."
 read_when:
   - You are installing, configuring, or auditing the qa-channel plugin
 title: "QA Channel plugin"
@@ -7,7 +7,7 @@ title: "QA Channel plugin"
 
 # QA Channel plugin
 
-Adds the QA Channel surface for sending and receiving OpenClaw messages.
+OpenClaw QA synthetic channel plugin.
 
 ## Distribution
 

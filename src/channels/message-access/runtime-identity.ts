@@ -26,13 +26,21 @@ type ResolvedIdentityField = Required<Pick<ChannelIngressIdentityField, "key" | 
 export function defineStableChannelIngressIdentity(
   params: StableChannelIngressIdentityParams = {},
 ): ChannelIngressIdentityDescriptor {
-  const { entryIdPrefix, resolveEntryId, aliases, isWildcardEntry, matchEntry, ...primary } =
-    params;
+  const {
+    entryIdPrefix,
+    resolveEntryId,
+    aliases,
+    isWildcardEntry,
+    matchEntry,
+    resolveParticipant,
+    ...primary
+  } = params;
   return {
     primary,
     aliases,
     isWildcardEntry,
     matchEntry,
+    resolveParticipant,
     resolveEntryId:
       resolveEntryId ??
       (entryIdPrefix ? ({ entryIndex }) => `${entryIdPrefix}-${entryIndex + 1}` : undefined),

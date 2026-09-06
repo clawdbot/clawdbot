@@ -1,4 +1,5 @@
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.js";
@@ -25,7 +26,6 @@ import {
 import type { NodeWorkerLaunchInput } from "./node-worker-supervisor-contract.js";
 import {
   createNodeWorkerActiveTurn,
-  createNodeWorkerJournalGate,
   nodeWorkerEnvironmentBinding,
   type NodeWorkerActiveOwnership,
   type NodeWorkerRunningChild,
@@ -71,6 +71,15 @@ export async function startNodeWorkerChild(
   for (const value of sensitiveValues) {
     registerSecretValueForRedaction(value);
   }
+  const finishFailed = (errorText: string) =>
+    context.capacity.finish({
+      launchId: params.input.launchId,
+      planHash: params.planHash,
+      supervisor: params.supervisor,
+      worker: null,
+      state: "failed",
+      errorText,
+    });
   let adapter: NodeWorkerChildAdapter;
   let container: NodeWorkerContainerIdentity | undefined;
   try {
@@ -93,14 +102,9 @@ export async function startNodeWorkerChild(
     adapter = prepared.adapter;
     container = prepared.container;
   } catch (error) {
-    return context.capacity.finish({
-      launchId: params.input.launchId,
-      planHash: params.planHash,
-      supervisor: params.supervisor,
-      worker: null,
-      state: "failed",
-      errorText: sanitizeNodeWorkerDiagnostic(error, "node worker spawn failed", scrubber.scrub),
-    });
+    return finishFailed(
+      sanitizeNodeWorkerDiagnostic(error, "node worker spawn failed", scrubber.scrub),
+    );
   }
   if (!adapter.pid) {
     if (container) {
@@ -108,14 +112,7 @@ export async function startNodeWorkerChild(
     }
     adapter.kill("SIGKILL");
     adapter.dispose();
-    return context.capacity.finish({
-      launchId: params.input.launchId,
-      planHash: params.planHash,
-      supervisor: params.supervisor,
-      worker: null,
-      state: "failed",
-      errorText: "node worker spawn did not return a process id",
-    });
+    return finishFailed("node worker spawn did not return a process id");
   }
   let worker: NodeWorkerProcessIdentity;
   try {
@@ -127,20 +124,15 @@ export async function startNodeWorkerChild(
     adapter.kill("SIGKILL");
     await adapter.wait().catch(() => undefined);
     adapter.dispose();
-    return context.capacity.finish({
-      launchId: params.input.launchId,
-      planHash: params.planHash,
-      supervisor: params.supervisor,
-      worker: null,
-      state: "failed",
-      errorText: sanitizeNodeWorkerDiagnostic(
+    return finishFailed(
+      sanitizeNodeWorkerDiagnostic(
         error,
         "node worker process identity unavailable",
         scrubber.scrub,
       ),
-    });
+    );
   }
-  const { journalReady, releaseJournal } = createNodeWorkerJournalGate();
+  const { promise: journalReady, resolve: releaseJournal } = createDeferredCore();
   const active = {
     state: "running",
     binding: nodeWorkerEnvironmentBinding(params.input),
@@ -151,7 +143,6 @@ export async function startNodeWorkerChild(
     gatewayNamespace: params.input.gatewayNamespace,
     launchId: params.input.launchId,
     planHash: params.planHash,
-    releaseJournal,
     scrubber,
     connectionFailure,
     supervisor: params.supervisor,
@@ -171,28 +162,23 @@ export async function startNodeWorkerChild(
       ...(container ? { container } : {}),
     });
   } catch (error) {
-    active.releaseJournal();
+    releaseJournal();
     if (container) {
       await context.stopChild(active, "interrupted");
       context.active.delete(active.launchId);
-      context.capacity.finish({
-        launchId: active.launchId,
-        planHash: active.planHash,
-        supervisor: params.supervisor,
-        worker: null,
-        state: "failed",
-        errorText: sanitizeNodeWorkerDiagnostic(
+      finishFailed(
+        sanitizeNodeWorkerDiagnostic(
           error,
           "node worker container identity could not be persisted",
           scrubber.scrub,
         ),
-      });
+      );
     } else {
       await context.stopChild(active, "interrupted").catch(() => undefined);
     }
     throw error;
   }
-  active.releaseJournal();
+  releaseJournal();
   if (running.state === "cancelled" || running.state === "interrupted") {
     await context.stopChild(active, running.state);
     return context.store.get(active.launchId) ?? running;
