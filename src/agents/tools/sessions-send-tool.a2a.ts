@@ -9,6 +9,11 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isInternalNonDeliveryChannel,
+} from "../../utils/message-channel-constants.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
@@ -109,6 +114,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterSessionKey?: string;
   requesterAgentId?: string;
   requesterChannel?: string;
+  requesterOrigin?: DeliveryContext;
   baseline?: AssistantReplySnapshot;
   roundOneReply?: string;
   waitRunId?: string;
@@ -169,12 +175,34 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
-    const announceTarget = await resolveAnnounceTarget({
+    const resolvedTarget = await resolveAnnounceTarget({
       sessionKey: params.targetSessionKey,
       displayKey: params.displayKey,
       callGateway: gatewayCall,
       agentId: params.targetAgentId,
     });
+    // ponytail: detached announce follows the live requester route when the
+    // target resolves to a stale internal sink (or nothing at all).
+    const origin = params.requesterOrigin;
+    const requesterFallback =
+      origin?.channel && origin?.to
+        ? {
+            channel: origin.channel,
+            to: origin.to,
+            ...(origin.accountId ? { accountId: origin.accountId } : {}),
+            ...(origin.threadId != null ? { threadId: String(origin.threadId) } : {}),
+          }
+        : undefined;
+    // WebChat is internal-only plumbing (Gateway `send` rejects it), so treat
+    // it like the other non-deliverable sinks and prefer the live route.
+    const isStaleAnnounceChannel = (channel: string) =>
+      channel === INTERNAL_MESSAGE_CHANNEL || isInternalNonDeliveryChannel(channel);
+    const announceTarget =
+      resolvedTarget && !isStaleAnnounceChannel(resolvedTarget.channel)
+        ? resolvedTarget
+        : requesterFallback && !isStaleAnnounceChannel(requesterFallback.channel)
+          ? requesterFallback
+          : (requesterFallback ?? resolvedTarget);
     const targetChannel = announceTarget?.channel ?? "unknown";
 
     // A same-session send is a human-facing source-channel reply, not a true
