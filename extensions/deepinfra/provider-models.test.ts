@@ -59,25 +59,11 @@ function expectedStaticChatCatalog() {
   return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
 }
 
-function expectedLiveChatCatalog(liveModels: ReturnType<typeof expectedStaticChatCatalog>) {
-  const liveIds = new Set(liveModels.map((model) => model.id));
-  return [
-    ...liveModels,
-    ...expectedStaticChatCatalog()
-      .filter((model) => !liveIds.has(model.id))
-      .map((model) =>
-        Object.assign(model, { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }),
-      ),
-  ];
-}
-
 async function withFetchPathTest(
   mockFetch: ReturnType<typeof vi.fn>,
   envOverrides: Record<string, string | undefined>,
   runAssertions: () => Promise<void>,
 ) {
-  vi.stubEnv("NODE_ENV", undefined);
-  vi.stubEnv("VITEST", undefined);
   for (const [key, value] of Object.entries(envOverrides)) {
     vi.stubEnv(key, value);
   }
@@ -220,9 +206,9 @@ describe("hasDeepInfraApiKey", () => {
   });
 });
 
-describe("discoverDeepInfraModels (chat-only shim)", () => {
-  it("returns static catalog in test environment", async () => {
-    const models = await discoverDeepInfraModels({ env: { VITEST: "true" } });
+describe("discoverDeepInfraModels", () => {
+  it("returns static catalog without credentials", async () => {
+    const models = await discoverDeepInfraModels({ hasApiKey: false });
     const modelIds = models.map((m) => m.id);
     const streamingUsageIncompatibleModelIds = models
       .filter((m) => !m.compat?.supportsUsageInStreaming)
@@ -249,20 +235,18 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
       expect(fetchSignal).toBeInstanceOf(AbortSignal);
       expect(fetchHeaders).toBeInstanceOf(Headers);
       expect((fetchHeaders as Headers).get("Accept")).toBe("application/json");
-      expect(models).toEqual(
-        expectedLiveChatCatalog([
-          {
-            id: "openai/gpt-oss-120b",
-            name: "openai/gpt-oss-120b",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 131072,
-            maxTokens: 65536,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            compat: { supportsUsageInStreaming: true },
-          },
-        ]),
-      );
+      expect(models).toEqual([
+        {
+          id: "openai/gpt-oss-120b",
+          name: "openai/gpt-oss-120b",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 131072,
+          maxTokens: 65536,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          compat: { supportsUsageInStreaming: true },
+        },
+      ]);
     });
   });
 
@@ -369,7 +353,7 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
       const models = await discoverDeepInfraModels();
       expect(models.map((m) => m.id)).toEqual(
-        expectedLiveChatCatalog([
+        [
           {
             id: "openai/gpt-oss-120b",
             name: "openai/gpt-oss-120b",
@@ -380,7 +364,7 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             compat: { supportsUsageInStreaming: true },
           },
-        ]).map((model) => model.id),
+        ].map((model) => model.id),
       );
     });
   });
@@ -395,43 +379,60 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
     });
   });
 
-  it("falls back to the complete static catalog when both sources fail", async () => {
+  it("rejects a chat acquisition when both sources fail", async () => {
     const mockFetch = vi.fn().mockRejectedValue(new Error("network error"));
 
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      const models = await discoverDeepInfraModels();
-      expect(models).toEqual(expectedStaticChatCatalog());
+      await expect(discoverDeepInfraModels()).rejects.toThrow();
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 
-  it("falls back to the static catalog on non-2xx HTTP responses", async () => {
+  it("rejects non-2xx metadata despite successful pricing", async () => {
     const mockFetch = mockProjectionFetch(
       vi.fn().mockResolvedValue(new Response("", { status: 503 })),
     );
 
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      const models = await discoverDeepInfraModels();
-      expect(models.map((m) => m.id)).toEqual(expectedStaticChatCatalog().map((model) => model.id));
+      await expect(discoverDeepInfraModels()).rejects.toThrow("HTTP 503");
     });
   });
 
-  it("falls back without caching malformed successful model list payloads", async () => {
+  it.each([
+    {
+      payload: { data: {} },
+      error: "Live model catalog response must be an array or { data: [] }",
+    },
+    {
+      payload: { data: [{ id: "broken/model", metadata: true }] },
+      error: "metadata discovery unavailable",
+    },
+    {
+      payload: { data: [{ id: "broken/model", metadata: { tags: "chat" } }] },
+      error: "metadata discovery unavailable",
+    },
+    {
+      payload: { data: [{ id: "broken/model", metadata: { tags: [42] } }] },
+      error: "metadata discovery unavailable",
+    },
+    {
+      payload: { data: [makeAgentModelEntry(), { id: "broken/model", metadata: { tags: [42] } }] },
+      error: "metadata discovery unavailable",
+    },
+  ])("rejects malformed model payloads without caching them: %j", async ({ payload, error }) => {
     const mockFetch = mockProjectionFetch(
       vi
         .fn()
-        .mockResolvedValueOnce(jsonResponse({ data: {} }))
+        .mockResolvedValueOnce(jsonResponse(payload))
         .mockResolvedValueOnce(
           jsonResponse({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
         ),
     );
 
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
+      await expect(discoverDeepInfraModels()).rejects.toThrow(error);
       expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
-        expectedStaticChatCatalog().map((model) => model.id),
-      );
-      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
-        expectedLiveChatCatalog([
+        [
           {
             id: "recovered/model",
             name: "recovered/model",
@@ -442,7 +443,7 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             compat: { supportsUsageInStreaming: true },
           },
-        ]).map((model) => model.id),
+        ].map((model) => model.id),
       );
       expect(mockFetch).toHaveBeenCalledTimes(3);
     });
@@ -459,7 +460,7 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
     );
 
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      const expectedIds = expectedLiveChatCatalog([
+      const expectedIds = [
         {
           id: "first/model",
           name: "first/model",
@@ -470,14 +471,14 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           compat: { supportsUsageInStreaming: true },
         },
-      ]).map((model) => model.id);
+      ].map((model) => model.id);
       expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(expectedIds);
       expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(expectedIds);
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 
-  it("does not cache successful responses that produce no live catalog rows", async () => {
+  it("retains and caches a successful empty catalog", async () => {
     const mockFetch = mockProjectionFetch(
       vi
         .fn()
@@ -488,24 +489,9 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
     );
 
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
-        expectedStaticChatCatalog().map((model) => model.id),
-      );
-      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
-        expectedLiveChatCatalog([
-          {
-            id: "recovered/model",
-            name: "recovered/model",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 131072,
-            maxTokens: 65536,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            compat: { supportsUsageInStreaming: true },
-          },
-        ]).map((model) => model.id),
-      );
-      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(await discoverDeepInfraModels()).toEqual([]);
+      expect(await discoverDeepInfraModels()).toEqual([]);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 });
