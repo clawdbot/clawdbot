@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardStartResult } from "../../packages/gateway-protocol/src/index.js";
+import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -271,10 +272,14 @@ describe("gateway e2e", () => {
           callerAuthOverride.rateLimit!.maxAttempts = 99;
           callerTailscaleOverride.preserveFunnel = false;
         }
+        const sourceBeforeLoggingEdit = (await configIO.readConfigFileSnapshot()).sourceConfig;
         const nextLoggingSource = {
-          ...initialConfig,
-          logging: { level: "debug" },
+          ...sourceBeforeLoggingEdit,
+          logging: { ...sourceBeforeLoggingEdit.logging, level: "debug" },
         } satisfies OpenClawConfig;
+        const loggingChanges = new Set<string>();
+        collectChangedPaths(sourceBeforeLoggingEdit, nextLoggingSource, "", loggingChanges);
+        expect([...loggingChanges]).toEqual(["logging.level"]);
         await writeConfigFile(nextLoggingSource);
         await expect
           .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })

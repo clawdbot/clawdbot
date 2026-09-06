@@ -191,8 +191,11 @@ export async function verifyUpdateServing(
       response,
     };
     const readback = readUpdateServingTranscript(readbackParams);
-    if (!readback) {
-      return { status: "failed", reason: "persistence-missing" };
+    if (readback.status !== "persisted") {
+      return {
+        status: "failed",
+        reason: readback.status === "not-found" ? "persistence-missing" : readback.status,
+      };
     }
     stage = "gateway";
     // The original call closes after its final response. Reconnect explicitly to
@@ -227,7 +230,7 @@ export async function verifyUpdateServing(
     });
     return receipt.success
       ? { status: "verified", receipt: receipt.data }
-      : { status: "failed", reason: "persistence-missing" };
+      : { status: "failed", reason: "turn-incomplete" };
   } catch (error) {
     if (identityFailure) {
       return identityFailure;

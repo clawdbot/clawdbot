@@ -20,6 +20,7 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { printResult } from "./progress.js";
@@ -75,6 +76,8 @@ export type FinishUpdateParams = UpdateRestartParams & {
   packageUpdateNodeRunner?: string;
   packageTransaction?: PackageUpdateTransaction;
   schemaVersions?: UpdateStateSchemaVersion[];
+  candidateSchemaVersions?: OpenClawSchemaVersions;
+  previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
   rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
 };
@@ -109,12 +112,16 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   });
   const recordNextAction = (result: UpdateRunResult) => {
     const run = params.opts.run;
+    const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
     const nextAction = resolveUpdateResultNextAction({
       result,
-      managedGatewayStopped: params.preManagedServiceStop?.stopped === true,
+      serviceRunning: active?.verification.serviceRunning,
+      runningVersion: active?.verification.runningVersion,
+      verificationFailure: active?.steps.findLast(
+        (step) => step.step === "gateway verification" && step.status === "failed",
+      )?.detail,
       env: run?.env ?? params.ownedManagedUpdateEnv ?? process.env,
     });
-    const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
     if (run && active?.status === "running" && active.origin.nextAction !== nextAction) {
       recordUpdateRunPhase(run.runId, active.phase, { origin: { nextAction } }, { env: run.env });
     }
@@ -158,6 +165,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           packageTransaction: params.packageTransaction,
           rollbackBlockedReason: params.rollbackBlockedReason,
           schemaVersions: params.schemaVersions,
+          candidateSchemaVersions: params.candidateSchemaVersions,
+          previousSchemaVersions: params.previousSchemaVersions,
           previousVerified: params.previousVerified,
           config:
             params.configSnapshot.sourceConfigBeforeMigrations ??
@@ -304,6 +313,12 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         finalResult.steps = [...finalResult.steps, retained];
       }
     }
+    if (finalResult.status === "error" && !rolledBack && params.preManagedServiceStop?.stopped) {
+      await recordFailedUpdateGatewayState(
+        params.opts.run,
+        currentServiceStop()?.serviceEnv ?? process.env,
+      );
+    }
     recordNextAction(finalResult);
     if (notify) {
       await writeControlPlaneUpdateRestartSentinelBestEffort({
@@ -311,12 +326,6 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         result: finalResult,
         jsonMode: Boolean(params.opts.json),
       });
-    }
-    if (finalResult.status === "error" && !rolledBack && params.preManagedServiceStop?.stopped) {
-      await recordFailedUpdateGatewayState(
-        params.opts.run,
-        params.preManagedServiceStop.serviceEnv ?? process.env,
-      );
     }
     // The recovering Gateway reads this notification at startup. Persist once
     // before restarting; rewriting a consumed sentinel could deliver it twice.
