@@ -45,6 +45,8 @@ export type ModelCatalogEntry = {
   params?: Record<string, unknown>;
   compat?: ModelCompatConfig;
   mediaInput?: ModelMediaInputConfig;
+  /** Auth profile id this entry was discovered through (e.g. "openai:owndate1"). */
+  profileId?: string;
   status?: ModelCatalogStatus;
   statusReason?: string;
   replaces?: string[];

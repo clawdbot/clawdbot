@@ -441,9 +441,10 @@ async function resolveLiteralPrefixProviderIds(params: {
   return ids;
 }
 
-function modelCatalogEntryKey(entry: { provider: string; id: string }): string {
+function modelCatalogEntryKey(entry: { provider: string; id: string; profileId?: string }): string {
   const normalizedRef = normalizeModelRef(entry.provider, entry.id);
-  return modelKey(normalizedRef.provider, normalizedRef.model);
+  const baseKey = modelKey(normalizedRef.provider, normalizedRef.model);
+  return entry.profileId ? `${baseKey}@${entry.profileId}` : baseKey;
 }
 
 async function addModelSelectOption(params: {
@@ -455,6 +456,7 @@ async function addModelSelectOption(params: {
     reasoning?: boolean;
     api?: string | null;
     baseUrl?: unknown;
+    profileId?: string;
   };
   options: WizardSelectOption[];
   seen: Set<string>;
@@ -496,6 +498,9 @@ async function addModelSelectOption(params: {
   });
   if (routeHint) {
     hints.push(routeHint);
+  }
+  if (params.entry.profileId) {
+    hints.push(`profile: ${params.entry.profileId}`);
   }
   if (
     !(await params.hasAuth(normalizedRef.provider, {
