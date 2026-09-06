@@ -1372,16 +1372,36 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         if (!qualityGuardEnabled) {
           return compactionResult(finalized.summary);
         }
-        if (finalized.qualityRetentionInfeasible) {
+        // One degraded path for every non-transport quality exhaustion. Cancelling
+        // here strands the session: the transcript never shrinks, so every later
+        // turn fails preflight the same way and the user has no way out. A lossy
+        // summary beats an uncompactable session. Genuinely unrecoverable paths
+        // (LLM throw, no model, no API key) still cancel above.
+        const degradeToFallbackSummary = async (diagnostic: string) => {
           log.warn(
-            "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
+            `Compaction safeguard: ${diagnostic}; using degraded fallback summary; ` +
+              "reasonCode=quality_guard_degraded_fallback",
+          );
+          const degraded = await finalizeSummaryText(
+            buildStructuredFallbackSummary(effectivePreviousSummary),
+            {
+              // The generated split-turn prefix is separately summarized context.
+              // Omitting it here silently drops the active request on this path,
+              // which normal finalization above preserves.
+              generatedSplitTurnSection: splitTurnSectionLocal
+                ? `\n\n${splitTurnSectionLocal}`
+                : undefined,
+              preservedTurnsSection: preservedTurnsSectionLocal,
+            },
+            producerLosses,
+          );
+          return compactionResult(degraded.summary);
+        };
+        if (finalized.qualityRetentionInfeasible) {
+          return degradeToFallbackSummary(
+            "required quality facts exceed finalized artifact budget; " +
               `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
           );
-          setCompactionSafeguardCancellation(
-            ctx.sessionManager,
-            "Compaction safeguard required facts exceed the finalized summary budget.",
-          );
-          return { cancel: true };
         }
         const quality = auditSummaryQuality({
           summary: finalized.summary,
@@ -1400,15 +1420,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           const reasonCodes = [
             ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),
           ];
-          log.warn(
-            "Compaction safeguard: finalized summary failed quality checks; " +
+          return degradeToFallbackSummary(
+            "final quality attempt failed; " +
               `reasonCodes=${reasonCodes.join(",")} reasonCount=${quality.reasons.length}`,
           );
-          setCompactionSafeguardCancellation(
-            ctx.sessionManager,
-            "Compaction safeguard finalized summary failed quality checks.",
-          );
-          return { cancel: true };
         }
         const reasons = quality.reasons.join(", ");
         const qualityFeedbackInstruction =

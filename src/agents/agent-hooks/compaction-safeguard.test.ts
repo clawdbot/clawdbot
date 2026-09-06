@@ -2870,7 +2870,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
-  it("fails closed when audit-required tail sections cannot fit the artifact cap", async () => {
+  it("degrades when audit-required tail sections cannot fit the artifact cap", async () => {
     mockSummarizeInStages.mockReset();
     const latestAsk = "preserve the pending deployment status";
     const identifier = `https://example.com/${"a".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`;
@@ -2906,11 +2906,16 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
 
-    expect(result).toEqual({ cancel: true });
+    // This path used to cancel before the audit ran at all, so the transcript
+    // never shrank and every later turn failed the same preflight. It now takes
+    // the same degraded route as an exhausted audit.
+    expect(result).not.toEqual({ cancel: true });
+    expect(expectCompactionResult(result).summary).toBeTruthy();
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
-      "Compaction safeguard required facts exceed the finalized summary budget.",
-    );
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
+    const retentionWarnings = compactionLogger.warn.mock.calls.flat().join("\n");
+    expect(retentionWarnings).toContain("reasonCode=quality_guard_degraded_fallback");
+    expect(retentionWarnings).toContain("required quality facts exceed finalized artifact budget");
   });
 
   it("restores source ask evidence omitted by the split-turn summary", async () => {
@@ -3733,6 +3738,135 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(auditInput.summary).toContain(latestAsk);
     expect(mockAuditSummaryQuality.mock.results[0]?.value).toEqual({ ok: true, reasons: [] });
     expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
+  });
+
+  it("retains the generated split-turn section when a final audit failure degrades to the fallback", async () => {
+    mockSummarizeInStages.mockReset();
+    const splitAsk = "report the split-turn deployment status";
+    const splitIdentifier = "/tmp/split-turn-degraded.log";
+    const splitMarker = "split-turn-prefix-marker-9f3a";
+    const historySummary = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Preserve exact context.",
+      "## Pending user asks",
+      "Continue the active work.",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(historySummary))
+      .mockResolvedValueOnce(summaryResult(`${splitMarker} ${splitAsk} ${splitIdentifier}`));
+    // Force the terminal audit failure directly. This test is about what the
+    // degraded artifact carries, not about how the audit reaches its verdict.
+    mockAuditSummaryQuality.mockReturnValue({
+      ok: false,
+      reasons: [`missing_identifiers:${splitIdentifier}`],
+    });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 0,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "summarize earlier work", timestamp: 1 },
+        ] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user", content: `${splitAsk} ${splitIdentifier}`, timestamp: 2 },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    // Normal finalization passes generatedSplitTurnSection; the degraded path
+    // must too, or the separately summarized turn prefix - the active request -
+    // is silently dropped on this terminal path only.
+    expect(result).not.toEqual({ cancel: true });
+    expect(expectCompactionResult(result).summary).toContain(splitMarker);
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
+  });
+
+  it("retains the generated split-turn section when retention infeasibility degrades to the fallback", async () => {
+    mockSummarizeInStages.mockReset();
+    const splitAsk = "report the split-turn retention status";
+    const splitIdentifier = "/tmp/split-turn-retention.log";
+    const splitMarker = "split-turn-retention-marker-4c7b";
+    // The history-side required tail cannot fit the artifact budget, so this
+    // returns through the retention branch before the audit runs at all.
+    const oversizedIdentifier = `https://example.com/${"a".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`;
+    const historySummary = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Preserve exact context.",
+      "## Pending user asks",
+      "Continue the active work.",
+      "## Exact identifiers",
+      oversizedIdentifier,
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(historySummary))
+      .mockResolvedValueOnce(summaryResult(`${splitMarker} ${splitAsk} ${splitIdentifier}`));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 0,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "user",
+            content: `summarize earlier work ${oversizedIdentifier}`,
+            timestamp: 1,
+          },
+        ] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user", content: `${splitAsk} ${splitIdentifier}`, timestamp: 2 },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    // Both terminal quality paths route through one degraded finalizer. The
+    // audit-failure path is covered above; this pins the retention path to the
+    // same composition, so a future refactor cannot hand one owner a different
+    // artifact than the other.
+    expect(result).not.toEqual({ cancel: true });
+    expect(expectCompactionResult(result).summary).toContain(splitMarker);
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
+    const retentionWarnings = compactionLogger.warn.mock.calls.flat().join("\n");
+    expect(retentionWarnings).toContain("reasonCode=quality_guard_degraded_fallback");
+    expect(retentionWarnings).toContain("required quality facts exceed finalized artifact budget");
   });
 
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
