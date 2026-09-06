@@ -1,4 +1,4 @@
-// Gateway-owned GPT-Live bridge over the Platform-key Frameless Bidi transport.
+// Gateway-owned GPT-Live bridge over released WebRTC and unlisted direct transport.
 import { randomUUID } from "node:crypto";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -36,6 +36,7 @@ import {
   type OpenAIQuicksilverAuth,
   type OpenAIQuicksilverRequestIds,
 } from "./realtime-quicksilver-wire.js";
+import { isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 
 const RELAY_SAMPLE_RATE = 24_000;
 const QUICKSILVER_SESSION_TTL_MS = 30 * 60_000;
@@ -198,7 +199,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         sessionId: randomUUID(),
         threadId: randomUUID(),
       };
-      if (auth.type === "api-key") {
+      if (auth.type === "api-key" && !isSupportedOpenAIGptLiveModel(this.config.model)) {
         await this.connectDirect(auth, requestIds, connectSignal);
       } else {
         await this.connectWebRtc(auth, requestIds, connectSignal);
@@ -248,7 +249,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   }
 
   private async connectWebRtc(
-    auth: Extract<OpenAIQuicksilverAuth, { type: "oauth" }>,
+    auth: OpenAIQuicksilverAuth,
     requestIds: OpenAIQuicksilverRequestIds,
     connectSignal: AbortSignal,
   ): Promise<void> {

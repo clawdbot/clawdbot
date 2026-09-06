@@ -349,9 +349,9 @@ OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. The
 released route remains available in **Settings → Talk**. Account-issued,
 unlisted routes can be set in `talk.realtime.model`, but are not published
 through catalogs or diagnostics. Browser Talk uses client WebRTC with
-Gateway-owned control. Gateway relay uses Gateway-owned WebRTC for released-route
-OAuth and the direct bidirectional transport for Platform authentication. Other
-backend consumers use the direct Platform-only transport.
+Gateway-owned control. Gateway relay uses Gateway-owned WebRTC for the released
+route with either OAuth or Platform fallback. Unlisted routes and other backend
+consumers use the direct Platform-only transport.
 
 For browser and Gateway-relay Talk, the released route prefers an OpenClaw
 ChatGPT OAuth profile and falls back to Platform API-key authentication.

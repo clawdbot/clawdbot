@@ -20,6 +20,7 @@ import {
   connectOpenAIQuicksilverSideband,
   type OpenAIQuicksilverSocketFactory,
 } from "./realtime-quicksilver-sideband.js";
+import { OPENAI_GPT_LIVE_MODELS } from "./realtime-quicksilver.js";
 import {
   createCallResponse,
   emitSideband,
@@ -880,7 +881,7 @@ describe("GPT-Live gateway relay bridge", () => {
     await vi.waitFor(() => expect(closePeer).toHaveBeenCalledOnce());
   });
 
-  it("signals, delegates through the injected runner, drops sideband audio, and tears down", async () => {
+  it("uses released Platform WebRTC, delegates, drops sideband audio, and tears down", async () => {
     let socket: FakeSocket | undefined;
     const applyAnswer = vi.fn(async () => undefined);
     const closePeer = vi.fn();
@@ -908,8 +909,8 @@ describe("GPT-Live gateway relay bridge", () => {
     const bridge = new OpenAIQuicksilverGatewayBridge(
       {
         providerConfig: {},
-        model: "gpt-live-test-canary",
-        voice: "marin",
+        model: OPENAI_GPT_LIVE_MODELS[0],
+        voice: "cove",
         instructions: "Speak briefly.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
         onAudio,
@@ -921,9 +922,8 @@ describe("GPT-Live gateway relay bridge", () => {
         runAgentConsult,
         logger: { debug: vi.fn(), warn: vi.fn() },
         resolveAuth: vi.fn(async () => ({
-          type: "oauth" as const,
-          token: "oauth-token",
-          accountId: "account-1",
+          type: "api-key" as const,
+          token: "test-api-key",
         })),
         createPeer: vi.fn(async () => peer),
         fetchImpl,
@@ -935,25 +935,31 @@ describe("GPT-Live gateway relay bridge", () => {
       openAIRealtimeHost,
     );
 
-    await bridge.connect();
+    const connection = bridge.connect();
+    await vi.waitFor(() => expect(socket).toBeDefined());
     if (!socket) {
       throw new Error("expected sideband socket");
     }
     const connectedSocket = socket;
-    const body = fetchImpl.mock.calls[0]?.[1]?.body;
-    if (typeof body !== "string") {
-      throw new Error("Expected initial call JSON");
-    }
-    expect(JSON.parse(body).session.delegation).toEqual({ type: "client", ack_filler: false });
-    expect(JSON.parse(body).session.instructions).toContain("Wait for the host control result");
-    expect(createOffer).toHaveBeenCalledOnce();
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(applyAnswer).toHaveBeenCalledWith("v=answer\r\n");
-    expect(adoptPendingAudio).not.toHaveBeenCalled();
     emitSideband(connectedSocket, {
       type: "session.started",
       session: { id: "rtc_bridge", expires_at: Math.floor(Date.now() / 1000) + 60 },
     });
+    await connection;
+    const body = fetchImpl.mock.calls[0]?.[1]?.body;
+    if (typeof body !== "string") {
+      throw new Error("Expected initial call body");
+    }
+    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toMatchObject({
+      "Content-Type": expect.stringMatching(/^multipart\/form-data; boundary=/),
+    });
+    expect(body).toContain('"delegation":{"type":"client","ack_filler":false}');
+    expect(body).toContain("Wait for the host control result");
+    expect(createOffer).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(applyAnswer).toHaveBeenCalledWith("v=answer\r\n");
+    expect(adoptPendingAudio).not.toHaveBeenCalled();
+    expect(parseSent(connectedSocket).some((event) => event.type === "session.update")).toBe(false);
     expect(onReady).toHaveBeenCalledOnce();
     bridge.sendUserMessage("Ready for the next task");
     expect(parseSent(connectedSocket)).toEqual([
