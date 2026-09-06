@@ -438,7 +438,13 @@ function buildBatchPayload(items: readonly TranslationBatchItem[]) {
       (item) =>
         [
           item.key,
-          item.sourcePath ? { text: item.text, sourcePath: item.sourcePath } : item.text,
+          item.sourcePath
+            ? {
+                text: item.text,
+                sourcePath: item.sourcePath,
+                sourceContext: item.sourceContext,
+              }
+            : item.text,
         ] as const,
     ),
   );
@@ -452,7 +458,8 @@ export function buildBatchPrompt(
   const lines = ["Translate this JSON object.", "Return ONLY a JSON object with the same keys."];
   if (items.some((item) => item.sourcePath)) {
     lines.push(
-      "For object values, translate only text. Use sourcePath to understand the native UI owner and disambiguate its meaning; source paths are context, not text to translate.",
+      "For object values, translate only text. Use sourcePath and the bounded sourceContext excerpt to understand the native UI owner and disambiguate its meaning; these fields are context, not text to translate.",
+      "Preserve the source order and meaning of unnumbered printf arguments. Rephrase surrounding prose rather than swapping the roles of argument values. Preserve literal percent escapes exactly.",
       "Return each id mapped directly to its translated string, without the context fields.",
     );
   }
@@ -1111,6 +1118,7 @@ type NativeTranslationEntry = {
   id: string;
   source: string;
   sourcePath: string;
+  sourceContext?: string;
 };
 
 export async function translateNativeEntries(
@@ -1128,6 +1136,7 @@ export async function translateNativeEntries(
     text: entry.source,
     textHash: hashControlUiTranslationText(entry.source),
     sourcePath: entry.sourcePath,
+    sourceContext: entry.sourceContext,
   }));
   const batches = buildTranslationBatches(pending);
   const clientAccess = createTranslationClientAccess(targetLocale, glossary);

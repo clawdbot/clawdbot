@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
+import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { selectDeterministicTranslation } from "./android-app-i18n.ts";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
@@ -18,6 +19,8 @@ export type NativeI18nEntry = {
   source: string;
   surface: NativeI18nSurface;
   sites: NativeI18nSite[];
+  /** Request-only owner excerpt; never persisted in the source inventory. */
+  sourceContext?: string;
 };
 
 export type NativeI18nSite = {
@@ -35,6 +38,7 @@ type Candidate = NativeI18nSite & {
   line: number;
   source: string;
   surface: NativeI18nSurface;
+  sourceContext?: string;
 };
 type NativeTranslationArtifactV1 = {
   entries: Array<{ id: string; source: string; translated: string }>;
@@ -99,6 +103,7 @@ const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
 const NATIVE_FORMAT_RE = /%(?:%|(?:\d+\$)?[@a-z])/giu;
 const NATIVE_SOURCE_READ_CONCURRENCY = 32;
+const NATIVE_SOURCE_CONTEXT_MAX_CHARS = 1200;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
@@ -1180,7 +1185,7 @@ export function extractNativeI18nCandidates(
       }
     }
   }
-  return [
+  const unique = [
     ...new Map(
       entries.map((entry) => [
         [entry.surface, entry.path, entry.kind, entry.source].join("\u0000"),
@@ -1188,6 +1193,20 @@ export function extractNativeI18nCandidates(
       ]),
     ).values(),
   ];
+  const lines = source.split(/\r?\n/u);
+  const beforeBudget = Math.floor(NATIVE_SOURCE_CONTEXT_MAX_CHARS / 3);
+  for (const entry of unique) {
+    const index = entry.line - 1;
+    const before = lines.slice(Math.max(0, index - 8), index).join("\n");
+    const after = lines.slice(index, index + 9).join("\n");
+    entry.sourceContext = [
+      sliceUtf16Safe(before, -beforeBudget),
+      sliceUtf16Safe(after, 0, NATIVE_SOURCE_CONTEXT_MAX_CHARS - beforeBudget - 1),
+    ]
+      .join("\n")
+      .trim();
+  }
+  return unique;
 }
 
 async function walkFiles(root: string, surface: NativeI18nSurface): Promise<string[]> {
@@ -1224,22 +1243,18 @@ function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "source" | "surface">)
 }
 
 export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEntry[] {
-  const sitesByIdentity = new Map<string, Map<string, NativeI18nSite>>();
+  const sitesByIdentity = new Map<string, Map<string, Candidate>>();
   const entryByIdentity = new Map<string, Pick<NativeI18nEntry, "source" | "surface">>();
   for (const candidate of entries) {
     const identity = nativeEntryIdentity(candidate);
     entryByIdentity.set(identity, { source: candidate.source, surface: candidate.surface });
-    const sites = sitesByIdentity.get(identity) ?? new Map<string, NativeI18nSite>();
-    const site = { kind: candidate.kind, path: candidate.path };
-    sites.set(`${site.path}\u0000${site.kind}`, site);
+    const sites = sitesByIdentity.get(identity) ?? new Map<string, Candidate>();
+    sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
     sitesByIdentity.set(identity, sites);
   }
   return [...entryByIdentity]
-    .map(([identity, entry]) => ({
-      id: `native.${entry.surface}.${createHash("sha256").update(identity).digest("hex").slice(0, 16)}`,
-      source: entry.source,
-      surface: entry.surface,
-      sites: [
+    .map(([identity, entry]) => {
+      const sites = [
         ...expectDefined(
           sitesByIdentity.get(identity),
           `native i18n sites for ${identity}`,
@@ -1247,8 +1262,16 @@ export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEn
       ].toSorted(
         (left, right) =>
           compareCodePoints(left.path, right.path) || compareCodePoints(left.kind, right.kind),
-      ),
-    }))
+      );
+      const sourceContext = sites[0]?.sourceContext;
+      return {
+        id: `native.${entry.surface}.${createHash("sha256").update(identity).digest("hex").slice(0, 16)}`,
+        source: entry.source,
+        surface: entry.surface,
+        sites: sites.map(({ kind, path: sitePath }) => ({ kind, path: sitePath })),
+        sourceContext,
+      };
+    })
     .toSorted(
       (left, right) =>
         compareCodePoints(left.surface, right.surface) ||
@@ -1336,7 +1359,8 @@ export function serializeNativeI18nInventory(entries: readonly NativeI18nEntry[]
     '  "version": 2,',
     '  "entries": [',
     ...entries.map(
-      (entry, index) => `    ${JSON.stringify(entry)}${index === entries.length - 1 ? "" : ","}`,
+      ({ id, source, surface, sites }, index) =>
+        `    ${JSON.stringify({ id, source, surface, sites })}${index === entries.length - 1 ? "" : ","}`,
     ),
     "  ]",
     "}",
@@ -1666,6 +1690,7 @@ export async function syncNativeLocale(
       id: entry.id,
       source: entry.source,
       sourcePath: entry.sites[0]?.path ?? "apps/.i18n/native-source.json",
+      sourceContext: entry.sourceContext,
     }));
   // Default v1 migration is provider-free; an explicit refresh also completes
   // its ordinary pending work instead of silently carrying selected translations.

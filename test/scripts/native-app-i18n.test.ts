@@ -62,7 +62,12 @@ describe("native app i18n inventory", () => {
       },
     ] satisfies NativeI18nEntry[];
 
-    const serialized = serializeNativeI18nInventory(entries);
+    const contextualEntries: NativeI18nEntry[] = [...entries];
+    contextualEntries[0] = {
+      ...expectDefined(entries[0], "first inventory entry"),
+      sourceContext: "request-only owner excerpt",
+    };
+    const serialized = serializeNativeI18nInventory(contextualEntries);
     const lines = serialized.trimEnd().split("\n");
 
     expect(JSON.parse(serialized)).toEqual({ version: 2, entries });
@@ -72,6 +77,36 @@ describe("native app i18n inventory", () => {
       `    ${JSON.stringify(entries[1])}`,
     ]);
     expect(serialized.endsWith("\n")).toBe(true);
+  });
+
+  it("carries bounded nearby owner code without changing stable inventory data", () => {
+    const source = [
+      `// distant prefix ${"x".repeat(2000)}`,
+      "fun statusRow(runPending: Boolean) {",
+      "  Button(enabled = !runPending) {",
+      '    Text("Run Pending")',
+      "  }",
+      `// trailing owner text ${"💡".repeat(1000)}`,
+      "}",
+    ].join("\n");
+    const candidates = extractNativeI18nCandidates("android", "apps/android/Status.kt", source);
+    const secondary = extractNativeI18nCandidates(
+      "android",
+      "apps/android/ZStatus.kt",
+      'Text("Run Pending")',
+    );
+    const entries = assignNativeI18nIds([...secondary, ...candidates]);
+    const entry = expectDefined(
+      entries.find((item) => item.source === "Run Pending"),
+      "status label",
+    );
+
+    expect(entry.sourceContext).toContain("Button(enabled = !runPending)");
+    expect(entry.sourceContext).toContain('Text("Run Pending")');
+    expect(entry.sourceContext?.length).toBeLessThanOrEqual(1200);
+    expect(assignNativeI18nIds([...candidates, ...secondary])).toEqual(entries);
+    expect(serializeNativeI18nInventory(entries)).not.toContain("sourceContext");
+    expect(serializeNativeI18nInventory(entries)).not.toContain("Button(enabled");
   });
 
   it("merges sites and hashes only surface plus source", () => {
