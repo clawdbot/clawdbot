@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId, normalizeChatChannelId } from "../../channels/registry.js";
@@ -257,6 +257,32 @@ function buildEmbeddedRunBaseParams(params: Parameters<typeof buildEmbeddedRunBa
   });
 }
 
+/**
+ * Overlays a reply route's originating fields onto the session context so
+ * threading and routable-target resolution key on the actual delivery peer.
+ * Shared by the embedded and CLI-backend candidate paths.
+ */
+export function buildReplyRouteSessionCtx(params: {
+  sessionCtx: TemplateContext;
+  replyRoute?: EmbeddedReplyRoute;
+  run: Pick<FollowupRun["run"], "agentAccountId" | "chatType">;
+}): TemplateContext & { ChatType?: ChatType } {
+  const { sessionCtx, replyRoute, run } = params;
+  return {
+    ...sessionCtx,
+    OriginatingChannel: replyRoute?.originatingChannel ?? sessionCtx.OriginatingChannel,
+    OriginatingTo: replyRoute?.originatingTo ?? sessionCtx.OriginatingTo,
+    AccountId: replyRoute?.originatingAccountId ?? sessionCtx.AccountId ?? run.agentAccountId,
+    ChatType:
+      normalizeChatType(replyRoute?.originatingChatType) ??
+      normalizeChatType(sessionCtx.ChatType) ??
+      run.chatType,
+    MessageThreadId: replyRoute?.originatingThreadId ?? sessionCtx.MessageThreadId,
+    ReplyToId: replyRoute?.originatingReplyToId ?? sessionCtx.ReplyToId,
+    ReplyToMode: replyRoute?.originatingReplyToMode ?? sessionCtx.ReplyToMode,
+  };
+}
+
 function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;
@@ -264,23 +290,11 @@ function buildEmbeddedContextFromTemplate(params: {
   hasRepliedRef: { value: boolean } | undefined;
 }) {
   const config = params.run.config;
-  const sessionCtx = {
-    ...params.sessionCtx,
-    OriginatingChannel:
-      params.replyRoute?.originatingChannel ?? params.sessionCtx.OriginatingChannel,
-    OriginatingTo: params.replyRoute?.originatingTo ?? params.sessionCtx.OriginatingTo,
-    AccountId:
-      params.replyRoute?.originatingAccountId ??
-      params.sessionCtx.AccountId ??
-      params.run.agentAccountId,
-    ChatType:
-      normalizeChatType(params.replyRoute?.originatingChatType) ??
-      normalizeChatType(params.sessionCtx.ChatType) ??
-      params.run.chatType,
-    MessageThreadId: params.replyRoute?.originatingThreadId ?? params.sessionCtx.MessageThreadId,
-    ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
-    ReplyToMode: params.replyRoute?.originatingReplyToMode ?? params.sessionCtx.ReplyToMode,
-  };
+  const sessionCtx = buildReplyRouteSessionCtx({
+    sessionCtx: params.sessionCtx,
+    replyRoute: params.replyRoute,
+    run: params.run,
+  });
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,

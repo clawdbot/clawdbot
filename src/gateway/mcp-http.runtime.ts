@@ -222,6 +222,9 @@ export class McpLoopbackToolCache {
       params.messageProvider ?? "",
       clientCapsCacheKey,
       params.currentChannelId ?? "",
+      // Same native channel but a different routable target must not reuse stale
+      // tool schemas: the send-ledger key is derived from the routable target.
+      params.currentMessagingTarget ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId ?? "",
       params.replyToMode ?? "",

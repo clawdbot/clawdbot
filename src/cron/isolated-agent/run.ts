@@ -4,8 +4,10 @@ import {
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import { clearTurnSendLedgerForRun } from "../../agents/tools/turn-send-ledger.js";
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -115,6 +117,8 @@ export async function runCronIsolatedAgentTurn(
     return { ...prepared.result, admissionDisposition: "rejected" };
   }
   const preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
+  // Capture the stable run id before execution can rotate its persisted session.
+  const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
   let leaseActive = true;
   // Accounting, delivery, and teardown use the same metadata as inference. Keep
   // the lease open until cleanup finishes, then fence detached borrowed work.
@@ -123,8 +127,6 @@ export async function runCronIsolatedAgentTurn(
       preparedRuntimeLease.pluginGeneration,
       () =>
         withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, async () => {
-          // Capture the stable run id before execution can rotate its persisted session.
-          const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
           const ownsRunContext = params.job.sessionTarget === "isolated";
           let runContextOwnerToken: string | undefined;
           let runLifecycleGeneration = admittedLifecycleGeneration;
@@ -412,6 +414,31 @@ export async function runCronIsolatedAgentTurn(
     );
   } finally {
     leaseActive = false;
-    preparedRuntimeLease.release();
+    try {
+      preparedRuntimeLease.release();
+    } finally {
+      // Guarantee the per-turn send budget is released at the cron logical-run terminal,
+      // even if a candidate deferred its own cleanup (a non-final fallback failure) and the
+      // fallback chain then threw before a later candidate settled. Cron reuses its durable
+      // session id as the runId, so a leaked slot would suppress the next scheduled turn's
+      // genuine send. The key mirrors the loopback grant exactly (resolveCliMcpSessionKey
+      // canonicalizes the main alias); the CLI settlement terminal clears the same slot on
+      // ordinary success/failure, so this is a bounded safety net, not the primary owner.
+      try {
+        clearTurnSendLedgerForRun({
+          agentId: prepared.context.agentId,
+          sessionKey: canonicalizeMainSessionAlias({
+            cfg: prepared.context.cfgWithAgentDefaults,
+            agentId: prepared.context.agentId,
+            sessionKey: prepared.context.runSessionKey?.trim() || "main",
+          }),
+          runId: initialSessionId,
+        });
+      } catch (ledgerError) {
+        logWarn(
+          `[cron:${params.job.id}] Failed to clear per-turn send ledger during cleanup: ${String(ledgerError)}`,
+        );
+      }
+    }
   }
 }

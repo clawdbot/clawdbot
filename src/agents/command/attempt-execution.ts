@@ -1126,6 +1126,7 @@ export function runAgentAttempt(params: {
               (completionNeedsMessageDelivery
                 ? (params.opts.replyTo ?? params.opts.to)
                 : undefined),
+            currentMessagingTarget: params.runContext.currentMessagingTarget,
             chatId: params.runContext.chatId,
             channelContext: params.runContext.channelContext,
             currentThreadTs: params.runContext.currentThreadTs,
@@ -1323,6 +1324,7 @@ export function runAgentAttempt(params: {
     groupSpace: params.runContext.groupSpace,
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
+    currentMessagingTarget: params.runContext.currentMessagingTarget,
     chatId: params.runContext.chatId,
     channelContext: params.runContext.channelContext,
     currentThreadTs: params.runContext.currentThreadTs,

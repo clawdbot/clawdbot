@@ -33,6 +33,7 @@ import {
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
+import { buildReplyRouteSessionCtx, buildThreadingToolContext } from "./agent-runner-utils.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -96,6 +97,18 @@ export async function runCliFallbackCandidate(
     ? turn.sessionCtx.ReplyToId
     : (turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid);
   const commandDetailsVisible = turn.resolvedVerboseLevel === "full";
+  // Resolve the routable delivery target the same way the embedded path does so
+  // the per-turn send ledger keys the current-source send on the same peer that
+  // conversations_send uses. currentChannelId keeps its existing native semantics.
+  const cliCurrentMessagingTarget = buildThreadingToolContext({
+    sessionCtx: buildReplyRouteSessionCtx({
+      sessionCtx: turn.sessionCtx,
+      replyRoute: turn.followupRun,
+      run: turn.followupRun.run,
+    }),
+    config: params.runtimeConfig,
+    hasRepliedRef: turn.opts?.hasRepliedRef,
+  }).currentMessagingTarget;
   const cliToolSummaryTracker = createCliToolSummaryTracker({
     detailMode: turn.toolProgressDetail,
     commandDetailsVisible,
@@ -405,6 +418,7 @@ export async function runCliFallbackCandidate(
             clientCaps: turn.followupRun.run.clientCaps,
             currentChannelId:
               turn.followupRun.originatingTo ?? turn.sessionCtx.OriginatingTo ?? turn.sessionCtx.To,
+            currentMessagingTarget: cliCurrentMessagingTarget,
             senderId: turn.followupRun.run.senderId,
             senderName: turn.followupRun.run.senderName,
             senderUsername: turn.followupRun.run.senderUsername,

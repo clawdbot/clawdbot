@@ -454,6 +454,10 @@ const config = {
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
+    // Focused per-turn send-budget tests assert the ledger's caps, peek accessor, reset seam,
+    // and reservation result/handle types; production wires only the reserve/commit/release
+    // helpers and key builders, so the module keeps those exports test-only in the prod graph.
+    "src/agents/tools/turn-send-ledger.ts": ["exports", "types"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],

@@ -31,6 +31,7 @@ import type {
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
+import { clearTurnSendLedgerForRun } from "../tools/turn-send-ledger.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
@@ -660,6 +661,20 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
         lease: contextEngineLogicalTurnLease,
       });
     }
+    // Reset the per-turn send budget once the whole logical run terminates. This is the
+    // fallback-chain boundary, not the per-candidate run-loop.ts `finally`: internal
+    // retries and provider fallbacks reuse this runId and must keep the same budget, so
+    // the opt-in hard cap holds for the entire turn (turn-send-ledger.ts). By here every
+    // candidate's tool work has settled (runWithModelFallback awaited the run() calls),
+    // so no reservation is in flight. Rebuild the exact session slot the send tools wrote
+    // under: their agentSessionKey resolves to `sessionKey?.trim() || sessionId`
+    // (embedded-agent-runner/run/attempt-setup.ts), so mirror that here or the delete
+    // misses the slot. A missing scope or absent slot is a harmless no-op.
+    clearTurnSendLedgerForRun({
+      agentId: params.identity.agentId,
+      sessionKey: params.identity.sessionKey?.trim() || params.identity.sessionId,
+      runId: params.identity.runId,
+    });
     await contextEngineLogicalTurnLease.dispose();
   }
 }

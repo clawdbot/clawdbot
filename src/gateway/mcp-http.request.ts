@@ -423,6 +423,9 @@ export function resolveMcpRequestContext(
       messageProvider: undefined,
       clientCaps: undefined,
       currentChannelId: undefined,
+      // Routable target is a bound-context-only authority; a grant-authenticated
+      // caller can never supply it via a spoofable request header.
+      currentMessagingTarget: undefined,
       currentThreadTs: undefined,
       currentMessageId: undefined,
       currentInboundAudio: undefined,

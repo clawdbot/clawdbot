@@ -1,4 +1,4 @@
-export const TSGO_CORE_TEST_MAX_ROOTS = 720;
+export const TSGO_CORE_TEST_MAX_ROOTS = 730;
 
 export const TSGO_CORE_TEST_SHARDS = [
   {

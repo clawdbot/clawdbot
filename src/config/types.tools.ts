@@ -586,4 +586,15 @@ export type MessageToolsConfig = {
     /** Enable broadcast action (default: true). */
     enabled?: boolean;
   };
+  /**
+   * Hard cap on successful message-tool sends to the same target within one turn
+   * (agent run). Unset disables the cap; the always-on soft receipt is unaffected.
+   */
+  maxMessagesPerTurnPerTarget?: number;
+  /**
+   * Enable the soft reminder appended to tool results from the second same-target
+   * send onward within one turn. Unset defaults to on; set false to disable only
+   * the nudge text. The per-turn send counting and hard cap are unaffected.
+   */
+  turnSendNudge?: boolean;
 };

@@ -238,6 +238,8 @@ export type RunCliAgentParams = {
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
   currentChannelId?: string;
+  /** Trusted routable delivery target for send-ledger keying; distinct from the native channel id. */
+  currentMessagingTarget?: string;
   chatId?: string;
   channelContext?: PluginHookChannelContext;
   currentThreadTs?: string;
@@ -406,4 +408,11 @@ export type PreparedCliRunContext = {
   resultContentSourceByToolName?: ReadonlyMap<string, ToolResultContentSource>;
   cwdHash?: string;
   mcpDeliveryCapture?: true;
+  // Exact per-turn send ledger slot the loopback message/conversations_send tools
+  // write under on this run (buildCliMcpGrantContext forwards these verbatim to the
+  // tools). The settlement terminal deletes this precise slot so a reused runId — the
+  // isolated cron durable-session-id-as-runId case — does not inherit a prior turn's
+  // committed counts or seen operationIds. Absent when no loopback grant was minted
+  // (no OpenClaw tools ran, so nothing was written).
+  turnSendLedgerScope?: { agentId?: string; sessionKey: string; runId: string };
 };

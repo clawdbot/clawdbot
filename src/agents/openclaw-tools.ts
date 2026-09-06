@@ -549,6 +549,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentId: sessionAgentId,
             agentSessionId: options?.sessionId,
             agentSessionKey: options?.agentSessionKey,
+            runId: options?.runId,
             config: resolvedConfig,
             senderIsOwner: options?.senderIsOwner,
           }),

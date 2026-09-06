@@ -1418,6 +1418,10 @@ describe("mcp loopback server", () => {
       messageProvider: "discord",
       clientCaps: ["tool-events"],
       currentChannelId: "discord:bound",
+      // Native channel id and routable target diverge (Slack-style native
+      // conversation vs user route). turnSourceTo must carry the routable
+      // target on both the hook and the admitted caller identity.
+      currentMessagingTarget: "discord:user:routable",
       currentThreadTs: "bound-thread",
       currentMessageId: "bound-message",
       currentInboundAudio: true,
@@ -1520,7 +1524,7 @@ describe("mcp loopback server", () => {
       approvalReviewerDeviceId: "bound-reviewer",
       channelId: "discord:bound",
       turnSourceChannel: "discord",
-      turnSourceTo: "discord:bound",
+      turnSourceTo: "discord:user:routable",
       turnSourceAccountId: "bound-account",
       turnSourceThreadId: "bound-thread",
     });
@@ -1530,7 +1534,7 @@ describe("mcp loopback server", () => {
       sessionKey: boundContext.sessionKey,
       operationalRunInstance: admittedRunContext.operationalRunInstance,
       turnSourceChannel: boundContext.messageProvider,
-      turnSourceTo: boundContext.currentChannelId,
+      turnSourceTo: boundContext.currentMessagingTarget,
       turnSourceAccountId: boundContext.accountId,
       turnSourceThreadId: boundContext.currentThreadTs,
     });

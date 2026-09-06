@@ -4,9 +4,36 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import {
+  buildTurnSendTargetKey,
+  commitTurnSend,
+  reserveTurnSend,
+  resetTurnSendLedgerForTest,
+} from "../agents/tools/turn-send-ledger.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
+
+// The message tool keys the send ledger on the agentId-scoped session key it builds
+// internally (pollEchoSessionKey in message-tool-execution.ts), not the raw session key.
+// #114388 made that key `${agentId}\0${sessionKey}` so concurrent agents sharing one
+// session stay isolated. Seed the ledger with the exact string the tool will peek with,
+// derived through the same resolver production uses; a hand-built raw key would silently
+// miss the slot and let the cap stay inert even when the wiring under test is correct.
+function ledgerSessionKey(sessionKey: string): string {
+  return `${resolveSessionAgentId({ sessionKey })}\0${sessionKey}`;
+}
+
+// Seed one committed send for a (turn, target) via the reserve->commit primitive the
+// tools use, so the opt-in cap of 1 is already reached when the tool under test peeks.
+function seedCommittedSend(key: { sessionKey: string; runId: string; targetKey: string }): void {
+  const reserved = reserveTurnSend(key, {});
+  if (reserved.status !== "reserved") {
+    throw new Error(`expected to seed a reserved send, got "${reserved.status}"`);
+  }
+  commitTurnSend(reserved.reservation);
+}
 
 describe("resolveGatewayScopedTools", () => {
   beforeAll(() => {
@@ -289,5 +316,95 @@ describe("resolveGatewayScopedTools", () => {
     } finally {
       markRequesterTurnYielded.mockRestore();
     }
+  });
+});
+
+describe("resolveGatewayScopedTools per-turn send ledger wiring", () => {
+  afterEach(() => {
+    resetTurnSendLedgerForTest();
+  });
+
+  // The per-turn send budget only activates when runId reaches the message tool
+  // (message-tool.ts builds its budget context only for a defined runId). The Gateway
+  // loopback path must forward runId, or the ledger is silently inert for every
+  // ordinary Gateway turn. Pre-seed one send for this turn/target, then prove the
+  // opt-in cap of 1 blocks the tool the resolver produced — impossible unless runId
+  // is wired through.
+  it("forwards runId so the message tool per-turn cap engages on the loopback surface", async () => {
+    const sessionKey = "agent:main:telegram:group:-100123";
+    const runId = "gw-run-1";
+    const targetKey = buildTurnSendTargetKey({ channel: "telegram", target: "peer-1" });
+    seedCommittedSend({ sessionKey: ledgerSessionKey(sessionKey), runId, targetKey });
+
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        tools: { profile: "minimal", message: { maxMessagesPerTurnPerTarget: 1 } },
+      } as OpenClawConfig,
+      sessionKey,
+      runId,
+      messageProvider: "telegram",
+      inboundEventKind: "room_event",
+      surface: "loopback",
+    });
+    const messageTool = result.tools.find((tool) => tool.name === "message");
+    if (!messageTool) {
+      throw new Error("expected message tool");
+    }
+
+    const blocked = await messageTool.execute("gw-msg-1", {
+      action: "send",
+      channel: "telegram",
+      to: "peer-1",
+      message: "second variant",
+    });
+    expect(blocked.details).toMatchObject({
+      status: "suppressed",
+      reason: "turn_send_budget_exhausted",
+    });
+  });
+
+  // The current-source send must key the ledger on the routable messaging target
+  // (what conversations_send uses), not the native channel id. Seed the budget for
+  // the routable target only, then send with no explicit target while native and
+  // routable differ. This blocks only if currentMessagingTarget threads through
+  // resolveGatewayScopedTools -> createOpenClawTools -> the message tool; without it
+  // the no-target send falls back to the native id and misses the seeded slot.
+  it("threads the routable currentMessagingTarget so a current-source send shares the ledger slot", async () => {
+    const sessionKey = "agent:main:slack:dm:U123";
+    const runId = "gw-run-2";
+    const targetKey = buildTurnSendTargetKey({ channel: "slack", target: "user:U123" });
+    seedCommittedSend({ sessionKey: ledgerSessionKey(sessionKey), runId, targetKey });
+
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        tools: { profile: "minimal", message: { maxMessagesPerTurnPerTarget: 1 } },
+      } as OpenClawConfig,
+      sessionKey,
+      runId,
+      messageProvider: "slack",
+      // Native channel id and routable target intentionally differ, and agentTo is
+      // left unset exactly as the production loopback resolve leaves it. That keeps
+      // the seeded slot reachable only via currentMessagingTarget: were the routable
+      // target dropped, the resolver's `?? agentTo` fallback would be undefined and
+      // the no-target send would key on the native "D123" instead, missing the slot.
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+      inboundEventKind: "room_event",
+      surface: "loopback",
+    });
+    const messageTool = result.tools.find((tool) => tool.name === "message");
+    if (!messageTool) {
+      throw new Error("expected message tool");
+    }
+
+    const blocked = await messageTool.execute("gw-msg-2", {
+      action: "send",
+      channel: "slack",
+      message: "second variant to current source",
+    });
+    expect(blocked.details).toMatchObject({
+      status: "suppressed",
+      reason: "turn_send_budget_exhausted",
+    });
   });
 });

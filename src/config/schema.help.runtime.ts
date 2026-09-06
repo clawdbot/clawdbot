@@ -444,6 +444,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Per-agent message guard for sending across providers. Keep false for public or sandboxed agents.",
   "agents.entries.*.tools.message.actions.allow":
     'Per-agent message action allowlist for the message tool. Set to a minimal list such as ["send"] for public sandbox agents so read, edit, delete, reaction, and other provider-specific message actions stay hidden and blocked.',
+  "agents.entries.*.tools.message.maxMessagesPerTurnPerTarget":
+    "Per-agent hard cap on successful message sends to the same target within one turn. Overrides the global tools.message.maxMessagesPerTurnPerTarget; unset inherits it. Media and broadcast fan-out are exempt.",
+  "agents.entries.*.tools.message.turnSendNudge":
+    "Per-agent toggle for the soft reminder appended to tool results from the second same-target send onward within one turn. Overrides the global tools.message.turnSendNudge; unset inherits it. Set false to suppress only the nudge text; per-turn counting and the hard cap are unaffected.",
   "tools.exec.approvalRunningNoticeMs":
     "Delay in milliseconds before showing an in-progress notice after an exec approval is granted. Increase to reduce flicker for fast commands, or lower for quicker operator feedback.",
   "tools.links.enabled":
@@ -558,6 +562,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
+  "tools.message.maxMessagesPerTurnPerTarget":
+    "Hard cap on successful message sends to the same target within one agent turn. Unset (default) leaves the cap off; the model still receives an always-on soft reminder from the second send to a target onward. Media (sendAttachment/upload-file) and broadcast fan-out are exempt from the cap.",
+  "tools.message.turnSendNudge":
+    "Enable the soft reminder appended to tool results from the second same-target send onward within one agent turn. Unset defaults to on; set false to suppress only the nudge text. Per-turn send counting and the maxMessagesPerTurnPerTarget hard cap are unaffected. A per-agent unset value inherits this global setting.",
   "tools.message.actions.allow":
     "Global message action allowlist for the message tool. Use only when the whole runtime should expose and accept a reduced action set; prefer per-agent allowlists for public or sandboxed agents.",
   "tools.web.search.enabled":

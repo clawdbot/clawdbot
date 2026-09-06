@@ -317,6 +317,35 @@ vi.mock("./agent-runner-utils.js", async () => ({
     fastMode: params.run.fastMode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
   }),
+  // The CLI candidate resolves the routable send target through these two before
+  // building CLI run params; the factory must export every binding prod touches
+  // or the eager call throws and the CLI run never starts.
+  buildReplyRouteSessionCtx: (params: {
+    sessionCtx: Record<string, unknown>;
+    replyRoute?: {
+      originatingChannel?: string;
+      originatingTo?: string;
+      originatingAccountId?: string;
+      originatingChatType?: string;
+      originatingThreadId?: string;
+      originatingReplyToId?: string;
+    };
+    run: { agentAccountId?: string; chatType?: string };
+  }) => ({
+    ...params.sessionCtx,
+    OriginatingChannel:
+      params.replyRoute?.originatingChannel ?? params.sessionCtx.OriginatingChannel,
+    OriginatingTo: params.replyRoute?.originatingTo ?? params.sessionCtx.OriginatingTo,
+    AccountId:
+      params.replyRoute?.originatingAccountId ??
+      params.sessionCtx.AccountId ??
+      params.run.agentAccountId,
+    ChatType:
+      params.replyRoute?.originatingChatType ?? params.sessionCtx.ChatType ?? params.run.chatType,
+    MessageThreadId: params.replyRoute?.originatingThreadId ?? params.sessionCtx.MessageThreadId,
+    ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
+  }),
+  buildThreadingToolContext: () => ({}),
 }));
 
 vi.mock("./reply-delivery.js", () => ({

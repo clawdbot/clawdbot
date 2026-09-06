@@ -132,6 +132,49 @@ so a no-config user still gets the protection.
   The post-compaction guard runs whenever the master flag is not explicitly `false`, even if you never wrote a `tools.loopDetection` block. To verify, look for `post-compaction guard armed for N attempts` in the gateway log immediately after a compaction event.
 </Note>
 
+## Per-turn send budget
+
+Loop detection hashes the full tool arguments, so a model that re-sends the same
+answer reworded produces a different hash each time and slips past it by design
+(different text is a legitimately different message). To catch that pattern, the
+`message` and `conversations_send` tools keep a per-turn, per-target count of
+successful sends, independent of `tools.loopDetection` and its master switch.
+
+- **Soft reminder (on by default).** From the second successful send to the same
+  target within one turn, the tool result carries a one-line note reminding the
+  model to finalize instead of sending another variant. The first send is never
+  annotated, so ordinary single replies stay noise-free. Broadcast fan-out and
+  dry runs are not counted. Set `tools.message.turnSendNudge` to `false` to
+  suppress only this reminder text; the per-turn counting and the hard cap below
+  keep working. The per-agent override lives at
+  `agents.entries.*.tools.message.turnSendNudge`, and an unset per-agent value
+  inherits the global setting.
+- **Hard cap (opt-in, default off).** Set
+  `tools.message.maxMessagesPerTurnPerTarget` to a positive integer to block
+  sends beyond that many deliveries to the same target in one turn. The block
+  happens before delivery, and the two tools report it in the two different
+  shapes their result schemas allow. The `message` tool returns a suppressed
+  result carrying the structured reason `turn_send_budget_exhausted`.
+  `conversations_send` declares a closed result schema with no reason field, so
+  it returns a suppressed result (status `suppressed`) whose block reason is in
+  the human-readable text instead of a structured field. Media actions
+  (`sendAttachment`, `upload-file`) and broadcast fan-out are exempt so
+  legitimately split messages are never truncated. The per-agent override lives
+  at `agents.entries.*.tools.message.maxMessagesPerTurnPerTarget`.
+
+```json5
+{
+  tools: {
+    message: {
+      // Off when unset. Blocks the 3rd+ send to the same target in one turn.
+      maxMessagesPerTurnPerTarget: 2,
+      // On by default. Set false to drop the soft reminder while keeping counting.
+      turnSendNudge: true,
+    },
+  },
+}
+```
+
 ## Logs and expected behavior
 
 When a loop is detected, OpenClaw logs a loop event and either warns or blocks

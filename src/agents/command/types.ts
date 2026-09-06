@@ -44,6 +44,8 @@ export type AgentRunContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   currentChannelId?: string;
+  /** Trusted routable delivery target for send-ledger keying; distinct from the native channel id. */
+  currentMessagingTarget?: string;
   /** Transport-native chat/conversation ID for plugin hook identity context. */
   chatId?: string;
   /** Channel-specific sender/chat metadata for plugin hook identity context. */

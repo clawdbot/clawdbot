@@ -108,6 +108,70 @@ export function buildToolCallEventsWithArgs(
   return stream.complete(16);
 }
 
+// Emits the SAME tool call `count` times inside ONE model response — one send
+// repeated with byte-identical arguments, but each copy carrying a DISTINCT
+// call_id and item id (`..._ptsb_repeat_${n}`). Distinct ids are required: the
+// Responses transport's terminal guard rejects a stream that repeats a tool-call
+// identity (openai-responses-stream-internal.ts), so byte-identical ids would
+// throw pre-dispatch and never reach delivery. With distinct ids the copies pass
+// the guard and, because the message-tool idempotency key folds in the tool-call
+// id, derive DIFFERENT idempotency keys despite the identical payload — so the
+// second copy is a genuinely distinct send, not an idempotent replay. Used by the
+// per-turn send-budget REPEAT fixture to prove the cap-block path (reserveTurnSend
+// exhaustion) rather than idempotent admission, the direct-tool mirror of the
+// concurrent conversations_send race in scenario 5. Each copy gets its own
+// output_index so the stream stays routable.
+export function buildDuplicateToolCallEventsWithArgs(
+  name: string,
+  args: Record<string, unknown>,
+  count: number,
+): StreamEvent[] {
+  const serialized = JSON.stringify(args);
+  const responseId = `resp_mock_${name}_ptsb_repeat`;
+  const buildItem = (outputIndex: number) => ({
+    type: "function_call",
+    // Distinct per copy so the byte-identical sends carry distinct tool-call
+    // identities; the `ptsb_repeat` tag lets the e2e locate them in the transcript.
+    id: `fc_mock_${name}_ptsb_repeat_${outputIndex + 1}`,
+    call_id: `call_mock_${name}_ptsb_repeat_${outputIndex + 1}`,
+    name,
+    arguments: serialized,
+  });
+  const events: StreamEvent[] = [];
+  const output: ReturnType<typeof buildItem>[] = [];
+  for (let outputIndex = 0; outputIndex < count; outputIndex += 1) {
+    const item = buildItem(outputIndex);
+    output.push(item);
+    events.push({
+      type: "response.output_item.added",
+      output_index: outputIndex,
+      item: { ...item, arguments: "" },
+    });
+    events.push({
+      type: "response.function_call_arguments.delta",
+      item_id: item.id,
+      output_index: outputIndex,
+      delta: serialized,
+    });
+    events.push({
+      type: "response.output_item.done",
+      output_index: outputIndex,
+      item,
+    });
+  }
+  events.push({
+    type: "response.completed",
+    response: {
+      id: responseId,
+      object: "response",
+      status: "completed",
+      output,
+      usage: { input_tokens: 64, output_tokens: 24, total_tokens: 88 },
+    },
+  });
+  return events;
+}
+
 export function buildCustomToolCallEventsWithInput(
   name: string,
   input: string,

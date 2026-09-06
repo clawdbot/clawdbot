@@ -85,6 +85,8 @@ export function resolveGatewayScopedTools(params: {
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   messageProvider?: string;
   currentChannelId?: string;
+  /** Trusted routable delivery target (e.g. Slack "user:U123") for send-ledger keying. */
+  currentMessagingTarget?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
@@ -327,6 +329,7 @@ export function resolveGatewayScopedTools(params: {
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
     currentChannelId: params.currentChannelId ?? params.agentTo,
+    currentMessagingTarget: params.currentMessagingTarget ?? params.agentTo,
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     currentMessageId: params.currentMessageId,
     replyToMode: params.replyToMode,

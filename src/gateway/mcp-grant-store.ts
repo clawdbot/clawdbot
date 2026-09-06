@@ -38,6 +38,8 @@ export type McpLoopbackRequestContext = {
   messageProvider?: string;
   clientCaps?: string[];
   currentChannelId?: string;
+  /** Trusted routable delivery target for send-ledger keying; distinct from the native channel id. */
+  currentMessagingTarget?: string;
   currentThreadTs?: string;
   currentMessageId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";

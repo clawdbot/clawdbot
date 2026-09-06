@@ -242,6 +242,9 @@ async function runEmbeddedAgentViaCliBackend(
       extraSystemPrompt: params.extraSystemPrompt,
       messageChannel: params.messageChannel,
       messageProvider: params.messageProvider,
+      // Carry the routable delivery target so an explicit-target send keys the
+      // per-turn send ledger on the same peer the embedded run would have.
+      currentMessagingTarget: params.currentMessagingTarget,
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       abortSignal: params.abortSignal,

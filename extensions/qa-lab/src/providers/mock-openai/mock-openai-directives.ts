@@ -248,6 +248,73 @@ export function isQaToolSearchFixture(text: string) {
   return QA_TOOL_SEARCH_PROMPT_RE.test(text) || QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(text);
 }
 
+// Per-turn send-budget fixture: keep emitting `message`/`conversations_send` to one
+// target across continuation rounds until `count` sends have been planned this turn,
+// then finalize with plain text. Lets an e2e prove the per-turn send ledger (nudge +
+// hard cap) at the real delivery boundary, since the ledger keys on the agent run.
+// Marker `QA-PTSB-SEND` is unique to that fixture, so this never affects other prompts.
+//
+// Optional `outcomes=` maps each planned send (1-based) to a delivery shape: `ok`
+// sends a visible `${marker}-${sequence}` payload; `suppress` sends an empty message
+// so real core delivery returns deliveryStatus "suppressed" (no_visible_payload). This
+// lets an e2e prove a delivered-nothing send does not charge the budget at the real
+// boundary. Absent `outcomes`, every planned send is `ok`.
+export function extractPerTurnSendBudgetDirective(text: string): {
+  tool: "message" | "conversations_send";
+  count: number;
+  marker: string;
+  ref?: string;
+  outcomes?: ("ok" | "suppress")[];
+} | null {
+  const match =
+    /QA-PTSB-SEND\s+tool=(message|conversations_send)\s+count=(\d+)\s+marker=([A-Za-z0-9._-]+)(?:\s+ref=(conv_[a-f0-9]{32}))?(?:\s+outcomes=([a-z,]+))?/u.exec(
+      text,
+    );
+  if (!match) {
+    return null;
+  }
+  const count = Number.parseInt(match[2] ?? "", 10);
+  if (!Number.isFinite(count) || count < 1) {
+    return null;
+  }
+  // Capture group 1 is the alternation `(message|conversations_send)`; narrow by comparison instead of an unsound cast.
+  const tool = match[1] === "conversations_send" ? "conversations_send" : "message";
+  // conversations_send cannot be planned without a concrete conversationRef to target.
+  if (tool === "conversations_send" && !match[4]) {
+    return null;
+  }
+  const outcomes = match[5]
+    ?.split(",")
+    .map((token) => token.trim())
+    .filter((token): token is "ok" | "suppress" => token === "ok" || token === "suppress");
+  return {
+    tool,
+    count,
+    marker: match[3] ?? "QA-PTSB",
+    ...(match[4] ? { ref: match[4] } : {}),
+    ...(outcomes && outcomes.length > 0 ? { outcomes } : {}),
+  };
+}
+
+// Per-turn send-budget REPEAT fixture: unlike QA-PTSB-SEND (one send per
+// continuation round), this makes the model emit the SAME `message` send TWICE
+// inside ONE response — byte-identical arguments, but each copy carrying a
+// distinct call_id and item id (the Responses transport rejects a repeated
+// tool-call identity, so identical ids would throw before dispatch). Because the
+// message-tool idempotency key folds in the tool-call id, the two copies derive
+// DIFFERENT idempotency keys despite the identical payload and run as two distinct
+// sends; under a per-turn cap the second is cap-blocked
+// ("turn_send_budget_exhausted"), not admitted as an idempotent replay. Lets an
+// e2e prove the cap-block path (not idempotent admission) at the real delivery
+// boundary. Marker `QA-PTSB-REPEAT` is unique to this fixture.
+export function extractPerTurnSendBudgetRepeatDirective(text: string): { marker: string } | null {
+  const match = /QA-PTSB-REPEAT\s+tool=message\s+marker=([A-Za-z0-9._-]+)/u.exec(text);
+  if (!match) {
+    return null;
+  }
+  return { marker: match[1] ?? "QA-PTSB-REPEAT" };
+}
+
 export function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> | null {
   if (!/\bsessions_spawn\b/i.test(text)) {
     return null;
