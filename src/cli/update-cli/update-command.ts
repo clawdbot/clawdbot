@@ -19,6 +19,7 @@ import {
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
 } from "../../infra/update-check.js";
+import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
@@ -87,15 +88,20 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
   const prepared = await withUpdateInProgressEnv(invocationCwd, () =>
     prepareUpdateCommand(inputOpts),
   );
-  const run = await admitUpdateCommandRun({
-    opts: inputOpts,
-    root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
-    invocationCwd,
-  });
+  // Parents predating the run ledger cannot finish a row invented by their
+  // post-core child, which is already running the updated package version.
+  const run =
+    prepared.postCoreUpdateResume && !process.env[UPDATE_RUN_ID_ENV]?.trim()
+      ? undefined
+      : await admitUpdateCommandRun({
+          opts: inputOpts,
+          root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
+          invocationCwd,
+        });
   const opts = { ...inputOpts, run };
   prepared.controlPlaneUpdateSentinelMeta = {
     ...prepared.controlPlaneUpdateSentinelMeta,
-    runId: run.runId,
+    runId: run?.runId,
   };
   recoveryState.triageTarget.root = prepared.discoveredRoot;
   const presentation = createUpdateProgress(!opts.json && !prepared.postCoreUpdateResume, run);
@@ -140,7 +146,7 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
             recoveryState.windowsTaskAutoStartRecovery?.complete();
           }
           if (failure) {
-            if (!prepared.postCoreUpdateResume) {
+            if (run && !prepared.postCoreUpdateResume) {
               if (failure.error instanceof UpdateCommandFailure) {
                 completeUpdateCommandRun(failure.error.result, run);
               } else {

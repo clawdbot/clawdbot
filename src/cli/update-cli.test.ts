@@ -560,7 +560,8 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 vi.mock("../commands/triage.js", () => ({ triageCommand }));
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
-const { getUpdateRun, listUpdateRuns } = await import("../infra/update-run-ledger.js");
+const { createUpdateRun, getUpdateRun, listUpdateRuns } =
+  await import("../infra/update-run-ledger.js");
 // Real recovery dependencies need the initialized runtime and child-process mocks.
 const { runUpdateFailureTriage } = await import("../infra/update-triage.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
@@ -3759,23 +3760,42 @@ describe("update-cli", () => {
     );
   });
 
-  it("post-core resume children exit after writing a plugin update result", async () => {
-    const resultDir = createCaseDir("openclaw-post-core-result");
-    const resultPath = path.join(resultDir, "plugins.json");
-    await fs.mkdir(resultDir, { recursive: true });
+  it.each([false, true])(
+    "post-core resume children preserve parent run ownership (inherited run: %s)",
+    async (inheritRun) => {
+      const resultDir = createCaseDir("openclaw-post-core-result");
+      const resultPath = path.join(resultDir, "plugins.json");
+      await fs.mkdir(resultDir, { recursive: true });
+      const env = { ...process.env, OPENCLAW_STATE_DIR: resultDir };
+      const parentRun = inheritRun
+        ? createUpdateRun(
+            {
+              trigger: "cli",
+              target: { channel: "stable", version: "2026.9.2" },
+              before: { version: "2026.9.1" },
+            },
+            { env },
+          )
+        : undefined;
 
-    await runPostCoreCommand(
-      { restart: false },
-      { OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: resultPath },
-    );
+      await runPostCoreCommand(
+        { restart: false },
+        {
+          OPENCLAW_STATE_DIR: resultDir,
+          OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: resultPath,
+          OPENCLAW_UPDATE_RUN_ID: parentRun?.runId,
+        },
+      );
 
-    const result = JSON.parse(await fs.readFile(resultPath, "utf-8")) as {
-      status?: string;
-    };
-    expect(result.status).toBe("ok");
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
-    expectNoSideEffects(runGatewayUpdate, spawn);
-  });
+      const result = JSON.parse(await fs.readFile(resultPath, "utf-8")) as {
+        status?: string;
+      };
+      expect(result.status).toBe("ok");
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+      expectNoSideEffects(runGatewayUpdate, spawn);
+      expect(listUpdateRuns({}, { env })).toEqual(parentRun ? [parentRun] : []);
+    },
+  );
 
   it("post-core resume mode uses the parent install records snapshot for missing payload warnings", async () => {
     const resultDir = createCaseDir("openclaw-post-core-records");
