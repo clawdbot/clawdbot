@@ -253,7 +253,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         new WizardSession(
           async (prompter, signal, runnerSession) => {
             await runSystemAgentGatewayTask(async () => {
-              const [{ applyAuthChoiceLoadedPluginProvider }, setupShared] = await Promise.all([
+              const [{ prepareAuthChoiceLoadedPluginProvider }, setupShared] = await Promise.all([
                 import("../../plugins/provider-auth-choice.js"),
                 import("../../wizard/setup.shared.js"),
               ]);
@@ -269,7 +269,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               const workspaceDir = params.workspace?.trim()
                 ? resolveUserPath(params.workspace.trim())
                 : undefined;
-              const applied = await applyAuthChoiceLoadedPluginProvider({
+              const prepared = await prepareAuthChoiceLoadedPluginProvider({
                 authChoice: params.authChoice,
                 ...(params.agentId ? { agentId: params.agentId } : {}),
                 config: baseConfig,
@@ -287,23 +287,24 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                 isRemote: true,
                 beforePersistentEffect: () => {
                   signal.throwIfAborted();
-                  runnerSession.lockCancellation();
+                  runnerSession.lockCancellationForPreparation();
                 },
               });
-              if (!applied || applied.retrySelection) {
+              if (!prepared || prepared.retrySelection) {
                 throw new Error(
                   `Provider setup resolution failed for "${params.authChoice}". Run \`openclaw doctor --fix\`, restart the Gateway, and try again.`,
                 );
               }
               signal.throwIfAborted();
               runnerSession.lockCancellation();
-              await setupShared.writeWizardConfigFile(applied.config, {
+              await prepared.persistAuthProfiles();
+              await setupShared.writeWizardConfigFile(prepared.config, {
                 allowConfigSizeDrop: false,
                 baseSnapshot: snapshot,
                 ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
               });
-              if (applied.agentModelOverride) {
-                runnerSession.setPreparedModelRef(applied.agentModelOverride);
+              if (prepared.agentModelOverride) {
+                runnerSession.setPreparedModelRef(prepared.agentModelOverride);
               }
             });
           },

@@ -41,6 +41,43 @@ beforeEach(() => {
 });
 
 describe("catalog-only provider preparation", () => {
+  it.each([
+    {
+      label: "installer detail",
+      installError:
+        "Synthetic install failed: package checksum differs. Retry after checking the registry.",
+    },
+    { label: "an undetailed skipped install", installError: undefined },
+  ])("keeps $label in the terminal setup failure", async ({ installError }) => {
+    vi.mocked(prepareAuthChoiceLoadedPluginProvider).mockResolvedValue({
+      config,
+      retrySelection: true,
+      ...(installError ? { installError } : {}),
+      authProfiles: [],
+      persistAuthProfiles,
+    });
+
+    const plan = await buildTestPlan({
+      kind: "provider-auth",
+      authChoice: "fixture-api-key",
+      cfg: config,
+      sourceCfg: config,
+      workspaceDir: "/tmp/isolated-provider-probe",
+      pluginWorkspaceDir: "/tmp/selected-workspace",
+      agentDir: "/tmp/isolated-provider-probe/agent",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() as never },
+      prompter: createWizardPrompter(),
+      deps: { resolveManifestProviderAuthChoice: () => undefined },
+    });
+
+    expect(plan).toEqual({
+      error:
+        installError ??
+        "Fixture was not installed and configured. Review the installer details and try again.",
+    });
+    expect(persistAuthProfiles).not.toHaveBeenCalled();
+  });
+
   it.each(["openclaw", "fixture-cli"])(
     "normalizes the starter while retaining trusted installation and the selected %s runtime",
     async (runtimeId) => {

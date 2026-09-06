@@ -58,6 +58,8 @@ type ApplyProviderAuthChoiceResult = {
 };
 
 type PreparedApplyProviderAuthChoiceResult = ApplyProviderAuthChoiceResult & {
+  /** Retain installer detail when the setup wizard retires its progress steps. */
+  installError?: string;
   /** The resolved provider owns starter-model normalization. */
   provider?: ProviderPlugin;
   /** Installer-owned records captured before provider authentication executes. */
@@ -67,7 +69,8 @@ type PreparedApplyProviderAuthChoiceResult = ApplyProviderAuthChoiceResult & {
 };
 
 function preparedWithoutAuthProfiles(
-  result: ApplyProviderAuthChoiceResult,
+  result: ApplyProviderAuthChoiceResult &
+    Pick<PreparedApplyProviderAuthChoiceResult, "installError">,
 ): PreparedApplyProviderAuthChoiceResult {
   return {
     ...result,
@@ -469,18 +472,21 @@ export async function prepareAuthChoiceLoadedPluginProvider(
       enabledConfig = enableResult.config;
     }
 
-    const resolveScopedRuntimeProviders = (config: OpenClawConfig): ProviderPlugin[] =>
-      resolvePluginProviders({
+    const resolveScopedRuntimeProviders = (
+      config: OpenClawConfig,
+      preparedInstallRecords?: Record<string, PluginInstallRecord>,
+    ): ProviderPlugin[] => {
+      const request = {
         config,
         workspaceDir,
         env: params.env,
-        mode: "setup",
-        ...(manifestAuthChoice
-          ? {
-              onlyPluginIds: [manifestAuthChoice.pluginId],
-            }
-          : {}),
-      });
+        mode: "setup" as const,
+        ...(manifestAuthChoice ? { onlyPluginIds: [manifestAuthChoice.pluginId] } : {}),
+      };
+      return preparedInstallRecords
+        ? resolvePluginProviders(request, preparedInstallRecords)
+        : resolvePluginProviders(request);
+    };
 
     const setupProvider = manifestAuthChoice
       ? resolvePluginSetupProvider({
@@ -521,17 +527,22 @@ export async function prepareAuthChoiceLoadedPluginProvider(
         prompter: params.prompter,
         runtime: params.runtime,
         workspaceDir,
+        reviewOfficialArtifacts: true,
         beforePersistentEffect: params.beforePersistentEffect,
       });
       if (!installResult.installed) {
-        return preparedWithoutAuthProfiles({ config: installResult.cfg, retrySelection: true });
+        return preparedWithoutAuthProfiles({
+          config: installResult.cfg,
+          retrySelection: true,
+          ...(installResult.error ? { installError: installResult.error } : {}),
+        });
       }
       nextConfig = installResult.cfg;
       const installRecord = nextConfig.plugins?.installs?.[installResult.pluginId];
       if (installRecord) {
         pendingPluginInstalls = { [installResult.pluginId]: structuredClone(installRecord) };
       }
-      providers = resolveScopedRuntimeProviders(nextConfig);
+      providers = resolveScopedRuntimeProviders(nextConfig, pendingPluginInstalls);
       resolved = resolveProviderPluginChoice({
         providers,
         choice: params.authChoice,
@@ -593,6 +604,8 @@ export async function prepareAuthChoiceLoadedPluginProvider(
           await runProviderModelSelectedHook({
             config,
             model: selectedModel,
+            preparedProvider: resolved.provider,
+            env: params.env,
             prompter: params.prompter,
             agentDir: params.agentDir,
             workspaceDir,

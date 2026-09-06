@@ -184,7 +184,7 @@ function mergePatchConflicts(base: unknown, current: unknown, patch: unknown): b
 export function applyManualAuthConfig(
   config: OpenClawConfig,
   manualAuth: NonNullable<SetupInferenceTestPlan["manualAuth"]>,
-  configKind: "runtime" | "source",
+  currentSourceConfig: OpenClawConfig,
   enablePlugin: typeof enablePluginInConfig = enablePluginInConfig,
 ): OpenClawConfig {
   let enabledConfig = config;
@@ -195,11 +195,11 @@ export function applyManualAuthConfig(
     }
     enabledConfig = enableResult.config;
   }
-  // Runtime validation includes resolved defaults; source validation must compare
-  // only authored state so normal materialization cannot impersonate a concurrent edit.
-  const configBase =
-    configKind === "runtime" ? manualAuth.runtimeConfigBase : manualAuth.sourceConfigBase;
-  if (mergePatchConflicts(configBase, enabledConfig, manualAuth.configPatch)) {
+  // Installing a provider can materialize new runtime defaults without editing
+  // config. Both projections validate conflicts against the same authored source.
+  if (
+    mergePatchConflicts(manualAuth.sourceConfigBase, currentSourceConfig, manualAuth.configPatch)
+  ) {
     throw new Error(
       "Provider configuration changed during the live inference test, so the verified credential was not saved. Review the current provider settings and retry.",
     );

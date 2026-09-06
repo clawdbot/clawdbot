@@ -4773,6 +4773,7 @@ describe("activateSetupInference", () => {
     expect(ensureCodex).toHaveBeenCalledOnce();
     expect(ensureCodex).toHaveBeenCalledWith(
       expect.objectContaining({
+        reviewOfficialArtifacts: true,
         cfg: expect.objectContaining({
           agents: expect.objectContaining({
             defaults: { model: { primary: "openai/gpt-5.4" } },

@@ -99,7 +99,8 @@ The provider picker is built from installed manifests and OpenClaw's official
 provider-plugin catalog, so installable providers such as Meta appear before their
 plugin is present. When a connection needs a runtime plugin, the app and dashboard show the
 staged package's source and capabilities, with integrity when available before installing or
-enabling it. Review the details, then explicitly confirm acceptance to continue.
+enabling it, including verified first-party packages. Review the details, then
+explicitly confirm acceptance to continue.
 Declining or confirmed cancellation stops that attempt without selecting another
 inference route. When the Gateway confirms that the live AI test failed before
 saving the connection, the app shows the failure and lets you retry or choose a

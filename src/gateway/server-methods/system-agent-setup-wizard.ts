@@ -58,9 +58,11 @@ export async function startSetupActivationWizard(params: {
             prompter,
             signal,
             isCancelled: () => signal.aborted,
-            beforePersistentEffect: () => runnerSession.lockCancellation(),
+            beforePersistentEffect: () => runnerSession.lockCancellationForPreparation(),
+            onPreparationComplete: () => runnerSession.finishPreparation(),
             onCommitStarted: () => runnerSession.lockCancellation(),
           });
+          signal.throwIfAborted();
           if (!result.ok) {
             if (result.disposition === "rejected-before-promotion") {
               runnerSession.setActivationRejection({

@@ -41,6 +41,8 @@ export type SetupInferenceTestPlan = {
   modelRef: string;
   /** Authored/staged config used for route, auth, and persistence decisions. */
   config: OpenClawConfig;
+  /** Installer-owned preparation facts, separate from provider-authored config patches. */
+  pendingPluginInstalls?: Record<string, PluginInstallRecord>;
   /** Execution-only projection that admits the reserved OpenClaw agent. */
   executionConfig?: OpenClawConfig;
   /** Execution identity used by the real OpenClaw turn. */
@@ -55,7 +57,6 @@ export type SetupInferenceTestPlan = {
   persistModelRef?: string;
   manualAuth?: {
     profiles: ProviderAuthResult["profiles"];
-    runtimeConfigBase: OpenClawConfig;
     sourceConfigBase: OpenClawConfig;
     configPatch: unknown;
     pluginId?: string;
@@ -522,13 +523,15 @@ export function buildPreparedProviderTestPlan(params: {
     modelRef,
     agentDir: params.agentDir,
     config: prepared.config,
+    ...(params.pendingPluginInstalls
+      ? { pendingPluginInstalls: structuredClone(params.pendingPluginInstalls) }
+      : {}),
     agentId: "openclaw",
     routeAgentId: params.routeAgentId,
     ...(prepared.selectedProfileId ? { authProfileId: prepared.selectedProfileId } : {}),
     persistModelRef: modelRef,
     manualAuth: {
       profiles: prepared.profiles,
-      runtimeConfigBase: params.cfg,
       sourceConfigBase: params.sourceCfg,
       configPatch: createMergePatch(params.cfg, prepared.config),
       ...(params.pluginId ? { pluginId: params.pluginId } : {}),

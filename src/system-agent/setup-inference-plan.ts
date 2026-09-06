@@ -93,7 +93,7 @@ async function prepareSetupProviderAuthChoice(
         normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
     );
     const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
-    return { enableResult, sourceEnableResult, provider, method };
+    return { enableResult, provider, method };
   });
 }
 
@@ -152,7 +152,7 @@ export async function buildTestPlan(params: {
     if (providerChoice.error !== undefined) {
       return { error: providerChoice.error };
     }
-    const { enableResult, sourceEnableResult, provider, method } = providerChoice;
+    const { enableResult, provider, method } = providerChoice;
     if (!provider || !method?.appGuidedSetup) {
       return { error: "That detected provider is no longer available on this Gateway." };
     }
@@ -197,8 +197,8 @@ export async function buildTestPlan(params: {
         };
       }
       return buildPreparedProviderTestPlan({
-        cfg: enableResult.config,
-        sourceCfg: sourceEnableResult.config,
+        cfg,
+        sourceCfg: params.sourceCfg,
         preparedConfig,
         profiles: result.profiles,
         selectedProfileId: matchingProfile?.profileId,
@@ -335,7 +335,6 @@ export async function buildTestPlan(params: {
           persistModelRef: modelRef,
           manualAuth: {
             profiles: preparedAuth.profiles,
-            runtimeConfigBase: cfg,
             sourceConfigBase: params.sourceCfg,
             configPatch: createMergePatch(cfg, preparedAuth.config),
           },
@@ -482,7 +481,9 @@ export async function buildTestPlan(params: {
         const modelRef = prepared?.agentModelOverride?.trim();
         if (!prepared || prepared.retrySelection || !modelRef) {
           return {
-            error: `${managedWizardChoice.label} was not installed and configured. Review the installer details and try again.`,
+            error:
+              prepared?.installError ||
+              `${managedWizardChoice.label} was not installed and configured. Review the installer details and try again.`,
           };
         }
         return buildPreparedProviderTestPlan({
@@ -517,7 +518,7 @@ export async function buildTestPlan(params: {
       if (providerChoice.error !== undefined) {
         return { error: providerChoice.error };
       }
-      const { enableResult, sourceEnableResult, provider, method } = providerChoice;
+      const { enableResult, provider, method } = providerChoice;
       const resolved = provider && method ? { provider, method } : null;
       if (
         !resolved ||
@@ -669,8 +670,8 @@ export async function buildTestPlan(params: {
         };
       }
       return buildPreparedProviderTestPlan({
-        cfg: enableResult.config,
-        sourceCfg: sourceEnableResult.config,
+        cfg,
+        sourceCfg: params.sourceCfg,
         preparedConfig,
         profiles: result.profiles,
         selectedProfileId: matchingProfile?.profileId,
