@@ -100,6 +100,9 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+function isOpenClawSharedMemoryDatabasePath(pathname: string): boolean {
+  return pathname.includes(path.sep + "memory" + path.sep + "shared-");
+}
 
 export {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -204,9 +207,11 @@ export function withOpenClawAgentDatabaseAsync<T>(
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
   const existing = cache.pending.get(pathname);
   if (existing?.agentId !== undefined && existing.agentId !== agentId) {
-    return Promise.reject(
-      new Error(`Agent database ${pathname} is opening for ${existing.agentId}`),
-    );
+    if (!isOpenClawSharedMemoryDatabasePath(pathname)) {
+      return Promise.reject(
+        new Error(`Agent database ${pathname} is opening for ${existing.agentId}`),
+      );
+    }
   }
   if (existing?.controller.signal.aborted) {
     return existing.promise.then(
@@ -665,7 +670,7 @@ export function getOpenClawAgentDatabaseIfOpen(
   if (cache.failures.has(pathname)) {
     throw cache.failures.get(pathname);
   }
-  if (database.agentId !== agentId) {
+  if (database.agentId !== agentId && !isOpenClawSharedMemoryDatabasePath(pathname)) {
     throw new Error(
       `OpenClaw agent database ${pathname} is already open for agent ${database.agentId}; requested agent ${agentId}.`,
     );
