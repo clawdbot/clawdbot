@@ -78,7 +78,10 @@ function oldestOutboxEnqueueSequence() {
 function outboxPayloadRequiresAdvancement() {
   // Blocked rows are terminal audit evidence, not retryable work. Keep them
   // inspectable without letting them hold later same-session turns behind them.
-  return /* kysely-allow-raw: Payload state is owned by the closed outbox union above. */ sql<boolean>`json_extract(context_engine_turn_outbox.payload_json, '$.state') IS NOT 'blocked'`;
+  // Malformed payload rows are contained the same way: json_valid excludes them
+  // before json_extract can fault on invalid JSON, so one corrupted durable row
+  // cannot block pending-work selection for later valid turns.
+  return /* kysely-allow-raw: Payload state is owned by the closed outbox union above. */ sql<boolean>`json_valid(context_engine_turn_outbox.payload_json) AND json_extract(context_engine_turn_outbox.payload_json, '$.state') IS NOT 'blocked'`;
 }
 
 export function isRetryableContextEngineTurnReadFailure(
@@ -127,7 +130,12 @@ function writeContextEngineTurnOutboxPayload(params: {
   );
   if (existing) {
     assertMatchingOutboxOwner(existing, params, advancementKey);
-    const existingPayload = JSON.parse(existing.payload_json) as ContextEngineTurnOutboxPayload;
+    let existingPayload: ContextEngineTurnOutboxPayload;
+    try {
+      existingPayload = JSON.parse(existing.payload_json) as ContextEngineTurnOutboxPayload;
+    } catch {
+      throw new Error(`Failed to parse existing outbox payload JSON for ${advancementKey}`);
+    }
     const transitionMatches =
       (params.payload.state === "accepted" &&
         existingPayload.state === "admitted" &&
@@ -279,7 +287,15 @@ export function recoverContextEngineTurnOutbox(params: {
       .orderBy(outboxEnqueueSequence(), "asc"),
   ).rows;
   for (const row of rows) {
-    const payload = JSON.parse(row.payload_json) as ContextEngineTurnOutboxPayload;
+    let payload: ContextEngineTurnOutboxPayload;
+    try {
+      payload = JSON.parse(row.payload_json) as ContextEngineTurnOutboxPayload;
+    } catch {
+      params.warn(
+        `[context-engine] skipping outbox row with malformed payload JSON: ${row.advancement_key}`,
+      );
+      continue;
+    }
     if (payload.state === "ready") {
       continue;
     }
