@@ -36,7 +36,7 @@ describe("security audit gateway config findings", () => {
     expect(hasFindingWithSeverity(checkId, "critical", findings)).toBe(testCase.missingAuth);
   });
 
-  it.each(["undefined", "null", "  undefined  "])(
+  it.each(["undefined", "null", "  undefined  ", "", "  "])(
     'flags a stringified nullish gateway token as critical: "%s"',
     (token) => {
       const cfg: OpenClawConfig = {
@@ -53,6 +53,38 @@ describe("security audit gateway config findings", () => {
       expect(hasFinding("gateway.token_too_short", findings)).toBe(false);
     },
   );
+
+  it("keeps a valid environment fallback authoritative over a blank inline token", () => {
+    const cfg: OpenClawConfig = { gateway: { auth: { mode: "token", token: " " } } };
+    expect(
+      hasFinding(
+        "gateway.token_placeholder_value",
+        collectGatewayConfigFindings(cfg, cfg, { OPENCLAW_GATEWAY_TOKEN: "synthetic-valid-token" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not report an inactive or overridden token as the active credential", () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { mode: "password", password: "synthetic-password", token: "undefined" } },
+    };
+    expect(
+      hasFinding("gateway.token_placeholder_value", collectGatewayConfigFindings(cfg, cfg, {})),
+    ).toBe(false);
+    expect(
+      hasFinding(
+        "gateway.token_placeholder_value",
+        collectGatewayConfigFindings(
+          cfg,
+          cfg,
+          {},
+          {
+            gatewayAuthOverride: { mode: "token", token: "synthetic-valid-token" },
+          },
+        ),
+      ),
+    ).toBe(false);
+  });
 
   it("keeps the short-token warning for a real short gateway token", () => {
     const cfg: OpenClawConfig = {

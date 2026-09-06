@@ -16,13 +16,13 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isStringifiedNullishToken } from "../gateway/auth-token-sentinel.js";
 import {
   resolveAdvertisedControlUiLinks,
   resolveControlUiLinks,
   resolveLocalControlUiProbeLinks,
 } from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
 import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
 import {
   detectBrowserOpenSupport,
@@ -137,7 +137,7 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   const trimmed = value.trim();
   // Reject the literal string "undefined" — a common bug when JS undefined
   // gets coerced to a string via template literals or String(undefined).
-  if (isStringifiedNullishToken(trimmed)) {
+  if (isInvalidGatewayToken(trimmed)) {
     return "";
   }
   return trimmed;

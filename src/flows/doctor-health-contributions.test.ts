@@ -85,8 +85,13 @@ const mocks = vi.hoisted(() => ({
         ? { source: "exec", command: "printf token", cache: false }
         : undefined,
   })),
-  resolveGatewayAuth: vi.fn(() => ({ mode: "token", token: undefined })),
-  resolveGatewayAuthToken: vi.fn(async () => ({
+  resolveGatewayAuth: vi.fn<() => { mode: string; token?: string }>(() => ({
+    mode: "token",
+    token: undefined,
+  })),
+  resolveGatewayAuthToken: vi.fn<
+    () => Promise<{ source: string; token?: string; unresolvedRefReason?: string }>
+  >(async () => ({
     source: "unavailable",
     unresolvedRefReason: "exec provider failed",
   })),
@@ -2129,30 +2134,50 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("regenerates a stringified nullish Gateway token instead of accepting it", async () => {
-    const contribution = requireDoctorContribution("doctor:gateway-auth");
-    const ctx = createDoctorContext({
-      cfg: {
-        gateway: {
-          mode: "local",
-          auth: { mode: "token", token: "undefined" },
+  it.each(["undefined", "null", "  undefined  ", "", "  "])(
+    "regenerates invalid Gateway token %j",
+    async (token) => {
+      mocks.resolveGatewayAuth.mockReturnValue({ mode: "token", token });
+      mocks.resolveGatewayAuthToken.mockResolvedValue({ source: "config", token });
+      const contribution = requireDoctorContribution("doctor:gateway-auth");
+      const ctx = createDoctorContext({
+        cfg: {
+          gateway: {
+            mode: "local",
+            auth: { mode: "token", token },
+          },
         },
-      },
-      options: { generateGatewayToken: true, nonInteractive: true },
-      configPath: "/tmp/openclaw.json",
-    });
+        options: { generateGatewayToken: true, nonInteractive: true },
+        configPath: "/tmp/openclaw.json",
+      });
 
-    await contribution.run(ctx);
+      await contribution.run(ctx);
 
-    // The placeholder is truthy, so token resolution would have accepted it and
-    // returned before any repair could run.
-    expect(mocks.resolveGatewayAuthToken).not.toHaveBeenCalled();
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("gateway.auth.token is the literal string"),
-      "Gateway auth",
-    );
-    expect(ctx.cfg.gateway?.auth?.token).toBe("generated-gateway-token");
-  });
+      expect(mocks.note).toHaveBeenCalledWith(
+        expect.stringContaining("not a usable secret"),
+        "Gateway auth",
+      );
+      expect(ctx.cfg.gateway?.auth?.token).toBe("generated-gateway-token");
+    },
+  );
+
+  it.each(["password", "none"] as const)(
+    "preserves %s auth during placeholder repair",
+    async (mode) => {
+      mocks.resolveGatewayAuth.mockReturnValue({ mode, token: "undefined" });
+      const original = {
+        mode,
+        token: "undefined",
+        ...(mode === "password" ? { password: "synthetic-password" } : {}),
+      };
+      const ctx = createDoctorContext({
+        cfg: { gateway: { mode: "local", auth: original } },
+        options: { generateGatewayToken: true, nonInteractive: true },
+      });
+      await requireDoctorContribution("doctor:gateway-auth").run(ctx);
+      expect(ctx.cfg.gateway?.auth).toEqual(original);
+    },
+  );
 
   it("forwards allow-exec to Gateway service repair", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-services");
