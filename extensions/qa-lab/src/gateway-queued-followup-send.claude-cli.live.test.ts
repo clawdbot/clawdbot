@@ -1,20 +1,38 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { isLiveTestEnabled, isTruthyEnvValue } from "openclaw/plugin-sdk/test-live";
 import { afterEach, describe, expect, it } from "vitest";
 import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import { createQaGatewayChild } from "./gateway-child.js";
-import { QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER } from "./providers/mock-openai/mock-openai-contracts.js";
-import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
-const FIRST_REPLY_MARKER = "QA-QUEUED-FOLLOWUP-FIRST-OK";
+const FIRST_REPLY_MARKER = "QA-CLI-QUEUED-FOLLOWUP-FIRST-OK";
+const QUEUED_REPLY_MARKER = "QA-CLI-QUEUED-FOLLOWUP-SECOND-OK";
 const TOOL_AUTHORITY_SNAPSHOT_ERROR = "Reply operation has no active tool authority snapshot";
+const CLI_EXEC_LOG = "cli exec: provider=claude-cli";
+const CLI_TURN_LOG = "cli turn: provider=claude-cli";
+// The bundled Anthropic plugin's default Claude CLI model; override for a
+// cheaper or faster local login.
+const CLI_MODEL = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL?.trim() || "claude-cli/claude-opus-5";
 
-describe.skipIf(process.platform === "win32")("queued follow-up after an active reply run", () => {
+// Live: needs an installed, logged-in Claude Code executable on PATH.
+//   OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CLI_BACKEND=1 pnpm test <this file>
+const describeLive =
+  isLiveTestEnabled() &&
+  isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND) &&
+  process.platform !== "win32"
+    ? describe
+    : describe.skip;
+
+function countOccurrences(haystack: string, needle: string) {
+  return haystack.split(needle).length - 1;
+}
+
+describeLive("queued follow-up after an active reply run (Claude CLI backend)", () => {
   const cleanups: Array<() => Promise<void>> = [];
   afterEach(async () => {
     const errors: unknown[] = [];
@@ -26,31 +44,31 @@ describe.skipIf(process.platform === "win32")("queued follow-up after an active 
       }
     }
     if (errors.length) {
-      throw new AggregateError(errors, "queued follow-up test cleanup failed");
+      throw new AggregateError(errors, "queued follow-up CLI test cleanup failed");
     }
   });
 
-  it("runs a message sent mid-turn as its own turn and delivers its reply", async () => {
+  it("runs a message sent mid-turn through the CLI backend and delivers its reply", async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
     const bus = await startQaBusServer({ state });
     cleanups.push(() => bus.stop());
-    const mock = await startQaMockOpenAiServer();
-    cleanups.push(() => mock.stop());
     const owner = createQaGatewayChild();
     cleanups.push(async () => {
       expect((await owner.stop()).errors).toEqual([]);
     });
     const gateway = await owner.start({
       repoRoot,
-      providerBaseUrl: `${mock.baseUrl}/v1`,
-      providerMode: "mock-openai",
-      forcedRuntime: "openclaw",
+      providerMode: "live-frontier",
+      primaryModel: CLI_MODEL,
+      alternateModel: CLI_MODEL,
+      // Claude Code owns its local login; forward the host home so the CLI
+      // backend can reuse it (subscription mode, no API key).
+      forwardHostHome: true,
+      claudeCliAuthMode: "subscription",
       transport,
       transportBaseUrl: bus.baseUrl,
       controlUiEnabled: false,
-      // Debug logging makes the queued-admission overlap ("sessionState=processing")
-      // observable in the child gateway log for this regression.
       runtimeEnvPatch: { OPENCLAW_LOG_LEVEL: "debug" },
       mutateConfig: (cfg) => ({
         ...cfg,
@@ -67,7 +85,7 @@ describe.skipIf(process.platform === "win32")("queued follow-up after an active 
         messages: { ...cfg.messages, queue: { ...cfg.messages?.queue, mode: "followup" } },
       }),
     });
-    const conversation = { id: "queued-followup-send", kind: "direct" as const };
+    const conversation = { id: "queued-followup-cli-send", kind: "direct" as const };
     const sessionKey = buildAgentSessionKey({
       agentId: "qa",
       channel: "qa-channel",
@@ -98,67 +116,54 @@ describe.skipIf(process.platform === "win32")("queued follow-up after an active 
     try {
       await transport.waitReady({ gateway });
       const sinceIndex = state.getSnapshot().messages.length;
-      // The mock holds the first turn's response so the second message is
-      // admitted as a queued follow-up while this reply run is still active.
       const first = await send(
-        `queued followup stall gateway qa check. Reply exactly: ${FIRST_REPLY_MARKER}`,
+        `Reply with exactly this text and nothing else: ${FIRST_REPLY_MARKER}`,
       );
       expect(first.runId).toBeTruthy();
-      // Wait until the first turn's reply run has actually started (INFO log),
-      // not merely enqueued, so the second message is a genuine mid-run arrival.
+      // Wait until the first turn has actually launched the CLI process, so
+      // the second message is a genuine mid-run arrival on the CLI backend.
       await transport.waitForCondition(
-        () => (gateway.logs().includes("embedded run start: runId=") ? true : undefined),
-        60_000,
+        () => (gateway.logs().includes(CLI_EXEC_LOG) ? true : undefined),
+        120_000,
         25,
       );
-      // The first turn's response is held by the mock, so its reply is not
-      // delivered yet when the second message arrives. (The inbound message
-      // text itself carries the marker, so scan outbound messages only.)
-      expect(
-        state
-          .getSnapshot()
-          .messages.some(
-            (message) =>
-              message.direction === "outbound" && message.text.includes(FIRST_REPLY_MARKER),
-          ),
-      ).toBe(false);
-      const second = await send("repeated request queued reply gateway qa check");
+      expect(countOccurrences(gateway.logs(), CLI_TURN_LOG)).toBe(0);
+      const second = await send(
+        `Reply with exactly this text and nothing else: ${QUEUED_REPLY_MARKER}`,
+      );
       expect(second.runId).toBeTruthy();
-      // Accepted while the first run was still active (its reply is still held).
-      expect(
-        state
-          .getSnapshot()
-          .messages.some(
-            (message) =>
-              message.direction === "outbound" && message.text.includes(FIRST_REPLY_MARKER),
-          ),
-      ).toBe(false);
+      // The second send was accepted while the first CLI turn was still running.
+      expect(countOccurrences(gateway.logs(), CLI_TURN_LOG)).toBe(0);
 
       const firstReply = await transport.waitForOutbound({
         conversation,
         sinceIndex,
         textIncludes: FIRST_REPLY_MARKER,
-        timeoutMs: 120_000,
+        timeoutMs: 300_000,
       });
+      // Pre-fix, the queued turn threw at route binding on CLI backends and the
+      // message was dropped; the reply below never arrived.
       const queuedReply = await transport.waitForOutbound({
         conversation,
         sinceIndex,
-        textIncludes: QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
-        timeoutMs: 120_000,
+        textIncludes: QUEUED_REPLY_MARKER,
+        timeoutMs: 300_000,
       });
-      // The queued message runs as its own turn after the first finishes and its
-      // reply is delivered. (On CLI backends the pre-fix queued run threw at route
-      // binding and dropped the message; that boundary is covered RED/GREEN by
-      // followup-turn-admission.queued-handoff.test.ts.)
       expect(queuedReply.accountId).toBe(transport.accountId);
 
-      // Ordering: the queued turn ran and replied after the first turn finished.
       const outbound = state
         .getSnapshot()
         .messages.slice(sinceIndex)
         .filter((message) => message.direction === "outbound");
+      // Ordering: the queued turn ran and replied after the first turn finished.
       expect(outbound.findIndex((message) => message.id === firstReply.id)).toBeLessThan(
         outbound.findIndex((message) => message.id === queuedReply.id),
+      );
+      // Both turns completed as separate CLI executions, with no route-binding failure.
+      await transport.waitForCondition(
+        () => (countOccurrences(gateway.logs(), CLI_TURN_LOG) >= 2 ? true : undefined),
+        30_000,
+        25,
       );
       expect(gateway.logs()).not.toContain(TOOL_AUTHORITY_SNAPSHOT_ERROR);
       await transport.waitForCondition(
@@ -176,5 +181,5 @@ describe.skipIf(process.platform === "win32")("queued follow-up after an active 
         { cause: error },
       );
     }
-  }, 600_000);
+  }, 900_000);
 });
