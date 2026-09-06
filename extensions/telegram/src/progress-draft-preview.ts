@@ -77,8 +77,9 @@ export function renderTelegramProgressDraftPreview(
     snapshot.statusHeadline || snapshot.plan?.length
       ? snapshot.lines.filter(
           (line) =>
-            typeof line === "string" ||
-            (!line.id?.startsWith("reasoning:") && !line.id?.startsWith("commentary:")),
+            typeof line !== "string" &&
+            !line.id?.startsWith("reasoning:") &&
+            !line.id?.startsWith("commentary:"),
         )
       : snapshot.lines;
   const attention = activity.filter(isChannelProgressAttentionLine);

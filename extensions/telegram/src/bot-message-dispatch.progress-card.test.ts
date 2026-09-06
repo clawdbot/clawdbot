@@ -4,10 +4,11 @@ import {
   createContext,
   createDirectSessionPayload,
   createTelegramDraftStream,
+  deliverReplies,
   describeTelegramDispatch,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
-  expectDeliveredReply,
+  editMessageTelegram,
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 
@@ -21,6 +22,12 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
       try {
         const actualDraft =
           await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
+        const actualDelivery = await vi.importActual<typeof import("./bot/delivery.replies.js")>(
+          "./bot/delivery.replies.js",
+        );
+        const actualEdit = await vi.importActual<typeof import("./send-edit.js")>("./send-edit.js");
+        deliverReplies.mockImplementation(actualDelivery.deliverReplies);
+        editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
         let draft: TelegramDraftStream | undefined;
         createTelegramDraftStream.mockImplementation((params) => {
           draft = actualDraft.createTelegramDraftStream(params);
@@ -39,12 +46,12 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             text,
           };
         });
-        vi.spyOn(bot.api, "editMessageText").mockImplementation(
-          async (_chatId, messageId, text) => {
+        const edit = vi
+          .spyOn(bot.api, "editMessageText")
+          .mockImplementation(async (_chatId, messageId, text) => {
             visible.set(messageId, text);
             return true;
-          },
-        );
+          });
         vi.spyOn(bot.api, "deleteMessage").mockImplementation(async (_chatId, messageId) => {
           visible.delete(messageId);
           return true;
@@ -102,7 +109,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             expect(send).toHaveBeenCalledTimes(2);
 
             await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+            expect([...visible.values()]).toContain("Done");
+            const finalMessages = [...visible.entries()];
             const sendsAfterFinal = send.mock.calls.length;
+            const editsAfterFinal = edit.mock.calls.length;
             await replyOptions?.onPlanUpdate?.({
               phase: "update",
               explanation: "Late card",
@@ -110,13 +120,15 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             });
             await draft?.flush();
             expect(send).toHaveBeenCalledTimes(sendsAfterFinal);
-            expect([...visible.values()].join("\n")).not.toContain("Late card");
+            expect(edit).toHaveBeenCalledTimes(editsAfterFinal);
+            expect([...visible.entries()]).toEqual(finalMessages);
             return { queuedFinal: true };
           },
         );
 
         await dispatchWithContext({
           bot,
+          cfg: { channels: { telegram: { botToken: "test-token" } } },
           context: createContext({
             ctxPayload: createDirectSessionPayload(),
             threadSpec: { id: undefined, scope: "none" },
@@ -131,8 +143,8 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             },
           },
         });
-        expectDeliveredReply(0, { text: "Done" });
         await vi.runOnlyPendingTimersAsync();
+        expect([...visible.values()]).toEqual(["Done"]);
       } finally {
         vi.useRealTimers();
       }
