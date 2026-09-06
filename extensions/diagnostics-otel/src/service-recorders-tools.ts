@@ -123,12 +123,18 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     ).spanContext();
   };
 
-  const recordToolExecutionCompleted = (
-    evt: Extract<DiagnosticEventPayload, { type: "tool.execution.completed" }>,
+  const recordToolExecutionFinished = (
+    evt: Extract<
+      DiagnosticEventPayload,
+      { type: "tool.execution.completed" | "tool.execution.error" }
+    >,
     metadata: DiagnosticEventMetadata,
     toolContent?: OtelToolCallContent,
   ) => {
     const attrs = toolExecutionBaseAttrs(evt);
+    if (evt.type === "tool.execution.error") {
+      attrs["openclaw.errorCategory"] = normalizeDiagnosticValue(evt.errorCategory, "other");
+    }
     toolExecutionDurationHistogram.record(evt.durationMs, attrs);
     if (!tracesEnabled) {
       return;
@@ -136,34 +142,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
     addRunAttrs(spanAttrs, evt);
     assignOtelToolIdentityAttributes(spanAttrs, evt);
-    assignOtelToolContentAttributes(spanAttrs, toolContent, contentCapturePolicy);
-    const span =
-      takeTrackedTrustedSpan(evt, metadata) ??
-      spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
-        parentContext: activeTrustedParentContext(evt, metadata),
-        endTimeMs: toolTimestampMs(evt),
-      });
-    setSpanAttrs(span, spanAttrs);
-    span.end(toolTimestampMs(evt));
-  };
-
-  const recordToolExecutionError = (
-    evt: Extract<DiagnosticEventPayload, { type: "tool.execution.error" }>,
-    metadata: DiagnosticEventMetadata,
-    toolContent?: OtelToolCallContent,
-  ) => {
-    const attrs = {
-      ...toolExecutionBaseAttrs(evt),
-      "openclaw.errorCategory": normalizeDiagnosticValue(evt.errorCategory, "other"),
-    };
-    toolExecutionDurationHistogram.record(evt.durationMs, attrs);
-    if (!tracesEnabled) {
-      return;
-    }
-    const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
-    addRunAttrs(spanAttrs, evt);
-    assignOtelToolIdentityAttributes(spanAttrs, evt);
-    if (evt.errorCode) {
+    if (evt.type === "tool.execution.error" && evt.errorCode) {
       spanAttrs["openclaw.errorCode"] = normalizeDiagnosticValue(evt.errorCode, "other");
     }
     assignOtelToolContentAttributes(spanAttrs, toolContent, contentCapturePolicy);
@@ -174,10 +153,12 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
         endTimeMs: toolTimestampMs(evt),
       });
     setSpanAttrs(span, spanAttrs);
-    span.setStatus({
-      code: SpanStatusCode.ERROR,
-      message: redactSensitiveText(evt.errorCategory),
-    });
+    if (evt.type === "tool.execution.error") {
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: redactSensitiveText(evt.errorCategory),
+      });
+    }
     span.end(toolTimestampMs(evt));
   };
 
@@ -407,8 +388,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     recordGatewayEventLoopSample,
     recordSkillUsed,
     recordToolExecutionStarted,
-    recordToolExecutionCompleted,
-    recordToolExecutionError,
+    recordToolExecutionFinished,
     recordToolExecutionBlocked,
     recordPayloadLarge,
     recordExecProcessCompleted,
