@@ -324,7 +324,11 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
         } (target outside the backup):`,
       );
       for (const link of result.skippedSymbolicLinks) {
-        lines.push(`- ${shortenHomePath(link.sourcePath)} -> ${link.linkTarget}`);
+        // Both sides go through shortenHomePath. The target was previously printed
+        // raw while the source was shortened, so a summary a user pastes into an
+        // issue embedded their real home path — inconsistent with every other
+        // display path in this file, and with the surrounding `skipped` variants.
+        lines.push(`- ${shortenHomePath(link.sourcePath)} -> ${shortenHomePath(link.linkTarget)}`);
       }
     }
     if (result.verified) {

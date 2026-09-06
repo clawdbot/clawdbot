@@ -27,6 +27,7 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { resolveHomeDir } from "../utils.js";
 import {
   createBackupArchive,
   formatBackupCreateSummary,
@@ -174,6 +175,34 @@ function resolveCanonicalTestSqlitePath(
 
 describe("formatBackupCreateSummary", () => {
   const backupArchiveLine = "Backup archive: /tmp/openclaw-backup.tar.gz";
+
+  it("shortens the home directory in both sides of a skipped symbolic link", () => {
+    // AGENTS.md: "Never disclose credentials, private config, personal data ... in
+    // source, commits, GitHub text, logs, or proof captures." This summary is text
+    // operators paste into issues, so a raw home path in it leaks a username. The
+    // link TARGET was previously printed unshortened while its source was
+    // shortened -- inconsistent with every other display path in this file. The
+    // round-trip create test cannot catch that: its target is a tmpdir path, which
+    // shortenHomePath leaves untouched. Hence this unit assertion, which uses a
+    // home-relative target on purpose.
+    const home = resolveHomeDir();
+    const summary = formatBackupCreateSummary(
+      makeResult({
+        skippedSymbolicLinks: [
+          {
+            sourcePath: path.join(home, ".openclaw", "venv", "bin", "python3"),
+            linkTarget: path.join(home, "elsewhere", "python3"),
+          },
+        ],
+      }),
+    );
+    const line = expectDefined(
+      summary.find((entry) => entry.includes("python3")),
+      "skipped symbolic link line",
+    );
+    expect(line).toBe("- ~/.openclaw/venv/bin/python3 -> ~/elsewhere/python3");
+    expect(line).not.toContain(home);
+  });
 
   it.each([
     {

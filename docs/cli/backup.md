@@ -320,7 +320,12 @@ Individual symbolic links elsewhere in a backed-up path can also point outside t
 
 Agent-scoped temporary trees under `agents/<agentId>/agent/**/{tmp,.tmp}/` are also omitted and reported as regenerable. This includes temporary files directly below an agent directory and temporary trees inside agent runtime homes; durable sibling directories remain included. An explicitly configured config file, credentials directory, or workspace nested below an omitted temporary root remains included.
 
-Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. An absolute link whose real target is contained by a declared asset, such as a Nix-managed config or credentials link, is rewritten to a portable relative archive link. Other absolute links, links containing backslashes, and links escaping the archive root or every declared asset are rejected during both creation and verification.
+Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. An absolute link whose real target is contained by a declared asset, such as a Nix-managed config or credentials link, is rewritten to a portable relative archive link.
+
+The remaining cases are handled differently on creation and on verification, because the two commands answer different questions.
+
+- **Creation** omits an absolute link that no declared asset owns, keeps the rest of the archive, and reports the link and its target (see above). Such a link has no portable archive path, so no archive can represent it and no restore could recreate it — omitting it removes nothing a stricter policy would have preserved. Creation still refuses a link containing backslashes and a relative link that escapes the archive root or every declared asset: unlike an absolute target, a relative escape _would_ resolve to a path inside or beside a restored tree, which is the substitution hazard the archive guard exists to prevent.
+- **Verification and restore** refuse any archive containing a link that escapes the archive root or the declared assets, absolute or relative, with no omission path. An archive is untrusted input at that point, so the check stays fail-closed.
 
 Installer-managed and rebuildable runtime roots under the state directory are
 also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and
