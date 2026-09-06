@@ -1208,6 +1208,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           ...(declaration !== "peer" ? { openclaw: "*" } : {}),
         };
         const peerDependencies = declaration !== "direct" ? { openclaw: "*" } : {};
+        fs.mkdirSync(rootDir, { recursive: true });
         createColdPluginFixture({
           rootDir,
           pluginId,
