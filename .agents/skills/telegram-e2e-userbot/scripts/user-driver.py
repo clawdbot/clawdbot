@@ -546,8 +546,7 @@ class UserDriver:
             return chat_writability(
                 member=True,
                 writable=(
-                    default_can_send
-                    and isinstance(can_message, dict)
+                    isinstance(can_message, dict)
                     and can_message.get("@type") == "canSendMessageToUserResultOk"
                 ),
             )

@@ -171,17 +171,43 @@ class PhotoContentTest(unittest.TestCase):
                 )
 
     def test_private_writability_uses_can_send_result(self):
-        chat = {
-            "type": {"@type": "chatTypePrivate", "user_id": 77},
-            "permissions": {"can_send_basic_messages": True},
-        }
-        for result_type, writable in [
-            ("canSendMessageToUserResultOk", True),
-            ("canSendMessageToUserResultUserHasPaidMessages", False),
-            ("canSendMessageToUserResultUserIsDeleted", False),
-            ("canSendMessageToUserResultUserRestrictsNewChats", False),
+        for name, permissions, result_type, writable in [
+            (
+                "allowed with group-style permission",
+                {"can_send_basic_messages": True},
+                "canSendMessageToUserResultOk",
+                True,
+            ),
+            ("allowed without permissions", None, "canSendMessageToUserResultOk", True),
+            (
+                "allowed despite denied group-style permission",
+                {"can_send_basic_messages": False},
+                "canSendMessageToUserResultOk",
+                True,
+            ),
+            (
+                "paid messages",
+                {"can_send_basic_messages": True},
+                "canSendMessageToUserResultUserHasPaidMessages",
+                False,
+            ),
+            (
+                "deleted user",
+                {"can_send_basic_messages": True},
+                "canSendMessageToUserResultUserIsDeleted",
+                False,
+            ),
+            (
+                "restricted new chats",
+                {"can_send_basic_messages": True},
+                "canSendMessageToUserResultUserRestrictsNewChats",
+                False,
+            ),
         ]:
-            with self.subTest(result_type=result_type):
+            with self.subTest(name=name):
+                chat = {"type": {"@type": "chatTypePrivate", "user_id": 77}}
+                if permissions is not None:
+                    chat["permissions"] = permissions
                 result, requests = self.inspect_chat(
                     chat,
                     {"canSendMessageToUser": {"@type": result_type}},
