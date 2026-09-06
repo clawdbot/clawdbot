@@ -110,11 +110,17 @@ describe("PR refresh replay through the Control UI", () => {
       await expect.poll(async () => (await forceRequests()).length).toBe(initialForces + 2);
       // The next frame cannot share the earlier request's microtask batch.
       await page.evaluate(
-        () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
       );
       await gateway.emitGatewayEvent("chat", final);
       await page.evaluate(
-        () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
       );
       const afterReplay = (await forceRequests()).length - initialForces;
       const mergedText = `Merged ${pullRequest.url}`;

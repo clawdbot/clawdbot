@@ -1,11 +1,10 @@
 import { readSessionProjectionFinalMessageIdentity } from "@openclaw/gateway-client/browser";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { parseGitHubLinkTarget } from "../../components/github-link-target.ts";
 import {
   resolveUiConversationIdentity,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
-import type { ChatEventPayload } from "./chat-gateway.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { normalizeFinalAssistantMessage } from "./terminal-message-identity.ts";
 
 const GITHUB_URL_CANDIDATE = /https:\/\/github\.com\/[^\s<>()\]}'"`]+/giu;
@@ -14,11 +13,13 @@ const PR_REFRESH_RECEIPT_MAX_CHARS = 4_096;
 // GitHub caps owners at 39 and repos at 100 chars; 256 covers a split PR URL.
 const STREAM_PR_LINK_TAIL_CHARS = 256;
 
-type PullRequestRefreshHost = Pick<
-  ChatPageHost,
-  "client" | "connectionEpoch" | "sessionKey" | "refreshSessionPullRequests"
-> &
-  UiSessionDefaultsHost;
+// History cleanup also calls this owner; its port must not depend on page/event types.
+export type PullRequestRefreshHost = UiSessionDefaultsHost & {
+  client: GatewayBrowserClient | null;
+  connectionEpoch: number;
+  sessionKey: string;
+  refreshSessionPullRequests?: (options?: { refresh?: boolean }) => boolean;
+};
 
 type RefreshOwner = {
   client: PullRequestRefreshHost["client"];
@@ -100,17 +101,17 @@ export function retirePullRequestRefreshes(state: object): void {
 /** The first streamed link refreshes promptly; the final separately observes later PR changes. */
 export function refreshPullRequestsForStreamedLinks(
   state: PullRequestRefreshHost,
-  payload: ChatEventPayload,
+  runId: string | undefined,
   deltaText: string,
 ): void {
   const owner = refreshOwner(state);
-  const runId = payload.runId ?? "";
-  const key = JSON.stringify(["stream", runId]);
+  const runKey = runId ?? "";
+  const key = JSON.stringify(["stream", runKey]);
   if (owner.receipts.has(key)) {
     return;
   }
-  const joined = (owner.tail?.runId === runId ? owner.tail.text : "") + deltaText;
-  owner.tail = { runId, text: joined.slice(-STREAM_PR_LINK_TAIL_CHARS) };
+  const joined = (owner.tail?.runId === runKey ? owner.tail.text : "") + deltaText;
+  owner.tail = { runId: runKey, text: joined.slice(-STREAM_PR_LINK_TAIL_CHARS) };
   if (pullRequestLinksIn(joined).length > 0) {
     requestRefresh(state, owner, key);
   }
@@ -119,14 +120,15 @@ export function refreshPullRequestsForStreamedLinks(
 /** Only a repeated emitted final is redundant; history and stream receipts cannot consume it. */
 export function refreshPullRequestsForFinalReply(
   state: PullRequestRefreshHost,
-  payload: ChatEventPayload,
+  runId: string | undefined,
+  message: unknown,
 ): void {
   const identity = readSessionProjectionFinalMessageIdentity(
-    normalizeFinalAssistantMessage(payload.message),
+    normalizeFinalAssistantMessage(message),
   );
   requestRefresh(
     state,
     refreshOwner(state),
-    payload.runId && identity ? JSON.stringify(["final", payload.runId, identity]) : null,
+    runId && identity ? JSON.stringify(["final", runId, identity]) : null,
   );
 }

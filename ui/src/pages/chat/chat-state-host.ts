@@ -16,6 +16,7 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
+import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -43,6 +44,7 @@ export type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
 export type ChatPageHost = ChatHost &
   ChatState &
   ChatRealtimeState &
+  PullRequestRefreshHost &
   SessionWorkspaceHost &
   BackgroundTasksHost & {
     chatSubmissions: ApplicationContext["chatSubmissions"];
@@ -159,6 +161,5 @@ export type ChatPageHost = ChatHost &
     exportCurrentChat?: () => Promise<ChatExportResult> | ChatExportResult;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
-    refreshSessionPullRequests?: (options?: { refresh?: boolean }) => boolean;
     retireSessionCompanion?: (sessionKey: string, agentId?: string | null) => void;
   };

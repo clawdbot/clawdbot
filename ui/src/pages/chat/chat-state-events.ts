@@ -570,7 +570,7 @@ export function handlePageGatewayEvent(
         state.observerDigest = null;
       }
       if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
-        refreshPullRequestsForStreamedLinks(state, payload, payload.deltaText);
+        refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
       }
       const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
       const shouldRefreshPullRequests =
@@ -583,7 +583,7 @@ export function handlePageGatewayEvent(
         fireFirstReplyConfetti();
       }
       if (shouldRefreshPullRequests && payload) {
-        refreshPullRequestsForFinalReply(state, payload);
+        refreshPullRequestsForFinalReply(state, payload.runId, payload.message);
       }
       const shouldRecoverMissingTerminal = Boolean(
         recoveryRunId &&

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import type { ChatEventPayload } from "./chat-gateway.ts";
 import {
   refreshPullRequestsForFinalReply,
   refreshPullRequestsForStreamedLinks,
@@ -20,10 +19,6 @@ function createHost() {
   return { state, refresh };
 }
 
-function final(message: unknown, runId = "run-1"): ChatEventPayload {
-  return { state: "final", sessionKey: "agent:main:demo", runId, message };
-}
-
 const text = "Opened https://github.com/openclaw/openclaw/pull/111532";
 const message = { role: "assistant", content: [{ type: "text", text }] };
 
@@ -32,8 +27,8 @@ describe("PR refresh emission receipts", () => {
     const { state, refresh } = createHost();
     const emit = () =>
       phase === "stream"
-        ? refreshPullRequestsForStreamedLinks(state, { ...final(message), state: "delta" }, text)
-        : refreshPullRequestsForFinalReply(state, final(message));
+        ? refreshPullRequestsForStreamedLinks(state, "run-1", text)
+        : refreshPullRequestsForFinalReply(state, "run-1", message);
     refresh.mockReturnValueOnce(false);
     emit();
     emit();
@@ -45,10 +40,10 @@ describe("PR refresh emission receipts", () => {
   it("does not consume a final before its refresh callback is installed", () => {
     const { state, refresh } = createHost();
     state.refreshSessionPullRequests = undefined;
-    refreshPullRequestsForFinalReply(state, final(message));
+    refreshPullRequestsForFinalReply(state, "run-1", message);
     state.refreshSessionPullRequests = refresh;
-    refreshPullRequestsForFinalReply(state, final(message));
-    refreshPullRequestsForFinalReply(state, final(message));
+    refreshPullRequestsForFinalReply(state, "run-1", message);
+    refreshPullRequestsForFinalReply(state, "run-1", message);
     expect(refresh).toHaveBeenCalledOnce();
   });
 
@@ -90,8 +85,8 @@ describe("PR refresh emission receipts", () => {
     },
   ])("reuses canonical final identity for $name", ({ first, second, expected }) => {
     const { state, refresh } = createHost();
-    refreshPullRequestsForFinalReply(state, final(first));
-    refreshPullRequestsForFinalReply(state, final(second));
+    refreshPullRequestsForFinalReply(state, "run-1", first);
+    refreshPullRequestsForFinalReply(state, "run-1", second);
     expect(refresh).toHaveBeenCalledTimes(expected);
   });
 
@@ -99,12 +94,20 @@ describe("PR refresh emission receipts", () => {
     "retires receipts with their %s owner",
     (change) => {
       const { state, refresh } = createHost();
-      refreshPullRequestsForFinalReply(state, final(message));
-      if (change === "connection epoch") state.connectionEpoch += 1;
-      if (change === "client") state.client = createTestGatewayClient(() => ({}));
-      if (change === "conversation") state.sessionKey = "agent:main:other";
-      if (change === "explicit reset") retirePullRequestRefreshes(state);
-      refreshPullRequestsForFinalReply(state, { ...final(message), sessionKey: state.sessionKey });
+      refreshPullRequestsForFinalReply(state, "run-1", message);
+      if (change === "connection epoch") {
+        state.connectionEpoch += 1;
+      }
+      if (change === "client") {
+        state.client = createTestGatewayClient(() => ({}));
+      }
+      if (change === "conversation") {
+        state.sessionKey = "agent:main:other";
+      }
+      if (change === "explicit reset") {
+        retirePullRequestRefreshes(state);
+      }
+      refreshPullRequestsForFinalReply(state, "run-1", message);
       expect(refresh).toHaveBeenCalledTimes(2);
     },
   );
@@ -121,35 +124,34 @@ describe("PR refresh emission receipts", () => {
       },
     };
     state.sessionKey = "main";
-    refreshPullRequestsForFinalReply(state, { ...final(message), sessionKey: "main" });
+    refreshPullRequestsForFinalReply(state, "run-1", message);
     state.sessionKey = "agent:main:main";
-    refreshPullRequestsForFinalReply(state, { ...final(message), sessionKey: state.sessionKey });
+    refreshPullRequestsForFinalReply(state, "run-1", message);
     expect(refresh).toHaveBeenCalledOnce();
   });
 
   it("does not merge the same final across different runs", () => {
     const { state, refresh } = createHost();
-    refreshPullRequestsForFinalReply(state, final(message, "first-run"));
-    refreshPullRequestsForFinalReply(state, final(message, "later-run"));
+    refreshPullRequestsForFinalReply(state, "first-run", message);
+    refreshPullRequestsForFinalReply(state, "later-run", message);
     expect(refresh).toHaveBeenCalledTimes(2);
   });
 
   it("keeps unidentified runs eligible for freshness", () => {
     const { state, refresh } = createHost();
-    const payload = { ...final(message), runId: undefined };
-    refreshPullRequestsForFinalReply(state, payload);
-    refreshPullRequestsForFinalReply(state, payload);
+    refreshPullRequestsForFinalReply(state, undefined, message);
+    refreshPullRequestsForFinalReply(state, undefined, message);
     expect(refresh).toHaveBeenCalledTimes(2);
   });
 
   it("evicts old receipts while retaining recently emitted finals", () => {
     const { state, refresh } = createHost();
     for (let index = 0; index < 1_000; index += 1) {
-      refreshPullRequestsForFinalReply(state, final(message, `run-${index}`));
+      refreshPullRequestsForFinalReply(state, `run-${index}`, message);
     }
-    refreshPullRequestsForFinalReply(state, final(message, "run-999"));
+    refreshPullRequestsForFinalReply(state, "run-999", message);
     expect(refresh).toHaveBeenCalledTimes(1_000);
-    refreshPullRequestsForFinalReply(state, final(message, "run-0"));
+    refreshPullRequestsForFinalReply(state, "run-0", message);
     expect(refresh).toHaveBeenCalledTimes(1_001);
   });
 
@@ -160,12 +162,12 @@ describe("PR refresh emission receipts", () => {
       role: "assistant",
       content: [{ type: "text", text: largeText }],
     };
-    refreshPullRequestsForFinalReply(state, final(large));
-    refreshPullRequestsForFinalReply(state, final(large));
-    refreshPullRequestsForFinalReply(
-      state,
-      final({ ...large, content: [{ type: "text", text: largeText + "different" }] }),
-    );
+    refreshPullRequestsForFinalReply(state, "run-1", large);
+    refreshPullRequestsForFinalReply(state, "run-1", large);
+    refreshPullRequestsForFinalReply(state, "run-1", {
+      ...large,
+      content: [{ type: "text", text: largeText + "different" }],
+    });
     expect(refresh).toHaveBeenCalledTimes(3);
   });
 });
