@@ -500,7 +500,8 @@ describe("Control UI E2E resource ownership", () => {
 
   it.each([undefined, 1])(
     "admits every prebuilt real-Gateway file once with the native worker cap %s",
-    (workers) => {
+    async (workers) => {
+      const { uiE2ePrivateServerTestFiles } = await import("./vitest/vitest.ui-e2e.config.ts");
       const result = probeOwnership({
         prebuilt: true,
         cli: workers === undefined ? [] : ["--maxWorkers", String(workers)],
@@ -550,10 +551,13 @@ describe("Control UI E2E resource ownership", () => {
       expect(parallel).toHaveLength(13);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
-      expect(parallel.filter((entry) => entry.project === "ui-e2e-real-gateway")).toHaveLength(9);
-      expect(
-        parallel.filter((entry) => entry.project === "ui-e2e-real-gateway-standalone"),
-      ).toHaveLength(4);
+      for (const entry of parallel) {
+        expect(entry.project).toBe(
+          uiE2ePrivateServerTestFiles.includes(entry.file)
+            ? "ui-e2e-real-gateway-standalone"
+            : "ui-e2e-real-gateway",
+        );
+      }
       expect(result.admissions.toSorted()).toEqual(
         result.contexts.map((entry) => entry.name).toSorted(),
       );
