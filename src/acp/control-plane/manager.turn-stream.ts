@@ -12,6 +12,7 @@ import { normalizeText } from "./runtime-options.js";
 /** Mutable gate used to suppress late events after timeout/cancel races. */
 type AcpTurnEventGate = {
   open: boolean;
+  pendingDelivery?: Promise<void>;
 };
 
 /** Summary of whether a turn stream emitted user-visible output or terminal events. */
@@ -58,11 +59,20 @@ async function consumeAcpTurnEvents(params: {
         normalizeText(event.message) || "ACP turn failed before completion.",
         event.detailCode ? { detailCode: event.detailCode } : undefined,
       );
-    } else if (event.type === "text_delta" || event.type === "tool_call") {
-      sawOutput = true;
-      await params.onOutputEvent?.(event);
     }
-    await params.onEvent?.(forwardedEvent);
+    const outputEvent =
+      event.type === "text_delta" || event.type === "tool_call" ? event : undefined;
+    if (outputEvent) {
+      sawOutput = true;
+    }
+    params.eventGate.pendingDelivery = Promise.resolve(
+      outputEvent ? params.onOutputEvent?.(outputEvent) : undefined,
+    ).then(() => params.onEvent?.(forwardedEvent));
+    try {
+      await params.eventGate.pendingDelivery;
+    } finally {
+      params.eventGate.pendingDelivery = undefined;
+    }
   }
 
   if (params.eventGate.open && streamError) {
@@ -146,15 +156,6 @@ export async function consumeAcpTurnStream(params: {
       },
       (error: unknown) => ({ kind: "prompt-start-error" as const, error }),
     );
-    const eventsPromise = consumeAcpTurnEvents({
-      events: turn.events,
-      eventGate: params.eventGate,
-      onEvent: params.onEvent,
-      onOutputEvent: params.onOutputEvent,
-    }).then(
-      (outcome) => ({ kind: "events" as const, outcome }),
-      (error: unknown) => ({ kind: "event-error" as const, error }),
-    );
     const resultPromise = turn.result.then(
       (result) => {
         promptReadinessOpen = false;
@@ -163,6 +164,22 @@ export async function consumeAcpTurnStream(params: {
       (error: unknown) => {
         promptReadinessOpen = false;
         return { kind: "result-error" as const, error };
+      },
+    );
+    const eventsPromise = consumeAcpTurnEvents({
+      events: turn.events,
+      eventGate: params.eventGate,
+      onEvent: params.onEvent,
+      onOutputEvent: params.onOutputEvent,
+    }).then(
+      (outcome) => ({ kind: "events" as const, outcome }),
+      async (error: unknown) => {
+        // Event delivery can fail before prompt readiness. Cancel its producer
+        // immediately, then retain the actor until backend cleanup completes.
+        await turn.cancel({ reason: "turn-events-error" }).catch(() => {});
+        await turn.closeStream({ reason: "turn-events-error" }).catch(() => {});
+        await resultPromise;
+        return { kind: "event-error" as const, error };
       },
     );
 
@@ -185,7 +202,6 @@ export async function consumeAcpTurnStream(params: {
     let result: AcpRuntimeTurnResult | null = null;
     const firstOutcome = await Promise.race([eventsPromise, resultPromise]);
     if (firstOutcome.kind === "event-error") {
-      await turn.closeStream({ reason: "turn-events-error" }).catch(() => {});
       throw firstOutcome.error;
     }
     if (firstOutcome.kind === "events") {
@@ -207,9 +223,15 @@ export async function consumeAcpTurnStream(params: {
     }
 
     let closedTerminalStream = false;
-    if (!eventOutcome) {
+    while (!eventOutcome) {
+      // Channel delivery can outlive the backend result. Only an idle event
+      // iterator may be closed; closeStream discards queued ACPX output.
+      await params.eventGate.pendingDelivery?.catch(() => {});
       let eventsOutcome = await Promise.race([eventsPromise, waitForQueuedEvents()]);
       if (eventsOutcome === "pending") {
+        if (params.eventGate.pendingDelivery) {
+          continue;
+        }
         await turn.closeStream({ reason: `turn-result-${result.status}` }).catch(() => {});
         closedTerminalStream = true;
         eventsOutcome = await eventsPromise;

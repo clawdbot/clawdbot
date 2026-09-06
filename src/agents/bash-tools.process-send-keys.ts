@@ -11,7 +11,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { textResult } from "./tools/tool-results.js";
 
 function failText(text: string): AgentToolResult<unknown> {
-  return textResult(text, { status: "failed" });
+  return textResult(text, { status: "failed", error: text });
 }
 
 export async function writeProcessStdin(stdin: ManagedRunStdin, data: string | Buffer) {

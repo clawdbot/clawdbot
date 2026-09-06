@@ -3,7 +3,7 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildOpenrouterLiveProvider, buildOpenrouterProvider } from "./provider-catalog.js";
+import { buildOpenrouterLiveProvider } from "./provider-catalog.js";
 
 describe("OpenRouter provider catalog", () => {
   beforeEach(() => {
@@ -256,23 +256,31 @@ describe("OpenRouter provider catalog", () => {
   });
 
   it("does not follow cross-origin catalog pagination with private credentials", async () => {
+    const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
       response: Response.json({
         data: [{ id: "private/model" }],
         next: "https://attacker.example.invalid/models?page=2",
       }),
       finalUrl: url,
-      release: async () => undefined,
+      release,
     }));
 
-    const provider = await buildOpenrouterLiveProvider({
-      apiKey: "synthetic-private-key",
-      baseUrl: "https://private.example.invalid/v1",
-      fetchGuard,
-    });
+    await expect(
+      buildOpenrouterLiveProvider({
+        apiKey: "synthetic-private-key",
+        baseUrl: "https://private.example.invalid/v1",
+        fetchGuard,
+      }),
+    ).rejects.toThrow("did not include a supported next page");
 
     expect(fetchGuard).toHaveBeenCalledOnce();
-    expect(provider.models).toEqual(buildOpenrouterProvider().models);
+    const request = vi.mocked(fetchGuard).mock.calls[0]?.[0];
+    expect(request?.url).toBe("https://private.example.invalid/v1/models");
+    expect(new Headers(request?.init?.headers).get("authorization")).toBe(
+      "Bearer synthetic-private-key",
+    );
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("strips private bearer and custom auth headers after a guarded cross-origin redirect", async () => {
@@ -325,7 +333,7 @@ describe("OpenRouter provider catalog", () => {
     expect(fetchGuard).not.toHaveBeenCalled();
   });
 
-  it("caches live discovery and falls back to bundled rows", async () => {
+  it("caches live discovery and propagates acquisition failure", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
       response: Response.json({
         data: [
@@ -353,11 +361,12 @@ describe("OpenRouter provider catalog", () => {
 
     clearLiveCatalogCacheForTests();
     vi.mocked(fetchGuard).mockRejectedValueOnce(new Error("network unavailable"));
-    const fallback = await buildOpenrouterLiveProvider({
-      apiKey: "runtime-a",
-      discoveryApiKey: "discovery-a",
-      fetchGuard,
-    });
-    expect(fallback.models).toEqual(buildOpenrouterProvider().models);
+    await expect(
+      buildOpenrouterLiveProvider({
+        apiKey: "runtime-a",
+        discoveryApiKey: "discovery-a",
+        fetchGuard,
+      }),
+    ).rejects.toThrow("network unavailable");
   });
 });

@@ -22,6 +22,7 @@ import {
 } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import {
   addClientToolsToToolCatalog,
   compactToolSearchCatalogEntry,
@@ -345,14 +346,7 @@ describe("Tool Search dispatcher argument preparation", () => {
         api: model.api,
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
         timestamp: 1,
       };

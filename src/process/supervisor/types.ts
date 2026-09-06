@@ -154,6 +154,5 @@ export interface ProcessSupervisor {
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
-  waitForScope?: (scopeKey: string) => Promise<void>;
   getRecord(runId: string): RunRecord | undefined;
 }

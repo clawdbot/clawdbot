@@ -114,6 +114,12 @@ its own server preset, so verification does not rewrite an existing managed
 server's preset. Downloaded files may remain cached for a retry. Setup verifies and reuses cached
 recommendations, and charges disk space only for missing model and runtime files.
 
+Managed router presets retain configured chat models in deterministic order and
+remove model sections outside that inventory. Chat and embedding preparation
+update their owned settings while preserving the header, `[*]` defaults,
+comments, and additional options on retained models. Embedding-only setup uses
+a fresh preset.
+
 ### Set up only local embeddings
 
 When `memory.search.provider` is `local` and chat setup cannot proceed or is

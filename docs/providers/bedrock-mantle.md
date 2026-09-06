@@ -87,10 +87,21 @@ OpenClaw attempts to generate a Mantle bearer token from the AWS default
 credential chain. It then discovers available Mantle models by querying the
 region's `/v1/models` endpoint.
 
-| Behavior          | Detail                                                                               |
-| ----------------- | ------------------------------------------------------------------------------------ |
-| Discovery cache   | Results cached for 1 hour per region; a fetch failure returns the last cached result |
-| IAM token refresh | Every 2 hours, cached per region                                                     |
+| Behavior          | Detail                                                              |
+| ----------------- | ------------------------------------------------------------------- |
+| Discovery cache   | Results cached for 1 hour for the same region and bearer credential |
+| IAM token refresh | Every 2 hours, cached per region                                    |
+
+A failed refresh reports unavailable or rejected catalog access. The catalog keeps
+compatible last-good models with that failure status; expired discovery data does
+not become a successful refresh. A successful empty response clears discovered
+membership. Restore endpoint access and refresh again after a failure.
+
+The plugin's public discovery helpers retain their v2026.9.2 advisory defaults:
+same-credential stale rows can be returned on failure, and implicit resolution
+returns `null` for empty results. Programmatic callers can pass
+`discoveryMode: "strict"` for failure propagation and successful empty provider
+results. The bundled catalog hooks always select that strict mode.
 
 To keep the Mantle plugin enabled but suppress automatic discovery and IAM
 bearer-token generation, disable the plugin-owned discovery toggle:
@@ -156,15 +167,16 @@ complete Claude model entries you want to use.
   </Accordion>
 
   <Accordion title="Endpoint unavailability">
-    If the Mantle endpoint is unavailable, returns no models, or bearer-token
-    resolution fails, discovery returns an empty result and the implicit
-    provider is skipped. OpenClaw does not error; other configured providers
-    continue to work normally.
+    Failed endpoint requests report unavailable or rejected catalog access.
+    Compatible last-good models remain listed with that failure status. A
+    successful empty response clears discovered membership. If no bearer token
+    can be resolved, discovery is not attempted and the implicit provider is
+    skipped. Other configured providers continue to work normally.
   </Accordion>
 
   <Accordion title="Claude via the Anthropic Messages route">
     When automatic discovery owns the model list, OpenClaw appends five Claude
-    models after a successful lookup, regardless of what `/v1/models` returns:
+    models after a successful `/v1/models` lookup that returns at least one model:
     `amazon-bedrock-mantle/anthropic.claude-opus-5` (Claude Opus 5),
     `amazon-bedrock-mantle/anthropic.claude-sonnet-5` (Claude Sonnet 5),
     `amazon-bedrock-mantle/anthropic.claude-opus-4-7` (Claude Opus 4.7), and
