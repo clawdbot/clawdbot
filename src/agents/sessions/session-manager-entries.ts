@@ -1,6 +1,6 @@
 import {
-  inspectTranscriptEventsSync,
   readActiveTranscriptEntryAnchor,
+  readTranscriptMutationAtSync,
   validatePreparedAssistantAppendSync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
@@ -175,7 +175,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (!this.persistenceTarget) {
       return null;
     }
-    return inspectTranscriptEventsSync(this.persistenceTarget).snapshot.transcriptUpdatedAt;
+    return readTranscriptMutationAtSync(this.persistenceTarget);
   }
 
   private createTranscriptMutationConflictError(): Error {

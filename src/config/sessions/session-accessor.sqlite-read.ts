@@ -147,6 +147,20 @@ export function inspectRuntimeTranscriptEventsSync(scope: SessionTranscriptReadS
   );
 }
 
+/** Reads only the current transcript mutation fence without parsing transcript rows. */
+export function readTranscriptMutationAtSync(scope: SessionTranscriptReadScope): number | null {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () => readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt,
+    {
+      databaseLabel: database.path,
+      operationLabel: "session transcript mutation read",
+    },
+  );
+}
+
 /** Validates a prepared assistant using indexed identities and returns its exact mutation fence. */
 export function validatePreparedAssistantAppendSync(
   scope: SessionTranscriptReadScope,

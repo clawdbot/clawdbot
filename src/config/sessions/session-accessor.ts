@@ -263,6 +263,7 @@ export {
   readTranscriptEventAtSeqSync,
   readTranscriptIdentityByEventId,
   readTranscriptRawDelta,
+  readTranscriptMutationAtSync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
   validatePreparedAssistantAppendSync,

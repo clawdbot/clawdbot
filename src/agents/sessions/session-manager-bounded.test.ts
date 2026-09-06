@@ -108,6 +108,86 @@ it("keeps generated entry ids unique outside a bounded transcript tail", async (
   );
 });
 
+it("retries a stale bounded append without parsing transcript rows outside the bounded context", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-bounded-stale-append-");
+  const scope = {
+    agentId: "main",
+    sessionId: "bounded-stale-append",
+    sessionKey: "agent:main:bounded-stale-append",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "excluded",
+    message: { role: "user", content: "excluded" },
+  });
+  await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "retained",
+    parentId: "excluded",
+    message: { role: "user", content: "retained" },
+  });
+  const manager = SessionManager.openBounded(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 1,
+  });
+  const database = openOpenClawAgentDatabase({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
+  });
+  database.db
+    .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1")
+    .run("{excluded-row-is-not-json", scope.sessionId);
+  await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "out-of-band",
+    parentId: "retained",
+    message: { role: "assistant", content: "late" },
+  });
+
+  const appendedId = manager.appendModelChange("openai", "gpt-5.6");
+
+  expect(
+    database.db
+      .prepare(
+        "SELECT parent_id FROM transcript_event_identities WHERE session_id = ? AND event_id = ?",
+      )
+      .get(scope.sessionId, appendedId),
+  ).toEqual({ parent_id: "out-of-band" });
+  expect(
+    database.db
+      .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = 1")
+      .get(scope.sessionId),
+  ).toEqual({ event_json: "{excluded-row-is-not-json" });
+});
+
+it("accepts a prepared assistant whose parent is the admitted user", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-admitted-assistant-");
+  const scope = {
+    agentId: "main",
+    sessionId: "admitted-assistant",
+    sessionKey: "agent:main:admitted-assistant",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const manager = SessionManager.open(scope, dir);
+  const admitted = manager.appendMessageWithTranscriptAnchor({
+    role: "user",
+    content: "current",
+    timestamp: 1,
+  });
+  if (!admitted.anchor) {
+    throw new Error("missing admission anchor");
+  }
+
+  runWithSessionTranscriptReadFence(
+    { ...admitted.anchor, logicalTurnId: "current", role: "user" },
+    () => expect(() => manager.appendMessage(buildAssistantMessage("reply"))).not.toThrow(),
+  );
+});
+
 it("appends an assistant without parsing transcript rows outside the bounded context", async () => {
   const dir = tempDirs.make("openclaw-session-manager-bounded-assistant-");
   const scope = {

@@ -60,6 +60,12 @@ export function canRebasePreparedAssistantInTransaction(
   if (preparedParentId !== null && !preparedParent) {
     return false;
   }
+  const admitted = admittedUserId
+    ? readTranscriptIdentityByEventId(database, sessionId, admittedUserId)
+    : undefined;
+  if (admittedUserId && !admitted) {
+    return false;
+  }
   const newerMessageMetadata = Array.from(
     iterateSqliteQuerySync(
       database.db,
@@ -89,14 +95,12 @@ export function canRebasePreparedAssistantInTransaction(
   ) {
     return false;
   }
-  const admitted = admittedUserId
-    ? newerMessageMetadata.find((row) => row.event_id === admittedUserId)
-    : undefined;
-  if (admittedUserId && !admitted) {
+  const admittedIsNewer = admitted !== undefined && admitted.seq > (preparedParent?.seq ?? -1);
+  if (admittedIsNewer && !newerMessageMetadata.some((row) => row.event_id === admittedUserId)) {
     return false;
   }
   if (newerMessageMetadata.length === 0) {
-    return admittedUserId === undefined;
+    return !admittedIsNewer;
   }
   const newerRoles = Array.from(
     iterateSqliteQuerySync(
