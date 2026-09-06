@@ -3717,7 +3717,7 @@ src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2
 src/tui/tui-session-run-coordinator.ts	1
 src/tui/tui-stream-assembler.ts	2
-src/tui/tui-task-suggestions.ts	7
+src/tui/tui-task-suggestions.ts	6
 src/tui/tui.ts	5
 src/utils.ts	1
 src/utils/delivery-context.shared.ts	2
