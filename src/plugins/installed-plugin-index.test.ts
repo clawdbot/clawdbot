@@ -334,19 +334,21 @@ describe("installed plugin index", () => {
       name: "tolerates stale manifest records without normalized channels",
       id: "stale-record",
       idHint: "demo",
+      installOwner: undefined,
     },
     {
       name: "does not read inherited prototype names as install records",
       id: "toString",
       idHint: "toString",
+      installOwner: "toString",
     },
-  ])("$name", ({ id, idHint }) => {
+  ])("$name", ({ id, idHint, installOwner }) => {
     const rootDir = makeTempDir();
     writeRuntimeEntry(rootDir);
     const manifestPath = path.join(rootDir, "openclaw.plugin.json");
 
     const records = buildInstalledPluginIndexRecords({
-      candidates: [createPluginCandidate({ rootDir, idHint })],
+      candidates: [createPluginCandidate({ rootDir, idHint, installOwner })],
       registry: {
         plugins: [
           {
