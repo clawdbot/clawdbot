@@ -560,6 +560,31 @@ function claimCodexAppServerThreadOwnership(
   };
 }
 
+/**
+ * Records that compaction rebuilt this thread from its creation-time developer
+ * instructions and discarded the injected catalog refresh. Incognito compaction
+ * keeps its separately owned subscription, so there is no claim/retain cycle to
+ * carry the reversion and the retained record has to be corrected in place.
+ */
+export function revertCodexAppServerLiveThreadSkillsCatalog(
+  client: CodexAppServerClient,
+  threadId: string,
+): void {
+  const runtime = configuredClients.get(client);
+  if (!runtime || runtime.closed) {
+    return;
+  }
+  const retained = runtime.retainedThreads.get(threadId);
+  const ephemeralPolicy = retained?.ephemeralPolicy;
+  if (!retained || !ephemeralPolicy) {
+    return;
+  }
+  retained.ephemeralPolicy = {
+    ...ephemeralPolicy,
+    skillsInstructions: ephemeralPolicy.nativeSkillsInstructions,
+  };
+}
+
 /** Distinguish active claimed ownership from an already-evicted idle subscription. */
 export function hasCodexAppServerLiveThread(
   client: CodexAppServerClient,

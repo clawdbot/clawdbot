@@ -25,6 +25,7 @@ import { resolveCodexBindingAppServerConnection } from "./binding-connection.js"
 import {
   consumeCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
+  revertCodexAppServerLiveThreadSkillsCatalog,
   type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
 import {
@@ -862,6 +863,12 @@ async function compactCodexNativeThread(
         } finally {
           completionWatch.cancel();
           try {
+            if (compactionSucceeded) {
+              // An incognito thread keeps its separately owned subscription, so
+              // it never reaches the re-retain below. Correct its record in place
+              // or the discarded catalog refresh is never delivered again.
+              revertCodexAppServerLiveThreadSkillsCatalog(client, binding.threadId);
+            }
             if (
               (compactionSucceeded || compactionRequestDefinitelyRejected) &&
               retainedThreadOwnership
