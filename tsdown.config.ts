@@ -760,7 +760,7 @@ const unifiedDeclarationCompilerOptions: NonNullable<DtsOptions["compilerOptions
   stableTypeOrdering: true;
 } = { stableTypeOrdering: true };
 
-const configs = [
+const configs: UserConfig[] = [
   nodeBuildConfig({
     name: TSDOWN_PACKAGE_CONFIG_GROUP,
     entry: buildAgentCoreDistEntries(),
@@ -853,6 +853,6 @@ const configs = [
         ),
       )
     : []),
-] satisfies UserConfig[];
+];
 
 export default configs;
