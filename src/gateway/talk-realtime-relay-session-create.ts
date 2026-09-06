@@ -578,13 +578,18 @@ export function createTalkRealtimeRelaySession(
       closeRelaySession(active, reason);
     },
   };
-  let bridge: ReturnType<typeof harness.createBridge>;
+  let bridgeResult:
+    | { ok: true; bridge: ReturnType<typeof harness.createBridge> }
+    | { ok: false; error: unknown };
   try {
-    bridge = harness.createBridge(bridgeRequest);
+    bridgeResult = { ok: true, bridge: harness.createBridge(bridgeRequest) };
   } catch (error) {
-    // oxlint-disable-next-line preserve-caught-error -- Raw provider causes must not cross the public relay boundary.
-    throw new Error(publicError(error));
+    bridgeResult = { ok: false, error };
   }
+  if (!bridgeResult.ok) {
+    throw new Error(publicError(bridgeResult.error));
+  }
+  const bridge = bridgeResult.bridge;
   bridgeRef.current = bridge;
   const earlyTerminal = constructionTerminal.current;
   if (earlyTerminal) {

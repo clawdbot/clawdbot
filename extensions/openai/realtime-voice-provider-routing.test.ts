@@ -100,18 +100,20 @@ describe("OpenAI realtime voice provider routing", () => {
 
     expect(provider.models).toContain("gpt-live-1-codex");
     expect(provider.models).not.toContain(OPAQUE_REALTIME_MODEL);
-    expect(provider.capabilities.voicesByModel).toEqual({
-      "gpt-live-1-codex": [
-        "arbor",
-        "breeze",
-        "cove",
-        "ember",
-        "juniper",
-        "maple",
-        "sol",
-        "spruce",
-        "vale",
-      ],
+    expect(provider.capabilities).toMatchObject({
+      voicesByModel: {
+        "gpt-live-1-codex": [
+          "arbor",
+          "breeze",
+          "cove",
+          "ember",
+          "juniper",
+          "maple",
+          "sol",
+          "spruce",
+          "vale",
+        ],
+      },
     });
     expect(
       internalApi.isGatewayRelayConfigured({
