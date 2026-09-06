@@ -185,6 +185,127 @@ function firstAgentCommandOptions() {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
+  it.each(
+    (
+      [
+        { name: "empty string", result: { role: "tool", tool_call_id: "call_1", content: "" } },
+        { name: "whitespace", result: { role: "tool", tool_call_id: "call_1", content: " \n " } },
+        { name: "empty array", result: { role: "tool", tool_call_id: "call_1", content: [] } },
+        {
+          name: "empty text part",
+          result: { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "" }] },
+        },
+        { name: "legacy empty string", result: { role: "function", name: "lookup", content: "" } },
+        { name: "legacy null", result: { role: "function", name: "lookup", content: null } },
+      ] satisfies Array<{
+        name: string;
+        result: OpenAI.ChatCompletionToolMessageParam | OpenAI.ChatCompletionFunctionMessageParam;
+      }>
+    ).flatMap(({ name, result }) => [false, true].map((stream) => ({ name, result, stream }))),
+  )("continues a client tool result with $name (stream=$stream)", async ({ result, stream }) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Lookup completed." }] } as never);
+    const client = createOpenAiChatClient(enabledPort);
+    const request = {
+      model: "openclaw",
+      messages: [
+        { role: "user", content: "Check the account." },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "lookup", arguments: "{}" },
+            },
+          ],
+        },
+        result,
+      ] satisfies OpenAI.ChatCompletionMessageParam[],
+    };
+    const response = stream
+      ? await client.chat.completions.stream(request).finalChatCompletion()
+      : await client.chat.completions.create(request);
+    expect(response.choices[0]?.message.content).toBe("Lookup completed.");
+    expect(response.choices[0]?.finish_reason).toBe("stop");
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    const message = firstAgentCommandOptions()?.message;
+    expect(message).toContain("tool_call id=call_1 name=lookup arguments={}");
+    expect(message?.split(CURRENT_MESSAGE_MARKER)[1]).toBe(
+      `\nTool:${result.role === "function" ? result.name : result.tool_call_id}: `,
+    );
+  });
+
+  it.each([false, true])(
+    "preserves each parallel client tool result (emptyFirst=%s)",
+    async (emptyFirst) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: [{ text: "Both lookups completed." }],
+      } as never);
+      const results: OpenAI.ChatCompletionToolMessageParam[] = [
+        { role: "tool", tool_call_id: "call_1", content: "" },
+        { role: "tool", tool_call_id: "call_2", content: "0" },
+      ];
+      const response = await createOpenAiChatClient(enabledPort).chat.completions.create({
+        model: "openclaw",
+        messages: [
+          { role: "user", content: "Compare the accounts." },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: ["call_1", "call_2"].map((id) => ({
+              id,
+              type: "function",
+              function: { name: "lookup", arguments: "{}" },
+            })),
+          },
+          ...(emptyFirst ? results : results.toReversed()),
+        ],
+      });
+      expect(response.choices[0]?.message.content).toBe("Both lookups completed.");
+      const message = firstAgentCommandOptions()?.message;
+      expect(message).toContain("Tool:call_1: ");
+      expect(message).toContain("Tool:call_2: 0");
+      expect(message?.split(CURRENT_MESSAGE_MARKER)[1]).toBe(
+        emptyFirst ? "\nTool:call_2: 0" : "\nTool:call_1: ",
+      );
+    },
+  );
+
+  it.each([
+    { role: "tool", tool_call_id: "call_1" },
+    { role: "tool", tool_call_id: "call_1", content: null },
+    { role: "tool", tool_call_id: "call_1", content: 0 },
+    { role: "tool", tool_call_id: "call_1", content: {} },
+    { role: "tool", tool_call_id: "call_1", content: [null] },
+    { role: "tool", tool_call_id: "call_1", content: [{}] },
+    { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: 0 }] },
+    { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "" }, {}] },
+    { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: " \n " }, {}] },
+    { role: "tool", content: "" },
+    { role: "tool", tool_call_id: " ", content: "" },
+    { role: "function", name: "lookup" },
+    { role: "function", name: "lookup", content: [] },
+    { role: "function", name: "lookup", content: [{ type: "text", text: "" }] },
+    { role: "function", content: null },
+    { role: "user", content: "" },
+    { role: "assistant", content: "" },
+  ])(
+    "does not invent a client tool result for malformed or missing content: %j",
+    async (message) => {
+      agentCommandMock.mockClear();
+      const response = await postChatCompletions(enabledPort, {
+        model: "openclaw",
+        messages: [message],
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("binds the Gateway lifecycle resolver to chat-completion runs", async () => {
     const started = await startGatewayServerWithRetries({
       port: await getGatewayTestPort(),

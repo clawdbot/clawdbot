@@ -3484,50 +3484,83 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it("reuses the prior session when previous_response_id is provided", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Let me check that." }],
-      meta: {
-        stopReason: "tool_calls",
-        pendingToolCalls: [
-          {
-            id: "call_1",
-            name: "get_weather",
-            arguments: '{"city":"Taipei"}',
-          },
-        ],
-      },
-    } as never);
+  it.each([
+    { stream: false, output: "" },
+    { stream: true, output: "" },
+    { stream: false, output: " \n " },
+    { stream: true, output: "0" },
+    { stream: false, output: "Sunny, 70F." },
+  ])(
+    "continues a client tool result (stream=$stream, output=$output)",
+    async ({ stream, output }) => {
+      const port = enabledPort;
+      const client = new OpenAI({
+        apiKey: "test",
+        baseURL: `http://127.0.0.1:${port}/v1`,
+        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+        maxRetries: 0,
+      });
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: [{ text: "Let me check that." }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "get_weather",
+              arguments: '{"city":"Taipei"}',
+            },
+          ],
+        },
+      } as never);
 
-    const firstResponse = await postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      input: "check the weather",
-      tools: WEATHER_TOOL,
-    });
-    expect(firstResponse.status).toBe(200);
-    const firstJson = (await firstResponse.json()) as { id?: string };
-    const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
-    expect(firstJson.id).toMatch(/^resp_/);
-    const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
+      const firstJson = await client.responses.create({
+        stream: false,
+        model: "openclaw",
+        input: "check the weather",
+        tools: [{ ...WEATHER_TOOL[0], parameters: {}, strict: false }],
+      });
+      expect(firstJson.status).toBe("completed");
+      const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
+      expect(firstJson.id).toMatch(/^resp_/);
+      const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
 
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "It is sunny." }],
-    } as never);
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: [{ text: "It is sunny." }],
+      } as never);
 
-    const secondResponse = await postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      previous_response_id: firstJson.id,
-      input: [{ type: "function_call_output", call_id: "call_1", output: "Sunny, 70F." }],
-    });
-    expect(secondResponse.status).toBe(200);
-    const secondOpts = firstAgentOpts(1) as { sessionKey?: string } | undefined;
-    expect(secondOpts?.sessionKey).toBe(firstSessionKey);
-    await ensureResponseConsumed(secondResponse);
-  });
+      const request = {
+        model: "openclaw",
+        previous_response_id: firstJson.id,
+        input: [{ type: "function_call_output" as const, call_id: "call_1", output }],
+      };
+      const secondResponse = stream
+        ? await client.responses.stream(request).finalResponse()
+        : await client.responses.create(request);
+      expect(secondResponse.status).toBe("completed");
+      expect(secondResponse.output_text).toBe("It is sunny.");
+      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      expect(firstAgentOpts(1)).toMatchObject({
+        sessionKey: firstSessionKey,
+        message: `Tool:call_1: ${output}`,
+      });
+    },
+  );
+
+  it.each([undefined, null, 0, {}, []].map((output) => ({ output })))(
+    "rejects malformed function output: %j",
+    async ({ output }) => {
+      agentCommandMock.mockClear();
+      const response = await postResponses(enabledPort, {
+        model: "openclaw",
+        input: [{ type: "function_call_output", call_id: "call_1", output }],
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("reuses prior sessions across different user values when auth scope matches", async () => {
     const port = enabledPort;
