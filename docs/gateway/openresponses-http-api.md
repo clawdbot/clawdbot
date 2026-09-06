@@ -245,6 +245,8 @@ Event types currently emitted: `response.created`, `response.in_progress`, `resp
 
 Failed agent runs, including whole-agent timeouts, return a failed response. Streaming failures emit `response.failed` followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
 
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
+
 ## Usage
 
 `usage` is populated when the underlying provider reports token counts. OpenClaw normalizes common OpenAI-style aliases before those counters reach downstream status/session surfaces, including `input_tokens` / `output_tokens` and `prompt_tokens` / `completion_tokens`.

@@ -97,6 +97,7 @@ describe("post-plugin update readiness", () => {
   });
 
   it("runs updated readiness checks even when no plugin package changed", async () => {
+    const beforeDoctor = vi.fn(async () => undefined);
     await completePostCorePluginUpdate({
       root: "/opt/openclaw",
       pluginUpdate: { ...pluginUpdate, changed: false },
@@ -104,11 +105,72 @@ describe("post-plugin update readiness", () => {
       yes: true,
       json: true,
       timeoutMs: 5_000,
+      beforeDoctor,
     });
 
+    expect(beforeDoctor).not.toHaveBeenCalled();
     expect(mocks.runExec.mock.calls.map(([, args]) => args)).toEqual([
+      ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
       ["/opt/openclaw/dist/index.js", "doctor", "--lint", "--json", "--severity-min", "error"],
     ]);
+  });
+
+  it("requires the lifecycle owner before starting fresh Doctor maintenance", async () => {
+    const beforeDoctor = vi.fn(async () => undefined);
+    await completePostCorePluginUpdate({
+      root: "/opt/openclaw",
+      pluginUpdate,
+      freshDoctorRequired: true,
+      yes: true,
+      json: true,
+      timeoutMs: 5_000,
+      beforeDoctor,
+    });
+    expect(beforeDoctor).toHaveBeenCalledOnce();
+    expect(beforeDoctor.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.runExec.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("uses target validation when the unchanged-plugin parent retains an older schema", async () => {
+    mocks.readConfig.mockResolvedValue({ ...validConfigSnapshot, valid: false });
+    const result = await completePostCorePluginUpdate({
+      root: "/opt/openclaw",
+      pluginUpdate: { ...pluginUpdate, changed: false },
+      freshDoctorRequired: false,
+      yes: true,
+      json: true,
+      timeoutMs: 5_000,
+    });
+    expect(result.pluginUpdate.status).toBe("ok");
+    expect(result.configSnapshot.valid).toBe(false);
+    expect(mocks.runExec.mock.calls.map(([, args]) => args)).toEqual([
+      ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
+      ["/opt/openclaw/dist/index.js", "doctor", "--lint", "--json", "--severity-min", "error"],
+    ]);
+  });
+
+  it("does not start Doctor when the lifecycle owner refuses maintenance", async () => {
+    const beforeDoctor = vi.fn(async () => {
+      throw new Error("Gateway owner changed");
+    });
+    const result = await completePostCorePluginUpdate({
+      root: "/opt/openclaw",
+      pluginUpdate,
+      freshDoctorRequired: true,
+      yes: true,
+      json: true,
+      timeoutMs: 5_000,
+      beforeDoctor,
+    });
+    expect(beforeDoctor).toHaveBeenCalledOnce();
+    expect(mocks.runExec.mock.calls.some(([, args]) => args.includes("--repair"))).toBe(false);
+    expect(result.pluginUpdate).toMatchObject({
+      status: "error",
+      warnings: [
+        expect.objectContaining({ reason: expect.stringContaining("Gateway owner changed") }),
+      ],
+    });
   });
 
   it("returns the owner-provided remediation and refuses restart when readiness fails", async () => {

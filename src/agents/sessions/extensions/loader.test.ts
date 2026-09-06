@@ -48,4 +48,48 @@ export default async function(api) {
     expect(result.extensions).toHaveLength(1);
     expect(result.extensions[0]?.commands.has("sdk-subpath-probe")).toBe(true);
   });
+
+  it.each([
+    { sdk: "openclaw/plugin-sdk/agent-sessions", typebox: "typebox" },
+    { sdk: "@openclaw/plugin-sdk/agent-sessions", typebox: "@sinclair/typebox" },
+  ])("loads the host session SDK and schema helpers through $sdk", async ({ sdk, typebox }) => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-session-sdk-"));
+    tempDirs.push(dir);
+    const extensionPath = join(dir, "extension.ts");
+    await writeFile(
+      extensionPath,
+      `
+import { AuthStorage, ModelRegistry } from "${sdk}";
+import { streamProxy, IMAGE_BLOCK_TOKENS } from "${sdk.replace("agent-sessions", "agent-core")}";
+import { Type } from "${typebox}";
+import { Compile } from "${typebox}/compile";
+import { IsEmail } from "${typebox}/format";
+import { Check } from "${typebox}/value";
+
+export default function(api) {
+  const registry = ModelRegistry.inMemory(AuthStorage.inMemory({}));
+  registry.registerProvider("sdk-probe", {
+    api: "openai-responses",
+    baseUrl: "https://example.test",
+    models: [{ id: "probe" }],
+  });
+  const schema = Type.Number();
+  if (!Compile(schema).Check(1) || Check(schema, "invalid") || !IsEmail("probe@example.test")) {
+    throw new Error("host schema helpers did not preserve their contracts");
+  }
+  if (typeof streamProxy !== "function" || !(IMAGE_BLOCK_TOKENS > 0)) {
+    throw new Error("public agent-core exports were lost");
+  }
+  api.registerCommand("session-sdk-probe", {
+    description: registry.find("sdk-probe", "probe").id,
+    handler() {},
+  });
+}
+`,
+    );
+
+    const loaded = await loadExtensionsCached([extensionPath], dir);
+    expect(loaded.errors).toEqual([]);
+    expect(loaded.extensions[0]?.commands.get("session-sdk-probe")?.description).toBe("probe");
+  });
 });

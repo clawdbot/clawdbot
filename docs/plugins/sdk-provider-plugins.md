@@ -300,6 +300,12 @@ catalog, API-key auth, and dynamic model resolution.
     separate from account discovery; do not retry a rejected account request
     anonymously or substitute seed rows inside a strict builder.
 
+    Custom catalog hooks may receive optional `mode` metadata from
+    `ctx.resolveProviderApiKey()`: `api_key`, `oauth`, or `token`. When present,
+    it describes that lookup's selected credential. Use it when choosing a vendor
+    authentication scheme; a separate `resolveProviderAuth()` call may select a
+    different profile. Omitted mode metadata does not change existing callback behavior.
+
     For a non-Bearer or nonstandard list endpoint, pass options instead of
     `true`:
 
