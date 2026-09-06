@@ -32,6 +32,27 @@ describe("security audit model hygiene findings", () => {
         },
         expectedAbsentCheckId: "models.weak_tier",
       },
+      {
+        name: "gpt-6 generation",
+        cfg: {
+          agents: { defaults: { model: { primary: "github-copilot/gpt-6-astra" } } },
+        },
+        expectedAbsentCheckId: "models.weak_tier",
+      },
+      {
+        name: "gpt-4.1 stays below threshold",
+        cfg: {
+          agents: { defaults: { model: { primary: "openai/gpt-4.1" } } },
+        },
+        expectedPresent: [{ checkId: "models.weak_tier", severity: "warn" }],
+      },
+      {
+        name: "azure gpt-35-turbo alias stays below threshold",
+        cfg: {
+          agents: { defaults: { model: { primary: "azure-openai/gpt-35-turbo" } } },
+        },
+        expectedPresent: [{ checkId: "models.weak_tier", severity: "warn" }],
+      },
     ];
 
     for (const testCase of cases) {
