@@ -1,20 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import {
-  readSqliteBusyTimeout,
-  runWithSqliteBusyTimeout,
-  setSqliteBusyTimeout,
-} from "../../infra/sqlite-busy-timeout.js";
+import { setSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import {
   isSqliteLockError,
   runSqliteImmediateTransactionSync,
+  withSqliteWriteAdmissionService,
 } from "../../infra/sqlite-transaction.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
 
 const COMMIT_DECISION_TIMEOUT_MS = 5_000;
 const WAITING = 0;
@@ -24,20 +16,16 @@ const COMMITTING = 3;
 const SETTLED = 4;
 const REQUESTED = 5;
 
-const pendingAuthorizations = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteReclamationAuthorizations"),
-  () => new Map<string, () => void>(),
-);
-
 /** Preserve the reclamation owner's context when an unrelated synchronous writer helps. */
 export async function withSqliteReclamationAuthorization<T>(
-  buffer: SharedArrayBuffer | undefined,
-  databasePath: string,
-  assertCurrent: (() => void) | undefined,
+  buffer: SharedArrayBuffer,
+  database: DatabaseSync,
+  assertCurrent: () => void,
   run: (authorize: () => unknown[]) => Promise<T>,
 ): Promise<T> {
-  if (!buffer || !assertCurrent) {
-    return await run(() => []);
+  const databasePath = database.location();
+  if (databasePath === null) {
+    throw new Error("SQLite reclamation authorization requires a file-backed database");
   }
   const shared = new Int32Array(buffer);
   const inOwnerContext = AsyncLocalStorage.snapshot();
@@ -74,55 +62,7 @@ export async function withSqliteReclamationAuthorization<T>(
       }
     }
   };
-  pendingAuthorizations.set(databasePath, service);
-  try {
-    return await run(authorize);
-  } finally {
-    pendingAuthorizations.delete(databasePath);
-  }
-}
-
-/** Retry only write admission; never replay an append or its synchronous callbacks. */
-export function runSqliteTranscriptWriteTransaction<T>(
-  operation: Parameters<typeof runOpenClawAgentWriteTransaction<T>>[0],
-  options: Parameters<typeof runOpenClawAgentWriteTransaction>[1],
-  transactionOptions?: Parameters<typeof runOpenClawAgentWriteTransaction>[2],
-): T {
-  const database = openOpenClawAgentDatabase(options);
-  const service = pendingAuthorizations.get(database.path);
-  if (!service || database.db.isTransaction) {
-    return runOpenClawAgentWriteTransaction(operation, options, transactionOptions);
-  }
-  const busyTimeoutMs = readSqliteBusyTimeout(database.db);
-  const deadline = performance.now() + busyTimeoutMs;
-  let entered = false;
-  while (true) {
-    try {
-      return runWithSqliteBusyTimeout(
-        database.db,
-        Math.min(25, Math.max(0, Math.ceil(deadline - performance.now()))),
-        (restore) =>
-          runOpenClawAgentWriteTransaction(
-            (current) => {
-              entered = true;
-              restore();
-              return operation(current);
-            },
-            options,
-            transactionOptions,
-          ),
-        { lockFailureReporting: "suppress" },
-      );
-    } catch (error) {
-      if (entered || !isSqliteLockError(error) || performance.now() >= deadline) {
-        throw error;
-      }
-      service();
-      if (performance.now() >= deadline) {
-        throw error;
-      }
-    }
-  }
+  return await withSqliteWriteAdmissionService(database, service, () => run(authorize));
 }
 
 function rejectCommit(shared: Int32Array): void {
