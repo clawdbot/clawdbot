@@ -105,9 +105,11 @@ export function renderMessageActionButtons(
   },
 ) {
   return html`
-    ${details.replyTarget && opts.onReply
-      ? renderReplyButton(details.replyTarget, opts.onReply)
-      : nothing}
+    ${
+      details.replyTarget && opts.onReply
+        ? renderReplyButton(details.replyTarget, opts.onReply)
+        : nothing
+    }
     ${details.markdown ? renderCopyAsMarkdownButton(details.markdown) : nothing}
   `;
 }

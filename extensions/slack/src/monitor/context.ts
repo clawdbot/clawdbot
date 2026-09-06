@@ -46,10 +46,7 @@ import {
 } from "./suggested-prompts.js";
 import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
 
-export {
-  buildSlackAssistantThreadMetadata,
-  parseSlackAssistantThreadMetadata,
-} from "./assistant-thread-context.js";
+export { buildSlackAssistantThreadMetadata } from "./assistant-thread-context.js";
 export type { SlackAssistantThreadContext } from "./assistant-thread-context.js";
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 export { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./suggested-prompts.js";
@@ -121,7 +118,6 @@ export type SlackMonitorContext = {
   threadInheritParent: boolean;
   slashCommand: Required<import("openclaw/plugin-sdk/config-contracts").SlackSlashCommandConfig>;
   textLimit: number;
-  ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
 
@@ -225,7 +221,6 @@ export function createSlackMonitorContext(params: {
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
-  ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
 }): SlackMonitorContext {
@@ -635,7 +630,6 @@ export function createSlackMonitorContext(params: {
     threadInheritParent: params.threadInheritParent,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
-    ackReactionScope: params.ackReactionScope,
     typingReaction: params.typingReaction,
     mediaMaxBytes: params.mediaMaxBytes,
     logger,

@@ -4790,9 +4790,7 @@ describe("runCli exit behavior", () => {
 
     await runCli(["node", "openclaw", "doctor", "--help"]);
 
-    expect(registerCoreCliByNameMock.mock.calls).toEqual([
-      [program, ctx, "doctor", ["node", "openclaw", "doctor", "--help"]],
-    ]);
+    expect(registerCoreCliByNameMock.mock.calls).toEqual([[program, ctx, "doctor"]]);
     expect(registerSubCliByNameMock.mock.calls).toEqual([
       [program, "doctor", ["node", "openclaw", "doctor", "--help"]],
     ]);

@@ -1,7 +1,5 @@
-// Public chat transcript renderer and DOM shell.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
@@ -9,7 +7,6 @@ import {
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
 import {
-  markdownSessionHref,
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
 } from "../../../components/markdown-session-links.ts";
@@ -22,6 +19,7 @@ import {
   CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
   renderChatHistoryBoundary,
 } from "./chat-history-boundary.ts";
+import { renderChatPositionRail } from "./chat-position-rail.ts";
 import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
@@ -66,16 +64,22 @@ function renderTranscriptShell(
       ? html`
           <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
             ${historySentinel}
-            ${projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
-              ? historyHeader.template
-              : nothing}
-            ${projection.showLoadingSkeleton
-              ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
-              : nothing}
+            ${
+              projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
+                ? historyHeader.template
+                : nothing
+            }
+            ${
+              projection.showLoadingSkeleton
+                ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
+                : nothing
+            }
             ${projection.isEmpty && !projection.searchOpen ? renderWelcomeState(props) : nothing}
-            ${projection.isEmpty && projection.searchOpen
-              ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
-              : nothing}
+            ${
+              projection.isEmpty && projection.searchOpen
+                ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
+                : nothing
+            }
           </div>
         `
       : projection.renderRows(historySentinel, historyHeader);
@@ -102,24 +106,19 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
-        const sessionTarget =
-          markdownSessionLinkFromKeyboardEvent(event) ??
-          (event.key === "Enter"
-            ? markdownSessionHref(event, sessionRefFromPath, props.basePath)
-            : null);
+        const sessionTarget = markdownSessionLinkFromKeyboardEvent(event, props.basePath);
         if (sessionTarget) {
-          event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);
           return;
         }
         props.onHistoryIntent?.(event);
       }}
-      @touchstart=${props.onHistoryIntent
-        ? { handleEvent: props.onHistoryIntent, passive: true }
-        : null}
-      @touchmove=${props.onHistoryIntent
-        ? { handleEvent: props.onHistoryIntent, passive: true }
-        : null}
+      @touchstart=${
+        props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null
+      }
+      @touchmove=${
+        props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null
+      }
       @touchend=${props.onHistoryIntent}
       @touchcancel=${props.onHistoryIntent}
       @click=${(event: MouseEvent) => {
@@ -130,9 +129,7 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
-        const sessionTarget =
-          markdownSessionLinkFromEvent(event) ??
-          markdownSessionHref(event, sessionRefFromPath, props.basePath);
+        const sessionTarget = markdownSessionLinkFromEvent(event, props.basePath);
         if (sessionTarget && shouldHandleNavigationClick(event)) {
           event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);
@@ -148,6 +145,11 @@ function renderTranscriptShell(
         aria-atomic="true"
         >${transcript.liveAnnouncementText}</span
       >
+      ${renderChatPositionRail({
+        messages: projection.positionMessages,
+        transcript,
+        requestUpdate: props.onRequestUpdate ?? (() => {}),
+      })}
       ${transcriptContents}
     </div>
   `;

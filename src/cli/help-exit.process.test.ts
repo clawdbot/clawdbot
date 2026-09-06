@@ -248,7 +248,7 @@ describe("CLI help process exit", () => {
       const argv = ["node", "openclaw", group, "--help"];
       const registered =
         registry === "core"
-          ? await registerCoreCliByName(program, createProgramContext(), group, argv)
+          ? await registerCoreCliByName(program, createProgramContext(), group)
           : await registerSubCliByName(program, group, argv);
       const parseResult = await program
         .parseAsync(argv.slice(2), { from: "user" })
@@ -369,15 +369,17 @@ describe("models list JSON failure process output", () => {
 });
 
 describe("message broadcast process exit", () => {
-  it("exits nonzero after a structured target failure", async () => {
+  it("drains a large piped JSON payload before exiting nonzero on a structured target failure", async () => {
     const root = tempDirs.make("openclaw-message-broadcast-exit-");
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     const entryPath = path.join(root, "run-message-broadcast.mjs");
+    const largePayload = "x".repeat(8_388_608);
     await fs.writeFile(
       entryPath,
       `import { registerHooks } from "node:module";
 const messageModule = "data:text/javascript," + encodeURIComponent(\`export async function messageCommand() {
+  process.stdout.write(JSON.stringify(${JSON.stringify({ payload: largePayload })}) + "\\\\n");
   return ${JSON.stringify({
     kind: "broadcast",
     channel: "fixture",
@@ -400,11 +402,18 @@ registerHooks({
   },
 });
 const { createMessageCliHelpers } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/cli/program/message/helpers.ts")).href)});
+const { runCliWithExitFinalization } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/cli/one-shot-exit.ts")).href)});
 const { runMessageAction } = createMessageCliHelpers("fixture");
-await runMessageAction("broadcast", {
-  channel: "fixture",
-  targets: ["ok-target", "failed-target"],
-  message: "hello",
+await runCliWithExitFinalization({
+  run: () =>
+    runMessageAction("broadcast", {
+      channel: "fixture",
+      targets: ["ok-target", "failed-target"],
+      message: "hello",
+    }),
+  onError: (err) => {
+    console.error(err);
+  },
 });
 `,
     );
@@ -412,6 +421,7 @@ await runMessageAction("broadcast", {
     const child = spawnSync(process.execPath, ["--import", "tsx", entryPath], {
       cwd: path.resolve("."),
       encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
       env: {
         ...process.env,
         HOME: root,
@@ -429,6 +439,7 @@ await runMessageAction("broadcast", {
     expect(child.error).toBeUndefined();
     expect(child.signal).toBeNull();
     expect(child.status, child.stderr).toBe(1);
+    expect(JSON.parse(child.stdout.trim())).toEqual({ payload: largePayload });
   });
 });
 

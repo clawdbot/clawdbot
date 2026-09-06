@@ -1049,13 +1049,12 @@ describe("checkTokenDrift", () => {
     expect(result).toBeNull();
   });
 
-  it("detects drift when config has token but service has different token", () => {
+  it("detects token drift without choosing an installation action", () => {
     const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
     expect(result).toStrictEqual({
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
       message:
         "Config token differs from service token. The daemon will use the old token after restart.",
-      detail: "Run `openclaw gateway install --force` to sync the token.",
       level: "recommended",
     });
   });

@@ -817,6 +817,9 @@ whether voice-style TTS should ask providers for a native `voice-note` target or
 keep normal `audio-file` synthesis, and whether the channel transcodes
 non-native output before sending.
 
+One-off speech requests from the agent tool and `/tts` commands use the same
+channel delivery rules as automatic replies.
+
 Telegram also advertises captioned final TTS. With `tts.mode: "final"` and
 Auto-TTS set to `always` (or eligible `inbound` mode), streamed text is held
 until synthesis finishes and sent as the voice-note caption. Text beyond

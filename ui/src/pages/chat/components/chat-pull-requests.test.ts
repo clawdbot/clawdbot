@@ -6,7 +6,7 @@ import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../../src/gateway/control-ui-contract.js";
-import type { GitHubPublicationView } from "../chat-github-publication.ts";
+import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
 import {
   chatPullRequestId,
   createPullRequestBranch,
@@ -18,6 +18,7 @@ import {
 function publication(overrides: Partial<GitHubPublicationView> = {}): GitHubPublicationView {
   return {
     busy: false,
+    canWrite: true,
     locked: false,
     options: null,
     selection: {

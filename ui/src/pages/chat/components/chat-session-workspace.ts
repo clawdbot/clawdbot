@@ -1,4 +1,5 @@
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
@@ -140,7 +141,7 @@ function artifactSidebarContent(params: {
     const language = mimeType === "application/json" ? "json" : "";
     return {
       kind: "markdown",
-      content: `# ${title}\n\n\`\`\`${language}\n${decoded}\n\`\`\``,
+      content: `# ${title}\n\n${formatFencedCodeBlock(decoded, language)}`,
       rawText: decoded,
     };
   }

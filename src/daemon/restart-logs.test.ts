@@ -11,6 +11,7 @@ import {
   resolveGatewayRestartLogPath,
   resolveGatewaySupervisorLogPaths,
 } from "./restart-logs.js";
+import { buildPlatformRuntimeLogHints } from "./runtime-hints.js";
 
 const tempDirs: string[] = [];
 
@@ -119,6 +120,30 @@ describe("restart log conventions", () => {
     expect(line).toContain("mode=deferred");
     expect(line).toContain("pid=4242");
     expect(line).toContain("interactive=0");
+  });
+
+  it("advertises the actual restart log when a POSIX state path contains a backslash", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-path-"));
+    tempDirs.push(dir);
+    const env = { HOME: dir, OPENCLAW_STATE_DIR: path.join(dir, String.raw`state\literal`) };
+    appendGatewayLifecycleAuditLog(env, {
+      action: "restart",
+      source: "cli",
+      mode: "deferred",
+      interactive: false,
+    });
+
+    const hints = buildPlatformRuntimeLogHints({
+      platform: "darwin",
+      env,
+      systemdServiceName: "openclaw-gateway",
+      windowsTaskName: "OpenClaw Gateway",
+    });
+    const advertised = hints.find((hint) => hint.startsWith("Restart attempts: "));
+    expect(advertised).toBe(`Restart attempts: ${resolveGatewayRestartLogPath(env)}`);
+    expect(fs.readFileSync(resolveGatewayRestartLogPath(env), "utf8")).toContain(
+      "openclaw gateway lifecycle source=cli action=restart",
+    );
   });
 
   it("does not throw when lifecycle audit logging fails", () => {

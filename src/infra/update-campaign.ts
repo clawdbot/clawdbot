@@ -28,13 +28,6 @@ type UpdateCampaignAnnouncement = {
   onChange: (campaign: UpdateCampaignState | undefined) => void;
 };
 
-type UpdateCampaignDependencies = {
-  now: () => number;
-  setTimer: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
-  clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
-  createId: () => string;
-};
-
 function sameTarget(a: UpdateCampaignTarget, b: UpdateCampaignTarget): boolean {
   if (a.kind !== b.kind) {
     return false;
@@ -53,20 +46,12 @@ function sameTarget(a: UpdateCampaignTarget, b: UpdateCampaignTarget): boolean {
 
 /** Owns the single in-memory automatic-update campaign for this process. */
 export class UpdateCampaignController {
+  private readonly createId = randomUUID;
   private campaign: UpdateCampaignState | undefined;
   private target: UpdateCampaignTarget | undefined;
   private announcement: UpdateCampaignAnnouncement | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private held = false;
-
-  constructor(
-    private readonly dependencies: UpdateCampaignDependencies = {
-      now: () => Date.now(),
-      setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
-      clearTimer: (timer) => clearTimeout(timer),
-      createId: randomUUID,
-    },
-  ) {}
 
   getState(): UpdateCampaignState | undefined {
     return this.campaign;
@@ -96,9 +81,9 @@ export class UpdateCampaignController {
     this.held = false;
     this.target = announcement.target;
     this.announcement = announcement;
-    const now = this.dependencies.now();
+    const now = Date.now();
     this.campaign = {
-      id: this.dependencies.createId(),
+      id: this.createId(),
       state: "waiting-for-idle",
       announcedAtMs: now,
       forceAtMs: now + CAMPAIGN_FORCE_DELAY_MS,
@@ -145,7 +130,7 @@ export class UpdateCampaignController {
     }
     this.cancelTimer();
     this.held = true;
-    const now = this.dependencies.now();
+    const now = Date.now();
     const holdUntilMs = now + durationMs;
     this.transition({
       id: campaign.id,
@@ -179,7 +164,7 @@ export class UpdateCampaignController {
     }
 
     this.cancelTimer();
-    const now = this.dependencies.now();
+    const now = Date.now();
     if (campaign.holdUntilMs !== undefined && now < campaign.holdUntilMs) {
       this.scheduleNext();
       return;
@@ -243,7 +228,7 @@ export class UpdateCampaignController {
       return;
     }
     this.cancelTimer();
-    const now = this.dependencies.now();
+    const now = Date.now();
     this.transition({
       id: campaign.id,
       state: "applying",
@@ -274,7 +259,7 @@ export class UpdateCampaignController {
     if (!campaign || campaign.state === "applying") {
       return;
     }
-    const now = this.dependencies.now();
+    const now = Date.now();
     const holdBoundaryMs =
       campaign.holdUntilMs !== undefined && campaign.holdUntilMs > now
         ? campaign.holdUntilMs
@@ -285,7 +270,7 @@ export class UpdateCampaignController {
       holdBoundaryMs,
     );
     const delayMs = Math.max(0, Math.min(CAMPAIGN_POLL_MS, nextBoundaryMs - now));
-    this.timer = this.dependencies.setTimer(() => this.reconcile(), delayMs);
+    this.timer = setTimeout(() => this.reconcile(), delayMs);
     this.timer.unref?.();
   }
 
@@ -293,7 +278,7 @@ export class UpdateCampaignController {
     if (this.timer === undefined) {
       return;
     }
-    this.dependencies.clearTimer(this.timer);
+    clearTimeout(this.timer);
     this.timer = undefined;
   }
 }

@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { createMessageReceiptFromOutboundResults } from "../channels/message/receipt.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
-import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
+import {
+  projectEmbeddedMessageDeliveryFact,
+  readEmbeddedMessageDeliveryFact,
+} from "./embedded-agent-message-delivery.js";
 
 describe("projectEmbeddedMessageDeliveryFact", () => {
+  it.each([
+    { status: "settled", partialDelivery: false, sourceReplyDelivered: true, expected: true },
+    { status: "settled", partialDelivery: true, sourceReplyDelivered: true },
+    { status: "dryRun", partialDelivery: false, sourceReplyDelivered: true },
+    { status: "failed", partialDelivery: false, sourceReplyDelivered: true },
+    { status: "settled", partialDelivery: false, sourceReplyDelivered: "true" },
+  ])("reads only confirmed final source delivery: %j", ({ expected, ...fact }) => {
+    expect(
+      readEmbeddedMessageDeliveryFact({ ...fact, createdThreadIds: [] })?.sourceReplyDelivered,
+    ).toBe(expected);
+  });
   it("projects canonical poll receipt identity and thread facts", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [{ messageId: "platform-poll-1" }],

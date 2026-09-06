@@ -1,4 +1,6 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { readSessionRuntimeOwnership } from "../agents/harness/session-runtime-ownership.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import {
@@ -7,9 +9,12 @@ import {
 } from "../agents/session-model-ref.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
 import { resolveConcreteSessionStorePath } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { SessionEntryPair } from "./session-list-order.js";
+import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
 import type {
   SessionActorProfileIdentity,
@@ -41,11 +46,13 @@ export function buildSingleRowStoreChildSessionsByKey(params: {
   store: Record<string, SessionEntry>;
   key: string;
   now: number;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
 }): Map<string, string[]> {
   return buildStoreChildSessionIndex({
     store: params.store,
     keys: [params.key],
     now: params.now,
+    subagentRuns: params.subagentRuns,
     requireCurrentController: true,
   });
 }
@@ -204,4 +211,41 @@ export function resolveTranscriptUsageFallback(params: {
     totalTokensFresh: snapshot.totalTokensFresh === true,
     estimatedCostUsd,
   };
+}
+
+export function populateSessionListAcpMetadata(params: {
+  cfg: OpenClawConfig;
+  entries: readonly SessionEntryPair[];
+  targetsBySessionKey: GatewayStoredSessionTargets;
+  rowContext?: SessionListRowContext;
+}): void {
+  const metadataByEntry = params.rowContext?.acpSessionMetaByEntry;
+  if (!metadataByEntry || params.entries.length === 0) {
+    return;
+  }
+  const entries = params.entries
+    .filter(([, entry]) => !metadataByEntry.has(entry))
+    .map(([key, entry]) => {
+      const agentId = expectDefined(params.targetsBySessionKey.get(key), "ACP row owner").agentId;
+      return {
+        sessionKey: resolveStoredSessionKeyForAgentStore({
+          cfg: params.cfg,
+          agentId,
+          sessionKey: key,
+        }),
+        agentId,
+        entry,
+      };
+    });
+  if (!entries.length) {
+    return;
+  }
+  const metadata = readAcpSessionMetaBatch({
+    entries,
+    cfg: params.cfg,
+  });
+  // Record absent metadata too, so selected rows do not repeat missing-store reads.
+  for (const { entry } of entries) {
+    metadataByEntry.set(entry, metadata.get(entry));
+  }
 }

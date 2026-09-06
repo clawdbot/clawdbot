@@ -40,17 +40,19 @@ export function renderCapabilityToggleRow(options: {
         <span>${options.label}</span>
         ${options.note ?? nothing}
       </span>
-      ${options.checkbox
-        ? nothing
-        : html`<wa-switch
-            slot="details"
-            class="agent-chat__capability-menu-switch"
-            size="s"
-            tabindex="-1"
-            .checked=${options.checked}
-            ?disabled=${options.disabled}
-            aria-label=${options.label}
-          ></wa-switch>`}
+      ${
+        options.checkbox
+          ? nothing
+          : html`<wa-switch
+              slot="details"
+              class="agent-chat__capability-menu-switch"
+              size="s"
+              tabindex="-1"
+              .checked=${options.checked}
+              ?disabled=${options.disabled}
+              aria-label=${options.label}
+            ></wa-switch>`
+      }
     </wa-dropdown-item>
   `;
 }

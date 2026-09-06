@@ -288,6 +288,40 @@ describe("together video generation provider", () => {
     expect(canceled).toBe(true);
   });
 
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", body: "" },
+  ])("rejects a successful $name response as generated video", async ({ contentType, body }) => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({
+        id: "video_invalid_download",
+        status: "in_progress",
+      }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "video_invalid_download",
+          status: "completed",
+          outputs: { video_url: "https://example.com/invalid.mp4" },
+        }),
+      })
+      .mockResolvedValueOnce(new Response(body, { headers: { "content-type": contentType } }));
+
+    const provider = buildTogetherVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "together",
+        model: "Wan-AI/Wan2.2-T2V-A14B",
+        prompt: "invalid download",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Together generated video download: malformed video response");
+  });
+
   it("uses the video API endpoint when the shared Together text base URL is configured", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: streamedJsonResponse({

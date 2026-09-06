@@ -1,6 +1,7 @@
 // Control UI module implements main behavior.
 import "./styles.css";
 import "./app/app-host.ts";
+import { canReloadControlUiDocument } from "./app/document-reload-guard.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
 import {
   installMissingStylesheetRecovery,
@@ -25,7 +26,7 @@ if (isProd && "serviceWorker" in navigator) {
   const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
   swUrl.searchParams.set("v", currentControlUiBuildId);
   navigator.serviceWorker.addEventListener("message", (event) => {
-    if (controlUiWorkerActivationRetires(event.data)) {
+    if (controlUiWorkerActivationRetires(event.data) && canReloadControlUiDocument()) {
       window.location.reload();
     }
     if (event.data?.type === "sw-version-probe") {

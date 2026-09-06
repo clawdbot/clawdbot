@@ -1,5 +1,6 @@
 {
   "id": "openai",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "sessionRouteStateOwners": [
     {
       "id": "openai",
@@ -42,12 +43,41 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "openai": "openai"
+    },
     "providers": {
       "openai": {
         "baseUrl": "https://api.openai.com/v1",
         "api": "openai-responses",
         "defaultUtilityModel": "gpt-5.6-luna",
         "models": [
+          {
+            "id": "gpt-6-astra",
+            "name": "GPT-6 Astra",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 10,
+              "output": 50,
+              "cacheRead": 1,
+              "cacheWrite": 12.5,
+              "tieredPricing": [
+                { "range": [0, 272001], "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
+                { "range": [272001], "input": 20, "output": 75, "cacheRead": 2, "cacheWrite": 25 }
+              ]
+            },
+            "thinkingLevelMap": { "off": null, "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false,
+              "codeMode": "preferred"
+            }
+          },
           {
             "id": "gpt-5.6-sol",
             "name": "GPT-5.6 Sol",
@@ -180,6 +210,20 @@
       "openai": "runtime"
     },
     "suppressions": [
+      {
+        "provider": "openai",
+        "model": "gpt-5.4",
+        "reason": "GPT-5.4 has retired from the ChatGPT-account Codex route.",
+        "retirement": { "replacedBy": "gpt-5.6-terra" },
+        "when": { "baseUrlHosts": ["chatgpt.com"] }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "reason": "GPT-5.4 Mini has retired from the ChatGPT-account Codex route.",
+        "retirement": { "replacedBy": "gpt-5.6-luna" },
+        "when": { "baseUrlHosts": ["chatgpt.com"] }
+      },
       {
         "provider": "openai",
         "model": "gpt-5.3-codex-spark",

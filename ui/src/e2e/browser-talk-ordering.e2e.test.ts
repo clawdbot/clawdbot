@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   dispatchOpenAiTalkEvent,
@@ -90,10 +92,10 @@ suite.define(() => {
           delta: "Lantern.",
         });
         await expect.poll(() => rows.allTextContents()).toEqual(["Lantern."]);
-        await page.screenshot({
-          path: path.join(artifactDir, "unresolved-order.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "unresolved-order.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [rows.first()]),
+        );
         await final("answer-2", "assistant", "Lantern.");
         await emit({
           type: "input_audio_buffer.committed",
@@ -108,7 +110,10 @@ suite.define(() => {
           delta: "Glacier.",
         });
         await expect.poll(() => rows.allTextContents()).toEqual(["Glacier.", "Lantern."]);
-        await page.screenshot({ path: path.join(artifactDir, "streaming.png"), fullPage: true });
+        await writeFile(
+          path.join(artifactDir, "streaming.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [rows.first()]),
+        );
         await item("question-2", "user", "answer-1");
         await final("question-2", "user", "Please say lantern.");
         await final("answer-1", "assistant", "Glacier.");
@@ -131,10 +136,10 @@ suite.define(() => {
             .poll(() => rows.allTextContents())
             .toEqual(["Please say glacier.", "Glacier.", "Please say lantern.", "Lantern."]);
         } finally {
-          await page.screenshot({
-            path: path.join(artifactDir, "final-order.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, "final-order.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [rows.first()]),
+          );
         }
         await page.getByRole("button", { name: "Stop voice input" }).click();
         await gateway.waitForRequest("talk.client.close");

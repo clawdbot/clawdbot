@@ -54,6 +54,7 @@ export async function prepareSessionWorktree(params: {
   workspace: string;
   name?: string;
   baseRef?: string;
+  checkoutCommit?: string;
   label?: string;
   runSetupScript: boolean;
   signal?: AbortSignal;
@@ -89,7 +90,11 @@ export async function prepareSessionWorktree(params: {
           ),
         );
       }
-      if ((params.name && existing.name !== params.name) || (params.baseRef && boundId)) {
+      // Replaying the recorded selection reuses the checkout; changing it must not rebase it.
+      if (
+        (params.name && existing.name !== params.name) ||
+        (params.baseRef && existing.baseRef !== params.baseRef)
+      ) {
         return err(
           errorShape(
             ErrorCodes.INVALID_REQUEST,
@@ -106,6 +111,7 @@ export async function prepareSessionWorktree(params: {
       name: params.name,
       suggestedName: slugifyWorktreeTitle(params.label ?? ""),
       baseRef: params.baseRef,
+      checkoutCommit: params.checkoutCommit,
       runSetupScript: params.runSetupScript,
       signal: params.signal,
       commitGuard,

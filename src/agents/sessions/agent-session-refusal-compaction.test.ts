@@ -158,7 +158,7 @@ describe("AgentSession refusal compaction", () => {
         api: "anthropic-messages",
         provider: "anthropic",
         baseUrl: `http://127.0.0.1:${address.port}`,
-        contextWindow: threshold ? 100 : 1000,
+        contextWindow: threshold ? 32_768 : 65_536,
         maxTokens: 16,
       } satisfies Model<"anthropic-messages">;
       const sessionManager = SessionManager.inMemory();
@@ -168,7 +168,7 @@ describe("AgentSession refusal compaction", () => {
           model,
           [{ type: "text", text: "Earlier answer." }],
           "stop",
-          threshold ? 85 : 10,
+          threshold ? model.contextWindow - 15 : 10,
         ),
       );
       streamMocks.streamSimple.mockImplementation(

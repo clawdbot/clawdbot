@@ -1,8 +1,13 @@
 // Slack tests cover monitor.tool result plugin behavior.
 import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { HISTORY_CONTEXT_MARKER } from "openclaw/plugin-sdk/reply-history";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultSlackTestConfig,
@@ -12,10 +17,20 @@ import {
   getSlackHandlers,
   flush,
   resetSlackTestState,
+  runSlackHandlerWithDispatch,
   runSlackMessageOnce,
   startSlackMonitor,
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
+
+const mediaFetchMock = vi.hoisted(() =>
+  vi.fn<typeof import("./monitor/media.runtime.js").fetchWithRuntimeDispatcher>(),
+);
+
+vi.mock("./monitor/media.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor/media.runtime.js")>()),
+  fetchWithRuntimeDispatcher: mediaFetchMock,
+}));
 
 const { monitorSlackProvider } = await import("./monitor/provider.js");
 
@@ -24,6 +39,7 @@ const { sendMock, replyMock, reactMock, reactionAddMock, upsertPairingRequestMoc
   slackTestState;
 
 beforeEach(() => {
+  mediaFetchMock.mockReset().mockRejectedValue(new Error("Unexpected Slack media test request"));
   resetInboundDedupe();
   resetSlackTestState(defaultSlackTestConfig());
 });
@@ -407,24 +423,20 @@ describe("monitorSlackProvider tool results", () => {
       latestCtx = (ctx ?? {}) as { RawBody?: string };
       return { text: "ack" };
     });
-    const originalFetch = globalThis.fetch;
-    const mockFetch = vi.fn(async () => new Response("Not Found", { status: 404 }));
-    globalThis.fetch = mockFetch as typeof fetch;
+    const mockFetch = mediaFetchMock.mockImplementation(
+      async () => new Response("Not Found", { status: 404 }),
+    );
 
-    try {
-      await runSlackMessageOnce(
-        monitorSlackProvider,
-        {
-          event: makeSlackMessageEvent({
-            text: "caption",
-            attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
-          }),
-        },
-        { awaitDispatch: true },
-      );
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "caption",
+          attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+        }),
+      },
+      { awaitDispatch: true },
+    );
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(latestCtx?.RawBody).toBe("caption\n\n[slack attachment unavailable]");
@@ -721,6 +733,44 @@ describe("monitorSlackProvider tool results", () => {
         }),
       { timeout: 5_000 },
     );
+  });
+
+  it("applies acknowledgement scope changes without reconnecting the running monitor", async () => {
+    const config: OpenClawConfig = {
+      messages: { ackReaction: "eyes", ackReactionScope: "off" },
+      channels: { slack: { dmPolicy: "open", allowFrom: ["*"] } },
+    };
+    slackTestState.config = config;
+    setRuntimeConfigSnapshot(config, config);
+    replyMock.mockResolvedValue({ text: "reply" });
+    const monitor = startSlackMonitor(monitorSlackProvider);
+    try {
+      const handler = await getSlackHandlerOrThrow("message");
+      for (const [index, scope] of (["off", "all", "off"] as const).entries()) {
+        const nextConfig: OpenClawConfig = {
+          ...config,
+          messages: { ...config.messages, ackReactionScope: scope },
+        };
+        setRuntimeConfigSnapshot(nextConfig, nextConfig);
+        await runSlackHandlerWithDispatch(handler, {
+          event: makeSlackMessageEvent({ ts: `200.${index}` }),
+        });
+        await vi.waitFor(() => expect(reactionAddMock).toHaveBeenCalledTimes(index === 0 ? 0 : 1));
+        expect(slackTestState.appStartMock).toHaveBeenCalledTimes(1);
+        expect(slackTestState.appStopMock).not.toHaveBeenCalled();
+      }
+      expect(reactionAddMock).toHaveBeenCalledWith({
+        channel: "C1",
+        timestamp: "200.1",
+        name: "eyes",
+      });
+    } finally {
+      try {
+        await stopSlackMonitor(monitor);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    }
   });
 
   it("keeps ack reaction after sending the missing-reply fallback when status reactions are disabled", async () => {

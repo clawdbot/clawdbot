@@ -248,13 +248,13 @@ describe("provider transport stream contracts", () => {
   it("routes localService models through the OpenClaw simple-completion transport", () => {
     const model = attachModelProviderLocalService(
       buildModel("openai-completions", {
-        id: "google/gemma-4-E2B-it",
-        provider: "inferrs",
-        baseUrl: "http://127.0.0.1:8080/v1",
+        id: "gemma4",
+        provider: "llmman",
+        baseUrl: "http://127.0.0.1:17434/v1",
       }),
       {
-        command: "/usr/local/bin/inferrs",
-        args: ["serve", "google/gemma-4-E2B-it"],
+        command: "/usr/local/bin/llmman",
+        args: ["serve", "gemma4"],
       },
     );
 
@@ -262,8 +262,8 @@ describe("provider transport stream contracts", () => {
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
     const preparedModel = prepareTransportAwareSimpleModel(model);
     expect(preparedModel.api).toBe("openclaw-openai-completions-transport");
-    expect(preparedModel.provider).toBe("inferrs");
-    expect(preparedModel.id).toBe("google/gemma-4-E2B-it");
+    expect(preparedModel.provider).toBe("llmman");
+    expect(preparedModel.id).toBe("gemma4");
   });
 
   it("keeps Codex defaults on the OpenClaw transport until OpenClaw preserves attribution", () => {

@@ -207,11 +207,9 @@ it.each(["global", "shared-project"])(
           (claim) => claim.agentId === "free-harness",
         ),
       ).toEqual(before.claims.find((claim) => claim.agentId === "free-harness"));
-      await expect(
-        fs.access(
-          path.join(state.workspaceDir, "state", "sessions", `${sessionKey}.json.migrated`),
-        ),
-      ).resolves.toBeUndefined();
+      await fs.access(
+        path.join(state.workspaceDir, "state", "sessions", `${sessionKey}.json.migrated`),
+      );
     });
   },
 );

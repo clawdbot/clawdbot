@@ -29,7 +29,7 @@ export async function prepareChatMetadataModelProjection(params: {
   facts: ChatMetadataProjectionFacts;
   requesterProfileId?: string;
   preferredProfileId?: string;
-  lockedProfileId?: string;
+  pinnedProfileId?: string;
   assertCurrent?: () => void;
 }): Promise<PreparedAgentProjection<{ models?: unknown[] }>> {
   const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
@@ -55,7 +55,7 @@ export async function prepareChatMetadataModelProjection(params: {
     isCurrent: params.facts.owner.isCurrent,
     observationConfig: params.facts.owner.observationConfig,
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
-    ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
+    ...(params.pinnedProfileId ? { pinnedProfileId: params.pinnedProfileId } : {}),
   });
   const [modelCatalog, readModels] = await Promise.all([
     projector.projectCatalog(),

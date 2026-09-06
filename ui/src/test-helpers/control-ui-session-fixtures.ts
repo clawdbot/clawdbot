@@ -1,3 +1,8 @@
+import type {
+  SessionsResolveCandidate,
+  SessionsResolveResult,
+} from "../../../packages/gateway-protocol/src/index.js";
+
 export type ControlUiSessionFixture = {
   key: string;
   sessionId?: string;
@@ -189,8 +194,54 @@ export function createControlUiSessionFixtures(input: {
       ...[...materialized].filter((key) => !keys.has(key)).map(read),
     ];
   };
+  const resolve = (params: {
+    reference?: { key: string };
+    key?: string;
+    shortId?: string;
+    agentId?: string;
+  }): SessionsResolveResult => {
+    const present = (row: ControlUiSessionFixture): SessionsResolveCandidate => ({
+      key: row.key,
+      agentId:
+        typeof row.agentId === "string"
+          ? row.agentId
+          : (row.key.split(":")[1] ?? params.agentId ?? "main"),
+      ...(typeof row.displayName === "string" ? { displayName: row.displayName } : {}),
+      ...(row.boardFace === "chat" || row.boardFace === "dashboard"
+        ? { boardFace: row.boardFace }
+        : {}),
+    });
+    const requestedKey = params.reference?.key ?? params.key;
+    if (requestedKey) {
+      const key =
+        input.mainKey === "global" && /^agent:[^:]+:(?:main|global)$/u.test(requestedKey)
+          ? "global"
+          : canonicalKey(requestedKey);
+      return listed.has(key) ? { ok: true, ...present(read(key)) } : { ok: false };
+    }
+    // Canonical fixtures provide short-key identity; slug-specific routing scenarios
+    // declare explicit wire replies instead of cloning the Gateway's slug matcher.
+    const shortId = params.shortId?.toLowerCase();
+    const matches = shortId
+      ? [...listed]
+          .filter((key) => {
+            const tail = key.split(":").at(-1)?.replaceAll("-", "").toLowerCase() ?? "";
+            return (
+              /^[0-9a-f]{32}$/u.test(tail) &&
+              tail.startsWith(shortId) &&
+              (!params.agentId || present(read(key)).agentId === params.agentId)
+            );
+          })
+          .map((key) => present(read(key)))
+      : [];
+    const only = matches.length === 1 ? matches[0] : undefined;
+    return only
+      ? { ok: true, ...only }
+      : { ok: false, ...(matches.length ? { candidates: matches.slice(0, 10) } : {}) };
+  };
   return {
     read,
+    resolve,
     // History publishes a full row replacement. An unseeded wire-only fixture
     // has no canonical metadata to publish until its caller declares the row.
     sessionInfo: (key: string) => (listed.has(canonicalKey(key)) ? read(key) : undefined),

@@ -3,7 +3,10 @@ import type { BeamStoredSession } from "./types.js";
 import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS } from "./types.js";
 
 export type BeamStore = {
-  put: (session: BeamStoredSession) => Promise<void>;
+  update: (
+    beamId: string,
+    updateValue: (current: BeamStoredSession | undefined) => BeamStoredSession | undefined,
+  ) => Promise<boolean>;
   get: (beamId: string) => Promise<BeamStoredSession | undefined>;
   list: () => Promise<BeamStoredSession[]>;
 };
@@ -16,7 +19,7 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
     defaultTtlMs: BEAM_RETENTION_MS,
   });
   return {
-    put: (session) => store.register(session.beamId, session),
+    update: (beamId, updateValue) => store.update!(beamId, updateValue),
     get: (beamId) => store.lookup(beamId),
     list: async () => (await store.entries()).map((entry) => entry.value),
   };

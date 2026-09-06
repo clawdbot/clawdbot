@@ -71,6 +71,12 @@ model response before opening the agent. An already configured Gateway opens
 its normal dashboard after verification; newly configured access continues into
 guided onboarding.
 
+If the Gateway confirms that a live model test failed before saving the model
+and credentials, close the error and retry or choose another connection.
+An uncertain error keeps replacement setup blocked because settings may already
+have been saved. Confirmed cancellation and requests rejected before setup
+started can be retried immediately.
+
 Model Setup can resume an activation across a Gateway restart or app reopen
 while its temporary recovery record is valid. Recovery stays bound to the same
 Gateway, agent, and authentication. When the known activation target still
@@ -146,14 +152,31 @@ The packaging script stages only that media capability set before Tauri invokes
 linuxdeploy. This prevents optional host plugins from adding unrelated system
 libraries to the AppImage dependency closure.
 
+The packaging flow provisions Tauri's five AppImage tools into a clean,
+digest-pinned cache. After Tauri builds the AppImage, the finalizer re-verifies
+that cache, removes bundled Wayland client libraries from the retained AppDir,
+and rebuilds the artifact. WebKitGTK and Mesa then use one compatible host
+stack.
+
 You can also build the same bundles from a source checkout:
 
 ```bash
 plugins=$(mktemp -d)
+cache=$(mktemp -d)
+trap 'rm -rf "$plugins" "$cache"' EXIT
+export XDG_CACHE_HOME="$cache"
 apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins"
-cd apps/linux/src-tauri
-GSTREAMER_PLUGINS_DIR="$plugins" \
-  pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
+apps/linux/scripts/tauri-appimage-tools.sh prepare
+apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
+export LDAI_RUNTIME_FILE="$(apps/linux/scripts/tauri-appimage-tools.sh runtime-path)"
+(
+  cd apps/linux/src-tauri
+  GSTREAMER_PLUGINS_DIR="$plugins" \
+    pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
+      --config '{"bundle":{"createUpdaterArtifacts":false,"useLocalToolsDir":false}}'
+)
+apps/linux/scripts/finalize-appimage.sh \
+  apps/linux/src-tauri/target/release/bundle/appimage
 ```
 
 The `Linux App` CI workflow uploads the same bundles as the
@@ -306,7 +329,7 @@ ExecStart=/usr/local/bin/openclaw gateway --port 18789
 Restart=always
 RestartSec=5
 RestartPreventExitStatus=78
-TimeoutStopSec=30
+TimeoutStopSec=330
 TimeoutStartSec=30
 SuccessExitStatus=0 143
 OOMPolicy=continue

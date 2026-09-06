@@ -1,6 +1,7 @@
 // Extracts provider contract public artifacts from plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { collectPublicArtifactFactories } from "./public-artifact-factories.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -35,30 +36,6 @@ function tryLoadProviderContractApi(pluginId: string): Record<string, unknown> |
   }
 }
 
-function collectProviderContractEntries(params: {
-  pluginId: string;
-  mod: Record<string, unknown>;
-}): ProviderContractEntry[] {
-  const providers: ProviderContractEntry[] = [];
-  for (const [name, exported] of Object.entries(params.mod).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    if (
-      typeof exported !== "function" ||
-      exported.length !== 0 ||
-      !name.startsWith("create") ||
-      !name.endsWith("Provider")
-    ) {
-      continue;
-    }
-    const candidate = exported();
-    if (isProviderPlugin(candidate)) {
-      providers.push({ pluginId: params.pluginId, provider: candidate });
-    }
-  }
-  return providers;
-}
-
 export function resolveBundledExplicitProviderContractsFromPublicArtifacts(params: {
   onlyPluginIds: readonly string[];
 }): ProviderContractEntry[] | null {
@@ -68,11 +45,15 @@ export function resolveBundledExplicitProviderContractsFromPublicArtifacts(param
     if (!mod) {
       return null;
     }
-    const entries = collectProviderContractEntries({ pluginId, mod });
+    const entries = collectPublicArtifactFactories({
+      mod,
+      suffix: "Provider",
+      isArtifact: isProviderPlugin,
+    });
     if (entries.length === 0) {
       return null;
     }
-    providers.push(...entries);
+    providers.push(...entries.map((provider) => ({ pluginId, provider })));
   }
   return providers;
 }

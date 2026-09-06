@@ -374,7 +374,12 @@ describe("AgentSession compaction", () => {
         error: `No API key found for ${activeModel.provider}`,
       });
       return createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
       );
     });
     const compactionEvents = collectCompactionEnds(session);
@@ -404,7 +409,12 @@ describe("AgentSession compaction", () => {
     const sessionManager = SessionManager.open(scope, dir);
     sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
     sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "old answer" }], "stop", 950),
+      ...createAssistant(
+        testModel,
+        [{ type: "text", text: "old answer" }],
+        "stop",
+        testModel.contextWindow,
+      ),
       timestamp: 2,
     });
     const currentUser = {
@@ -427,6 +437,7 @@ describe("AgentSession compaction", () => {
       settingsManager: createAutoCompactionSettings(),
       resourceLoader: createResourceLoader(createResultHandlers("condensed history")),
     });
+    const compactionEvents = collectCompactionEnds(session);
     // Embedded attempt preparation removes the ingress-persisted user from model state.
     // Pre-prompt compaction rebuilds it from the durable branch before prompt submission.
     session.agent.state.messages = session.agent.state.messages.slice(0, -1);
@@ -435,6 +446,15 @@ describe("AgentSession compaction", () => {
       persistedUserIdempotencyKey: currentUser.idempotencyKey,
     });
 
+    expect(compactionEvents).toEqual([
+      expect.objectContaining({
+        reason: "threshold",
+        outcome: expect.objectContaining({ status: "completed", willRetry: false }),
+      }),
+    ]);
+    expect(sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(
+      1,
+    );
     expect(requests).toHaveLength(1);
     expect(
       requests[0]?.messages.filter(
@@ -533,7 +553,12 @@ describe("AgentSession compaction", () => {
           throw syntheticError;
         }
         return createAssistantResultStream(
-          createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+          createAssistant(
+            activeModel,
+            [{ type: "text", text: "complete answer" }],
+            "stop",
+            activeModel.contextWindow,
+          ),
         );
       },
     );

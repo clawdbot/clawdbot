@@ -3,7 +3,6 @@ import { formatUiExternalText } from "../../../lib/format-error.ts";
 import {
   buildAssistantAttachmentUrl,
   isLocalAssistantAttachmentSource,
-  isLocalAttachmentPreviewAllowed,
 } from "./chat-message-local-media.ts";
 import {
   isChatMediaResourceCurrent,
@@ -11,6 +10,7 @@ import {
   observeChatMediaResource,
   scheduleChatMediaResourceRefresh,
   type ChatMediaResource,
+  type ImageRenderOptions,
 } from "./chat-message-media.ts";
 
 type AssistantAttachmentAvailability =
@@ -34,6 +34,7 @@ type AssistantAttachmentAvailability =
       recoverable: boolean;
       retryAttempted?: true;
       unconfirmed?: true;
+      canAllow?: boolean;
     };
 
 export const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
@@ -43,35 +44,13 @@ export const ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES = 2;
 
 export function resolveAssistantAttachmentAvailability(
   source: string,
-  localMediaPreviewRoots: readonly string[],
-  resourceBasePath: string | undefined,
-  authToken: string | null | undefined,
-  onRequestUpdate: (() => void) | undefined,
+  options: ImageRenderOptions = {},
+  allowImage = false,
 ): AssistantAttachmentAvailability {
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
   }
-  // Bootstrap has no client roots yet; authenticated Gateway metadata remains authoritative.
-  if (
-    localMediaPreviewRoots.length > 0 &&
-    !isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)
-  ) {
-    return createUnavailableAssistantAttachment(
-      t("chat.attachments.outsideAllowedFolders"),
-      false,
-      {
-        recoverable: false,
-      },
-    );
-  }
-  const normalizedAuthToken = authToken?.trim() ?? "";
-  const cacheKey = `${resourceBasePath ?? ""}::${normalizedAuthToken}::${source}`;
-  const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
-    "assistant-attachment",
-    cacheKey,
-    onRequestUpdate,
-    source,
-  );
+  const resource = observeAssistantAttachment(source, options);
   const cached = resource.value;
   let refreshingAvailability: Extract<
     AssistantAttachmentAvailability,
@@ -142,6 +121,7 @@ export function resolveAssistantAttachmentAvailability(
   };
   if (typeof fetch === "function") {
     const headers = new Headers({ Accept: "application/json" });
+    const normalizedAuthToken = options.authToken?.trim();
     if (normalizedAuthToken) {
       headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
     }
@@ -154,8 +134,14 @@ export function resolveAssistantAttachmentAvailability(
         ),
       ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS,
     );
-    const pending = fetch(buildAssistantAttachmentMetaUrl(source, resourceBasePath), {
-      method: "GET",
+    const attachmentUrl = buildAssistantAttachmentUrl(
+      source,
+      options.resourceBasePath,
+      refreshingAvailability?.mediaTicket,
+      options,
+    );
+    const pending = fetch(`${attachmentUrl}&meta=1${allowImage ? "&allow=1" : ""}`, {
+      method: allowImage ? "POST" : "GET",
       headers,
       credentials: "same-origin",
       signal: controller.signal,
@@ -179,14 +165,18 @@ export function resolveAssistantAttachmentAvailability(
           durationMs?: number;
           width?: number;
           height?: number;
+          code?: string;
           reason?: string;
           retryable?: boolean;
+          canAllow?: boolean;
         } | null;
         if (payload?.available === false) {
           return createUnavailableAssistantAttachment(
-            formatUiExternalText(payload.reason, t("chat.attachments.unavailable")),
+            payload.code === "outside-allowed-folders"
+              ? t("chat.attachments.outsideAllowedFolders")
+              : formatUiExternalText(payload.reason, t("chat.attachments.unavailable")),
             resource.retryAttempted,
-            { recoverable: payload.retryable !== false },
+            { recoverable: payload.retryable !== false, canAllow: payload.canAllow === true },
           );
         }
         if (payload?.available === true) {
@@ -240,36 +230,31 @@ export function resolveAssistantAttachmentAvailability(
 
 export function retryAssistantAttachmentAvailability(
   source: string,
-  resourceBasePath: string | undefined,
-  authToken: string | null | undefined,
-  onRequestUpdate: (() => void) | undefined,
+  options: ImageRenderOptions = {},
+  allowImage = false,
 ): void {
   if (!isLocalAssistantAttachmentSource(source)) {
-    onRequestUpdate?.();
+    options.onRequestUpdate?.();
     return;
   }
-  const normalizedAuthToken = authToken?.trim() ?? "";
-  const cacheKey = `${resourceBasePath ?? ""}::${normalizedAuthToken}::${source}`;
-  const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
-    "assistant-attachment",
-    cacheKey,
-    onRequestUpdate,
-    source,
-  );
+  const resource = observeAssistantAttachment(source, options);
   resource.abortController?.abort();
   resource.abortController = undefined;
   resource.pending = undefined;
   resource.value = undefined;
   resource.retryAttempted = false;
   scheduleAssistantAttachmentRefresh(resource, { status: "checking" });
+  if (allowImage) {
+    resolveAssistantAttachmentAvailability(source, options, true);
+  }
   notifyChatMediaResourceSubscribers(resource);
-  onRequestUpdate?.();
+  options.onRequestUpdate?.();
 }
 
 function createUnavailableAssistantAttachment(
   reason: string,
   retryAttempted: boolean,
-  options: { recoverable?: boolean; unconfirmed?: true } = {},
+  options: { recoverable?: boolean; unconfirmed?: true; canAllow?: boolean } = {},
 ): Extract<AssistantAttachmentAvailability, { status: "unavailable" }> {
   return {
     status: "unavailable",
@@ -278,12 +263,26 @@ function createUnavailableAssistantAttachment(
     recoverable: options.recoverable !== false,
     ...(options.unconfirmed ? { unconfirmed: true } : {}),
     ...(retryAttempted ? { retryAttempted: true } : {}),
+    ...(options.canAllow ? { canAllow: true } : {}),
   };
 }
 
-function buildAssistantAttachmentMetaUrl(source: string, resourceBasePath?: string): string {
-  const attachmentUrl = buildAssistantAttachmentUrl(source, resourceBasePath);
-  return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
+function observeAssistantAttachment(source: string, options: ImageRenderOptions) {
+  // Identical paths can have different project/protection policy in different sessions.
+  const cacheKey = JSON.stringify([
+    options.resourceBasePath ?? "",
+    options.authToken?.trim() ?? "",
+    options.sessionKey,
+    options.agentId,
+    options.policyKey,
+    source,
+  ]);
+  return observeChatMediaResource<AssistantAttachmentAvailability>(
+    "assistant-attachment",
+    cacheKey,
+    options.onRequestUpdate,
+    source,
+  );
 }
 
 function setAssistantAttachmentAvailability(

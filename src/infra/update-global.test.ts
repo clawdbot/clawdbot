@@ -368,9 +368,22 @@ describe("update global helpers", () => {
     });
   });
 
-  it("keeps npm self-updates on the running package root when the PATH probe diverges", async () => {
+  it.each([
+    {
+      name: "keeps npm self-updates on the running package root when the PATH probe diverges",
+      prefix: "openclaw-update-ephemeral-probe-",
+      packageParts: ["openclaw"],
+      packageOptions: {},
+    },
+    {
+      name: "keeps scoped npm self-updates on the running package root",
+      prefix: "openclaw-update-scoped-probe-",
+      packageParts: ["@scope", "cli"],
+      packageOptions: { packageName: "@scope/cli" },
+    },
+  ])("$name", async ({ prefix, packageParts, packageOptions }) => {
     await withMockedPlatform("darwin", async () => {
-      await withTestDir({ prefix: "openclaw-update-ephemeral-probe-" }, async (base) => {
+      await withTestDir({ prefix }, async (base) => {
         // The running install lives in an nvm tree while `npm root -g` on
         // PATH answers with a Homebrew Cellar root — the skew produced when a
         // per-Node npm shim is executed by a foreign node (e.g. a launchd
@@ -379,7 +392,7 @@ describe("update global helpers", () => {
         // install never loads from.
         const nvmPrefix = path.join(base, "home", ".nvm", "versions", "node", "v24.5.0");
         const nvmRoot = path.join(nvmPrefix, "lib", "node_modules");
-        const pkgRoot = path.join(nvmRoot, "openclaw");
+        const pkgRoot = path.join(nvmRoot, ...packageParts);
         const cellarRoot = path.join(
           base,
           "opt",
@@ -400,6 +413,7 @@ describe("update global helpers", () => {
             runCommand,
             timeoutMs: 1000,
             pkgRoot,
+            ...packageOptions,
           }),
         ).resolves.toEqual({
           manager: "npm",
@@ -409,45 +423,6 @@ describe("update global helpers", () => {
           npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
         expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([["npm", "--version"]]);
-      });
-    });
-  });
-
-  it("keeps scoped npm self-updates on the running package root", async () => {
-    await withMockedPlatform("darwin", async () => {
-      await withTestDir({ prefix: "openclaw-update-scoped-probe-" }, async (base) => {
-        const nvmPrefix = path.join(base, "home", ".nvm", "versions", "node", "v24.5.0");
-        const nvmRoot = path.join(nvmPrefix, "lib", "node_modules");
-        const pkgRoot = path.join(nvmRoot, "@scope", "cli");
-        const cellarRoot = path.join(
-          base,
-          "opt",
-          "homebrew",
-          "Cellar",
-          "node",
-          "26.3.1",
-          "lib",
-          "node_modules",
-        );
-        await fs.mkdir(pkgRoot, { recursive: true });
-
-        const runCommand = createNpmRootRunner({ defaultNpmRoot: cellarRoot });
-
-        await expect(
-          resolveGlobalInstallTarget({
-            manager: "npm",
-            runCommand,
-            timeoutMs: 1000,
-            pkgRoot,
-            packageName: "@scope/cli",
-          }),
-        ).resolves.toEqual({
-          manager: "npm",
-          command: "npm",
-          globalRoot: nvmRoot,
-          packageRoot: pkgRoot,
-          npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
-        });
       });
     });
   });

@@ -1143,7 +1143,7 @@ export function findDistCallGatewayModuleFiles(cwd = process.cwd()) {
   return fs.existsSync(distDir)
     ? fs
         .readdirSync(distDir)
-        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
+        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.m?js$/u.test(name))
         .toSorted((left, right) => left.localeCompare(right))
     : [];
 }

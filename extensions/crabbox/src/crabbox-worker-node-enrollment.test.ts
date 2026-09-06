@@ -4,6 +4,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import net from "node:net";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
@@ -94,10 +95,16 @@ function testHome() {
 
 async function serveArtifact(
   archive: Buffer,
-  options: { tls?: boolean; redirect?: boolean; truncate?: boolean } = {},
+  options: {
+    tls?: boolean;
+    redirect?: boolean;
+    truncate?: boolean;
+    resetBeforeHeaders?: boolean;
+    resetBeforeTls?: boolean;
+  } = {},
 ) {
   let tls: { cert: Buffer; key: Buffer } | undefined;
-  if (options.tls) {
+  if (options.tls && !options.resetBeforeTls) {
     const directory = tempDirs.make("crabbox-bootstrap-tls-");
     const cert = path.join(directory, "cert.pem");
     const key = path.join(directory, "key.pem");
@@ -125,6 +132,10 @@ async function serveArtifact(
   const authorizations: Array<string | undefined> = [];
   const handle: http.RequestListener = (request, response) => {
     authorizations.push(request.headers.authorization);
+    if (options.resetBeforeHeaders) {
+      request.socket.resetAndDestroy();
+      return;
+    }
     if (options.redirect) {
       response.writeHead(302, { location: "https://untrusted.example.test/artifact" });
       response.end();
@@ -137,11 +148,22 @@ async function serveArtifact(
     }
     response.end(archive);
   };
-  const server = tls ? https.createServer(tls, handle) : http.createServer(handle);
+  const server = options.resetBeforeTls
+    ? net.createServer((socket) => socket.once("data", () => socket.resetAndDestroy()))
+    : tls
+      ? https.createServer(tls, handle)
+      : http.createServer(handle);
+  const sockets = new Set<net.Socket>();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   cleanups.push(async () => {
-    server.closeAllConnections();
+    for (const socket of sockets) {
+      socket.destroy();
+    }
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
@@ -458,16 +480,21 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
   it.each([
     ["digest", "integrity verification"],
     ["length", "length does not match"],
-    ["redirect", "HTTP 302"],
-    ["truncated", "bootstrap download failed (ECONNRESET): aborted"],
+    ["redirect", /download HTTP response failed:.*HTTP 302/],
+    ["http-reset", "download HTTP response failed (ECONNRESET)"],
+    ["tls-reset", "download TLS failed (ECONNRESET)"],
+    ["truncated", "download body failed (ECONNRESET): aborted"],
   ] as const)(
-    "rejects a bad archive %s before installing or starting a node",
+    "identifies bootstrap %s failure before installing or starting a node",
     async (failure, diagnosis) => {
       const { home, stateDir } = testHome();
       const archive = await packageFixture("first");
       const { nodeBootstrap, authorizations } = await serveArtifact(archive, {
         redirect: failure === "redirect",
         truncate: failure === "truncated",
+        resetBeforeHeaders: failure === "http-reset",
+        resetBeforeTls: failure === "tls-reset",
+        tls: failure === "tls-reset",
       });
       const result = await enroll(home, {
         ...nodeBootstrap,
@@ -475,10 +502,12 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         ...(failure === "length" ? { bytes: archive.length + 1 } : {}),
       });
       expect(result.code).toBe(1);
-      expect(result.output).toContain(diagnosis);
+      expect(result.output).toMatch(diagnosis);
       expect(result.output).not.toContain(nodeBootstrap.token);
       expect(result.output).not.toContain(setupCode);
-      expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
+      expect(authorizations).toEqual(
+        failure === "tls-reset" ? [] : [`Bearer ${nodeBootstrap.token}`],
+      );
       expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
       expect(fs.readdirSync(stateDir)).toEqual([]);
       expect(fs.readdirSync(path.join(home, ".openclaw-worker", "node-runtimes"))).toEqual([]);
@@ -493,7 +522,9 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     const rejected = await enroll(home, { ...nodeBootstrap, tlsFingerprint: "f".repeat(64) });
     expect(rejected).toMatchObject({
       code: 1,
-      output: expect.stringContaining("TLS fingerprint mismatch"),
+      output: expect.stringContaining(
+        "download TLS failed: Cloud worker bootstrap TLS fingerprint mismatch",
+      ),
     });
     expect(authorizations).toHaveLength(0);
     await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });

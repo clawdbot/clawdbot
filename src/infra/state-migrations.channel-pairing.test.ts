@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
 import {
   readChannelPairingStateSnapshot,
@@ -41,6 +41,38 @@ function isCaseSensitiveDirectory(directory: string): boolean {
 }
 
 describe("legacy channel pairing state migration", () => {
+  it("marks configured-channel account discovery as deferred without resolving accounts", async () => {
+    const { sourceDir } = await createFixture();
+    writeJson(path.join(sourceDir, "custom-channel-allowFrom.json"), ["legacy-user"]);
+    const resolveAccounts = vi.fn(() => ({
+      defaultAccountIds: { "custom-channel": "primary" },
+    }));
+
+    const detected = detectLegacyChannelPairingState({
+      sourceDir,
+      configuredChannelIds: ["custom-channel"],
+      resolveAccounts,
+      deferConfiguredAccountDiscovery: true,
+    });
+
+    expect(detected.accountDiscoveryDeferred).toBe(true);
+    expect(resolveAccounts).not.toHaveBeenCalled();
+  });
+
+  it("does not defer pairing requests or built-in explicit default accounts", async () => {
+    const { sourceDir } = await createFixture();
+    writeJson(path.join(sourceDir, "telegram-pairing.json"), { version: 1, requests: [] });
+    writeJson(path.join(sourceDir, "whatsapp-default-allowFrom.json"), ["legacy-user"]);
+
+    const detected = detectLegacyChannelPairingState({
+      sourceDir,
+      configuredChannelIds: ["custom-channel", "whatsapp"],
+      deferConfiguredAccountDiscovery: true,
+    });
+
+    expect(detected.accountDiscoveryDeferred).toBe(false);
+  });
+
   it("imports pairing requests and scoped allowFrom entries into SQLite", async () => {
     const { env, sourceDir } = await createFixture();
     const createdAt = new Date().toISOString();

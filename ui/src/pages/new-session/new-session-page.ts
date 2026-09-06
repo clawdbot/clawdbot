@@ -476,16 +476,18 @@ export class NewSessionPage extends OpenClawLightDomElement {
     const incognito = this.submission.visibility === "incognito";
     return html`
       <div
-        class="new-session-page ${pendingMessage ? "chat" : ""} ${incognito
-          ? "new-session-page--incognito"
-          : ""}"
+        class="new-session-page ${pendingMessage ? "chat" : ""} ${
+          incognito ? "new-session-page--incognito" : ""
+        }"
       >
-        ${catalog.isTarget(this.data)
-          ? nothing
-          : renderNewSessionIncognitoControl(
-              this.submission,
-              this.submission.capabilities.canStartAsDraft(this.context),
-            )}
+        ${
+          catalog.isTarget(this.data)
+            ? nothing
+            : renderNewSessionIncognitoControl(
+                this.submission,
+                this.submission.capabilities.canStartAsDraft(this.context),
+              )
+        }
         ${renderNewSessionBody({
           error: this.submission.error,
           pendingMessage,

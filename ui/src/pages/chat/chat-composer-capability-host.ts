@@ -507,11 +507,13 @@ export class ChatComposerCapabilityHost {
             onSubmit: (form) => void this.submitAddServer(context, state, session, form),
             onCancel: () => this.closeAddDialog(),
           })}
-          ${this.addError
-            ? html`<div class="mcp-server-message mcp-server-message--error" role="alert">
-                ${this.addError}
-              </div>`
-            : nothing}
+          ${
+            this.addError
+              ? html`<div class="mcp-server-message mcp-server-message--error" role="alert">
+                  ${this.addError}
+                </div>`
+              : nothing
+          }
         </div>
       </openclaw-modal-dialog>
     `;

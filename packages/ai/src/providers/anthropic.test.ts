@@ -24,6 +24,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
+import { createZeroUsage } from "../usage.test-support.js";
 import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
 
 function createSseResponse(events: Record<string, unknown>[] = []): Response {
@@ -73,14 +74,7 @@ function makeAnthropicAssistantMessage(
     model: "claude-sonnet-4-6",
     stopReason: "stop",
     timestamp: 0,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     content,
     ...overrides,
   };
@@ -278,6 +272,28 @@ describe("Anthropic provider", () => {
       expect(config.fetch).toBe(hostFetch);
     }
   });
+
+  it.each(["none", "short", "long"] as const)(
+    "sends the OpenCode session header with %s cache retention",
+    async (cacheRetention) => {
+      streamAnthropic(
+        makeAnthropicModel({ baseUrl: "https://opencode.ai/zen/go" }),
+        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+        { apiKey: "sk-ant-provider", sessionId: "session-123", cacheRetention },
+      );
+      await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+      const config = anthropicMockState.configs[0] as {
+        defaultHeaders?: Record<string, string | null>;
+      };
+      expect(
+        Object.fromEntries(
+          Object.entries(config.defaultHeaders ?? {}).filter(
+            ([key]) => key.startsWith("x-") || key === "session_id",
+          ),
+        ),
+      ).toEqual({ "x-opencode-session": "session-123" });
+    },
+  );
 
   it("puts Claude subscription billing identity first for OAuth requests", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
@@ -2272,8 +2288,10 @@ describe("Anthropic provider", () => {
             description: "healthy schema",
             parameters: {
               type: "object",
-              properties: { query: { type: "string" } },
+              properties: { query: { $ref: "#/$defs/Query" } },
+              $defs: { Query: { type: "string", minLength: 1 } },
               required: ["query"],
+              additionalProperties: false,
             },
           } as Tool,
         ],
@@ -2286,9 +2304,12 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect(payload.tools?.map((tool) => tool.name)).toEqual(["healthy_tool"]);
-    expect(payload.tools?.[0]?.input_schema).toMatchObject({
-      properties: { query: { type: "string" } },
+    expect(payload.tools?.[0]?.input_schema).toEqual({
+      type: "object",
+      properties: { query: { $ref: "#/$defs/Query" } },
+      $defs: { Query: { type: "string", minLength: 1 } },
       required: ["query"],
+      additionalProperties: false,
     });
   });
 

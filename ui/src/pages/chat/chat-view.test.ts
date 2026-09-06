@@ -21,8 +21,9 @@ import {
   replaceSlashCommands,
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
-import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -451,7 +452,7 @@ function createChatHeaderState(
     throw new Error(`Unexpected request: ${method}`);
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  const sessions = createSessionCapability({
+  const sessions = createTestSessionCapability({
     snapshot: { client, phase: "connected", hello: null },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
@@ -732,7 +733,6 @@ function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     assistantAvatar: null,
     userName: null,
     userAvatar: null,
-    localMediaPreviewRoots: [],
     assistantAttachmentAuthToken: null,
     autoExpandToolCalls: false,
     attachments: [],
@@ -877,33 +877,58 @@ function createBackgroundTasks(
 }
 
 describe("chat Swarm progress", () => {
-  it("stays visible during an active run between the transcript and composer", () => {
-    const parentSessionKey = "agent:main:parent";
-    const container = renderChatView({
-      sessionKey: parentSessionKey,
-      canAbort: true,
-      showNewMessages: true,
-      swarmSessions: [
-        {
-          key: "agent:main:subagent:worker",
-          kind: "direct",
-          updatedAt: 1,
-          parentSessionKey,
-          swarmGroupId: "swarm:agent:main:parent:turn-42",
-          label: "Worker A",
-          status: "running",
+  it.each(["agent:main:parent", "parent"])(
+    "stays visible for %s between the transcript and composer",
+    (routeKey) => {
+      const parentSessionKey = "agent:main:parent";
+      const container = renderChatView({
+        sessionKey: routeKey,
+        canAbort: true,
+        showNewMessages: true,
+        swarm: {
+          sessionKey: parentSessionKey,
+          sessions: [
+            {
+              key: "agent:main:parent",
+              kind: "direct",
+              swarm: {
+                groups: [
+                  {
+                    groupId: "swarm:agent:main:parent:turn-42",
+                    createdAt: 1,
+                    children: [{ sessionKey: "agent:main:subagent:worker", status: "running" }],
+                    queued: 0,
+                    running: 1,
+                    done: 0,
+                    failed: 0,
+                  },
+                ],
+                otherActiveGroups: 0,
+              },
+            },
+            {
+              key: "agent:main:subagent:worker",
+              kind: "direct",
+              updatedAt: 1,
+              parentSessionKey,
+              swarmGroupId: "swarm:agent:main:parent:turn-42",
+              label: "Worker A",
+              status: "running",
+            },
+          ],
         },
-      ],
-    });
+      });
 
-    const widget = container.querySelector("[data-test-id=chat-swarm]");
-    expect(widget).not.toBeNull();
-    const scrollAnchor = widget?.previousElementSibling;
-    expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
-    expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(widget?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
-    expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe("Worker A");
-  });
+      const widget = requireElement(container, "[data-test-id=chat-swarm]", "Swarm progress");
+      const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
+      const scrollAnchor = widget.previousElementSibling;
+      expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
+      expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+      expect(widget.parentElement).toBe(shell.parentElement);
+      expect(widget.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe("Worker A");
+    },
+  );
 });
 
 describe("inline approval card", () => {
@@ -930,12 +955,12 @@ describe("inline approval card", () => {
     });
 
     const card = container.querySelector(".chat-inline-approval .exec-approval-card");
-    const inlineSurface = container.querySelector(".chat-inline-approval");
+    const inlineSurface = requireElement(container, ".chat-inline-approval", "inline approval");
+    const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
     expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
-    expect(inlineSurface?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(
-      inlineSurface?.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
-    ).toBe(true);
+    expect(inlineSurface.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(inlineSurface.parentElement).toBe(shell.parentElement);
+    expect(inlineSurface.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     const countdown = expectDefined(
       container.querySelector<LitElement>(".exec-approval-countdown"),
       "inline approval countdown",
@@ -1806,6 +1831,8 @@ describe("chat code-block copy", () => {
 
 describe("chat transcript rendering", () => {
   it("refreshes cached inline reply handlers when the callback identity changes", () => {
+    // Freeze the separate minute-based timestamp dependency while checking callback rebinding.
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
     const transcript = createTestTranscript();
     const firstReply = vi.fn();
     const currentReply = vi.fn();
@@ -1822,8 +1849,6 @@ describe("chat transcript rendering", () => {
         isStreaming: false,
       },
     ] as ReturnType<typeof chatThread.buildCachedChatItems>;
-    const defaultBuildChatItems = buildChatItemsMock.getMockImplementation();
-    const defaultRenderMessageGroup = renderMessageGroupMock.getMockImplementation();
     buildChatItemsMock.mockReturnValue(stableChatItems);
     renderMessageGroupMock.mockImplementation(
       (
@@ -1865,13 +1890,6 @@ describe("chat transcript rendering", () => {
       '[aria-label="Reply to message"]',
       "inline reply button",
     ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    if (defaultRenderMessageGroup) {
-      renderMessageGroupMock.mockImplementation(defaultRenderMessageGroup);
-    }
-    if (defaultBuildChatItems) {
-      buildChatItemsMock.mockImplementation(defaultBuildChatItems);
-    }
-
     expect(firstReply).not.toHaveBeenCalled();
     expect(currentReply).toHaveBeenCalledOnce();
   });
@@ -2469,7 +2487,8 @@ describe("chat scroll-to-bottom affordance", () => {
     const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
     const queue = requireElement(container, ".chat-queue", "composer queue");
     const composer = requireElement(shell, ".agent-chat__input", "composer");
-    expect(wrapper.nextElementSibling).toBe(shell);
+    expect(wrapper.parentElement).toBe(shell.parentElement);
+    expect(wrapper.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(queue.closest(".agent-chat__composer-shell")).toBe(shell);
     expect(queue.compareDocumentPosition(composer)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
@@ -2581,7 +2600,7 @@ describe("chat composer workbench", () => {
     );
 
     // The working claw owns the signal while the run is live.
-    const working = renderChatView({ messages, backgroundTasks, canAbort: true });
+    const working = renderChatView({ messages, backgroundTasks, canAbort: true, runActive: true });
     expect(working.querySelector(".chat-tasks-status")).toBeNull();
   });
 
@@ -2616,8 +2635,9 @@ afterEach(() => {
   releaseChatAttachmentPayloads([...registeredAttachmentPayloads.values()]);
   registeredAttachmentPayloads.clear();
   vi.useRealTimers();
-  buildChatItemsMock.mockClear();
-  renderMessageGroupMock.mockClear();
+  // Restore defaults even when a case fails with an override installed.
+  buildChatItemsMock.mockReset();
+  renderMessageGroupMock.mockReset();
   chatMediaRenderVersionMock.value = 0;
   resetChatViewState();
   replaceSlashCommands(buildFallbackSlashCommands());
@@ -2835,7 +2855,6 @@ describe("chat transcript rendering cache", () => {
       fullMessageAgentId: "media",
       basePath: "/control",
       resourceBasePath: "/resources",
-      localMediaPreviewRoots: ["/tmp/media"],
       assistantAttachmentAuthToken: "attachment-token",
       resolveArtifactDownload,
       canvasPluginSurfaceUrl: "https://example.com/canvas",
@@ -2859,7 +2878,6 @@ describe("chat transcript rendering cache", () => {
       agentId: mediaProps.fullMessageAgentId,
       runActive: true,
       resourceBasePath: mediaProps.resourceBasePath,
-      localMediaPreviewRoots: mediaProps.localMediaPreviewRoots,
       assistantAttachmentAuthToken: mediaProps.assistantAttachmentAuthToken,
       resolveArtifactDownload,
       canvasPluginSurfaceUrl: mediaProps.canvasPluginSurfaceUrl,
@@ -2872,7 +2890,7 @@ describe("chat transcript rendering cache", () => {
     };
 
     vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([streamPart]);
-    renderChatView({ ...mediaProps, canAbort: true });
+    renderChatView({ ...mediaProps, canAbort: true, runActive: true });
 
     expect(vi.mocked(chatMessage.renderStreamGroup).mock.calls.at(-1)?.[1]).toMatchObject(expected);
     expect(vi.mocked(chatMessage.renderStreamGroup).mock.calls.at(-1)?.[1]?.onOpenImage).toEqual(
@@ -2901,6 +2919,7 @@ describe("chat transcript rendering cache", () => {
     renderChatView({
       ...mediaProps,
       canAbort: true,
+      runActive: true,
       messages: [{ role: "assistant", content: "Interim answer", timestamp: 1 }],
     });
 
@@ -3086,6 +3105,7 @@ describe("chat loading skeleton", () => {
   it("routes live and completed status into the existing assistant turn", () => {
     renderChatView({
       canAbort: true,
+      runActive: true,
       messages: [
         { role: "assistant", content: "Finished answer", timestamp: 1, runId: "run-composed" },
       ],
@@ -4831,6 +4851,23 @@ describe("chat slash menu accessibility", () => {
     expect(draft).toBe("before /think high then answer concisely");
   });
 
+  it("does not consume an embedded free-form command as a direct inline invocation", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const onSlashCommand = vi.fn();
+    const { container } = createReactiveDraftHarness({ onDraftChange, onSend, onSlashCommand });
+
+    inputDraftAtEnd(container, "Please /learn release health");
+    keydownComposer(container, "Enter");
+
+    expect(onSlashCommand).not.toHaveBeenCalled();
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(draft).toBe("Please /learn release health");
+  });
+
   it("tab-completes an inline command argument without replacing surrounding prose", () => {
     let draft = "";
     const onDraftChange = vi.fn((next: string) => {
@@ -4882,10 +4919,7 @@ describe("chat slash menu accessibility", () => {
     expect(draft).toBe("Please use $weather ");
   });
 
-  it.each([
-    ["reset", "/reset"],
-    ["exec gateway", "/exec gateway"],
-  ])("executes inline /%s like its standalone command", (typedCommand, dispatchedCommand) => {
+  it("executes an inline /reset like its standalone command", () => {
     let draft = "";
     const onDraftChange = vi.fn((next: string) => {
       draft = next;
@@ -4894,10 +4928,30 @@ describe("chat slash menu accessibility", () => {
     const onSlashCommand = vi.fn();
     const { container } = createReactiveDraftHarness({ onDraftChange, onSend, onSlashCommand });
 
-    inputDraftAtEnd(container, `Please /${typedCommand}`);
+    inputDraftAtEnd(container, "Please /reset");
     keydownComposer(container, "Enter");
 
-    expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith(dispatchedCommand);
+    expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/reset");
+    expect(draft).toBe("Please ");
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("serializes a selected inline /exec host argument canonically", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const onSlashCommand = vi.fn();
+    const { container } = createReactiveDraftHarness({ onDraftChange, onSend, onSlashCommand });
+
+    inputDraftAtEnd(container, "Please /exec");
+    keydownComposer(container, "Tab");
+    keydownComposer(container, "ArrowDown");
+    keydownComposer(container, "Enter");
+
+    expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/exec host=gateway");
     expect(draft).toBe("Please ");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
     expect(onSend).not.toHaveBeenCalled();
@@ -5320,6 +5374,38 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).not.toHaveBeenCalled();
     expect(draft).toBe("hello /statu");
   });
+
+  it.each(["/verb", "hello /verb"])(
+    "does not dispatch a stale command argument after disconnect for %s",
+    (commandDraft) => {
+      let draft = "";
+      const onDraftChange = vi.fn((next: string) => {
+        draft = next;
+      });
+      const onSend = vi.fn();
+      const onSlashCommand = vi.fn();
+      const { container, renderCurrent } = createReactiveDraftHarness({
+        onDraftChange,
+        onSend,
+        onSlashCommand,
+      });
+
+      inputDraftAtEnd(container, commandDraft);
+      keydownComposer(container, "Enter");
+      const fullOption = Array.from(
+        container.querySelectorAll<HTMLElement>(".slash-menu-item"),
+      ).find((item) => item.querySelector(".slash-menu-name")?.textContent?.trim() === "full");
+      expect(fullOption).toBeInstanceOf(HTMLElement);
+      const draftBeforeDisconnect = draft;
+
+      renderCurrent({ connected: false });
+      fullOption?.click();
+
+      expect(onSlashCommand).not.toHaveBeenCalled();
+      expect(onSend).not.toHaveBeenCalled();
+      expect(draft).toBe(draftBeforeDisconnect);
+    },
+  );
 
   it("clears the visible local draft immediately when send clears the host draft", () => {
     const { container, onDraftChange, onSend } = createDraftHarness();
@@ -6887,6 +6973,53 @@ describe("chat model controls", () => {
 
     const modelSelect = getChatModelSelect(container);
     expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("shows the session's active fallback model without changing its selected preference", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "codex",
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "codex" },
+        { id: "qwen3.5:9b", name: "Qwen 3.5 9B", provider: "ollama" },
+      ],
+    });
+    const selectedSession = expectDefined(state.sessionsResult?.sessions[0], "selected session");
+    Object.assign(selectedSession, {
+      activeModel: "qwen3.5:9b",
+      activeModelProvider: "ollama",
+    });
+
+    const container = renderModelControls(state);
+    const trigger = getChatModelSelect(container);
+
+    expect(trigger.textContent).toContain("Qwen 3.5 9B");
+    expect(trigger.getAttribute("aria-label")).toBe("Chat model: Qwen 3.5 9B");
+    expect(trigger.dataset.chatSelectValue).toBe("codex/gpt-5.5");
+    expect(
+      container
+        .querySelector('[data-chat-model-option="codex/gpt-5.5"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("does not borrow selected-model metadata for an unknown active fallback", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "codex",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "codex", supportsTools: false }],
+    });
+    const selectedSession = expectDefined(state.sessionsResult?.sessions[0], "selected session");
+    Object.assign(selectedSession, {
+      activeModel: "qwen3.5:9b",
+      activeModelProvider: "ollama",
+    });
+
+    const trigger = getChatModelSelect(renderModelControls(state));
+
+    expect(trigger.textContent).toContain("ollama/qwen3.5:9b");
+    expect(trigger.dataset.chatModelTools).toBe("available");
+    expect(trigger.querySelector(".chat-controls__trigger-provider-icon")).toBeNull();
   });
 
   it("renders an accessible skeleton and reserves hidden effort geometry before the snapshot", () => {
@@ -9200,7 +9333,7 @@ describe("right-click Reply", () => {
 
   it("disables rewind and fork context actions during an active run", () => {
     const { bubble } = renderChatBubble(
-      { canAbort: true, onRewindMessage: vi.fn(), onForkMessage: vi.fn() },
+      { canAbort: true, runActive: true, onRewindMessage: vi.fn(), onForkMessage: vi.fn() },
       { entryId: "persisted-user", groupClass: "chat-group user" },
     );
 

@@ -1,8 +1,9 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { fetchChildSessionRows } from "./child-session-data.ts";
 import type { SessionCapability } from "./index.ts";
-import { normalizeAgentId } from "./session-key.ts";
+import { normalizeAgentId, areUiSessionKeysEquivalent } from "./session-key.ts";
 
 const SWARM_SESSION_PAGE_SIZE = 10_000;
 
@@ -27,7 +28,7 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
     : null;
   const agent = authoredAgentId ? asNullableRecord(entries?.[authoredAgentId]) : null;
   const agentEnabled = readSwarmEnabled(asNullableRecord(agent?.tools)?.swarm);
-  return agentEnabled ?? globalEnabled ?? false;
+  return agentEnabled ?? globalEnabled ?? true;
 }
 
 function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySessionRow): boolean {
@@ -67,6 +68,8 @@ export async function hydrateSwarmSessionRows(params: {
 
 type SwarmHydrationParams = {
   sessions: SessionCapability;
+  agentId?: string;
+  readParent: () => Promise<GatewaySessionRow | null>;
   parentKey: string;
   sourceEpoch: number;
   currentRows: () => readonly GatewaySessionRow[];
@@ -80,14 +83,27 @@ export class SwarmRosterHydrator {
   private generation = 0;
   private attemptRevision = -1;
   private attempts = 0;
+  private currentRowsByKey = new Map<string, string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   update(params: SwarmHydrationParams): void {
-    const key = `${params.sourceEpoch}:${params.parentKey}`;
+    const key = `${params.sourceEpoch}:${params.agentId ?? ""}:${params.parentKey}`;
     if (this.key !== key) {
       this.reset(key);
     }
-    this.rows = mergeSwarmSessionRows(this.rows, params.currentRows());
+    const currentRows = params
+      .currentRows()
+      .filter((row) => !areUiSessionKeysEquivalent(row.key, params.parentKey));
+    const currentRowsByKey = new Map(currentRows.map((row) => [row.key, JSON.stringify(row)]));
+    // A repeated page is not a new lifecycle observation. Reapplying it can
+    // overwrite a newer child fetch whose persisted timestamp did not change.
+    this.rows = mergeSwarmSessionRows(
+      this.rows,
+      currentRows.filter(
+        (row) => this.currentRowsByKey.get(row.key) !== currentRowsByKey.get(row.key),
+      ),
+    );
+    this.currentRowsByKey = currentRowsByKey;
     params.onRows(this.rows);
     const revision = params.sessions.canonicalListRevision;
     if (this.attemptRevision !== revision) {
@@ -105,47 +121,79 @@ export class SwarmRosterHydrator {
   }
 
   private hydrate(params: SwarmHydrationParams): void {
-    const generation = this.generation;
+    const generation = ++this.generation;
     const revision = params.sessions.canonicalListRevision;
-    const key = `${params.sourceEpoch}:${params.parentKey}`;
+    const key = `${params.sourceEpoch}:${params.agentId ?? ""}:${params.parentKey}`;
     const isCurrent = () => generation === this.generation && this.key === key;
-    const currentRowsAtStart = params.currentRows();
+    const currentRowsAtStart = params
+      .currentRows()
+      .filter((row) => !areUiSessionKeysEquivalent(row.key, params.parentKey));
     const currentRowsAtStartByKey = new Map(
       currentRowsAtStart.map((row) => [row.key, JSON.stringify(row)]),
     );
     let hydrated = false;
     let retrying = false;
     this.attempts += 1;
-    void hydrateSwarmSessionRows({
+    const scheduleRetry = () => {
+      retrying = true;
+      this.revision = -1;
+      const delayMs = Math.min(30_000, 1_000 * 2 ** Math.min(this.attempts - 1, 5));
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        if (isCurrent()) {
+          this.update(params);
+        }
+      }, delayMs);
+    };
+    // Counts belong to the parent read; optional child names must never hold them hostage.
+    const children = hydrateSwarmSessionRows({
       sessions: params.sessions,
       parentKey: params.parentKey,
       currentRows: currentRowsAtStart,
       isCurrent,
-    })
-      .then((rows) => {
-        if (!rows || !isCurrent()) {
+    }).catch(() => null);
+    void params
+      .readParent()
+      .then((parent) => {
+        if (!isCurrent()) {
           return;
         }
         hydrated = true;
         this.revision = revision;
-        const changedCurrentRows = params
-          .currentRows()
-          .filter((row) => currentRowsAtStartByKey.get(row.key) !== JSON.stringify(row));
-        this.rows = mergeSwarmSessionRows(rows, changedCurrentRows);
+        this.rows = parent ? mergeSwarmSessionRows(this.rows, [parent]) : [];
         params.onRows(this.rows);
+        if (!parent) {
+          return;
+        }
+        void children.then((rows) => {
+          if (!isCurrent()) {
+            return;
+          }
+          const changedCurrentRows = params
+            .currentRows()
+            .filter(
+              (row) =>
+                !areUiSessionKeysEquivalent(row.key, params.parentKey) &&
+                currentRowsAtStartByKey.get(row.key) !== JSON.stringify(row),
+            );
+          this.rows = rows
+            ? mergeSwarmSessionRows(mergeSwarmSessionRows(rows, [parent]), changedCurrentRows)
+            : [parent];
+          params.onRows(this.rows);
+          if (!rows) {
+            scheduleRetry();
+          }
+        });
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!isCurrent()) {
           return;
         }
-        retrying = true;
-        const retryDelayMs = Math.min(30_000, 1_000 * 2 ** Math.min(this.attempts - 1, 5));
-        this.timer = setTimeout(() => {
-          this.timer = null;
-          if (isCurrent()) {
-            this.update(params);
-          }
-        }, retryDelayMs);
+        if (error instanceof GatewayRequestError && error.code === "INVALID_REQUEST") {
+          this.rows = [];
+          params.onRows(this.rows);
+        }
+        scheduleRetry();
       })
       .finally(() => {
         if (!isCurrent()) {
@@ -165,6 +213,7 @@ export class SwarmRosterHydrator {
       clearTimeout(this.timer);
     }
     this.rows = [];
+    this.currentRowsByKey.clear();
     this.key = key;
     this.revision = -1;
     this.generation += 1;
