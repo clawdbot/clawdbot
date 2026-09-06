@@ -496,7 +496,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.observer.visibility", "session-observer-rpc", "operator.read", "2026.7"],
   // Additive phase-2 collaboration methods append so older advertised indices stay stable.
   ["session.visibility.set", "sessions-sharing", "operator.write", "2026.7"],
-  ["session.publicShare.set", "sessions-sharing", "operator.write", "2026.9"],
   ["session.members.list", "sessions-sharing", "operator.read", "2026.7"],
   ["session.members.add", "sessions-sharing", "operator.write", "2026.7"],
   ["session.members.remove", "sessions-sharing", "operator.write", "2026.7"],
