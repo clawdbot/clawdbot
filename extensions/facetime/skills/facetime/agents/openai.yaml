@@ -1,0 +1,4 @@
+interface:
+  display_name: "FaceTime Calls"
+  short_description: "Inspect and manage FaceTime calls for owner handles"
+  default_prompt: "Use $facetime to inspect internal stages or request a call to a configured owner handle."

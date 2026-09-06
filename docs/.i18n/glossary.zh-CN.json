@@ -4,6 +4,22 @@
     "target": "OpenClaw"
   },
   {
+    "source": "FaceTime plugin",
+    "target": "FaceTime 插件"
+  },
+  {
+    "source": "FaceTime recovery and removal",
+    "target": "FaceTime 恢复与移除"
+  },
+  {
+    "source": "Facetime plugin",
+    "target": "FaceTime 插件"
+  },
+  {
+    "source": "facetime",
+    "target": "facetime"
+  },
+  {
     "source": "macOS platform notes",
     "target": "macOS 平台说明"
   },

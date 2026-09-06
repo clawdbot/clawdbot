@@ -1,0 +1,114 @@
+{
+  "name": "@openclaw/facetime",
+  "version": "2026.8.1",
+  "private": true,
+  "description": "Experimental private FaceTime realtime voice carrier for OpenClaw agents",
+  "license": "MIT",
+  "author": "OpenClaw contributors",
+  "homepage": "https://docs.openclaw.ai/plugins/facetime",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "keywords": [
+    "facetime",
+    "openclaw",
+    "openclaw-plugin",
+    "realtime-voice"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw",
+    "directory": "extensions/facetime"
+  },
+  "files": [
+    "index.ts",
+    "runtime-api.ts",
+    "src/audio-pump.ts",
+    "src/call-events.ts",
+    "src/call-lifecycle.ts",
+    "src/config.ts",
+    "src/driver-setup.ts",
+    "src/helper-endpoint.ts",
+    "src/helper-rpc.ts",
+    "src/helper-supervisor.ts",
+    "src/outbound-call.ts",
+    "src/pending-dial-store.ts",
+    "src/plugin-paths.ts",
+    "src/preflight.ts",
+    "src/runtime-call-control.ts",
+    "src/runtime-call-events.ts",
+    "src/runtime-carrier-process.ts",
+    "src/runtime-helper-results.ts",
+    "src/runtime-lifecycle.ts",
+    "src/runtime-state.ts",
+    "src/runtime-status.ts",
+    "src/runtime.ts",
+    "src/setup.ts",
+    "src/static-status.ts",
+    "src/talk-consult-controller.ts",
+    "src/talk-driver-config.ts",
+    "src/talk-driver.ts",
+    "src/talk-events-summary.ts",
+    "src/tool.ts",
+    "docs/phase1-verification.md",
+    "helper-endpoint.json",
+    "scripts/commit-driver-transaction.sh",
+    "scripts/ensure-helper-ipc-key.sh",
+    "scripts/inject-helper-terminal.sh",
+    "scripts/inject-helper.sh",
+    "scripts/install-driver-root.sh",
+    "scripts/install-driver.applescript",
+    "scripts/install-driver.sh",
+    "scripts/remove-user-artifacts.sh",
+    "scripts/stage-helper.sh",
+    "scripts/verify-native-helper.sh",
+    "scripts/verify-xcode-trust.sh",
+    "skills/facetime/SKILL.md",
+    "skills/facetime/agents/openai.yaml",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+    "openclaw.plugin.json"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "type": "module",
+  "scripts": {
+    "install:driver": "bash scripts/install-driver.sh",
+    "uninstall:driver": "bash scripts/install-driver.sh --uninstall",
+    "inject:helper": "bash scripts/inject-helper.sh",
+    "inject:helper:phone": "bash scripts/inject-helper.sh --app Phone",
+    "inject:helper:terminal": "bash scripts/inject-helper-terminal.sh"
+  },
+  "dependencies": {
+    "typebox": "1.3.6"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.8.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.8.1"
+    },
+    "build": {
+      "bundledDist": false,
+      "openclawVersion": "2026.8.1"
+    }
+  }
+}

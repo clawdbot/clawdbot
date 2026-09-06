@@ -1461,6 +1461,8 @@
                   "plugins/codex-computer-use",
                   "plugins/logbook",
                   "plugins/meeting-plugins",
+                  "plugins/facetime",
+                  "plugins/facetime-recovery",
                   "plugins/google-meet",
                   "plugins/teams-meetings",
                   "plugins/zoom-meetings",

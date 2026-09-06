@@ -71,11 +71,21 @@
       - any-glob-to-any-file:
           - "extensions/imap/**"
           - "docs/automation/imap.md"
+"plugin: facetime":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/facetime/**"
+          - "docs/plugins/facetime.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: logbook":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/logbook/**"
+          - "docs/plugins/logbook.md"
 "plugin: teams-meetings":
   - changed-files:
       - any-glob-to-any-file:

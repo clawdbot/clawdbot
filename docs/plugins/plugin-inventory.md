@@ -358,7 +358,9 @@ Each entry lists the package, distribution route, and description.
 
 ## Source checkout only
 
-3 plugins
+4 plugins
+
+- **[facetime](/plugins/reference/facetime)** (`@openclaw/facetime`) - source checkout only. Experimental private FaceTime realtime voice carrier for OpenClaw agents.
 
 - **[qa-channel](/plugins/reference/qa-channel)** (`@openclaw/qa-channel`) - source checkout only. OpenClaw QA synthetic channel plugin.
 

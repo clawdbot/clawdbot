@@ -1055,6 +1055,19 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/facetime:
+    dependencies:
+      typebox:
+        specifier: 1.3.6
+        version: 1.3.6
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/fal:
     devDependencies:
       '@openclaw/plugin-sdk':

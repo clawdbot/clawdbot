@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.DS_Store
+WORKLOG.md
+helper-ipc-key
+
+helper/*.xcworkspace/xcuserdata/
+helper/FaceTimeHelper.xcodeproj/xcuserdata/
+*.xcuserstate
+DerivedData/
+native/.build/
+native-driver/.build/

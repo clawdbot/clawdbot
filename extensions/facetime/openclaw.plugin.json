@@ -1,0 +1,65 @@
+{
+  "id": "facetime",
+  "name": "FaceTime",
+  "description": "Experimental private FaceTime realtime voice carrier for OpenClaw agents",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "skills": ["./skills"],
+  "contracts": {
+    "tools": ["facetime_call"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean", "default": true },
+      "ownerHandles": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": []
+      },
+      "realtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "type": "string" },
+          "model": { "type": "string" },
+          "voice": { "type": "string" },
+          "sessionKey": { "type": "string", "default": "main" },
+          "toolPolicy": {
+            "type": "string",
+            "enum": ["safe-read-only", "owner", "none"],
+            "default": "owner"
+          },
+          "instructions": { "type": "string", "maxLength": 4000 },
+          "providers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": { "label": "Enable FaceTime Voice" },
+    "ownerHandles": {
+      "label": "Owner FaceTime Handles",
+      "help": "Only these handles may place or receive bridged calls. Every listed handle receives authenticated owner privileges."
+    },
+    "realtime.provider": { "label": "Realtime Provider", "advanced": true },
+    "realtime.model": { "label": "Realtime Model", "advanced": true },
+    "realtime.voice": { "label": "Realtime Voice", "advanced": true },
+    "realtime.sessionKey": { "label": "Agent Session Key", "advanced": true },
+    "realtime.toolPolicy": { "label": "Tool Policy", "advanced": true }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "realtime.providers.*.apiKey", "expected": "string" }]
+    }
+  }
+}
