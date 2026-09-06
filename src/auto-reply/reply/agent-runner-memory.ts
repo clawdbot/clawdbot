@@ -10,6 +10,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-compaction-constants.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { MEMORY_FLUSH_ALLOWED_TOOLS } from "../../agents/agent-tools.read.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
@@ -1667,6 +1668,20 @@ export async function runMemoryFlushIfNeeded(params: {
             terminalReplyExpectation: "optional",
             trigger: "memory",
             memoryFlushWritePath,
+            // Maintenance must execute on the runtime the session was
+            // configured for. Without this opt-in an embedded flush targeting
+            // a CLI runtime falls through to the direct-API passthrough, which
+            // Anthropic bills as metered extra usage rather than the plan
+            // limits the CLI runtime was chosen for. The dispatch gate itself
+            // decides eligibility, so non-CLI and API-key runs keep the
+            // passthrough untouched.
+            cliBackendDispatch: "subscription-auth",
+            // The gate needs the run's tool state as a named allowlist. This
+            // is the set agent-tools already constructs for a flush, so the
+            // read-only/append-only restriction is unchanged: the dispatch
+            // exposes no native CLI tools and bounds the loopback grant to
+            // these two, keeping the append-only write wrapper in force.
+            toolsAllow: [...MEMORY_FLUSH_ALLOWED_TOOLS],
             initialTurnTainted:
               !params.followupRun.run.senderIsOwner || sessionLogSnapshot?.turnTainted === true,
             prompt: activeMemoryFlushPlan.prompt,

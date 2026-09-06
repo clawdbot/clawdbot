@@ -43,6 +43,7 @@ import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
 import {
+  MEMORY_FLUSH_ALLOWED_TOOLS,
   type SkillInstructionDeliveryCache,
   wrapToolMemoryFlushAppendOnlyWrite,
 } from "./agent-tools.read.js";
@@ -133,7 +134,7 @@ import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
 
-const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
+const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(MEMORY_FLUSH_ALLOWED_TOOLS);
 
 function applyModelProviderToolPolicy(
   toolsInput: AnyAgentTool[],

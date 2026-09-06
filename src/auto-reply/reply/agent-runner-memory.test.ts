@@ -10,6 +10,7 @@ import {
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { MEMORY_FLUSH_ALLOWED_TOOLS } from "../../agents/agent-tools.read.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
@@ -281,6 +282,8 @@ type EmbeddedAgentParams = {
   prompt?: string;
   transcriptPrompt?: string;
   memoryFlushWritePath?: string;
+  cliBackendDispatch?: string;
+  toolsAllow?: string[];
   silentExpected?: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
   terminalReplyExpectation?: "required" | "optional";
@@ -657,6 +660,22 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(compactionExpected ? 1 : 0);
     },
   );
+
+  it("keeps a flush on the configured CLI runtime instead of the direct-API passthrough", async () => {
+    await runProjectedCompaction(true);
+
+    const flushCall = requireEmbeddedAgentCall();
+    // Without the opt-in, an embedded flush targeting a CLI runtime falls
+    // through to `cli_runtime_passthrough_openclaw`, which bills subscription
+    // credentials as metered extra usage instead of the runtime's plan limits.
+    expect(flushCall.cliBackendDispatch).toBe("subscription-auth");
+    // The dispatch gate fails closed on tool policy: an absent, empty, or
+    // wildcard allowlist silently drops the run back to that passthrough, so
+    // pin the shape the gate requires rather than only the opt-in flag.
+    expect(flushCall.toolsAllow).toEqual([...MEMORY_FLUSH_ALLOWED_TOOLS]);
+    expect(flushCall.toolsAllow?.length ?? 0).toBeGreaterThan(0);
+    expect(flushCall.toolsAllow?.some((name) => name.includes("*"))).toBe(false);
+  });
 
   it("runs exactly one auto-reply memory flush turn, rotates, and persists metadata", async () => {
     const followupRun = createTestFollowupRun({
