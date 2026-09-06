@@ -34,6 +34,7 @@ const formatSessionUsageCostSummaryMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const applySessionPatchProjectionMock = vi.fn();
 const projectSessionsPatchEntryMock = vi.fn();
+const projectSessionPatchResultMock = vi.fn();
 const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
@@ -277,6 +278,10 @@ vi.mock("../gateway/session-utils.js", () => ({
   resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
 }));
 
+vi.mock("../gateway/session-utils-model.js", () => ({
+  projectSessionPatchResult: (...args: unknown[]) => projectSessionPatchResultMock(...args),
+}));
+
 vi.mock("../gateway/server-model-catalog.js", () => ({
   loadGatewayModelCatalog: (params?: CatalogLoadParams) => loadGatewayModelCatalogMock(params),
 }));
@@ -431,6 +436,16 @@ describe("EmbeddedTuiBackend", () => {
     );
     projectSessionsPatchEntryMock.mockReset();
     projectSessionsPatchEntryMock.mockResolvedValue({ ok: true, entry: {} });
+    projectSessionPatchResultMock.mockReset();
+    projectSessionPatchResultMock.mockImplementation(
+      (params: { canonicalKey: string; entry: unknown; storePath: string }) => ({
+        ok: true,
+        path: params.storePath,
+        key: params.canonicalKey,
+        entry: params.entry,
+        resolved: { modelProvider: "openai", model: "gpt-5.4" },
+      }),
+    );
     getRuntimeConfigMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({});
     loadGatewayModelCatalogMock.mockReset();
@@ -851,6 +866,41 @@ describe("EmbeddedTuiBackend", () => {
     expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "main", readOnly: false }),
     );
+  });
+
+  it("projects local patch responses through the canonical gateway model identity", async () => {
+    const cfg = { agents: { defaults: { model: "demo-cli/shared-model" } } };
+    const entry = {
+      sessionId: "session-cli-model",
+      providerOverride: "demo-cli",
+      modelOverride: "shared-model",
+    };
+    getRuntimeConfigMock.mockReturnValue(cfg);
+    projectSessionsPatchEntryMock.mockResolvedValueOnce({ ok: true, entry });
+    projectSessionPatchResultMock.mockReturnValueOnce({
+      ok: true,
+      path: "/tmp/openclaw-sessions.json",
+      key: "agent:main:main",
+      entry,
+      resolved: { modelProvider: "demo-provider", model: "shared-model" },
+    });
+
+    const result = await new EmbeddedTuiBackend().patchSession({
+      key: "agent:main:main",
+      label: "renamed",
+    });
+
+    expect(projectSessionPatchResultMock).toHaveBeenCalledWith({
+      canonicalKey: "agent:main:main",
+      cfg,
+      entry,
+      storePath: "/tmp/openclaw-sessions.json",
+      targetAgentId: "main",
+    });
+    expect(result.resolved).toEqual({
+      modelProvider: "demo-provider",
+      model: "shared-model",
+    });
   });
 
   it("rejects a missing harness-owned session before a local patch can create it", async () => {
