@@ -8,9 +8,11 @@ import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { createEmbeddedRunProgressController } from "./progress-controller.js";
 import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 
 export type PreparedEmbeddedRunInput = {
   runParams: RunEmbeddedAgentParamsWithSessionFile;
+  sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
   contextEngineAgentId?: string;
   provider: string;
   modelId: string;

@@ -1,6 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,7 +13,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/control-ui-activity-summaries");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("control-ui-activity-summaries");
+  }
+});
 
 suite.define(() => {
   it("updates one visible tool summary from running to completed output", async () => {
@@ -86,11 +93,12 @@ suite.define(() => {
         await entry.getByText("Run: run-diagnostics", { exact: true }).waitFor();
 
         if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(proofDir, "completed-tool-summary.png"),
-          });
+          await writeFile(
+            path.join(proofDir, "completed-tool-summary.png"),
+            await takeControlUiViewportScreenshot(page, entry, [
+              entry.getByText("Indexed 3 diagnostic sources.", { exact: true }),
+            ]),
+          );
         }
       },
     );

@@ -31,13 +31,28 @@ describe("shared ip helpers", () => {
     expect(isLegacyIpv4Literal("example.com")).toBe(false);
   });
 
-  it("matches both IPv4 and IPv6 CIDRs", () => {
-    expect(isIpInCidr("10.42.0.59", "10.42.0.0/24")).toBe(true);
-    expect(isIpInCidr("10.43.0.59", "10.42.0.0/24")).toBe(false);
-    expect(isIpInCidr("2001:db8::1234", "2001:db8::/32")).toBe(true);
-    expect(isIpInCidr("2001:db9::1234", "2001:db8::/32")).toBe(false);
-    expect(isIpInCidr("::ffff:127.0.0.1", "127.0.0.1")).toBe(true);
-    expect(isIpInCidr("127.0.0.1", "::ffff:127.0.0.2")).toBe(false);
+  it.each([
+    ["10.42.0.59", "10.42.0.0/24", true],
+    ["10.43.0.59", "10.42.0.0/24", false],
+    ["2001:db8::1234", "2001:db8::/32", true],
+    ["2001:db9::1234", "2001:db8::/32", false],
+    ["::ffff:127.0.0.1", "127.0.0.1", true],
+    ["127.0.0.1", "::ffff:127.0.0.2", false],
+    ["127.0.0.1", "127.1/8", true],
+    ["127.0.0.1", "127.1", false],
+    ["10.42.0.59", " 10.42.0.0/24 ", true],
+    ["10.42.0.59", "10.42.0.0/33", false],
+    ["2001:db8::1", "2001:db8::/129", false],
+    ["10.42.0.59", "junk", false],
+    ["10.42.0.59", "", false],
+    ["junk", "10.42.0.0/24", false],
+    ["10.42.0.59", "2001:db8::/32", false],
+    ["fe80::1%eth0", "fe80::1%eth1", false],
+    ["fe80::1%eth0", "fe80::1%eth0", true],
+    ["fe80::1%eth0", "fe80::1%eth1/128", true],
+    ["::ffff:127.0.0.1", "::ffff:127.0.0.1/128", true],
+  ])("matches %s against %s: %s", (ip, range, expected) => {
+    expect(isIpInCidr(ip, range)).toBe(expected);
   });
 
   it("extracts embedded IPv4 for transition prefixes", () => {

@@ -204,11 +204,13 @@ export async function finalizeNodeAdoptedSession(params: {
           throw changedError();
         }
         if (current.initializing !== true) {
-          return { archivedAt: undefined };
+          return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
         }
         const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : {};
         return {
           archivedAt: undefined,
+          archivedBy: undefined,
+          archiveReason: undefined,
           pluginExtensions: {
             ...entry.pluginExtensions,
             codex: { ...codex, sessionCatalog: params.marker },
@@ -270,7 +272,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
       key: nodeAdoptionSessionKey(params.hostId, params.record.threadId),
       agentId: params.agentId,
       recoverMatchingInitialEntry: true,
-      ...(params.record.name?.trim() ? { label: params.record.name.trim() } : {}),
+      displayName: params.record.name ?? undefined,
       ...(params.record.cwd?.trim() ? { spawnedCwd: params.record.cwd.trim() } : {}),
       initialEntry: {
         agentHarnessId: "codex",

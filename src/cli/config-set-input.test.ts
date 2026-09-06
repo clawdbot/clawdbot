@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   hasProviderBuilderOptions,
   parseBatchSource,
+  parseConfigSetCurrentExpectation,
   type ConfigSetOptions,
 } from "./config-set-input.js";
 
@@ -29,6 +30,52 @@ describe("config set input parsing", () => {
 
     expect(hasProviderBuilderOptions(retired)).toBe(false);
     expect(hasProviderBuilderOptions({ providerTrustedDir: ["/usr/local/bin"] })).toBe(true);
+  });
+
+  it("parses absent and strict JSON current-value expectations", () => {
+    expect(parseConfigSetCurrentExpectation({ expectCurrentAbsent: true })).toEqual({
+      kind: "absent",
+    });
+    expect(parseConfigSetCurrentExpectation({ expectCurrentJson: "null" })).toEqual({
+      kind: "json",
+      value: null,
+    });
+    expect(
+      parseConfigSetCurrentExpectation({ expectCurrentJson: '{"enabled":true,"ports":[1,2]}' }),
+    ).toEqual({
+      kind: "json",
+      value: { enabled: true, ports: [1, 2] },
+    });
+  });
+
+  it.each([
+    {
+      name: "both expectation flags",
+      options: { expectCurrentAbsent: true, expectCurrentJson: "null" },
+      message: "choose either --expect-current-absent or --expect-current-json",
+    },
+    {
+      name: "malformed expected JSON",
+      options: { expectCurrentJson: "{enabled:true}" },
+      message: "--expect-current-json must be valid JSON",
+    },
+    {
+      name: "non-finite expected number",
+      options: { expectCurrentJson: "1e999" },
+      message: "--expect-current-json must be valid JSON",
+    },
+    {
+      name: "batch mode",
+      options: { expectCurrentAbsent: true, batchJson: "[]" },
+      message: "cannot be combined with batch mode",
+    },
+    {
+      name: "dry-run",
+      options: { expectCurrentAbsent: true, dryRun: true },
+      message: "cannot be combined with --dry-run",
+    },
+  ] as const)("rejects $name with a current-value expectation", ({ options, message }) => {
+    expect(() => parseConfigSetCurrentExpectation(options)).toThrow(message);
   });
 
   it("returns null when no batch options are provided", () => {
@@ -170,5 +217,13 @@ describe("config set input parsing", () => {
       const parsed = parseBatchSource({ batchFile: batchPath });
       expect(parsed).toEqual([{ path: "gateway.port", value: 19000 }]);
     });
+  });
+
+  it("rejects batch entries with non-finite numbers", () => {
+    expect(() =>
+      parseBatchSource({
+        batchJson: '[{"path":"channels.custom.timeout","value":1e999}]',
+      }),
+    ).toThrow("Value must be a finite number");
   });
 });

@@ -15,7 +15,16 @@ export type CodeModeToolSurfaceObservation = {
 
 const CODE_MODE_TOOL_SURFACE_OBSERVER = Symbol("openaiCodeModeToolSurfaceObserver");
 const CODE_MODE_TOOL_SURFACE_COLLECTOR = Symbol("openaiCodeModeToolSurfaceCollector");
+const STRICT_REASONING_TAG_TEXT = Symbol("openaiStrictReasoningTagText");
 type CodeModeToolSurfaceObserver = (observation: CodeModeToolSurfaceObservation) => void;
+
+function markStrictReasoningTagText(options: object): void {
+  Reflect.set(options, STRICT_REASONING_TAG_TEXT, true);
+}
+
+function isStrictReasoningTagText(options: object | undefined): boolean {
+  return options ? Reflect.get(options, STRICT_REASONING_TAG_TEXT) === true : false;
+}
 
 export const codeModeToolSurfaceObserver = {
   set(
@@ -44,12 +53,29 @@ export const codeModeToolSurfaceObserver = {
   },
 };
 
+/** Internal output policy for callers that must not recover ambiguous reasoning as visible text. */
+export const reasoningTagTextPolicy = {
+  markStrict: markStrictReasoningTagText,
+  isStrict: isStrictReasoningTagText,
+  copy(source: object | undefined, target: object): void {
+    if (isStrictReasoningTagText(source)) {
+      markStrictReasoningTagText(target);
+    }
+  },
+};
+
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
+export type AnthropicContextManagementOptions = {
+  anthropicServerCompaction?: boolean;
+  anthropicCompactThreshold?: number;
+  cacheTtlPruning?: { tools?: { allow?: string[]; deny?: string[] } };
+};
+
 /** Provider options shared by the Anthropic provider and canonical transport. */
-export interface AnthropicOptions extends StreamOptions {
+export interface AnthropicOptions extends StreamOptions, AnthropicContextManagementOptions {
   /**
    * Enable extended thinking.
    * For Opus 4.6+ and Sonnet 4.6: uses adaptive thinking (model decides when/how much to think).

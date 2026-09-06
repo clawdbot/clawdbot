@@ -10,12 +10,4 @@ describe("sandbox exec-server JSON-RPC helpers", () => {
 
     expect(send).toHaveBeenCalledWith({ jsonrpc: "2.0", id: 1, result: null });
   });
-
-  it("keeps undefined results as empty objects for methods without bodies", () => {
-    const send = vi.fn();
-
-    sendResult(send, 2, undefined);
-
-    expect(send).toHaveBeenCalledWith({ jsonrpc: "2.0", id: 2, result: {} });
-  });
 });

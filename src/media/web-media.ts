@@ -41,6 +41,7 @@ import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
   getDefaultLocalRootsCore,
+  HostReadMediaTypeError,
   LocalMediaAccessError,
   readLocalMediaFile,
   type LocalMediaAccessErrorCode,
@@ -52,6 +53,7 @@ import {
   readImageProbeFromHeader,
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
+import { formatMediaSize } from "./store.shared.js";
 
 export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -172,6 +174,7 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/msword",
   "application/pdf",
   "application/vnd.ms-excel",
+  "application/vnd.ms-excel.sheet.macroenabled.12",
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -206,7 +209,6 @@ const HOST_READ_DECLARED_TEXT_ERROR =
 const HOST_READ_TEXT_PLAIN_EXTENSION_BY_MIME: Record<string, readonly string[]> = {
   "text/plain": [".txt"],
 };
-const MB = 1024 * 1024;
 
 function stripLegacyMediaDirectivePrefix(mediaUrl: string): string {
   if (/^\s*media:\/\//i.test(mediaUrl)) {
@@ -498,16 +500,12 @@ function isAllowedHostReadTextAlias(mime: string | undefined, filePath?: string)
   return ext !== undefined && allowedExtensions.includes(ext);
 }
 
-function formatMb(bytes: number, digits = 2): string {
-  return (bytes / MB).toFixed(digits);
-}
-
 function formatCapLimit(label: string, cap: number, size: number): string {
-  return `${label} exceeds ${formatMb(cap, 0)}MB limit (got ${formatMb(size)}MB)`;
+  return `${label} exceeds ${formatMediaSize(cap)} limit (got ${formatMediaSize(size)})`;
 }
 
 function formatCapReduce(label: string, cap: number, size: number): string {
-  return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
+  return `${label} could not be reduced below ${formatMediaSize(cap)} (got ${formatMediaSize(size)})`;
 }
 
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
@@ -554,7 +552,7 @@ function assertHostReadMediaAllowed(params: {
     ) {
       return;
     }
-    throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
+    throw new HostReadMediaTypeError(HOST_READ_DECLARED_TEXT_ERROR);
   }
   const sniffedKind = kindFromMime(params.sniffedContentType);
   if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
@@ -593,18 +591,16 @@ function assertHostReadMediaAllowed(params: {
     normalizedMime &&
     HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)
   ) {
-    throw new LocalMediaAccessError(
-      "path-not-allowed",
+    throw new HostReadMediaTypeError(
       `Host-local media sends require buffer-verified media/document types (got fallback ${normalizedMime}).`,
     );
   }
-  throw new LocalMediaAccessError(
-    "path-not-allowed",
+  throw new HostReadMediaTypeError(
     `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, and validated plain-text documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
-function toJpegFileName(fileName?: string): string | undefined {
+function toImageFileName(fileName: string | undefined, mimeType: string): string | undefined {
   if (!fileName) {
     return undefined;
   }
@@ -613,10 +609,10 @@ function toJpegFileName(fileName?: string): string | undefined {
     return fileName;
   }
   const parsed = path.parse(trimmed);
-  if (!parsed.ext || HEIC_EXT_RE.test(parsed.ext)) {
-    return path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext: ".jpg" });
-  }
-  return path.format({ dir: parsed.dir, name: parsed.name, ext: ".jpg" });
+  const ext = extensionForMime(mimeType);
+  return mimeType !== "image/jpeg" && parsed.ext.toLowerCase() === ext
+    ? fileName
+    : path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext });
 }
 
 type OptimizedImage = {
@@ -898,19 +894,18 @@ function logOptimizedImage(params: { originalSize: number; optimized: OptimizedI
   }
   if (params.optimized.format === "png") {
     logVerbose(
-      `Optimized PNG (preserving alpha) from ${formatMb(params.originalSize)}MB to ${formatMb(params.optimized.optimizedSize)}MB (side<=${params.optimized.resizeSide}px)`,
+      `Optimized PNG (preserving alpha) from ${formatMediaSize(params.originalSize)} to ${formatMediaSize(params.optimized.optimizedSize)} (side<=${params.optimized.resizeSide}px)`,
     );
     return;
   }
   logVerbose(
-    `Optimized media from ${formatMb(params.originalSize)}MB to ${formatMb(params.optimized.optimizedSize)}MB (side<=${params.optimized.resizeSide}px, q=${params.optimized.quality})`,
+    `Optimized media from ${formatMediaSize(params.originalSize)} to ${formatMediaSize(params.optimized.optimizedSize)} (side<=${params.optimized.resizeSide}px, q=${params.optimized.quality})`,
   );
 }
 
 async function optimizeImageWithFallback(params: {
   buffer: Buffer;
   cap: number;
-  meta?: { contentType?: string; fileName?: string };
   imageCompression?: ImageCompressionPolicy;
 }): Promise<OptimizedImage> {
   const { buffer, cap } = params;
@@ -927,7 +922,7 @@ async function optimizeImageWithFallback(params: {
     transparency: "auto",
   });
   if (optimized.chosen.transparency === "flattened" && shouldLogVerbose()) {
-    logVerbose(`Image transparency flattened to fit ${formatMb(cap, 0)}MB optimization budget`);
+    logVerbose(`Image transparency flattened to fit ${formatMediaSize(cap)} optimization budget`);
   }
   return {
     buffer: optimized.data,
@@ -964,7 +959,6 @@ export async function optimizeImageBufferForWebMedia(params: {
       fileName: params.fileName,
     };
   }
-  const meta = { contentType: params.contentType, fileName: params.fileName };
   const originalContentType = resolvePreservableOriginalImageContentType({
     buffer: params.buffer,
     cap,
@@ -983,7 +977,6 @@ export async function optimizeImageBufferForWebMedia(params: {
   const optimized = await optimizeImageWithFallback({
     buffer: params.buffer,
     cap,
-    meta,
     imageCompression: params.imageCompression,
   });
   logOptimizedImage({ originalSize: params.buffer.length, optimized });
@@ -994,7 +987,7 @@ export async function optimizeImageBufferForWebMedia(params: {
     buffer: optimized.buffer,
     contentType: optimized.mimeType,
     kind: "image",
-    fileName: optimized.format === "jpeg" ? toJpegFileName(params.fileName) : params.fileName,
+    fileName: toImageFileName(params.fileName, optimized.mimeType),
   };
 }
 
@@ -1036,34 +1029,6 @@ async function loadWebMediaInternal(
     mediaUrl;
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
 
-  const optimizeAndClampImage = async (
-    buffer: Buffer,
-    cap: number,
-    meta?: { contentType?: string; fileName?: string },
-  ) => {
-    const originalSize = buffer.length;
-    const optimized = await optimizeImageWithFallback({
-      buffer,
-      cap,
-      meta,
-      ...(imageCompression ? { imageCompression } : {}),
-    });
-    logOptimizedImage({ originalSize, optimized });
-
-    if (optimized.buffer.length > cap) {
-      throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
-    }
-
-    const fileName = optimized.format === "jpeg" ? toJpegFileName(meta?.fileName) : meta?.fileName;
-
-    return {
-      buffer: optimized.buffer,
-      contentType: optimized.mimeType,
-      kind: "image" as const,
-      fileName,
-    };
-  };
-
   const clampAndFinalize = async (params: {
     buffer: Buffer;
     contentType?: string;
@@ -1075,40 +1040,26 @@ async function loadWebMediaInternal(
     // Otherwise fall back to per-kind defaults.
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
     if (params.kind === "image") {
+      if (optimizeImages) {
+        return await optimizeImageBufferForWebMedia({
+          buffer: params.buffer,
+          contentType: params.contentType,
+          fileName: params.fileName,
+          maxBytes: cap,
+          imageCompression,
+        });
+      }
       const imageCap = effectiveImageBytesCap(cap, imageCompression) ?? cap;
       const isGif = params.contentType === "image/gif";
-      if (isGif || !optimizeImages) {
-        if (params.buffer.length > imageCap) {
-          throw new Error(formatCapLimit(isGif ? "GIF" : "Media", imageCap, params.buffer.length));
-        }
-        assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);
-        return {
-          buffer: params.buffer,
-          contentType: params.contentType,
-          kind: params.kind,
-          fileName: params.fileName,
-        };
+      if (params.buffer.length > imageCap) {
+        throw new Error(formatCapLimit(isGif ? "GIF" : "Media", imageCap, params.buffer.length));
       }
-      const originalContentType = resolvePreservableOriginalImageContentType({
-        buffer: params.buffer,
-        cap: imageCap,
-        contentType: params.contentType,
-        fileName: params.fileName,
-        policy: imageCompression,
-      });
-      if (originalContentType) {
-        return {
-          buffer: params.buffer,
-          contentType: originalContentType,
-          kind: params.kind,
-          fileName: params.fileName,
-        };
-      }
+      assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);
       return {
-        ...(await optimizeAndClampImage(params.buffer, imageCap, {
-          contentType: params.contentType,
-          fileName: params.fileName,
-        })),
+        buffer: params.buffer,
+        contentType: params.contentType,
+        kind: params.kind,
+        fileName: params.fileName,
       };
     }
     if (params.buffer.length > cap) {
@@ -1213,7 +1164,7 @@ async function loadWebMediaInternal(
     } catch (err) {
       if (err instanceof FsSafeError) {
         if (err.code === "too-large") {
-          throw new Error(`Media exceeds ${formatMb(sourceReadCap, 0)}MB limit`, {
+          throw new Error(`Media exceeds ${formatMediaSize(sourceReadCap)} limit`, {
             cause: err,
           });
         }
@@ -1247,7 +1198,7 @@ async function loadWebMediaInternal(
       throw err;
     }
   }
-  const sniffedMime = await detectMime({ buffer: data });
+  const sniffedMime = hostReadCapability ? await detectMime({ buffer: data }) : undefined;
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = kindFromMime(mime);
   if (hostReadCapability) {

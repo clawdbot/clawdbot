@@ -94,7 +94,8 @@ describe("renderConfiguredModel", () => {
 
     expect(text(container)).toContain(`Selected model ${fixture.label}`);
     expect(text(container)).toContain(fixture.detail);
-    expect(text(container)).toContain(`${fixture.label} isn’t responding.`);
+    expect(text(container)).toContain("connect ECONNREFUSED");
+    expect(text(container)).not.toContain("isn’t responding");
     expect(text(container)).not.toContain("Change connection");
     const button = container.querySelector<HTMLButtonElement>("button");
     expect(button?.textContent?.trim()).toBe("Try again");

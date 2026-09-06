@@ -29,10 +29,12 @@ import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
-import { enableExplicitlySelectedPluginInConfig } from "../plugins/enable.js";
+import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
+import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   ensureChannelSetupPluginInstalledWithNavigation as runPluginInstallWithNavigation,
@@ -144,7 +146,9 @@ export async function setupChannels(
     ...options?.accountIds,
   };
   const scopedPluginsById = new Map<ChannelChoice, ChannelSetupPlugin>();
-  const resolveWorkspaceDir = () => resolveChannelSetupWorkspaceDir(next);
+  let preparedWorkspaceDir = options?.workspaceDir;
+  const resolveWorkspaceDir = () =>
+    (preparedWorkspaceDir ??= resolveChannelSetupWorkspaceDir(next));
   const rememberScopedPlugin = (plugin: ChannelSetupPlugin) => {
     const channel = plugin.id;
     scopedPluginsById.set(channel, plugin);
@@ -211,6 +215,22 @@ export async function setupChannels(
     }
     return undefined;
   };
+  const enableChannelPluginForSetup = async (channel: ChannelChoice) =>
+    await withPluginLifecycleLease({}, async () => {
+      const result = await enablePluginWithCapabilityConsent(next, channel, {
+        workspaceDir: resolveWorkspaceDir(),
+        onCapabilityConsent: createPluginCapabilityConsentPrompter(
+          prompter,
+          options?.beforePersistentEffect,
+        ),
+      });
+      next = result.config;
+      if (result.enabled) {
+        // Capture the reviewed runtime before another lifecycle operation replaces it.
+        await loadScopedChannelPlugin(channel);
+      }
+      return result;
+    });
   const getVisibleSetupFlowAdapter = (channel: ChannelChoice) => {
     const scopedPlugin = scopedPluginsById.get(channel);
     if (scopedPlugin) {
@@ -247,6 +267,7 @@ export async function setupChannels(
     ? { statusByChannel: new Map<ChannelChoice, ChannelSetupStatus>(), statusLines: [] }
     : await collectChannelStatus({
         cfg: next,
+        workspaceDir: resolveWorkspaceDir(),
         options,
         accountOverrides,
         installedPlugins: listVisibleInstalledPlugins(),
@@ -406,8 +427,7 @@ export async function setupChannels(
       );
       return false;
     }
-    const result = enableExplicitlySelectedPluginInConfig(next, channel);
-    next = result.config;
+    const result = await enableChannelPluginForSetup(channel);
     if (!result.enabled) {
       await prompter.note(
         t("wizard.channels.pluginEnableFailed", {
@@ -419,11 +439,7 @@ export async function setupChannels(
       );
       return false;
     }
-    if (getVisibleChannelPlugin(channel)) {
-      await refreshStatus(channel);
-      return true;
-    }
-    const plugin = await loadScopedChannelPlugin(channel);
+    const plugin = getVisibleChannelPlugin(channel);
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!plugin) {
       if (adapter) {
@@ -653,8 +669,17 @@ export async function setupChannels(
   };
 
   const ensureChannelSetupPluginInstalledWithNavigation = async (
+    channel: ChannelChoice,
     install: Parameters<typeof runPluginInstallWithNavigation>[0]["install"],
-  ) => await runPluginInstallWithNavigation({ install, prompter, options });
+  ) =>
+    await withPluginLifecycleLease({}, async () => {
+      const outcome = await runPluginInstallWithNavigation({ install, prompter, options });
+      if (outcome.status !== "back" && outcome.value.installed) {
+        next = outcome.value.cfg;
+        await loadScopedChannelPlugin(channel, outcome.value.pluginId ?? install.entry.pluginId);
+      }
+      return outcome;
+    });
 
   const handleChannelChoice = async (
     channel: ChannelChoice,
@@ -716,8 +741,7 @@ export async function setupChannels(
         if (!resume) {
           return "done";
         }
-        const result = enableExplicitlySelectedPluginInConfig(next, channel);
-        next = result.config;
+        const result = await enableChannelPluginForSetup(channel);
         if (!result.enabled) {
           await prompter.note(
             t("wizard.channels.pluginEnableFailed", {
@@ -757,7 +781,7 @@ export async function setupChannels(
     const installedCatalogEntry = installedCatalogById.get(channel);
     if (catalogEntry) {
       const workspaceDir = resolveWorkspaceDir();
-      const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation({
+      const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation(channel, {
         cfg: next,
         entry: catalogEntry,
         runtime,
@@ -775,7 +799,6 @@ export async function setupChannels(
       if (installOutcome.persistentEffectStarted) {
         cfgOnBack = next;
       }
-      await loadScopedChannelPlugin(channel, result.pluginId ?? catalogEntry.pluginId);
       await refreshStatus(channel);
     } else if (installedCatalogEntry) {
       let plugin = await loadScopedChannelPlugin(channel, installedCatalogEntry.pluginId);
@@ -800,7 +823,7 @@ export async function setupChannels(
           return "done";
         }
         const workspaceDir = resolveWorkspaceDir();
-        const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation({
+        const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation(channel, {
           cfg: next,
           entry: installedCatalogEntry,
           runtime,
@@ -818,10 +841,7 @@ export async function setupChannels(
         if (installOutcome.persistentEffectStarted) {
           cfgOnBack = next;
         }
-        plugin = await loadScopedChannelPlugin(
-          channel,
-          result.pluginId ?? installedCatalogEntry.pluginId,
-        );
+        plugin = getVisibleChannelPlugin(channel);
       }
       if (!plugin) {
         await prompter.note(
@@ -861,7 +881,7 @@ export async function setupChannels(
           return "done";
         }
         const workspaceDir = resolveWorkspaceDir();
-        const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation({
+        const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation(channel, {
           cfg: next,
           entry: fallbackCatalogEntry,
           runtime,
@@ -879,7 +899,6 @@ export async function setupChannels(
         if (installOutcome.persistentEffectStarted) {
           cfgOnBack = next;
         }
-        await loadScopedChannelPlugin(channel, result.pluginId ?? fallbackCatalogEntry.pluginId);
         await refreshStatus(channel);
       } else {
         const enabled = await enableBundledPluginForSetup(channel);
@@ -1011,6 +1030,7 @@ export async function setupChannels(
 
   const selectedLines = resolveChannelSelectionNoteLines({
     cfg: next,
+    workspaceDir: resolveWorkspaceDir(),
     installedPlugins: listVisibleInstalledPlugins(),
     selection,
   });

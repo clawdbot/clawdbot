@@ -7,6 +7,7 @@ const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 const removalDatePendingCompatCodes = new Set<PluginCompatCode>([
   "plugin-sdk-tool-plugin-public-demotion",
   "agent-harness-sdk-alias",
+  "plugin-sdk-shipped-channel-setup-exports",
 ]);
 const retiredPluginSdkSubpathCodes = [
   "plugin-sdk-channel-streaming-subpath",
@@ -82,10 +83,30 @@ describe("plugin compatibility registry", () => {
       (record) =>
         record.status === "removal-pending" &&
         record.removeAfter !== undefined &&
-        record.removeAfter <= "2026-07-30",
+        record.removeAfter <= "2026-09-02",
     );
 
     expect(staleRemovalWindows).toEqual([]);
+    for (const code of [
+      "plugin-sdk-config-runtime-subpath",
+      "plugin-sdk-channel-reply-pipeline-subpath",
+      "plugin-sdk-infra-runtime-subpath",
+      "plugin-sdk-channel-lifecycle-subpath",
+      "plugin-sdk-channel-message-subpath",
+    ] as const satisfies readonly PluginCompatCode[]) {
+      const record = records.get(code);
+      expect(record).toMatchObject({
+        status: "removal-pending",
+        deprecated: "2026-07-06",
+        warningStarts: "2026-07-06",
+        removeAfter: "2026-10-01",
+        docsPath: "/plugins/sdk-migration",
+      });
+      expect(record?.replacement).toMatch(
+        /retain until supported external plugin migration is verified/u,
+      );
+    }
+
     expect(records.get("plugin-sdk-media-understanding-public-demotion")).toMatchObject({
       status: "removal-pending",
       removeAfter: "2026-09-30",
@@ -215,15 +236,15 @@ describe("plugin compatibility registry", () => {
     expect(record?.removeAfter).toBeUndefined();
   });
 
-  it("keeps removed shipped channel setup exports as a migration tombstone", () => {
+  it("keeps shipped channel setup exports until published packages migrate", () => {
     const record = listPluginCompatRecords().find(
       (candidate) => candidate.code === "plugin-sdk-shipped-channel-setup-exports",
     );
 
     expect(record).toMatchObject({
-      status: "removed",
+      status: "deprecated",
       replacement:
-        "plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
+        "retain until supported published packages migrate to plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
     });
     expect(record?.removeAfter).toBeUndefined();
   });

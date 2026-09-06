@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Gateway session lifecycle state projection.
 // Converts agent run lifecycle events into session row/store status updates.
 import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
@@ -15,17 +16,28 @@ import {
   projectMainSessionRecoveryLifecycle,
 } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { updateSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  appendSessionTranscriptReport,
+  patchSessionEntryCore,
+  type SessionTranscriptWriteScope,
+} from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
+import { boundedWorkerError } from "./worker-environments/worker-error.js";
+
+const restartRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
 
 type LifecyclePhase = "start" | "end" | "error";
 
 type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
+  contextClaimId?: string;
   runId?: string;
+  clientRunId?: string;
   lifecycleGeneration?: string;
+  mainSessionRestartRecovery?: true;
   data?: {
     phase?: unknown;
     startedAt?: unknown;
@@ -43,7 +55,14 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
 
 type LifecycleSessionShape = Pick<
   GatewaySessionRow,
-  "updatedAt" | "status" | "lastRunError" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
+  | "updatedAt"
+  | "status"
+  | "lastRunError"
+  | "lastRunId"
+  | "startedAt"
+  | "endedAt"
+  | "runtimeMs"
+  | "abortedLastRun"
 >;
 
 type PersistedLifecycleSessionShape = Pick<
@@ -51,6 +70,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "updatedAt"
   | "status"
   | "lastRunError"
+  | "lastRunId"
   | "startedAt"
   | "endedAt"
   | "runtimeMs"
@@ -60,9 +80,10 @@ type PersistedLifecycleSessionShape = Pick<
   | "lifecycleRunId"
 >;
 
-type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
+type GatewaySessionLifecycleSnapshot = Partial<Pick<SessionEntry, keyof LifecycleSessionShape>>;
 
 const SESSION_RUN_ERROR_MAX_CHARS = 160;
+const RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE = "run-failed-before-reply";
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -89,6 +110,63 @@ function resolveTerminalOutcome(event: LifecycleEventLike): AgentRunTerminalOutc
   });
 }
 
+function resolveSettledLifecycleTerminalOutcome(
+  event: LifecycleEventLike,
+): AgentRunTerminalOutcome | undefined {
+  const phase = resolveLifecyclePhase(event);
+  if (phase !== "end" && phase !== "error") {
+    return undefined;
+  }
+  const outcome = resolveTerminalOutcome(event);
+  return isAgentLifecycleYieldedWaiting({
+    phase,
+    yielded: event.data?.yielded,
+    livenessState: event.data?.livenessState,
+    stopReason: outcome.stopReason,
+    aborted: event.data?.aborted,
+    status: event.data?.status,
+    timeoutPhase: event.data?.timeoutPhase,
+    error: event.data?.error,
+  })
+    ? undefined
+    : outcome;
+}
+
+function sanitizeSessionRunError(error: unknown): string {
+  return renderUserFacingText(error, { errorContext: true }).replace(/\s+/g, " ").trim();
+}
+
+/** Shared transcript outcome for owners that already committed a failed run. */
+export async function recordGatewaySessionRunFailure(params: {
+  target: SessionTranscriptWriteScope & { sessionId: string };
+  runId: string;
+  error: unknown;
+  assertCommitAllowed?: () => void;
+}): Promise<void> {
+  const { runId } = params;
+  const error = boundedWorkerError(sanitizeSessionRunError(params.error), 512);
+  const result = await appendSessionTranscriptReport(params.target, {
+    kind: "custom",
+    customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
+    suppressWhenAssistantRun: runId,
+    selectReport: (latest) => {
+      params.assertCommitAllowed?.();
+      if (isRecord(latest?.details) && latest.details.runId === runId) {
+        return undefined;
+      }
+      return {
+        customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
+        content: `This turn did not run: ${error}.`,
+        display: true,
+        details: { runId, error },
+      };
+    },
+  });
+  if (!result.ok) {
+    throw new Error(`Failed run notice could not be appended: ${result.error.code}`);
+  }
+}
+
 function resolveSessionRunError(
   outcome: AgentRunTerminalOutcome,
   status: SessionRunStatus,
@@ -96,9 +174,7 @@ function resolveSessionRunError(
   if ((status !== "failed" && status !== "timeout") || !outcome.error) {
     return undefined;
   }
-  const sanitized = renderUserFacingText(outcome.error, { errorContext: true })
-    .replace(/\s+/g, " ")
-    .trim();
+  const sanitized = sanitizeSessionRunError(outcome.error);
   return sanitized ? truncateUtf16Safe(sanitized, SESSION_RUN_ERROR_MAX_CHARS) : undefined;
 }
 
@@ -141,8 +217,8 @@ function resolveRuntimeMs(params: {
   return undefined;
 }
 
-function deriveGatewaySessionLifecycleSnapshot(params: {
-  session?: Partial<LifecycleSessionShape> | null;
+export function deriveGatewaySessionLifecycleSnapshot(params: {
+  session?: GatewaySessionLifecycleSnapshot | null;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
   const phase = resolveLifecyclePhase(params.event);
@@ -170,17 +246,7 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
   const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
   const endedAt = resolveLifecycleEndedAt(params.event);
   const updatedAt = endedAt ?? existing?.updatedAt;
-  const yieldedWaiting = isAgentLifecycleYieldedWaiting({
-    phase,
-    yielded: params.event.data?.yielded,
-    livenessState: params.event.data?.livenessState,
-    stopReason: params.event.data?.stopReason,
-    aborted: params.event.data?.aborted,
-    status: params.event.data?.status,
-    timeoutPhase: params.event.data?.timeoutPhase,
-    error: params.event.data?.error,
-  });
-  const terminal = yieldedWaiting ? undefined : resolveTerminalOutcome(params.event);
+  const terminal = resolveSettledLifecycleTerminalOutcome(params.event);
   const status = terminal
     ? SESSION_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminal)]
     : "running";
@@ -222,14 +288,15 @@ function derivePersistedSessionLifecyclePatch(params: {
   }
   const phase = resolveLifecyclePhase(params.event);
   const runId = normalizeLifecycleRunId(params.event.runId);
+  const clientRunId = normalizeLifecycleRunId(params.event.clientRunId) ?? runId;
   // Run ownership follows the durable running projection. Terminal settlement
   // releases it; yielded parents retain it for their continuation lifecycle.
   return {
     ...projection.patch,
     ...(phase === "start"
-      ? { lifecycleRunId: runId }
+      ? { lifecycleRunId: runId, lastRunId: undefined }
       : projection.patch.status && projection.patch.status !== "running"
-        ? { lifecycleRunId: undefined }
+        ? { lifecycleRunId: undefined, lastRunId: clientRunId }
         : {}),
   };
 }
@@ -312,6 +379,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
   sessionKey: string;
   agentId?: string;
   event: LifecycleEventLike;
+  assertCommitAllowed?: () => void;
 }): Promise<void> {
   const phase = resolveLifecyclePhase(params.event);
   if (!phase) {
@@ -331,12 +399,16 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       : undefined;
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
-  await updateSessionEntry(
+  let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
+  let failedRun: { runId: string; error: unknown } | undefined;
+  const persisted = await patchSessionEntryCore(
     {
       storePath: sessionEntry.storePath,
       sessionKey: sessionEntry.canonicalKey,
     },
     async (storedEntry) => {
+      terminalRecovery = undefined;
+      failedRun = undefined;
       const entry = storedEntry as SessionEntry;
       if (
         exactCronRun &&
@@ -358,17 +430,79 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       ) {
         return null;
       }
+      const eventRunId = normalizeLifecycleRunId(params.event.runId);
+      const eventClientRunId = normalizeLifecycleRunId(params.event.clientRunId);
+      const terminalRunId = normalizeLifecycleRunId(entry.lastRunId);
+      if (
+        phase === "start" &&
+        entry.status !== "running" &&
+        terminalRunId !== undefined &&
+        (eventRunId === terminalRunId || eventClientRunId === terminalRunId)
+      ) {
+        // A delayed start from a terminalized run must not reopen the row after
+        // its end write commits; lifecycle events are delivered in order, but
+        // their async persistence can settle out of order.
+        return null;
+      }
       const patch = derivePersistedSessionLifecyclePatch({
         entry,
         event: params.event,
       });
+      if (
+        phase === "error" &&
+        params.event.data?.aborted !== true &&
+        eventRunId &&
+        (patch.status === "failed" || patch.status === "timeout")
+      ) {
+        failedRun = {
+          runId: eventRunId,
+          error: resolveTerminalOutcome(params.event).error,
+        };
+      }
+      const recoveryTerminalRunId = normalizeLifecycleRunId(params.event.runId);
+      const recoveryTerminalIsCurrent =
+        params.event.mainSessionRestartRecovery === true &&
+        params.event.lifecycleGeneration === getAgentEventLifecycleGeneration() &&
+        recoveryTerminalRunId !== undefined &&
+        (phase === "end" || phase === "error");
+      const terminalOutcome = recoveryTerminalIsCurrent
+        ? resolveSettledLifecycleTerminalOutcome(params.event)
+        : undefined;
+      if (terminalOutcome && recoveryTerminalRunId && Object.keys(patch).length > 0) {
+        terminalRecovery = {
+          runId: recoveryTerminalRunId,
+          outcome: terminalOutcome,
+        };
+      }
       return Object.keys(patch).length > 0 ? patch : null;
     },
     {
       skipMaintenance: true,
       takeCacheOwnership: true,
       requireWriteSuccess: true,
+      ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
     },
   );
+  if (persisted && terminalRecovery) {
+    const message = `main-session restart recovery terminal: session=${sessionEntry.canonicalKey} run=${terminalRecovery.runId} status=${terminalRecovery.outcome.status} reason=${terminalRecovery.outcome.reason}`;
+    restartRecoveryLog[terminalRecovery.outcome.status === "ok" ? "info" : "warn"](message);
+  }
   lifecyclePersistenceVersion += 1;
+  if (persisted && failedRun) {
+    const { runId, error } = failedRun;
+    // Only accepted errors pay for branch navigation; assistant detection and
+    // report deduplication share the appender's authoritative write snapshot.
+    await recordGatewaySessionRunFailure({
+      target: {
+        agentId: sessionEntry.agentId,
+        storePath: sessionEntry.storePath,
+        sessionKey: sessionEntry.canonicalKey,
+        sessionId: persisted.sessionId,
+        expectedLifecycleRevision: persisted.lifecycleRevision,
+      },
+      runId,
+      error,
+      assertCommitAllowed: params.assertCommitAllowed,
+    });
+  }
 }

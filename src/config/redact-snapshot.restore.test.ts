@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
   REDACTED_SENTINEL,
@@ -94,12 +95,46 @@ describe("restoreRedactedValues", () => {
     expect(result.channels.slack.accounts.ws2.botToken).toBe("user-typed-new-token-value");
   });
 
-  it("handles missing original gracefully", () => {
-    const incoming = {
-      channels: { newChannel: { token: REDACTED_SENTINEL } },
-    };
-    const original = {};
-    expect(restoreRedactedValues_orig(incoming, original).ok).toBe(false);
+  it.each<{ name: string; hints: ConfigUiHints; warningPath: string }>([
+    {
+      name: "schema hints",
+      hints: { "channels.*.token": { sensitive: true } },
+      warningPath: "channels.*.token",
+    },
+    {
+      name: "heuristic fallback",
+      hints: { "gateway.auth.token": { sensitive: true } },
+      warningPath: "channels.newChannel.token",
+    },
+  ])("warns on missing originals only during writes with $name", async ({ hints, warningPath }) => {
+    const original = { channels: { existing: { token: "existing" } } };
+    const incoming = { channels: { newChannel: { token: REDACTED_SENTINEL } } };
+    const warnLogs = createWarnLogCapture("openclaw-config-redaction-test");
+    try {
+      // Raw replacement also changes the channel key, so its sentinel has no matching original.
+      expect(redactConfigSnapshot(makeSnapshot(original), hints).raw).toBeNull();
+      expect(await warnLogs.findText("Cannot un-redact config key")).toBeUndefined();
+
+      expect(restoreRedactedValues_orig(incoming, original, hints).ok).toBe(false);
+      expect(await warnLogs.findText("Cannot un-redact config key")).toContain(warningPath);
+    } finally {
+      warnLogs.cleanup();
+    }
+  });
+
+  it("keeps array truncation warnings during raw validation", async () => {
+    const snapshot = makeSnapshot({ plugins: { allow: ["source"] } });
+    const runtimeConfig = { plugins: { allow: ["source", "runtime-default"] } };
+    const warnLogs = createWarnLogCapture("openclaw-config-redaction-array-test");
+    try {
+      const result = redactConfigSnapshot({ ...snapshot, config: runtimeConfig, runtimeConfig });
+      expect(result.raw).toBe(snapshot.raw);
+      expect(await warnLogs.findText("Redacted config array key plugins.allow[]")).toContain(
+        "has been truncated",
+      );
+    } finally {
+      warnLogs.cleanup();
+    }
   });
 
   it.each(["toString", "constructor", "valueOf", "hasOwnProperty"])(
@@ -210,6 +245,39 @@ describe("restoreRedactedValues", () => {
     const result = restoreRedactedValues_orig(incoming, original, hints);
     expect(result.ok).toBe(false);
     expect(result.humanReadableMessage).toContain("Reserved redaction sentinel");
+  });
+
+  it.each<{ name: string; field: string; hints: ConfigUiHints }>([
+    {
+      name: "known URL path marked non-sensitive",
+      field: "baseUrl",
+      hints: { "channels.proofchat.baseUrl": { sensitive: false } },
+    },
+    {
+      name: "URL hint marked non-sensitive",
+      field: "endpoint",
+      hints: { "channels.proofchat.endpoint": { sensitive: false, tags: ["url-secret"] } },
+    },
+    {
+      name: "wildcard URL hint marked non-sensitive",
+      field: "endpoint",
+      hints: { "channels.proofchat.*": { sensitive: false, tags: ["url-secret"] } },
+    },
+  ])("round-trips redacted URLs with $name", ({ field, hints }) => {
+    const original = {
+      channels: { proofchat: { [field]: "https://example.test/v1?token=synthetic-query" } },
+    };
+    const redacted = redactConfigSnapshot(makeSnapshot(original), hints);
+    expect(redacted.config).toEqual({ channels: { proofchat: { [field]: REDACTED_SENTINEL } } });
+    expect(restoreRedactedValues_orig(redacted.config, original, hints)).toEqual({
+      ok: true,
+      result: original,
+    });
+    const safe = { channels: { proofchat: { [field]: "https://example.test/v1" } } };
+    expect(redactConfigSnapshot(makeSnapshot(safe), hints).config).toEqual(safe);
+    expect(
+      restoreRedactedValues_orig(redacted.config, { channels: { proofchat: {} } }, hints).ok,
+    ).toBe(false);
   });
 
   it("restores array items using wildcard uiHints", () => {

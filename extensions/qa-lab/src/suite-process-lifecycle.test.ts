@@ -1,5 +1,4 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -33,13 +32,8 @@ function buildSuiteProcessEnv(outputDir: string) {
     OPENCLAW_HOME: home,
     OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
     OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
-    OPENCLAW_BUILD_PRIVATE_QA: "1",
     OPENCLAW_QA_SUITE_PROGRESS: "1",
-    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
   };
-  if (!existsSync(path.join(repoRoot, "dist", "index.js"))) {
-    env.OPENCLAW_FORCE_BUILD = "1";
-  }
   delete env.VITEST;
   delete env.VITEST_POOL_ID;
   delete env.VITEST_WORKER_ID;

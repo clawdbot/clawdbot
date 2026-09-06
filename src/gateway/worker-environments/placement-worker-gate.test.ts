@@ -39,8 +39,8 @@ describe("worker session placement gate", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function activate() {
-    let placement = store.startDispatch(SESSION);
+  function activate(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
+    let placement = store.startDispatch({ ...SESSION, executionMode });
     placement = store.transition({
       sessionId: SESSION.sessionId,
       from: "requested",
@@ -113,6 +113,12 @@ describe("worker session placement gate", () => {
     expect(gate.readWorkerTurnClaim(binding)).toEqual(claim);
     expect(gate.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
     expect(() => gate.updateAckCursors({ claim, transcriptSeq: 2 })).toThrow("stale worker turn");
+    expect(() =>
+      gate.prepareWorkspaceResultOwnerRevocation(binding, new Error("restart owner revoked")),
+    ).not.toThrow();
+    expect(restartedStore.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: claim.sessionId, recoveryRequestedAtMs: null },
+    ]);
   });
 
   it("does not classify a same-id claim from a different run as inherited", () => {
@@ -155,6 +161,8 @@ describe("worker session placement gate", () => {
 
     expect(gate.validateWorkerTurn(firstBinding)).toBe(false);
     expect(gate.validateWorkerTurn(secondBinding)).toBe(true);
+    expect(() => gate.readWorkerTurnLiveAckCursor(firstBinding)).toThrow("stale worker turn");
+    expect(gate.readWorkerTurnLiveAckCursor(secondBinding)).toBe(0);
     expect(gate.isWorkerTurnToolAuthorized(firstBinding, "sessions_send")).toBe(false);
     expect(gate.isWorkerTurnToolAuthorized(secondBinding, "sessions_send")).toBe(true);
     expect(() => gate.updateAckCursors({ claim: firstBinding, transcriptSeq: 3 })).toThrow(
@@ -176,6 +184,7 @@ describe("worker session placement gate", () => {
       lastTranscriptAckCursor: 4,
       lastLiveEventAckCursor: 9,
     });
+    expect(gate.readWorkerTurnLiveAckCursor(binding)).toBe(9);
     expect(store.listPendingWorkspaceResults()).toMatchObject([
       { sessionId: SESSION.sessionId, runId },
     ]);
@@ -183,6 +192,81 @@ describe("worker session placement gate", () => {
     store.completeWorkspaceResultAndReleaseTurn(claim);
     expect(store.get(SESSION.sessionId)?.turnClaim).toBeNull();
     expect(gate.validateWorkerTurn(binding)).toBe(false);
+  });
+
+  it("hands a worker-owned pending result to recovery before owner revocation", () => {
+    const claim = preclaim("run-worker-revoked");
+    const gate = createWorkerSessionPlacementGate(store);
+    gate.updateAckCursors({ claim, liveSeq: 1 });
+
+    gate.prepareWorkspaceResultOwnerRevocation(
+      { sessionId: claim.sessionId, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      new Error("worker owner revoked"),
+    );
+
+    expect(store.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: claim.sessionId, recoveryRequestedAtMs: expect.any(Number) },
+    ]);
+    expect(store.get(claim.sessionId)).toMatchObject({
+      state: "active",
+      turnClaim: expect.anything(),
+    });
+  });
+
+  it("fails a Gateway-owned pending result before owner revocation", () => {
+    const placement = activate("remote-exec");
+    const claim = store.claimTurn({
+      sessionId: placement.sessionId,
+      agentId: placement.agentId,
+      sessionKey: placement.sessionKey,
+      claimId: "claim:run-local-revoked",
+      runId: "run-local-revoked",
+      owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+    });
+    store.markWorkspaceResultPending(claim);
+
+    createWorkerSessionPlacementGate(store).prepareWorkspaceResultOwnerRevocation(
+      { sessionId: claim.sessionId, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      new Error("local owner revoked"),
+    );
+
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(store.get(claim.sessionId)).toMatchObject({
+      state: "failed",
+      recoveryError: "local owner revoked",
+      turnClaim: null,
+    });
+  });
+
+  it("preserves a staged Gateway-owned result during owner revocation", () => {
+    const placement = activate("remote-exec");
+    const claim = store.claimTurn({
+      sessionId: placement.sessionId,
+      agentId: placement.agentId,
+      sessionKey: placement.sessionKey,
+      claimId: "claim:run-local-staged",
+      runId: "run-local-staged",
+      owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+    });
+    store.markWorkspaceResultPending(claim);
+    store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/local-staged");
+
+    createWorkerSessionPlacementGate(store).prepareWorkspaceResultOwnerRevocation(
+      { sessionId: claim.sessionId, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      new Error("local owner revoked"),
+    );
+
+    expect(store.listPendingWorkspaceResults()).toMatchObject([
+      {
+        sessionId: claim.sessionId,
+        recoveryRequestedAtMs: expect.any(Number),
+        stagedResultRef: "refs/openclaw/worker-results/local-staged",
+      },
+    ]);
+    expect(store.get(claim.sessionId)).toMatchObject({
+      state: "active",
+      turnClaim: expect.anything(),
+    });
   });
 
   it("lets the admitted worker finish acknowledgements after draining closes admission", () => {

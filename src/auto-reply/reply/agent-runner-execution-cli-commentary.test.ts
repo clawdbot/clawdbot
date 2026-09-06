@@ -5,6 +5,7 @@ import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   createFollowupRun,
+  initialFallbackAttemptOptions,
   createMockTypingSignaler,
   getExecuteAgentTurnForTest,
   loadActualRunCliAgentForTest,
@@ -12,7 +13,7 @@ import {
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 const scriptedCliProgram = String.raw`
 let input = "";
@@ -54,7 +55,11 @@ process.stdin.on("end", () => {
 function useClaudeCliFallback() {
   state.isCliProviderMock.mockReturnValue(true);
   state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-    result: await params.run("claude-cli", "claude-opus-4-6"),
+    result: await params.run(
+      "claude-cli",
+      "claude-opus-4-6",
+      initialFallbackAttemptOptions(params),
+    ),
     provider: "claude-cli",
     model: "claude-opus-4-6",
     attempts: [],
@@ -213,6 +218,47 @@ describe("executeAgentTurn: CLI durable commentary", () => {
     if (result.kind === "success") {
       expect(result.runResult.payloads).toEqual([{ text: "Short final wrap-up." }]);
     }
+  });
+
+  it("forwards channel presentation callbacks to native CLI input", async () => {
+    useClaudeCliFallback();
+    state.createBlockReplyDeliveryHandlerMock.mockImplementationOnce(
+      (params: { onBlockReply: NonNullable<GetReplyOptions["onBlockReply"]> }) =>
+        params.onBlockReply,
+    );
+    state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+      await params.onBlockReply?.({
+        text: "Which color?",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Blue",
+                  action: { type: "question", questionId: "question-1", optionValue: "Blue" },
+                },
+              ],
+            },
+          ],
+        },
+      });
+      await params.onPartialReply?.({ text: "Fallback question" });
+      return { payloads: [{ text: "Answered." }], meta: {} };
+    });
+
+    const onBlockReply = vi.fn<NonNullable<GetReplyOptions["onBlockReply"]>>(async () => undefined);
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
+      async () => undefined,
+    );
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+
+    await executeAgentTurn(createTurnParams({ onBlockReply, onPartialReply }, false));
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Which color?", presentation: expect.any(Object) }),
+    );
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "Fallback question" });
   });
 
   it("delivers commentary payloads without block streaming", async () => {

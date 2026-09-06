@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expectDefined } from "@openclaw/normalization-core";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   type WorkerLiveEventParams,
@@ -17,11 +18,13 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
 import type { GatewayWsClient } from "../gateway/server/ws-types.js";
 import type { WorkerConnectionIdentity } from "../gateway/worker-environments/connection-identity.js";
 import { hashWorkerCredential } from "../gateway/worker-environments/credential.js";
 import { createWorkerInferenceStore } from "../gateway/worker-environments/inference-store.js";
+import { createWorkerChatProjection } from "../gateway/worker-environments/live-chat.test-support.js";
 import * as liveEvents from "../gateway/worker-environments/live-events.js";
 import { projectWorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import * as placements from "../gateway/worker-environments/placement-store.js";
@@ -71,6 +74,7 @@ const BUNDLE_ARTIFACT = {
 };
 const PROVIDER: WorkerProvider = {
   id: "fake",
+  resolveAllocation: async () => ({ leaseId: "lease-fault", sharedHost: false }),
   provision: async () => ({ leaseId: "lease-fault", ssh: SSH_ENDPOINT }),
   inspect: async () => ({ status: "active" }),
   destroy: async () => {},
@@ -165,6 +169,7 @@ export class ComposedGatewayHarness {
   readonly requests: Array<{ method: string; params: unknown }> = [];
   readonly admissions: WorkerConnectionIdentity[] = [];
   readonly liveDeltas: string[] = [];
+  readonly chat: ReturnType<typeof createWorkerChatProjection>;
   readonly abandonedServices: workerEnv.WorkerEnvironmentService[] = [];
   providerCalls = 0;
   replacementProviderCalls = 0;
@@ -174,6 +179,7 @@ export class ComposedGatewayHarness {
 
   private readonly httpServer: Server;
   private readonly webSocketServer: WebSocketServer;
+  private readonly connectionWork = new GatewayConnectionWork();
   private readonly sockets = new Set<WebSocket>();
   private readonly socketCleanups = new Set<() => void>();
   private readonly requestMethods = new Map<string, string>();
@@ -239,11 +245,12 @@ export class ComposedGatewayHarness {
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
     });
-    this.placementGateValue = this.createPlacementGate();
+    this.placementGateValue = createWorkerSessionPlacementGate(this.placementStore);
     this.serviceValue = this.createService();
     this.httpServer = createServer();
     this.webSocketServer = new WebSocketServer({ server: this.httpServer });
     this.webSocketServer.on("connection", (socket) => this.accept(socket));
+    this.chat = createWorkerChatProjection(SESSION_KEY);
     this.unsubscribeLive = onAgentRuntimeEvent((event) => {
       if (typeof event.data.delta === "string") {
         this.liveDeltas.push(event.data.delta);
@@ -252,15 +259,12 @@ export class ComposedGatewayHarness {
   }
 
   get epoch(): number {
-    const record = this.store.get(ENVIRONMENT_ID);
-    if (!record) {
-      throw new Error("fault environment missing");
-    }
-    return record.ownerEpoch;
+    return expectDefined(this.store.get(ENVIRONMENT_ID), "fault environment missing").ownerEpoch;
   }
 
   async start(): Promise<void> {
-    const listening = once(this.httpServer, "listening");
+    // ws forwards bind errors first; wait there so failed binds reject setup.
+    const listening = once(this.webSocketServer, "listening");
     this.httpServer.listen(this.socketPath);
     await listening;
   }
@@ -355,10 +359,13 @@ export class ComposedGatewayHarness {
   }
 
   hardRestart(): void {
+    this.chat.state.clear();
     this.abandonedServices.push(this.serviceValue);
     this.liveEventsValue.clear();
     this.liveEventsValue = this.createLiveEvents(false);
-    this.placementGateValue = this.createPlacementGate({ rejectExistingWorkerClaims: true });
+    this.placementGateValue = createWorkerSessionPlacementGate(this.placementStore, {
+      rejectExistingWorkerClaims: true,
+    });
     this.useReplacementExecutor = true;
     this.serviceValue = this.createService();
     this.terminateSockets();
@@ -448,6 +455,8 @@ export class ComposedGatewayHarness {
       cleanup();
     }
     this.socketCleanups.clear();
+    this.connectionWork.beginClose();
+    await this.connectionWork.drain();
     await this.serviceValue.stop();
     for (const service of this.abandonedServices) {
       await service.stop();
@@ -455,6 +464,7 @@ export class ComposedGatewayHarness {
     this.liveEventsValue.clear();
     this.unsubscribeLive?.();
     this.unsubscribeLive = undefined;
+    this.chat.dispose();
     await new Promise<void>((resolve) => {
       this.webSocketServer.close(() => resolve());
     });
@@ -600,12 +610,6 @@ export class ComposedGatewayHarness {
     });
   }
 
-  private createPlacementGate(
-    options: { rejectExistingWorkerClaims?: boolean } = {},
-  ): WorkerSessionPlacementGate {
-    return createWorkerSessionPlacementGate(this.placementStore, options);
-  }
-
   private matchesLiveEventGate(gate: LiveEventGate, request: WorkerLiveEventParams): boolean {
     if (gate.target === "preview") {
       return request.event.kind === "assistant" || request.event.kind === "thinking";
@@ -635,6 +639,7 @@ export class ComposedGatewayHarness {
     const service = this.serviceValue;
     const cleanup = workerServer.attachWorkerWsMessageHandler({
       socket,
+      connectionWork: this.connectionWork,
       connId,
       service: {
         ...service,

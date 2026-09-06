@@ -7,11 +7,8 @@ import {
 } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { resolveSignalTarget } from "./aliases.js";
-import {
-  resolveSignalApprovalConversationKey,
-  resolveSignalApprovalTargetAuthorKeys,
-} from "./approval-reactions.js";
+import { resolveSignalDeliveredConversationKey } from "./aliases.js";
+import { resolveSignalApprovalTargetAuthorKeys } from "./approval-reactions.js";
 
 type SignalQuestionReactionIdentity = {
   accountId: string;
@@ -39,24 +36,6 @@ const questionReactionTargets = createQuestionReactionTargetStore<
   resolveReaction: questionGatewayRuntime.resolveReaction,
 });
 
-function resolveConversationKey(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-}): string | null {
-  try {
-    return (
-      resolveSignalTarget({
-        cfg: params.cfg,
-        accountId: params.accountId,
-        input: params.to,
-      })?.to ?? resolveSignalApprovalConversationKey(params.to)
-    );
-  } catch {
-    return resolveSignalApprovalConversationKey(params.to);
-  }
-}
-
 export function registerSignalQuestionReactionTargetForDeliveredPayload(params: {
   cfg: OpenClawConfig;
   target: { channel: string; to: string; accountId?: string | null };
@@ -69,7 +48,10 @@ export function registerSignalQuestionReactionTargetForDeliveredPayload(params: 
   if (params.target.channel !== "signal" || !binding) {
     return false;
   }
-  const conversationKey = resolveConversationKey({ cfg: params.cfg, ...params.target });
+  const conversationKey = resolveSignalDeliveredConversationKey({
+    cfg: params.cfg,
+    ...params.target,
+  });
   const targetAuthorKeys = resolveSignalApprovalTargetAuthorKeys(params);
   if (!conversationKey || targetAuthorKeys.length === 0) {
     return false;

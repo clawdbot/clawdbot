@@ -8,11 +8,11 @@ read_when:
   - Rolling back a risky remote access or DM configuration
 ---
 
-<Warning>
+<Note>
 Expose the Gateway only after you can explain who can reach it, how they are
 authenticated, which agents they can trigger, and which tools those agents can
 use. When in doubt, return to loopback-only access and re-run the audit.
-</Warning>
+</Note>
 
 This runbook turns the broader [Security](/gateway/security) guidance into an
 operator checklist for remote access and messaging exposure.

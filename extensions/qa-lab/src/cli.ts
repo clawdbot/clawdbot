@@ -1,8 +1,11 @@
 // Qa Lab plugin module implements cli behavior.
 import type { Command } from "commander";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { collectString } from "./cli-options.js";
+import {
+  collectString,
+  invalidQaCliArgument,
+  parseQaCliPositiveIntegerOption,
+} from "./cli-options.js";
 import type {
   QaLabSelfCheckCommandOptions,
   QaProfileCommandOptions,
@@ -33,6 +36,7 @@ type QaScenarioRunCliOptions = {
   allowFailures?: QaSuiteCommandOptions["allowFailures"];
   failFast?: QaSuiteCommandOptions["failFast"];
   fast?: QaSuiteCommandOptions["fastMode"];
+  scenario?: QaSuiteCommandOptions["scenarioIds"];
 };
 
 type QaRunCliOptions = QaLabSelfCheckCommandOptions &
@@ -40,7 +44,6 @@ type QaRunCliOptions = QaLabSelfCheckCommandOptions &
     qaProfile?: QaProfileCommandOptions["profile"];
     surface?: QaProfileCommandOptions["surface"];
     category?: QaProfileCommandOptions["category"];
-    scenario?: QaProfileCommandOptions["scenarioIds"];
     evidenceMode?: QaProfileCommandOptions["evidenceMode"];
     excludeTestExecutionEvidence?: boolean;
   };
@@ -72,7 +75,6 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
   thinking?: QaSuiteCommandOptions["thinking"];
   cliAuthMode?: QaSuiteCommandOptions["cliAuthMode"];
   parityPack?: QaSuiteCommandOptions["parityPack"];
-  scenario?: QaSuiteCommandOptions["scenarioIds"];
   enablePlugin?: QaSuiteCommandOptions["enabledPluginIds"];
   image?: QaSuiteCommandOptions["image"];
   cpus?: QaSuiteCommandOptions["cpus"];
@@ -84,22 +86,6 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
 };
 
 const loadQaLabCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
-
-function invalidQaCliArgument(message: string): Error & { code: string; exitCode: number } {
-  const error = new Error(message) as Error & { code: string; exitCode: number };
-  error.name = "InvalidArgumentError";
-  error.code = "commander.invalidArgument";
-  error.exitCode = 1;
-  return error;
-}
-
-function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined) {
-    throw invalidQaCliArgument(`${flag} must be a positive integer.`);
-  }
-  return parsed;
-}
 
 function parseQaCliTcpPortOption(value: string, flag: string): number {
   const parsed = parseQaCliPositiveIntegerOption(value, flag);
@@ -169,19 +155,16 @@ function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
   }
 }
 
+function validateQaScenarioSelection(opts: QaScenarioRunCliOptions, command: Command) {
+  // Keep omitted defaults distinct from an explicitly empty selection.
+  if (command.getOptionValueSource("scenario") === "cli" && opts.scenario?.length === 0) {
+    throw invalidQaCliArgument("--scenario must name at least one non-empty scenario id.");
+  }
+}
+
 async function runQaSelfCheck(opts: QaLabSelfCheckCommandOptions) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaLabSelfCheckCommand(opts);
-}
-
-async function runQaProfile(opts: QaProfileCommandOptions) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaProfileCommand(opts);
-}
-
-async function runQaSuiteCliCommand(opts: QaSuiteCommandOptions) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaSuiteCommand(opts);
 }
 
 async function runQaParityReport(opts: {
@@ -439,14 +422,17 @@ export function registerQaLabCli(program: Command) {
   qaRun.action(async (opts: QaRunCliOptions, command: Command) => {
     validateQaRunMode(opts, command);
     if (opts.qaProfile?.trim()) {
-      await runQaProfile({
+      const evidenceMode = resolveQaEvidenceModeOptions(opts);
+      validateQaScenarioSelection(opts, command);
+      const runtime = await loadQaLabCliRuntime();
+      await runtime.runQaProfileCommand({
         repoRoot: opts.repoRoot,
         outputDir: opts.outputDir,
         profile: opts.qaProfile,
         surface: opts.surface,
         category: opts.category,
         scenarioIds: opts.scenario,
-        evidenceMode: resolveQaEvidenceModeOptions(opts),
+        evidenceMode,
         transportId: opts.transport,
         providerMode: opts.providerMode,
         primaryModel: opts.model,
@@ -515,8 +501,10 @@ export function registerQaLabCli(program: Command) {
       collectString,
       [],
     )
-    .action(async (opts: QaSuiteCliOptions) => {
-      await runQaSuiteCliCommand({
+    .action(async (opts: QaSuiteCliOptions, command: Command) => {
+      validateQaScenarioSelection(opts, command);
+      const runtime = await loadQaLabCliRuntime();
+      await runtime.runQaSuiteCommand({
         repoRoot: opts.repoRoot,
         outputDir: opts.outputDir,
         transportId: opts.transport,

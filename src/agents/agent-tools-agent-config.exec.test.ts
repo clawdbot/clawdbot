@@ -77,6 +77,68 @@ describe("Agent-specific exec tool defaults", () => {
     tempDirs.cleanup();
   });
 
+  it("keeps each actual exec result for its own agent retention after another process tool loads", async () => {
+    const config: OpenClawConfig = {
+      tools: { exec: { host: "gateway", mode: "full", cleanupMs: 60_000 } },
+      agents: { list: [{ id: "main", tools: { exec: { cleanupMs: 180_000 } } }, { id: "helper" }] },
+    };
+    const toolsFor = (agentId: string) =>
+      createOpenClawCodingTools({
+        config,
+        sessionKey: `agent:${agentId}:main`,
+        exec: { backgroundMs: 0, notifyOnExit: false },
+        ...createTempAgentDirs(`retention-${agentId}`),
+      });
+    const longTools = toolsFor("main");
+    const shortTools = toolsFor("helper");
+    const start = async (tools: ReturnType<typeof toolsFor>, callId: string) => {
+      const result = await requireExecTool(tools).execute(callId, {
+        command: "echo retention-result",
+        background: true,
+      });
+      const sessionId = (result.details as { sessionId?: string }).sessionId;
+      if (!sessionId) {
+        throw new Error("Expected an actual background process session");
+      }
+      await vi.waitFor(() => expect(getFinishedSession(sessionId)).toBeDefined());
+      return sessionId;
+    };
+    // Neither lazy process tool has run when these processes are admitted.
+    const longId = await start(longTools, "long-retention");
+    const shortId = await start(shortTools, "short-retention");
+    const shortProcess = shortTools.find((tool) => tool.name === "process");
+    const longProcess = longTools.find((tool) => tool.name === "process");
+    if (!shortProcess || !longProcess) {
+      throw new Error("Expected process tools for both agents");
+    }
+    await shortProcess.execute("load-short-process", { action: "list" });
+    const observedAt = Date.now();
+    // The old 60s global TTL sweeps every 30s, so allow its next full sweep.
+    await new Promise((resolve) => setTimeout(resolve, 95_000));
+    const longResult = await longProcess.execute("long-retention-log", {
+      action: "log",
+      sessionId: longId,
+    });
+    const shortResult = await shortProcess.execute("short-retention-log", {
+      action: "log",
+      sessionId: shortId,
+    });
+    console.log(
+      JSON.stringify({
+        retentionObservation: {
+          elapsedMs: Date.now() - observedAt,
+          longStatus: (longResult.details as { status?: string }).status,
+          shortStatus: (shortResult.details as { status?: string }).status,
+        },
+      }),
+    );
+    expect(shortResult.details).toMatchObject({ status: "failed" });
+    expect(longResult.details).toMatchObject({ status: "completed" });
+    expect(longResult.content[0]).toMatchObject({
+      text: expect.stringContaining("retention-result"),
+    });
+  }, 120_000);
+
   it.each([0, 3_000])(
     "inherits the global exec approval running notice delay %i",
     (approvalRunningNoticeMs) => {
@@ -169,6 +231,7 @@ describe("Agent-specific exec tool defaults", () => {
     expect.soft(execTool.description).not.toMatch(/background|yieldMs|process/);
     expect.soft(schemaPropertyNames(execTool)).not.toContain("background");
     expect.soft(schemaPropertyNames(execTool)).not.toContain("yieldMs");
+    expect.soft(schemaPropertyNames(execTool)).not.toContain("security");
 
     const result = await execTool.execute("call-runtime-exec-only", {
       command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 250)"`,
@@ -196,6 +259,7 @@ describe("Agent-specific exec tool defaults", () => {
       ...createTempAgentDirs("test-main-implicit-gateway"),
     });
     const execTool = requireExecTool(tools);
+    expect.soft(schemaPropertyNames(execTool)).not.toContain("security");
 
     const result = await execTool.execute("call-implicit-auto-default", {
       command: "echo done",
@@ -383,45 +447,5 @@ describe("Agent-specific exec tool defaults", () => {
     });
     const details = result?.details as { status?: string } | undefined;
     expect(details?.status).toBe("completed");
-  });
-
-  it("admits per-agent cleanup retention with the background exec", async () => {
-    const cleanupMs = 3 * 60 * 60 * 1000;
-    const tools = createOpenClawCodingTools({
-      config: {
-        tools: {
-          exec: {
-            host: "gateway",
-            mode: "full",
-            cleanupMs: 60 * 1000,
-          },
-        },
-        agents: {
-          list: [{ id: "main", tools: { exec: { cleanupMs } } }],
-        },
-      },
-      exec: { backgroundMs: 0 },
-      sessionKey: "agent:main:main",
-      ...createTempAgentDirs("test-main-cleanup-retention"),
-    });
-
-    const result = await requireExecTool(tools).execute("call-main-cleanup-retention", {
-      command: "echo done",
-      background: true,
-    });
-    const sessionId = (result.details as { sessionId?: string }).sessionId;
-    expect(sessionId).toEqual(expect.any(String));
-    if (!sessionId) {
-      throw new Error("expected a background process session");
-    }
-
-    await vi.waitFor(() => {
-      expect(getFinishedSession(sessionId)).toBeDefined();
-    });
-    const finished = getFinishedSession(sessionId);
-    if (!finished) {
-      throw new Error("expected a finished process session");
-    }
-    expect(finished.expiresAt - finished.endedAt).toBe(cleanupMs);
   });
 });

@@ -1,11 +1,11 @@
 // Session resolve tests cover canonical/legacy key lookup, store migration,
 // agent scoping, listed-session selection, and protocol error mapping.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import * as sessionRows from "./session-utils-row.js";
 
 const hoisted = vi.hoisted(() => ({
-  listSessionsFromStoreMock: vi.fn(),
   resolveGatewaySessionStoreTargetWithStoreMock: vi.fn(),
   loadCombinedSessionStoreForGatewayMock: vi.fn(),
   listAgentIdsMock: vi.fn(),
@@ -25,7 +25,6 @@ vi.mock("./session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
   return {
     ...actual,
-    listSessionsFromStore: hoisted.listSessionsFromStoreMock,
     resolveGatewaySessionStoreTargetWithStore:
       hoisted.resolveGatewaySessionStoreTargetWithStoreMock,
     loadCombinedSessionStoreForGatewayCore: hoisted.loadCombinedSessionStoreForGatewayMock,
@@ -60,11 +59,9 @@ describe("resolveSessionKeyFromResolveParams", () => {
       key: canonicalKey,
       agentId: "main",
     });
-    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   };
 
   beforeEach(() => {
-    hoisted.listSessionsFromStoreMock.mockReset();
     hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockReset();
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
@@ -83,7 +80,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
     targetStore = {
       [canonicalKey]: { sessionId: "sess-1", updatedAt: 1 },
     };
-    hoisted.listSessionsFromStoreMock.mockReturnValue({ sessions: [] });
 
     await expect(
       resolveSessionKeyFromResolveParams({
@@ -246,32 +242,39 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
   });
 
-  it("resolves sessionId matches from raw store metadata without hydrating session rows", async () => {
+  it.each([
+    { sessionId: "sess-target", agentId: "main" },
+    { label: "target-label", agentId: "main" },
+  ])("resolves %j from raw metadata without hydrating session rows", async (p) => {
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath,
+      targetsBySessionKey: new Map([
+        ["agent:main:noisy", { agentId: "main", storeTarget: { agentId: "main", storePath } }],
+        ["agent:main:target", { agentId: "main", storeTarget: { agentId: "main", storePath } }],
+      ]),
       store: {
-        "agent:main:noisy": { sessionId: "sess-noisy", updatedAt: 2 },
-        "agent:main:target": { sessionId: "sess-target", updatedAt: 1 },
+        "agent:main:noisy": {
+          sessionId: "sess-noisy",
+          label: "target-label extra",
+          updatedAt: 2,
+        },
+        "agent:main:target": { sessionId: "sess-target", label: "target-label", updatedAt: 1 },
       },
     });
-    hoisted.listSessionsFromStoreMock.mockImplementation(() => {
-      throw new Error("session rows should not be materialized for exact sessionId lookup");
-    });
+    const rowSpy = vi.spyOn(sessionRows, "buildGatewaySessionRow");
+    onTestFinished(() => rowSpy.mockRestore());
 
     const cfg = {};
-    const result = await resolveSessionKeyFromResolveParams({
-      cfg,
-      p: { sessionId: "sess-target", agentId: "main" },
-    });
+    const result = await resolveSessionKeyFromResolveParams({ cfg, p });
 
     expect(result).toEqual({ ok: true, key: "agent:main:target", agentId: "main" });
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
       agentId: "main",
     });
-    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
+    expect(rowSpy).not.toHaveBeenCalled();
   });
 
-  it("resolves an archived session by its trailing UUID prefix", async () => {
+  it("resolves archived short ids without projecting unrelated model metadata", async () => {
     const key = "agent:main:thread:abcdef12-3456-4789-8abc-def012345678";
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath,
@@ -281,6 +284,11 @@ describe("resolveSessionKeyFromResolveParams", () => {
           updatedAt: 10,
           archivedAt: 20,
           displayName: "Release monitor",
+          label: "Renamed release monitor",
+          boardFace: "dashboard",
+          get modelOverride(): string {
+            throw new Error("Short references must not resolve model metadata");
+          },
         },
       },
     });
@@ -290,7 +298,13 @@ describe("resolveSessionKeyFromResolveParams", () => {
         cfg: {},
         p: { shortId: "ABCDEF12", agentId: "main" },
       }),
-    ).resolves.toEqual({ ok: true, key, agentId: "main" });
+    ).resolves.toEqual({
+      ok: true,
+      key,
+      agentId: "main",
+      displayName: "Renamed release monitor",
+      boardFace: "dashboard",
+    });
   });
 
   it("uses a display-name slug only to narrow a short-id tie", async () => {
@@ -300,7 +314,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: {
         [releaseKey]: { updatedAt: 2, displayName: "Release monitor" },
-        [deployKey]: { updatedAt: 1, displayName: "Deploy monitor" },
+        [deployKey]: { updatedAt: 1, displayName: "Deploy monitor", boardFace: "chat" },
       },
     });
 
@@ -309,7 +323,13 @@ describe("resolveSessionKeyFromResolveParams", () => {
         cfg: {},
         p: { shortId: "12345678", slugHint: "deploy-monitor" },
       }),
-    ).resolves.toEqual({ ok: true, key: deployKey, agentId: "main" });
+    ).resolves.toEqual({
+      ok: true,
+      key: deployKey,
+      agentId: "main",
+      displayName: "Deploy monitor",
+      boardFace: "chat",
+    });
   });
 
   it("ignores a deleted-agent short-id collision before resolving a unique match", async () => {
@@ -328,7 +348,12 @@ describe("resolveSessionKeyFromResolveParams", () => {
         cfg: {},
         p: { shortId: "12345678", slugHint: "deleted-session" },
       }),
-    ).resolves.toEqual({ ok: true, key: survivingKey, agentId: "main" });
+    ).resolves.toEqual({
+      ok: true,
+      key: survivingKey,
+      agentId: "main",
+      displayName: "Surviving session",
+    });
   });
 
   it("reports a deleted-agent-only short-id match as missing", async () => {
@@ -358,7 +383,11 @@ describe("resolveSessionKeyFromResolveParams", () => {
         const suffix = index.toString(16).padStart(4, "0");
         return [
           `agent:main:thread:12345678-${suffix}-4000-8000-000000000000`,
-          { updatedAt: 100 - index, displayName: `Candidate ${index}` },
+          {
+            updatedAt: 100 - index,
+            displayName: `Candidate ${index}`,
+            ...(index % 2 === 0 ? { boardFace: "dashboard" as const } : {}),
+          },
         ];
       }),
     );
@@ -373,11 +402,18 @@ describe("resolveSessionKeyFromResolveParams", () => {
     ).resolves.toEqual({
       ok: true,
       ambiguous: true,
-      candidates: expectedKeys.map((key, index) => ({
-        key,
-        agentId: "main",
-        displayName: `Candidate ${index}`,
-      })),
+      candidates: expectedKeys.map((key, index) => {
+        const candidate: {
+          key: string;
+          agentId: string;
+          displayName: string;
+          boardFace?: "dashboard";
+        } = { key, agentId: "main", displayName: `Candidate ${index}` };
+        if (index % 2 === 0) {
+          candidate.boardFace = "dashboard";
+        }
+        return candidate;
+      }),
     });
   });
 
@@ -412,11 +448,156 @@ describe("resolveSessionKeyFromResolveParams", () => {
   });
 
   it.each([
+    { key: "agent:main:deploy-monitor", slug: "deploy-monitor", expected: "literal" },
+    { key: "agent:main:missing", slug: "deploy-monitor", expected: "slug" },
+    { key: "agent:main:missing", expected: "missing" },
+  ])("discovers a named reference with exact-key precedence: $expected", async (reference) => {
+    const literal = "agent:main:deploy-monitor";
+    const slugKey = "agent:main:thread:12345678-0000-4000-8000-000000000001";
+    const store = {
+      [literal]: { updatedAt: 1, displayName: "Literal session", boardFace: "chat" as const },
+      [slugKey]: { updatedAt: 2, displayName: "Deploy: monitor", boardFace: "dashboard" as const },
+    };
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store,
+      targetsBySessionKey: new Map(
+        Object.keys(store).map((key) => [
+          key,
+          { agentId: "main", storeTarget: { agentId: "main", storePath } },
+        ]),
+      ),
+    });
+    const result = await resolveSessionKeyFromResolveParams({
+      cfg: {},
+      p: {
+        reference: { key: reference.key, slug: reference.slug },
+        agentId: "main",
+        allowMissing: true,
+      },
+    });
+    expect(result).toEqual(
+      reference.expected === "missing"
+        ? { ok: true, missing: true }
+        : {
+            ok: true,
+            key: reference.expected === "literal" ? literal : slugKey,
+            agentId: "main",
+            displayName: reference.expected === "literal" ? "Literal session" : "Deploy: monitor",
+            boardFace: reference.expected === "literal" ? "chat" : "dashboard",
+          },
+    );
+  });
+
+  it("resolves a configured global alias with its stored non-default owner", async () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["main", "work"]);
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: { global: { updatedAt: 1, displayName: "Work dashboard", boardFace: "dashboard" } },
+      targetsBySessionKey: new Map([
+        ["global", { agentId: "work", storeTarget: { agentId: "work", storePath } }],
+      ]),
+    });
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: { session: { scope: "global", mainKey: "primary" } },
+        p: { reference: { key: "agent:work:primary" }, agentId: "work", includeGlobal: true },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: "global",
+      agentId: "work",
+      displayName: "Work dashboard",
+      boardFace: "dashboard",
+    });
+  });
+
+  it.each(["!Room:example.org", "!room:example.org"])(
+    "preserves opaque reference key casing: %s",
+    async (room) => {
+      const key = "agent:main:matrix:channel:!Room:example.org";
+      hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+        storePath,
+        store: { [key]: { updatedAt: 1, displayName: "Room" } },
+        targetsBySessionKey: new Map([
+          [key, { agentId: "main", storeTarget: { agentId: "main", storePath } }],
+        ]),
+      });
+      const result = await resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: {
+          reference: { key: `agent:main:matrix:channel:${room}` },
+          agentId: "main",
+          allowMissing: true,
+        },
+      });
+      expect(result).toEqual(
+        room.startsWith("!Room")
+          ? { ok: true, key, agentId: "main", displayName: "Room" }
+          : { ok: true, missing: true },
+      );
+    },
+  );
+
+  it("bounds named-reference ambiguity after excluding deleted agents and non-UUID titles", async () => {
+    const store = Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => [
+        `agent:main:thread:12345678-${index.toString(16).padStart(4, "0")}-4000-8000-000000000000`,
+        {
+          updatedAt: 100 - index,
+          displayName: "Shared dashboard",
+          boardFace: "dashboard" as const,
+        },
+      ]),
+    );
+    const keys = Object.keys(store);
+    store["agent:deleted:thread:12345678-ffff-4000-8000-000000000000"] = {
+      updatedAt: 200,
+      displayName: "Shared dashboard",
+      boardFace: "dashboard",
+    };
+    store["agent:main:literal"] = {
+      updatedAt: 300,
+      displayName: "Shared dashboard",
+      boardFace: "dashboard",
+    };
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store,
+      targetsBySessionKey: new Map(
+        Object.keys(store).map((key) => [
+          key,
+          { agentId: "main", storeTarget: { agentId: "main", storePath } },
+        ]),
+      ),
+    });
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { reference: { key: "agent:main:missing", slug: "shared-dashboard" } },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      ambiguous: true,
+      candidates: keys.slice(0, 10).map((key) => ({
+        key,
+        agentId: "main",
+        displayName: "Shared dashboard",
+        boardFace: "dashboard",
+      })),
+    });
+  });
+
+  it.each([
     {
       p: { shortId: "too-short" },
       message: "shortId must be 8-32 hexadecimal characters",
     },
     { p: { label: "release", slugHint: "release" }, message: "slugHint requires shortId" },
+    {
+      p: { key: "agent:main:literal", reference: { key: "agent:main:literal" } },
+      message: "Provide either key, sessionId, label, shortId, or reference (not multiple)",
+    },
   ])("rejects invalid short reference params: $message", async ({ p, message }) => {
     await expect(resolveSessionKeyFromResolveParams({ cfg: {}, p })).resolves.toMatchObject({
       ok: false,
@@ -430,23 +611,17 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: { [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1, label: "my-label" } },
     });
-    hoisted.listSessionsFromStoreMock.mockReturnValue({
-      sessions: [{ key: deletedAgentKey, sessionId: "sess-orphan", label: "my-label" }],
-    });
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
 
     const cfg = {};
     const result = await resolveSessionKeyFromResolveParams({
       cfg,
-      p: { label: "my-label", agentId: "main" },
+      p: { label: "my-label" },
     });
 
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
+      agentId: undefined,
     });
-    expect(hoisted.listSessionsFromStoreMock).toHaveBeenCalledWith(
-      expect.objectContaining({ lightweightListRows: true }),
-    );
     expect(result).toEqual({
       ok: false,
       error: {

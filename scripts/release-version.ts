@@ -2,20 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import {
-  canonicalAndroidVersionCode,
-  normalizeAndroidVersionCode,
-  normalizePinnedAndroidVersion,
-  renderAndroidReleaseNotes,
-  renderAndroidVersionProperties,
-} from "./lib/android-version.ts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
+import { planMobileRelease } from "./mobile-release-version.ts";
 
 const MACOS_INFO_PLIST = "apps/macos/Sources/OpenClaw/Resources/Info.plist";
-const ANDROID_CHANGELOG_FILE = "apps/android/CHANGELOG.md";
-const ANDROID_RELEASE_NOTES_FILE = "apps/android/fastlane/metadata/android/en-US/release_notes.txt";
-const ANDROID_VERSION_FILE = "apps/android/version.json";
-const ANDROID_VERSION_PROPERTIES_FILE = "apps/android/Config/Version.properties";
 
 type ReleaseVersionMode = "check" | "write";
 
@@ -36,11 +26,6 @@ type ReleaseVersionChange = {
 type ReleaseVersionPlan = {
   changes: ReleaseVersionChange[];
   version: string;
-};
-
-type AndroidVersionManifest = {
-  version?: unknown;
-  versionCode?: unknown;
 };
 
 export function parseReleaseVersionArgs(argv: string[]): ReleaseVersionArgs {
@@ -114,7 +99,13 @@ export function planReleaseVersion(params: {
     planMacosInfoPlist(rootDir, parsedVersion),
   ];
   if (params.android) {
-    changes.push(...planAndroidVersion(rootDir, parsedVersion.baseVersion));
+    changes.push(
+      ...planMobileRelease({
+        gatewayVersion: parsedVersion.baseVersion,
+        phase: "prepare",
+        rootDir,
+      }).changes,
+    );
   }
 
   return {
@@ -221,53 +212,6 @@ function planMacosInfoPlist(
   return { currentContent, nextContent, path: filePath };
 }
 
-function planAndroidVersion(rootDir: string, baseVersion: string): ReleaseVersionChange[] {
-  const versionPath = path.join(rootDir, ANDROID_VERSION_FILE);
-  const propertiesPath = path.join(rootDir, ANDROID_VERSION_PROPERTIES_FILE);
-  const changelogPath = path.join(rootDir, ANDROID_CHANGELOG_FILE);
-  const releaseNotesPath = path.join(rootDir, ANDROID_RELEASE_NOTES_FILE);
-  const versionContent = fs.readFileSync(versionPath, "utf8");
-  const propertiesContent = fs.readFileSync(propertiesPath, "utf8");
-  const changelogContent = fs.readFileSync(changelogPath, "utf8");
-  const releaseNotesContent = fs.readFileSync(releaseNotesPath, "utf8");
-  const manifest = JSON.parse(versionContent) as AndroidVersionManifest;
-  const currentVersion =
-    typeof manifest.version === "string" ? normalizePinnedAndroidVersion(manifest.version) : null;
-  const currentVersionCode =
-    typeof manifest.versionCode === "number" ? manifest.versionCode : Number.NaN;
-  const versionCode =
-    currentVersion === baseVersion
-      ? normalizeAndroidVersionCode(currentVersionCode, baseVersion)
-      : canonicalAndroidVersionCode(baseVersion);
-  const nextVersionContent = `${JSON.stringify({ version: baseVersion, versionCode }, null, 2)}\n`;
-  const nextPropertiesContent = renderAndroidVersionProperties({
-    canonicalVersion: baseVersion,
-    versionCode,
-  });
-  const nextReleaseNotesContent = renderAndroidReleaseNotes(
-    { canonicalVersion: baseVersion },
-    changelogContent,
-  );
-
-  return [
-    {
-      currentContent: versionContent,
-      nextContent: nextVersionContent,
-      path: versionPath,
-    },
-    {
-      currentContent: propertiesContent,
-      nextContent: nextPropertiesContent,
-      path: propertiesPath,
-    },
-    {
-      currentContent: releaseNotesContent,
-      nextContent: nextReleaseNotesContent,
-      path: releaseNotesPath,
-    },
-  ];
-}
-
 function replacePlistString(content: string, key: string, value: string, filePath: string): string {
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(
@@ -296,7 +240,7 @@ function printUsage(): void {
       "",
       "  --check    report release version drift without writing (default)",
       "  --write    update all selected version files after validating them",
-      "  --android  also align the independently pinned Android release train",
+      "  --android  also prepare shared mobile and Android release metadata",
       "",
     ].join("\n"),
   );

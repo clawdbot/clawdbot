@@ -8,17 +8,16 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import { loadCronStore, saveCronJobsStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
-  isCronRunReceiptOwnerDefinitelyStale,
+  isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
-import { stop } from "./ops-lifecycle.js";
+import { start, stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
 import {
   cleanupQueuedCronRunReservations,
@@ -118,7 +117,18 @@ it("recovers a dead running owner on timer refresh without an admission conflict
   expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
     lastRunStatus: "error",
   });
-  expect((await loadCronStore(store.storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
+  const reclaimed = (await loadCronStore(store.storePath)).jobs[0];
+  expect(reclaimed?.enabled).toBe(false);
+  expect(reclaimed?.state.runningAtMs).toBeUndefined();
+  expect(reclaimed?.state.nextRunAtMs).toBeUndefined();
+  expect(reclaimed?.state.startupCatchupAtMs).toBeUndefined();
+  // Reclamation must consume the occurrence, not defer a duplicate until the
+  // next timer tick or turn it into startup catch-up on a later restart.
+  await onTimer(sibling);
+  stop(sibling);
+  await start(sibling);
+  await onTimer(sibling);
+  expect(runIsolatedAgentJob).not.toHaveBeenCalled();
   const receiptRows = runOpenClawStateWriteTransaction(({ db }) =>
     db
       .prepare(
@@ -166,17 +176,18 @@ it("preserves foreign state while retrying an unrelated reservation", async () =
     startedAtMs,
   });
   let receipt: ReturnType<typeof claimCronRunReceiptInDatabase> | undefined;
-  await saveCronJobsStoreWithTransactionHooks(
+  await saveCronJobsStore(
     store.storePath,
     { version: 1, jobs: [foreignRunning, pendingJob] },
-    undefined,
     {
-      beforeWrite: (database) => {
-        receipt = claimCronRunReceiptInDatabase({
-          database,
-          prepared,
-          resolveAgentId: (job) => job.agentId ?? "main",
-        });
+      transactionHooks: {
+        beforeWrite: (database) => {
+          receipt = claimCronRunReceiptInDatabase({
+            database,
+            prepared,
+            resolveAgentId: (job) => job.agentId ?? "main",
+          });
+        },
       },
     },
   );
@@ -352,7 +363,7 @@ it("retires a reservation when its row disappears during the post-commit reload"
       | undefined;
     expect(receipt?.status).toBe("skipped");
     expect(
-      isCronRunReceiptOwnerDefinitelyStale({
+      isCronRunReceiptOwnerStale({
         receiptId: receipt!.receiptId,
         storeKey: cronStoreKey(store.storePath),
         jobId: job.id,

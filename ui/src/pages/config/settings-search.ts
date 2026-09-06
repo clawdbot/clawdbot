@@ -5,6 +5,7 @@ import {
   type SettingsSearchBlock,
 } from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
@@ -12,10 +13,14 @@ import {
 } from "../../components/config-form.search.ts";
 import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { configPageForSection } from "./config-sections.ts";
 import { memoryVisibleSchemaKeys } from "./memory-schema.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
+import { setupVisibleSchema } from "./setup-schema.ts";
+
+registerSettingsEnglish();
 
 type StaticSettingsBlock = SettingsSearchBlock & {
   searchText: string;
@@ -37,10 +42,10 @@ function resolveStaticSettingsBlock(block: SettingsSearchTarget): StaticSettings
 
 // Curated pages render only a subset of their section's schema; search must
 // promise exactly what the destination page can edit, or the result is a
-// dead-end (e.g. update.checkOnStart matched search but was editable nowhere).
+// dead-end.
 const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, () => readonly string[]>> = {
   memory: memoryVisibleSchemaKeys,
-  updates: () => ["channel", "auto"],
+  updates: () => ["channel", "checkOnStart", "auto"],
 };
 
 function visibleSectionSchema(routeId: string, sectionSchema: JsonSchema): JsonSchema {
@@ -66,6 +71,7 @@ export function findSettingsSearchBlocks(params: {
   identityAvailable?: boolean;
   basePath?: string;
   canAdmin?: boolean;
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
     return [];
@@ -76,7 +82,11 @@ export function findSettingsSearchBlocks(params: {
       ? STATIC_SETTINGS_BLOCKS.filter(
           (block) =>
             (params.identityAvailable || !block.requiresIdentity) &&
-            isSettingsNavigationRouteVisible(block.routeId, params.canAdmin !== false),
+            isSettingsNavigationRouteVisible(
+              block.routeId,
+              params.canAdmin !== false,
+              params.nativeDeviceSettings,
+            ),
         )
           .map(resolveStaticSettingsBlock)
           .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
@@ -91,10 +101,19 @@ export function findSettingsSearchBlocks(params: {
   const value = params.value ?? {};
   for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
     const routeId = configPageForSection(key);
-    if (!isSettingsNavigationRouteVisible(routeId, params.canAdmin !== false)) {
+    if (
+      !isSettingsNavigationRouteVisible(
+        routeId,
+        params.canAdmin !== false,
+        params.nativeDeviceSettings,
+      )
+    ) {
       continue;
     }
-    const sectionSchema = visibleSectionSchema(routeId, rawSectionSchema);
+    const sectionSchema =
+      key === "wizard"
+        ? setupVisibleSchema(rawSectionSchema)
+        : visibleSectionSchema(routeId, rawSectionSchema);
     const meta = SECTION_META[key];
     const tierSplit = splitConfigSchemaByTier({
       schema: sectionSchema,
@@ -134,7 +153,7 @@ export function findSettingsSearchBlocks(params: {
         : {
             routeId,
             label: meta?.label ?? sectionSchema.title ?? key,
-            search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}`,
+            search: `?section=${encodedKey}${matchesAdvanced || key === "wizard" ? "&advanced=1" : ""}`,
             hash: destination.hash,
           },
     );

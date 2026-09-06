@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalizePersistedUserMessageMedia,
   isImageMediaFact,
+  isVideoMediaFact,
   normalizeMediaFacts,
   PERSISTED_LEGACY_MEDIA_KEYS,
   readPersistedMediaFacts,
@@ -221,6 +222,75 @@ describe("canonical image media facts", () => {
   it.each([
     { name: "filename-only SVG", fact: { path: "/tmp/diagram.svg" }, expected: false },
     {
+      name: "separate image filename with opaque source",
+      fact: {
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "photo.png",
+        contentType: "application/octet-stream",
+      },
+      expected: true,
+    },
+    {
+      name: "separate TIFF filename with opaque source",
+      fact: {
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "scan.TIFF",
+        contentType: "binary/octet-stream",
+      },
+      expected: true,
+    },
+    {
+      name: "separate SVG filename with opaque source",
+      fact: {
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "diagram.svg",
+      },
+      expected: false,
+    },
+    {
+      name: "authoritative document with separate image filename",
+      fact: {
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "photo.png",
+        contentType: "application/octet-stream",
+        kind: "document" as const,
+      },
+      expected: false,
+    },
+    {
+      name: "concrete document MIME with separate image filename",
+      fact: {
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "photo.png",
+        contentType: "application/pdf",
+      },
+      expected: false,
+    },
+    {
+      name: "classified source before conflicting separate image filename",
+      fact: {
+        url: "https://cdn.example.test/download/voice.ogg",
+        fileName: "photo.png",
+        contentType: "application/octet-stream",
+      },
+      expected: false,
+    },
+    {
+      name: "classified URL before conflicting separate filename and opaque path",
+      fact: {
+        path: "/tmp/opaque",
+        url: "https://cdn.example.test/download/voice.ogg",
+        fileName: "photo.png",
+        contentType: "application/octet-stream",
+      },
+      expected: false,
+    },
+    {
+      name: "separate filename without an actual media source",
+      fact: { fileName: "photo.png", contentType: "application/octet-stream" },
+      expected: false,
+    },
+    {
       name: "unknown-kind SVG with generic MIME",
       fact: {
         path: "/tmp/diagram.svg",
@@ -277,6 +347,16 @@ describe("canonical image media facts", () => {
     },
   ])("classifies $name at the shared image-fact owner", ({ fact, expected }) => {
     expect(isImageMediaFact(fact)).toBe(expected);
+  });
+
+  it("classifies video from separate filename metadata when its source is opaque", () => {
+    expect(
+      isVideoMediaFact({
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "clip.mp4",
+        contentType: "application/octet-stream",
+      }),
+    ).toBe(true);
   });
 
   it("preserves generic binary provenance without inventing authoritative documents", () => {

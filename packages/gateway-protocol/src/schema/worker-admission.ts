@@ -2,16 +2,14 @@ import { Type, type Static, type TProperties } from "typebox";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 import { closedObject } from "./closed-object.js";
 import { FailoverReasonSchema } from "./failover-reason.js";
-import {
-  GitHubPublicationBodySchema,
-  GitHubPublicationTitleSchema,
-} from "./session-github-publication.js";
 import { withSince } from "./since.js";
+import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "./worker-computer.js";
 import {
   LiveIntegerSchema,
   LiveSequenceSchema,
   LiveTextSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
   WorkerAdmissionFailureReasonSchema,
   WorkerErrorResponseFrameSchema,
   WorkerErrorShapeSchema,
@@ -41,15 +39,19 @@ export const WORKER_PROTOCOL_METHODS = [
   "worker.live-event",
   "worker.sessions.spawn",
   "worker.sessions.send",
-  "worker.github.publish",
+  "worker.portal",
+  "worker.computer",
+  "worker.skill-workshop",
 ] as const;
 export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
 export const WORKER_LAUNCH_V2_PROTOCOL_FEATURE = "worker-launch-v2";
 export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-context-v2";
 export const WORKER_SESSION_TOOLS_PROTOCOL_FEATURE = "worker-session-tools-v1";
-export const WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE = "worker-github-publication-v1";
+export const WORKER_PORTAL_PROTOCOL_FEATURE = "worker-portal-v1";
 export const WORKER_PROTOCOL_FEATURES = [
+  "skill-resources-v1",
+  "worker-skill-workshop-v1",
   "worker-heartbeat-v1",
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
@@ -57,7 +59,8 @@ export const WORKER_PROTOCOL_FEATURES = [
   // launch V2: an older gateway would adopt this worker and send the old shape.
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
+  WORKER_PORTAL_PROTOCOL_FEATURE,
+  WORKER_COMPUTER_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;
@@ -224,17 +227,21 @@ export const WorkerSessionsSendParamsSchema = closedObject({
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 86_400 })),
 });
 
-export const WorkerGitHubPublishParamsSchema = closedObject({
+export const WorkerPortalParamsSchema = closedObject({
   toolCallId: WorkerSessionToolCallIdSchema,
-  title: Type.Optional(GitHubPublicationTitleSchema),
-  body: Type.Optional(GitHubPublicationBodySchema),
+  action: Type.Union([Type.Literal("open"), Type.Literal("list"), Type.Literal("close")]),
+  port: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_535 })),
+  title: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  description: Type.Optional(Type.String({ maxLength: WORKER_SESSION_TOOL_MAX_TEXT_LENGTH })),
+  path: Type.Optional(Type.String({ maxLength: 1_024, pattern: "^/" })),
+  id: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
 });
 
 export const WorkerSessionToolResultSchema = closedObject({
   resultJson: Type.String({ minLength: 2, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
 });
 
-export const WorkerSessionsSpawnResponseFrameSchema = Type.Union([
+export const WorkerSessionToolResponseFrameSchema = Type.Union([
   closedObject({
     type: Type.Literal("res"),
     id: WorkerFrameIdSchema,
@@ -244,25 +251,9 @@ export const WorkerSessionsSpawnResponseFrameSchema = Type.Union([
   WorkerErrorResponseFrameSchema,
 ]);
 
-export const WorkerSessionsSendResponseFrameSchema = Type.Union([
-  closedObject({
-    type: Type.Literal("res"),
-    id: WorkerFrameIdSchema,
-    ok: Type.Literal(true),
-    payload: WorkerSessionToolResultSchema,
-  }),
-  WorkerErrorResponseFrameSchema,
-]);
-
-export const WorkerGitHubPublishResponseFrameSchema = Type.Union([
-  closedObject({
-    type: Type.Literal("res"),
-    id: WorkerFrameIdSchema,
-    ok: Type.Literal(true),
-    payload: WorkerSessionToolResultSchema,
-  }),
-  WorkerErrorResponseFrameSchema,
-]);
+export const WorkerSessionsSpawnResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
+export const WorkerSessionsSendResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
+export const WorkerPortalResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
 
 const WorkerTranscriptTextContentSchema = closedObject({
   type: Type.Literal("text"),
@@ -283,7 +274,7 @@ const WorkerTranscriptThinkingContentSchema = closedObject({
 
 const WorkerTranscriptImageContentSchema = closedObject({
   type: Type.Literal("image"),
-  data: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  data: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES }),
   mimeType: Type.String({ minLength: 1, maxLength: 256 }),
 });
 
@@ -317,7 +308,7 @@ export const WorkerProviderReplayStateSchema = closedObject({
   authProfileHash: Type.Optional(WorkerReplayHashSchema),
 });
 
-const WorkerTranscriptUserMessageSchema = closedObject({
+export const WorkerTranscriptUserMessageSchema = closedObject({
   role: Type.Literal("user"),
   content: Type.Array(
     Type.Union([WorkerTranscriptTextContentSchema, WorkerTranscriptImageContentSchema]),
@@ -727,15 +718,13 @@ export type WorkerHeartbeatRequestFrame = Static<typeof WorkerHeartbeatRequestFr
 export type WorkerHeartbeatResponseFrame = Static<typeof WorkerHeartbeatResponseFrameSchema>;
 export type WorkerSessionsSpawnParams = Static<typeof WorkerSessionsSpawnParamsSchema>;
 export type WorkerSessionsSendParams = Static<typeof WorkerSessionsSendParamsSchema>;
-export type WorkerGitHubPublishParams = Static<typeof WorkerGitHubPublishParamsSchema>;
+export type WorkerPortalParams = Static<typeof WorkerPortalParamsSchema>;
 export type WorkerSessionToolResult = Static<typeof WorkerSessionToolResultSchema>;
 export type WorkerSessionsSpawnResponseFrame = Static<
   typeof WorkerSessionsSpawnResponseFrameSchema
 >;
 export type WorkerSessionsSendResponseFrame = Static<typeof WorkerSessionsSendResponseFrameSchema>;
-export type WorkerGitHubPublishResponseFrame = Static<
-  typeof WorkerGitHubPublishResponseFrameSchema
->;
+export type WorkerPortalResponseFrame = Static<typeof WorkerPortalResponseFrameSchema>;
 export type WorkerTranscriptMessage = Static<typeof WorkerTranscriptMessageSchema>;
 export type WorkerProviderReplayState = Static<typeof WorkerProviderReplayStateSchema>;
 export type WorkerTranscriptCommitParams = Static<typeof WorkerTranscriptCommitParamsSchema>;

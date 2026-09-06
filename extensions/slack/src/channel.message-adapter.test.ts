@@ -5,10 +5,10 @@ import {
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 const cfg = {
   channels: {

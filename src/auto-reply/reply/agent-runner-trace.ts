@@ -2,9 +2,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
-import { formatTokenCount } from "../../utils/usage-format.js";
+import { formatTokenCount } from "../../utils/token-format.js";
 import type { ReplyPayload } from "../types.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 
@@ -229,7 +228,7 @@ export function derivePromptSegments(
             lines.slice(index, end + 1).join("\n").length,
           );
           index = end + 1;
-          while ((lines[index] ?? "") === "") {
+          while (index < lines.length && lines[index] === "") {
             index += 1;
           }
           continue;
@@ -258,7 +257,7 @@ export function derivePromptSegments(
             lines.slice(start, end + 1).join("\n").length,
           );
           index = end + 1;
-          while ((lines[index] ?? "") === "") {
+          while (index < lines.length && lines[index] === "") {
             index += 1;
           }
           continue;
@@ -505,7 +504,6 @@ function formatRawTraceSummaryLine(params: {
 }
 
 export function buildInlineRawTracePayload(params: {
-  entry: SessionEntry | undefined;
   rawUserText?: string;
   rawAssistantText?: string;
   sessionUsage?: {
@@ -547,10 +545,7 @@ export function buildInlineRawTracePayload(params: {
   toolSummary?: TraceToolSummaryView;
   completion?: TraceCompletionView;
   contextManagement?: TraceContextManagementView;
-}): ReplyPayload | undefined {
-  if (params.entry?.traceLevel !== "raw") {
-    return undefined;
-  }
+}): ReplyPayload {
   const resolvedPromptTokens = deriveContextPromptTokens({
     lastCallUsage: params.lastCallUsage,
     promptTokens: params.promptTokens,

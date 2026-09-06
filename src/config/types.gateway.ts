@@ -1,3 +1,4 @@
+import type { ControlUiEnvironment } from "../gateway/control-ui-bootstrap-contract.js";
 // Defines gateway runtime and networking configuration types.
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -135,16 +136,18 @@ export type GatewayControlUiConfig = {
   enabled?: boolean;
   /** Optional base path prefix for the Control UI (e.g. "/openclaw"). */
   basePath?: string;
+  experimental?: {
+    /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
+    customPlugins?: boolean;
+  };
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /** Optional visual label and named color distinguishing this Gateway environment. */
+  environment?: ControlUiEnvironment;
+  /** Show the Discord community invitation in this Gateway's Control UI (default true). */
+  communityInvite?: boolean;
   /** Optional service credential used only for Control UI GitHub previews and discovery. */
   github?: { token?: SecretInput };
-  /**
-   * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
-   * When enabled, chat.toolTitles generates short titles through standard
-   * utility-model routing and caches them per agent.
-   */
-  toolTitles?: boolean;
   /** Produce utility-model session status digests for subscribed Control UI clients (default true). */
   sessionObserver?: boolean;
   /**
@@ -204,18 +207,18 @@ export type GatewayTrustedProxyConfig = {
    */
   allowLoopback?: boolean;
   /**
-   * Automatically approve new browser device identities after trusted-proxy
-   * authentication. Disabled by default; existing-device upgrades stay manual.
+   * Automatically approve new browser/native UI operator devices and same-key scope upgrades after
+   * trusted-proxy authentication. Disabled by default; configured scopes cap grants.
    */
   deviceAutoApprove?: {
-    /** Enable automatic approval for new browser devices. @default false */
+    /** Enable automatic browser enrollment and same-key scope upgrades. @default false */
     enabled?: boolean;
     /**
      * Maximum operator scopes granted by automatic approval. Listing
      * operator.admin explicitly lets every proxy-authenticated user request
      * automatic full-admin device grants. Requests without scopes receive the
      * configured maximum. @default operator.read, operator.write,
-     * operator.approvals
+     * operator.approvals, operator.questions
      */
     scopes?: string[];
   };
@@ -270,9 +273,9 @@ export type GatewayTailscaleConfig = {
 export type GatewayRemoteConfig = {
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
-  /** macOS app-only transport (SSH tunnel or direct WS); core validates/preserves but does not read it. */
+  /** Desktop companion transport (SSH tunnel or direct WS); core validates/preserves but does not read it. */
   transport?: "ssh" | "direct";
-  /** macOS app-only remote SSH port (default 18789); core validates/preserves but does not read it. */
+  /** Desktop companion remote SSH port (default 18789); core validates/preserves but does not read it. */
   remotePort?: number;
   /** Token for remote auth (when the gateway requires token auth). */
   token?: SecretInput;
@@ -318,7 +321,7 @@ export type GatewayTerminalConfig = {
 
 /** Labs-gated external CLI session targets in the Control UI. */
 export type GatewayCliAgentsConfig = {
-  /** Show catalog-backed CLI agents in the new-session model picker. Default: false. */
+  /** Show catalog-backed CLI agents in the new-session model picker. Default: true. */
   enabled?: boolean;
 };
 
@@ -538,6 +541,28 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+/** Closed session, sandbox, agent, and operator-scope policy for one named team role. */
+export type GatewayOperatorRoleDefinition = {
+  sessions: {
+    /** Maximum access to another person's sessions without explicit membership. */
+    others: "none" | "view" | "suggest" | "write";
+  };
+  /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */
+  sandbox?: "inherit" | "required";
+  /** Agent IDs available for session creation and runs, or all agents when set to "*". */
+  agents: "*" | string[];
+  /** Ceiling applied to the authenticated profile's granted operator scopes. */
+  scopes: OperatorScope[];
+};
+
+/** Optional named operator-role policies for Gateway deployments shared by a team. */
+export type GatewayOperatorRolesConfig = {
+  /** Required validated default for profiles without a valid assigned role. */
+  default?: string;
+  /** Closed capability bundles indexed by administrator-selected role names. */
+  definitions: Record<string, GatewayOperatorRoleDefinition>;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -565,6 +590,8 @@ export type GatewayConfig = {
   cliAgents?: GatewayCliAgentsConfig;
   terminal?: GatewayTerminalConfig;
   auth?: GatewayAuthConfig;
+  /** Optional profile-bound operator roles; omitted preserves legacy authorization. */
+  roles?: GatewayOperatorRolesConfig;
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;

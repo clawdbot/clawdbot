@@ -384,6 +384,85 @@ describe("cli program (nodes basics)", () => {
     expect(output).not.toContain("Two");
   });
 
+  it.each(["status", "list"])(
+    "preserves recorded connection ages in nodes %s after a stale pairing snapshot",
+    async (command) => {
+      const now = Date.now();
+      const recent = now - 1_000;
+      const old = now - 2 * 24 * 60 * 60 * 1_000;
+      const nodes = [
+        {
+          nodeId: "reconnected",
+          paired: true,
+          connected: true,
+          connectedAtMs: recent,
+          lastConnectedAtMs: recent,
+        },
+        {
+          nodeId: "catalog-only",
+          paired: true,
+          connected: false,
+          lastConnectedAtMs: recent,
+        },
+        { nodeId: "old", paired: true, connected: false, lastConnectedAtMs: old },
+        { nodeId: "unknown", paired: true, connected: false },
+      ];
+      programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+        const { method } = (args[0] ?? {}) as { method?: string };
+        return method === "node.pair.list"
+          ? { pending: [], paired: [{ nodeId: "reconnected", lastConnectedAtMs: old }] }
+          : { ts: now, nodes };
+      });
+
+      await runProgram(["nodes", command, "--last-connected", "24h", "--json"]);
+
+      const result = writeJsonArgAt(0) as {
+        nodes?: Array<{ nodeId: string; lastConnectedAtMs?: number }>;
+        paired?: Array<{ nodeId: string; lastConnectedAtMs?: number }>;
+      };
+      expect(
+        (result.nodes ?? result.paired)?.map(({ nodeId, lastConnectedAtMs }) => ({
+          nodeId,
+          lastConnectedAtMs,
+        })),
+      ).toEqual([
+        { nodeId: "reconnected", lastConnectedAtMs: recent },
+        { nodeId: "catalog-only", lastConnectedAtMs: recent },
+      ]);
+    },
+  );
+
+  it.each([
+    { command: "status", duration: "24h" },
+    { command: "status", duration: "1h30m" },
+    { command: "status", duration: "0" },
+    { command: "status", duration: " 24H " },
+    { command: "list", duration: "24h" },
+    { command: "list", duration: "1h30m" },
+    { command: "list", duration: "0" },
+    { command: "list", duration: " 24H " },
+  ])("preserves nodes $command --last-connected $duration", async ({ command, duration }) => {
+    const node = {
+      nodeId: "recent-node",
+      displayName: "Recent Node",
+      paired: true,
+      connected: true,
+      lastConnectedAtMs: Date.now() + 60_000,
+    };
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+      const { method } = (args[0] ?? {}) as { method?: string };
+      return method === "node.pair.list" ? { pending: [], paired: [node] } : { nodes: [node] };
+    });
+
+    await runProgram(["nodes", command, "--last-connected", duration, "--json"]);
+
+    const result = writeJsonArgAt(0) as {
+      nodes?: Array<{ nodeId: string }>;
+      paired?: Array<{ nodeId: string }>;
+    };
+    expect((result.nodes ?? result.paired)?.map(({ nodeId }) => nodeId)).toEqual(["recent-node"]);
+  });
+
   it.each([
     {
       label: "paired node details",
@@ -562,12 +641,13 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes describe and calls node.describe", async () => {
+    const unsafeEffectiveCommand = "camera.snap\u001b[2J\neffective-spoof";
     mockGatewayWithIosNodeListAnd("node.describe", {
       ts: Date.now(),
       nodeId: "ios-node",
       displayName: "iOS Node",
       caps: ["camera"],
-      commands: ["camera.snap"],
+      commands: [unsafeEffectiveCommand],
       approvalState: "pending-reapproval",
       pendingRequestId: "request-approval",
       pendingDeclaredCaps: ["camera", "canvas"],
@@ -589,7 +669,8 @@ describe("cli program (nodes basics)", () => {
 
     const out = getRuntimeOutput();
     expect(out).toContain("Commands");
-    expect(out).toContain("camera.snap");
+    expect(out).toContain("camera.snap\\neffective-spoof");
+    expect(out).not.toContain("\neffective-spoof");
     expect(out).toContain("Approval");
     expect(out).toContain("reapproval pending");
     expect(out).toContain("Pending request");
@@ -601,9 +682,16 @@ describe("cli program (nodes basics)", () => {
     expect(out).toContain("openclaw nodes approve request-approval");
     expect(out).not.toContain("\u001b");
     expect(out).not.toContain("[2K");
+    expect(out).not.toContain("[2J");
+
+    await runProgram(["nodes", "describe", "--node", "ios-node", "--json"]);
+
+    const json = writeJsonArgAt(-1) as { commands?: string[] };
+    expect(json.commands).toEqual([unsafeEffectiveCommand]);
   });
 
   it("keeps explicit gateway options in node reapproval guidance without leaking auth", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
     programGatewayCallMock.mockResolvedValue({
       ts: Date.now(),
       nodes: [
@@ -630,7 +718,9 @@ describe("cli program (nodes basics)", () => {
     ]);
 
     const output = getRuntimeOutput();
-    expect(output).toContain("openclaw nodes approve request-reapproval --timeout 3000");
+    expect(output).toContain(
+      "openclaw --profile work nodes approve request-reapproval --timeout 3000",
+    );
     expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
     expect(output).not.toContain("gateway-user");
     expect(output).not.toContain("url-secret");
@@ -846,6 +936,32 @@ describe("cli program (nodes basics)", () => {
 
     await runProgram(["nodes", "remove", "--node", "iOS Node"]);
     expectGatewayRequest("node.pair.remove", { nodeId: "ios-node" });
+  });
+
+  it("runs nodes rename and preserves the successful node.rename payload", async () => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+      const { method } = (args[0] ?? {}) as { method?: string };
+      return method === "node.list"
+        ? { nodes: [{ nodeId: "ios-node", displayName: "iOS Node", paired: true }] }
+        : { ok: true, nodeId: "ios-node", displayName: "Renamed Node" };
+    });
+
+    await runProgram([
+      "nodes",
+      "rename",
+      "--node",
+      "iOS Node",
+      "--name",
+      " Renamed Node ",
+      "--json",
+    ]);
+
+    expectGatewayRequest("node.rename", { nodeId: "ios-node", displayName: "Renamed Node" });
+    expect(writeJsonArgAt(0)).toEqual({
+      ok: true,
+      nodeId: "ios-node",
+      displayName: "Renamed Node",
+    });
   });
 
   it("runs nodes invoke and calls node.invoke", async () => {

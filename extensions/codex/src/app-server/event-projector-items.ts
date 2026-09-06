@@ -7,6 +7,12 @@ export type CodexNativeToolUnfinishedStatus = Extract<
   "failed" | "unknown"
 >;
 
+export function matchesCodexSnapshotTurn(item: CodexThreadItem, turnId: string): boolean {
+  // Missing turnId inherits the validated enclosing snapshot; explicit foreign IDs do not.
+  const itemTurnId = readItemString(item, "turnId");
+  return itemTurnId === undefined || itemTurnId === turnId;
+}
+
 export function itemKind(
   item: CodexThreadItem,
 ): "tool" | "command" | "patch" | "search" | "analysis" | undefined {

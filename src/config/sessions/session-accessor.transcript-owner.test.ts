@@ -182,22 +182,24 @@ describe("transcript turn logical ownership", () => {
     });
   });
 
-  it("uses an explicit agent for a pathless injected session store", async () => {
-    await withTempHome(async (home) => {
-      const configuredStorePath = path.join(home, "shared-sessions.json");
-      const sessionEntry = { sessionId: "injected-research", updatedAt: 1 };
-      const sessionStore = { global: sessionEntry };
-      const cfg = {
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-        session: { store: configuredStorePath },
-      } satisfies OpenClawConfig;
+  it.each([false, true])(
+    "completes a pathless injected write before a later failure: %s",
+    async (failSecondAppend) => {
+      await withTempHome(async (home) => {
+        const configuredStorePath = path.join(home, "shared-sessions.json");
+        const sessionEntry = { sessionId: "injected-research", updatedAt: 1 };
+        const sessionStore = { global: sessionEntry };
+        const cfg = {
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { ops: {}, research: {} },
+          },
+          session: { store: configuredStorePath },
+        } satisfies OpenClawConfig;
 
-      await expect(
-        persistSessionTranscriptTurn(
+        const completed: string[] = [];
+        const turn = persistSessionTranscriptTurn(
           {
             agentId: "research",
             sessionId: sessionEntry.sessionId,
@@ -206,13 +208,45 @@ describe("transcript turn logical ownership", () => {
           },
           {
             config: cfg,
-            messages: [{ message: { role: "user", content: "injected research" } }],
+            messages: [
+              {
+                eventId: "injected-first",
+                message: { role: "user", content: "injected research" },
+              },
+              ...(failSecondAppend
+                ? [
+                    {
+                      message: { role: "user", content: "cannot commit" },
+                      prepareMessageAfterIdempotencyCheck: () => {
+                        throw new Error("second append failed");
+                      },
+                    },
+                  ]
+                : []),
+            ],
+            onMessageCommitted: ({ messageId }) => {
+              completed.push(messageId);
+            },
             updateMode: "none",
           },
-        ),
-      ).resolves.toMatchObject({ appendedCount: 1 });
-    });
-  });
+        );
+        if (failSecondAppend) {
+          await expect(turn).rejects.toThrow("second append failed");
+        } else {
+          await expect(turn).resolves.toMatchObject({ appendedCount: 1 });
+        }
+        expect(completed).toEqual(["injected-first"]);
+        expect(
+          await loadTranscriptEvents({
+            agentId: "research",
+            sessionId: sessionEntry.sessionId,
+            sessionKey: "global",
+            storePath: configuredStorePath,
+          }),
+        ).toContainEqual(expect.objectContaining({ id: "injected-first" }));
+      });
+    },
+  );
 
   it("keeps a pathless injected session store ownerless without an explicit agent", async () => {
     await withTempHome(async (home) => {

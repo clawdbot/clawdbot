@@ -4,6 +4,8 @@
  * blocks or plain prompt text.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { normalizeAgentRunRouteChange } from "./agent-run-terminal-receipt.js";
 import {
   formatGeneratedAttachmentLines,
   mediaUrlsFromGeneratedAttachments,
@@ -32,6 +34,7 @@ type AgentTaskCompletionInternalEvent = {
   status: AgentInternalEventStatus;
   statusLabel: string;
   result: string;
+  modelRouteChange?: string;
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
@@ -42,6 +45,12 @@ type TaskCompletionPromptMode = "plain" | "protected";
 
 const MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS = 6_000;
 const TASK_COMPLETION_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
+// Status labels embed provider/lifecycle error text ("failed: <cause>",
+// "timed out: <cause>"), which is caller-supplied and unbounded. Keep the
+// single status line short so a large error cannot crowd out the child result
+// or the reply instruction in the parent's prompt.
+const MAX_TASK_COMPLETION_STATUS_LABEL_CHARS = 500;
+const TASK_COMPLETION_STATUS_LABEL_TRUNCATION_MARKER = "…[truncated]";
 
 /** Internal event variants that can be rendered into agent prompt context. */
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
@@ -152,8 +161,17 @@ function formatTaskCompletionEvent(
   const sessionId = sanitizeSingleLineField(event.childSessionId ?? "unknown", "unknown");
   const announceType = sanitizeSingleLineField(event.announceType, "unknown");
   const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
-  const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
+  const statusLabel = truncateWithMarker(
+    sanitizeSingleLineField(event.statusLabel, event.status),
+    MAX_TASK_COMPLETION_STATUS_LABEL_CHARS,
+    {
+      marker: TASK_COMPLETION_STATUS_LABEL_TRUNCATION_MARKER,
+      reserve: TASK_COMPLETION_STATUS_LABEL_TRUNCATION_MARKER.length,
+      trimEnd: true,
+    },
+  );
   const result = formatChildResultDataBlock(event.result);
+  const modelRouteChange = normalizeAgentRunRouteChange(event.modelRouteChange);
   const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
   const mediaDirectiveLines = formatGeneratedMediaDirectiveLines(event);
   const lines =
@@ -173,6 +191,9 @@ function formatTaskCompletionEvent(
     "",
     result,
   );
+  if (modelRouteChange) {
+    lines.push("", modelRouteChange);
+  }
   if (attachmentLines.length > 0) {
     lines.push("", ...attachmentLines);
   }

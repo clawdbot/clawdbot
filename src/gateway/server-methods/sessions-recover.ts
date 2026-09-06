@@ -3,6 +3,7 @@ import {
   type SessionsRecoverResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { recoverGatewaySession } from "../session-recovery-service.js";
+import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { emitSessionArchived, emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
@@ -36,8 +37,15 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
       key: params.key,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(creation.actor ? { actor: creation.actor } : {}),
+      ...(client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: client.internal.operatorRoleActor }
+        : {}),
       authorizedPluginId: client?.internal?.pluginRuntimeOwnerId,
       ...(commitGuard ? { commitGuard } : {}),
+      workerPlacementContext: resolveSessionWorkerPlacementContext(context),
       launchContinuation: async (continuation) =>
         await launchSessionRecoveryContinuation({
           ...continuation,

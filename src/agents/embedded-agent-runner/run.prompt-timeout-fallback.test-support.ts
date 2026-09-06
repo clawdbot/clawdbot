@@ -1,5 +1,6 @@
 // Full-entry coverage for handing replay-safe prompt timeouts to model fallback.
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -8,12 +9,13 @@ import {
   mockedClassifyFailoverReason,
   mockedGetApiKeyForModel,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
@@ -21,14 +23,22 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.prompt-timeout-fallback" });
     useOpenAIPlatformAuthFixture();
   });
 
-  it("throws FailoverError for replay-safe harness-owned prompt timeouts when model fallbacks are configured", async () => {
+  afterEach(async () => {
+    await state?.cleanup();
+  });
+
+  it("throws FailoverError for persistent replay-safe prompt timeouts after transient retries", async () => {
+    // The transient retry owner continues the same model first; a timeout that
+    // persists past the retry budget hands off to the configured fallback.
     mockedClassifyFailoverReason.mockReturnValue("timeout");
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+    mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
         assistantTexts: [],
         terminal: {
@@ -40,7 +50,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     );
 
     const promise = runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-prompt-timeout-fallback",
@@ -58,7 +68,8 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow("LLM request timed out.");
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    // Initial attempt plus the full same-model transient retry budget.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(9);
   });
 
   it("finalizes a settled write after an idle timeout without replaying the prompt", async () => {
@@ -130,7 +141,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
       .mockReturnValueOnce([{ text: "The note was written once." }]);
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-post-tool-idle-finalization",

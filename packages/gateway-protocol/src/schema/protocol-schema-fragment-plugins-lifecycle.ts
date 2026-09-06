@@ -5,8 +5,10 @@ import * as hooks from "./hooks.js";
 import * as logsChat from "./logs-chat.js";
 import * as pluginApprovals from "./plugin-approvals.js";
 import * as plugins from "./plugins.js";
+import * as updateRuns from "./update-runs.js";
 
 export const PluginLifecycleProtocolSchemas = {
+  CapabilityConsentErrorDetails: plugins.CapabilityConsentErrorDetailsSchema,
   HooksStatusParams: hooks.HooksStatusParamsSchema,
   PluginApprovalRequestParams: pluginApprovals.PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: pluginApprovals.PluginApprovalResolveParamsSchema,
@@ -15,8 +17,25 @@ export const PluginLifecycleProtocolSchemas = {
   PluginCatalogInstallAction: plugins.PluginCatalogInstallActionSchema,
   PluginCatalogOfficialInstall: plugins.PluginCatalogOfficialInstallSchema,
   PluginControlUiDescriptor: plugins.PluginControlUiDescriptorSchema,
+  PluginControlUiModule: plugins.PluginControlUiModuleSchema,
+  PluginControlUiDiagnostic: plugins.PluginControlUiDiagnosticSchema,
+  PluginsControlUiListParams: plugins.PluginsControlUiListParamsSchema,
+  PluginsControlUiReloadParams: plugins.PluginsControlUiReloadParamsSchema,
+  PluginsControlUiCatalog: plugins.PluginsControlUiCatalogSchema,
+  PluginsControlUiChangedEvent: plugins.PluginsControlUiChangedEventSchema,
+  PluginsControlUiReportParams: plugins.PluginsControlUiReportParamsSchema,
+  PluginsControlUiStatusParams: plugins.PluginsControlUiStatusParamsSchema,
+  PluginsControlUiStatusResult: plugins.PluginsControlUiStatusResultSchema,
+  PluginDeclaredSurface: plugins.PluginDeclaredSurfaceSchema,
+  PluginDeclaredSurfaceWidening: plugins.PluginDeclaredSurfaceWideningSchema,
+  PluginHookGrant: plugins.PluginHookGrantSchema,
+  PluginInspectSource: plugins.PluginInspectSourceSchema,
+  PluginInstallTrust: plugins.PluginInstallTrustSchema,
+  PluginOperatorGrants: plugins.PluginOperatorGrantsSchema,
   PluginSearchPackage: plugins.PluginSearchPackageSchema,
   PluginSearchResultEntry: plugins.PluginSearchResultEntrySchema,
+  PluginsInspectParams: plugins.PluginsInspectParamsSchema,
+  PluginsInspectResult: plugins.PluginsInspectResultSchema,
   PluginsInstallParams: plugins.PluginsInstallParamsSchema,
   PluginsInstallResult: plugins.PluginsInstallResultSchema,
   PluginsListParams: plugins.PluginsListParamsSchema,
@@ -59,6 +78,7 @@ export const PluginLifecycleProtocolSchemas = {
   DevicePairSetupCompletedEvent: devices.DevicePairSetupCompletedEventSchema,
   DevicePairSetupDeliveryUncertainEvent: devices.DevicePairSetupDeliveryUncertainEventSchema,
   ChatHistoryParams: logsChat.ChatHistoryParamsSchema,
+  ChatStartupParams: logsChat.ChatStartupParamsSchema,
   ChatHistoryDeltaResult: logsChat.ChatHistoryDeltaResultSchema,
   ChatHistoryResetResult: logsChat.ChatHistoryResetResultSchema,
   ChatHistoryCursorResult: logsChat.ChatHistoryCursorResultSchema,
@@ -84,6 +104,13 @@ export const PluginLifecycleProtocolSchemas = {
   UpdateHoldParams: config.UpdateHoldParamsSchema,
   UpdateHoldResult: config.UpdateHoldResultSchema,
   UpdateRunParams: config.UpdateRunParamsSchema,
+  UpdateRunRecord: updateRuns.UpdateRunRecordSchema,
+  UpdateRunResult: updateRuns.UpdateRunResultSchema,
+  UpdateRunsGetParams: updateRuns.UpdateRunsGetParamsSchema,
+  UpdateRunsGetResult: updateRuns.UpdateRunsGetResultSchema,
+  UpdateRunsListParams: updateRuns.UpdateRunsListParamsSchema,
+  UpdateRunsListResult: updateRuns.UpdateRunsListResultSchema,
+  UpdateRunChangedEvent: updateRuns.UpdateRunChangedEventSchema,
   TickEvent: frames.TickEventSchema,
   ShutdownEvent: frames.ShutdownEventSchema,
 } as const;

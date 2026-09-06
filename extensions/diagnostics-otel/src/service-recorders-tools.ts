@@ -1,5 +1,8 @@
-import { SpanStatusCode } from "@opentelemetry/api";
-import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { ROOT_CONTEXT, SpanStatusCode } from "@opentelemetry/api";
+import {
+  isInternalDiagnosticEventMetadata,
+  normalizeDiagnosticValue,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "../api.js";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { positiveFiniteNumber } from "./service-genai-attributes.js";
@@ -13,6 +16,9 @@ import type { TelemetryExporterDiagnosticEvent } from "./service-types.js";
 
 export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime) {
   const {
+    gcDurationHistogram,
+    gatewayEventLoopDelayMaxHistogram,
+    gatewayEventLoopObservedCounter,
     queueDepthHistogram,
     skillUsedCounter,
     toolExecutionDurationHistogram,
@@ -267,6 +273,28 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     span.end(evt.ts);
   };
 
+  const recordGcDuration = (
+    evt: Extract<DiagnosticEventPayload, { type: "diagnostic.gc" }>,
+    metadata: DiagnosticEventMetadata,
+  ) => {
+    if (!metadata.trusted && !isInternalDiagnosticEventMetadata(metadata)) {
+      return;
+    }
+    gcDurationHistogram.record(evt.durationMs, undefined, ROOT_CONTEXT);
+  };
+
+  const recordGatewayEventLoopSample = (
+    evt: Extract<DiagnosticEventPayload, { type: "gateway.event_loop.sample" }>,
+    metadata: DiagnosticEventMetadata,
+  ) => {
+    if (!metadata.trusted && !isInternalDiagnosticEventMetadata(metadata)) {
+      return;
+    }
+    // Process-wide windows must not inherit the reader's trace through an external SDK.
+    gatewayEventLoopDelayMaxHistogram.record(evt.delayMaxMs, undefined, ROOT_CONTEXT);
+    gatewayEventLoopObservedCounter.add(evt.intervalMs, undefined, ROOT_CONTEXT);
+  };
+
   const recordHeartbeat = (
     evt: Extract<DiagnosticEventPayload, { type: "diagnostic.heartbeat" }>,
   ) => {
@@ -375,6 +403,8 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
   };
 
   return {
+    recordGcDuration,
+    recordGatewayEventLoopSample,
     recordSkillUsed,
     recordToolExecutionStarted,
     recordToolExecutionCompleted,

@@ -68,6 +68,7 @@ describe("prepareAgentRunUserTurn", () => {
 
     await expect(
       prepareAgentRunUserTurn({
+        assertCurrent: () => {},
         request: {
           message: "must not reach the stale session",
           idempotencyKey: "disappeared-session-run",

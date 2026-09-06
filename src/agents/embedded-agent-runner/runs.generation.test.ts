@@ -21,6 +21,8 @@ import {
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
+} from "./active-run-projections.js";
+import {
   setActiveEmbeddedRunLifecycleGeneration,
   type EmbeddedAgentQueueHandle,
 } from "./run-state.js";
@@ -77,6 +79,7 @@ vi.mock("../../infra/agent-events.js", async (importOriginal) => ({
 
 function createRunHandle(params: {
   abort?: EmbeddedAgentQueueHandle["abort"];
+  compacting?: boolean;
   diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   queueMessage: EmbeddedAgentQueueHandle["queueMessage"];
   runId: string;
@@ -92,7 +95,7 @@ function createRunHandle(params: {
     queueMessage: params.queueMessage,
     isStreaming: () => true,
     isAbortable: () => false,
-    isCompacting: () => false,
+    isCompacting: () => params.compacting === true,
     abort: params.abort ?? (() => {}),
   };
 }
@@ -104,6 +107,24 @@ describe("embedded run registry lifecycle generations", () => {
     resetDiagnosticRunActivityForTest();
     resetDiagnosticEventsForTest();
     lifecycleMock.reset();
+  });
+
+  it("aborts a rootless compacting run when its gateway lifecycle rotates", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun(
+      "rootless-session",
+      createRunHandle({
+        abort,
+        compacting: true,
+        queueMessage: vi.fn(async () => {}),
+        runId: "rootless-run",
+      }),
+    );
+
+    rotateAgentEventLifecycleGeneration();
+
+    expect(abort).toHaveBeenCalledWith("restart");
+    expect(listActiveEmbeddedRunSessionIds()).not.toContain("rootless-session");
   });
 
   it("rejects a delayed prior-lifecycle registration for a current session owner", async () => {

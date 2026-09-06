@@ -10,8 +10,9 @@ const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}[\]()#+\-!|>~])/g;
 
 type PostParseResult = {
   textContent: string;
-  imageKeys: string[];
-  mediaKeys: Array<{ fileKey: string; fileName?: string }>;
+  attachments: Array<
+    { kind: "image"; key: string } | { kind: "file"; key: string; fileName?: string }
+  >;
   mentionedOpenIds: string[];
 };
 
@@ -129,8 +130,7 @@ function renderCodeBlockElement(element: Record<string, unknown>): string {
 
 function renderElement(
   element: unknown,
-  imageKeys: string[],
-  mediaKeys: Array<{ fileKey: string; fileName?: string }>,
+  attachments: PostParseResult["attachments"],
   mentionedOpenIds: string[],
   renderMediaPlaceholders: boolean,
 ): string {
@@ -156,7 +156,7 @@ function renderElement(
     case "img": {
       const imageKey = normalizeFeishuExternalKey(toStringOrEmpty(element.image_key));
       if (imageKey) {
-        imageKeys.push(imageKey);
+        attachments.push({ kind: "image", key: imageKey });
       }
       return renderMediaPlaceholders ? "![image]" : "";
     }
@@ -164,7 +164,7 @@ function renderElement(
       const fileKey = normalizeFeishuExternalKey(toStringOrEmpty(element.file_key));
       if (fileKey) {
         const fileName = toStringOrEmpty(element.file_name) || undefined;
-        mediaKeys.push({ fileKey, fileName });
+        attachments.push({ kind: "file", key: fileKey, ...(fileName ? { fileName } : {}) });
       }
       return renderMediaPlaceholders ? "[media]" : "";
     }
@@ -244,14 +244,12 @@ export function parsePostContent(
     if (!payload) {
       return {
         textContent: FALLBACK_POST_TEXT,
-        imageKeys: [],
-        mediaKeys: [],
+        attachments: [],
         mentionedOpenIds: [],
       };
     }
 
-    const imageKeys: string[] = [];
-    const mediaKeys: Array<{ fileKey: string; fileName?: string }> = [];
+    const attachments: PostParseResult["attachments"] = [];
     const mentionedOpenIds: string[] = [];
     const paragraphs: string[] = [];
 
@@ -263,8 +261,7 @@ export function parsePostContent(
       for (const element of paragraph) {
         renderedParagraph += renderElement(
           element,
-          imageKeys,
-          mediaKeys,
+          attachments,
           mentionedOpenIds,
           options.renderMediaPlaceholders !== false,
         );
@@ -278,11 +275,10 @@ export function parsePostContent(
 
     return {
       textContent: textContent || (options.emptyTextFallback ?? FALLBACK_POST_TEXT),
-      imageKeys,
-      mediaKeys,
+      attachments,
       mentionedOpenIds,
     };
   } catch {
-    return { textContent: FALLBACK_POST_TEXT, imageKeys: [], mediaKeys: [], mentionedOpenIds: [] };
+    return { textContent: FALLBACK_POST_TEXT, attachments: [], mentionedOpenIds: [] };
   }
 }

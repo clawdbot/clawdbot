@@ -1,6 +1,7 @@
 // Discord plugin module implements send.permissions behavior.
 import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
+import { isDiscordThreadChannelType } from "./channel-type.js";
 import { resolveDiscordRest } from "./client.js";
 import {
   getChannel,
@@ -44,14 +45,6 @@ function hasAdministrator(bitfield: bigint) {
 
 function hasPermissionBit(bitfield: bigint, permission: bigint) {
   return (bitfield & permission) === permission;
-}
-
-export function isThreadChannelType(channelType?: number) {
-  return (
-    channelType === ChannelType.GuildNewsThread ||
-    channelType === ChannelType.GuildPublicThread ||
-    channelType === ChannelType.GuildPrivateThread
-  );
 }
 
 async function fetchBotUserId(rest: RequestClient) {
@@ -146,7 +139,7 @@ function resolveMemberChannelPermissionBits(params: {
 async function resolveChannelPermissionSubject(rest: RequestClient, channel: APIChannel) {
   const channelType = "type" in channel ? channel.type : undefined;
   const parentId = "parent_id" in channel ? channel.parent_id : undefined;
-  if (isThreadChannelType(channelType) && parentId) {
+  if (isDiscordThreadChannelType(channelType) && parentId) {
     return await getChannel(rest, parentId);
   }
   return channel;
@@ -207,7 +200,7 @@ export async function canViewDiscordGuildChannel(
     if (!hasPermissionBit(permissions, PermissionFlagsBits.ViewChannel)) {
       return false;
     }
-    if ("type" in channel && channel.type === ChannelType.GuildPrivateThread) {
+    if ("type" in channel && channel.type === ChannelType.PrivateThread) {
       if (hasPermissionBit(permissions, PermissionFlagsBits.ManageThreads)) {
         return true;
       }

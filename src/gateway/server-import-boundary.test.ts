@@ -100,6 +100,20 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
+  it.each(["src/gateway/methods/core-descriptors.ts", "src/gateway/method-scopes.ts"])(
+    "keeps static method policy independent of session storage: %s",
+    (entryPath) => {
+      const graph = collectStaticValueImportGraph(entryPath);
+      const sessionStorageImports = [...graph.keys()]
+        .map((filePath) => path.relative(repoRoot, filePath))
+        .filter((filePath) =>
+          filePath.startsWith(path.join("src", "config", "sessions") + path.sep),
+        );
+
+      expect(sessionStorageImports).toEqual([]);
+    },
+  );
+
   it("keeps remote catalog refresh networking behind the overlay boundary", () => {
     const startupGraph = collectStaticValueImportGraph(
       "src/plugins/gateway-startup-plugin-providers.ts",
@@ -169,14 +183,14 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
     expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
     expect(serverImpl).not.toContain('from "../secrets/runtime.js"');
-    expect(readSource("src/gateway/server-reload-handlers.ts")).not.toContain(
+    expect(readSource("src/gateway/server-reload-managed.ts")).not.toContain(
       'from "../secrets/runtime.js"',
     );
     const wsConnection = readSource("src/gateway/server/ws-connection.ts");
-    expect(wsConnection).not.toMatch(
-      /import\s+\{[^}]*attachGatewayWsMessageHandler[^}]*\}\s+from "\.\/ws-connection\/message-handler\.js"/s,
+    const wsGraph = collectStaticValueImportGraph("src/gateway/server/ws-connection.ts");
+    expect([...wsGraph.keys()]).not.toContain(
+      path.join(repoRoot, "src/gateway/server/ws-connection/message-handler.ts"),
     );
-    expect(wsConnection).toContain('import("./ws-connection/message-handler.js")');
     expect(wsConnection).not.toContain('from "../talk-realtime-relay.js"');
     expect(wsConnection).not.toContain('from "../talk-transcription-relay.js"');
     expect(wsConnection).toContain('from "../talk-session-registry.js"');
@@ -226,9 +240,6 @@ describe("gateway startup import boundaries", () => {
     expect(cleanup).toContain('import("../plugins/installed-plugin-index-records.js")');
     expect(postReadyStart).toBeGreaterThan(serverStart);
     expect(cleanupCall).toBeGreaterThan(postReadyStart);
-    expect(serverImpl.slice(postReadyStart, cleanupCall + 300)).not.toContain(
-      "startupConfigLoad.pluginMetadataSnapshot?.index.installRecords",
-    );
     expect(cleanup).toContain("loadInstalledPluginIndexInstallRecordsSync()");
   });
 
@@ -259,55 +270,21 @@ describe("gateway startup import boundaries", () => {
     expect(workerStartup.match(/loadWorkerEnvironmentRuntimeModule\(\)/gu)).toHaveLength(3);
   });
 
-  it("fences config reload before gateway teardown and gateway_stop hooks", () => {
-    const serverImpl = readServerImplementation();
-    const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
-    const hookStart = serverImpl.indexOf('name: "gateway_stop plugin hooks"', closeStart);
-    const reloadStopStart = serverImpl.indexOf('name: "close prelude fence"', closeStart);
-    const terminalStopStart = serverImpl.indexOf('name: "terminal sessions"', closeStart);
-    const closePreludeStart = serverImpl.indexOf('name: "gateway close prelude"', closeStart);
-    const lateSidecarJoinStart = serverImpl.indexOf('name: "late sidecar cleanup"', closeStart);
-    const gatewayCloseStart = serverImpl.indexOf('name: "gateway close"', lateSidecarJoinStart);
-    const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
-    const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
-    const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");
-    const beginHelperEnd = serverImpl.indexOf("};", beginHelperStart);
-    const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({");
-    const postReadyEnd = serverImpl.indexOf("});", postReadyStart);
-    const postReadyBlock = serverImpl.slice(postReadyStart, postReadyEnd);
+  it("keeps worker session tools out of idle worker startup", () => {
+    const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
+    const startupFunction = workerStartup.indexOf(
+      "export async function createGatewayWorkerEnvironmentRuntime",
+    );
+    const eagerImportsStart = workerStartup.indexOf("const [", startupFunction);
+    const eagerImportsEnd = workerStartup.indexOf("]);", eagerImportsStart);
+    const eagerImports = workerStartup.slice(eagerImportsStart, eagerImportsEnd);
 
-    expect(closeStart).toBeGreaterThan(-1);
-    expect(reloadStopStart).toBeGreaterThan(closeStart);
-    expect(reloadStopStart).toBeLessThan(terminalStopStart);
-    expect(reloadStopStart).toBeLessThan(hookStart);
-    expect(lateSidecarJoinStart).toBeGreaterThan(closePreludeStart);
-    expect(lateSidecarJoinStart).toBeLessThan(gatewayCloseStart);
-    expect(serverImpl.slice(closeStart, hookStart)).not.toContain("await import(");
-    expect(markHelperStart).toBeGreaterThan(-1);
-    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "clearPostReadyMaintenanceTimer();",
+    expect(eagerImports).not.toContain(
+      'import("./worker-environments/worker-session-tool-executor.js")',
     );
-    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "cronReconciliation.invalidate();",
+    expect(workerStartup).toContain(
+      "const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(",
     );
-    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "void stopOutboundDeliveryRecoveryForClose();",
-    );
-    expect(beginHelperStart).toBeGreaterThan(-1);
-    expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
-      "markClosePreludeStarted();",
-    );
-    expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
-      "stopConfigReloaderForClose().catch",
-    );
-    expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
-      "stopOutboundDeliveryRecoveryForClose(),",
-    );
-    expect(postReadyStart).toBeGreaterThan(-1);
-    expect(postReadyBlock).toContain("isClosing: () => lifecycle.closePreludeStarted");
-    expect(postReadyBlock).toContain("if (lifecycle.closePreludeStarted)");
-    expect(postReadyBlock).toContain(
-      "shouldStartCron: () => !lifecycle.closePreludeStarted && !cronStartState.handled",
-    );
+    expect(workerStartup).toContain("loadWorkerSessionToolExecutorModule().then(");
   });
 });

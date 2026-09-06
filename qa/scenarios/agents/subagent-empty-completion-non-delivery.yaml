@@ -1,0 +1,177 @@
+title: Subagent empty completion non-delivery
+
+scenario:
+  id: subagent-empty-completion-non-delivery
+  surface: subagents
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-delivery
+    secondary:
+      - channels.qa-channel-final-reply
+  objective: Prove a successful native subagent with explicit empty terminal output settles without requester delivery or retry.
+  gatewayConfigPatch:
+    tools:
+      alsoAllow:
+        - write
+    agents:
+      entries:
+        qa:
+          tools:
+            alsoAllow:
+              - write
+  successCriteria:
+    - The child completes successfully after one real write tool side effect.
+    - The requester receives one visible parent acknowledgement.
+    - The lifecycle owner records delivery as not applicable.
+    - The requester receives no terminal message before or after Gateway restart.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/help/testing.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/agents/agent-run-terminal-reply.ts
+    - src/agents/subagents/registry/subagent-registry-lifecycle-completion.ts
+  execution:
+    kind: flow
+    providerMode: mock-openai
+    retryCount: 0
+    summary: Exercise successful empty terminal output through mock provider, ephemeral Gateway, SQLite task state, and QA channel capture.
+    config:
+      requiredProviderMode: mock-openai
+      metadataSentinel: QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK
+
+flow:
+  steps:
+    - name: records empty success without requester delivery
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`expected provider mode ${config.requiredProviderMode}, got ${env.providerMode}`"
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 120000
+        - set: readEmptyTask
+          value:
+            lambda:
+              params:
+                - taskId
+              async: true
+              expr: "(await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks?.find((task) => task.title === 'qa-terminal-empty' && (!taskId || task.taskId === taskId))"
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.length"
+        - set: requestCursor
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: conversationId
+          value:
+            expr: "`terminal-empty-${randomUUID().slice(0, 8)}`"
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: conversationId
+            senderName: QA Empty Reply Operator
+            text: "Subagent terminal reply QA check: empty. Spawn one native worker, reply to the requester after spawning, then finish without waiting. Do not use ACP."
+        - call: waitForCondition
+          saveAs: emptyTask
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const task = await readEmptyTask(); return task?.status === 'completed' ? task : undefined; })().catch(() => undefined)"
+            - 60000
+            - 250
+        - assert:
+            expr: "emptyTask.terminalOutcome === 'succeeded' && emptyTask.deliveryStatus === 'not_applicable'"
+            message:
+              expr: "`empty completion did not close at its lifecycle owner: ${JSON.stringify(emptyTask)}`"
+        - call: waitForCondition
+          saveAs: requesterAcknowledgements
+          args:
+            - lambda:
+                expr: "(() => { const messages = state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === conversationId && String(message.text ?? '').trim() === 'QA-SUBAGENT-EMPTY-PARENT-ACK'); return messages.length > 0 ? messages : undefined; })()"
+            - 60000
+            - 250
+        - set: emptyOutboundHistory
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId)"
+        - set: emptyOutbound
+          value:
+            expr: "emptyOutboundHistory.filter((message) => !message.deleted)"
+        - set: emptyRequests
+          value:
+            expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`) : []"
+        - set: emptyTerminalOutbound
+          value:
+            expr: "emptyOutboundHistory.filter((message) => String(message.text ?? '').trim() === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
+        - assert:
+            expr: "requesterAcknowledgements.length === 1"
+            message:
+              expr: "`requester did not receive exactly one parent acknowledgement; outbound=${recentOutboundSummary(state)}`"
+        - assert:
+            expr: "emptyTerminalOutbound.length === 0"
+            message:
+              expr: "`empty completion unexpectedly reached terminal requester delivery; outbound=${recentOutboundSummary(state)} requests=${JSON.stringify(emptyRequests)}`"
+        - assert:
+            expr: "emptyRequests.some((request) => request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === 'qa-terminal-empty') && emptyRequests.some((request) => request.plannedToolName === 'write' && request.plannedToolArgs?.path === 'qa-terminal-empty-side-effect.txt') && !emptyRequests.some((request) => request.plannedToolName === 'message' && request.plannedToolArgs?.message === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED') && !emptyRequests.some((request) => request.plannedToolName === 'sessions_yield')"
+            message:
+              expr: "`empty completion did not stop at the lifecycle owner: ${JSON.stringify(emptyRequests)}`"
+        - assert:
+            expr: "emptyOutboundHistory.every((message) => !String(message.text ?? '').includes(config.metadataSentinel) && !String(message.text ?? '').includes('BEGIN_OPENCLAW_INTERNAL_CONTEXT') && String(message.text ?? '').trim() !== 'NO_REPLY')"
+            message:
+              expr: "`empty completion leaked silence or internal metadata; outbound=${recentOutboundSummary(state)}`"
+        - set: postCompletionRequestCursor
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: restartPatch
+          value:
+            expr: "({ gateway: { controlUi: { allowedOrigins: [`http://127.0.0.1:${64000 + Math.floor(Math.random() * 999)}`] } } })"
+        - call: restartGatewayWithConfigPatch
+          args:
+            - env:
+                ref: env
+              patch:
+                ref: restartPatch
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 180000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 180000
+        - call: waitForCondition
+          saveAs: restoredTask
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const task = await readEmptyTask(emptyTask.taskId); return task?.status === 'completed' && task.terminalOutcome === 'succeeded' && task.deliveryStatus === 'not_applicable' ? task : undefined; })().catch(() => undefined)"
+            - 60000
+            - 250
+        - set: postRestartOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId).map((message) => ({ id: message.id, text: String(message.text ?? '') }))"
+        - set: postRestartRequests
+          value:
+            expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${postCompletionRequestCursor}`) : []"
+        - set: postRestartCompletionRequests
+          value:
+            expr: "postRestartRequests.filter((request) => String(request.raw ?? '').includes('[Internal task completion event]') || request.plannedToolArgs?.message === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
+        - assert:
+            expr: "restoredTask?.taskId === emptyTask.taskId && restoredTask?.status === 'completed' && restoredTask?.terminalOutcome === 'succeeded' && restoredTask?.deliveryStatus === 'not_applicable'"
+            message:
+              expr: "`empty completion lost its terminal state after restart: ${JSON.stringify({ expectedTaskId: emptyTask.taskId, taskId: restoredTask?.taskId, status: restoredTask?.status, terminalOutcome: restoredTask?.terminalOutcome, deliveryStatus: restoredTask?.deliveryStatus })}`"
+        - assert:
+            expr: "postRestartCompletionRequests.length === 0 && postRestartOutbound.every((message) => String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED' && !String(message.text ?? '').includes(config.metadataSentinel) && String(message.text ?? '').trim() !== 'NO_REPLY')"
+            message:
+              expr: "`Gateway restart retried or exposed empty completion: requests=${JSON.stringify(postRestartRequests)} outbound=${JSON.stringify(postRestartOutbound)}`"
+      detailsExpr: "JSON.stringify({ taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, taskTerminalOutcome: emptyTask.terminalOutcome, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterAcknowledgements.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutboundHistory.map((message) => String(message.text ?? '')), postRestartProviderRequestCount: postRestartRequests.length, postRestartCompletionRequestCount: postRestartCompletionRequests.length, providerMode: env.providerMode, pass: true }, null, 2)"

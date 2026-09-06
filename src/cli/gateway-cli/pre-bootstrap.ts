@@ -1,4 +1,4 @@
-import * as upgrade from "../../commands/doctor/shared/automatic-upgrade-config-repair.js";
+import * as startupRepair from "../../commands/doctor/shared/automatic-startup-config-repair.js";
 import { resetPublishedConfigRuntimeEnv } from "../../config/config-env-vars.js";
 // Gateway startup checks that must run before shared CLI bootstrap can migrate state.
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
@@ -344,7 +344,7 @@ async function guardGatewayRunSelectedConfig(
       lastGuardedGatewayRunSnapshot = snapshot;
       return true;
     }
-    const trustedSnapshot = upgrade.resolveUpgradeConfigSnapshot(snapshot);
+    const trustedSnapshot = startupRepair.resolveStartupConfigSnapshot(snapshot);
     if (!trustedSnapshot) {
       return false;
     }
@@ -759,7 +759,7 @@ export async function recheckGatewayRunBootstrap(
     (await isSameGatewayRunConfigSnapshot(expected, current, {
       allowPathChange: params.snapshot !== undefined,
     })) ||
-    upgrade.isUpgradeConfigRepairResult(expected, current)
+    startupRepair.isStartupConfigRepairResult(expected, current)
   ) {
     return true;
   }

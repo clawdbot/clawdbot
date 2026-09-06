@@ -69,7 +69,7 @@ export function assertExpectedExistingSession(params: {
 export function consumeExpectedSessionWorkAdmission(params: {
   constraint?: ExpectedExistingSessionConstraint;
   identities: Iterable<string | undefined>;
-  onInterrupt: () => void;
+  onInterrupt: (reason?: Error) => void;
   scope: string;
 }): SessionWorkAdmissionLease | undefined {
   const handoffId = params.constraint?.handoffId;

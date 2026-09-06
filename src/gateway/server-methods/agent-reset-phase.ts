@@ -9,10 +9,12 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
 import { setGatewayDedupeEntries } from "../agent-turn/agent-dedupe.js";
 import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { formatForLog } from "../ws-log.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
@@ -43,6 +45,7 @@ type AgentResetPhaseResult = {
 };
 
 export async function runAgentResetPhase(params: {
+  assertAdmissionCurrent?: () => void;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   requestedSessionKey?: string;
@@ -91,12 +94,27 @@ export async function runAgentResetPhase(params: {
     normalizeOptionalLowercaseString(resetCommandMatch[1]) === "new" ? "new" : "reset";
   let resetResult: Awaited<ReturnType<typeof runSessionResetFromAgent>>;
   try {
+    const creation = prepareSkillLibrarySessionCreation(
+      params.client,
+      params.context.getRuntimeConfig,
+      resolveAgentRunSessionCreation(params.client),
+    );
     resetResult = await runSessionResetFromAgent({
       key: params.requestedSessionKey,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       reason: resetReason,
-      creation: resolveAgentRunSessionCreation(params.client),
-      assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
+      creation,
+      ...(params.client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: params.client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(params.client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: params.client.internal.operatorRoleActor }
+        : {}),
+      assertCurrent: () => {
+        params.assertAdmissionCurrent?.();
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        assertPreparedSkillLibrarySelection(creation.skillLibrarySelections);
+      },
       onCommitted: (commit) => {
         params.setCommittedResetCompletion({
           reason: resetReason,

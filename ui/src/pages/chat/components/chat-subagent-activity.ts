@@ -5,7 +5,6 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { isActiveTask, sortTasks, taskTimestampMs, taskTitle } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import { renderDiffStatChips } from "./chat-diff-render.ts";
 
 const SUBAGENT_ACTIVITY_LIMIT = 5;
 const SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS = 60_000;
@@ -70,7 +69,7 @@ export function deriveSubagentActivity(params: {
 
 function subagentActivityLabel(task: TaskSummary): string {
   if (isActiveTask(task)) {
-    return t("chat.backgroundTasks.subagentActivity.working");
+    return t("chat.backgroundTasks.subagentActivity.running");
   }
   if (task.status === "cancelled") {
     return t("chat.backgroundTasks.subagentActivity.cancelled");
@@ -103,9 +102,9 @@ function renderSubagentActivityIndicator(task: TaskSummary): TemplateResult {
   }
   const failed = task.status !== "completed";
   return html`<span
-    class="chat-subagent-activity__indicator chat-subagent-activity__indicator--${failed
-      ? "failed"
-      : "finished"}"
+    class="chat-subagent-activity__indicator chat-subagent-activity__indicator--${
+      failed ? "failed" : "finished"
+    }"
     aria-hidden="true"
     >${failed ? icons.x : icons.check}</span
   >`;
@@ -120,17 +119,18 @@ function renderSubagentActivityRow(
   const content = html`
     ${renderSubagentActivityIndicator(task)}
     <span class="chat-subagent-activity__label">${label}</span>
-    ${snippet
-      ? keyed(
-          `${task.status}:${snippet}`,
-          html`<span
-            class="chat-subagent-activity__snippet chat-subagent-activity__snippet--updated"
-            title=${snippet}
-            >${snippet}</span
-          >`,
-        )
-      : nothing}
-    ${task.diffStat ? renderDiffStatChips(task.diffStat) : nothing}
+    ${
+      snippet
+        ? keyed(
+            `${task.status}:${snippet}`,
+            html`<span
+              class="chat-subagent-activity__snippet chat-subagent-activity__snippet--updated"
+              title=${snippet}
+              >${snippet}</span
+            >`,
+          )
+        : nothing
+    }
   `;
   if (!onOpenTaskDetail) {
     return html`<div
@@ -172,13 +172,15 @@ export function renderSubagentActivity(
         (task) => task.id,
         (task) => renderSubagentActivityRow(task, onOpenTaskDetail),
       )}
-      ${presentation.overflowWorking > 0
-        ? html`<div class="chat-subagent-activity__overflow">
-            ${t("chat.backgroundTasks.subagentActivity.moreWorking", {
-              count: String(presentation.overflowWorking),
-            })}
-          </div>`
-        : nothing}
+      ${
+        presentation.overflowWorking > 0
+          ? html`<div class="chat-subagent-activity__overflow">
+              ${t("chat.backgroundTasks.subagentActivity.moreWorking", {
+                count: String(presentation.overflowWorking),
+              })}
+            </div>`
+          : nothing
+      }
     </div>
   `;
 }

@@ -4,7 +4,7 @@ import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { execFileUtf8 } from "./exec-file.js";
+import { execSystemctl, readSystemctlDetail } from "./systemd-exec.js";
 
 type SystemSystemdOwnership =
   | { status: "absent"; unitName: string }
@@ -28,13 +28,19 @@ function quotePosixArgument(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-async function querySystemManager(unitName: string): Promise<SystemSystemdOwnership> {
-  const result = await execFileUtf8("systemctl", [
-    "show",
-    "--property=LoadState",
-    "--value",
-    unitName,
-  ]);
+function unverifiableSystemOwnership(
+  unitName: string,
+  detail: string,
+  operation: "systemctl" | "filesystem" = "systemctl",
+): SystemSystemdOwnership {
+  return { status: "unverifiable", unitName, operation, detail };
+}
+
+async function querySystemManager(
+  unitName: string,
+  run = execSystemctl,
+): Promise<SystemSystemdOwnership> {
+  const result = await run(["show", "--property=LoadState", "--value", unitName]);
   const loadState = result.stdout.trim().toLowerCase();
   if (result.code === 0) {
     if (loadState === "not-found") {
@@ -43,65 +49,35 @@ async function querySystemManager(unitName: string): Promise<SystemSystemdOwners
     if (loadState) {
       return { status: "loaded", unitName };
     }
-    return {
-      status: "unverifiable",
-      unitName,
-      operation: "systemctl",
-      detail: "systemctl returned no LoadState",
-    };
+    return unverifiableSystemOwnership(unitName, "systemctl returned no LoadState");
   }
-  const detail = `${result.stderr} ${result.stdout}`.trim();
+  const detail = readSystemctlDetail(result) || `systemctl exited with code ${result.code}`;
   const normalizedDetail = detail.toLowerCase();
   if (
+    result.termination === "exit" &&
     normalizedDetail.includes(unitName.toLowerCase()) &&
     /not[- ]found|could not be found/i.test(normalizedDetail)
   ) {
     return { status: "absent", unitName };
   }
-  return {
-    status: "unverifiable",
-    unitName,
-    operation: "systemctl",
-    detail: detail || `systemctl exited with code ${result.code}`,
-  };
+  return unverifiableSystemOwnership(unitName, detail);
 }
 
-async function readSystemUnitLoadPaths(
+async function findInstalledSystemUnit(
   unitName: string,
-): Promise<string[] | SystemSystemdOwnership> {
-  const result = await execFileUtf8("systemctl", ["show", "--property=UnitPath", "--value"]);
+  run = execSystemctl,
+): Promise<SystemSystemdOwnership> {
+  const result = await run(["show", "--property=UnitPath", "--value"]);
   if (result.code !== 0) {
-    const detail = `${result.stderr} ${result.stdout}`.trim();
-    return {
-      status: "unverifiable",
-      unitName,
-      operation: "systemctl",
-      detail: detail || `systemctl exited with code ${result.code}`,
-    };
+    const detail = readSystemctlDetail(result) || `systemctl exited with code ${result.code}`;
+    return unverifiableSystemOwnership(unitName, detail);
   }
-  const paths = [
-    ...new Set(
-      result.stdout
-        .split(/\s+/)
-        .map((entry) => entry.trim())
-        .filter((entry) => path.posix.isAbsolute(entry)),
-    ),
-  ];
-  if (paths.length === 0) {
-    return {
-      status: "unverifiable",
+  const loadPaths = [...new Set(result.stdout.split(/\s+/).filter(path.posix.isAbsolute))];
+  if (loadPaths.length === 0) {
+    return unverifiableSystemOwnership(
       unitName,
-      operation: "systemctl",
-      detail: "systemctl returned no system manager unit load paths",
-    };
-  }
-  return paths;
-}
-
-async function findInstalledSystemUnit(unitName: string): Promise<SystemSystemdOwnership> {
-  const loadPaths = await readSystemUnitLoadPaths(unitName);
-  if (!Array.isArray(loadPaths)) {
-    return loadPaths;
+      "systemctl returned no system manager unit load paths",
+    );
   }
   for (const dir of loadPaths) {
     const unitPath = path.posix.join(dir, unitName);
@@ -112,33 +88,35 @@ async function findInstalledSystemUnit(unitName: string): Promise<SystemSystemdO
       if (isMissingPathError(error)) {
         continue;
       }
-      return {
-        status: "unverifiable",
-        unitName,
-        operation: "filesystem",
-        detail: `${unitPath}: ${formatUnknownError(error)}`,
-      };
+      const detail = `${unitPath}: ${formatUnknownError(error)}`;
+      return unverifiableSystemOwnership(unitName, detail, "filesystem");
     }
   }
   return { status: "absent", unitName };
 }
 
-async function inspectSystemSystemdOwnership(unitName: string): Promise<SystemSystemdOwnership> {
+async function inspectSystemSystemdOwnership(
+  unitName: string,
+  timeoutMs?: number,
+): Promise<SystemSystemdOwnership> {
   if (process.platform !== "linux") {
     return { status: "absent", unitName };
   }
 
-  const initialQuery = await querySystemManager(unitName);
+  const deadlineAt = timeoutMs && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
+  const run = (args: string[]) =>
+    execSystemctl(args, undefined, deadlineAt ? Math.max(1, deadlineAt - Date.now()) : undefined);
+  const initialQuery = await querySystemManager(unitName, run);
   if (initialQuery.status !== "absent") {
     return initialQuery;
   }
-  const installed = await findInstalledSystemUnit(unitName);
+  const installed = await findInstalledSystemUnit(unitName, run);
   if (installed.status !== "absent") {
     return installed;
   }
   // Close the manager-query-to-filesystem-snapshot race. Publication and
   // activation repeat the complete probe because root installers share no lock.
-  return await querySystemManager(unitName);
+  return await querySystemManager(unitName, run);
 }
 
 function isRunningAsRoot(): boolean {
@@ -190,8 +168,17 @@ class SystemSystemdOwnershipError extends Error {
   }
 }
 
-export async function assertNoSystemSystemdOwnership(unitName: string): Promise<void> {
-  const ownership = await inspectSystemSystemdOwnership(unitName);
+export function isSystemSystemdOwnershipError(
+  error: unknown,
+): error is SystemSystemdOwnershipError {
+  return error instanceof SystemSystemdOwnershipError;
+}
+
+export async function assertNoSystemSystemdOwnership(
+  unitName: string,
+  timeoutMs?: number,
+): Promise<void> {
+  const ownership = await inspectSystemSystemdOwnership(unitName, timeoutMs);
   if (ownership.status !== "absent") {
     throw new SystemSystemdOwnershipError(ownership);
   }

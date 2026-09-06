@@ -13,9 +13,10 @@ import {
   loadTranscriptEvents,
   readTranscriptRawDelta,
   replaceTranscriptEventsSync,
-  updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
@@ -719,12 +720,31 @@ describe("SessionManager.open", () => {
     ).toMatchObject([{ content: "root" }, { content: "side middle" }, { content: "side leaf" }]);
   });
 
-  it("normalizes session names to one line", () => {
+  it.each([
+    { label: "missing", names: [], expected: undefined, rewind: false },
+    {
+      label: "single-line normalized",
+      names: ["  first\nsecond\r\nthird  "],
+      expected: "first second third",
+      rewind: false,
+    },
+    { label: "cleared", names: ["old name", "  "], expected: undefined, rewind: false },
+    {
+      label: "off-branch latest",
+      names: ["old name", "latest name"],
+      expected: "latest name",
+      rewind: true,
+    },
+  ])("reads $label session names", ({ names, expected, rewind }) => {
     const manager = SessionManager.inMemory();
-
-    manager.appendSessionInfo("  first\nsecond\r\nthird  ");
-
-    expect(manager.getSessionName()).toBe("first second third");
+    const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    for (const name of names) {
+      manager.appendSessionInfo(name);
+    }
+    if (rewind) {
+      manager.branch(root);
+    }
+    expect(manager.getSessionName()).toBe(expected);
   });
 
   it("ignores opaque SQLite rows while resolving the session cwd", async () => {
@@ -756,7 +776,8 @@ describe("SessionManager.open", () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-prompt-release-rebound";
-    const sessionKey = "agent:main:dashboard:sqlite-prompt-release-rebound";
+    const sensitivePeer = "+15551234567";
+    const sessionKey = `agent:main:whatsapp:direct:${sensitivePeer}\n\x1b[31mspoof`;
     const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
     await upsertSessionEntryCore(scope, { sessionFile: marker, sessionId, updatedAt: 10 });
@@ -777,19 +798,25 @@ describe("SessionManager.open", () => {
       { sessionId: "replacement-session", updatedAt: 20 },
     );
 
-    try {
-      sessionManager.appendCompaction("late summary", assistant.messageId, 42);
-      throw new Error("expected rebound compaction persistence to fail");
-    } catch (error) {
-      expect(error).toMatchObject({
-        cause: {
-          actualSessionId: "replacement-session",
-          code: "session-rebound",
-          expectedSessionId: sessionId,
-          sessionKey,
-        },
-      });
-    }
+    const expectedCause = {
+      actualSessionIdHash: redactIdentifier("replacement-session"),
+      agentIdHash: redactIdentifier(scope.agentId),
+      code: "session-rebound",
+      expectedSessionIdHash: redactIdentifier(sessionId),
+      sessionKeyHash: redactIdentifier(sessionKey),
+    };
+    const captureError = (run: () => unknown): unknown => {
+      try {
+        run();
+      } catch (error) {
+        return error;
+      }
+      throw new Error("expected rebound transcript persistence to fail");
+    };
+    const compactionError = captureError(() =>
+      sessionManager.appendCompaction("late summary", assistant.messageId, 42),
+    );
+    expect(compactionError).toMatchObject({ cause: expectedCause });
 
     const entriesBeforeRejectedAppends = sessionManager.getEntries();
     const leafBeforeRejectedAppends = sessionManager.getLeafId();
@@ -797,12 +824,26 @@ describe("SessionManager.open", () => {
     expect(() => sessionManager.branchWithSummary(null, "late summary")).toThrow(
       "entry was not persisted",
     );
-    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
-      "entry was not persisted",
-    );
-    expect(() =>
+    const eventError = captureError(() => sessionManager.appendModelChange("openai", "gpt-5.5"));
+    const messageError = captureError(() =>
       sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
-    ).toThrow("message was not persisted");
+    );
+    for (const error of [eventError, messageError]) {
+      expect(error).toMatchObject({ cause: expectedCause });
+      const operatorFacingReason = formatErrorMessage(error);
+      for (const hash of Object.values(expectedCause).filter((value) =>
+        value.startsWith("sha256:"),
+      )) {
+        expect(operatorFacingReason).toContain(hash);
+      }
+      expect(operatorFacingReason).not.toContain(sessionKey);
+      expect(operatorFacingReason).not.toContain(sensitivePeer);
+      expect(operatorFacingReason).not.toContain("spoof");
+      expect(operatorFacingReason).not.toContain(sessionId);
+      expect(operatorFacingReason).not.toContain("replacement-session");
+      expect(operatorFacingReason).not.toContain("\n");
+      expect(operatorFacingReason).not.toContain("\x1b");
+    }
     expect(sessionManager.getEntries()).toEqual(entriesBeforeRejectedAppends);
     expect(sessionManager.getLeafId()).toBe(leafBeforeRejectedAppends);
     expect(sessionManager.getAppendParentId()).toBe(appendParentBeforeRejectedAppends);
@@ -856,138 +897,6 @@ describe("SessionManager.open", () => {
         }),
         type: "message",
       }),
-    ]);
-  });
-
-  it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const storePath = path.join(dir, "sessions.json");
-    const sessionId = "sqlite-branch-source";
-    const sessionKey = "agent:main:dashboard:sqlite-branch-source";
-    const marker = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId,
-      storePath,
-    });
-    const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, storePath },
-      {
-        delivery: { kind: "internal" },
-        sessionFile: marker,
-        sessionId,
-        updatedAt: 10,
-      },
-    );
-    const user = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "user-message",
-      message: { role: "user", content: "question before branch" },
-    });
-    const assistant = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "assistant-message",
-      message: buildAssistantMessage("answer before branch"),
-      parentId: user.messageId,
-    });
-
-    const sessionManager = openMarker(marker, sessionKey, dir);
-    const branchedMarker = await sessionManager.createBranchedSession(assistant.messageId);
-    const branchedSessionId = sessionManager.getSessionId();
-
-    expect(branchedMarker).toBe(branchedSessionId);
-    expect(branchedSessionId).not.toBe(sessionId);
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-      delivery: { kind: "internal" },
-      sessionId: branchedSessionId,
-    });
-    await expect(loadTranscriptEvents({ agentId: "main", sessionId, storePath })).resolves.toEqual([
-      expect.objectContaining({ id: sessionId, type: "session" }),
-      expect.objectContaining({ id: user.messageId, type: "message" }),
-      expect.objectContaining({ id: assistant.messageId, type: "message" }),
-    ]);
-    await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        sessionId: branchedSessionId,
-        sessionKey,
-        storePath,
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        id: branchedSessionId,
-        parentSession: sessionId,
-        type: "session",
-      }),
-      expect.objectContaining({ id: user.messageId, type: "message" }),
-      expect.objectContaining({ id: assistant.messageId, type: "message" }),
-    ]);
-  });
-
-  it("rejects a queued branch when lifecycle ownership changes before persistence", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const storePath = path.join(dir, "sessions.json");
-    const sessionId = "sqlite-branch-race-source";
-    const sessionKey = "agent:main:dashboard:sqlite-branch-race-source";
-    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
-    const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntryCore(scope, {
-      lifecycleRevision: "branch-original-revision",
-      sessionFile: marker,
-      sessionId,
-      updatedAt: 10,
-    });
-    const user = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "branch-race-user",
-      message: { role: "user", content: "question before raced branch" },
-    });
-    const assistant = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "branch-race-assistant",
-      message: buildAssistantMessage("answer before raced branch"),
-      parentId: user.messageId,
-    });
-    const sessionManager = openMarker(marker, sessionKey, dir);
-
-    let releaseOwnerChange = () => {};
-    const ownerChangeGate = new Promise<void>((resolve) => {
-      releaseOwnerChange = resolve;
-    });
-    let markOwnerChangeStarted = () => {};
-    const ownerChangeStarted = new Promise<void>((resolve) => {
-      markOwnerChangeStarted = resolve;
-    });
-    const ownerChange = updateSessionEntry(scope, async () => {
-      markOwnerChangeStarted();
-      await ownerChangeGate;
-      return { lifecycleRevision: "branch-replacement-revision" };
-    });
-    await ownerChangeStarted;
-
-    const branch = sessionManager.createBranchedSession(assistant.messageId);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    releaseOwnerChange();
-
-    await ownerChange;
-    await expect(branch).rejects.toMatchObject({
-      cause: {
-        code: "session-rebound",
-        expectedSessionId: sessionId,
-        sessionKey,
-      },
-    });
-    expect(loadSessionEntry(scope)).toMatchObject({
-      lifecycleRevision: "branch-replacement-revision",
-      sessionId,
-    });
-    expect(sessionManager.getSessionId()).toBe(sessionId);
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ id: sessionId, type: "session" }),
-      expect.objectContaining({ id: user.messageId, type: "message" }),
-      expect.objectContaining({ id: assistant.messageId, type: "message" }),
     ]);
   });
 

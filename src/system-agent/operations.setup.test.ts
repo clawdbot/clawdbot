@@ -253,7 +253,7 @@ describe("parseSystemAgentOperation", () => {
         surface: "cli",
         runtime,
       },
-      { commit: expect.any(Function) },
+      { beforePersistentApply: undefined },
     );
     expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5 (verified and kept)");
     const audit = readLastAuditEntry();
@@ -410,7 +410,7 @@ describe("parseSystemAgentOperation", () => {
     expect(mockConfig.currentConfig()).toMatchObject({ gateway: { port: 19000 } });
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ expectedInferenceRoute: expect.any(Object) }),
-      { commit: expect.any(Function) },
+      { beforePersistentApply: undefined },
     );
   });
 
@@ -482,7 +482,7 @@ describe("parseSystemAgentOperation", () => {
         surface: "cli",
         runtime,
       },
-      { commit: expect.any(Function) },
+      { beforePersistentApply: undefined },
     );
   });
 
@@ -930,7 +930,7 @@ describe("parseSystemAgentOperation", () => {
         latencyMs: 5,
       };
     });
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (bindingOwner !== "verified") {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }
@@ -976,7 +976,7 @@ describe("parseSystemAgentOperation", () => {
         latencyMs: 5,
       };
     });
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (bindingOwner !== "verified") {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }

@@ -12,6 +12,7 @@ type DirectMessageCheck = {
   roomId: string;
   senderId?: string;
   selfUserId?: string;
+  joinedMembers?: string[];
 };
 
 type DirectRoomTrackerOptions = {
@@ -202,7 +203,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         return false;
       }
       const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
-      const joinedMembers = await resolveJoinedMembers(roomId);
+      const joinedMembers = params.joinedMembers ?? (await resolveJoinedMembers(roomId));
       const strictDirectMembership = isStrictDirectMembership({
         selfUserId,
         remoteUserId: senderId,

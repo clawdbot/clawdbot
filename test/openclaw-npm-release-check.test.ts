@@ -72,17 +72,17 @@ describe("prepared OpenClaw AI dependency", () => {
 });
 
 describe("workspace template package paths", () => {
-  it("keeps the runtime heartbeat template in the npm pack guard", () => {
-    expect(WORKSPACE_TEMPLATE_PACK_PATHS).toContain("src/agents/templates/HEARTBEAT.md");
+  it("does not require the retired heartbeat file in the npm pack guard", () => {
+    expect(WORKSPACE_TEMPLATE_PACK_PATHS).not.toContain("src/agents/templates/HEARTBEAT.md");
     expect(WORKSPACE_TEMPLATE_PACK_PATHS).not.toContain("docs/reference/templates/HEARTBEAT.md");
   });
 
-  it("keeps runtime heartbeat templates allowlisted in package.json", () => {
+  it("does not package retired runtime heartbeat templates", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf-8")) as {
       files?: unknown;
     };
 
-    expect(packageJson.files).toContain("src/agents/templates/");
+    expect(packageJson.files).not.toContain("src/agents/templates/");
   });
 });
 
@@ -538,6 +538,14 @@ describe("resolveNpmReleaseCheckCommandTimeoutMs", () => {
 });
 
 describe("parseNpmPackJsonOutput", () => {
+  it("preserves filename-only pnpm receipts and npm size metadata", () => {
+    const receipt = { filename: "openclaw.tgz", unpackedSize: 120_354_302 };
+    expect(parseNpmPackJsonOutput(JSON.stringify(receipt))).toEqual([receipt]);
+    expect(parseNpmPackJsonOutput(JSON.stringify({ filename: receipt.filename }))).toEqual([
+      { filename: receipt.filename },
+    ]);
+  });
+
   it("parses a plain npm pack JSON array", () => {
     expect(parseNpmPackJsonOutput('[{"filename":"openclaw.tgz","files":[]}]')).toEqual([
       { filename: "openclaw.tgz", files: [] },
@@ -587,6 +595,16 @@ describe("parseNpmPackJsonOutput", () => {
 
   it("returns null when no JSON payload is present", () => {
     expect(parseNpmPackJsonOutput("> openclaw@2026.3.23 prepack")).toBeNull();
+  });
+
+  it.each([{}, { path: 42 }])("rejects incomplete packed file inventories: %j", (file) => {
+    expect(
+      parseNpmPackJsonOutput(
+        JSON.stringify([
+          { filename: "openclaw.tgz", files: [{ path: "dist/control-ui/index.html" }, file] },
+        ]),
+      ),
+    ).toBeNull();
   });
 });
 
@@ -639,6 +657,8 @@ describe("collectForbiddenPackedPathErrors", () => {
   it("rejects private qa artifacts in npm pack output", () => {
     expect(
       collectForbiddenPackedPathErrors([
+        "dist-runtime/extensions/example/runtime.js",
+        "dist/OpenClaw.app/Contents/MacOS/OpenClaw",
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-channel/package.json",
         "dist/extensions/qa-lab/runtime-api.js",
@@ -647,11 +667,15 @@ describe("collectForbiddenPackedPathErrors", () => {
         "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
         "dist/plugin-sdk/qa-channel.js",
         "dist/plugin-sdk/qa-channel-protocol.d.ts",
+        "dist/plugin-sdk/qa-lab.js",
+        "dist/plugin-sdk/qa-runtime.d.ts",
         "dist/qa-runtime-B9LDtssJ.js",
         "docs/channels/qa-channel.md",
         "qa/scenarios/index.yaml",
       ]),
     ).toEqual([
+      'npm package must not include local application build output "dist/OpenClaw.app/Contents/MacOS/OpenClaw".',
+      'npm package must not include local runtime build output "dist-runtime/extensions/example/runtime.js".',
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
       'npm package must not include private QA channel docs "docs/channels/qa-channel.md".',
@@ -660,8 +684,10 @@ describe("collectForbiddenPackedPathErrors", () => {
       'npm package must not include private QA channel type artifact "dist/plugin-sdk/extensions/qa-channel/api.d.ts".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
+      'npm package must not include private QA lab SDK artifact "dist/plugin-sdk/qa-lab.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
       'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
+      'npm package must not include private QA runtime SDK artifact "dist/plugin-sdk/qa-runtime.d.ts".',
       'npm package must not include private QA suite artifact "qa/scenarios/index.yaml".',
     ]);
   });

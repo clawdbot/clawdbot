@@ -32,7 +32,7 @@ Target-kind and service prefixes such as `channel:<id>`, `user:<id>`, `room:<id>
 
 Direct messages collapse to the agent's **main** session by default:
 
-- `agent:<agentId>:<mainKey>` (default: `agent:main:main`)
+- `agent:<agentId>:main` (for example: `agent:main:main`)
 
 `session.dmScope` controls DM collapsing: `main` (default) shares one main
 session, while `per-peer`, `per-channel-peer`, and `per-account-channel-peer`
@@ -151,25 +151,34 @@ Example:
 
 ## Session storage
 
-Runtime session rows live in each agent's SQLite database under the state
-directory (default `~/.openclaw`):
+Runtime session rows and transcripts live in each agent's SQLite database under
+the state directory (default `~/.openclaw`):
 
 - `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 
 Older installs may have legacy transcript JSONL files and a `sessions.json` row
-store under `~/.openclaw/agents/<agentId>/sessions/`. Gateway startup and
-`openclaw doctor --fix` import hot legacy rows/history into SQLite
-automatically. Use `openclaw doctor --session-sqlite inspect
+store under `~/.openclaw/agents/<agentId>/sessions/`. To import that history into
+SQLite, stop the Gateway, back up its state, and run `openclaw doctor --fix`
+before restarting it. Gateway startup does not import legacy session files: if
+it finds a legacy store, it refuses readiness and prints the Doctor command for
+the active profile. Use `openclaw doctor --session-sqlite inspect
 --session-sqlite-all-agents` and the
-[Doctor](/cli/doctor#session-sqlite-migration) validation sequence when you need
-explicit migration evidence.
-You can still select a legacy store path via `session.store` and `{agentId}`
-templating for migration and offline-maintenance workflows.
+[Doctor](/cli/doctor#session-sqlite-migration) migration sequence for inspection
+and validation.
 
-Gateway and ACP session discovery also scans disk-backed agent stores under the
-default `agents/` root and under templated `session.store` roots. Discovered
-stores must stay inside that resolved agent root and use a regular legacy
-`sessions.json` file. Symlinks and out-of-root paths are ignored.
+`session.store` supports `{agentId}` templating. At runtime, a legacy store path
+selects its corresponding SQLite database; the JSON file itself is only a
+migration input or an explicit offline-maintenance target.
+
+Gateway session discovery can include on-disk stores under the default `agents/`
+root and templated `session.store` roots that use the
+`agents/<agentId>/sessions/sessions.json` layout. It recognizes the corresponding
+`agent/openclaw-agent.sqlite` database without requiring a legacy `sessions.json`
+file. Discovered store files must be regular files within the resolved agent
+root; symlinked store files and out-of-root paths are ignored.
+
+ACP session discovery reads SQLite ACP metadata and joins it to the corresponding
+session entries.
 
 ## WebChat behavior
 

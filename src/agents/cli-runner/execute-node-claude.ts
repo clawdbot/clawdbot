@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
+import { prepareNodeClaudeSkillRuntime } from "../../gateway/node-claude-skill-runtime.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../../infra/exec-approvals.js";
 import type { RunExit } from "../../process/supervisor/types.js";
@@ -7,28 +8,11 @@ import type {
   registerExecApprovalRequestForHostOrThrow,
   resolveRegisteredExecApprovalDecision,
 } from "../bash-tools.exec-approval-request.js";
-import type { PreparedCliRunContext } from "./types.js";
+import { createCliRunCurrentAssertion } from "./execution-target.js";
+import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const NODE_CLI_MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const NODE_CLI_MAX_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
-
-type NodeClaudePlacement = { nodeId: string; cwd?: string };
-
-export function resolveNodeClaudeTarget(
-  context: PreparedCliRunContext,
-): NodeClaudePlacement | null {
-  const entry = context.params.sessionEntry;
-  const nodeId = entry?.execNode?.trim();
-  // For claude-cli, the session placement tuple owns both agent turns and
-  // their exec tools so the CLI, auth, transcript, and commands stay together.
-  if (context.backendResolved.id !== "claude-cli" || entry?.execHost !== "node") {
-    return null;
-  }
-  if (!nodeId) {
-    throw new Error("node-placed Claude CLI session is missing execNode");
-  }
-  return { nodeId, ...(entry.execCwd?.trim() ? { cwd: entry.execCwd.trim() } : {}) };
-}
 
 const NODE_CLI_OMIT_BARE_ARGS = new Set([
   "--strict-mcp-config",
@@ -192,6 +176,7 @@ export async function executeNodeClaudeRun(params: {
   const hardDeadlineAt = startedAt + hardTimeoutMs;
   const nodeAbortController = new AbortController();
   const nodeRunAbortSignal = nodeAbortController.signal;
+  const assertCurrent = createCliRunCurrentAssertion(contextParams, nodeRunAbortSignal);
   let hardDeadlineReached = false;
   const hardDeadlineTimer = setTimeout(() => {
     hardDeadlineReached = true;
@@ -214,7 +199,10 @@ export async function executeNodeClaudeRun(params: {
     contextParams.replyOperation?.attachBackend(replyBackendHandle);
   }
   let nodeResult: Awaited<ReturnType<typeof invokeNodeClaudeCliRun>>;
+  let skillRuntime: Awaited<ReturnType<typeof prepareNodeClaudeSkillRuntime>>;
   try {
+    assertCurrent();
+    skillRuntime = await prepareNodeClaudeSkillRuntime(params.context, nodeRunAbortSignal);
     const invokeNode = async (approval?: {
       decision: "allow-once" | "allow-always";
       plan: SystemRunApprovalPlan;
@@ -231,7 +219,9 @@ export async function executeNodeClaudeRun(params: {
           },
         };
       }
+      assertCurrent();
       return await params.deps.invokeNodeClaudeCliRun({
+        assertCurrent,
         nodeId: params.nodePlacement.nodeId,
         argv: params.executionArgs,
         stdin: params.stdinPayload,
@@ -253,12 +243,14 @@ export async function executeNodeClaudeRun(params: {
           Math.min(params.noOutputTimeoutMs, NODE_CLI_MAX_IDLE_TIMEOUT_MS),
         ),
         onProgress: params.consumeStdout,
-        signal: nodeAbortController.signal,
+        signal: skillRuntime?.signal ?? nodeAbortController.signal,
+        ...(skillRuntime ? { skillRuntime } : {}),
       });
     };
     nodeResult = await invokeNode();
     const approval = parseNodeClaudeApprovalRequired(nodeResult);
     if (approval) {
+      skillRuntime?.assertCurrent();
       const approvalId = crypto.randomUUID();
       const registration = await waitForNodeOperation({
         operation: params.deps.registerExecApprovalRequestForHostOrThrow({
@@ -278,14 +270,14 @@ export async function executeNodeClaudeRun(params: {
             ? { approvalReviewerDeviceIds: [contextParams.approvalReviewerDeviceId] }
             : {}),
         }),
-        signal: nodeAbortController.signal,
+        signal: skillRuntime?.signal ?? nodeAbortController.signal,
       });
       const decision = await waitForNodeOperation({
         operation: params.deps.resolveRegisteredExecApprovalDecision({
           approvalId: registration.id,
           preResolvedDecision: registration.finalDecision,
         }),
-        signal: nodeAbortController.signal,
+        signal: skillRuntime?.signal ?? nodeAbortController.signal,
       });
       if (decision === "allow-once" || decision === "allow-always") {
         nodeResult = await invokeNode({ decision, plan: approval.systemRunPlan });
@@ -311,6 +303,10 @@ export async function executeNodeClaudeRun(params: {
       },
     };
   } finally {
+    if (skillRuntime?.signal.aborted) {
+      nodeAbortController.abort();
+    }
+    skillRuntime?.close();
     clearTimeout(hardDeadlineTimer);
     if (replyBackendHandle) {
       contextParams.replyOperation?.detachBackend(replyBackendHandle);

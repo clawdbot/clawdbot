@@ -82,10 +82,7 @@ function decodeMeetingTelephonyTtsAudio(
     case "alaw":
       return alawToPcm(audio);
   }
-  return unsupportedMeetingTelephonyTtsFormat(sourceFormat);
-}
-
-function unsupportedMeetingTelephonyTtsFormat(_format: never): never {
+  sourceFormat satisfies never;
   throw new Error("Unsupported telephony TTS output format for meeting platform");
 }
 

@@ -26,7 +26,11 @@ import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
-import type { StatusGatewayDiagnosticsResult } from "../status-runtime-shared.ts";
+import { formatDeliveryQueueHealthLine } from "../health-format.js";
+import type {
+  resolveStatusGatewayHealthSafe,
+  StatusGatewayDiagnosticsResult,
+} from "../status-runtime-shared.ts";
 import {
   formatUpdateRestartActionLines,
   formatUpdateRestartStatusValue,
@@ -164,7 +168,7 @@ export async function appendStatusAllDiagnosis(params: {
   exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
   agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
-  health: unknown;
+  health: Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>> | null | undefined;
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
   const { lines, muted, ok, warn, fail } = params;
@@ -236,9 +240,7 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push(
       `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`)}`,
     );
-    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload, {
-      formatTimeAgo,
-    });
+    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload);
     if (updateRestartValue) {
       lines.push(`  ${muted(`Update restart: ${updateRestartValue}`)}`);
     }
@@ -298,7 +300,7 @@ export async function appendStatusAllDiagnosis(params: {
       params.tailscaleMode === "off"
         ? `Tailscale exposure: off · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
         : `Tailscale exposure: ${params.tailscaleMode} · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
-    emitCheck(label, okBackend && (params.tailscaleMode === "off" || hasDns) ? "ok" : "warn");
+    emitCheck(label, params.tailscaleMode === "off" || (okBackend && hasDns) ? "ok" : "warn");
     if (params.tailscale.error) {
       lines.push(`  ${muted(`error: ${params.tailscale.error}`)}`);
     }
@@ -501,31 +503,19 @@ export async function appendStatusAllDiagnosis(params: {
     );
   }
 
-  const healthErr = (() => {
-    if (!params.health || typeof params.health !== "object") {
-      return "";
+  if (params.health) {
+    if ("error" in params.health) {
+      if (params.health.error) {
+        lines.push("");
+        lines.push(muted("Gateway health:"));
+        lines.push(`  ${muted(redactStatusSecrets(params.health.error))}`);
+      }
+    } else {
+      const deliveryQueueLine = formatDeliveryQueueHealthLine(params.health);
+      if (deliveryQueueLine) {
+        emitCheck(redactStatusSecrets(deliveryQueueLine), "warn");
+      }
     }
-    const record = params.health as Record<string, unknown>;
-    if (!("error" in record)) {
-      return "";
-    }
-    const value = record.error;
-    if (!value) {
-      return "";
-    }
-    if (typeof value === "string") {
-      return value;
-    }
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return "[unserializable error]";
-    }
-  })();
-  if (healthErr) {
-    lines.push("");
-    lines.push(muted("Gateway health:"));
-    lines.push(`  ${muted(redactStatusSecrets(healthErr))}`);
   }
 
   lines.push("");

@@ -13,25 +13,29 @@ import {
   validateWorkerDesktopObserveParams,
   validateWorkerDesktopLaunchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
-import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
+import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { isDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
 import { getNodeDesktopService } from "../desktop/node-source-context.js";
+import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import {
-  collectNodeRunnerIssuesByNodeId,
-  collectNodeWorkerBundleStatusByNodeId,
-  collectNodeWorkerCapacityByNodeId,
-  isNodeRunnerSessionHost,
-} from "../node-registry-private.js";
+  isNodeCommandAllowed,
+  resolveNodeCommandAllowlist,
+  resolveRequiredNodeCommandAuthority,
+} from "../node-command-policy.js";
+import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
+import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
+import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
 import { formatForLog } from "../ws-log.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const GATEWAY_ENVIRONMENT: EnvironmentSummary = {
   id: "gateway",
@@ -59,33 +63,45 @@ const WORKER_STATUS: Record<WorkerEnvironmentState, EnvironmentSummary["status"]
 function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
-function rejectInvalid(
-  respond: RespondFn,
-  method: string,
-  validator: Parameters<typeof respondInvalidParams>[0]["validator"],
-) {
-  return respondInvalidParams({ respond, method, validator });
-}
 function summarizeNodeEnvironment(
   node: NodeListNode,
   config: Parameters<typeof resolveNodeCommandAllowlist>[0],
+  requiredCommands: readonly string[],
+  liveNode: NodeSession | undefined,
 ): EnvironmentSummary {
   // Expose both declared capabilities and command names so older node
   // runtimes still advertise useful execution surfaces in one stable list.
   const capabilities = uniqueSortedStrings(node.caps, node.commands);
   const platform = node.platform?.trim();
-  const desktop =
-    node.connected === true &&
-    isNodeCommandAllowed({
-      command: NODE_DESKTOP_STREAM_COMMAND,
-      declaredCommands: node.commands,
-      allowlist: resolveNodeCommandAllowlist(config, {
-        platform: node.platform,
-        deviceFamily: node.deviceFamily,
-        commands: node.commands,
-        approvedCommands: node.commands,
-      }),
-    }).ok;
+  const allowlist =
+    node.connected === true
+      ? resolveNodeCommandAllowlist(config, {
+          platform: node.platform,
+          deviceFamily: node.deviceFamily,
+          commands: node.commands,
+          approvedCommands: node.commands,
+        })
+      : undefined;
+  const invocableCommands = allowlist
+    ? uniqueSortedStrings(node.commands)
+        .filter(
+          (command) =>
+            command.length <= 128 &&
+            isNodeCommandAllowed({ command, declaredCommands: node.commands, allowlist }).ok,
+        )
+        .slice(0, 128)
+    : [];
+  const desktop = invocableCommands.includes(NODE_DESKTOP_STREAM_COMMAND);
+  const requiredNodeCommand =
+    allowlist && liveNode
+      ? resolveRequiredNodeCommandAuthority({
+          requiredCommands,
+          declaredCommands: liveNode.declaredCommands,
+          effectiveCommands: liveNode.commands,
+          withheldCommands: readNodeSessionWithheldCommands(liveNode),
+          allowlist,
+        })
+      : undefined;
   return {
     id: `node:${node.nodeId}`,
     type: "node",
@@ -104,6 +120,8 @@ function summarizeNodeEnvironment(
     trust: "persistent",
     ...(desktop ? { desktop: true } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
+    ...(invocableCommands.length > 0 ? { invocableCommands } : {}),
+    ...(requiredNodeCommand ? { requiredNodeCommand } : {}),
     ...(node.issues?.length ? { issues: [...node.issues] } : {}),
   };
 }
@@ -138,15 +156,19 @@ export function summarizeWorkerEnvironment(
     },
   };
 }
-async function listEnvironments(context: GatewayRequestContext): Promise<EnvironmentSummary[]> {
+export async function listGatewayEnvironments(
+  context: GatewayRequestContext,
+  workers = listWorkerEnvironments(context),
+  runtimeId?: string,
+): Promise<EnvironmentSummary[]> {
   const [devices, nodes] = await Promise.all([listDevicePairing(), listNodePairing()]);
+  // Orphaned or failed rows that retain a node binding still own its pairing role.
+  // Only destroyed proves enrollment retirement; teardown-failed rows clear nodeDeviceId.
   const managedCloudNodeIds = new Set(
-    listWorkerEnvironments(context).flatMap((environment) =>
+    workers.flatMap((environment) =>
       environment.providerId !== "device" &&
       environment.nodeDeviceId &&
-      environment.state !== "destroyed" &&
-      environment.state !== "failed" &&
-      environment.state !== "orphaned"
+      environment.state !== "destroyed"
         ? [environment.nodeDeviceId]
         : [],
     ),
@@ -154,46 +176,19 @@ async function listEnvironments(context: GatewayRequestContext): Promise<Environ
   const visibleDevices = devices.paired.filter(
     (device) => !managedCloudNodeIds.has(device.deviceId),
   );
-  const currentPairingStates = new Map<string, { identity: string; generation?: string }>();
-  for (const device of visibleDevices) {
-    const state = resolveNodePairingState(device);
-    if (state) {
-      currentPairingStates.set(state.identity.nodeId, {
-        identity: state.identity.key,
-        ...(state.generation ? { generation: state.generation.key } : {}),
-      });
-    }
-  }
-  const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(currentPairingStates);
-  const sessionHostNodeIds = new Set(
-    connectedNodes.flatMap((node) =>
-      isNodeRunnerSessionHost({
-        registry: context.nodeRegistry,
-        nodeId: node.nodeId,
-        connId: node.connId,
-        pairingGeneration: node.pairingGeneration,
-      })
-        ? [node.nodeId]
-        : [],
-    ),
+  const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(
+    projectPairedDeviceNodeBindings(visibleDevices),
   );
-  const issuesByNodeId = collectNodeRunnerIssuesByNodeId(context.nodeRegistry, connectedNodes);
-  const workerSlotsByNodeId = collectNodeWorkerCapacityByNodeId(
-    context.nodeRegistry,
-    connectedNodes,
-  );
-  const workerBundleByNodeId = collectNodeWorkerBundleStatusByNodeId(
-    context.nodeRegistry,
-    connectedNodes,
-  );
+  const runtimeState = collectNodeCatalogRuntimeState(context.nodeRegistry, connectedNodes);
+  const connectedNodesById = new Map(connectedNodes.map((node) => [node.nodeId, node]));
+  const requiredCommands = runtimeId
+    ? (resolveWorkerPlacementCapabilities(runtimeId).devicePlacement?.requiredNodeCommands ?? [])
+    : [];
   const catalog = createKnownNodeCatalog({
     pairedDevices: visibleDevices,
     pairedNodes: nodes.paired.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
     connectedNodes: connectedNodes.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
-    sessionHostNodeIds,
-    workerSlotsByNodeId,
-    workerBundleByNodeId,
-    issuesByNodeId,
+    ...runtimeState,
   });
   const config = context.getRuntimeConfig();
   const gateway =
@@ -202,15 +197,16 @@ async function listEnvironments(context: GatewayRequestContext): Promise<Environ
       : GATEWAY_ENVIRONMENT;
   return [
     gateway,
-    ...listKnownNodes(catalog).map((node) => summarizeNodeEnvironment(node, config)),
+    ...listKnownNodes(catalog).map((node) =>
+      summarizeNodeEnvironment(node, config, requiredCommands, connectedNodesById.get(node.nodeId)),
+    ),
   ];
 }
 function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironmentServiceRecord[] {
   try {
     return context.workerEnvironmentService?.list() ?? [];
   } catch {
-    // A damaged worker store must not regress the pre-existing gateway/node inventory.
-    return [];
+    throw new Error("environment inventory unavailable");
   }
 }
 export function listWorkerProfiles(context: GatewayRequestContext) {
@@ -229,11 +225,15 @@ async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
   const summaries = listWorkerProfiles(context);
   return await Promise.all(
     summaries.map(async (summary) => {
-      const executionMode = (["worker-turn", "remote-exec"] as const).find(
+      const executionModes = (["worker-turn", "remote-exec"] as const).filter(
         (mode) =>
-          context.workerEnvironmentService?.supportsExecutionMode?.(summary.id, mode) === true,
+          context.workerEnvironmentService?.supportsExecutionMode(summary.id, mode) === true,
       );
-      const resolvedSummary = Object.assign(summary, executionMode ? { executionMode } : {});
+      const executionMode = executionModes[0];
+      const resolvedSummary = Object.assign(
+        summary,
+        executionMode ? { executionMode, executionModes } : {},
+      );
       try {
         const options = await context.workerEnvironmentService?.listMachineOptions?.(summary.id);
         const machines = options ?? [];
@@ -454,13 +454,25 @@ async function respondDesktopLaunch(params: {
 }
 
 export const environmentsHandlers: GatewayRequestHandlers = {
-  "environments.list": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsListParams(params)) {
-      return rejectInvalid(respond, "environments.list", validateEnvironmentsListParams);
+  "environments.list": async ({ params, respond, client, context }) => {
+    if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
+      return;
+    }
+    if (params.runtimeId) {
+      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      const access = authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes);
+      if (!access.allowed) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.FORBIDDEN, `missing scope: ${access.missingScope}`),
+        );
+        return;
+      }
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const environments = await listEnvironments(context);
       const workers = listWorkerEnvironments(context);
+      const environments = await listGatewayEnvironments(context, workers, params.runtimeId);
       const summarizedAtMs = Date.now();
       environments.push(
         ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),
@@ -470,11 +482,13 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "environments.status": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsStatusParams(params)) {
-      return rejectInvalid(respond, "environments.status", validateEnvironmentsStatusParams);
+    if (
+      !assertValidParams(params, validateEnvironmentsStatusParams, "environments.status", respond)
+    ) {
+      return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const environment = (await listEnvironments(context)).find(
+      const environment = (await listGatewayEnvironments(context)).find(
         (entry) => entry.id === params.environmentId,
       );
       if (environment) {
@@ -500,8 +514,10 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "environments.create": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsCreateParams(params)) {
-      return rejectInvalid(respond, "environments.create", validateEnvironmentsCreateParams);
+    if (
+      !assertValidParams(params, validateEnvironmentsCreateParams, "environments.create", respond)
+    ) {
+      return;
     }
     const service = context.workerEnvironmentService;
     if (!service) {
@@ -520,8 +536,10 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     );
   },
   "environments.destroy": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsDestroyParams(params)) {
-      return rejectInvalid(respond, "environments.destroy", validateEnvironmentsDestroyParams);
+    if (
+      !assertValidParams(params, validateEnvironmentsDestroyParams, "environments.destroy", respond)
+    ) {
+      return;
     }
     const service = context.workerEnvironmentService;
     if (!service) {
@@ -560,8 +578,15 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     );
   },
   "worker.desktop.observe": async ({ params, respond, context }) => {
-    if (!validateWorkerDesktopObserveParams(params)) {
-      return rejectInvalid(respond, "worker.desktop.observe", validateWorkerDesktopObserveParams);
+    if (
+      !assertValidParams(
+        params,
+        validateWorkerDesktopObserveParams,
+        "worker.desktop.observe",
+        respond,
+      )
+    ) {
+      return;
     }
     await respondDesktopObserve({
       request: {
@@ -573,8 +598,15 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "worker.desktop.launch": async ({ params, respond, context }) => {
-    if (!validateWorkerDesktopLaunchParams(params)) {
-      return rejectInvalid(respond, "worker.desktop.launch", validateWorkerDesktopLaunchParams);
+    if (
+      !assertValidParams(
+        params,
+        validateWorkerDesktopLaunchParams,
+        "worker.desktop.launch",
+        respond,
+      )
+    ) {
+      return;
     }
     await respondDesktopLaunch({
       environmentId: params.environmentId,
@@ -584,14 +616,14 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "desktop.observe": async ({ params, respond, context }) => {
-    if (!validateDesktopObserveParams(params)) {
-      return rejectInvalid(respond, "desktop.observe", validateDesktopObserveParams);
+    if (!assertValidParams(params, validateDesktopObserveParams, "desktop.observe", respond)) {
+      return;
     }
     await respondDesktopObserve({ request: params, respond, context });
   },
   "desktop.launch": async ({ params, respond, context }) => {
-    if (!validateDesktopLaunchParams(params)) {
-      return rejectInvalid(respond, "desktop.launch", validateDesktopLaunchParams);
+    if (!assertValidParams(params, validateDesktopLaunchParams, "desktop.launch", respond)) {
+      return;
     }
     await respondDesktopLaunch({
       environmentId: params.source.environmentId,

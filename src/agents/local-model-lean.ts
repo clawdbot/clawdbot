@@ -23,12 +23,6 @@ const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set([
   "tts",
   "video_generate",
 ]);
-const LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS = {
-  enabled: true,
-  mode: "tools",
-  searchDefaultLimit: 5,
-  maxSearchLimit: 10,
-} as const;
 
 function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>) {
   if (!names) {
@@ -111,24 +105,4 @@ export function filterLocalModelLeanTools(params: {
       !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(normalizedName)
     );
   });
-}
-
-export function applyLocalModelLeanToolSearchDefaults(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-}): OpenClawConfig | undefined {
-  if (!params.config || !isLocalModelLeanEnabled(params)) {
-    return params.config;
-  }
-  if (params.config.tools?.toolSearch !== undefined) {
-    return params.config;
-  }
-  return {
-    ...params.config,
-    tools: {
-      ...params.config.tools,
-      toolSearch: LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS,
-    },
-  };
 }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { extractServerUiPrefs } from "./server-prefs-state.ts";
 import { configWithPrefs, createServerPrefsWriter } from "./server-prefs.test-support.ts";
 import {
   applyServerUiPrefs,
@@ -40,6 +41,7 @@ describe("server pref extraction", () => {
         configWithPrefs({
           theme: "knot",
           themeMode: "dark",
+          accent: "#AbC123",
           locale: "de",
           chatShowThinking: false,
           chatSendShortcut: "modifier-enter",
@@ -55,11 +57,31 @@ describe("server pref extraction", () => {
     expect(onApplied).toHaveBeenCalledWith({
       theme: "knot",
       themeMode: "dark",
+      accent: "#abc123",
       locale: "de",
       chatShowThinking: false,
       chatSendShortcut: "modifier-enter",
       sidebarEntries: ["route:usage", "session:agent:main:test"],
     });
+  });
+
+  it.each([
+    ["#AbC123", "#abc123"],
+    ["#000000", "#000000"],
+    ["#abc", undefined],
+    ["abc123", undefined],
+    ["#abc123ff", undefined],
+    ["#gg0000", undefined],
+  ])("validates and normalizes server and locally mirrored accents %s", (value, expected) => {
+    expect(extractServerUiPrefs(configWithPrefs({ accent: value }))).toEqual(
+      expected ? { accent: expected } : {},
+    );
+    const { gatewayUrl } = loadSettings();
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gatewayUrl}`,
+      JSON.stringify({ gatewayUrl, accent: value }),
+    );
+    expect(loadSettings().accent).toBe(expected);
   });
 
   it("ignores invalid values and configs without prefs", () => {
@@ -310,18 +332,24 @@ describe("changedServerUiPrefs", () => {
     const previous = loadSettings();
     const withOverrides = {
       ...previous,
+      accent: "#48d6c2",
       chatPersistCommentary: false,
       chatFollowUpMode: "queue" as const,
     };
     expect(changedServerUiPrefs(previous, withOverrides)).toEqual({
+      accent: "#48d6c2",
       chatPersistCommentary: false,
       chatFollowUpMode: "queue",
     });
 
-    // Clearing the follow-up override must propagate as an explicit removal.
+    // Clearing user overrides must propagate as explicit merge-patch removals.
     expect(
-      changedServerUiPrefs(withOverrides, { ...withOverrides, chatFollowUpMode: undefined }),
-    ).toEqual({ chatFollowUpMode: null });
+      changedServerUiPrefs(withOverrides, {
+        ...withOverrides,
+        accent: undefined,
+        chatFollowUpMode: undefined,
+      }),
+    ).toEqual({ accent: null, chatFollowUpMode: null });
   });
 
   it("pushes an explicit locale removal when returning to System", () => {
@@ -398,6 +426,7 @@ describe("clearable pref removal from the server", () => {
       configWithPrefs({
         theme: "knot",
         themeMode: "dark",
+        accent: "#48d6c2",
         chatSendShortcut: "modifier-enter",
       }),
       { onApplied },
@@ -409,10 +438,12 @@ describe("clearable pref removal from the server", () => {
       theme: "claw",
       themeMode: "system",
     });
+    expect(reset.accent).toBeUndefined();
     expect(reset.chatSendShortcut).toBe("enter");
     const persisted = JSON.parse(
       localStorage.getItem(`openclaw.control.settings.v1:${reset.gatewayUrl}`) ?? "{}",
     ) as Record<string, unknown>;
+    expect(Object.hasOwn(persisted, "accent")).toBe(false);
     expect(Object.hasOwn(persisted, "chatSendShortcut")).toBe(false);
   });
 });
@@ -507,6 +538,7 @@ describe("pushServerUiPrefs", () => {
 
   it("retains rejected appearance edits as device-local state with local-only reset", async () => {
     const scope = "ws://gw";
+    patchSettings({ gatewayUrl: scope });
     const config = configWithPrefs({
       theme: "claw",
       locale: "de",

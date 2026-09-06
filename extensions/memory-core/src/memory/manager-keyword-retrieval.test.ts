@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -28,7 +29,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0.35,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -59,7 +59,6 @@ describe("memory index", () => {
   it.each([
     {
       name: "slug path stem",
-      config: { hybrid: { enabled: true } },
       exactFile: "project-lantern.md",
       bodyText: "Project lantern project lantern project lantern.",
       query: "project-lantern",
@@ -67,7 +66,6 @@ describe("memory index", () => {
     },
     {
       name: "dated path stem",
-      config: {},
       exactFile: "2020-01-01.md",
       bodyText: "2020 01 01 2020 01 01 2020 01 01",
       query: "2020-01-01",
@@ -78,7 +76,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0.35,
-      ...testCase.config,
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -106,7 +103,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -134,9 +130,7 @@ describe("memory index", () => {
 
   it("bounds the merged six-term fallback candidate set", async () => {
     providerFixture.forceNoProvider = true;
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     const terms = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
     for (const term of terms) {
       for (let index = 0; index < 5; index += 1) {
@@ -156,9 +150,7 @@ describe("memory index", () => {
 
   it("counts exact candidate headroom by distinct path instead of chunk", async () => {
     providerFixture.forceNoProvider = true;
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     for (let index = 0; index < 200; index += 1) {
       const dir = path.join(fixture.paths.memory, index.toString().padStart(3, "0"));
       await fs.mkdir(dir, { recursive: true });
@@ -178,7 +170,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -325,20 +316,14 @@ describe("memory index", () => {
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
     const degraded = manager as unknown as {
-      provider: {
-        id: string;
-        model: string;
-        embedQuery: () => Promise<number[]>;
-        embedBatch: (texts: string[]) => Promise<number[][]>;
-        close: () => Promise<void>;
-      } | null;
+      provider: EmbeddingProvider | null;
       markLocalEmbeddingProviderDegraded: (err: unknown) => void;
     };
     const provider = degraded.provider;
     if (!provider) {
       throw new Error("Expected a test embedding provider");
     }
-    provider.embedQuery = async () => {
+    provider.embed = async () => {
       throw providerFixture.createLocalWorkerExitError();
     };
     degraded.markLocalEmbeddingProviderDegraded = () => {
@@ -355,7 +340,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -398,7 +382,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -470,5 +453,51 @@ describe("memory index", () => {
     } finally {
       fixture.restoreStateDir();
     }
+  });
+
+  it("ranks substring-only recall without reporting perfect confidence", async () => {
+    providerFixture.forceNoProvider = true;
+    const manager = await getPersistentManager(
+      createCfg({
+        provider: "none",
+        ftsTokenizer: "trigram",
+        minScore: 0,
+      }),
+    );
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    await fs.writeFile(path.join(fixture.paths.memory, "a-weak.md"), "记忆 alpha beta gamma");
+    await fs.writeFile(path.join(fixture.paths.memory, "z-strong.md"), "记忆");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("记忆", { maxResults: 2, minScore: 0 });
+
+    expect(results.map((entry) => entry.path)).toEqual(["memory/z-strong.md", "memory/a-weak.md"]);
+    expect(results.every((entry) => entry.score > 0 && entry.score < 1)).toBe(true);
+    expect(results.every((entry) => !("hasBodyMatch" in entry))).toBe(true);
+  });
+
+  it("keeps substring-only body ranking within an exact hybrid tier", async () => {
+    const manager = await getPersistentManager(
+      createCfg({
+        ftsTokenizer: "trigram",
+        minScore: 0,
+      }),
+    );
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    const weakDir = path.join(fixture.paths.memory, "a");
+    const strongDir = path.join(fixture.paths.memory, "z");
+    await fs.mkdir(weakDir, { recursive: true });
+    await fs.mkdir(strongDir, { recursive: true });
+    await fs.writeFile(path.join(weakDir, "记忆.md"), "记忆 alpha beta gamma");
+    await fs.writeFile(path.join(strongDir, "记忆.md"), "记忆");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("记忆", { maxResults: 2, minScore: 0 });
+
+    expect(results.map((entry) => entry.path)).toEqual(["memory/z/记忆.md", "memory/a/记忆.md"]);
   });
 });

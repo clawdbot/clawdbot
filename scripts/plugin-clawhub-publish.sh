@@ -139,7 +139,7 @@ pack_cmd=(
   "${clawhub_workdir}"
   package
   pack
-  "${package_source}"
+  .
   --pack-destination
   "${pack_dir}"
   --json
@@ -174,6 +174,7 @@ if [[ "${packed_mode}" == "false" ]]; then
 
   pack_json="${pack_dir}/pack.json"
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
+    OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${invocation_root}" \
     node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" -- \
     "${pack_cmd[@]}" > "${pack_json}"
   pack_output="$(cat "${pack_json}")"
@@ -261,16 +262,21 @@ for timeout_candidate in timeout gtimeout; do
     break
   fi
 done
-if [[ -z "${timeout_bin}" ]]; then
-  echo "GNU timeout or gtimeout with --signal and --kill-after support is required for bounded ClawHub CLI calls." >&2
-  exit 1
+if [[ -n "${timeout_bin}" ]]; then
+  clawhub_timeout=(
+    "${timeout_bin}"
+    --signal=TERM
+    --kill-after=10s
+    "${clawhub_timeout_seconds}s"
+  )
+else
+  clawhub_timeout=(
+    node
+    "${repo_root}/scripts/lib/bounded-command.mjs"
+    "$((clawhub_timeout_seconds * 1000))"
+    --
+  )
 fi
-clawhub_timeout=(
-  "${timeout_bin}"
-  --signal=TERM
-  --kill-after=10s
-  "${clawhub_timeout_seconds}s"
-)
 
 validate_packed_publish() {
   local dry_run_json

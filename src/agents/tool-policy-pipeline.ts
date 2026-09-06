@@ -4,10 +4,10 @@
  * expanded only after unknown core/plugin entries are classified.
  */
 import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
-import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
 import { auditToolPolicyFilter } from "./tool-policy-audit.js";
+import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
@@ -159,10 +159,11 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       continue;
     }
 
-    let policy: ToolPolicyLike | undefined = step.policy;
+    const policy = step.policy;
     const frozenAllow = isFrozenClawToolAllowPolicy(policy);
     if (step.stripPluginOnlyAllowlist) {
       // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
+      // Read declarations per layer because callbacks can update the next layer.
       const resolved = analyzeAllowlistByToolType(
         policy,
         pluginGroups,
@@ -204,16 +205,14 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
           }
         }
       }
-      policy = resolved.policy;
     }
 
-    const expanded =
-      frozenAllow && policy
-        ? {
-            allow: policy.allow,
-            deny: expandPolicyWithPluginGroups({ deny: policy.deny }, pluginGroups)?.deny,
-          }
-        : expandPolicyWithPluginGroups(policy, pluginGroups);
+    const expanded = frozenAllow
+      ? {
+          allow: policy.allow,
+          deny: expandPolicyWithPluginGroups({ deny: policy.deny }, pluginGroups)?.deny,
+        }
+      : expandPolicyWithPluginGroups(policy, pluginGroups);
     if (!expanded) {
       continue;
     }

@@ -15,28 +15,21 @@ type PluginUpdateCliOutcome = {
 export function logPluginUpdateOutcomes(params: {
   outcomes: readonly PluginUpdateCliOutcome[];
   log: (message: string) => void;
+  error: (message: string) => void;
 }): { hasErrors: boolean } {
   let hasErrors = false;
   for (const outcome of params.outcomes) {
     if (outcome.status === "error") {
       hasErrors = true;
-      params.log(theme.error(outcome.message));
-      if (outcome.channelFallback) {
-        params.log(theme.warn(outcome.channelFallback.message));
-      }
-      continue;
-    }
-    if (outcome.status === "skipped") {
+      params.error(theme.error(outcome.message));
+    } else if (outcome.status === "skipped") {
       if (isClawHubTrustSkippedOutcome(outcome)) {
         hasErrors = true;
       }
       params.log(theme.warn(outcome.message));
-      if (outcome.channelFallback) {
-        params.log(theme.warn(outcome.channelFallback.message));
-      }
-      continue;
+    } else {
+      params.log(outcome.message);
     }
-    params.log(outcome.message);
     if (outcome.channelFallback) {
       params.log(theme.warn(outcome.channelFallback.message));
     }

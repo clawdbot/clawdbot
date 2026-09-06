@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
-import type { ChatState } from "./chat-history.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 
 type AbortDiagnosticState = ChatState & {
   chatRunStatus?: { phase: string; runId: string | null; sessionKey: string } | null;
@@ -118,6 +118,7 @@ describe("aborted chat diagnostics", () => {
     expect(state.chatRunError).toBe(displayedDiagnostic);
     expect(state.chatRunError).toEqual({
       summary: "Error: edit tool validation failed: edits: must be an array",
+      runId: "run-validation-abort",
     });
     expect(state.chatRunId).toBeNull();
   });

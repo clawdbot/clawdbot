@@ -129,8 +129,8 @@ describe("safe gateway restart coordinator", () => {
   });
 
   it("counts an admitted spawn handoff while excluding the preflight request", async () => {
-    const handoff = tryBeginGatewayRootWorkAdmission();
-    const request = tryBeginGatewayRootWorkAdmission();
+    const handoff = tryBeginGatewayRootWorkAdmission("subagents:spawn-handoff");
+    const request = tryBeginGatewayRootWorkAdmission("ws:gateway.restart");
     expect(handoff).not.toBeNull();
     expect(request).not.toBeNull();
 
@@ -151,7 +151,7 @@ describe("safe gateway restart coordinator", () => {
           {
             kind: "root-request",
             count: 1,
-            message: "1 active gateway request(s)",
+            message: "1 active gateway request(s): subagents:spawn-handoff",
           },
         ]);
       });

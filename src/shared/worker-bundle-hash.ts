@@ -1,8 +1,18 @@
 import { createHash } from "node:crypto";
 
 export const WORKER_BUNDLE_MANIFEST_VERSION = "openclaw-worker-bundle-v1";
+export const WORKER_BUNDLE_ARTIFACT_MODE = 0o700;
 export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";
+export const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";
 export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";
+
+/** Immutable source archive within the running node's owning package, outside its dist inventory. */
+export function workerBundleArchiveRelativePath(sha256: string): string {
+  if (!/^[a-f0-9]{64}$/u.test(sha256)) {
+    throw new Error("Invalid worker bundle archive SHA-256");
+  }
+  return `worker-artifacts/${sha256}.tgz`;
+}
 
 export function compareWorkerBundlePaths(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;

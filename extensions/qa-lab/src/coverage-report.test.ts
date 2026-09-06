@@ -156,9 +156,13 @@ function scenarioWithCoverage(params: {
 }
 
 describe("qa coverage report", () => {
+  let catalogInventory: ReturnType<typeof buildQaCoverageInventory> | undefined;
+  const readCatalogInventory = () =>
+    (catalogInventory ??= buildQaCoverageInventory(readQaScenarioPack().scenarios));
+
   it("groups scenario coverage metadata by theme and surface", () => {
     const scenarios = readQaScenarioPack().scenarios;
-    const inventory = buildQaCoverageInventory(scenarios);
+    const inventory = readCatalogInventory();
 
     expect(inventory.scenarioCount).toBeGreaterThan(0);
     expect(inventory.coverageIdCount).toBeGreaterThan(0);
@@ -312,7 +316,7 @@ describe("qa coverage report", () => {
       { assert: { expr: expect.stringContaining("config.blockedMarker") } },
     ]);
 
-    const inventory = buildQaCoverageInventory(scenarios);
+    const inventory = readCatalogInventory();
     const coverage = expectDefined(
       inventory.coverageIds.find((candidate) => candidate.id === coverageId),
       "session turn ordering coverage inventory",
@@ -368,9 +372,7 @@ describe("qa coverage report", () => {
   });
 
   it("renders a compact markdown inventory", () => {
-    const report = renderQaCoverageMarkdownReport(
-      buildQaCoverageInventory(readQaScenarioPack().scenarios),
-    );
+    const report = renderQaCoverageMarkdownReport(readCatalogInventory());
 
     expect(report).toContain("# QA Coverage Inventory");
     expect(report).toContain("- Missing coverage metadata: 0");
@@ -454,13 +456,16 @@ describe("qa coverage report", () => {
 
   it("finds every cataloged native scenario by its authoritative execution path", () => {
     const scenarios = readQaScenarioPack().scenarios;
+    const matchesByExecutionPath = new Map<string, string[]>();
     for (const scenario of scenarios) {
-      if (scenario.execution.kind !== "flow") {
-        expect(
-          findQaScenarioMatches(scenarios, scenario.execution.path).map(({ id }) => id),
-          scenario.id,
-        ).toContain(scenario.id);
+      if (scenario.execution.kind === "flow") {
+        continue;
       }
+      const matchedIds =
+        matchesByExecutionPath.get(scenario.execution.path) ??
+        findQaScenarioMatches(scenarios, scenario.execution.path).map(({ id }) => id);
+      matchesByExecutionPath.set(scenario.execution.path, matchedIds);
+      expect(matchedIds, scenario.id).toContain(scenario.id);
     }
   });
 
@@ -490,6 +495,28 @@ describe("qa coverage report", () => {
     expect(findQaScenarioMatches([scenario], query).map(({ id }) => id)).toStrictEqual([
       scenario.id,
     ]);
+  });
+
+  it.each([
+    ["buzz", "channel-canary"],
+    ["telegram", "channel-canary"],
+    ["telegram", "channel-workspace-relative-media"],
+    ["matrix", "channel-workspace-relative-media"],
+  ] as const)("finds the %s transport declared by %s", (channel, scenarioId) => {
+    const match = findQaScenarioMatches(readQaScenarioPack().scenarios, channel).find(
+      (candidate) => candidate.id === scenarioId,
+    );
+
+    expect(match).toMatchObject({ id: scenarioId, channel });
+  });
+
+  it.each([
+    ["active-memory-preprompt-recall", "mock-openai"],
+    ["discord-transcripts-voice-authorization", "live-frontier"],
+  ] as const)("reports the canonical provider mode for %s", (scenarioId, providerMode) => {
+    expect(findQaScenarioMatches(readQaScenarioPack().scenarios, scenarioId)).toContainEqual(
+      expect.objectContaining({ id: scenarioId, requiredProviderMode: providerMode }),
+    );
   });
 
   it.each([
@@ -562,6 +589,45 @@ describe("qa coverage report", () => {
     expect(report).toContain(
       "- Suite command: `pnpm openclaw qa suite --channel-driver live --channel matrix --scenario dm-per-room-session`",
     );
+  });
+
+  it.each([
+    [
+      "agent-startup-instruction-first-action",
+      "--provider-mode mock-openai --scenario agent-startup-instruction-first-action",
+    ],
+    [
+      "channel-workspace-relative-media",
+      "--channel-driver live --channel matrix --scenario channel-workspace-relative-media",
+    ],
+    ["channel-canary", "--scenario channel-canary"],
+  ] as const)("renders a runnable suite command for %s", (scenarioId, expectedArgs) => {
+    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, scenarioId);
+    const report = renderQaScenarioMatchesMarkdownReport({ query: scenarioId, matches });
+
+    expect(report).toContain(`- Suite command: \`pnpm openclaw qa suite ${expectedArgs}\``);
+  });
+
+  it("groups commands by compatible provider mode while preserving the live default", () => {
+    const scenarios = readQaScenarioPack().scenarios;
+    const scenarioIds = [
+      "agent-startup-instruction-first-action",
+      "instruction-profile-artifact-followthrough-live",
+      "instruction-followthrough-repo-contract",
+    ];
+    const matches = scenarioIds.flatMap((scenarioId) =>
+      findQaScenarioMatches(scenarios, scenarioId),
+    );
+    const report = renderQaScenarioMatchesMarkdownReport({ query: "provider lanes", matches });
+
+    expect(report).toContain("- Suite commands:");
+    expect(report).toContain(
+      "--provider-mode mock-openai --scenario agent-startup-instruction-first-action",
+    );
+    expect(report).toContain(
+      "--scenario instruction-profile-artifact-followthrough-live --scenario instruction-followthrough-repo-contract",
+    );
+    expect(report).not.toContain("--provider-mode live-frontier");
   });
 
   it("splits flow commands across channel lanes", () => {

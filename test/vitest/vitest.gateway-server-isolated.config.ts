@@ -1,8 +1,12 @@
-// Vitest gateway server isolated config wires module-mocking Gateway tests out of
-// the shared module cache.
+// Vitest gateway isolated config wires module-mocking Gateway tests out of the
+// shared module cache.
 import { defineConfig } from "vitest/config";
 import { gatewayServerIsolatedTestFiles } from "./vitest.gateway-server-paths.mjs";
-import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
+import {
+  intersectIncludePatterns,
+  loadPatternListFromEnv,
+  narrowIncludePatternsForCli,
+} from "./vitest.pattern-file.ts";
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 
 export function createGatewayServerIsolatedVitestConfig(
@@ -10,7 +14,10 @@ export function createGatewayServerIsolatedVitestConfig(
   options: { argv?: string[] } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
-  const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const includeFromEnv = intersectIncludePatterns(
+    gatewayServerIsolatedTestFiles,
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
+  );
   const cliInclude = narrowIncludePatternsForCli(gatewayServerIsolatedTestFiles, options.argv);
 
   return defineConfig({

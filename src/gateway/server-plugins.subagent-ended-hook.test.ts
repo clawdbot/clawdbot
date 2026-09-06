@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 type HandleGatewayRequestOptions = GatewayRequestOptions & {
@@ -24,15 +25,6 @@ const internalAgentTurnFacade = vi.hoisted(() => ({
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
 }));
-vi.mock("./agent-turn/internal-facade.runtime.js", () => ({
-  createInternalAgentTurnFacade: (options: InternalAgentTurnFacadeOptions) => {
-    internalAgentTurnFacade.create(options);
-    return {
-      dispatch: internalAgentTurnFacade.dispatch,
-      wait: internalAgentTurnFacade.wait,
-    };
-  },
-}));
 
 type ServerPluginsModule = typeof import("./server-plugins.js") & {
   clearFallbackGatewayContext: () => void;
@@ -51,7 +43,15 @@ function createTestCfg(): OpenClawConfig {
 function createTestContext(label: string, cfg: OpenClawConfig): GatewayRequestContext {
   return {
     label,
+    trackExecution: trackAsyncWork,
     getRuntimeConfig: () => cfg,
+    createAgentTurnFacade: (options: InternalAgentTurnFacadeOptions) => {
+      internalAgentTurnFacade.create(options);
+      return {
+        dispatch: internalAgentTurnFacade.dispatch,
+        wait: internalAgentTurnFacade.wait,
+      };
+    },
   } as unknown as GatewayRequestContext;
 }
 
@@ -65,8 +65,6 @@ async function loadServerPlugins(): Promise<ServerPluginsModule> {
     setFallbackGatewayContext: (context) => {
       testGatewayContext = context;
     },
-    createGatewaySubagentRuntime: (resolveGatewayContext) =>
-      actual.createGatewaySubagentRuntime(resolveGatewayContext ?? (() => testGatewayContext)),
   } as ServerPluginsModule;
 }
 
@@ -115,7 +113,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
   test("marks plugin SDK subagent runs for Gateway-owned subagent tracking", async () => {
     const serverPlugins = await loadServerPlugins();
     const requesterContext = await loadSubagentRequesterContext();
-    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    const runtime = serverPlugins.createGatewaySubagentRuntime(() => testGatewayContext);
     serverPlugins.setFallbackGatewayContext(
       createTestContext("plugin-sdk-subagent", createTestCfg()),
     );
@@ -147,7 +145,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
   test("attaches only host-owned requester lineage for explicit completion delivery", async () => {
     const serverPlugins = await loadServerPlugins();
     const requesterContext = await loadSubagentRequesterContext();
-    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    const runtime = serverPlugins.createGatewaySubagentRuntime(() => testGatewayContext);
     serverPlugins.setFallbackGatewayContext(
       createTestContext("plugin-sdk-completion", createTestCfg()),
     );
@@ -199,7 +197,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
 
   test("rejects explicit completion delivery outside a requester-bound hook", async () => {
     const serverPlugins = await loadServerPlugins();
-    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    const runtime = serverPlugins.createGatewaySubagentRuntime(() => testGatewayContext);
     serverPlugins.setFallbackGatewayContext(
       createTestContext("plugin-sdk-completion-missing", createTestCfg()),
     );
@@ -218,7 +216,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
 
   test("rejects unsupported runtime completion destinations", async () => {
     const serverPlugins = await loadServerPlugins();
-    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    const runtime = serverPlugins.createGatewaySubagentRuntime(() => testGatewayContext);
     serverPlugins.setFallbackGatewayContext(
       createTestContext("plugin-sdk-completion-invalid", createTestCfg()),
     );
@@ -303,7 +301,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
 
   test("preserves the child session so the transcript stays readable until the plugin deletes it", async () => {
     const serverPlugins = await loadServerPlugins();
-    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    const runtime = serverPlugins.createGatewaySubagentRuntime(() => testGatewayContext);
     serverPlugins.setFallbackGatewayContext(createTestContext("plugin-readback", createTestCfg()));
 
     const transcript = [
@@ -405,7 +403,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
     },
   ])("preserves the agent.wait $name result", async ({ result, expected = result }) => {
     const serverPlugins = await loadServerPlugins();
-    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    const runtime = serverPlugins.createGatewaySubagentRuntime(() => testGatewayContext);
     serverPlugins.setFallbackGatewayContext(createTestContext("plugin-wait", createTestCfg()));
     internalAgentTurnFacade.wait.mockResolvedValue(result);
 

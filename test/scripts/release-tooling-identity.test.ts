@@ -1,10 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import JSZip from "jszip";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  downloadFullReleaseNpmPreflight,
+  resolveFullReleaseNpmPreflight,
+  validateNpmPreflightProducer,
+  validateFullReleaseNpmPreflight,
+  verifyNpmPreflightProducer,
+  verifyReleasePreflightToolingIdentity,
+} from "../../scripts/npm-preflight-tooling-identity.mjs";
 import {
   resolveReleaseToolingIdentity,
   validateReleasePublishParentRun,
   validateReleaseToolingIdentity,
   verifyReleaseToolingIdentity,
 } from "../../scripts/release-tooling-identity.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
@@ -206,6 +221,14 @@ describe("release tooling identity", () => {
           workflowSha: SHA,
         }),
       ).toMatchObject({ route: "main", sha: SHA });
+      expect(runGh).toHaveBeenCalledWith([
+        "api",
+        `repos/openclaw/openclaw/compare/${SHA}...main`,
+        "--method",
+        "GET",
+        "--jq",
+        "{status}",
+      ]);
     },
   );
 
@@ -276,9 +299,9 @@ describe("release tooling identity", () => {
         id: Number(PARENT_RUN_ID),
         run_attempt: Number(PARENT_RUN_ATTEMPT),
         repository: { full_name: "openclaw/openclaw" },
-        path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
+        path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
         event: "workflow_dispatch",
-        head_branch: REF,
+        head_branch: "main",
         head_sha: SHA,
         status: "in_progress",
         conclusion: null,
@@ -288,7 +311,9 @@ describe("release tooling identity", () => {
     expect(
       verifyReleaseToolingIdentity({
         ...protectedIdentity(),
+        releasePublishFullRef: "refs/heads/main",
         releasePublishParentStatePolicy: "active",
+        releasePublishRef: "main",
         releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
         releasePublishRunId: PARENT_RUN_ID,
         runGh,
@@ -306,6 +331,10 @@ describe("release tooling identity", () => {
   it.each([
     ["active", "in_progress", null, true],
     ["active", "completed", "success", false],
+    ["active-or-failure", "in_progress", null, true],
+    ["active-or-failure", "completed", "failure", true],
+    ["active-or-failure", "completed", "success", false],
+    ["active-or-failure", "completed", "cancelled", false],
     ["active-or-success", "in_progress", null, true],
     ["active-or-success", "completed", "success", true],
     ["active-or-success", "completed", "failure", false],
@@ -319,7 +348,9 @@ describe("release tooling identity", () => {
       const validate = () =>
         validateReleasePublishParentRun({
           identity: { ref: REF, fullRef: FULL_REF, sha: SHA },
+          releasePublishFullRef: "refs/heads/main",
           releasePublishParentStatePolicy,
+          releasePublishRef: "main",
           releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
           releasePublishRunId: PARENT_RUN_ID,
           repository: "openclaw/openclaw",
@@ -327,9 +358,9 @@ describe("release tooling identity", () => {
             id: Number(PARENT_RUN_ID),
             run_attempt: Number(PARENT_RUN_ATTEMPT),
             repository: { full_name: "openclaw/openclaw" },
-            path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
+            path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
             event: "workflow_dispatch",
-            head_branch: REF,
+            head_branch: "main",
             head_sha: SHA,
             status,
             conclusion,
@@ -356,6 +387,473 @@ describe("release tooling identity", () => {
             object: { sha: SHA, type: "commit" },
           }),
       }),
-    ).toThrow("run id, attempt, and parent state policy must be provided together");
+    ).toThrow("run id, attempt, ref, full ref, and parent state policy must be provided together");
   });
+
+  it.each([
+    ["wrong parent branch", "release/2026.8.1", "refs/heads/main"],
+    ["wrong parent full ref", "main", "refs/heads/release/2026.8.1"],
+    ["untrusted parent ref", "feature/release", "refs/heads/feature/release"],
+  ])("rejects %s independently of protected child identity", (_label, parentRef, parentFullRef) => {
+    expect(() =>
+      validateReleasePublishParentRun({
+        identity: { ref: REF, fullRef: FULL_REF, sha: SHA },
+        releasePublishFullRef: parentFullRef,
+        releasePublishParentStatePolicy: "active",
+        releasePublishRef: parentRef,
+        releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
+        releasePublishRunId: PARENT_RUN_ID,
+        repository: "openclaw/openclaw",
+        run: {
+          id: Number(PARENT_RUN_ID),
+          run_attempt: Number(PARENT_RUN_ATTEMPT),
+          repository: { full_name: "openclaw/openclaw" },
+          path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
+          event: "workflow_dispatch",
+          head_branch: "main",
+          head_sha: SHA,
+          status: "in_progress",
+          conclusion: null,
+        },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("historical npm preflight tooling", () => {
+  const producer = {
+    repository: "openclaw/openclaw",
+    workflowRef: `openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@${FULL_REF}`,
+    workflowSha: SHA,
+    runId: RUN_ID,
+    runAttempt: "1",
+  };
+  const expectedProducer = {
+    repository: producer.repository,
+    workflowFullRef: FULL_REF,
+    workflowSha: SHA,
+    runId: RUN_ID,
+    runAttempt: "1",
+  };
+
+  it("distinguishes immutable original ref evidence from legacy unknown provenance", () => {
+    expect(
+      validateNpmPreflightProducer({ ...expectedProducer, manifest: { version: 2, producer } }),
+    ).toEqual({ originalWorkflowRef: producer.workflowRef, provenance: "immutable-manifest" });
+    expect(validateNpmPreflightProducer({ ...expectedProducer, manifest: { version: 1 } })).toEqual(
+      { originalWorkflowRef: null, provenance: "legacy-unrecorded" },
+    );
+  });
+
+  it.each([
+    { version: 2 },
+    { version: 1, producer },
+    { version: "2", producer },
+    {
+      version: 2,
+      producer: {
+        ...producer,
+        workflowRef: producer.workflowRef.replace("refs/tags/", "refs/heads/"),
+      },
+    },
+    { version: 2, producer: { ...producer, workflowSha: OTHER_SHA } },
+    { version: 2, producer: { ...producer, runId: PARENT_RUN_ID } },
+    { version: 2, producer: { ...producer, runAttempt: "2" } },
+    { version: 2, producer: { ...producer, repository: "other/repo" } },
+    { version: 2, producer: { ...producer, extra: true } },
+  ])("rejects incomplete or mismatched immutable producer evidence %j", (manifest) => {
+    expect(() => validateNpmPreflightProducer({ ...expectedProducer, manifest })).toThrow();
+  });
+
+  function proof(overrides: Record<string, unknown> = {}) {
+    const responses: Record<string, unknown> = {
+      [`git/ref/tags/${REF}`]: { ref: FULL_REF, object: { sha: SHA, type: "commit" } },
+      [`git/matching-refs/heads/${REF}`]: [],
+      [`compare/${SHA}...main`]: { status: "ahead" },
+      [`compare/${SHA}...${OTHER_SHA}`]: { status: "ahead" },
+      ...overrides,
+    };
+    const runGh = vi.fn((args: string[]) => {
+      const route = args[1]?.replace("repos/openclaw/openclaw/", "");
+      if (!route || !(route in responses)) {
+        throw new Error("unavailable provenance");
+      }
+      return JSON.stringify(responses[route]);
+    });
+    return { ...protectedIdentity(), publisherSha: OTHER_SHA, runGh };
+  }
+
+  it("accepts an unchanged historical producer under a distinct descendant publisher", () => {
+    const options = proof();
+    expect(verifyReleasePreflightToolingIdentity(options)).toMatchObject({
+      ref: REF,
+      sha: SHA,
+      route: "protected-tag",
+    });
+    expect(options.runGh.mock.calls.map(([args]) => args[1])).toEqual([
+      `repos/openclaw/openclaw/git/ref/tags/${REF}`,
+      `repos/openclaw/openclaw/git/matching-refs/heads/${REF}`,
+      `repos/openclaw/openclaw/compare/${SHA}...main`,
+      `repos/openclaw/openclaw/compare/${SHA}...${OTHER_SHA}`,
+    ]);
+  });
+
+  it.each([
+    ["missing tag", `git/ref/tags/${REF}`, null],
+    [
+      "moved tag",
+      `git/ref/tags/${REF}`,
+      { ref: FULL_REF, object: { sha: OTHER_SHA, type: "commit" } },
+    ],
+    ["annotated tag", `git/ref/tags/${REF}`, { ref: FULL_REF, object: { sha: SHA, type: "tag" } }],
+    ["ambiguous branch", `git/matching-refs/heads/${REF}`, [{ ref: `refs/heads/${REF}` }]],
+    ["malformed branches", `git/matching-refs/heads/${REF}`, {}],
+    ["malformed branch entry", `git/matching-refs/heads/${REF}`, [{}]],
+    ["producer outside main", `compare/${SHA}...main`, { status: "diverged" }],
+    ["producer newer than publisher", `compare/${SHA}...${OTHER_SHA}`, { status: "behind" }],
+    ["unrelated publisher", `compare/${SHA}...${OTHER_SHA}`, { status: "diverged" }],
+    ["missing ancestry", `compare/${SHA}...${OTHER_SHA}`, {}],
+  ])("rejects %s", (_name, route, response) => {
+    expect(() => verifyReleasePreflightToolingIdentity(proof({ [route]: response }))).toThrow();
+  });
+
+  it("fails closed when provenance cannot be read", () => {
+    expect(() =>
+      verifyReleasePreflightToolingIdentity({
+        ...proof(),
+        runGh: () => {
+          throw new Error("HTTP 503");
+        },
+      }),
+    ).toThrow("HTTP 503");
+  });
+
+  it.each([
+    { publisherSha: "invalid" },
+    { workflowFullRef: `refs/heads/${REF}` },
+    { workflowSha: OTHER_SHA },
+  ])("rejects invalid producer or publisher identity %j", (override) => {
+    expect(() => verifyReleasePreflightToolingIdentity({ ...proof(), ...override })).toThrow();
+  });
+});
+
+describe.each([
+  {
+    label: "FRV-owned",
+    workflowPath: ".github/workflows/full-release-validation.yml",
+    fullRunId: RUN_ID,
+    fullRunAttempt: "1",
+  },
+  {
+    label: "independent producer after FRV rerun",
+    workflowPath: ".github/workflows/full-release-artifacts.yml",
+    fullRunId: PARENT_RUN_ID,
+    fullRunAttempt: "3",
+  },
+])("$label npm qualification", ({ workflowPath, fullRunId, fullRunAttempt }) => {
+  const producer = {
+    repository: "openclaw/openclaw",
+    workflowRef: `openclaw/openclaw/${workflowPath}@refs/heads/main`,
+    workflowSha: SHA,
+    runId: RUN_ID,
+    runAttempt: "1",
+    jobId: "999",
+    jobName: "Qualify release npm artifacts / Qualify prepared npm package",
+    producerWorkflowPath: ".github/workflows/openclaw-npm-preflight.yml",
+  };
+  const manifest = {
+    version: 3,
+    releaseSha: OTHER_SHA,
+    tarballName: "openclaw.tgz",
+    tarballSha256: "c".repeat(64),
+    producer,
+    preparedBundle: {
+      schema: "openclaw.prepared-npm-bundle/v1",
+      source: { sha: OTHER_SHA },
+      package: { sha256: "c".repeat(64) },
+      producer: { repository: producer.repository, workflowSha: SHA },
+    },
+  };
+  const qualified = {
+    schema: "openclaw.qualified-npm-preflight/v1",
+    source: { sha: OTHER_SHA },
+    producer,
+    manifestSha256: "d".repeat(64),
+    artifact: {
+      id: "555",
+      name: `openclaw-npm-preflight-${OTHER_SHA}`,
+      digest: "e".repeat(64),
+      runId: RUN_ID,
+      runAttempt: "1",
+    },
+  };
+  const fullReleaseManifest = {
+    workflowName: "Full Release Validation",
+    runId: fullRunId,
+    runAttempt: fullRunAttempt,
+    workflowFullRef: "refs/heads/main",
+    targetSha: OTHER_SHA,
+    workflowSha: SHA,
+    publicationArtifacts: { npmPreflight: qualified },
+  };
+  const input = {
+    manifest,
+    repository: producer.repository,
+    workflowFullRef: "refs/heads/main",
+    workflowSha: SHA,
+    workflowPath,
+    runId: RUN_ID,
+    runAttempt: "1",
+    fullReleaseManifest,
+    fullReleaseRunId: fullRunId,
+    fullReleaseRunAttempt: fullRunAttempt,
+    manifestSha256: "d".repeat(64),
+  };
+  const resolutionInput = {
+    manifest: fullReleaseManifest,
+    repository: producer.repository,
+    runId: fullRunId,
+    runAttempt: fullRunAttempt,
+    sourceSha: OTHER_SHA,
+    toolingSha: SHA,
+  };
+  function reader(jobOverrides = {}, artifactOverrides = {}, runOverrides = {}) {
+    const job = {
+      id: 999,
+      name: producer.jobName,
+      run_id: Number(RUN_ID),
+      run_attempt: 1,
+      head_sha: SHA,
+      status: "completed",
+      conclusion: "success",
+      ...jobOverrides,
+    };
+    return (args: string[]) => {
+      const endpoint = args[1];
+      if (!endpoint) {
+        throw new Error("Expected GitHub API endpoint.");
+      }
+      if (endpoint.endsWith("/artifacts/555")) {
+        return JSON.stringify({
+          id: 555,
+          name: qualified.artifact.name,
+          digest: `sha256:${qualified.artifact.digest}`,
+          expired: false,
+          workflow_run: { id: Number(RUN_ID), head_sha: SHA },
+          ...artifactOverrides,
+        });
+      }
+      if (endpoint.includes("/jobs?")) {
+        return JSON.stringify({ total_count: 1, jobs: [job] });
+      }
+      if (endpoint.endsWith("/attempts/1")) {
+        return JSON.stringify({
+          id: Number(RUN_ID),
+          run_attempt: 1,
+          head_sha: SHA,
+          path: workflowPath,
+          head_branch: "main",
+          event: "workflow_dispatch",
+          status: "completed",
+          conclusion: "success",
+          repository: { full_name: producer.repository },
+          head_repository: { full_name: producer.repository },
+          ...runOverrides,
+        });
+      }
+      throw new Error(`Unexpected proof request: ${endpoint}`);
+    };
+  }
+  it("requires the exact successful qualifier and immutable artifact from the selected FRV", () => {
+    const runGh = vi.fn(reader());
+    expect(resolveFullReleaseNpmPreflight({ ...resolutionInput, runGh })).toMatchObject({
+      producer: { runId: RUN_ID, runAttempt: "1" },
+      artifact: { id: 555 },
+    });
+    expect(runGh.mock.calls.map(([args]) => args[1])).toContain(
+      `repos/openclaw/openclaw/actions/runs/${RUN_ID}/attempts/1`,
+    );
+    expect(verifyNpmPreflightProducer({ ...input, runGh: reader() })).toMatchObject({
+      provenance: "immutable-manifest",
+    });
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, runGh: reader({ conclusion: "failure" }) }),
+    ).toThrow("completed producer job");
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, manifestSha256: "f".repeat(64), runGh: reader() }),
+    ).toThrow("exact full release qualification");
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, fullReleaseManifest: undefined, runGh: reader() }),
+    ).toThrow("qualified npm preflight");
+  });
+  it("rejects stale source or attempt and raw-only package evidence", () => {
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, manifest: { version: 1 }, runGh: reader() }),
+    ).toThrow("qualified version 3");
+    const expected = {
+      manifest: fullReleaseManifest,
+      runId: fullRunId,
+      runAttempt: fullRunAttempt,
+      sourceSha: OTHER_SHA,
+      toolingSha: SHA,
+    };
+    expect(() => validateFullReleaseNpmPreflight({ ...expected, sourceSha: SHA })).toThrow(
+      "qualified npm preflight",
+    );
+    expect(() => validateFullReleaseNpmPreflight({ ...expected, runAttempt: "2" })).toThrow(
+      "qualified npm preflight",
+    );
+    expect(() =>
+      validateNpmPreflightProducer({
+        ...input,
+        manifest: {
+          ...manifest,
+          producer: { ...producer, jobName: "Prepare publishable npm package" },
+        },
+      }),
+    ).toThrow("qualification");
+  });
+
+  it.each(["run", "attempt", "tooling", "workflow", "repository", "ref"])(
+    "rejects a descriptor detached from its %s binding",
+    (mismatch) => {
+      const changed = structuredClone(fullReleaseManifest);
+      const descriptor = changed.publicationArtifacts.npmPreflight;
+      if (mismatch === "run") {
+        descriptor.artifact.runId = "99999";
+      }
+      if (mismatch === "attempt") {
+        descriptor.artifact.runAttempt = "2";
+      }
+      if (mismatch === "tooling") {
+        descriptor.producer.workflowSha = OTHER_SHA;
+      }
+      if (mismatch === "workflow") {
+        descriptor.producer.workflowRef = producer.workflowRef.replace(
+          workflowPath,
+          ".github/workflows/ci.yml",
+        );
+      }
+      if (mismatch === "repository") {
+        descriptor.producer.repository = "other/repository";
+      }
+      if (mismatch === "ref") {
+        descriptor.producer.workflowRef = producer.workflowRef.replace(
+          "refs/heads/main",
+          "refs/heads/other",
+        );
+      }
+      expect(() =>
+        resolveFullReleaseNpmPreflight({ ...resolutionInput, manifest: changed, runGh: reader() }),
+      ).toThrow();
+    },
+  );
+
+  it.each(["run", "attempt", "tooling", "workflow", "repository", "unfinished", "artifact"])(
+    "rejects changed live %s evidence before downloading package bytes",
+    (mismatch) => {
+      const runOverrides: Record<string, unknown> = {};
+      const artifactOverrides: Record<string, unknown> = {};
+      if (mismatch === "run") {
+        runOverrides.id = 777;
+      }
+      if (mismatch === "attempt") {
+        runOverrides.run_attempt = 2;
+      }
+      if (mismatch === "tooling") {
+        runOverrides.head_sha = OTHER_SHA;
+      }
+      if (mismatch === "workflow") {
+        runOverrides.path = ".github/workflows/ci.yml";
+      }
+      if (mismatch === "repository") {
+        runOverrides.repository = { full_name: "other/repository" };
+      }
+      if (mismatch === "unfinished") {
+        Object.assign(runOverrides, { status: "in_progress", conclusion: null });
+      }
+      if (mismatch === "artifact") {
+        artifactOverrides.workflow_run = { id: 777, head_sha: SHA };
+      }
+      expect(() =>
+        resolveFullReleaseNpmPreflight({
+          ...resolutionInput,
+          runGh: reader({}, artifactOverrides, runOverrides),
+        }),
+      ).toThrow();
+    },
+  );
+
+  it.each(["valid", "archive changed", "manifest changed"])(
+    "downloads only the exact qualified archive (%s)",
+    async (outcome) => {
+      const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
+      const tarballBytes = Buffer.from("prepared package bytes");
+      const zip = new JSZip();
+      zip.file("preflight-manifest.json", manifestBytes);
+      zip.file(manifest.tarballName, tarballBytes);
+      zip.file("dependency-evidence/dependency-evidence-manifest.json", "{}", {
+        createFolders: false,
+      });
+      const archive = await zip.generateAsync({
+        type: "nodebuffer",
+        compression: "STORE",
+        platform: "UNIX",
+      });
+      const selected = structuredClone(fullReleaseManifest);
+      selected.publicationArtifacts.npmPreflight.artifact.digest = createHash("sha256")
+        .update(archive)
+        .digest("hex");
+      selected.publicationArtifacts.npmPreflight.manifestSha256 =
+        outcome === "manifest changed"
+          ? "f".repeat(64)
+          : createHash("sha256").update(manifestBytes).digest("hex");
+      const metadata = {
+        id: 555,
+        name: qualified.artifact.name,
+        digest: `sha256:${selected.publicationArtifacts.npmPreflight.artifact.digest}`,
+        size_in_bytes: archive.length,
+        expired: false,
+        expires_at: "2099-10-01T00:00:00Z",
+        workflow_run: { id: Number(RUN_ID), head_sha: SHA },
+      };
+      const delivered = Buffer.from(archive);
+      if (outcome === "archive changed") {
+        delivered.writeUInt8(delivered.readUInt8(0) ^ 1, 0);
+      }
+      const fetchImpl: typeof fetch = async (url) => {
+        const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        return requestUrl.endsWith("/zip")
+          ? new Response(new Uint8Array(delivered))
+          : Response.json(metadata);
+      };
+      const outputDir = join(tempDirs.make("qualified-npm-preflight-"), "qualified");
+      const download = downloadFullReleaseNpmPreflight({
+        ...resolutionInput,
+        manifest: selected,
+        outputDir,
+        token: "test-artifact-token",
+        runGh: reader({}, metadata),
+        fetchImpl,
+      });
+      if (outcome === "valid") {
+        await expect(download).resolves.toMatchObject({
+          producer: { runId: RUN_ID, runAttempt: "1" },
+        });
+        expect(readFileSync(join(outputDir, "preflight-manifest.json"))).toEqual(manifestBytes);
+        expect(readFileSync(join(outputDir, manifest.tarballName))).toEqual(tarballBytes);
+        expect(
+          readFileSync(
+            join(outputDir, "dependency-evidence/dependency-evidence-manifest.json"),
+            "utf8",
+          ),
+        ).toBe("{}");
+      } else {
+        await expect(download).rejects.toThrow(
+          outcome === "archive changed" ? "digest" : "qualified descriptor",
+        );
+        expect(existsSync(outputDir)).toBe(false);
+      }
+    },
+  );
 });

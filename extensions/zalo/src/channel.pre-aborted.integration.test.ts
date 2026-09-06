@@ -6,9 +6,9 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setZaloRuntime, type OpenClawConfig, type PluginRuntime } from "../runtime-api.js";
 import { resolveZaloAccount } from "./accounts.js";
 import { zaloPlugin } from "./channel.js";
-import { setZaloRuntime, type OpenClawConfig, type PluginRuntime } from "./runtime-api.js";
 
 const originalZaloApiUrl = process.env.ZALO_API_URL;
 

@@ -1,7 +1,9 @@
-import { mkdir, rm } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -16,7 +18,7 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/applied-revision-diff");
+let artifactDir: string;
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -64,21 +66,23 @@ async function screenshot(page: Page, fileName: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(artifactDir, fileName),
-  });
+  await writeFile(
+    path.join(artifactDir, fileName),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+      page.getByRole("button", { name: "Full body", exact: true }),
+    ]),
+  );
 }
 
 describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", () => {
+  beforeEach(() => {
+    if (captureUiProofEnabled) {
+      artifactDir = createControlUiE2eArtifactDir("applied-revision-diff");
+    }
+  });
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    if (captureUiProofEnabled) {
-      await rm(artifactDir, { force: true, recursive: true });
-      await mkdir(artifactDir, { recursive: true });
     }
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });

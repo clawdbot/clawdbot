@@ -25,6 +25,21 @@ describe("browser manage start timeout option", () => {
     expect(startCall[2]).toBeUndefined();
   });
 
+  it.each([
+    { args: ["reset-profile"], path: "/reset-profile" },
+    { args: ["create-profile", "--name", "work"], path: "/profiles/create" },
+    { args: ["delete-profile", "--name", "work"], path: "/profiles/work" },
+  ])("inherits parent --timeout for $path", async ({ args, path }) => {
+    const program = createBrowserManageProgram({ withParentTimeout: true });
+    await program.parseAsync(["browser", "--timeout", "60000", "--json", ...args], {
+      from: "user",
+    });
+
+    const request = findBrowserManageCall(path);
+    expect(request?.[0]).toEqual(expect.objectContaining({ timeout: "60000" }));
+    expect(request?.[2]).toBeUndefined();
+  });
+
   it("passes headless=true for browser start --headless", async () => {
     const program = createBrowserManageProgram({ withParentTimeout: true });
     await program.parseAsync(["browser", "start", "--headless"], { from: "user" });

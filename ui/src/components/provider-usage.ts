@@ -118,59 +118,69 @@ function renderProviderCostHistory(snapshot: ProviderUsageSnapshot) {
         })}
       </div>
       <div class="provider-cost-tokens">
-        ${totals.requests > 0
-          ? html`<span
-              >${t("usage.providerUsage.requests", {
-                count: new Intl.NumberFormat().format(totals.requests),
-              })}</span
-            >`
-          : nothing}
+        ${
+          totals.requests > 0
+            ? html`<span
+                >${t("usage.providerUsage.requests", {
+                  count: new Intl.NumberFormat().format(totals.requests),
+                })}</span
+              >`
+            : nothing
+        }
         <span>${t("usage.providerUsage.inputTokens", { count: inputCount })}</span>
         <span>${t("usage.providerUsage.cacheTokens", { count: cacheCount })}</span>
         <span>${t("usage.providerUsage.outputTokens", { count: outputCount })}</span>
       </div>
-      ${history.models.length > 0 || history.categories.length > 0
-        ? html`
-            <div class="provider-cost-breakdowns">
-              ${history.models.length > 0
-                ? html`
-                    <div class="provider-cost-breakdown">
-                      <span class="provider-cost-breakdown__title"
-                        >${t("usage.providerUsage.topModels")}</span
-                      >
-                      ${history.models
-                        .slice(0, 3)
-                        .map(
-                          (model) => html`
-                            <div>
-                              <span>${model.name}</span
-                              ><strong>${formatCompactTokenCount(model.totalTokens)}</strong>
-                            </div>
-                          `,
-                        )}
-                    </div>
-                  `
-                : nothing}
-              ${history.categories.length > 0
-                ? html`
-                    <div class="provider-cost-breakdown">
-                      <span class="provider-cost-breakdown__title"
-                        >${t("usage.providerUsage.costCategories")}</span
-                      >
-                      ${history.categories.slice(0, 3).map(
-                        (category) => html`
-                          <div>
-                            <span>${category.name}</span>
-                            <strong>${formatProviderAmount(category.amount, history.unit)}</strong>
-                          </div>
-                        `,
-                      )}
-                    </div>
-                  `
-                : nothing}
-            </div>
-          `
-        : nothing}
+      ${
+        history.models.length > 0 || history.categories.length > 0
+          ? html`
+              <div class="provider-cost-breakdowns">
+                ${
+                  history.models.length > 0
+                    ? html`
+                        <div class="provider-cost-breakdown">
+                          <span class="provider-cost-breakdown__title"
+                            >${t("usage.providerUsage.topModels")}</span
+                          >
+                          ${history.models
+                            .slice(0, 3)
+                            .map(
+                              (model) => html`
+                                <div>
+                                  <span>${model.name}</span
+                                  ><strong>${formatCompactTokenCount(model.totalTokens)}</strong>
+                                </div>
+                              `,
+                            )}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  history.categories.length > 0
+                    ? html`
+                        <div class="provider-cost-breakdown">
+                          <span class="provider-cost-breakdown__title"
+                            >${t("usage.providerUsage.costCategories")}</span
+                          >
+                          ${history.categories.slice(0, 3).map(
+                            (category) => html`
+                              <div>
+                                <span>${category.name}</span>
+                                <strong
+                                  >${formatProviderAmount(category.amount, history.unit)}</strong
+                                >
+                              </div>
+                            `,
+                          )}
+                        </div>
+                      `
+                    : nothing
+                }
+              </div>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -185,50 +195,58 @@ export function renderProviderUsageDetails(snapshot: ProviderUsageSnapshot) {
     return html`<div class="provider-usage-error">${formatUiExternalText(snapshot.error)}</div>`;
   }
   return html`
-    ${snapshot.windows.length > 0
-      ? html`
-          <div class="provider-usage-windows">
-            ${snapshot.windows.map((window) => {
-              const used = Math.max(0, Math.min(100, window.usedPercent));
-              const remaining = Math.max(0, 100 - used);
-              const reset = formatProviderReset(window.resetAt);
-              return html`
-                <div class="provider-usage-window">
-                  <div class="provider-usage-window__meta">
-                    <span>${window.label}</span>
-                    <strong
-                      >${t("usage.providerUsage.remaining", {
-                        percent: remaining.toFixed(0),
-                      })}</strong
+    ${
+      snapshot.windows.length > 0
+        ? html`
+            <div class="provider-usage-windows">
+              ${snapshot.windows.map((window) => {
+                const used = Math.max(0, Math.min(100, window.usedPercent));
+                const remaining = Math.max(0, 100 - used);
+                const reset = formatProviderReset(window.resetAt);
+                return html`
+                  <div class="provider-usage-window">
+                    <div class="provider-usage-window__meta">
+                      <span>${window.label}</span>
+                      <strong
+                        >${t("usage.providerUsage.remaining", {
+                          percent: remaining.toFixed(0),
+                        })}</strong
+                      >
+                    </div>
+                    <div
+                      class="provider-usage-progress"
+                      role="progressbar"
+                      aria-label=${window.label}
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow=${used.toFixed(0)}
                     >
+                      <span style=${`width: ${used}%`}></span>
+                    </div>
+                    ${
+                      reset
+                        ? html`<div class="provider-usage-reset">
+                            ${t("usage.providerUsage.resets", { date: reset })}
+                          </div>`
+                        : nothing
+                    }
                   </div>
-                  <div
-                    class="provider-usage-progress"
-                    role="progressbar"
-                    aria-label=${window.label}
-                    aria-valuemin="0"
-                    aria-valuemax="100"
-                    aria-valuenow=${used.toFixed(0)}
-                  >
-                    <span style=${`width: ${used}%`}></span>
-                  </div>
-                  ${reset
-                    ? html`<div class="provider-usage-reset">
-                        ${t("usage.providerUsage.resets", { date: reset })}
-                      </div>`
-                    : nothing}
-                </div>
-              `;
-            })}
-          </div>
-        `
-      : nothing}
-    ${snapshot.billing && snapshot.billing.length > 0
-      ? html`<div class="provider-usage-billing">${renderProviderBilling(snapshot)}</div>`
-      : nothing}
+                `;
+              })}
+            </div>
+          `
+        : nothing
+    }
+    ${
+      snapshot.billing && snapshot.billing.length > 0
+        ? html`<div class="provider-usage-billing">${renderProviderBilling(snapshot)}</div>`
+        : nothing
+    }
     ${renderProviderCostHistory(snapshot)}
-    ${snapshot.summary
-      ? html`<div class="provider-usage-summary">${snapshot.summary}</div>`
-      : nothing}
+    ${
+      snapshot.summary
+        ? html`<div class="provider-usage-summary">${snapshot.summary}</div>`
+        : nothing
+    }
   `;
 }

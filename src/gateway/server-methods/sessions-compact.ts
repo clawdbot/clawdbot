@@ -16,10 +16,11 @@ import {
 } from "../../config/sessions.js";
 import {
   applySessionPatchProjection,
-  loadTranscriptEvents,
   preflightSessionTranscriptForManualCompact,
+  readTranscriptStatsSync,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import {
@@ -149,13 +150,13 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         return;
       }
     } else {
-      const transcriptEvents = await loadTranscriptEvents({
+      const transcriptStats = readTranscriptStatsSync({
         agentId: target.agentId,
         sessionId,
         sessionKey: compactTarget.primaryKey,
         storePath,
       });
-      if (transcriptEvents.length === 0) {
+      if (transcriptStats.eventCount === 0) {
         respond(
           true,
           {
@@ -350,13 +351,13 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             return;
           }
 
-          const transcriptEvents = await loadTranscriptEvents({
+          const transcriptStats = readTranscriptStatsSync({
             agentId: target.agentId,
             sessionId,
             sessionKey: compactTarget.primaryKey,
             storePath,
           });
-          if (transcriptEvents.length === 0) {
+          if (transcriptStats.eventCount === 0) {
             respond(
               true,
               {
@@ -387,16 +388,25 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               reason,
             });
           let result: Awaited<ReturnType<typeof runGatewaySessionCompaction>>;
+          let expectedEntry: InternalSessionEntry = latestEntry;
           try {
-            result = await runGatewaySessionCompaction({
-              cfg,
-              entry: latestEntry,
-              agentId: target.agentId,
-              sessionId,
-              sessionKey: target.canonicalKey,
-              sessionStoreKey: compactTarget.primaryKey,
-              storePath,
-            });
+            result = await runGatewaySessionCompaction(
+              {
+                cfg,
+                entry: latestEntry,
+                runId: operationId,
+                agentId: target.agentId,
+                sessionId,
+                sessionKey: target.canonicalKey,
+                sessionStoreKey: compactTarget.primaryKey,
+                storePath,
+              },
+              {
+                onCommitted: (accepted) => {
+                  expectedEntry = accepted.entry;
+                },
+              },
+            );
           } catch (err) {
             emitCompactionEnd(false, formatErrorMessage(err));
             throw err;
@@ -413,8 +423,9 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 project: ({ existingEntry }) => {
                   if (
                     !existingEntry ||
-                    existingEntry.sessionId !== sessionId ||
-                    existingEntry.lifecycleRevision !== lifecycleRevision ||
+                    existingEntry.sessionId !== expectedEntry.sessionId ||
+                    existingEntry.lifecycleRevision !== expectedEntry.lifecycleRevision ||
+                    existingEntry.activeWriterRunId !== expectedEntry.activeWriterRunId ||
                     resolveSessionWorkStartError(target.canonicalKey, existingEntry)
                   ) {
                     return { ok: false };
@@ -425,12 +436,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                     Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
                   if (result.compactionKind === "context-engine") {
                     clearAllCliSessions(entryToUpdate);
-                  }
-                  if (
-                    result.result?.sessionId &&
-                    result.result.sessionId !== entryToUpdate.sessionId
-                  ) {
-                    entryToUpdate.sessionId = result.result.sessionId;
                   }
                   delete entryToUpdate.inputTokens;
                   delete entryToUpdate.outputTokens;
@@ -470,7 +475,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             recordSessionCompacted({
               sessionKey: target.canonicalKey,
               operationId,
-              sessionId: result.result?.sessionId ?? sessionId,
+              sessionId: expectedEntry.sessionId,
               agentId: target.agentId ?? requestedAgentId,
             });
           }

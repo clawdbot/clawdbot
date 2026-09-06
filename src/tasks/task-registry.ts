@@ -37,7 +37,6 @@ export {
   listTasksForFlowId,
   listTasksForOwnerKey,
   listTasksForRelatedSessionKey,
-  listTasksForSessionKey,
   resolveTaskForLookupToken,
 } from "./task-registry-query.js";
 export { publishTaskRecordAfterAtomicStore } from "./task-registry-mutation.js";

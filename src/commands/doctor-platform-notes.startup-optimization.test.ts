@@ -1,10 +1,7 @@
 // Doctor platform note tests cover startup optimization hints and note output.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { noteStartupOptimizationHints } from "./doctor-platform-notes.js";
-
-function firstNoteCall(noteFn: ReturnType<typeof vi.fn>) {
-  return noteFn.mock.calls[0] ?? [];
-}
 
 describe("noteStartupOptimizationHints", () => {
   it("does not warn when compile cache and no-respawn are configured", () => {
@@ -32,7 +29,7 @@ describe("noteStartupOptimizationHints", () => {
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    const [message, title] = firstNoteCall(noteFn);
+    const [message, title] = expectDefined<unknown[]>(noteFn.mock.calls[0], "note call 0");
     expect(title).toBe("Startup optimization");
     expect(message).toBe(
       [
@@ -59,7 +56,7 @@ describe("noteStartupOptimizationHints", () => {
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    const [message] = firstNoteCall(noteFn);
+    const [message] = expectDefined<unknown[]>(noteFn.mock.calls[0], "note call 0");
     expect(message).toBe(
       [
         "- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled.",

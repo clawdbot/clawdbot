@@ -1,12 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
-type RuntimeExternalCliStore = AuthProfileStore &
-  Pick<RuntimeAuthProfileStore, "runtimeExternalCliProfileIds">;
-
 export function getRuntimeExternalCliProfileIds(store: AuthProfileStore): readonly string[] {
-  return (store as RuntimeExternalCliStore).runtimeExternalCliProfileIds ?? [];
+  const runtimeStore: RuntimeAuthProfileStore = store;
+  return runtimeStore.runtimeExternalCliProfileIds ?? [];
 }
 
 export function setRuntimeExternalCliProfileIds(
@@ -14,8 +13,19 @@ export function setRuntimeExternalCliProfileIds(
   profileIds: Iterable<string>,
 ): void {
   const ids = [...new Set(profileIds)].filter((profileId) => store.profiles[profileId]).toSorted();
-  (store as RuntimeExternalCliStore).runtimeExternalCliProfileIds =
-    ids.length > 0 ? ids : undefined;
+  const runtimeStore: RuntimeAuthProfileStore = store;
+  runtimeStore.runtimeExternalCliProfileIds = ids.length > 0 ? ids : undefined;
+}
+
+function getRuntimeLocalProfileIds(store: AuthProfileStore): readonly string[] {
+  const runtimeStore: RuntimeAuthProfileStore = store;
+  return runtimeStore.runtimeLocalProfileIds ?? [];
+}
+
+function setRuntimeLocalProfileIds(store: AuthProfileStore, profileIds: Iterable<string>): void {
+  const ids = [...new Set(profileIds)].filter((profileId) => store.profiles[profileId]).toSorted();
+  const runtimeStore: RuntimeAuthProfileStore = store;
+  runtimeStore.runtimeLocalProfileIds = ids.length > 0 ? ids : undefined;
 }
 
 export function removeRuntimeExternalProfileReferences(params: {
@@ -61,6 +71,10 @@ export function removeRuntimeExternalProfileReferences(params: {
   if (next.runtimePersistedProfileIds?.length === 0) {
     next.runtimePersistedProfileIds = undefined;
   }
+  setRuntimeLocalProfileIds(
+    next,
+    getRuntimeLocalProfileIds(next).filter((profileId) => !params.profileIds.has(profileId)),
+  );
   next.runtimeExternalProfileIds = next.runtimeExternalProfileIds?.filter(
     (profileId) => !params.profileIds.has(profileId),
   );
@@ -75,6 +89,23 @@ export function removeRuntimeExternalProfileReferences(params: {
     getRuntimeExternalCliProfileIds(next).filter((profileId) => !params.profileIds.has(profileId)),
   );
   return next;
+}
+
+/** Shared persistence and snapshots never retain a turn's selected personal account. */
+export function removePersonalAuthProfileReferences(store: AuthProfileStore): AuthProfileStore {
+  const profileIds = new Set(
+    [
+      ...Object.keys(store.profiles),
+      ...Object.keys(store.usageStats ?? {}),
+      ...Object.values(store.order ?? {}).flat(),
+      ...Object.values(store.lastGood ?? {}),
+      ...(store.runtimePersistedProfileIds ?? []),
+      ...(store.runtimeExternalProfileIds ?? []),
+      ...getRuntimeLocalProfileIds(store),
+      ...getRuntimeExternalCliProfileIds(store),
+    ].filter(isUserModelAuthProfileId),
+  );
+  return removeRuntimeExternalProfileReferences({ store, profileIds });
 }
 
 /** Carries lifecycle-owned external profiles across a durable-store refresh. */

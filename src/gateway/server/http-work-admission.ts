@@ -1,15 +1,17 @@
 // Gateway HTTP boundary helpers coordinate request and upgrade work with host suspension.
 import type { ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { waitForHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 
 type GatewayBoundaryHandler = () => Promise<boolean> | boolean;
 
 async function runWithGatewayBoundaryWorkAdmission(
+  origin: string,
   reject: () => void,
   run: GatewayBoundaryHandler,
 ): Promise<boolean> {
-  const admission = tryBeginGatewayRootWorkAdmission();
+  const admission = tryBeginGatewayRootWorkAdmission(origin);
   if (!admission) {
     reject();
     return true;
@@ -26,34 +28,46 @@ export async function runWithGatewayHttpWorkAdmission(
   res: ServerResponse,
   run: GatewayBoundaryHandler,
 ): Promise<boolean> {
-  return await runWithGatewayBoundaryWorkAdmission(() => {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Retry-After", "1");
-    res.end(
-      JSON.stringify({
-        error: {
-          message: "Gateway is temporarily unavailable while suspending or restarting",
-          type: "service_unavailable",
-          code: "gateway_unavailable",
-        },
-      }),
-    );
-  }, run);
+  return await runWithGatewayBoundaryWorkAdmission(
+    "http:request",
+    () => {
+      res.statusCode = 503;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Retry-After", "1");
+      res.end(
+        JSON.stringify({
+          error: {
+            message: "Gateway is temporarily unavailable while suspending or restarting",
+            type: "service_unavailable",
+            code: "gateway_unavailable",
+          },
+        }),
+      );
+    },
+    async () => {
+      try {
+        return await run();
+      } finally {
+        await waitForHttpRequestRejection(res.req);
+      }
+    },
+  );
 }
 
-export function writeGatewayUpgradeServiceUnavailable(
-  socket: Pick<Duplex, "write">,
+export function rejectGatewayUpgradeServiceUnavailable(
+  socket: Pick<Duplex, "end" | "destroy">,
   body: string,
 ): void {
-  socket.write(
+  // Reused HTTP sockets can buffer upgrade writes; destroy only after flushing.
+  socket.end(
     "HTTP/1.1 503 Service Unavailable\r\n" +
       "Connection: close\r\n" +
       "Content-Type: text/plain; charset=utf-8\r\n" +
       `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n` +
       "\r\n" +
       body,
+    () => socket.destroy(),
   );
 }
 
@@ -62,8 +76,11 @@ export async function runWithGatewayUpgradeWorkAdmission(
   socket: Duplex,
   run: GatewayBoundaryHandler,
 ): Promise<boolean> {
-  return await runWithGatewayBoundaryWorkAdmission(() => {
-    writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
-    socket.destroy();
-  }, run);
+  return await runWithGatewayBoundaryWorkAdmission(
+    "http:upgrade",
+    () => {
+      rejectGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+    },
+    run,
+  );
 }

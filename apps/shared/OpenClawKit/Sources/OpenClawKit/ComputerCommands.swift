@@ -281,26 +281,13 @@ public struct OpenClawComputerEscalation: Codable, Sendable, Equatable {
     }
 }
 
-/// Result of a `computer.act` input action. Optional v2 fields are omitted for
-/// v1 actions so their existing JSON payload remains byte-for-byte unchanged.
+/// Canonical result of a `computer.act` action.
 public struct OpenClawComputerActResult: Codable, Sendable, Equatable {
     public var ok: Bool
-    public var cursorX: Double?
-    public var cursorY: Double?
     public var effect: OpenClawComputerActionEffect?
     public var observation: OpenClawComputerObservation?
     public var escalation: OpenClawComputerEscalation?
     public var details: [String: AnyCodable]?
-
-    public init(ok: Bool, cursorX: Double, cursorY: Double) {
-        self.ok = ok
-        self.cursorX = cursorX
-        self.cursorY = cursorY
-        self.effect = nil
-        self.observation = nil
-        self.escalation = nil
-        self.details = nil
-    }
 
     public init(
         ok: Bool,
@@ -310,8 +297,6 @@ public struct OpenClawComputerActResult: Codable, Sendable, Equatable {
         details: [String: AnyCodable]? = nil)
     {
         self.ok = ok
-        self.cursorX = nil
-        self.cursorY = nil
         self.effect = effect
         self.observation = observation
         self.escalation = escalation

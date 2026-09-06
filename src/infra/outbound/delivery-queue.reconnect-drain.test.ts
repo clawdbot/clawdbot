@@ -1,10 +1,17 @@
 // Covers reconnect-triggered queue drain selection, active claims, backoff
 // bypass, and concurrent drain suppression.
+import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { beginConversationDeliveryOperation } from "../../config/sessions/conversation-delivery-store.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { drainPendingDeliveries as drainPluginPendingDeliveries } from "../../plugin-sdk/delivery-queue-runtime.js";
+import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import {
   type DeliverFn,
@@ -14,7 +21,6 @@ import {
   withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
 import {
-  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
   reserveDeliveryAttempt,
@@ -22,6 +28,7 @@ import {
   failDelivery,
 } from "./delivery-queue-storage.js";
 import {
+  loadPendingDeliveries,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
   readQueuedEntry,
@@ -195,6 +202,80 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     expect(delivery.skipQueue).toBe(true);
   });
 
+  it("leaves Gateway conversation records for the authorized recovery owner", async () => {
+    const operationId = "conversation-reconnect";
+    const storePath = path.join(tmpDir, "agent-sessions.json");
+    const scope = { agentId: "main", storePath };
+    const conversationRef = buildConversationRef({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "peer-agent",
+    });
+    await upsertSessionEntryCore(
+      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
+      {
+        sessionId: "reef-session",
+        updatedAt: 100,
+        chatType: "direct",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+          origin: {
+            provider: "reef",
+            accountId: "default",
+            nativeDirectUserId: "peer-agent",
+          },
+        }),
+      },
+    );
+    beginConversationDeliveryOperation(scope, {
+      operationId,
+      operationKind: "send",
+      conversationRef,
+      message: "deliver only through the authorized recovery owner",
+      preparedMessageId: "reef-prepared",
+    });
+    const id = await enqueueDelivery(
+      {
+        channel: "reef",
+        to: "reef:peer-agent",
+        accountId: "default",
+        payloads: [{ text: "deliver only through the authorized recovery owner" }],
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId,
+          storePath,
+          routeFingerprint: "route-reconnect",
+        },
+      },
+      tmpDir,
+    );
+    await failDelivery(id, NO_LISTENER_ERROR, tmpDir);
+    const deliver = vi.fn<DeliverFn>(async () => {
+      throw new PlatformMessageNotDispatchedError(
+        "Conversation delivery is missing its current route authorization",
+        { cause: undefined, retryable: false },
+      );
+    });
+
+    await drainPluginPendingDeliveries({
+      drainKey: "reef:default",
+      logLabel: "Reef reconnect drain",
+      cfg: stubCfg,
+      log: createRecoveryLog(),
+      stateDir: tmpDir,
+      deliver,
+      selectEntry: (entry) => ({
+        match: entry.channel === "reef" && entry.accountId === "default",
+        bypassBackoff: true,
+      }),
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect((await loadPendingDeliveries(tmpDir)).map((entry) => entry.id)).toContain(id);
+  });
+
   it("skips entries from other accounts", async () => {
     const log = createRecoveryLog();
     const deliver = vi.fn<DeliverFn>(async () => {});
@@ -265,6 +346,50 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
 
     await drain();
     expect(deliver).toHaveBeenCalledTimes(channels.length);
+  });
+
+  it("bounds stop admission independently of queued backlog size", async () => {
+    for (const index of Array.from({ length: 64 }, (_, position) => position)) {
+      const id = await enqueueDelivery(
+        {
+          channel: "directchat",
+          to: `+1${String(index).padStart(3, "0")}`,
+          payloads: [{ text: `queued ${index}` }],
+        },
+        tmpDir,
+      );
+      setQueuedEntryState(tmpDir, id, { retryCount: 0, enqueuedAt: index + 1 });
+    }
+    const pendingBefore = await loadPendingDeliveries(tmpDir);
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const deliver = vi.fn<DeliverFn>(async () => {
+      if (deliver.mock.calls.length === 1) {
+        await firstBlocked;
+      }
+    });
+    let shouldContinue = true;
+
+    const drain = drainPendingDeliveriesCore({
+      drainKey: "gateway:outbound",
+      logLabel: "Outbound delivery retry",
+      cfg: stubCfg,
+      log: createRecoveryLog(),
+      stateDir: tmpDir,
+      deliver,
+      selectEntry: () => ({ match: true, bypassBackoff: false }),
+      shouldContinue: () => shouldContinue,
+    });
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+
+    shouldContinue = false;
+    releaseFirst();
+    await drain;
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(await loadPendingDeliveries(tmpDir)).toEqual(pendingBefore.slice(1));
   });
 
   it("rejects recovered delivery when the current channel config disables its account", async () => {

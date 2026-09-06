@@ -55,7 +55,7 @@ export function githubPublicationUnsafeConfigArgs(scope: "--local" | "--worktree
     scope,
     "--includes",
     "--get-regexp",
-    "^(core\\.(alternaterefscommand|askpass|fsmonitor|gitproxy|hookspath|sshcommand|worktree)|credential\\..*helper|filter\\..*|http\\..*|include(if)?\\..*|push\\..*|remote\\..*\\.(proxy|receivepack|uploadpack|vcs)|uploadpack\\.packobjectshook|url\\..*\\.(insteadof|pushinsteadof))$",
+    "^(core\\.(alternaterefscommand|askpass|fsmonitor|gitproxy|sshcommand|worktree)|credential\\..*helper|filter\\..*|http\\..*|include(if)?\\..*|push\\..*|remote\\..*\\.(proxy|receivepack|uploadpack|vcs)|uploadpack\\.packobjectshook|url\\..*\\.(insteadof|pushinsteadof))$",
   ];
 }
 

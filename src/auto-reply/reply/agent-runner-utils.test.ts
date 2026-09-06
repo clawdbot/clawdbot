@@ -3,15 +3,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
-  const resolveEffectiveModelFallbacksMock = vi.fn();
+  const resolveModelFallbackAvailabilityMock = vi.fn();
   const getChannelPluginMock = vi.fn();
   const isReasoningTagProviderMock = vi.fn();
-  return { resolveEffectiveModelFallbacksMock, getChannelPluginMock, isReasoningTagProviderMock };
+  return {
+    resolveModelFallbackAvailabilityMock,
+    getChannelPluginMock,
+    isReasoningTagProviderMock,
+  };
 });
 
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveEffectiveModelFallbacks: (...args: unknown[]) =>
-    hoisted.resolveEffectiveModelFallbacksMock(...args),
+vi.mock("../../agents/agent-scope.js", async () => ({
+  modelFallbackOverrideFromAvailability: (
+    await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+      "../../agents/agent-scope.js",
+    )
+  ).modelFallbackOverrideFromAvailability,
+  resolveModelFallbackAvailability: (...args: unknown[]) =>
+    hoisted.resolveModelFallbackAvailabilityMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -53,6 +62,11 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
     skillsSnapshot: [],
     ownerNumbers: ["+15550001"],
     enforceFinalTag: false,
+    thinkingCatalog: [
+      { provider: "openai", id: "gpt-4.1-mini", input: ["text"] },
+      { provider: "minimax", id: "MiniMax-M2.7", input: ["text"] },
+      { provider: "anthropic", id: "claude-sonnet-4-6", input: ["text"] },
+    ],
     thinkLevel: "medium",
     verboseLevel: "off",
     reasoningLevel: "none",
@@ -65,19 +79,23 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 
 describe("agent-runner-utils", () => {
   beforeEach(() => {
-    hoisted.resolveEffectiveModelFallbacksMock.mockClear();
+    hoisted.resolveModelFallbackAvailabilityMock.mockReset();
+    hoisted.resolveModelFallbackAvailabilityMock.mockReturnValue({ kind: "none_configured" });
     hoisted.getChannelPluginMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
   });
 
   it("resolves model fallback options from run context", () => {
-    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveModelFallbackAvailabilityMock.mockReturnValue({
+      kind: "active",
+      models: ["fallback-model"],
+    });
     const run = makeRun({ hasSessionModelOverride: true, modelOverrideSource: "user" });
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+    expect(hoisted.resolveModelFallbackAvailabilityMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
       sessionKey: run.sessionKey,
@@ -93,12 +111,16 @@ describe("agent-runner-utils", () => {
       agentDir: run.agentDir,
       agentId: run.agentId,
       sessionKey: run.sessionKey,
+      modelFallbackAvailability: { kind: "active", models: ["fallback-model"] },
       fallbacksOverride: ["fallback-model"],
     });
   });
 
   it("passes through recovered auto fallback provenance for model fallback options", () => {
-    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveModelFallbackAvailabilityMock.mockReturnValue({
+      kind: "active",
+      models: ["fallback-model"],
+    });
     const run = makeRun({
       hasSessionModelOverride: true,
       hasAutoFallbackProvenance: true,
@@ -106,7 +128,7 @@ describe("agent-runner-utils", () => {
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+    expect(hoisted.resolveModelFallbackAvailabilityMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
       sessionKey: run.sessionKey,
@@ -122,17 +144,28 @@ describe("agent-runner-utils", () => {
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(hoisted.resolveModelFallbackAvailabilityMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
+      hasSessionModelOverride: false,
+      modelOverrideSource: undefined,
+      hasAutoFallbackProvenance: false,
+      modelSelectionLocked: true,
+    });
     expect(resolved.fallbacksOverride).toEqual([]);
   });
 
   it("passes through missing agentId for helper-based fallback resolution", () => {
-    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveModelFallbackAvailabilityMock.mockReturnValue({
+      kind: "active",
+      models: ["fallback-model"],
+    });
     const run = makeRun({ agentId: undefined });
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+    expect(hoisted.resolveModelFallbackAvailabilityMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: undefined,
       sessionKey: run.sessionKey,
@@ -143,7 +176,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
 
-  it("builds embedded run base params with auth profile and run metadata", () => {
+  it("builds embedded run base params with auth profile and run metadata", async () => {
     const run = makeRun({
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
@@ -170,7 +203,7 @@ describe("agent-runner-utils", () => {
       authProfileIdSource: "user",
     });
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunBaseParams({
       run,
       provider: "openai",
       model: "gpt-4.1-mini",
@@ -206,10 +239,10 @@ describe("agent-runner-utils", () => {
     expect(resolved.terminalReplyExpectation).toBe("optional");
   });
 
-  it("threads prompt cache affinity through embedded execution params", () => {
+  it("threads prompt cache affinity through embedded execution params", async () => {
     const run = makeRun();
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: { Provider: "webchat" },
       hasRepliedRef: undefined,
@@ -223,10 +256,10 @@ describe("agent-runner-utils", () => {
     expect(resolved.runBaseParams.promptCacheKey).toBe("stable-session-cache-key");
   });
 
-  it("uses the queued conversation policy snapshot", () => {
+  it("uses the queued conversation policy snapshot", async () => {
     const run = makeRun({ conversationToolPolicy: { deny: ["exec"] } });
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "telegram",
@@ -241,10 +274,10 @@ describe("agent-runner-utils", () => {
     expect(resolved.runBaseParams.conversationToolPolicy).toEqual({ deny: ["exec"] });
   });
 
-  it("uses session chat type over stale queued metadata for embedded execution params", () => {
+  it("uses session chat type over stale queued metadata for embedded execution params", async () => {
     const run = makeRun({ chatType: "direct" });
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: { Provider: "discord", ChatType: "Channel" },
       hasRepliedRef: undefined,
@@ -257,8 +290,11 @@ describe("agent-runner-utils", () => {
     expect("chatType" in resolved.runBaseParams).toBe(false);
   });
 
-  it("passes through recovered auto fallback provenance for embedded run params", () => {
-    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
+  it("passes through recovered auto fallback provenance for embedded run params", async () => {
+    hoisted.resolveModelFallbackAvailabilityMock.mockReturnValue({
+      kind: "active",
+      models: ["fallback-model"],
+    });
     const run = makeRun({
       hasSessionModelOverride: true,
       hasAutoFallbackProvenance: true,
@@ -268,7 +304,7 @@ describe("agent-runner-utils", () => {
       primaryProvider: "openai",
     });
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunBaseParams({
       run,
       provider: "openai",
       model: "gpt-4.1-mini",
@@ -276,7 +312,7 @@ describe("agent-runner-utils", () => {
       authProfile,
     });
 
-    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+    expect(hoisted.resolveModelFallbackAvailabilityMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
       sessionKey: run.sessionKey,
@@ -284,17 +320,21 @@ describe("agent-runner-utils", () => {
       modelOverrideSource: undefined,
       hasAutoFallbackProvenance: true,
     });
+    expect(resolved.modelFallbackAvailability).toEqual({
+      kind: "active",
+      models: ["fallback-model"],
+    });
     expect(resolved.modelFallbacksOverride).toEqual(["fallback-model"]);
   });
 
-  it("disables embedded model fallbacks for a model-locked run", () => {
+  it("disables embedded model fallbacks for a model-locked run", async () => {
     const run = makeRun({ modelSelectionLocked: true });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
     });
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunBaseParams({
       run,
       provider: "openai",
       model: "gpt-4.1-mini",
@@ -302,19 +342,27 @@ describe("agent-runner-utils", () => {
       authProfile,
     });
 
-    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(hoisted.resolveModelFallbackAvailabilityMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
+      hasSessionModelOverride: false,
+      modelOverrideSource: undefined,
+      hasAutoFallbackProvenance: false,
+      modelSelectionLocked: true,
+    });
     expect(resolved.modelFallbacksOverride).toEqual([]);
     expect(resolved.modelSelectionLocked).toBe(true);
   });
 
-  it("does not force final-tag enforcement for minimax providers", () => {
+  it("does not force final-tag enforcement for minimax providers", async () => {
     const run = makeRun({ enforceFinalTag: false });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "minimax",
       primaryProvider: "minimax",
     });
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunBaseParams({
       run,
       provider: "minimax",
       model: "MiniMax-M2.7",
@@ -330,14 +378,14 @@ describe("agent-runner-utils", () => {
     });
   });
 
-  it("builds embedded contexts and scopes auth profile by provider", () => {
+  it("builds embedded contexts and scopes auth profile by provider", async () => {
     const run = makeRun({
       authProfileId: "profile-openai",
       authProfileIdSource: "auto",
       chatType: "direct",
     });
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "OpenAI",
@@ -380,15 +428,20 @@ describe("agent-runner-utils", () => {
     });
   });
 
-  it("prefers OriginatingChannel over Provider for messageProvider", () => {
-    const run = makeRun({ agentAccountId: "work", chatType: "group" });
+  it("prefers OriginatingChannel over Provider for messageProvider", async () => {
+    const run = makeRun({
+      agentAccountId: "work",
+      chatType: "group",
+      conversationRoutePeerId: "queued-peer",
+    });
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "heartbeat",
         OriginatingChannel: "Telegram",
         OriginatingTo: "268300329",
+        ConversationRoutePeerId: "later-peer",
       },
       hasRepliedRef: undefined,
       provider: "openai",
@@ -399,10 +452,11 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
     expect(resolved.embeddedContext.agentAccountId).toBe("work");
     expect(resolved.embeddedContext.chatType).toBe("group");
+    expect(resolved.embeddedContext.conversationRoutePeerId).toBe("queued-peer");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
 
-  it("hydrates the queued route before resolving channel threading policy", () => {
+  it("hydrates the queued route before resolving channel threading policy", async () => {
     hoisted.getChannelPluginMock.mockReturnValue({
       threading: {
         buildToolContext: ({
@@ -410,27 +464,37 @@ describe("agent-runner-utils", () => {
           context,
         }: {
           accountId?: string | null;
-          context: { ChatType?: string; NativeChannelId?: string; To?: string };
+          context: {
+            ChatType?: string;
+            MessageThreadId?: string | number;
+            NativeChannelId?: string;
+            To?: string;
+          };
         }) => ({
           currentChannelId: context.NativeChannelId ?? context.To,
           currentMessagingTarget: context.To,
+          currentThreadTs:
+            context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
           replyToMode: accountId === "work" && context.ChatType === "direct" ? "off" : "all",
         }),
       },
     });
     const run = makeRun({ agentAccountId: "work", chatType: "direct" });
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "cron-event",
         NativeChannelId: "D1",
+        SessionKey: "agent:main:main:thread:1234:42",
+        MessageThreadId: "stale-topic",
       },
       replyRoute: {
         originatingChannel: "slack",
         originatingTo: "user:U1",
         originatingAccountId: "work",
         originatingChatType: "direct",
+        originatingThreadId: 42,
       },
       hasRepliedRef: undefined,
       provider: "openai",
@@ -442,12 +506,14 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageTo).toBe("user:U1");
     expect(resolved.embeddedContext.currentChannelId).toBe("D1");
     expect(resolved.embeddedContext.currentMessagingTarget).toBe("user:U1");
+    expect(resolved.embeddedContext.messageThreadId).toBe(42);
+    expect(resolved.embeddedContext.currentThreadTs).toBe("42");
     expect(resolved.embeddedContext.agentAccountId).toBe("work");
     expect(resolved.embeddedContext.chatType).toBe("direct");
     expect(resolved.embeddedContext.replyToMode).toBe("off");
   });
 
-  it("carries a prepared direct-message reply mode into generic message tools", () => {
+  it("carries a prepared direct-message reply mode into generic message tools", async () => {
     const run = makeRun();
     const replyRoute = {
       originatingChannel: "reef",
@@ -458,7 +524,7 @@ describe("agent-runner-utils", () => {
       "originatingChannel" | "originatingTo" | "originatingReplyToMode"
     >;
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       replyRoute,
       sessionCtx: {
@@ -480,10 +546,10 @@ describe("agent-runner-utils", () => {
     });
   });
 
-  it("carries inbound audio context into embedded message tools", () => {
+  it("carries inbound audio context into embedded message tools", async () => {
     const run = makeRun();
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "telegram",

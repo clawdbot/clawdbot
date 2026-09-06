@@ -1,7 +1,7 @@
 // Gateway WebSocket connection handler owns pre-auth limits, handshake auth, presence, and message-handler attachment.
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { RawData, WebSocket, WebSocketServer } from "ws";
+import type { WebSocket, WebSocketServer } from "ws";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -20,20 +20,25 @@ import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
 import type { NodeReapprovalCoordinator } from "../node-reapproval-coordinator.js";
 import { clearNodeWakeState } from "../node-wake-state.js";
-import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import {
+  indexPluginNodeCapabilitySurfaces,
+  reconcileClientPluginNodeCapabilities,
+  type PluginNodeCapabilitySurface,
+} from "../plugin-node-capability.js";
+import type { GatewayConnectionWork } from "../server-connection-work.js";
+import {
+  WEBSOCKET_CLOSE_GRACE_MS,
   MAX_BUFFERED_BYTES,
   MAX_PAYLOAD_BYTES,
   MAX_PREAUTH_PAYLOAD_BYTES,
+  WEBSOCKET_OPEN_READY_STATE,
 } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
-import {
-  classifyGatewayStaleInstall,
-  GATEWAY_STALE_INSTALL_CLOSE_REASON,
-} from "../stale-install.js";
 import { cleanupTalkConnection } from "../talk-session-registry.js";
+import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";
+import { refreshClientPresence } from "./client-presence.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
@@ -49,6 +54,7 @@ import {
   HandshakeAuthLogLimiter,
   shouldLimitMissingCredentialAuthLog,
 } from "./ws-connection/handshake-auth-log-limiter.js";
+import { attachGatewayWsMessageHandlerOnDemand } from "./ws-connection/message-handler-loader.js";
 import type { WsOriginCheckMetrics } from "./ws-connection/message-handler.js";
 import {
   GatewayNodeLifecycleDispatchTracker,
@@ -69,27 +75,21 @@ import {
 } from "./ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
-
-const MAX_QUEUED_MESSAGE_HANDLER_FRAMES = 16;
 const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
 type GatewayWsSharedHandlerParams = {
+  bootId: string;
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
+  connectionWork: GatewayConnectionWork;
   preauthConnectionBudget: PreauthConnectionBudget;
   port: number;
   gatewayHost?: string;
   pluginSurfaceScheme?: "http" | "https";
   getPluginNodeCapabilities?: () => PluginNodeCapabilitySurface[];
-  /**
-   * Auth is read per connection, not per process: a reload can rotate it while
-   * this handler stays attached. One getter keeps that the only source, so no
-   * caller can hand over a snapshot that silently outlives the config it came from.
-   */
+  // Read per connection so reloads cannot leave a stale auth snapshot.
   getResolvedAuth: () => ResolvedGatewayAuth;
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
-  /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
-  /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   preauthHandshakeTimeoutMs?: number;
@@ -118,62 +118,11 @@ export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParam
   workerConnectionService?: WorkerConnectionService;
 };
 
-function attachGatewayWsMessageHandlerOnDemand(
-  params: import("./ws-connection/message-handler.js").GatewayWsMessageHandlerParams,
-): void {
-  const queued: RawData[] = [];
-  const queueMessage = (data: RawData) => {
-    if (queued.length >= MAX_QUEUED_MESSAGE_HANDLER_FRAMES) {
-      params.setCloseCause("message-handler-loading-overflow", {
-        queuedFrames: queued.length,
-      });
-      params.close(1008, "gateway message handler loading");
-      return;
-    }
-    queued.push(data);
-  };
-  params.socket.on("message", queueMessage);
-  void import("./ws-connection/message-handler.js")
-    .then(({ attachGatewayWsMessageHandler }) => {
-      params.socket.off("message", queueMessage);
-      if (params.isClosed()) {
-        return;
-      }
-      attachGatewayWsMessageHandler(params);
-      for (const data of queued) {
-        params.socket.emit("message", data);
-      }
-    })
-    .catch((error: unknown) => {
-      params.socket.off("message", queueMessage);
-      const formattedError = formatError(error);
-      const staleInstall = classifyGatewayStaleInstall(error);
-      if (staleInstall) {
-        params.setCloseCause("message-handler-load-failed", {
-          error: formattedError,
-          staleInstall: true,
-          restartCommand: staleInstall.restartCommand,
-        });
-        params.logWsControl.error(
-          `failed to load ws message handler because the OpenClaw installation changed while the Gateway was running conn=${params.connId}; run: ${staleInstall.restartCommand}; error: ${formattedError}`,
-        );
-        params.close(1011, GATEWAY_STALE_INSTALL_CLOSE_REASON);
-        return;
-      }
-      params.setCloseCause("message-handler-load-failed", {
-        error: formattedError,
-      });
-      params.logWsControl.error(
-        `failed to load ws message handler conn=${params.connId}: ${formattedError}`,
-      );
-      params.close(1011, "gateway message handler unavailable");
-    });
-}
-
 export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnectionHandlerParams) {
   const {
     wss,
     clients,
+    connectionWork,
     preauthConnectionBudget,
     port,
     pluginSurfaceScheme,
@@ -202,12 +151,15 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     workerConnectionService,
   } = params;
   const originCheckMetrics: WsOriginCheckMetrics = { hostHeaderFallbackAccepted: 0 };
-
   wss.on("connection", (socket, upgradeReq) => {
-    let client: GatewayWsClient | null = null;
-    let closed = false;
-    const openedAt = Date.now();
-    const connId = randomUUID();
+    if (connectionWork.isClosing) {
+      socket.terminate();
+      return;
+    }
+    let client: GatewayWsClient | null = null,
+      closed = false;
+    const [openedAt, connId] = [Date.now(), randomUUID()];
+    const connectionController = new AbortController();
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
     const publicWorkerIngress =
@@ -234,7 +186,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
     const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
     const openedDuringStartup = isStartupPending?.() === true;
-
     const pluginNodeCapabilities =
       connectionKind === "gateway" ? (getPluginNodeCapabilities?.() ?? []) : [];
     const pluginSurfaceBaseUrl =
@@ -296,9 +247,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
     };
 
-    let pingTimer: ReturnType<typeof setInterval> | undefined;
+    let stopKeepalive: (() => void) | undefined;
     let cleanupWorkerConnection: (() => void) | undefined;
-    let awaitingPong = false;
     let retainClientUntilNodeDrain = false;
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
@@ -327,8 +277,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         return;
       }
       closed = true;
+      connectionController.abort();
       clearTimeout(handshakeTimer);
-      clearInterval(pingTimer);
+      stopKeepalive?.();
       cleanupWorkerConnection?.();
       releasePreauthBudget();
       try {
@@ -339,14 +290,27 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     };
 
     const close = (code = 1000, reason?: string) => {
+      retainClientUntilNodeDrain ||=
+        !closed && client?.connect.role === "node" && nodeLifecycleDispatch.hasActive();
       retireTransport(code, reason);
       if (client && !retainClientUntilNodeDrain) {
         clients.delete(client);
       }
     };
 
+    let shutdownTimer: ReturnType<typeof setTimeout> | undefined;
+    const releaseConnection = connectionWork.registerConnection(() => {
+      shutdownTimer = setTimeout(() => socket.terminate(), WEBSOCKET_CLOSE_GRACE_MS);
+      shutdownTimer.unref?.();
+      close(1012, connectionKind === "worker" ? "gateway-shutdown" : "service restart");
+    });
+
     const send = (obj: unknown) => {
       if (closed) {
+        return { kind: "unavailable" } as const;
+      }
+      if (socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
+        close();
         return { kind: "unavailable" } as const;
       }
       if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
@@ -361,6 +325,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           limitBytes: MAX_BUFFERED_BYTES,
         });
         close(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
+        socket.terminate();
         return { kind: "unavailable" } as const;
       }
       let encoded: string;
@@ -373,6 +338,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         socket.send(encoded);
         return { kind: "sent" } as const;
       } catch {
+        socket.terminate();
+        close();
         return { kind: "unavailable" } as const;
       }
     };
@@ -389,14 +356,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     socket.once("error", (err) => {
       if (isWsPayloadLimitError(err)) {
-        const workerPayload = connectionKind === "worker";
         logRejectedLargePayload({
           surface: client ? "gateway.ws.frame" : "gateway.ws.preauth",
-          limitBytes: workerPayload
-            ? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES
-            : client
-              ? MAX_PAYLOAD_BYTES
-              : MAX_PREAUTH_PAYLOAD_BYTES,
+          limitBytes:
+            connectionKind === "worker"
+              ? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES
+              : client
+                ? MAX_PAYLOAD_BYTES
+                : MAX_PREAUTH_PAYLOAD_BYTES,
           reason: client ? "ws_frame_limit" : "preauth_frame_limit",
         });
       }
@@ -409,7 +376,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     socket.on("pong", () => {
-      awaitingPong = false;
       if (client?.presenceKey) {
         touchPresence(client.presenceKey);
       }
@@ -456,16 +422,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const isExpectedStartupRetryClose = closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE;
         const logFn =
           isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
-          isExpectedStartupRetryClose ||
+          closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE ||
           isExpectedLocalAppStartupAbort(code)
             ? logWsControl.debug
             : logWsControl.warn;
         const authReason = stringMetaValue(closeMeta, "authReason");
-        // This pre-connect close path has no client object yet; treat only
-        // missing shared credentials as suppressible startup retry noise.
+        // Only missing shared credentials are suppressible startup retry noise.
         const shouldLimitMissingAuthClose =
           closeCause === "unauthorized" &&
           shouldLimitMissingCredentialAuthLog({
@@ -510,18 +474,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         const context = buildRequestContext();
         cleanupTalkConnection(connId, logGateway);
         context.unsubscribeAllSessionEvents(connId);
-        // Detach (or, with a zero grace period, kill) any PTY shells this
-        // connection owned; detached sessions stay reattachable via
-        // terminal.attach until their reaper fires.
+        // Detach or kill owned PTY shells; detached sessions remain reattachable until reaped.
         context.terminalSessions?.handleDisconnect(connId);
         let currentDisconnectedNodeId: string | null = null;
         let disconnectedNodeHistory:
-          | {
-              nodeId: string;
-              connectedAtMs: number;
-              disconnectedAtMs: number;
-              pairingGeneration: string;
-            }
+          | Parameters<typeof recordPairedNodeDisconnection>[0]
           | undefined;
         if (client?.connect?.role === "node") {
           const nodeId = client.connect.device?.id ?? client.connect.client.id;
@@ -531,11 +488,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
               nodeId: nodeSession.nodeId,
               connectedAtMs: nodeSession.connectedAtMs,
               disconnectedAtMs: Date.now(),
-              pairingGeneration: nodeSession.pairingGeneration,
+              expectedPairingGeneration: {
+                nodeId: nodeSession.nodeId,
+                key: nodeSession.pairingGeneration,
+              },
             };
           }
-          // Retire I/O immediately, but keep the client revocable until admitted
-          // lifecycle work drains; pairing/token removal must still fence it.
+          // Retire I/O now, but retain revocation until admitted lifecycle work drains.
           retainClientUntilNodeDrain = true;
           retireTransport();
           try {
@@ -548,30 +507,12 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
               }
             }
             currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
-            if (
-              disconnectedNodeHistory &&
-              currentDisconnectedNodeId === disconnectedNodeHistory.nodeId
-            ) {
-              try {
-                await recordPairedNodeDisconnection({
-                  nodeId: disconnectedNodeHistory.nodeId,
-                  connectedAtMs: disconnectedNodeHistory.connectedAtMs,
-                  disconnectedAtMs: disconnectedNodeHistory.disconnectedAtMs,
-                  expectedPairingGeneration: {
-                    nodeId: disconnectedNodeHistory.nodeId,
-                    key: disconnectedNodeHistory.pairingGeneration,
-                  },
-                });
-              } catch (error) {
-                logGateway.warn(
-                  `failed to record node disconnect for ${disconnectedNodeHistory.nodeId}: ${formatForLog(error)}`,
-                );
-              }
-            }
           } finally {
             retainClientUntilNodeDrain = false;
           }
         }
+        // Retire node-owned projections before history persistence yields; a reconnect
+        // may own this node id by the time the write finishes.
         if (
           client?.presenceKey &&
           (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
@@ -586,6 +527,18 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           removeRemoteNodeInfo(currentDisconnectedNodeId);
           context.nodeUnsubscribeAll(currentDisconnectedNodeId);
           clearNodeWakeState(currentDisconnectedNodeId);
+        }
+        if (
+          disconnectedNodeHistory &&
+          currentDisconnectedNodeId === disconnectedNodeHistory.nodeId
+        ) {
+          try {
+            await recordPairedNodeDisconnection(disconnectedNodeHistory);
+          } catch (error) {
+            logGateway.warn(
+              `failed to record node disconnect for ${disconnectedNodeHistory.nodeId}: ${formatForLog(error)}`,
+            );
+          }
         }
       }
       logWs("out", "close", {
@@ -604,22 +557,38 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       close();
     };
     socket.once("close", (code, reason) => {
-      void handleSocketClose(code, reason).catch((error: unknown) => {
-        logGateway.error(`websocket close cleanup failed conn=${connId}: ${formatError(error)}`);
-        close();
-      });
+      // Delivery subscriptions end before asynchronous node drain or history cleanup.
+      connectionController.abort();
+      clearTimeout(shutdownTimer);
+      // ws removes its client synchronously; the Gateway retains this connection
+      // until asynchronous node history and other close cleanup have settled.
+      void connectionWork
+        .trackCleanup(() => handleSocketClose(code, reason))
+        .catch((error: unknown) => {
+          logGateway.error(`websocket close cleanup failed conn=${connId}: ${formatError(error)}`);
+          close();
+        })
+        .finally(releaseConnection);
     });
 
     const setClient = (next: GatewayWsClient) => {
-      // Concurrent connect frames can finish authentication out of order. Keep
-      // one socket owner so a raced finalizer cannot leak a client or ping loop.
+      // Keep one socket owner when concurrent connect frames finish out of order.
       if (closed || client) {
+        return false;
+      }
+      if (
+        next.connect.role === "node" &&
+        !reconcileClientPluginNodeCapabilities(
+          next,
+          indexPluginNodeCapabilitySurfaces(getPluginNodeCapabilities?.() ?? []),
+          () => close(1012, "node capabilities changed"),
+        )
+      ) {
         return false;
       }
       if (next.worker) {
         for (const existing of clients) {
           if (existing.worker?.environmentId === next.worker.environmentId) {
-            // Fence queued frames before transport teardown releases the old handler and timers.
             existing.invalidated = true;
             clients.delete(existing);
             try {
@@ -631,50 +600,53 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         }
       }
       releasePreauthBudget();
+      next.connectionSignal = connectionController.signal;
       client = next;
       clients.add(next);
-      pingTimer = setInterval(() => {
-        // A half-open TCP connection can remain OPEN indefinitely. Terminate
-        // after one missed pong so the normal close handler releases node state.
-        if (awaitingPong) {
-          setCloseCause("heartbeat-timeout");
-          try {
-            socket.terminate();
-          } catch {
-            close();
-          }
-          return;
-        }
-        awaitingPong = true;
+      if (
+        next.presenceKey &&
+        (next.authenticatedUserId || next.authenticatedUserProfile) &&
+        next.connect.role !== "node"
+      ) {
+        next.personPresence = { onlineSince: Date.now() };
+        refreshClientPresence(clients, next);
+      }
+      stopKeepalive = startWebSocketKeepalive(socket, () => {
+        // A half-open control connection must release its node and worker owners.
+        setCloseCause("heartbeat-timeout");
         try {
-          socket.ping();
+          socket.terminate();
         } catch {
-          // close() clears the timer; ping can race with a socket already entering CLOSING.
+          close();
         }
-      }, 25_000);
+      });
       return true;
     };
 
+    const connectionLifecycle = {
+      socket,
+      connectionWork,
+      connId,
+      isStartupPending,
+      send,
+      close,
+      isClosed: () => closed,
+      clearHandshakeTimer: () => clearTimeout(handshakeTimer),
+      getClient: () => client,
+      setClient,
+      setHandshakeState: (next: "pending" | "connected" | "failed") => {
+        handshakeState = next;
+      },
+      advanceHandshakePhase,
+      setCloseCause,
+      setLastFrameMeta,
+      logGateway,
+      logWsControl,
+    };
     if (connectionKind === "worker") {
       cleanupWorkerConnection = attachWorkerWsMessageHandler({
-        socket,
-        connId,
+        ...connectionLifecycle,
         service: workerConnectionService,
-        isStartupPending,
-        send,
-        close,
-        isClosed: () => closed,
-        clearHandshakeTimer: () => clearTimeout(handshakeTimer),
-        getClient: () => client,
-        setClient,
-        setHandshakeState: (next) => {
-          handshakeState = next;
-        },
-        advanceHandshakePhase,
-        setCloseCause,
-        setLastFrameMeta,
-        logGateway,
-        logWsControl,
         publicAdmission: publicWorkerIngress,
       });
       return;
@@ -689,10 +661,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     }
 
     attachGatewayWsMessageHandlerOnDemand({
-      socket,
+      ...connectionLifecycle,
       upgradeReq,
       ingressAttribution,
-      connId,
+      bootId: params.bootId,
       remoteAddr,
       remotePort,
       localAddr,
@@ -711,7 +683,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       rateLimiter,
       browserRateLimiter,
       nodeReapprovalCoordinator,
-      isStartupPending,
       isPendingWorkerNodeSetup,
       gatewayMethods,
       events,
@@ -720,22 +691,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       buildRequestContext,
       nodeLifecycleDispatch,
       refreshHealthSnapshot,
-      send,
-      close,
-      isClosed: () => closed,
-      clearHandshakeTimer: () => clearTimeout(handshakeTimer),
-      getClient: () => client,
-      setClient,
-      setHandshakeState: (next) => {
-        handshakeState = next;
-      },
-      advanceHandshakePhase,
-      setCloseCause,
-      setLastFrameMeta,
       originCheckMetrics,
-      logGateway,
       logHealth,
-      logWsControl,
     });
   });
 }

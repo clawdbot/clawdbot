@@ -26,6 +26,7 @@ import { isTelegramExtensionRoot } from "../../test/vitest/vitest.extension-tele
 import { isVoiceCallExtensionRoot } from "../../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
+import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
@@ -58,33 +59,34 @@ export type ExtensionBatchPlan = {
 type ExtensionTestShard = ExtensionBatchPlan & { checkName: string };
 
 const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
-  // CI shard planning uses measured wall time rather than raw file count.
-  // These ratios come from Blacksmith extension batch timings; import-heavy
-  // suites vary widely, and file count alone leaves long tail shards.
-  "test/vitest/vitest.extension-acpx.config.ts": 0.75,
-  "test/vitest/vitest.extension-browser.config.ts": 0.5,
-  "test/vitest/vitest.extension-codex.config.ts": 1.3,
-  "test/vitest/vitest.extension-diffs.config.ts": 0.6,
-  "test/vitest/vitest.extension-discord.config.ts": 0.62,
-  "test/vitest/vitest.extension-feishu.config.ts": 0.18,
+  // Use the larger complete-family seconds/file from runs 33676780376/33747183683.
+  // Round up to 0.01s and retain prior floors; both used two CPUs and two workers.
+  // Runner setup and runtime preparation are charged separately.
+  "test/vitest/vitest.extension-acpx.config.ts": 2.3,
+  "test/vitest/vitest.extension-browser.config.ts": 0.71,
+  "test/vitest/vitest.extension-codex.config.ts": 5.28,
+  "test/vitest/vitest.extension-diffs.config.ts": 1.97,
+  "test/vitest/vitest.extension-discord.config.ts": 0.76,
+  "test/vitest/vitest.extension-feishu.config.ts": 0.72,
   "test/vitest/vitest.extension-imessage.config.ts": 1.7,
-  "test/vitest/vitest.extension-irc.config.ts": 1,
+  "test/vitest/vitest.extension-irc.config.ts": 2.06,
   "test/vitest/vitest.extension-line.config.ts": 1.1,
-  "test/vitest/vitest.extension-matrix.config.ts": 0.28,
-  "test/vitest/vitest.extension-mattermost.config.ts": 0.75,
-  "test/vitest/vitest.extension-media.config.ts": 0.7,
-  "test/vitest/vitest.extension-memory.config.ts": 1,
-  "test/vitest/vitest.extension-messaging.config.ts": 0.4,
-  "test/vitest/vitest.extension-misc.config.ts": 0.7,
-  "test/vitest/vitest.extension-msteams.config.ts": 0.5,
-  "test/vitest/vitest.extension-provider-openai.config.ts": 1.35,
-  "test/vitest/vitest.extension-providers.config.ts": 0.5,
-  "test/vitest/vitest.extension-qa.config.ts": 0.65,
-  "test/vitest/vitest.extension-slack.config.ts": 0.45,
-  "test/vitest/vitest.extension-telegram.config.ts": 0.72,
-  "test/vitest/vitest.extension-voice-call.config.ts": 0.27,
+  "test/vitest/vitest.extension-matrix.config.ts": 1.37,
+  "test/vitest/vitest.extension-mattermost.config.ts": 1.48,
+  "test/vitest/vitest.extension-media.config.ts": 1.38,
+  "test/vitest/vitest.extension-memory.config.ts": 1.57,
+  "test/vitest/vitest.extension-messaging.config.ts": 0.72,
+  "test/vitest/vitest.extension-misc.config.ts": 1.16,
+  "test/vitest/vitest.extension-msteams.config.ts": 0.62,
+  "test/vitest/vitest.extension-provider-openai.config.ts": 1.48,
+  "test/vitest/vitest.extension-providers.config.ts": 1.92,
+  "test/vitest/vitest.extension-qa.config.ts": 1.3,
+  "test/vitest/vitest.extension-signal.config.ts": 1.1,
+  "test/vitest/vitest.extension-slack.config.ts": 0.96,
+  "test/vitest/vitest.extension-telegram.config.ts": 8.98,
+  "test/vitest/vitest.extension-voice-call.config.ts": 1.38,
   "test/vitest/vitest.extension-whatsapp.config.ts": 0.8,
-  "test/vitest/vitest.extension-zalo.config.ts": 0.7,
+  "test/vitest/vitest.extension-zalo.config.ts": 0.94,
   // This shared config is comparatively cheap per file, so raw file count
   // overstates its real wall-clock cost during CI shard planning.
   "test/vitest/vitest.extensions.config.ts": 1.1,
@@ -114,6 +116,13 @@ const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map<string, number>([
   ],
 ]);
 const EXTENSION_TEST_JOB_FILE_LIMITS = new Map<string, number>([
+  // The 468-file catch-all took 528–829s on two detected CPUs. Six jobs leave
+  // room for checkout/setup without changing its non-isolated worker lifecycle.
+  ["test/vitest/vitest.extensions.config.ts", 90],
+  // Run 33449014227: QA took 203s and isolated providers 271s on two detected
+  // CPUs. Reuse the job-only bound; Vitest keeps each config's file lifecycle.
+  ["test/vitest/vitest.extension-qa.config.ts", 90],
+  ["test/vitest/vitest.extension-providers.config.ts", 90],
   // Bound Telegram CI jobs so isolate recycling stays inside one job instead
   // of minting one runner per test file. Ten files keeps the worst job near
   // 3 minutes (observed 2026-08: ~45s runner setup + ~7-24s per file) while
@@ -153,45 +162,46 @@ function isPathInsideRepo(relativePath: string) {
 }
 
 function isSkippedTrackedTestFile(relativePath: string) {
-  return relativePath
-    .split("/")
-    .some((segment) => segment === "dist" || segment === "node_modules");
+  return (
+    isPluginControlUiPath(relativePath) ||
+    relativePath.split("/").some((segment) => segment === "dist" || segment === "node_modules")
+  );
 }
 
 let trackedRepoTestFiles: string[] | null | undefined;
 // Large checkouts exceed Node's 1 MiB spawnSync default. Preserve the Git inventory path;
 // ENOBUFS would otherwise trigger expensive extension-directory walks.
-const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
-function loadTrackedRepoTestFiles() {
-  if (trackedRepoTestFiles !== undefined) {
-    return trackedRepoTestFiles;
-  }
-
+export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
-  const result = spawnSync("git", ["ls-files", "--", ...TRACKED_EXTENSION_TEST_PATHSPECS], {
-    cwd: repoRoot,
+  const result = spawnSync("git", ["ls-files", "--", ...pathspecs], {
+    cwd,
     encoding: "utf8",
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status !== 0 || result.error) {
-    trackedRepoTestFiles = null;
-    return trackedRepoTestFiles;
+    return null;
   }
-
-  // Tracked repository metadata is immutable during one planner invocation.
-  // Reuse one inventory so broad extension plans do not fork Git per plugin.
-  trackedRepoTestFiles = result.stdout
+  return result.stdout
     .split("\n")
     .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter(
-      (line) =>
-        line.length > 0 &&
-        !isSkippedTrackedTestFile(line) &&
-        (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
-    );
+    .filter(Boolean);
+}
+
+function loadTrackedRepoTestFiles() {
+  // Tracked repository metadata is immutable during one planner invocation.
+  // Reuse one inventory so broad extension plans do not fork Git per plugin.
+  if (trackedRepoTestFiles === undefined) {
+    trackedRepoTestFiles =
+      listTrackedTestPlanFiles(repoRoot, TRACKED_EXTENSION_TEST_PATHSPECS)?.filter(
+        (line) =>
+          !isSkippedTrackedTestFile(line) &&
+          (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
+      ) ?? null;
+  }
   return trackedRepoTestFiles;
 }
 
@@ -224,6 +234,9 @@ function listFilesystemTestFiles(rootPath: string) {
     }
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
+      if (isPluginControlUiPath(normalizeRelative(path.relative(repoRoot, fullPath)))) {
+        continue;
+      }
       if (entry.isDirectory()) {
         if (entry.name === "node_modules" || entry.name === "dist") {
           continue;
@@ -238,17 +251,6 @@ function listFilesystemTestFiles(rootPath: string) {
   }
 
   return files.toSorted((left, right) => left.localeCompare(right));
-}
-
-/** List tracked or filesystem-discovered test files for extension roots. */
-export function listTrackedTestFilesForRoots(roots: string[]) {
-  const files = [];
-  for (const root of roots) {
-    const rootPath = path.join(repoRoot, root);
-    const trackedFiles = listTrackedTestFiles(rootPath) ?? listFilesystemTestFiles(rootPath);
-    files.push(...trackedFiles);
-  }
-  return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
 }
 
 /** List working-tree test files for extension roots, including new untracked tests. */
@@ -294,7 +296,7 @@ export function splitExtensionTestProcessTargets(config: string, targets: string
     : [uniqueSortedTargets(targets)];
 }
 
-/** Split an extension config's test files across CI jobs without changing process lifetime. */
+/** Split an extension config's test files into CI envelopes without changing process lifetime. */
 export function splitExtensionTestJobTargets(config: string, targets: string[]) {
   const maxFilesPerJob = resolveExtensionTestJobFileLimit(config);
   return maxFilesPerJob
@@ -333,7 +335,7 @@ function countTestFiles(rootPath: string) {
   return listFilesystemTestFiles(rootPath).length;
 }
 
-function estimatePlanCost(config: string, testFileCount: number) {
+export function estimateExtensionTestCost(config: string, testFileCount: number) {
   const multiplier = EXTENSION_TEST_COST_MULTIPLIERS[config] ?? 1;
   return Math.max(1, Math.ceil(testFileCount * multiplier));
 }
@@ -402,7 +404,7 @@ export function resolveExtensionTestPlan(params: { cwd?: string; targetArg?: str
     (sum, root) => sum + countTestFiles(path.join(repoRoot, root)),
     0,
   );
-  const estimatedCost = estimatePlanCost(config, testFileCount);
+  const estimatedCost = estimateExtensionTestCost(config, testFileCount);
 
   return {
     config,
@@ -417,7 +419,7 @@ export function resolveExtensionTestPlan(params: { cwd?: string; targetArg?: str
 
 type ResolvedExtensionTestPlan = ReturnType<typeof resolveExtensionTestPlan>;
 
-function mergeTestPlans(plans: ResolvedExtensionTestPlan[]): ExtensionBatchPlan {
+export function mergeExtensionTestPlans(plans: ResolvedExtensionTestPlan[]): ExtensionBatchPlan {
   const groupsByConfig = new Map<string, ExtensionTestPlanGroup>();
 
   const testPlans = plans.filter((plan) => plan.hasTests);
@@ -473,7 +475,9 @@ export function resolveExtensionBatchPlan(params: { cwd?: string; extensionIds?:
     resolveExtensionTestPlan({ cwd, targetArg: extensionId }),
   );
 
-  return mergeTestPlans(hasExplicitExtensionIds ? plans : plans.filter((plan) => plan.hasTests));
+  return mergeExtensionTestPlans(
+    hasExplicitExtensionIds ? plans : plans.filter((plan) => plan.hasTests),
+  );
 }
 
 type PendingExtensionTestShard = {
@@ -534,7 +538,7 @@ export function createExtensionTestShards(
       Object.assign(
         {},
         { index, checkName: `checks-node-extensions-shard-${index + 1}` },
-        mergeTestPlans(shard.plans),
+        mergeExtensionTestPlans(shard.plans),
       ),
     )
     .filter((shard) => shard.hasTests);

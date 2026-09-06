@@ -6,6 +6,7 @@ import type { RealtimeVoiceAgentControlResult } from "../talk/agent-run-control.
 import type {
   RealtimeVoiceBrowserAudioContract,
   RealtimeVoiceAudioClearReason,
+  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
@@ -16,6 +17,7 @@ import type { TalkEvent } from "../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { TalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 import type { RelayToolCallLedger } from "./talk-realtime-relay-tool-call-ledger.js";
+import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
 export const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 export const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
@@ -28,6 +30,7 @@ export const noFallbackRelayOutputFlush = () => {};
 
 export type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
+  | { relaySessionId: string; type: "responseStarted"; turnId: string }
   | { relaySessionId: string; type: "inputAudio"; byteLength: number }
   | {
       relaySessionId: string;
@@ -77,6 +80,7 @@ export type ForcedTerminalProviderResult = {
   options?: RealtimeVoiceToolResultOptions;
   turnId: string;
   epoch: number;
+  nativeCallIds?: readonly string[];
 };
 
 export type RelayAgentControlProviderSubmission = {
@@ -84,14 +88,111 @@ export type RelayAgentControlProviderSubmission = {
   providerResponseStarted: boolean;
 };
 
+type RelayProvider = RealtimeVoiceProviderPlugin;
+export class TalkRealtimeRelayOutputOwnership {
+  mode: "turn-bound" | "exact-response" = "turn-bound";
+  phase: "unowned" | "owned" | "cancelling" = "unowned";
+  outputGeneration = 0;
+  turnId?: string;
+  responseId?: string;
+  drain?: { promise: Promise<void>; resolve: () => void };
+
+  constructor(
+    private readonly activeTurnId: () => string | undefined,
+    private readonly ensureTurn: () => string,
+    private readonly fail: (message: string) => void,
+  ) {}
+
+  responseCreated(responseId: string | undefined): boolean {
+    const normalizedResponseId = responseId?.trim();
+    if (this.phase === "unowned") {
+      Object.assign(this, {
+        mode: normalizedResponseId ? ("exact-response" as const) : ("turn-bound" as const),
+        phase: "owned" as const,
+        turnId: this.ensureTurn(),
+        responseId: normalizedResponseId,
+      });
+      return true;
+    }
+    if (
+      this.phase === "owned" &&
+      this.mode === "exact-response" &&
+      normalizedResponseId &&
+      normalizedResponseId === this.responseId
+    ) {
+      return true;
+    }
+    this.fail("Realtime provider output has no live response owner.");
+    return false;
+  }
+
+  resolve(claim: boolean): string | undefined {
+    const activeTurnId = this.activeTurnId();
+    if (
+      this.phase !== "cancelling" &&
+      activeTurnId &&
+      this.mode === "turn-bound" &&
+      claim &&
+      this.phase === "unowned"
+    ) {
+      Object.assign(this, { phase: "owned" as const, turnId: activeTurnId });
+    }
+    const turnId =
+      this.phase === "owned" && this.turnId === activeTurnId ? activeTurnId : undefined;
+    if (!turnId && (claim || this.phase === "owned")) {
+      this.fail("Realtime provider output has no live response owner.");
+    }
+    return turnId;
+  }
+
+  finish(responseId: string | undefined, cancellationEvent = false) {
+    const cancelled = this.phase === "cancelling";
+    if (
+      (cancellationEvent && !cancelled) ||
+      (this.mode === "exact-response" &&
+        (this.phase === "unowned" || this.responseId !== responseId))
+    ) {
+      return "ignore";
+    }
+    this.drain?.resolve();
+    Object.assign(this, { phase: "unowned" as const, turnId: undefined, responseId: undefined });
+    return cancelled ? "cancelled" : "completed";
+  }
+
+  bind(provider: RelayProvider, runAgentConsult: RealtimeVoiceAgentConsultRunner): RelayProvider {
+    return {
+      ...provider,
+      createBridge: (request) =>
+        provider.createBridge({
+          ...request,
+          onEvent: (event) => {
+            if (
+              event.direction === "server" &&
+              event.type === "response.created" &&
+              !this.responseCreated(event.responseId)
+            ) {
+              return;
+            }
+            request.onEvent?.(event);
+          },
+          runAgentConsult,
+        }),
+    };
+  }
+}
+
 export type RelaySession = {
+  getToolAuthorityOverlay?: (
+    authority?: TalkAgentConsultAuthority,
+    source?: "reply" | "attempt",
+  ) => import("../auto-reply/reply/reply-run-registry.contracts.js").ReplyToolAuthorityOverlay;
   id: string;
   connId: string;
   context: GatewayRequestContext;
   bridge: RealtimeVoiceBridgeSession;
   harness: RealtimeVoiceSessionHarness;
-  sessionKey?: string;
-  agentId?: string;
+  outputOwnership: TalkRealtimeRelayOutputOwnership;
+  sessionTarget: PreparedTalkSessionTarget;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
   activeAgentRuns: Map<string, string>;
@@ -116,7 +217,6 @@ export type RelaySession = {
   voiceTranscriptQueue: BoundedSerialQueue;
   voiceSessionClose?: Promise<void>;
   failSession: (message: string) => void;
-  pendingVoiceTranscripts: Array<{ role: "user" | "assistant"; text: string }>;
 };
 
 export type CreateTalkRealtimeRelaySessionParams = {
@@ -126,10 +226,12 @@ export type CreateTalkRealtimeRelaySessionParams = {
   consultAuthority?: TalkAgentConsultAuthority;
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
+  controlSource: "delegation" | "transcript";
+  supportsToolCalls?: boolean;
   instructions: string;
   tools: RealtimeVoiceTool[];
   model?: string;
-  sessionKey?: string;
+  sessionTarget: PreparedTalkSessionTarget;
   voice?: string;
   language?: string;
   forceAgentConsultOnFinalTranscript?: boolean;

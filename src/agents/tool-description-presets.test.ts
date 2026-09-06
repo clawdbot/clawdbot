@@ -1,11 +1,41 @@
 import { describe, expect, it } from "vitest";
 import {
+  describeAskUserTool,
+  describeSecretsTool,
   describeSessionsHistoryTool,
   describeSessionsListTool,
   describeSessionsSearchTool,
   describeSessionsSendTool,
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
+
+describe("ask_user tool guidance", () => {
+  it("keeps native-control requirements visible to the model", () => {
+    const description = describeAskUserTool();
+
+    expect(description).toContain("exactly one question per call");
+    expect(description).toContain("native controls");
+    expect(description).toContain("Put every selectable choice in `options`");
+    expect(description).toContain("Use `multiSelect` only");
+  });
+});
+
+describe("secrets tool guidance", () => {
+  it("distinguishes config references from egress permission without offering plaintext", () => {
+    const description = describeSecretsTool();
+    expect(description).toContain("`list` metadata first");
+    expect(description).toContain("human masked entry");
+    expect(description).toContain("store SecretRef for supported config fields");
+    expect(description).toContain("enabled proxy + exact allowedHosts required");
+    expect(description).toContain("no hosts blocks egress, not config refs");
+    expect(description).toContain("No plaintext fallback");
+    expect(description).toContain("auto-injected opaque env sentinel under stored name");
+    expect(description).toContain("No secret templates; never override/print that variable");
+    expect(description).toContain("Native shell/sandbox/node: no protected injection");
+    expect(description).toContain("late saves need next turn");
+    expect(description).toContain("no_answer: report blocker or use best judgment");
+  });
+});
 
 const SESSION_LINK_BASE = "http://127.0.0.1:18789/control";
 const SESSION_LINK_LINE =
@@ -15,19 +45,18 @@ const SESSION_DESCRIPTIONS = [
     tool: "sessions_list",
     describe: describeSessionsListTool,
     original:
-      "List visible sessions and sidebar categories; filter kind/label/agentId/search/activity/archive. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
+      "List visible sessions and sidebar groups; filter kind/label/agentId/search/activity/archive. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
   },
   {
     tool: "sessions_history",
     describe: describeSessionsHistoryTool,
     original:
-      "Read sanitized visible-session history. Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
+      "Read sanitized visible-session history. Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
   },
   {
     tool: "sessions_search",
     describe: describeSessionsSearchTool,
-    original:
-      "Search your own past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+    original: "Search visible past sessions for matching user and assistant text.",
   },
 ] as const;
 
@@ -48,7 +77,9 @@ describe("sessions_send tool description", () => {
     expect(SESSIONS_SEND_TOOL_DISPLAY_SUMMARY).toContain("same-Gateway");
     expect(describeSessionsSendTool()).toContain("on this Gateway");
     expect(describeSessionsSendTool()).toContain("not an external address");
-    expect(describeSessionsSendTool()).toContain("`conversations_send`/`conversations_turn`");
+    expect(describeSessionsSendTool()).not.toContain("conversations_");
     expect(describeSessionsSendTool()).toContain("reply may still announce");
+    expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
+    expect(describeSessionsSendTool()).toContain("neither proves target completion");
   });
 });

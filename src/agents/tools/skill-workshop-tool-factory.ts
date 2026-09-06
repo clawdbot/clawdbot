@@ -6,7 +6,7 @@ import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
 
 export function createConfiguredSkillWorkshopTool(params: {
   workspaceDir: string;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   agentId: string;
   sessionKey?: string;
   runId?: string;
@@ -41,8 +41,8 @@ export function createConfiguredSkillWorkshopTool(params: {
       params.run?.proposalMutationBudget ??
       (params.run?.proposalOnly ? { remaining: 1 } : undefined),
     proposalReviewCompletion: params.run?.proposalReviewCompletion,
-    collectionReconcile: params.run?.collectionReconcile,
     modelContextWindowTokens: params.modelContextWindowTokens,
     proposalRevision: params.run?.proposalRevision,
+    libraryAuthoring: params.run?.libraryAuthoring,
   });
 }

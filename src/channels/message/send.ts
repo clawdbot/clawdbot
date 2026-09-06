@@ -3,8 +3,9 @@
  *
  * Sends rendered reply payloads, records live preview state, and classifies delivery outcomes.
  */
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
+import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   type OutboundDeliveryResult,
@@ -427,8 +428,37 @@ export async function sendDurableMessageBatchCore(
         durability: "required" as const,
       }
     : {};
+  const ephemeralWriterAuthorities = pendingFinalCompletion
+    ? []
+    : params.payloads.flatMap((payload) => {
+        const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
+        return authority ? [authority] : [];
+      });
+  const onPlatformSendDispatch =
+    ephemeralWriterAuthorities.length > 0
+      ? async () => {
+          for (const authority of ephemeralWriterAuthorities) {
+            assertSessionWriterDeliveryAuthorized(authority);
+          }
+          await params.onPlatformSendDispatch?.();
+        }
+      : params.onPlatformSendDispatch;
+  const assertDirectAdapterHandoff =
+    ephemeralWriterAuthorities.length > 0
+      ? () => {
+          params.assertDirectAdapterHandoff?.();
+          for (const authority of ephemeralWriterAuthorities) {
+            assertSessionWriterDeliveryAuthorized(authority);
+          }
+        }
+      : params.assertDirectAdapterHandoff;
   return await withDurableMessageSendContextCore(
-    { ...params, ...pendingFinalDelivery },
+    {
+      ...params,
+      ...pendingFinalDelivery,
+      onPlatformSendDispatch,
+      assertDirectAdapterHandoff,
+    },
     async (ctx) => {
       const rendered = await ctx.render();
       const result = await ctx.send(rendered);

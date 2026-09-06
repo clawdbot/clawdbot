@@ -1,11 +1,18 @@
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 export type PreparedModelRuntimeAuth = Readonly<{
   authStore: AuthProfileStore;
   authModes: PreparedAgentCredentialModes;
 }>;
+
+export type PreparedModelCatalogAuth = PreparedModelRuntimeAuth &
+  Readonly<{
+    /** Unobserved discovery credentials cannot authorize account-inventory retention. */
+    credentials?: Readonly<AuthStorageData>;
+  }>;
 
 export type PreparedModelRuntimeAuthScope = Readonly<{
   providerIds: readonly string[];
@@ -19,6 +26,7 @@ const authLoaderBySnapshot = new WeakMap<
   object,
   (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>
 >();
+const authByFullCatalog = new WeakMap<object, PreparedModelCatalogAuth>();
 
 // Secret-bearing state stays lifecycle-owned without becoming part of the public snapshot shape.
 export function setPreparedModelRuntimeAuthStore(
@@ -30,6 +38,17 @@ export function setPreparedModelRuntimeAuthStore(
 
 export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileStore | undefined {
   return authStoreBySnapshot.get(snapshot);
+}
+
+export function setPreparedModelFullCatalogAuth(
+  snapshot: object,
+  auth: PreparedModelCatalogAuth,
+): void {
+  authByFullCatalog.set(snapshot, auth);
+}
+
+export function getPreparedModelFullCatalogAuth(snapshot: object) {
+  return authByFullCatalog.get(snapshot);
 }
 
 export function setPreparedModelRuntimeAuthLoader(
@@ -62,4 +81,19 @@ export function getPreparedModelRuntimeAuthMaterializations(
   snapshot: object,
 ): readonly RuntimeAuthMaterialization[] {
   return materializationsBySnapshot.get(snapshot) ?? [];
+}
+
+export function copyPreparedModelRuntimeAuthBindings(source: object, target: object): void {
+  const authStore = authStoreBySnapshot.get(source);
+  const authLoader = authLoaderBySnapshot.get(source);
+  const materializations = materializationsBySnapshot.get(source);
+  if (authStore) {
+    authStoreBySnapshot.set(target, authStore);
+  }
+  if (authLoader) {
+    authLoaderBySnapshot.set(target, authLoader);
+  }
+  if (materializations) {
+    materializationsBySnapshot.set(target, materializations);
+  }
 }

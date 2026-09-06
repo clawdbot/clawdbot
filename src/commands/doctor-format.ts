@@ -3,11 +3,9 @@ import { formatCliCommand } from "../cli/command-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
-  resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
-import { resolveDaemonContainerContext } from "../daemon/container-context.js";
 import { formatRuntimeStatus } from "../daemon/runtime-format.js";
-import { buildPlatformRuntimeLogHints } from "../daemon/runtime-hints.js";
+import { buildGatewayRuntimeRecoveryHints } from "../daemon/runtime-hints.js";
 import {
   getSystemdCgroupHygieneSummary,
   isSystemdCgroupHygieneRisk,
@@ -45,7 +43,6 @@ export function buildGatewayRuntimeHints(
   }
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
-  const container = Boolean(resolveDaemonContainerContext(env));
   const fileLog = (() => {
     try {
       return getResolvedLoggerSettings().file;
@@ -53,12 +50,13 @@ export function buildGatewayRuntimeHints(
       return null;
     }
   })();
-  if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
+  const systemdDetail = runtime.inspectionFailure?.detail ?? runtime.detail;
+  if (platform === "linux" && isSystemdUnavailableDetail(systemdDetail)) {
     hints.push(
       ...renderSystemdUnavailableHints({
         wsl: isWSLEnv(env),
-        kind: classifySystemdUnavailableDetail(runtime.detail),
-        container,
+        kind: classifySystemdUnavailableDetail(systemdDetail),
+        env,
       }),
     );
     if (fileLog) {
@@ -80,52 +78,30 @@ export function buildGatewayRuntimeHints(
     }
     return hints;
   }
-  if (runtime.missingGuiSession && platform === "darwin") {
-    hints.push(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
-    );
-    hints.push(
-      `Sign in to the macOS desktop as this user, then run: ${formatCliCommand("openclaw gateway restart", env)}`,
-    );
-    hints.push(
-      "For headless VM setups, enable auto-login for the target user or use a custom LaunchDaemon (not shipped).",
-    );
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
-  }
-  if (runtime.missingSupervision && platform === "darwin") {
-    hints.push(
-      `LaunchAgent installed but not loaded. Run: ${formatCliCommand("openclaw gateway restart", env)}`,
-    );
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
-  }
-  if (runtime.status === "stopped") {
-    if (platform === "linux" && isSystemdStartLimitHit(runtime)) {
+  const missingGuiSession = runtime.missingGuiSession && platform === "darwin";
+  if (missingGuiSession || runtime.status === "stopped") {
+    if (!missingGuiSession && platform === "linux" && isSystemdStartLimitHit(runtime)) {
       // start-limit-hit means systemd gave up restarting after repeated crashes;
       // a plain "exited immediately" hint would hide that recovery needs a restart.
       hints.push(
         "systemd stopped restarting the gateway after repeated crashes.",
         `Recover with: ${formatCliCommand("openclaw gateway restart", env)}, then inspect logs if it keeps crashing.`,
       );
-    } else {
+    } else if (!missingGuiSession) {
       hints.push("Service is loaded but not running (likely exited immediately).");
     }
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
     hints.push(
-      ...buildPlatformRuntimeLogHints({
+      ...buildGatewayRuntimeRecoveryHints({
+        kind: missingGuiSession ? "gui-session" : "stopped",
+        restartCommand: formatCliCommand("openclaw gateway restart", env),
+        logFile: fileLog,
         platform,
         env,
-        systemdServiceName: resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE),
-        windowsTaskName: resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE),
       }),
     );
+    if (missingGuiSession) {
+      return hints;
+    }
   }
   if (platform === "linux" && isSystemdCgroupHygieneRisk(runtime.systemd)) {
     const unit =

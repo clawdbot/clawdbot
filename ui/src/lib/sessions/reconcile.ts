@@ -12,6 +12,9 @@ import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
+  type UiSessionDefaultsHost,
 } from "./session-key.ts";
 
 export type SessionReconcileOptions = {
@@ -73,6 +76,11 @@ export function appendSessionResults(
 
 type SessionChangedEventInfo = {
   key: string;
+  reason: string | null;
+  sessionId?: string;
+  updatedAt: number | null;
+  hasPermissionMode: boolean;
+  thinkingLevel?: string | null;
   agentId: string | null;
   runId: string | null;
   clientRunId: string | null;
@@ -187,6 +195,37 @@ export function reconcileRosterPresentationMetadata(
   return changed ? { ...incoming, sessions } : incoming;
 }
 
+export function preserveCurrentSessionRow(
+  result: SessionsListResult,
+  state: { result: SessionsListResult | null; agentId: string | null },
+  snapshot: UiSessionDefaultsHost & { sessionKey?: string },
+  backgroundHydrate: boolean,
+): SessionsListResult {
+  const currentKey = snapshot.sessionKey?.trim();
+  if (!currentKey) {
+    return result;
+  }
+  const parsedAgentId = parseAgentSessionKey(currentKey)?.agentId;
+  const currentAgentId = normalizeAgentId(
+    parsedAgentId ?? resolveUiSelectedGlobalAgentId(snapshot),
+  );
+  if (!parsedAgentId && normalizeAgentId(state.agentId ?? "") !== currentAgentId) {
+    return result;
+  }
+  const matchesCurrent = (row: GatewaySessionRow) =>
+    uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey, row.agentId);
+  const previousCurrentRow = state.result?.sessions.find(matchesCurrent);
+  if (
+    previousCurrentRow &&
+    (backgroundHydrate || previousCurrentRow.archived === true) &&
+    !result.sessions.some(matchesCurrent)
+  ) {
+    const sessions = [...result.sessions, previousCurrentRow];
+    return { ...result, count: sessions.length, sessions };
+  }
+  return result;
+}
+
 function stripThinkingMetadata<T extends ThinkingMetadataCarrier>(value: T): T {
   const next = { ...value };
   delete next.thinkingLevels;
@@ -287,11 +326,12 @@ function sessionRunStatus(value: unknown): SessionRunStatus | null {
     : null;
 }
 
-type ParsedSessionChangedEvent = SessionChangedEventInfo & {
-  event: Record<string, unknown>;
-  source: Record<string, unknown>;
-  reason: string | null;
-};
+type ParsedSessionChangedEvent = readonly [
+  info: SessionChangedEventInfo,
+  event: Record<string, unknown>,
+  source: Record<string, unknown>,
+  reason: string | null,
+];
 
 function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent | null {
   const event = recordOrNull(payload);
@@ -314,52 +354,62 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
       : typeof recordValue(event, "hasActiveRun") === "boolean"
         ? (recordValue(event, "hasActiveRun") as boolean)
         : null;
-  return {
+  const updatedAt = recordValue(source, "updatedAt");
+  const thinkingLevel = recordValue(source, "thinkingLevel");
+  return [
+    {
+      key,
+      reason,
+      sessionId: stringValue(recordValue(source, "sessionId")),
+      updatedAt: typeof updatedAt === "number" ? updatedAt : null,
+      hasPermissionMode: Object.hasOwn(source, "permissionMode"),
+      thinkingLevel:
+        typeof thinkingLevel === "string"
+          ? thinkingLevel
+          : thinkingLevel === null
+            ? null
+            : undefined,
+      agentId: stringValue(recordValue(event, "agentId")) ?? null,
+      runId:
+        stringValue(recordValue(event, "runId")) ??
+        stringValue(recordValue(source, "runId")) ??
+        null,
+      clientRunId:
+        stringValue(recordValue(event, "clientRunId")) ??
+        stringValue(recordValue(source, "clientRunId")) ??
+        null,
+      hasActiveRun,
+      status:
+        sessionRunStatus(recordValue(source, "status")) ??
+        sessionRunStatus(recordValue(event, "status")),
+      archived:
+        typeof recordValue(source, "archived") === "boolean"
+          ? (recordValue(source, "archived") as boolean)
+          : null,
+      isChatTurn:
+        phase === "start" ||
+        phase === "message" ||
+        phase === "end" ||
+        phase === "error" ||
+        reason === "send" ||
+        reason === "steer",
+    },
     event,
     source,
-    key,
     reason,
-    agentId: stringValue(recordValue(event, "agentId")) ?? null,
-    runId:
-      stringValue(recordValue(event, "runId")) ?? stringValue(recordValue(source, "runId")) ?? null,
-    clientRunId:
-      stringValue(recordValue(event, "clientRunId")) ??
-      stringValue(recordValue(source, "clientRunId")) ??
-      null,
-    hasActiveRun,
-    status:
-      sessionRunStatus(recordValue(source, "status")) ??
-      sessionRunStatus(recordValue(event, "status")),
-    archived:
-      typeof recordValue(source, "archived") === "boolean"
-        ? (recordValue(source, "archived") as boolean)
-        : null,
-    isChatTurn:
-      phase === "start" ||
-      phase === "message" ||
-      phase === "end" ||
-      phase === "error" ||
-      reason === "send" ||
-      reason === "steer",
-  };
+  ];
 }
 
 export function readSessionChangedEvent(payload: unknown): SessionChangedEventInfo | null {
-  const parsed = parseSessionChangedEvent(payload);
-  if (!parsed) {
-    return null;
-  }
-  return {
-    key: parsed.key,
-    agentId: parsed.agentId,
-    runId: parsed.runId,
-    clientRunId: parsed.clientRunId,
-    hasActiveRun: parsed.hasActiveRun,
-    status: parsed.status,
-    archived: parsed.archived,
-    isChatTurn: parsed.isChatTurn,
-  };
+  return parseSessionChangedEvent(payload)?.[0] ?? null;
 }
+
+// Null source confirms inheritance; omission on a lifecycle event preserves selection.
+const NULLABLE_SESSION_ROW_FIELDS = new Set<string>([
+  "updatedAt",
+  "activeLeafEntryId",
+  "modelOverrideSource",
+]);
 
 export function reconcileSessionChanged(
   result: SessionsListResult | null,
@@ -370,46 +420,8 @@ export function reconcileSessionChanged(
   if (!parsed) {
     return { applied: false, result };
   }
-  const { event, source, key, reason } = parsed;
-  if (reason === "delete" && !result) {
-    return {
-      applied: true,
-      key,
-      agentId: parsed.agentId,
-      deletedKey: key,
-      result,
-    };
-  }
-  if (!result) {
-    return { applied: false, result };
-  }
-  const selectedGlobalAgentId = parsed.agentId ?? options.selectedGlobalAgentId ?? null;
-  const existing = result.sessions.find((candidate) =>
-    matchesExistingSession(
-      candidate,
-      { key, kind: "global", updatedAt: null },
-      selectedGlobalAgentId,
-    ),
-  );
-
-  if (reason === "delete") {
-    if (!existing) {
-      return { applied: true, result, key, agentId: parsed.agentId, deletedKey: key };
-    }
-    const sessions = result.sessions.filter((candidate) => candidate !== existing);
-    return {
-      applied: true,
-      key,
-      agentId: parsed.agentId,
-      result: {
-        ...result,
-        count: sessions.length,
-        sessions,
-      },
-      deletedKey: existing.key,
-    };
-  }
-
+  const [info, event, source, reason] = parsed;
+  const { key } = info;
   const {
     agentId: _agentId,
     clientRunId: _clientRunId,
@@ -423,6 +435,51 @@ export function reconcileSessionChanged(
     ts: _ts,
     ...rowFields
   } = source;
+  // Ownerless raw global and projection-free legacy aliases only invalidate the
+  // canonical roster; optimistic merging could apply a retired private owner's
+  // lifecycle event to whichever agent is currently selected.
+  if (
+    !info.agentId &&
+    (isUiGlobalSessionKey(key) || (!parseAgentSessionKey(key) && !Object.keys(rowFields).length))
+  ) {
+    return { applied: false, key, agentId: null, result };
+  }
+  // Key-only notifications cannot identify which generation disappeared.
+  if (reason === "delete" && !info.sessionId) {
+    return { applied: false, key, agentId: info.agentId, result };
+  }
+  const selectedGlobalAgentId = info.agentId ?? options.selectedGlobalAgentId ?? null;
+  const existing = result?.sessions.find((candidate) =>
+    matchesExistingSession(
+      candidate,
+      { key, kind: "global", updatedAt: null },
+      selectedGlobalAgentId,
+    ),
+  );
+
+  if (reason === "delete") {
+    if (!result || !existing) {
+      return { applied: true, result, key, agentId: info.agentId, deletedKey: key };
+    }
+    if (existing.sessionId !== info.sessionId) {
+      return { applied: false, result, key, agentId: info.agentId };
+    }
+    const sessions = result.sessions.filter((candidate) => candidate !== existing);
+    return {
+      applied: true,
+      key,
+      agentId: info.agentId,
+      result: {
+        ...result,
+        count: sessions.length,
+        sessions,
+      },
+      deletedKey: existing.key,
+    };
+  }
+  if (!result) {
+    return { applied: false, result };
+  }
   // The gateway wire folds cron/spawn-child into "direct" before projection
   // (session-utils-row.ts, #115299); cron detection is isCronSessionKey.
   const kind =
@@ -438,20 +495,34 @@ export function reconcileSessionChanged(
   if (!kind || (!existing && sessionId === undefined && typeof updatedAt !== "number")) {
     return { applied: false, result };
   }
+  const eventResult = {
+    applied: true as const,
+    key,
+    agentId: info.agentId,
+    runId: info.runId,
+    clientRunId: info.clientRunId,
+    hasActiveRun: info.hasActiveRun,
+    status: info.status,
+    isChatTurn: info.isChatTurn,
+  };
+  // Events are broadcast independently of sessions.list filters and windows.
+  // They may update listed rows, but only a canonical list may admit a new row.
+  if (!existing) {
+    return { ...eventResult, result };
+  }
   const incomingRuntime = recordOrNull(rowFields.agentRuntime);
   const incomingThinkingIdentity: ThinkingMetadataCarrier = {
     modelProvider: stringValue(rowFields.modelProvider),
     model: stringValue(rowFields.model),
     ...(incomingRuntime ? { agentRuntime: { id: stringValue(incomingRuntime.id) ?? "" } } : {}),
   };
-  const existingFields =
-    existing && !thinkingMetadataIdentityMatches(incomingThinkingIdentity, existing)
-      ? stripThinkingMetadata(existing)
-      : existing;
+  const existingFields = !thinkingMetadataIdentityMatches(incomingThinkingIdentity, existing)
+    ? stripThinkingMetadata(existing)
+    : existing;
   const row = {
     ...existingFields,
     ...rowFields,
-    key: existing?.key ?? key,
+    key: existing.key,
     kind,
     updatedAt: updatedAt ?? null,
     ...(sessionId ? { sessionId } : {}),
@@ -461,10 +532,10 @@ export function reconcileSessionChanged(
   // typed optional-not-null, so every null tombstone deletes — a hand-kept
   // field list here drifts as new tombstoned fields ship (it already had:
   // toolOverrides/observerDigest/controlOwnerSessionKey/restartRecoveryStatus/
-  // goal leaked null). updatedAt/activeLeafEntryId are the schema's only
-  // legitimately nullable row fields and keep their explicit handling.
+  // goal leaked null). Only the fields below are legitimately nullable in the
+  // schema, where null is the value itself rather than a clear instruction.
   for (const [field, value] of Object.entries(rowFields)) {
-    if (value === null && field !== "updatedAt" && field !== "activeLeafEntryId") {
+    if (value === null && !NULLABLE_SESSION_ROW_FIELDS.has(field)) {
       delete row[field as keyof GatewaySessionRow];
     }
   }
@@ -476,15 +547,15 @@ export function reconcileSessionChanged(
     return { applied: false, result };
   }
   const eventTs = typeof event.ts === "number" && Number.isFinite(event.ts) ? event.ts : null;
-  const timestamped = eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) };
-  const previousOwner = existing?.owner?.actor;
+  const timestamped = eventTs !== null && eventTs > next.ts ? { ...next, ts: eventTs } : next;
+  const previousOwner = existing.owner?.actor;
   const nextOwner = row.owner?.actor;
   const ownershipChanged =
     (Object.hasOwn(rowFields, "owner") || Object.hasOwn(rowFields, "createdActor")) &&
     (previousOwner?.type !== nextOwner?.type ||
       previousOwner?.id !== nextOwner?.id ||
       previousOwner?.label !== nextOwner?.label ||
-      existing?.owner?.assignedAt !== row.owner?.assignedAt);
+      existing.owner?.assignedAt !== row.owner?.assignedAt);
   // The facet covers unloaded pages, so an ownership event invalidates it until
   // the session capability's canonical list refresh supplies a complete replacement.
   const reconciledResult = ownershipChanged ? { ...timestamped, owners: undefined } : timestamped;
@@ -496,14 +567,7 @@ export function reconcileSessionChanged(
     ),
   );
   return {
-    applied: true,
-    key,
-    agentId: parsed.agentId,
-    runId: parsed.runId,
-    clientRunId: parsed.clientRunId,
-    hasActiveRun: parsed.hasActiveRun,
-    status: parsed.status,
-    isChatTurn: parsed.isChatTurn,
+    ...eventResult,
     row: reconciledRow,
     result: reconciledResult,
   };
@@ -557,14 +621,18 @@ export function reconcileSessionHistory(
   const nextDefaults = defaults
     ? preserveRicherThinkingMetadata(defaults, result.defaults)
     : result.defaults;
+  // Lineage and repeated events can supply the current defaults. Preserve
+  // result identity when nothing changes so shared subscribers stay quiet.
+  const resultWithDefaults =
+    nextDefaults === result.defaults ? result : { ...result, defaults: nextDefaults };
   if (preserveMatchingExistingRow && existing) {
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   if (isOlderSessionSnapshot(session, existing)) {
     return result;
   }
   if (isOutsideResultScope || (!existing && !isPersistedSessionRow(session))) {
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   const visibleKey = existing?.key ?? session.key;
   const visibleSession = preserveRosterPresentationMetadata(
@@ -575,19 +643,14 @@ export function reconcileSessionHistory(
     existing,
   );
   if (isStaleForActiveSession(visibleSession, existing)) {
-    // Keep result identity when nothing changed so the caller's
-    // result === state.result publish gate can skip a spurious re-render.
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   if (
     existing &&
     isShallowEqualSessionRow(visibleSession, existing) &&
     sessionMatchesArchivedFilter(visibleSession, archivedFilter)
   ) {
-    // The same event reconciled twice (capability handler + chat page) must
-    // no-op the second pass; a fresh array here defeats every downstream
-    // result === state.result publish gate and re-renders per event.
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   const sessions = sessionMatchesArchivedFilter(visibleSession, archivedFilter)
     ? [

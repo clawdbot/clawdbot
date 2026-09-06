@@ -15,11 +15,13 @@ const smokeEntryPath = path.join(repoRoot, "dist", "plugins", "build-smoke-entry
 assert.ok(fs.existsSync(smokeEntryPath), `missing build output: ${smokeEntryPath}`);
 
 const {
+  buildPluginRuntimeLoadOptions,
   clearPluginCommands,
   getPluginCommandSpecs,
   getPluginModuleLoaderStats,
   loadOpenClawPlugins,
   matchPluginCommand,
+  resolvePluginRuntimeLoadContext,
 } = await import(pathToFileURL(smokeEntryPath).href);
 
 assert.equal(typeof loadOpenClawPlugins, "function", "built loader export missing");
@@ -126,24 +128,27 @@ assert.equal(
 clearPluginCommands();
 
 const smsStatsBefore = getPluginModuleLoaderStats();
-const smsRegistry = loadOpenClawPlugins({
-  cache: false,
-  preferBuiltPluginArtifacts: true,
-  workspaceDir: tempRoot,
-  env: {
-    ...process.env,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist-runtime", "extensions"),
-  },
-  config: {
-    plugins: {
-      enabled: true,
-      allow: ["sms"],
-      entries: {
-        sms: { enabled: true },
+// Prepared runtimes carry this context into late, plugin-scoped loads. Prove that the load-options
+// projection retains the built-artifact choice instead of reopening source transformation.
+const smsRegistry = loadOpenClawPlugins(
+  buildPluginRuntimeLoadOptions(
+    resolvePluginRuntimeLoadContext({
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["sms"],
+          entries: { sms: { enabled: true } },
+        },
       },
-    },
-  },
-});
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
+      },
+      workspaceDir: tempRoot,
+    }),
+    { cache: false, onlyPluginIds: ["sms"] },
+  ),
+);
 const smsRecord = smsRegistry.plugins.find((entry: { id: string }) => entry.id === "sms");
 assert.ok(smsRecord, "SMS plugin missing from registry");
 assert.equal(smsRecord.status, "loaded", smsRecord.error ?? "SMS plugin failed to load");
@@ -170,6 +175,162 @@ assert.equal(
   false,
   "compiled SMS runtime reached the source transformer",
 );
+
+// Exercise the real built load owner with omitted preferences, as provider and
+// tool callers do. Source-owned metadata must not force source execution.
+const { resolvePluginDiscoveryProvidersRuntime } = await import(
+  pathToFileURL(path.join(repoRoot, "dist", "plugins", "provider-discovery.runtime.js")).href
+);
+const { createPluginMetadataSnapshotFixture } =
+  await import("../src/plugins/plugin-metadata.test-support.js");
+const { withPluginRuntimeGenerationScope } =
+  await import("../src/plugins/runtime/generation-scope.js");
+const { setPluginRuntimeLoadContext } = await import("../src/plugins/runtime/load-context.js");
+const artifactPluginId = "build-artifact-selection";
+const artifactSourceRoot = path.join(tempRoot, "extensions", artifactPluginId);
+const artifactBuiltRoot = path.join(tempRoot, "dist", "extensions", artifactPluginId);
+fs.mkdirSync(artifactSourceRoot, { recursive: true });
+fs.mkdirSync(artifactBuiltRoot, { recursive: true });
+fs.mkdirSync(path.join(artifactSourceRoot, "dist"));
+const artifactEntry = (label: string) => `export default {
+  id: ${JSON.stringify(artifactPluginId)},
+  register(api) {
+    api.registerProvider({ id: ${JSON.stringify(artifactPluginId)}, label: ${JSON.stringify(label)}, auth: [] });
+    api.registerTool({ name: "artifact_probe", label: "Artifact", description: ${JSON.stringify(label)},
+      parameters: { type: "object", properties: {} },
+      async execute() { return { content: [{ type: "text", text: ${JSON.stringify(label)} }] }; }
+    });
+  }
+};\n`;
+const artifactSource = path.join(artifactSourceRoot, "index.ts");
+fs.writeFileSync(artifactSource, artifactEntry("source"));
+fs.writeFileSync(path.join(artifactBuiltRoot, "index.js"), artifactEntry("compiled"));
+fs.writeFileSync(path.join(artifactSourceRoot, "dist", "index.js"), artifactEntry("package-local"));
+fs.writeFileSync(path.join(artifactSourceRoot, "package.json"), JSON.stringify({ type: "module" }));
+for (const [rootDir, extension, label] of [
+  [artifactSourceRoot, ".ts", "source"],
+  [artifactBuiltRoot, ".js", "compiled"],
+] as const) {
+  fs.writeFileSync(
+    path.join(rootDir, `provider-discovery${extension}`),
+    `export default {
+    id: ${JSON.stringify(artifactPluginId)}, label: ${JSON.stringify(label)}, auth: [],
+    catalog: { run: async () => ({ providers: {} }) }
+  };\n`,
+  );
+}
+fs.writeFileSync(
+  path.join(artifactBuiltRoot, "package.json"),
+  JSON.stringify({
+    type: "module",
+    openclaw: { extensions: ["./index.js"] },
+  }),
+);
+const artifactConfig = {
+  plugins: { allow: [artifactPluginId], entries: { [artifactPluginId]: { enabled: true } } },
+};
+const artifactManifest = {
+  id: artifactPluginId,
+  rootDir: artifactSourceRoot,
+  source: artifactSource,
+  origin: "bundled" as const,
+  channels: [],
+  providers: [artifactPluginId],
+  cliBackends: [],
+  skills: [],
+  hooks: [],
+  contracts: { tools: ["artifact_probe"] },
+  manifestPath: path.join(artifactSourceRoot, "openclaw.plugin.json"),
+  providerDiscoverySource: path.join(artifactSourceRoot, "provider-discovery.ts"),
+  configSchema: { type: "object", properties: {}, additionalProperties: false },
+  packageManifest: { extensions: ["./index.ts"], build: { bundledDist: false } },
+};
+const artifactManifestRegistry = {
+  plugins: [artifactManifest],
+  diagnostics: [],
+};
+const artifactMetadataSnapshot = createPluginMetadataSnapshotFixture(artifactManifestRegistry);
+for (const toolDiscovery of [false, true]) {
+  for (const preferBuiltPluginArtifacts of [undefined, false]) {
+    const values = {
+      config: artifactConfig,
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(tempRoot, "artifact-state") },
+      manifestRegistry: artifactManifestRegistry,
+      installRecords: {},
+      preferBuiltPluginArtifacts,
+      workspaceDir: tempRoot,
+    };
+    const options = toolDiscovery
+      ? buildPluginRuntimeLoadOptions(resolvePluginRuntimeLoadContext(values))
+      : values;
+    const selected = loadOpenClawPlugins({
+      ...options,
+      cache: false,
+      activate: false,
+      toolDiscovery,
+      onlyPluginIds: [artifactPluginId],
+    });
+    const label = preferBuiltPluginArtifacts === false ? "source" : "compiled";
+    assert.equal(selected.plugins[0]?.status, "loaded", selected.plugins[0]?.error);
+    assert.equal(selected.providers[0]?.provider.label, label);
+    const tool = selected.tools[0]?.factory({ config: artifactConfig });
+    assert.equal(tool?.description, label);
+    if (!toolDiscovery) {
+      setPluginRuntimeLoadContext(selected, resolvePluginRuntimeLoadContext(values));
+      const providers = withPluginRuntimeGenerationScope(
+        { metadataSnapshot: artifactMetadataSnapshot, pluginRegistry: selected },
+        () =>
+          resolvePluginDiscoveryProvidersRuntime({
+            config: artifactConfig,
+            pluginMetadataSnapshot: artifactMetadataSnapshot,
+            onlyPluginIds: [artifactPluginId],
+            discoveryEntriesOnly: true,
+          }),
+      );
+      assert.equal(
+        providers[0]?.label,
+        label,
+        "provider discovery chose a different artifact policy",
+      );
+    }
+  }
+}
+
+// Implicit built-host policy leaves installed source alone; explicit true can
+// use its package-local output. Neither cache call order may contaminate the other.
+for (const [orderIndex, preferences] of [
+  [undefined, true],
+  [true, undefined],
+].entries()) {
+  const options = {
+    config: artifactConfig,
+    env: { ...process.env, OPENCLAW_STATE_DIR: path.join(tempRoot, "artifact-state") },
+    workspaceDir: path.join(tempRoot, `cache-order-${orderIndex}`),
+    manifestRegistry: {
+      ...artifactManifestRegistry,
+      plugins: [{ ...artifactManifest, origin: "global" }],
+    },
+    installRecords: {},
+    onlyPluginIds: [artifactPluginId],
+    cache: true,
+    activate: false,
+  };
+  const registries = preferences.map((preferBuiltPluginArtifacts) => {
+    const selected = loadOpenClawPlugins({ ...options, preferBuiltPluginArtifacts });
+    const label = preferBuiltPluginArtifacts ? "package-local" : "source";
+    assert.equal(selected.plugins[0]?.status, "loaded", selected.plugins[0]?.error);
+    assert.equal(selected.providers[0]?.provider.label, label, `cache call order ${orderIndex}`);
+    assert.equal(selected.tools[0]?.factory({ config: artifactConfig })?.description, label);
+    return selected;
+  });
+  for (const [index, preferBuiltPluginArtifacts] of preferences.entries()) {
+    assert.equal(
+      loadOpenClawPlugins({ ...options, preferBuiltPluginArtifacts }),
+      registries[index],
+      "repeated selection did not reuse its own cached registry",
+    );
+  }
+}
 
 clearPluginCommands();
 
@@ -205,5 +366,52 @@ assert.ok(match, "canonical built command registry did not receive the command")
 assert.equal(match.args, "now");
 const result = await match.command.handler({ args: match.args });
 assert.deepEqual(result, { text: "paired:now" });
+
+// Keep these imports after the cold native checks so they cannot prewarm the loader.
+const { buildBundleMcpToolsFromCatalog } = await import(
+  pathToFileURL(path.join(repoRoot, "dist", "agents", "agent-bundle-mcp-materialize.js")).href
+);
+const { getPluginToolMeta } = await import(
+  pathToFileURL(path.join(repoRoot, "dist", "plugins", "tool-metadata.js")).href
+);
+const { getPluginToolMeta: getSdkPluginToolMeta } = await import(
+  pathToFileURL(path.join(repoRoot, "dist", "plugin-sdk", "agent-harness-runtime.js")).href
+);
+const [mcpTool] = buildBundleMcpToolsFromCatalog({
+  catalog: {
+    version: 1,
+    generatedAt: 0,
+    servers: {
+      "build-smoke-mcp": {
+        serverName: "build-smoke-mcp",
+        safeServerName: "build-smoke-mcp",
+        launchSummary: "build smoke inventory fixture",
+        toolCount: 1,
+      },
+    },
+    tools: [
+      {
+        serverName: "build-smoke-mcp",
+        safeServerName: "build-smoke-mcp",
+        toolName: "lookup",
+        inputSchema: { type: "object", properties: {} },
+        fallbackDescription: "Look up a build smoke inventory item",
+      },
+    ],
+  },
+});
+assert.ok(mcpTool, "compiled MCP materializer did not produce a tool");
+const mcpMetadata = getPluginToolMeta(mcpTool);
+assert.ok(mcpMetadata, "canonical built metadata owner did not receive MCP tool metadata");
+assert.equal(mcpMetadata.pluginId, "bundle-mcp");
+assert.equal(mcpMetadata.mcp?.serverName, "build-smoke-mcp");
+assert.equal(mcpMetadata.mcp?.safeServerName, "build-smoke-mcp");
+assert.equal(mcpMetadata.mcp?.toolName, "lookup");
+assert.equal(mcpMetadata.mcp?.operation, "tool");
+assert.strictEqual(
+  getSdkPluginToolMeta(mcpTool),
+  mcpMetadata,
+  "public agent-harness-runtime SDK did not read the canonical MCP metadata record",
+);
 
 process.stdout.write("[build-smoke] built plugin singleton smoke passed\n");

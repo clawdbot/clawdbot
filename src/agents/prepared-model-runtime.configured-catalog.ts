@@ -1,29 +1,21 @@
-import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
+import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
   toStaticCatalogEntry,
   type PreparedConfiguredRuntimeModel,
-  type PreparedRuntimeCapabilityModel,
 } from "./prepared-model-runtime.configured.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type ConfiguredCatalogAgentFacts = {
-  configuredModelRefs: readonly ConfiguredModelRef[];
-  runtimeCapabilityModels: readonly PreparedRuntimeCapabilityModel[];
+  configuredModelRefs: readonly ModelCatalogRef[];
 };
 
 type ConfiguredCatalogWorkspaceFacts = {
   configuredCatalogEntries: readonly ModelCatalogEntry[];
-  inlineProviderModels: readonly InlineModelEntry[];
-};
-
-type ConfiguredRuntimeFacts = {
-  templateModelRegistry: ModelRegistry;
-  modelCatalog: ModelCatalogSnapshot;
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
   inlineProviderModels: readonly InlineModelEntry[];
 };
 
@@ -50,73 +42,21 @@ function createConfiguredModelCatalogSnapshot(params: {
   for (const configured of params.configuredRuntimeModels) {
     addEntry(toStaticCatalogEntry(configured.model));
   }
-  for (const { value } of params.agentFacts.configuredModelRefs) {
-    const separator = value.indexOf("/");
-    if (separator <= 0 || separator >= value.length - 1) {
-      continue;
-    }
-    const provider = normalizeProviderId(value.slice(0, separator));
-    const modelId = value.slice(separator + 1).trim();
-    if (!provider || !modelId) {
-      continue;
-    }
+  for (const { provider, modelId } of params.agentFacts.configuredModelRefs) {
     const model = params.templateModelRegistry.find(provider, modelId);
     if (model) {
       addEntry(toStaticCatalogEntry(model));
     }
   }
   const configuredEntries = [...entries.values()];
-  const materializedEntries = materializeRuntimeCapabilities(
-    configuredEntries,
-    params.agentFacts.runtimeCapabilityModels,
-  );
-  const staticEntries = materializeRuntimeCapabilities(
-    params.configuredRuntimeModels.map(({ model }) => toStaticCatalogEntry(model)),
-    params.agentFacts.runtimeCapabilityModels,
+  const staticEntries = params.configuredRuntimeModels.map(({ model }) =>
+    toStaticCatalogEntry(model),
   );
   return {
-    entries: materializedEntries,
-    routeVariants: materializedEntries,
+    entries: configuredEntries,
+    routeVariants: configuredEntries,
     ...(staticEntries.length > 0 ? { staticEntries } : {}),
   };
-}
-
-/**
- * Configured views omit runtime-only rows. Retain the concrete route's
- * capabilities on the logical row so downstream projections do not rediscover
- * or depend on an absent runtime sibling.
- */
-export function materializeRuntimeCapabilities(
-  entries: readonly ModelCatalogEntry[],
-  runtimeCapabilityModels: readonly PreparedRuntimeCapabilityModel[],
-): ModelCatalogEntry[] {
-  const runtimeByKey = new Map(
-    runtimeCapabilityModels.map(({ provider, modelId, model }) => [
-      modelCatalogEntryKey({ provider, id: modelId }),
-      toStaticCatalogEntry(model),
-    ]),
-  );
-  return entries.map((entry) => {
-    const runtime = runtimeByKey.get(modelCatalogEntryKey(entry));
-    if (!runtime) {
-      return entry;
-    }
-    const thinkingPolicyProvider = runtime.provider;
-    if (entry.configuredReasoning !== undefined) {
-      return { ...entry, thinkingPolicyProvider };
-    }
-    const params =
-      runtime.params || entry.params ? { ...runtime.params, ...entry.params } : undefined;
-    const compat =
-      runtime.compat || entry.compat ? { ...runtime.compat, ...entry.compat } : undefined;
-    return {
-      ...entry,
-      thinkingPolicyProvider,
-      ...(runtime.reasoning !== undefined ? { reasoning: runtime.reasoning } : {}),
-      ...(params ? { params } : {}),
-      ...(compat ? { compat } : {}),
-    };
-  });
 }
 
 export function prepareConfiguredRuntimeFacts(params: {
@@ -124,7 +64,7 @@ export function prepareConfiguredRuntimeFacts(params: {
   workspaceFacts: ConfiguredCatalogWorkspaceFacts;
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-}): ConfiguredRuntimeFacts {
+}): PreparedModelRuntimeCatalogFacts {
   return {
     templateModelRegistry: params.templateModelRegistry,
     modelCatalog: createConfiguredModelCatalogSnapshot(params),

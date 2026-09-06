@@ -4,7 +4,6 @@ import { resolveOpenAICompletionsCompat } from "@openclaw/ai/transports";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import "../llm/ai-transport-host.js";
 import type { Model } from "../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "./plugin-metadata-snapshot.types.js";
 
@@ -92,6 +91,8 @@ export function normalizeModelCompat(
   }
   const resolvedProviderMetadataOwners =
     providerMetadataOwners ?? getModelProviderRequestRouteFacts(model)?.providerMetadataOwners;
+  // Metadata supplies its capability resolver explicitly; only execution facades
+  // install the transport host, which would pull runtime into plugin discovery.
   const resolved = resolveOpenAICompletionsCompat(model, (input) =>
     resolveProviderRequestCapabilities({
       ...input,

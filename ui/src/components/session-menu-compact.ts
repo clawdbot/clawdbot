@@ -1,13 +1,19 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
-import { renderSessionOwnerAssignmentOptions } from "./session-owner-menu.ts";
+import "../styles/session-menu-compact.css";
 
-export type CompactSessionMenuView = "root" | "open-in" | "assign-owner" | "icon" | "group";
+export type CompactSessionMenuView =
+  | "root"
+  | "copy"
+  | "open-in"
+  | "assign-owner"
+  | "icon"
+  | "group";
 
 const COMPACT_SESSION_MENU_VIEW_BY_VALUE: Record<string, CompactSessionMenuView> = {
   "compact:back": "root",
+  "compact:open-copy": "copy",
   "compact:open-assign-owner": "assign-owner",
   "compact:open-group": "group",
   "compact:open-icon": "icon",
@@ -18,32 +24,32 @@ export function compactSessionMenuViewForValue(value: string): CompactSessionMen
   return COMPACT_SESSION_MENU_VIEW_BY_VALUE[value] ?? null;
 }
 
-export function compactSessionOwnerOptions(
-  ownerOptions: readonly SessionOwnerOption[],
-  selfOwner: SessionOwnerOption | null,
-): readonly SessionOwnerOption[] {
-  if (!selfOwner || ownerOptions.some((owner) => owner.id === selfOwner.id)) {
-    return ownerOptions;
-  }
-  return [selfOwner, ...ownerOptions];
-}
-
 export function renderCompactSessionMenuNavigationItem(params: {
-  view: Exclude<CompactSessionMenuView, "root">;
+  value: string;
   label: string;
   icon: TemplateResult;
+  details?: TemplateResult;
+  accessibleLabel?: string;
   disabled?: boolean;
   title?: string;
 }) {
   return html`
     <wa-dropdown-item
-      class="session-menu__item"
-      value=${`compact:open-${params.view}`}
+      class=${`session-menu__item${params.details ? " session-menu__item--compact-details" : ""}`}
+      value=${params.value}
+      aria-label=${params.accessibleLabel ?? nothing}
       ?disabled=${params.disabled ?? false}
       title=${params.title ?? nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${params.icon}</span>
       <span class="session-menu__text">${params.label}</span>
+      ${
+        params.details
+          ? html`<span class="session-menu__compact-details" aria-hidden="true"
+              >${params.details}</span
+            >`
+          : nothing
+      }
       <span slot="details" class="session-menu__icon session-menu__chevron" aria-hidden="true"
         >${icons.chevronRight}</span
       >
@@ -51,35 +57,7 @@ export function renderCompactSessionMenuNavigationItem(params: {
   `;
 }
 
-export function renderCompactSessionMenuView(params: {
-  view: CompactSessionMenuView;
-  ownerOptions: readonly SessionOwnerOption[];
-  currentOwnerId: string | null;
-  assignOwnerDisabled: boolean;
-  assignOwnerDisabledReason?: string;
-  renderOpenIn: () => TemplateResult;
-  renderIcon: () => TemplateResult;
-  renderGroup: () => TemplateResult;
-}) {
-  if (params.view === "root") {
-    return nothing;
-  }
-  const body =
-    params.view === "open-in"
-      ? params.renderOpenIn()
-      : params.view === "assign-owner"
-        ? renderSessionOwnerAssignmentOptions(
-            {
-              ownerOptions: params.ownerOptions,
-              currentOwnerId: params.currentOwnerId,
-              disabled: params.assignOwnerDisabled,
-              disabledReason: params.assignOwnerDisabledReason,
-            },
-            true,
-          )
-        : params.view === "icon"
-          ? params.renderIcon()
-          : params.renderGroup();
+export function renderCompactSessionMenuFrame(body: TemplateResult | readonly TemplateResult[]) {
   return html`
     <wa-dropdown-item class="session-menu__item session-menu__back" value="compact:back">
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.arrowLeft}</span>

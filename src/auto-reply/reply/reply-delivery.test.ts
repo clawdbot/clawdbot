@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import {
   createBlockReplyDeliveryHandler,
@@ -43,6 +44,92 @@ describe("createBlockReplyDeliveryHandler", () => {
 
     await createBlockReplyDeliveryHandler({ ...baseParams, [enabledFlag]: true })(payload);
     expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { lane: "reasoning", flag: "isReasoning", blockStreamingEnabled: false },
+    { lane: "commentary", flag: "isCommentary", blockStreamingEnabled: false },
+    { lane: "reasoning", flag: "isReasoning", blockStreamingEnabled: true },
+    { lane: "commentary", flag: "isCommentary", blockStreamingEnabled: true },
+    { lane: "status notice", flag: "isStatusNotice", blockStreamingEnabled: true },
+  ] as const)(
+    "preserves the final answer after directly sending $lane (streaming=$blockStreamingEnabled)",
+    async ({ flag, blockStreamingEnabled }) => {
+      const delivered: ReplyPayload[] = [];
+      const directlySentBlockKeys = new Set<string>();
+      const directlySentBlockPayloads: Array<ReplyPayload | undefined> = [];
+      const handler = createBlockReplyDeliveryHandler({
+        onBlockReply: async (payload) => {
+          delivered.push(payload);
+        },
+        normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+        applyReplyToMode: (payload) => payload,
+        typingSignals: {
+          signalTextDelta: vi.fn(async () => {}),
+        } as unknown as TypingSignaler,
+        reasoningPayloadsEnabled: true,
+        commentaryPayloadsEnabled: true,
+        blockStreamingEnabled,
+        blockReplyPipeline: null,
+        directlySentBlockKeys,
+        directlySentBlockPayloads,
+      });
+
+      await handler({ text: "Same answer", [flag]: true });
+      const { replyPayloads } = await buildReplyPayloads({
+        payloads: [{ text: "Same answer" }],
+        isHeartbeat: false,
+        didLogHeartbeatStrip: false,
+        blockStreamingEnabled,
+        blockReplyPipeline: null,
+        directlySentBlockKeys,
+        directlySentBlockPayloads: directlySentBlockPayloads.filter(
+          (payload): payload is ReplyPayload => payload !== undefined,
+        ),
+        replyToMode: "off",
+      });
+
+      expect(delivered).toHaveLength(1);
+      expect(directlySentBlockKeys.size).toBe(0);
+      expect(replyPayloads).toEqual([expect.objectContaining({ text: "Same answer" })]);
+    },
+  );
+
+  it("keeps a matching final answer from a different directly sent assistant message", async () => {
+    const directlySentBlockKeys = new Set<string>();
+    const directlySentBlockPayloads: Array<ReplyPayload | undefined> = [];
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: async () => {},
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      directlySentBlockPayloads,
+    });
+
+    await handler(setReplyPayloadMetadata({ text: "Same answer" }, { assistantMessageIndex: 0 }));
+    const finalPayload = setReplyPayloadMetadata(
+      { text: "Same answer" },
+      { assistantMessageIndex: 1 },
+    );
+    const { replyPayloads } = await buildReplyPayloads({
+      payloads: [finalPayload],
+      isHeartbeat: false,
+      didLogHeartbeatStrip: false,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      directlySentBlockPayloads: directlySentBlockPayloads.filter(
+        (payload): payload is ReplyPayload => payload !== undefined,
+      ),
+      replyToMode: "off",
+    });
+
+    expect(replyPayloads).toEqual([expect.objectContaining({ text: "Same answer" })]);
   });
 
   it("sends captioned media-bearing block replies when block streaming is disabled", async () => {
