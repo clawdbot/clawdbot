@@ -561,7 +561,8 @@ export async function executeMutableUpdate(params: {
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
-        managedServiceEnv: preManagedServiceStop?.serviceEnv,
+        // Foreign inspection metadata cannot authorize backup or Doctor writes.
+        getManagedServiceEnv: () => ownedManagedUpdateContext?.env,
         invocationCwd: params.invocationCwd,
         nodeRunner: params.packageUpdateNodeRunner,
         validateCandidate: async (candidateRoot) => {
