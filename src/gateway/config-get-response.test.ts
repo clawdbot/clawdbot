@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildRuntimeConfigSchemaFromRegistry } from "../config/runtime-schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   appliedConfigHash: "applied-1" as string | null,
@@ -76,6 +78,61 @@ afterEach(() => {
 });
 
 describe("config.get response cache", () => {
+  it.each(["core", "plus"])(
+    "redacts retained owner credentials from every snapshot projection with %s selected",
+    async (owner) => {
+      const config: OpenClawConfig = {
+        plugins: {
+          entries: { core: { enabled: owner === "core" }, plus: { enabled: owner === "plus" } },
+        },
+        channels: {
+          proofchat: { core: "synthetic-core", plus: "synthetic-plus", visible: "public-setting" },
+        },
+      };
+      const { manifestRegistry } = createPluginMetadataSnapshotFixture({
+        plugins: ["core", "plus"].map((id) => ({
+          id,
+          origin: "config",
+          channels: ["proofchat"],
+          channelConfigs: {
+            proofchat: {
+              schema: {
+                type: "object",
+                properties: { [id]: { type: "string" } },
+              },
+              uiHints: { [id]: { sensitive: true } },
+            },
+          },
+        })),
+      });
+      mocks.readConfigFileSnapshot.mockResolvedValue(configSnapshot(config));
+      const response = await readConfigGetResponse({
+        loadUiHints: () => buildRuntimeConfigSchemaFromRegistry(manifestRegistry, config).uiHints,
+      });
+      const output = JSON.stringify(response);
+      expect(output).not.toContain("synthetic-core");
+      expect(output).not.toContain("synthetic-plus");
+      for (const field of [
+        "config",
+        "sourceConfig",
+        "runtimeConfig",
+        "parsed",
+        "resolved",
+      ] as const) {
+        expect(response[field]).toMatchObject({
+          channels: {
+            proofchat: {
+              core: "__OPENCLAW_REDACTED__",
+              plus: "__OPENCLAW_REDACTED__",
+              visible: "public-setting",
+            },
+          },
+        });
+      }
+      expect(response.raw).toContain("public-setting");
+    },
+  );
+
   it("serves identical bytes without filesystem work on an active-watcher cache hit", async () => {
     const loadUiHints = vi.fn(() => undefined);
     const first = await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });

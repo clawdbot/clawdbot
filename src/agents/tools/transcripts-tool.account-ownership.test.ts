@@ -2,10 +2,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
+import { activeSessions } from "../../transcripts/capture.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
-import { activeSessions } from "./transcripts-tool-runtime.js";
-import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
+import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const { getTranscriptSourceProviderMock, listTranscriptSourceProvidersMock } = vi.hoisted(() => ({
   getTranscriptSourceProviderMock: vi.fn(),
@@ -839,7 +840,7 @@ describe("transcripts tool account ownership", () => {
     ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
   });
 
-  it("does not stop a same-millisecond replacement owned by another account", async () => {
+  it("does not stop a next-day capture owned by another account", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
     const stop = vi.fn(async (request) => ({ ok: true as const, sessionId: request.sessionId }));
@@ -902,7 +903,8 @@ describe("transcripts tool account ownership", () => {
 
     stop.mockClear();
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date(autoStarted.startedAt));
+    const nextDay = new Date(Date.parse(autoStarted.startedAt) + 86_400_000);
+    vi.setSystemTime(nextDay);
     await otherAccountTool.execute(
       "replacement-start",
       {
@@ -913,7 +915,7 @@ describe("transcripts tool account ownership", () => {
       undefined,
       vi.fn(),
     );
-    const selector = `${autoStarted.startedAt.slice(0, 10)}/account-bound-auto-start`;
+    const selector = `${nextDay.toISOString().slice(0, 10)}/account-bound-auto-start`;
     await service.stop();
     expect(stop).not.toHaveBeenCalled();
     const replacement = await storeFor(stateDir).readSession(selector);

@@ -20,6 +20,7 @@ import { createLazyPromise } from "../shared/lazy-promise.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-catalog-order.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type {
   ModelCatalogEntry,
   ModelCatalogSnapshot,
@@ -66,6 +67,7 @@ export type BuildPreparedModelCatalogParams = {
   readOnly?: boolean;
   includeProviderPluginAugmentation?: boolean;
   metadataSnapshot: PluginMetadataSnapshot;
+  providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"];
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 };
@@ -84,30 +86,6 @@ const loadProviderApiKeyResolver = createLazyPromise(
 export function resetModelCatalogBuilderCacheForTest() {
   manifestModelCatalogCache = new WeakMap();
   hasLoggedModelCatalogError = false;
-}
-
-/** Prepares provider aliases once for one captured catalog metadata generation. */
-export function createPreparedModelCatalogProviderNormalizer(
-  metadataSnapshot: Pick<PluginMetadataSnapshot, "manifestRegistry">,
-): (provider: string) => string {
-  let aliases: Map<string, string> | undefined;
-  return (provider) => {
-    const normalizedProvider = normalizeProviderId(provider);
-    if (!aliases) {
-      aliases = new Map();
-      for (const plugin of metadataSnapshot.manifestRegistry.plugins) {
-        for (const [alias, target] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
-          const key = normalizeProviderId(alias);
-          const canonicalProvider = normalizeProviderId(target.provider);
-          // Duplicate aliases retain the first nonempty target in manifest order.
-          if (canonicalProvider && !aliases.has(key)) {
-            aliases.set(key, canonicalProvider);
-          }
-        }
-      }
-    }
-    return aliases.get(normalizedProvider) ?? normalizedProvider;
-  };
 }
 
 function catalogEntryDedupeKey(provider: string, id: string): string {
@@ -454,8 +432,14 @@ export async function buildPreparedModelCatalogSnapshot(
     const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({
       manifestPlugins: manifestMetadataSnapshot,
     });
-    const normalizeProvider =
-      createPreparedModelCatalogProviderNormalizer(manifestMetadataSnapshot);
+    const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+      manifestMetadataSnapshot,
+      cfg,
+      env,
+    );
+    const observedProviders = new Set(
+      params.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
+    );
     const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
     logStage("catalog-deps-ready");
     const entries = params.modelRegistry.getAll() as DiscoveredModel[];
@@ -533,15 +517,22 @@ export async function buildPreparedModelCatalogSnapshot(
     const supplementalManifestKeys = new Set(
       supplementalManifestPlan.rows.map((entry) => catalogEntryDedupeKey(entry.provider, entry.id)),
     );
-    const runtimeDiscoveryProviders = new Set(
-      supplementalManifestPlan.entries.flatMap((entry) =>
+    const runtimeDiscoveryProviders = new Set([
+      ...observedProviders,
+      ...supplementalManifestPlan.entries.flatMap((entry) =>
         entry.discovery === "runtime" ? [normalizeProviderId(entry.provider)] : [],
       ),
-    );
+    ]);
     // Runtime declarations describe possible models, not account entitlement.
     // Only live registry or refreshed rows may publish those provider models.
-    const manifestModels = declaredManifestModels.filter((entry) =>
-      supplementalManifestKeys.has(catalogEntryDedupeKey(entry.provider, entry.id)),
+    const discoveredKeys = new Set(
+      models.map((entry) => catalogEntryDedupeKey(entry.provider, entry.id)),
+    );
+    const manifestModels = declaredManifestModels.filter(
+      (entry) =>
+        supplementalManifestKeys.has(catalogEntryDedupeKey(entry.provider, entry.id)) &&
+        (!observedProviders.has(entry.provider) ||
+          discoveredKeys.has(catalogEntryDedupeKey(entry.provider, entry.id))),
     );
     mergeCatalogRouteVariants(routeVariants, manifestModels);
     mergeCatalogEntries(models, manifestModels);
@@ -647,7 +638,12 @@ export async function buildPreparedModelCatalogSnapshot(
 
     const snapshot = createModelCatalogSnapshot(models, routeVariants);
     logStage("complete", `entries=${snapshot.entries.length}`);
-    return snapshot;
+    return params.providerOutcomes
+      ? {
+          ...snapshot,
+          authoritative: params.providerOutcomes.every((outcome) => outcome.status === "ready"),
+        }
+      : snapshot;
   } catch (error) {
     if (!hasLoggedModelCatalogError) {
       hasLoggedModelCatalogError = true;

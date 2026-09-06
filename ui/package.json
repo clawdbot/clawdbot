@@ -49,8 +49,8 @@
   },
   "devDependencies": {
     "@types/markdown-it": "14.2.0",
-    "@vitest/browser": "4.1.11",
-    "@vitest/browser-playwright": "4.1.11",
+    "@vitest/browser": "5.0.0",
+    "@vitest/browser-playwright": "5.0.0",
     "fake-indexeddb": "6.2.5",
     "jsdom": "29.1.1",
     "openclaw": "workspace:*",
@@ -58,6 +58,6 @@
     "playwright": "1.62.1",
     "postcss": "8.5.26",
     "vite": "8.2.2",
-    "vitest": "4.1.11"
+    "vitest": "5.0.0"
   }
 }

@@ -256,6 +256,18 @@ export class SandboxFsPathGuard {
     });
   }
 
+  async resolveAnchoredPinnedDirectoryEntry(
+    target: SandboxResolvedFsPath,
+    action: string,
+  ): Promise<PinnedSandboxDirectoryEntry> {
+    // Resolve allowed aliases before no-follow descriptor traversal pins the directory.
+    const containerPath = await this.resolveCanonicalContainerPath({
+      containerPath: target.containerPath,
+      allowFinalSymlinkForUnlink: false,
+    });
+    return this.resolvePinnedDirectoryEntry({ ...target, containerPath }, action);
+  }
+
   resolvePinnedDirectoryEntry(
     target: SandboxResolvedFsPath,
     action: string,

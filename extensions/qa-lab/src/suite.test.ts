@@ -614,8 +614,8 @@ describe("qa suite", () => {
 
       expect(artifacts.evidence?.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
       await expect(fs.access(artifacts.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(artifacts.reportPath)).resolves.toBeUndefined();
-      await expect(fs.access(artifacts.summaryPath)).resolves.toBeUndefined();
+      await fs.access(artifacts.reportPath);
+      await fs.access(artifacts.summaryPath);
     } finally {
       await fs.rm(outputDir, { recursive: true, force: true });
     }

@@ -414,10 +414,12 @@ test("sessions.describe retains each global row owner from a qualified main alia
     ["main", "main"],
     ["work", "workspace"],
     ["main", "workspace"],
+    ["work", "global"],
   ]) {
-    const described = await directSessionReq("sessions.describe", {
-      key: `agent:${agentId}:${alias}`,
-    });
+    const described = await directSessionReq(
+      "sessions.describe",
+      alias === "global" ? { key: "global", agentId } : { key: `agent:${agentId}:${alias}` },
+    );
     expect(described).toMatchObject({
       ok: true,
       payload: {
@@ -430,6 +432,12 @@ test("sessions.describe retains each global row owner from a qualified main alia
       },
     });
   }
+  expect(
+    await directSessionReq("sessions.describe", { key: "agent:main:workspace", agentId: "work" }),
+  ).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST" },
+  });
 });
 
 test("sessions.describe reads a pre-existing store after its agent is removed from config", async () => {

@@ -132,6 +132,7 @@ describe("Dynamic route startup bridge", () => {
     const reservedRouteSegments = [
       ...new Set([
         "focus",
+        "share",
         ...Object.values(CONTROL_UI_DOCUMENT_ROUTE_PATHS).map((path) => path.slice(1)),
         ...APP_ROUTE_IDS.flatMap((routeId) => {
           const definition = routePageSpec(routeId);

@@ -108,51 +108,50 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 
 ## Collection review
 
-In `auto` mode, the Gateway runs one system-owned cron job per agent each week
-(a multi-agent roster needs `agents.ownership: "explicit"`, see
-[Multi-agent](/concepts/multi-agent)).
-Each job appears in `openclaw cron list` and runs every 7 days. Cron owns the
-cadence; the job is enabled only when
-`skills.workshop.autonomous.mode` is `auto`. The review can only read skills
-and submit one atomic collection reconciliation listing only changes. It keeps distinct useful skills,
-rewrites weak ones, consolidates overlap, and drops junk or stale fragments.
-Choosing `auto` intentionally authorizes those rewrites and drops without a
-second approval **for Workshop-owned paths only**; `propose` and `off` do not
-run collection review.
+In `auto` mode, the Gateway maintains one weekly automation per agent. It is
+a normal isolated agent turn: cron owns scheduling, cancellation, and run
+history. `propose` and `off` disable these reviews.
 
-Each reviewer reads only its agent's Workshop directory. It reads each skill it
-intends to change. Unlisted skills stay
-untouched. Every skill in the Workshop directory may receive `write` or `drop`.
-Collection review records its changes in review history and the backup manifest;
-it does not create proposal rows.
+The reviewer reads and edits the agent's Workshop directory with normal file
+tools. Directory listings are paged to fit the selected model instead of putting
+every file path into the initial prompt. The reviewer follows each continuation
+before changing that directory.
+Skill contents are review material, not active instructions. It keeps useful
+procedures, simplifies bloated skills, consolidates overlap, and removes obsolete
+files. Absence of use in the current run never justifies removal. Usage tracking
+and experience review remain active; weekly cleanup does not receive a separate
+usage table.
 
-Recorded usage counts and last-used recency are supporting evidence, not an
-age-based lifecycle: heavy use favors preserving a skill's procedure, while no
-recorded use alone never justifies removing it.
+The file tools stay rooted at the Workshop directory. Shell commands use the
+operator's existing cron execution and approval policy; enabling review does not
+grant additional shell access. An approval-required policy can refuse unattended
+shell commands; a full-access policy permits them. File discovery does not need a shell.
 
-OpenClaw validates and scans every write before changing the Workshop directory,
-serializes each agent's collection edits with an agent-scoped lease, and retains
-one backup under that agent directory. The changed collection appears in new
-agent runs;
-running sessions keep their existing skill snapshot.
+Reviews require the embedded runtime. If an enabled sandbox has
+`workspaceAccess: "ro"` or `"none"`, the turn refuses to run rather than editing
+a disposable copy. A writable sandbox uses the agent's Workshop directory.
+Sandbox backends must support directory reads to provide shell-free discovery.
+Bundled backends use their existing filesystem permissions for these reads.
 
-To undo the last completed cleanup, ask the agent to restore the skill
-collection. It uses `skill_workshop` action `restore_collection` under the same
-agent-scoped lock. Restore refuses if any affected skill changed after cleanup.
-For an older backup that cannot be verified, follow the
-[manual recovery guidance](#when-an-older-backup-cannot-be-restored-automatically).
+### Changes and recovery
 
-Each attempt is persisted under the agent id review key before the model starts.
-Review is admitted only for collections of at most
-200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged.
-The reconciled result must stay inside the same byte limit.
+Collection review follows normal agent file-edit semantics. Completed edits
+remain if a later step fails or the turn is cancelled. There is no collection-wide
+transaction, post-turn scanner, automatic rollback, or separate review history
+writer. This also prevents a failed review from restoring an old tree over
+concurrent operator edits. Per-skill proposal validation, scanning, and apply
+behavior described above are unchanged.
 
-Every completed review records its kept, written, and dropped skill names in
-the shared state database, including the reason for each drop. OpenClaw retains
-the latest 90 outcomes per agent.
+The reviewer ends with a summary of changes and removal reasons, or why no change
+was needed. Find it in the automation's run history. Reviews do not announce into
+a conversation. Future sessions load changed skills; running sessions retain
+their existing instruction snapshot.
 
-Collection rewrites and merges produce `SKILL.md` files at or below 10,000
-characters. A skill already above the cap can only become shorter.
+Existing collection backups are preserved. The `restore_collection` action
+can restore a retained backup from the previous review implementation, but new
+reviews do not create collection backups. The `history` action reads those
+historical review records; current results belong to automation history.
+Restore refuses to overwrite affected skills changed after that backup.
 
 ### When an older backup cannot be restored automatically
 
@@ -166,8 +165,7 @@ Do not edit backup hashes or delete or flatten live files merely to make restore
 
 For operator-led recovery:
 
-1. Pause writes to the agent's Workshop, including collection review. A later cleanup can
-   replace the retained backup.
+1. Pause writes to the agent's Workshop, including collection review, before comparing or restoring files.
 2. Locate the backup under
    `<agentDir>/skill-workshop/collection-backups/<backup-id>/`.
    Its `manifest.json` identifies the affected Workshop-relative directories in
@@ -550,8 +548,9 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.curator.restore`           | `operator.admin` |
 
 `skills.curator.status` reports live skill usage recorded from trusted
-`skill.used` events, plus the latest collection review for each agent and per-workspace
-experience review outcomes. Age-based skill lifecycle curation is retired.
+`skill.used` events, retained pre-cron collection review records, and per-workspace
+experience review outcomes. Current collection reviews use automation run history.
+Age-based skill lifecycle curation is retired.
 `skills.curator.pin`, `skills.curator.unpin`, and `skills.curator.restore` remain
 registered for existing clients, but always return an error explaining that the
 weekly collection review now manages the skill collection.

@@ -369,7 +369,6 @@ async function testPreflightCandidate(params: {
     params.worktreeDir,
     params.timeoutMs,
     params.defaultCommandEnv,
-    "require-preferred",
   );
   if (manager.kind === "missing-required") {
     params.steps.push({
@@ -384,13 +383,11 @@ async function testPreflightCandidate(params: {
   }
   try {
     const preferIgnoreScripts = shouldInstallWithoutScriptsOnWindows(manager.manager);
-    const ignoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager);
-    const installArgv =
-      preferIgnoreScripts && ignoreScriptsArgv
-        ? ignoreScriptsArgv
-        : managerInstallArgs(manager.manager, {
-            compatFallback: manager.fallback && manager.manager === "npm",
-          });
+    const installArgv = preferIgnoreScripts
+      ? managerInstallIgnoreScriptsArgs(manager.manager)
+      : managerInstallArgs(manager.manager, {
+          compatFallback: manager.fallback && manager.manager === "npm",
+        });
     const installName = preferIgnoreScripts ? "deps install (ignore scripts)" : "deps install";
     const installEnv = await resolveInstallEnv(
       manager.manager,

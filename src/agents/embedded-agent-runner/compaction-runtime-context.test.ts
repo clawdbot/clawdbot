@@ -166,6 +166,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       authProfileId: "openai:p1",
       workspaceDir: "/tmp/workspace",
       cwd: "/tmp/task-repo",
+      requireWorkspaceOnly: true,
+      requireWritableSandbox: true,
       agentDir: "/tmp/agent",
       config: {} as unknown as OpenClawConfig,
       senderIsOwner: true,
@@ -189,6 +191,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:p1");
     expect(result.workspaceDir).toBe("/tmp/workspace");
     expect(result.cwd).toBe("/tmp/task-repo");
+    expect(result.requireWorkspaceOnly).toBe(true);
+    expect(result.requireWritableSandbox).toBe(true);
     expect(result.agentDir).toBe("/tmp/agent");
     expect(result.senderIsOwner).toBe(true);
     expect(result.senderId).toBe("user-123");

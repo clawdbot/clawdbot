@@ -3,11 +3,11 @@
  * Strict JSON stays the fast path; JSON5 is only the authored/legacy fallback.
  */
 import { createRequire } from "node:module";
-import { getWorkerDeployJson5 } from "../worker/worker-deploy-runtime-registry.js";
+import { getSealedRuntimeJson5 } from "../infra/sealed-runtime-registry.js";
 
 type Json5Parser = { parse: (value: string) => unknown };
 let json5Runtime: Json5Parser | undefined;
-declare const WORKER_DEPLOY_BUILD: boolean;
+declare const SEALED_RUNTIME_BUILD: boolean;
 
 function isJson5Parser(value: unknown): value is Json5Parser {
   return (
@@ -35,12 +35,12 @@ function loadJson5Parser(): Json5Parser {
   if (json5Runtime) {
     return json5Runtime;
   }
-  const injected = getWorkerDeployJson5();
+  const injected = getSealedRuntimeJson5();
   if (injected !== undefined) {
     return setJson5Runtime(injected);
   }
-  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
-    throw new Error("worker JSON5 runtime was not registered before use");
+  if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
+    throw new Error("sealed JSON5 runtime was not registered before use");
   }
   return setJson5Runtime(createRequire(import.meta.url)("json5"));
 }

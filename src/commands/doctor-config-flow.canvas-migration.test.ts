@@ -121,6 +121,7 @@ describe("Canvas document migration through doctor config persistence", () => {
           await writeCanvasConfig(home, customRoot, scenario === "legacy-root"),
         );
         expect(saved.plugins.entries.canvas.config.host).toEqual({ enabled: false });
+        expect(Object.keys(saved.plugins.entries)).toEqual(["canvas"]);
         expect(saved).not.toHaveProperty("canvasHost");
         expect((await readConfigFileSnapshot()).valid).toBe(true);
         if (hasDocument) {
