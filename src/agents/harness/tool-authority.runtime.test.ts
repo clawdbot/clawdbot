@@ -139,6 +139,26 @@ afterEach(() => {
 });
 
 describe("host-prepared embedded tool authority", () => {
+  it("falls back to direct authority when the captured reply operation is retired (#139847)", async () => {
+    // A message sent while an earlier reply run was active retires that
+    // operation before this attempt binds its route. Binding the route on the
+    // retired operation used to kill the whole attempt with
+    // "Reply operation has no active tool authority snapshot"; the wrapper
+    // must fall back to the direct prepared authority instead.
+    const retired = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+    retired.complete();
+    await admitted(async ({ admittedRunContext }) =>
+      withPreparedEmbeddedRunToolAuthority(
+        { admittedRunContext, replyOperation: retired },
+        { ...attempt, toolAuthorityFingerprint: "stale-fingerprint" },
+        undefined,
+        async (prepared) => {
+          expect(prepared.toolAuthorityFingerprint).toMatch(/^[a-f0-9]{64}$/);
+        },
+      ),
+    );
+  });
+
   it.each(["claim", "wrapper", "lifecycle", "persistence"] as const)(
     "refuses early native-question answers after creator %s closure",
     async (closure) => {
