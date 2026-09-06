@@ -28,7 +28,10 @@ import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
-import { prepareUpdateRestart } from "./update-command-restart-context.js";
+import {
+  prepareUpdateRestart,
+  type UpdateRestartParams,
+} from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   UpdateCommandFailure,
@@ -56,10 +59,8 @@ import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 const CLI_NAME = resolveCliName();
 
-export type FinishUpdateParams = {
-  result: UpdateRunResult;
+export type FinishUpdateParams = UpdateRestartParams & {
   failure?: { cause: unknown; detail: string };
-  root: string;
   previousInstallRoot?: string;
   installKindChanged: boolean;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -67,16 +68,11 @@ export type FinishUpdateParams = {
   storedChannel: UpdateChannel | null;
   channel: UpdateChannel;
   downgradeRisk: boolean;
-  shouldRestart: boolean;
   opts: UpdateCommandOptions;
-  preManagedServiceStop?: PreManagedServiceStop;
-  ownedManagedUpdateEnv?: NodeJS.ProcessEnv;
   controlPlaneUpdateSentinelMeta: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
   preUpdatePluginInstallRecords: Awaited<ReturnType<typeof loadInstalledPluginIndexInstallRecords>>;
   startedAt: number;
   packageUpdateNodeRunner?: string;
-  updateStepTimeoutMs: number;
-  invocationCwd?: string;
   packageTransaction?: PackageUpdateTransaction;
   schemaVersions?: UpdateStateSchemaVersion[];
   previousVerified?: boolean;

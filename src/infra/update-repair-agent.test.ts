@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { UpdateRepairValidation } from "./update-repair-agent.js";
 import { runUpdateRepairLoop } from "./update-repair-agent.js";
+import type { UpdateRepairValidation } from "./update-repair-protocol.js";
 
 type UpdateRepairParams = Parameters<typeof runUpdateRepairLoop>[0];
 

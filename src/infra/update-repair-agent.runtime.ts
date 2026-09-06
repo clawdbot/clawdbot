@@ -11,7 +11,7 @@ import {
   withInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "./installation-target-context.js";
-import type { UpdateRepairTarget } from "./update-repair-agent.js";
+import type { UpdateRepairTarget } from "./update-repair-protocol.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 
 const repairRuntime = {

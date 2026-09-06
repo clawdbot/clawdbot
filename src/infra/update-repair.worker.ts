@@ -2,11 +2,12 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { toErrorObject } from "./errors.js";
 import { installationTargetEnv } from "./installation-target-context.js";
-import { runUpdateRepairLoop, type UpdateRepairValidation } from "./update-repair-agent.js";
+import { runUpdateRepairLoop } from "./update-repair-agent.js";
 import {
   UPDATE_REPAIR_IPC_MAX_BYTES,
   updateRepairParentMessageSchema,
   type UpdateRepairWorkerMessage,
+  type UpdateRepairValidation,
 } from "./update-repair-protocol.js";
 import { getUpdateRun } from "./update-run-ledger.js";
 

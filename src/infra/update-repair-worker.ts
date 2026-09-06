@@ -4,17 +4,15 @@ import { redactSupportString } from "../logging/diagnostic-support-redaction.js"
 import { createCommandTerminationController } from "../process/exec-termination.js";
 import { installationTargetEnv } from "./installation-target-context.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import type {
-  UpdateRepairParams,
-  UpdateRepairResult,
-  UpdateRepairValidation,
-} from "./update-repair-agent.js";
 import {
   UPDATE_REPAIR_IPC_MAX_BYTES,
   updateRepairBudgetSchema,
   updateRepairParentMessageSchema,
   updateRepairWorkerMessageSchema,
   type UpdateRepairParentMessage,
+  type UpdateRepairParams,
+  type UpdateRepairResult,
+  type UpdateRepairValidation,
 } from "./update-repair-protocol.js";
 
 /** Loaded before replacement; inference imports belong entirely to the candidate child. */

@@ -2,8 +2,8 @@ import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { prepareRestartScript } from "./restart-helper.js";
-import type { FinishUpdateParams } from "./update-command-post-update.js";
 import {
   resolveServiceRefreshEnv,
   stripGatewayServiceMarkerEnv,
@@ -19,19 +19,21 @@ import {
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
   shouldPrepareUpdatedInstallRestart,
+  type PreManagedServiceStop,
 } from "./update-command-service.js";
 
+export type UpdateRestartParams = {
+  result: UpdateRunResult;
+  root: string;
+  preManagedServiceStop?: PreManagedServiceStop;
+  ownedManagedUpdateEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+  shouldRestart: boolean;
+  updateStepTimeoutMs: number;
+};
+
 export async function prepareUpdateRestart(
-  params: Pick<
-    FinishUpdateParams,
-    | "result"
-    | "root"
-    | "preManagedServiceStop"
-    | "ownedManagedUpdateEnv"
-    | "invocationCwd"
-    | "shouldRestart"
-    | "updateStepTimeoutMs"
-  >,
+  params: UpdateRestartParams,
   restartConfigSnapshot: ConfigFileSnapshot,
 ) {
   let restartScriptPath: string | null = null;

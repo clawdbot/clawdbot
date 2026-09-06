@@ -1,44 +1,17 @@
 import { z } from "zod";
 import { renderTriagePrompt } from "../commands/triage-prompt.js";
-import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import {
   updateRepairBudgetSchema,
   updateRepairValidationSchema,
-  type UpdateRepairWorkerMessage,
+  type UpdateRepairParams,
+  type UpdateRepairResult,
+  type UpdateRepairValidation,
 } from "./update-repair-protocol.js";
 import { runUpdateRepairWorker } from "./update-repair-worker.js";
 
-export type UpdateRepairTarget = {
-  stateDir: string;
-  configPath: string;
-  workspaceDir: string;
-  installRoot: string;
-  candidateRoot?: string;
-};
-export type UpdateRepairValidation = z.infer<typeof updateRepairValidationSchema>;
-export type UpdateRepairResult = Extract<UpdateRepairWorkerMessage, { type: "result" }>["result"];
 type RepairAttempt = UpdateRepairResult["attempts"][number];
-export type UpdateRepairEvent = Extract<UpdateRepairWorkerMessage, { type: "event" }>["event"];
-export type UpdateRepairParams = {
-  target: UpdateRepairTarget;
-  nodeRunner?: string;
-  runId?: string;
-  context: TriageUpdateFailure & {
-    phase: "validating" | "verifying";
-    beforeVersion?: string;
-    targetVersion?: string;
-    symptoms?: string[];
-  };
-  /** Read-only oracle for the captured target. Honor the signal to cancel diagnostics. */
-  validate: (signal: AbortSignal) => Promise<UpdateRepairValidation>;
-  budget?: z.input<typeof updateRepairBudgetSchema>;
-  onEvent?: (event: UpdateRepairEvent) => void;
-  signal?: AbortSignal;
-  /** The admitting update still owns this repair slot. */
-  isCurrent?: () => boolean;
-};
 
 const resultLineSchema = z.object({
   status: z.enum(["fixed", "partial", "not-fixed"]),

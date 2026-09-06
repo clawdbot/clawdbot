@@ -19,7 +19,7 @@ import {
 } from "../infra/installation-target-context.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
-import type { UpdateRepairValidation } from "../infra/update-repair-agent.js";
+import type { UpdateRepairValidation } from "../infra/update-repair-protocol.js";
 import {
   redactSupportString,
   type SupportRedactionContext,

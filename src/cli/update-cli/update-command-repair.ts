@@ -1,10 +1,10 @@
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveInstallationTarget } from "../../infra/installation-target-context.js";
-import {
-  prepareUnattendedUpdateRepair,
-  type UpdateRepairEvent,
-  type UpdateRepairValidation,
-} from "../../infra/update-repair-agent.js";
+import { prepareUnattendedUpdateRepair } from "../../infra/update-repair-agent.js";
+import type {
+  UpdateRepairEvent,
+  UpdateRepairValidation,
+} from "../../infra/update-repair-protocol.js";
 import {
   getUpdateRun,
   recordUpdateRunPhase,

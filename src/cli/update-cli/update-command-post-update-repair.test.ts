@@ -9,7 +9,7 @@ import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materializ
 import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import type { UpdateRepairParams } from "../../infra/update-repair-agent.js";
+import type { UpdateRepairParams } from "../../infra/update-repair-protocol.js";
 import {
   createUpdateRun,
   getUpdateRun,

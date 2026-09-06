@@ -3,11 +3,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { toErrorObject } from "./errors.js";
-import {
-  prepareUnattendedUpdateRepair,
-  type UpdateRepairEvent,
-  type UpdateRepairParams,
-} from "./update-repair-agent.js";
+import { prepareUnattendedUpdateRepair } from "./update-repair-agent.js";
+import type { UpdateRepairEvent, UpdateRepairParams } from "./update-repair-protocol.js";
 
 async function candidate(root: string, runtime: string) {
   const directory = path.join(root, "dist/infra");
