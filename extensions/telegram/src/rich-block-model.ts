@@ -337,11 +337,11 @@ export function maxInputRichBlockNesting(blocks: readonly InputRichBlock[]): num
   return Math.max(0, ...blocks.map(blockDepth));
 }
 
-/** Media elements per block, for the wire's 50-media message cap. */
+/** Media elements per block, for Telegram's observed 20-media message cap. */
 export function countInputRichBlockMedia(block: InputRichBlock): number {
   switch (block.type) {
     // Maps are excluded: 51 maps in one message were accepted live, so they
-    // do not consume the 50-attachment budget.
+    // do not consume the media-attachment budget.
     case "photo":
     case "video":
     case "audio":

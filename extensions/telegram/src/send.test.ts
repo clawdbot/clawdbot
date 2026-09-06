@@ -256,6 +256,15 @@ function markdownTable(columns: number): string {
     .join("\n");
 }
 
+function richMediaMarkdown(count: number, trailingText?: string): string {
+  const media = Array.from(
+    { length: count },
+    (_, index) =>
+      `<figure><img src="https://example.com/${index + 1}.jpg"/><figcaption>photo-${index + 1}</figcaption></figure>`,
+  );
+  return [...media, ...(trailingText ? [`<p>${trailingText}</p>`] : [])].join("\n\n");
+}
+
 function countTelegramRichBlocks(blocks: readonly InputRichBlock[] | undefined): number {
   return countInputRichBlocks(blocks ?? []);
 }
@@ -1548,6 +1557,47 @@ describe("sendMessageTelegram", () => {
     expect(plain).toContain("paragraph 500");
   });
 
+  it("uses one send for 20 rich media and two complete ordered sends for 21", async () => {
+    botApi.sendMessage.mockImplementation(async (chatId) => ({
+      message_id: botApi.sendMessage.mock.calls.length,
+      chat: { id: Number(chatId) },
+    }));
+
+    for (const [mediaCount, expectedSends] of [
+      [20, 1],
+      [21, 2],
+    ] as const) {
+      const trailingText = `TRAILING-CONTENT-${mediaCount}`;
+      await sendMessageTelegram("123", richMediaMarkdown(mediaCount, trailingText), {
+        cfg: { channels: { telegram: { richMessages: true } } },
+        token: "tok",
+      });
+
+      expect(botRawApi.sendRichMessage, `${mediaCount} media`).toHaveBeenCalledTimes(expectedSends);
+      const richMessages: Array<RichMessageTestPayload | undefined> =
+        botRawApi.sendRichMessage.mock.calls.map((call) => call[0]?.rich_message);
+      expect(
+        richMessages.map((message) =>
+          (message?.blocks ?? []).reduce(
+            (total, block) => total + countInputRichBlockMedia(block),
+            0,
+          ),
+        ),
+      ).toEqual(mediaCount === 20 ? [20] : [20, 1]);
+      const wireMedia = richMessages
+        .map((message) => JSON.stringify(message?.blocks ?? []))
+        .join("")
+        .match(/https:\/\/example\.com\/\d+\.jpg/g);
+      expect(wireMedia).toEqual(
+        Array.from({ length: mediaCount }, (_, index) => `https://example.com/${index + 1}.jpg`),
+      );
+      expect(inputRichBlocksToPlainText(richMessages.at(-1)?.blocks ?? [])).toContain(trailingText);
+
+      botRawApi.sendRichMessage.mockClear();
+      botApi.sendMessage.mockClear();
+    }
+  });
+
   it("keeps recursive list and album payloads within Telegram transport limits", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
     const list = Array.from({ length: 250 }, (_, index) => `${index + 1}. item ${index + 1}`).join(
@@ -1583,7 +1633,7 @@ describe("sendMessageTelegram", () => {
           (request?.blocks ?? []).reduce(
             (total, block) => total + countInputRichBlockMedia(block),
             0,
-          ) <= 50,
+          ) <= 20,
       ),
     ).toBe(true);
     expect(items.map((item) => item.value)).toEqual(

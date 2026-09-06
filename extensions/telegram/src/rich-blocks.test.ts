@@ -691,7 +691,7 @@ describe("splitTelegramRichBlocks", () => {
     const collage: InputRichBlock = {
       type: "collage",
       caption: { text: "Album caption" },
-      blocks: Array.from({ length: 51 }, (_, index) => ({
+      blocks: Array.from({ length: 21 }, (_, index) => ({
         type: "photo" as const,
         photo: { type: "photo" as const, media: `https://example.com/${index}.jpg` },
       })),
@@ -709,12 +709,76 @@ describe("splitTelegramRichBlocks", () => {
     ]);
     expect(
       mediaChunks.every(
-        (chunk) => chunk.reduce((total, block) => total + countInputRichBlockMedia(block), 0) <= 50,
+        (chunk) => chunk.reduce((total, block) => total + countInputRichBlockMedia(block), 0) <= 20,
       ),
     ).toBe(true);
     expect(albums.flatMap((album) => album.blocks)).toEqual(collage.blocks);
     expect(albums.flatMap((album) => (album.caption ? [album.caption.text] : []))).toEqual([
       "Album caption",
+    ]);
+  });
+
+  it("keeps exactly 20 media in one rich message and splits 21 into two", () => {
+    const photo = (index: number): InputRichBlock => ({
+      type: "photo",
+      photo: { type: "photo", media: `https://example.com/${index}.jpg` },
+    });
+
+    expect(
+      splitTelegramRichBlocks(Array.from({ length: 20 }, (_, index) => photo(index))),
+    ).toHaveLength(1);
+    const chunks = splitTelegramRichBlocks(Array.from({ length: 21 }, (_, index) => photo(index)));
+    expect(chunks).toHaveLength(2);
+    expect(
+      chunks.map((chunk) =>
+        chunk.reduce((total, block) => total + countInputRichBlockMedia(block), 0),
+      ),
+    ).toEqual([20, 1]);
+  });
+
+  it("splits a single list item containing 21 media without dropping its tail", () => {
+    const photos: InputRichBlock[] = Array.from({ length: 21 }, (_, index) => ({
+      type: "photo",
+      photo: { type: "photo", media: `https://example.com/${index}.jpg` },
+    }));
+    const tail: InputRichBlock = { type: "paragraph", text: "after media" };
+    const chunks = splitTelegramRichBlocks([
+      { type: "list", items: [{ value: 7, blocks: [...photos, tail] }] },
+    ]);
+    const lists = chunks.flat().filter((block) => block.type === "list");
+
+    expect(
+      chunks.map((chunk) =>
+        chunk.reduce((total, block) => total + countInputRichBlockMedia(block), 0),
+      ),
+    ).toEqual([20, 1]);
+    expect(lists.flatMap((list) => list.items).flatMap((item) => item.blocks)).toEqual([
+      ...photos,
+      tail,
+    ]);
+    expect(lists.flatMap((list) => list.items).map((item) => item.value)).toEqual([7, 7]);
+  });
+
+  it("moves a gallery whole to the next rich message and preserves surrounding text order", () => {
+    const photo = (index: number): InputRichBlock => ({
+      type: "photo",
+      photo: { type: "photo", media: `https://example.com/${index}.jpg` },
+    });
+    const leadingPhotos = Array.from({ length: 18 }, (_, index) => photo(index));
+    const slideshow: InputRichBlock = {
+      type: "slideshow",
+      blocks: Array.from({ length: 5 }, (_, index) => photo(index + 18)),
+    };
+    const chunks = splitTelegramRichBlocks([
+      ...leadingPhotos,
+      { type: "paragraph", text: "between albums" },
+      slideshow,
+      { type: "paragraph", text: "after albums" },
+    ]);
+
+    expect(chunks).toEqual([
+      [...leadingPhotos, { type: "paragraph", text: "between albums" }],
+      [slideshow, { type: "paragraph", text: "after albums" }],
     ]);
   });
 });

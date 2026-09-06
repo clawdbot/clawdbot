@@ -14,6 +14,8 @@ import {
   recordOutboundMessageForPromptContext,
   type TelegramOutboundPromptContextMessage,
 } from "./outbound-message-context.js";
+import { countInputRichBlockMedia } from "./rich-block-model.js";
+import { TELEGRAM_RICH_MEDIA_LIMIT } from "./rich-block-split.js";
 import { buildTelegramRichMarkdownPlan } from "./rich-message.js";
 import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
 import {
@@ -29,6 +31,7 @@ import {
   deliverTelegramTextPage,
   planTelegramTextDeliveryPages,
 } from "./telegram-text-delivery.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 type TelegramEditMessageTextParams = Parameters<TelegramApiContext["api"]["editMessageText"]>[3];
@@ -173,18 +176,37 @@ async function editMessageTelegramWithContext(
     const richPlan = useRichMessages
       ? buildTelegramRichMarkdownPlan(text, { tableMode, skipEntityDetection: !linkPreviewEnabled })
       : undefined;
+    const richMediaCount =
+      richPlan?.richMessage.blocks.reduce(
+        (total, block) => total + countInputRichBlockMedia(block),
+        0,
+      ) ?? 0;
+    const richEditExceedsMediaLimit = richMediaCount > TELEGRAM_RICH_MEDIA_LIMIT;
+    if (richEditExceedsMediaLimit) {
+      sendLogger.warn(
+        `telegram editMessage degrade=plain-fallback:rich-media-too-many: ${richMediaCount} media exceeds rich edit limit of ${TELEGRAM_RICH_MEDIA_LIMIT}`,
+      );
+    }
     // An edit replaces one message. Keep the complete rich document so a
     // structural-limit rejection recovers all its text, not just the first send page.
-    const page = richPlan?.richMessage.blocks.length
-      ? { ...richPlan, sourceText: richPlan.plainText, sourceTextMode: "markdown" as const }
-      : planTelegramTextDeliveryPages({
-          text: textMode === "html" ? htmlText : text,
-          maxChars: Number.MAX_SAFE_INTEGER,
-          tableMode,
-          richMessages: useRichMessages,
-          skipEntityDetection: !linkPreviewEnabled,
-          ...(textMode === "html" ? { textMode: "html" as const } : {}),
-        })[0];
+    // Telegram can silently accept and truncate over-limit rich-media edits, so
+    // proactively replace those with the complete visible plain projection.
+    const page = richEditExceedsMediaLimit
+      ? {
+          plainText: richPlan?.plainText ?? text,
+          sourceText: richPlan?.plainText ?? text,
+          sourceTextMode: "markdown" as const,
+        }
+      : richPlan?.richMessage.blocks.length
+        ? { ...richPlan, sourceText: richPlan.plainText, sourceTextMode: "markdown" as const }
+        : planTelegramTextDeliveryPages({
+            text: textMode === "html" ? htmlText : text,
+            maxChars: Number.MAX_SAFE_INTEGER,
+            tableMode,
+            richMessages: useRichMessages,
+            skipEntityDetection: !linkPreviewEnabled,
+            ...(textMode === "html" ? { textMode: "html" as const } : {}),
+          })[0];
     if (!page) {
       throw new Error("telegram editMessage failed: empty text");
     }
@@ -197,13 +219,19 @@ async function editMessageTelegramWithContext(
       fallbackLimit: Number.MAX_SAFE_INTEGER,
       sender: {
         sendPlain: (value, _fallback, label) =>
-          edit(
-            () =>
-              Object.keys(commonTextParams).length
-                ? api.editMessageText(chatId, messageId, value, commonTextParams)
-                : api.editMessageText(chatId, messageId, value),
-            label,
-          ),
+          value.length > TELEGRAM_TEXT_CHUNK_LIMIT
+            ? Promise.reject(
+                new Error(
+                  `telegram editMessage failed: complete plain fallback is ${value.length} characters, exceeding the ${TELEGRAM_TEXT_CHUNK_LIMIT}-character edit limit`,
+                ),
+              )
+            : edit(
+                () =>
+                  Object.keys(commonTextParams).length
+                    ? api.editMessageText(chatId, messageId, value, commonTextParams)
+                    : api.editMessageText(chatId, messageId, value),
+                label,
+              ),
         sendHtml: (value) =>
           edit(() =>
             api.editMessageText(chatId, messageId, value, {

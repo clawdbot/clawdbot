@@ -13,7 +13,9 @@ import {
 } from "./rich-block-model.js";
 import { splitTelegramPlainTextChunks, surrogateSafeChunkEnd } from "./rich-plain-fallback.js";
 
-const TELEGRAM_RICH_MEDIA_LIMIT = 50;
+// Telegram's server silently drops the overflowing media block and its tail
+// above 20 rich-media items, despite the documented 50-item limit.
+export const TELEGRAM_RICH_MEDIA_LIMIT = 20;
 
 type RichBlockBudget = { chars: number; blocks: number; media: number };
 type RichBlockLimits = { textLimit: number; blockLimit: number };
@@ -233,10 +235,36 @@ function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits)
     return pieces;
   }
   if (block.type === "list") {
+    const expandedItems = block.items.flatMap((item) => {
+      if (measureRichBlocks(item.blocks).media <= TELEGRAM_RICH_MEDIA_LIMIT) {
+        return [item];
+      }
+      const itemChunks = splitTelegramRichBlocks(item.blocks, {
+        textLimit,
+        // Reserve one block for the list wrapper and one for the item itself.
+        blockLimit: Math.max(1, blockLimit - 2),
+      });
+      return itemChunks.map((blocks) => {
+        const piece: InputRichBlockListItem = { blocks };
+        if (item.has_checkbox !== undefined) {
+          piece.has_checkbox = item.has_checkbox;
+        }
+        if (item.is_checked !== undefined) {
+          piece.is_checked = item.is_checked;
+        }
+        if (item.value !== undefined) {
+          piece.value = item.value;
+        }
+        if (item.type !== undefined) {
+          piece.type = item.type;
+        }
+        return piece;
+      });
+    });
     const pieces: InputRichBlock[] = [];
     let items: InputRichBlockListItem[] = [];
     let size: RichBlockBudget = { chars: 0, blocks: 1, media: 0 };
-    for (const item of block.items) {
+    for (const item of expandedItems) {
       const measured = measureRichBlocks(item.blocks);
       const itemSize = { ...measured, blocks: measured.blocks + 1 };
       const nextSize = addRichBlockBudget(size, itemSize);
