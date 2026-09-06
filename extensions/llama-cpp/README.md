@@ -20,10 +20,10 @@ shows **Managed local server** and **Existing llama-server** under one
 
 ## Configure managed text inference
 
-After explicit consent, OpenClaw installs the matching server build and
-downloads Gemma 4 E4B IT Q4_K_M (approximately 5.0 GB) plus EmbeddingGemma
-(approximately 0.3 GB). The default chat download is offered only on machines
-with at least 16 GiB of RAM.
+After explicit consent, OpenClaw installs the matching server build and a
+recommended chat model that fits the Gateway's memory, GPU, and free disk space.
+The download also includes the configured local embedding model, or EmbeddingGemma
+by default (approximately 0.3 GB). See the provider guide for current recommendations.
 
 When local memory search is configured and chat setup is unavailable or
 declined, OpenClaw offers a separate embedding-only setup. After explicit
