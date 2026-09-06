@@ -8,6 +8,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "../internal-runtime-context.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { normalizeAssistantReplayContent } from "./replay-history.js";
 
 // Preface of carriers persisted before the stable system prompt explained the markers.
@@ -60,14 +61,7 @@ function openclawTranscriptAssistant(model: "delivery-mirror" | "gateway-injecte
     api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
     provider: "openclaw",
     model,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 0,
   } as unknown as AgentMessage;

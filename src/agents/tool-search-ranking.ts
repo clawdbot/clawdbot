@@ -3,25 +3,32 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** Collects property names and descriptions from a JSON-Schema-shaped value. */
 export function readParameterText(parameters: unknown, depth = 0): string {
-  if (depth > 4 || !isRecord(parameters)) {
-    return "";
-  }
   const parts: string[] = [];
+  collectParameterText(parameters, depth, parts);
+  return parts.join(" ");
+}
+
+function collectParameterText(parameters: unknown, depth: number, parts: string[]): void {
+  if (depth > 4 || !isRecord(parameters)) {
+    return;
+  }
   const description = parameters.description;
-  if (typeof description === "string") {
+  if (typeof description === "string" && description) {
     parts.push(description);
   }
   const properties = parameters.properties;
   if (isRecord(properties)) {
     for (const [name, child] of Object.entries(properties)) {
-      parts.push(name, readParameterText(child, depth + 1));
+      if (name) {
+        parts.push(name);
+      }
+      collectParameterText(child, depth + 1, parts);
     }
   }
   const items = parameters.items;
   if (items !== undefined) {
-    parts.push(readParameterText(items, depth + 1));
+    collectParameterText(items, depth + 1, parts);
   }
-  return parts.filter(Boolean).join(" ");
 }
 
 /** BM25 term-frequency saturation. Standard Okapi default. */

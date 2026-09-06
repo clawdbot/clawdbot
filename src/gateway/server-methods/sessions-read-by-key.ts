@@ -38,6 +38,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     const { target, storePath, store, entry } = loadSessionEntriesForTarget({
       key,
       cfg,
+      includeStoreChildEntries: true,
       ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
     });
     const boundaryFilter = createRoleVisibilityFilter(client, cfg);

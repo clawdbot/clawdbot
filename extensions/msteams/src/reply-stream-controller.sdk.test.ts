@@ -84,7 +84,10 @@ afterAll(async () => {
   });
 });
 
-function createLoopbackController(scenario: string) {
+function createLoopbackController(
+  scenario: string,
+  msteamsConfig?: Parameters<typeof createTeamsReplyStreamController>[0]["msteamsConfig"],
+) {
   const send = async (activity: Record<string, unknown>) => {
     const result = await new Promise<{
       status: number;
@@ -167,6 +170,7 @@ function createLoopbackController(scenario: string) {
     conversationType: "personal",
     context: { activity: { type: "message" }, stream } as never,
     feedbackLoopEnabled: false,
+    msteamsConfig,
   });
   return {
     acknowledgements,
@@ -179,6 +183,48 @@ function createLoopbackController(scenario: string) {
 }
 
 describe("Microsoft Teams SDK acknowledged stream fallback", () => {
+  it.each([
+    { label: "default", progress: {}, expectedLabel: "Working" },
+    { label: "custom", progress: { label: "Custom progress" }, expectedLabel: "Custom progress" },
+  ])(
+    "clears and recreates a plan with the $label label before the final reply",
+    async ({ label, progress, expectedLabel }) => {
+      const scenario = `plan-clear-${label}`;
+      const { acknowledgements, controller } = createLoopbackController(scenario, {
+        streaming: { mode: "progress", progress },
+      });
+      const plan = [{ step: "Inspect", status: "in_progress" as const }];
+
+      try {
+        await controller.pushPlanProgress(plan);
+        await expect
+          .poll(() => acknowledgements.at(-1)?.text)
+          .toBe(`${expectedLabel}\n\n▸ Inspect`);
+
+        await controller.pushPlanProgress([]);
+        await expect.poll(() => acknowledgements.at(-1)?.text).toBe(expectedLabel);
+
+        await controller.pushPlanProgress(plan);
+        await expect
+          .poll(() => acknowledgements.at(-1)?.text)
+          .toBe(`${expectedLabel}\n\n▸ Inspect`);
+      } finally {
+        expect(controller.preparePayload({ text: "Done" })).toBeUndefined();
+        await expect(controller.finalize()).resolves.toEqual({
+          visibleReplySent: true,
+          content: "Done",
+          messageId: `stream-${scenario}`,
+        });
+      }
+      expect(requests.findLast((request) => request.scenario === scenario)).toEqual({
+        scenario,
+        type: "message",
+        text: "Done",
+        status: 201,
+      });
+    },
+  );
+
   it("redelivers only text not acknowledged by the real Teams SDK and HTTP provider", async () => {
     const { acknowledgements, controller, firstAcknowledgement, firstFlushFailure, logger } =
       createLoopbackController("size-limit");

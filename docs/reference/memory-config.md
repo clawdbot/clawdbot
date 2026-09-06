@@ -606,6 +606,10 @@ Built-in memory indexes live in each agent's OpenClaw SQLite database at
 | --------------------- | -------- | ----------- | ----------------------------------------- |
 | `store.fts.tokenizer` | `string` | `unicode61` | FTS5 tokenizer (`unicode61` or `trigram`) |
 
+With `trigram`, query terms shorter than three characters use substring matching,
+so short terms such as `AI` and `UK` remain searchable. Longer terms keep
+full-text matching, including in queries that also contain short terms.
+
 ---
 
 ## Citations

@@ -73,9 +73,7 @@ class ToolOutputComponent extends HyperlinkMarkdown {
 }
 
 // Prefer curated display summaries, then fall back to sanitized JSON args.
-function formatArgs(toolName: string, args: unknown): string {
-  const display = resolveToolDisplay({ name: toolName, args });
-  const detail = formatToolDetail(display);
+function formatArgs(detail: string | undefined, args: unknown): string {
   if (detail) {
     return tuiFormatters.sanitizeRenderableText(detail);
   }
@@ -115,17 +113,13 @@ export class ToolExecutionComponent extends Container {
   private argsLine: Text;
   private output: ToolOutputComponent;
   private toolName: string;
-  private args: unknown;
-  private result?: ToolResult;
-  private expanded = false;
-  private isError = false;
+  private title = "";
   private isPartial = true;
 
   constructor(toolName: string, args: unknown) {
     super();
     this.toolName = toolName;
-    this.args = args;
-    this.box = new Box(1, 1, (line) => theme.toolPendingBg(line));
+    this.box = new Box(1, 1, theme.toolPendingBg);
     this.header = new Text("", 0, 0);
     this.argsLine = new Text("", 0, 0);
     this.output = new ToolOutputComponent("", 0, 0, markdownTheme, {
@@ -136,59 +130,50 @@ export class ToolExecutionComponent extends Container {
     this.box.addChild(this.header);
     this.box.addChild(this.argsLine);
     this.box.addChild(this.output);
-    this.refresh();
+    this.setArgs(args);
+    this.setPartialResult(undefined);
   }
 
   /** Re-renders tool arguments when streaming tool call input changes. */
   setArgs(args: unknown) {
-    this.args = args;
-    this.refresh();
+    const display = resolveToolDisplay({ name: this.toolName, args });
+    this.title = `${display.emoji} ${display.label}`;
+    this.refreshTitle();
+    const argLine = formatArgs(formatToolDetail(display), args);
+    this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
   }
 
   /** Toggles preview/full output rendering for long tool results. */
   setExpanded(expanded: boolean) {
-    this.expanded = expanded;
-    this.refresh();
+    this.output.setExpanded(expanded);
   }
 
   /** Marks the tool call complete and renders final output. */
   setResult(result: ToolResult | undefined, opts?: { isError?: boolean }) {
-    this.result = result;
-    this.isPartial = false;
-    this.isError = Boolean(opts?.isError);
-    this.refresh();
+    this.updateResult(result, false, Boolean(opts?.isError));
   }
 
   /** Renders partial output while the tool call is still running. */
   setPartialResult(result: ToolResult | undefined) {
-    this.result = result;
-    this.isPartial = true;
-    this.refresh();
+    this.updateResult(result, true);
   }
 
-  private refresh() {
-    const bg = this.isPartial
-      ? theme.toolPendingBg
-      : this.isError
-        ? theme.toolErrorBg
-        : theme.toolSuccessBg;
-    this.box.setBgFn((line) => bg(line));
-
-    const display = resolveToolDisplay({
-      name: this.toolName,
-      args: this.args,
-    });
+  private refreshTitle() {
     const title = tuiFormatters.sanitizeRenderableLine(
-      `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`,
+      `${this.title}${this.isPartial ? " (running)" : ""}`,
     );
     this.header.setText(theme.toolTitle(theme.bold(title)));
+  }
 
-    const argLine = formatArgs(this.toolName, this.args);
-    this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
-
-    const raw = extractText(this.result);
-    const text = raw.trim() ? raw : this.isPartial ? "…" : "";
-    this.output.setExpanded(this.expanded);
-    this.output.setText(text);
+  private updateResult(result: ToolResult | undefined, isPartial: boolean, isError = false) {
+    if (this.isPartial !== isPartial) {
+      this.isPartial = isPartial;
+      this.refreshTitle();
+    }
+    this.box.setBgFn(
+      isPartial ? theme.toolPendingBg : isError ? theme.toolErrorBg : theme.toolSuccessBg,
+    );
+    const raw = extractText(result);
+    this.output.setText(raw.trim() ? raw : isPartial ? "…" : "");
   }
 }

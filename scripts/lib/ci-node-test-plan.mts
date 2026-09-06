@@ -2682,14 +2682,16 @@ function createCompactNodeTestShardBundles(
       runner,
       shard_name: shard.shardName,
     });
-    const partition =
-      group.pretestBuildMode && group.includePatterns
-        ? partitionRuntimeTestFiles(group.configs, group.includePatterns)
-        : undefined;
+    const partitionFiles = group.pretestBuildMode
+      ? (group.includePatterns ?? WHOLE_CONFIG_SPLIT_FILE_LISTERS.get(group.shard_name)?.())
+      : undefined;
+    const partition = partitionFiles
+      ? partitionRuntimeTestFiles(group.configs, partitionFiles)
+      : undefined;
     const runtimePartition =
       partition?.runtimeFiles.length && partition.otherFiles.length ? partition : undefined;
-    // Mixed selections keep their build consumers together. Whole-config
-    // consumers still use the complete-file splitter for oversized test work.
+    // Resolve whole-config ownership before splitting so ordinary files do not
+    // inherit a runtime build. Keep consumers together and split the remaining work.
     const plannedGroups =
       usesExpandedRunnerProfile(options.runnerBackend) ||
       COMPACT_BLACKSMITH_SPLIT_OWNERS.has(group.shard_name) ||
@@ -2788,9 +2790,6 @@ function createCompactNodeTestShardBundles(
         combined.every(isParallelCompactGroup) &&
         combined.every((entry) => estimateBinSeconds([entry]) <= serialSecondsCap);
       const secondsCap = parallel ? COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS : serialSecondsCap;
-      // CLI runtime children retain separate serial processes but can share the
-      // prerequisite within the full 150s budget. Fixed stripe families stay apart.
-      const sharesCliRuntimeBuild = combined.every((entry) => entry.pretestBuildMode === "runtime");
       // A later unrelated member can revoke an earlier complete-CLI exemption.
       // Recheck every sibling collision against the final bin's eligibility.
       const preservesStripeFamilies = combined.every((entry, index) => {
@@ -2798,16 +2797,7 @@ function createCompactNodeTestShardBundles(
         return (
           family === undefined ||
           sharesSerialCliBudget ||
-          combined
-            .slice(0, index)
-            .every(
-              (previous) =>
-                compactStripeFamily(previous) !== family ||
-                (sharesCliRuntimeBuild &&
-                  [previous, entry].every((sibling) =>
-                    /^agentic-cli-process-hosted-\d+$/u.test(sibling.shard_name),
-                  )),
-            )
+          combined.slice(0, index).every((previous) => compactStripeFamily(previous) !== family)
         );
       });
       return (

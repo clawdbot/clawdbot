@@ -12,6 +12,7 @@ import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
+  clickBoardWidgetControl,
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
@@ -227,12 +228,7 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
         .poll(() => outer.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
       expect(await outer.getAttribute("inert")).toBeNull();
-      const refresh = widgetFrame.getByText("Refresh data");
-      // Chromium can target the outer iframe just after reveal despite passing
-      // actionability checks. Await native pointer entry before the single click.
-      await refresh.hover();
-      await expect.poll(() => refresh.evaluate((element) => element.matches(":hover"))).toBe(true);
-      await refresh.click();
+      await clickBoardWidgetControl(page, widgetFrame.getByText("Refresh data"));
       await expect.poll(async () => (await gateway.getRequests("board.event")).length).toBe(1);
       expect((await gateway.getRequests("board.event"))[0]?.params).toMatchObject({
         ticket: "ticket",

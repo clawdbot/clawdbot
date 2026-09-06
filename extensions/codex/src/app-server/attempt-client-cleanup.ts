@@ -166,6 +166,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
 export async function terminateCodexBackgroundTerminals(
   client: CodexAppServerClient,
   threadId: string,
+  oneShotCliRun = false,
 ): Promise<void> {
   const options = {
     timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
@@ -192,6 +193,11 @@ export async function terminateCodexBackgroundTerminals(
       );
       if (remaining.data.length > 0) {
         throw new Error("native background terminals remain running");
+      }
+      // Codex drops terminal entries before OS exit and supplies no process
+      // identity. A later ancestry snapshot can miss a reparented survivor.
+      if (oneShotCliRun) {
+        throw new Error("native terminal termination did not confirm process cleanup");
       }
     }
   } catch (cause) {

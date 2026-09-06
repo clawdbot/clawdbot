@@ -350,6 +350,10 @@ The selected memory provider owns the reserve and flush margin; without a flush
 plan, maintenance still uses the effective compaction reserve. Nonpositive
 thresholds suppress token triggers. Transcript byte guards remain independent.
 
+When memory flush refreshes stale usage, it includes projected messages appended
+after the latest valid provider usage report before saving the total as fresh.
+The following compaction check therefore accounts for that later transcript growth.
+
 Notes:
 
 - The built-in prompt and system prompt include a `NO_REPLY` hint to suppress delivery.

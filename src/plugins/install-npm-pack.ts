@@ -11,9 +11,7 @@ import { parseRegistryNpmSpec, validateRegistryNpmSpec } from "../infra/npm-regi
 import { resolveUserPath } from "../utils.js";
 import {
   removeEmptyDirectoryIfPresent,
-  resolveManagedNpmGenerationUseForInstall,
-  resolveManagedNpmRootForInstall,
-  resolveManagedNpmRootPackageDir,
+  resolveManagedNpmInstallPlan,
   type ManagedNpmRootPreparedDependency,
 } from "./install-managed-npm-state.js";
 import { installPluginFromManagedNpmRoot } from "./install-managed-npm.js";
@@ -23,7 +21,6 @@ import {
   defaultLogger,
   emitSuccessfulPluginInstallSecurityEvent,
   loadPluginInstallRuntime,
-  resolveEffectiveInstallMode,
 } from "./install-shared.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
@@ -34,7 +31,6 @@ import {
   type PluginInstallLogger,
   type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
-import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 
 const MANAGED_NPM_PACK_ARCHIVE_DIR = "_openclaw-pack-archives";
 
@@ -206,34 +202,13 @@ export async function installPluginFromNpmPackArchive(
   }
   const packageName = packageNameResult.packageName;
   const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
-  const generationUse = await resolveManagedNpmGenerationUseForInstall({
+  const { policyMode } = await resolveManagedNpmInstallPlan({
     runtime,
     npmBaseDir,
     packageName,
     requestedMode: mode,
     npmResolution,
   });
-  const npmProjectRoot = resolveManagedNpmRootForInstall({
-    npmBaseDir,
-    packageName,
-    npmResolution,
-    useGeneration: generationUse !== "none",
-  });
-  const installRoot = resolveManagedNpmRootPackageDir(npmProjectRoot, packageName);
-  const targetMode =
-    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)
-      ? "update"
-      : await resolveEffectiveInstallMode({
-          runtime,
-          requestedMode: mode,
-          targetPath: installRoot,
-        });
-  const policyMode =
-    generationUse === "update"
-      ? "update"
-      : generationUse === "retained-install"
-        ? "install"
-        : targetMode;
 
   const result = await installPluginFromManagedNpmRoot(
     copyPluginInstallTransactionRequest(params, {

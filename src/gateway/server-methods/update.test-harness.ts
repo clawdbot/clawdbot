@@ -66,6 +66,12 @@ export const startManagedServiceUpdateHandoffMock = vi.fn<
   handoffId: params?.handoffId ?? "handoff-default",
   installRoot: params?.root ?? "/tmp/openclaw",
 }));
+export const transferManagedServiceUpdateHandoffMock = vi.fn<
+  typeof import("../../infra/update-managed-service-handoff.js").transferManagedServiceUpdateHandoff
+>(async () => true);
+export const cancelManagedServiceUpdateHandoffMock = vi.fn<
+  typeof import("../../infra/update-managed-service-handoff.js").cancelManagedServiceUpdateHandoff
+>(async () => "restored-in-process");
 
 export const sendGatewayLifecycleNoticeMock = vi.fn(async () => true);
 export const resolveGatewayLifecycleNoticeRouteMock = vi.fn(
@@ -229,6 +235,8 @@ vi.mock("../../infra/update-managed-service-handoff.js", async () => ({
     "../../infra/update-managed-service-handoff.js",
   )),
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
+  transferManagedServiceUpdateHandoff: transferManagedServiceUpdateHandoffMock,
+  cancelManagedServiceUpdateHandoff: cancelManagedServiceUpdateHandoffMock,
 }));
 
 vi.mock("./validation.js", () => ({
@@ -304,6 +312,8 @@ beforeEach(() => {
   refreshLatestUpdateRestartSentinelMock.mockResolvedValue(null);
   recordLatestUpdateRestartSentinelMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockReset();
+  transferManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
+  cancelManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue("restored-in-process");
   startManagedServiceUpdateHandoffMock.mockImplementation(async (params) => ({
     status: "started",
     pid: 12345,

@@ -27,8 +27,10 @@ import { createProcessTool } from "./bash-tools.process.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
+  createCodeModeHarness,
   resetCodeModeTestState,
   resultDetails,
+  runUntilCompleted,
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
 import type { AgentMessage, AgentToolResult } from "./runtime/index.js";
@@ -73,6 +75,16 @@ async function poll(
       ...(timeout === undefined ? {} : { timeout }),
     }),
   );
+}
+
+async function runProcessInCodeMode(args: Record<string, unknown>) {
+  const harness = createCodeModeHarness();
+  applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, createProcessTool()] });
+  return await runUntilCompleted({
+    execTool: expectDefined(harness.tools[0], "Code Mode exec"),
+    waitTool: expectDefined(harness.tools[1], "Code Mode wait"),
+    code: `return await process(${JSON.stringify(args)});`,
+  });
 }
 
 function resultText(result: AgentToolResult<unknown>): string {
@@ -292,6 +304,81 @@ test.each(["transformed", "blocked", "error"] as const)(
     }
   },
 );
+
+test.each(["running", "completed"] as const)(
+  "Code Mode reads the requested page from a %s process log",
+  async (status) => {
+    const session = createProcessSessionFixture({ id: "paged-log", backgrounded: true });
+    addSession(session);
+    appendOutput(session, "stdout", "before-page\nrequested-page\nafter-page\n");
+    if (status === "completed") {
+      markExited(session, 0, null, "completed");
+    }
+
+    const result = await runProcessInCodeMode({
+      action: "log",
+      sessionId: session.id,
+      offset: 1,
+      limit: 1,
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      value: { status, output: "requested-page", totalLines: 3 },
+    });
+  },
+);
+
+test("Code Mode retains the default log page limit and continuation hint", async () => {
+  const session = createProcessSessionFixture({ id: "tailed-log", backgrounded: true });
+  addSession(session);
+  appendOutput(
+    session,
+    "stdout",
+    Array.from({ length: 205 }, (_, index) => `line-${index}`).join("\n"),
+  );
+
+  const result = await runProcessInCodeMode({ action: "log", sessionId: session.id });
+
+  expect(result).toMatchObject({
+    status: "completed",
+    value: {
+      output: `${Array.from({ length: 200 }, (_, index) => `line-${index + 5}`).join("\n")}\n\n[showing last 200 of 205 lines; pass offset/limit to page]`,
+    },
+  });
+});
+
+test.each([
+  { action: "log", sessionId: "missing-process", error: "No session found for missing-process" },
+  {
+    action: "paste",
+    sessionId: "interactive-process",
+    text: "",
+    bracketed: false,
+    error: "No paste text provided.",
+  },
+  {
+    action: "send-keys",
+    sessionId: "interactive-process",
+    keys: ["up"],
+    error:
+      "Session interactive-process cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.",
+  },
+])("Code Mode preserves actionable $action failures", async ({ error, ...args }) => {
+  const session = createProcessSessionFixture({
+    id: "interactive-process",
+    backgrounded: true,
+    cursorKeyMode: "unknown",
+  });
+  const write = vi.fn((_data: string, callback?: (error?: Error | null) => void) => callback?.());
+  session.stdin = { write, end: vi.fn() };
+  addSession(session);
+
+  const result = await runProcessInCodeMode(args);
+
+  expect(result).toMatchObject({ status: "completed", value: { status: "failed", error } });
+  expect(write).not.toHaveBeenCalled();
+});
 
 test("a retained old snapshot cannot consume a successor poll delivery", async () => {
   const session = createProcessSessionFixture({ id: "retained-poll", backgrounded: true });

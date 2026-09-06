@@ -3,6 +3,7 @@
  * this file as the single source of truth for validation and defaulting.
  */
 import { z } from "zod";
+import type { AcpxAgentCommand } from "./command-line.js";
 
 const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 /** Permission policy applied to interactive ACPX tool requests. */
@@ -56,7 +57,7 @@ export type ResolvedAcpxPluginConfig = {
   openClawToolsMcpBridge: boolean;
   timeoutSeconds?: number;
   mcpServers: Record<string, McpServerConfig>;
-  agents: Record<string, string>;
+  agents: Record<string, AcpxAgentCommand>;
 };
 
 const nonEmptyTrimmedString = (message: string) =>
