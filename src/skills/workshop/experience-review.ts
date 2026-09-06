@@ -115,7 +115,7 @@ export async function runSkillExperienceReview(
 
 async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidate): Promise<void> {
   // Reset replaces the global controller; this review keeps its original lifetime
-  // across model execution and entry to autonomous apply.
+  // across model execution and outcome publication.
   const abortSignal = getGatewayRestartDrainSignal();
   const { foregroundPromptContext, workspaceDir } = candidate.ctx;
   const { sessionKey } = candidate.source;
@@ -177,6 +177,31 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         ? listWritableWorkshopSkillSummaries({ config, agentId: foregroundPromptContext.agentId })
         : undefined;
     validateSessionTranscriptContextAnchor(candidate.source, candidate.source);
+    // Source revocation fences retained tools and completion, even when the
+    // model handles a denied tool call and returns a normal final response.
+    const assertSourceCurrent = () => {
+      abortSignal.throwIfAborted();
+      if (
+        mode === "auto" &&
+        resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode !== "auto"
+      ) {
+        throw new Error("Automatic Skill Workshop maintenance was disabled during review.");
+      }
+      const current = loadSessionEntryReadOnly({
+        ...candidate.source,
+        hydrateSkillPromptRefs: false,
+        readConsistency: "latest",
+      });
+      if (
+        current?.sessionId !== candidate.source.sessionId ||
+        current?.permissionMode !== sourceEntry.permissionMode
+      ) {
+        throw new Error(
+          "Skill experience review source session was deleted, replaced, or changed permissions.",
+        );
+      }
+      validateSessionTranscriptContextAnchor(candidate.source, candidate.source);
+    };
     const preparedRunAdmission = prepareAgentRunAdmission({
       cfg: config,
       operationalRunInstance: createOperationalRunInstanceRef(runId),
@@ -185,31 +210,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         agentId: foregroundPromptContext.agentId,
         ingress: { kind: "system", boundary: "skill-workshop.experience", state: "present" },
       },
-      // A later foreground turn may continue, but replacing its source or changing
-      // its permission mode must fence this detached run's retained tools.
-      assertSourceCurrent: () => {
-        abortSignal.throwIfAborted();
-        if (
-          mode === "auto" &&
-          resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode !== "auto"
-        ) {
-          throw new Error("Automatic Skill Workshop maintenance was disabled during review.");
-        }
-        const current = loadSessionEntryReadOnly({
-          ...candidate.source,
-          hydrateSkillPromptRefs: false,
-          readConsistency: "latest",
-        });
-        if (
-          current?.sessionId !== candidate.source.sessionId ||
-          current?.permissionMode !== sourceEntry.permissionMode
-        ) {
-          throw new Error(
-            "Skill experience review source session was deleted, replaced, or changed permissions.",
-          );
-        }
-        validateSessionTranscriptContextAnchor(candidate.source, candidate.source);
-      },
+      assertSourceCurrent,
     });
     const run = () =>
       runSkillWorkshopReview({
@@ -255,7 +256,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     const embeddedResult = capability
       ? await runWithCronCreatorAuthorityCapability(capability, run)
       : await run();
-    abortSignal.throwIfAborted();
+    assertSourceCurrent();
 
     // Direct edits have normal file-tool semantics; drafts remain pending even
     // if the operator enables automatic maintenance while this review runs.

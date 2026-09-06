@@ -333,7 +333,11 @@ describe("experience review maintenance", () => {
           });
         }
         await Promise.resolve();
-        retainedAssertion();
+        if (change === "append") {
+          retainedAssertion();
+        } else {
+          expect(retainedAssertion).toThrow("no longer active");
+        }
         return { meta: { durationMs: 1 } };
       });
 
@@ -341,7 +345,7 @@ describe("experience review maintenance", () => {
       if (change === "append") {
         await review;
       } else {
-        await expect(review).rejects.toThrow("no longer active");
+        await expect(review).rejects.toThrow("source session");
       }
       expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
         outcome: change === "append" ? "completed" : "failed",
