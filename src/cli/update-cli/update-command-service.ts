@@ -249,26 +249,6 @@ export async function maybeRestartService(params: {
       recordUpdateRunPhase(params.opts.run.runId, phase, undefined, { env: params.opts.run.env });
     }
   };
-  const waitForHealthy = async (
-    expectedGatewayVersion: string | undefined,
-    expectedGatewayBuildId: string | undefined,
-    requireRunningService?: boolean,
-  ) => {
-    const service = resolveGatewayService();
-    return waitForGatewayHealthyRestart({
-      service,
-      port: activation.gatewayPort,
-      expectedVersion: expectedGatewayVersion,
-      ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
-      env: activation.serviceEnv,
-      requireRunningService,
-      settle: { probes: 12 },
-      supervisorKeepsAlive: await hasLoadedLaunchdKeepAliveSupervisor({
-        service,
-        env: activation.serviceEnv,
-      }),
-    });
-  };
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
     expectedGatewayBuildId: string | undefined,
@@ -357,11 +337,20 @@ export async function maybeRestartService(params: {
           await runUpdatedInstallGatewayCommand(activation, "install");
           if (expectedGatewayVersion && (isPackageUpdate || expectedGatewayBuildId)) {
             recordPhase("verifying");
-            const health = await waitForHealthy(
-              expectedGatewayVersion,
-              expectedGatewayBuildId,
-              true,
-            );
+            const service = resolveGatewayService();
+            const health = await waitForGatewayHealthyRestart({
+              service,
+              port: activation.gatewayPort,
+              expectedVersion: expectedGatewayVersion,
+              ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
+              env: activation.serviceEnv,
+              requireRunningService: true,
+              settle: { probes: 12 },
+              supervisorKeepsAlive: await hasLoadedLaunchdKeepAliveSupervisor({
+                service,
+                env: activation.serviceEnv,
+              }),
+            });
             refreshedGatewayHealth = health.healthy ? health : undefined;
             recordUpdateGatewayHealth(params.opts.run, health, activation.gatewayPort);
           }

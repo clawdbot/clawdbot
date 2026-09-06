@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
-  runUpdatedInstallGatewayCommand: async () => true,
+  runUpdatedInstallGatewayCommand: async () => "accepted",
 }));
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),

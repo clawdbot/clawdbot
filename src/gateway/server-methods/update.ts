@@ -404,7 +404,7 @@ export const updateHandlers: GatewayRequestHandlers = {
                 if (!current) {
                   throw new Error("Update run disappeared before managed Gateway parking.");
                 }
-                await notify(current, "parking");
+                await notify(current, current.phase === "requested" ? "parking" : "activating");
               },
               requester: params.requester,
               root: installRoot,

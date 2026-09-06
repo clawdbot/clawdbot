@@ -249,7 +249,7 @@ describe("verified package rollback", () => {
         if (running.code !== 0) {
           throw new Error(running.stderr);
         }
-        return healthy;
+        return healthy ? "ok" : "restart-health-failed";
       });
       try {
         const outcome = await rollbackFailedUpdate({
