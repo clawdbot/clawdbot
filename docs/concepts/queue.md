@@ -154,6 +154,12 @@ queued input reaches the transcript, it appears as interrupted input after
 restart and requires an explicit resend. The in-memory queue is not replayed.
 Host sleep that preserves the process can continue the existing queue normally.
 
+Channel messages retained by durable ingress remain retryable when a queued
+attempt is abandoned before agent-turn adoption. Abandonment releases that
+attempt's inbound and queue dedupe entries before ingress retries it. Messages
+already adopted or consumed keep duplicate suppression, so transport redelivery
+does not repeat their effects.
+
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
 - Default lane (`main`) is process-wide for inbound turns; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
 - Heartbeat embedded runs use the bounded `cron-nested` lane for global admission so slow background work does not block inbound replies, while their configured heartbeat session lane still serializes work for that session.

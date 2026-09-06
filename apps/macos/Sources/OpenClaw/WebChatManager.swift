@@ -337,6 +337,11 @@ final class WebChatManager {
         }
     }
 
+    /// Open native chat windows bound to a saved profile's shared fleet connection.
+    func openWindowCount(profileID: String) -> Int {
+        self.profileWindowOrder.count { self.profileWindows[$0]?.profileID == profileID }
+    }
+
     func closeGatewayWindows(profileID: String) {
         // Removal fences in-flight window creation before awaiting connection
         // shutdown, so an old picker selection cannot resurrect this profile.

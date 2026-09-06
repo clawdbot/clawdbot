@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -168,11 +169,7 @@ suite.define(() => {
     if (captureUiProof) {
       await mkdir(path.join(suite.artifactDir, "new-session-skeleton-gap"), { recursive: true });
     }
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-luna",
@@ -226,11 +223,7 @@ suite.define(() => {
   });
 
   it("selects a context window before creating a session", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-luna",
@@ -288,11 +281,7 @@ suite.define(() => {
   });
 
   it("shows metadata failure truthfully and recovers when the picker opens", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const models = [
       {
@@ -354,11 +343,7 @@ suite.define(() => {
   });
 
   it("restores the model picker after startup-sidecars metadata becomes available", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const recoveredModel = {
       available: true,

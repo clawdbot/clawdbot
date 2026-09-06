@@ -12,11 +12,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { isAppearancePref, type ResettableServerUiPrefKey } from "../../app/server-prefs-state.ts";
@@ -54,6 +50,10 @@ import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import {
+  GatewayPageController,
+  type GatewayPageChange,
+} from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -330,8 +330,6 @@ export class ConfigPage extends OpenClawLightDomElement {
   });
   private configViewState: ConfigViewState = createConfigViewState();
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
-  private systemInfoGatewaySource: ApplicationContext["gateway"] | null = null;
-  private systemInfoClient: GatewayBrowserClient | null = null;
   private updateStatusClient: GatewayBrowserClient | null = null;
   private readonly systemInfoPolling = new PollController(
     this,
@@ -352,7 +350,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private readonly systemInfoTask = new Task(this, {
     autoRun: false,
     // Null is an explicit visibility/capability invalidation for the current source.
-    args: () => [this.systemInfoGatewaySource, this.systemInfoRequestClient()] as const,
+    args: () => [this.gateway.gateway, this.systemInfoRequestClient()] as const,
     task: ([gateway, client], { signal }) =>
       gateway && client
         ? client.request<SystemInfoResult>("system.info", {}, { signal })
@@ -379,7 +377,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   > = new Task(this, {
     args: () =>
       [
-        this.systemInfoGatewaySource,
+        this.gateway.gateway,
         this.systemInfo ? this.systemInfoRequestClient() : null,
         this.context?.agentSelection.state.selectedId ?? null,
       ] as const,
@@ -444,6 +442,11 @@ export class ConfigPage extends OpenClawLightDomElement {
     },
   });
   private pendingRouteTargetId: string | null = null;
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: () => this.invalidateSystemInfoRequest(),
+    onSnapshot: (change) => this.handleGatewaySnapshot(change),
+  });
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.runtimeConfig,
@@ -457,11 +460,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.config,
       (config, notify) => config.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-      (gateway) => this.synchronizeSystemInfoGateway(gateway),
     )
     .watch(
       () => this.context?.agentSelection,
@@ -532,11 +530,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.mediaDeviceWatch = null;
     this.systemInfoPolling.stop();
     this.updateCountdownPolling.stop();
-    this.invalidateSystemInfoRequest();
     this.runtimeConfigSource = null;
     this.resetConfigViewState();
-    this.systemInfoGatewaySource = null;
-    this.systemInfoClient = null;
     this.updateStatusClient = null;
     this.subscriptions.clear();
     super.disconnectedCallback();
@@ -723,52 +718,42 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
   }
 
-  private synchronizeSystemInfoGateway(gateway: ApplicationContext["gateway"]) {
-    this.customThemeImportOwner.synchronizeScope(
-      gateway.connection.gatewayUrl,
-      this.context.theme.serverSelection,
-    );
-    if (gateway !== this.systemInfoGatewaySource) {
-      this.systemInfoPolling.stop();
-      this.invalidateSystemInfoRequest();
-      this.systemInfoGatewaySource = gateway;
-      this.resetConfigViewState();
-      this.systemInfoClient = null;
-      this.updateStatusClient = null;
-      this.systemInfo = null;
-      this.systemInfoUnavailable = false;
-      this.resetSessionObserverModels();
-    }
-    this.handleSystemInfoGatewaySnapshot(gateway.snapshot);
-    this.syncUpdateStatusRefresh();
-  }
-
   private resetConfigViewState() {
     // Revealed secrets and raw caches never cross a capability/source epoch.
     this.configViewState = createConfigViewState();
   }
 
-  private handleSystemInfoGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    const clientChanged = snapshot.client !== this.systemInfoClient;
-    const hasSystemInfo = supportsSystemInfo(snapshot.hello);
-    this.systemInfoClient = snapshot.client;
-    if (clientChanged) {
-      this.invalidateSystemInfoRequest();
+  private handleGatewaySnapshot({
+    snapshot,
+    initial,
+    sourceChanged,
+    clientChanged,
+  }: GatewayPageChange) {
+    this.customThemeImportOwner.synchronizeScope(
+      this.context.gateway.connection.gatewayUrl,
+      this.context.theme.serverSelection,
+    );
+    if (initial || sourceChanged) {
+      this.systemInfoPolling.stop();
+      this.resetConfigViewState();
+      this.updateStatusClient = null;
+    }
+    if (initial || sourceChanged || clientChanged) {
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
       this.resetSessionObserverModels();
     } else if (snapshot.phase !== "connected") {
-      this.invalidateSystemInfoRequest();
       this.systemInfo = null;
     }
     if (snapshot.phase === "connected" && snapshot.hello) {
-      this.systemInfoUnavailable = !hasSystemInfo;
-      if (!hasSystemInfo) {
+      this.systemInfoUnavailable = !supportsSystemInfo(snapshot.hello);
+      if (this.systemInfoUnavailable) {
         this.invalidateSystemInfoRequest();
         this.systemInfo = null;
       }
     }
     this.syncSystemInfoPolling(clientChanged);
+    this.syncUpdateStatusRefresh();
   }
 
   private syncSystemInfoPolling(forceRefresh = false) {
@@ -796,7 +781,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private systemInfoRequestClient(): GatewayBrowserClient | null {
-    const gatewaySource = this.systemInfoGatewaySource;
+    const gatewaySource = this.gateway.gateway;
     const gateway = gatewaySource?.snapshot;
     if (
       !gatewaySource ||

@@ -1,6 +1,5 @@
 // Custom editor component handles multiline TUI input and key bindings.
 import { Editor, getKeybindings, isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
-import { trimWouldCreateExecutableBangLine } from "../tui-submit.js";
 
 // Kitty keyboard protocol uses CSI-u sequences for AltGr on international layouts.
 const KITTY_CSI_U_SUFFIX_REGEX = /^(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?u$/u;
@@ -58,7 +57,7 @@ export class CustomEditor extends Editor {
   onAltUp?: () => void;
   shouldSubmitAutocomplete?: (text: string) => boolean;
 
-  /** Preserves text when pi-tui trimming would create an executable bang line. */
+  /** Preserve raw submit text so the owner chooses local editor dispatch before trimming. */
   override handleInput(data: string): void {
     if (isKeyRelease(data)) {
       return;
@@ -116,33 +115,33 @@ export class CustomEditor extends Editor {
     }
 
     const keybindings = getKeybindings();
-    const cursor = this.getCursor();
-    const lines = this.getLines();
-    const cursorAtEnd =
-      cursor.line === lines.length - 1 && cursor.col === (lines[cursor.line]?.length ?? 0);
     if (
-      cursorAtEnd &&
       this.isShowingAutocomplete() &&
       keybindings.matches(data, "tui.select.confirm") &&
-      keybindings.matches(data, "tui.input.submit") &&
-      this.shouldSubmitAutocomplete?.(this.getText())
+      keybindings.matches(data, "tui.input.submit")
     ) {
-      // Exact argument already present: close the picker so this Enter reaches submit.
-      this.setText(this.getText());
+      const cursor = this.getCursor();
+      const lines = this.getLines();
+      const cursorAtEnd =
+        cursor.line === lines.length - 1 && cursor.col === (lines[cursor.line]?.length ?? 0);
+      if (cursorAtEnd && this.shouldSubmitAutocomplete?.(this.getText())) {
+        // Exact argument already present: close the picker so this Enter reaches submit.
+        this.setText(this.getText());
+      }
     }
 
     if (keybindings.matches(data, "tui.input.submit") && this.onSubmit) {
       const expandedText = this.getExpandedText();
-      if (trimWouldCreateExecutableBangLine(expandedText)) {
-        const onSubmit = this.onSubmit;
-        this.onSubmit = () => onSubmit(expandedText);
-        try {
-          super.handleInput(data);
-        } finally {
-          this.onSubmit = onSubmit;
-        }
-        return;
+      const onSubmit = this.onSubmit;
+      // pi-tui may complete a command before submitting. Keep that completed text
+      // inside the original whitespace boundary so trimming cannot change its action.
+      this.onSubmit = (text) => onSubmit(expandedText.replace(expandedText.trim(), () => text));
+      try {
+        super.handleInput(data);
+      } finally {
+        this.onSubmit = onSubmit;
       }
+      return;
     }
     super.handleInput(data);
   }

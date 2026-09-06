@@ -97,6 +97,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   }
   const toolState: {
     yieldDetected: boolean;
+    yieldMessage?: string;
     yieldAcknowledgment?: string;
     persistentWebSearchAllowed?: boolean;
     webSearchAllowed: boolean;
@@ -233,8 +234,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           cronCreatorAuthorityUnavailableReason: "queued-local-operator-configured-mcp" as const,
         }
       : {}),
-    onYieldDetected: (acknowledgment: string | undefined) => {
+    onYieldDetected: (message: string, acknowledgment: string | undefined) => {
       toolState.yieldDetected = true;
+      toolState.yieldMessage = message;
       toolState.yieldAcknowledgment = acknowledgment;
     },
     claimYieldCompletion: () => runtimeYieldCompletionClaim.current?.() ?? false,

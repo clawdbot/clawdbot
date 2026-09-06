@@ -907,7 +907,7 @@ describe("scheduleRestartSentinelWake", () => {
   );
 
   it.each([false, true])(
-    "settles an exhausted pending handoff without overwriting CLI completion (%s)",
+    "bounds pending notice retries while preserving CLI run ownership (%s)",
     async (cliFinished) => {
       vi.useFakeTimers();
       const record = createUpdateRun({
@@ -934,7 +934,11 @@ describe("scheduleRestartSentinelWake", () => {
           status: "skipped",
           ts: 123,
           sessionKey: "agent:main:main",
-          stats: { runId: record.runId, reason: "restart-health-pending" },
+          stats: {
+            runId: record.runId,
+            handoffId: "managed-update-handoff",
+            reason: "restart-health-pending",
+          },
         },
       });
 
@@ -957,10 +961,30 @@ describe("scheduleRestartSentinelWake", () => {
       await vi.advanceTimersByTimeAsync(900);
 
       const result = getUpdateRun(record.runId)!;
-      expect(result.status).toBe(cliFinished ? "succeeded" : "failed");
-      expect(result.reason).toBe(cliFinished ? null : "restart-unhealthy");
+      expect(result.status).toBe(cliFinished ? "succeeded" : "running");
+      expect(result.reason).toBeNull();
+      if (!cliFinished) {
+        expect(result.finishedAtMs).toBeNull();
+        expect(result.verification.noticeDelivered).toBeUndefined();
+        expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+        expect(mocks.clearRestartSentinelIfRevision).not.toHaveBeenCalled();
+        const sentinelReads = mocks.readRestartSentinel.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(900);
+        expect(mocks.readRestartSentinel).toHaveBeenCalledTimes(sentinelReads);
+        finishUpdateRun(record.runId, {
+          status: "succeeded",
+          after: { version: resolveRuntimeServiceVersion() },
+        });
+        await scheduleRestartSentinelWake({ deps: {} as never });
+      }
+      const completed = getUpdateRun(record.runId)!;
+      expect(completed.status).toBe("succeeded");
+      expect(completed.verification.noticeDelivered).toBe(true);
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-        expect.objectContaining({ text: renderUpdateRunReport(result).markdown }),
+        expect.objectContaining({
+          text: renderUpdateRunReport(completed).markdown,
+          idempotencyKey: `update-run-finished:${record.runId}`,
+        }),
       );
       expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(2);

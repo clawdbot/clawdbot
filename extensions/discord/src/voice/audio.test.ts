@@ -48,7 +48,6 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
 import {
   createDiscordOpusEncodeStream,
   createDiscordOpusPlaybackStream,
-  decodeOpusStream,
   decodeOpusStreamChunks,
   writeVoiceWavFile,
 } from "./audio.js";
@@ -80,43 +79,27 @@ async function collectBuffers(stream: Readable): Promise<Buffer[]> {
   return chunks;
 }
 
-const decodeModes = [
-  { mode: "buffered", decode: decodeOpusStream },
-  {
-    mode: "streaming",
-    decode: async (stream: Readable, params: Parameters<typeof decodeOpusStream>[1]) => {
-      const chunks: Buffer[] = [];
-      await decodeOpusStreamChunks(stream, { ...params, onChunk: (chunk) => chunks.push(chunk) });
-      return Buffer.concat(chunks);
-    },
-  },
-];
-
 describe("discord voice opus codec", () => {
-  it.each(decodeModes)(
-    "round-trips Discord PCM through $mode Opus decoding",
-    async ({ decode }) => {
-      const encoder = createDiscordOpusEncodeStream();
-      const packetsPromise = collectBuffers(encoder);
+  it("round-trips Discord PCM while preserving the source packet identity", async () => {
+    const encoder = createDiscordOpusEncodeStream();
+    const packetsPromise = collectBuffers(encoder);
 
-      encoder.end(Buffer.alloc(960 * 2 * 2));
-      const packets = await packetsPromise;
+    encoder.end(Buffer.alloc(960 * 2 * 2));
+    const packets = await packetsPromise;
 
-      expect(packets).toHaveLength(1);
-      expect(packets[0]?.length).toBeGreaterThan(0);
+    expect(packets).toHaveLength(1);
+    expect(packets[0]?.length).toBeGreaterThan(0);
 
-      const onVerbose = vi.fn();
-      const onWarn = vi.fn();
-      const decoded = await decode(Readable.from(packets), {
-        maxBytes: 20 * 1024 * 1024,
-        onVerbose,
-        onWarn,
-      });
-      expect(decoded.length).toBe(960 * 2 * 2);
-      expect(onVerbose).toHaveBeenCalledWith("opus decoder: libopus-wasm");
-      expect(onWarn).not.toHaveBeenCalled();
-    },
-  );
+    const onVerbose = vi.fn();
+    const onWarn = vi.fn();
+    const onChunk = vi.fn();
+    await decodeOpusStreamChunks(Readable.from(packets), { onVerbose, onWarn, onChunk });
+    expect(onChunk).toHaveBeenCalledOnce();
+    expect(onChunk.mock.calls[0]?.[0]).toHaveLength(960 * 2 * 2);
+    expect(onChunk.mock.calls[0]?.[1]).toBe(packets[0]);
+    expect(onVerbose).toHaveBeenCalledWith("opus decoder: libopus-wasm");
+    expect(onWarn).not.toHaveBeenCalled();
+  });
 
   it("pads final partial PCM frames before encoding", async () => {
     const encoder = createDiscordOpusEncodeStream();
@@ -126,50 +109,37 @@ describe("discord voice opus codec", () => {
     const packets = await packetsPromise;
 
     expect(packets).toHaveLength(1);
-    const decoded = await decodeOpusStream(Readable.from(packets), {
-      maxBytes: 20 * 1024 * 1024,
+    const onChunk = vi.fn();
+    await decodeOpusStreamChunks(Readable.from(packets), {
+      onChunk,
       onVerbose: vi.fn(),
       onWarn: vi.fn(),
     });
-    expect(decoded).toHaveLength(960 * 2 * 2);
+    expect(onChunk).toHaveBeenCalledOnce();
+    expect(onChunk.mock.calls[0]?.[0]).toHaveLength(960 * 2 * 2);
   });
 
-  it.each(decodeModes)(
-    "preserves decoded audio and reports $mode stream failures",
-    async ({ decode }) => {
-      const err = new Error("memory access out of bounds");
-      const onError = vi.fn();
-      const stream = Readable.from(
-        (async function* () {
-          yield Buffer.from([0xf8, 0xff, 0xfe]);
-          throw err;
-        })(),
-      );
+  it("preserves decoded audio and reports stream failures", async () => {
+    const err = new Error("memory access out of bounds");
+    const onError = vi.fn();
+    const stream = Readable.from(
+      (async function* () {
+        yield Buffer.from([0xf8, 0xff, 0xfe]);
+        throw err;
+      })(),
+    );
 
-      const decoded = await decode(stream, {
-        maxBytes: 20 * 1024 * 1024,
-        onError,
-        onVerbose: vi.fn(),
-        onWarn: vi.fn(),
-      });
+    const onChunk = vi.fn();
+    await decodeOpusStreamChunks(stream, {
+      onChunk,
+      onError,
+      onVerbose: vi.fn(),
+      onWarn: vi.fn(),
+    });
 
-      expect(onError).toHaveBeenCalledWith(err);
-      expect(decoded).toHaveLength(960 * 2 * 2);
-    },
-  );
-  it("rejects oversized decoded input without returning a truncated successful capture", async () => {
-    const stream = Readable.from([
-      Buffer.from([0xf8, 0xff, 0xfe]),
-      Buffer.from([0xf8, 0xff, 0xfe]),
-    ]);
-    await expect(
-      decodeOpusStream(stream, {
-        maxBytes: 3840,
-        onVerbose: vi.fn(),
-        onWarn: vi.fn(),
-      }),
-    ).rejects.toThrow("speak a shorter segment");
-    expect(stream.destroyed).toBe(true);
+    expect(onError).toHaveBeenCalledWith(err);
+    expect(onChunk).toHaveBeenCalledOnce();
+    expect(onChunk.mock.calls[0]?.[0]).toHaveLength(960 * 2 * 2);
   });
 
   it("streams audio beyond a batch-sized budget without accumulating or truncating it", async () => {

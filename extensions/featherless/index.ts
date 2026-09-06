@@ -89,6 +89,7 @@ export default defineSingleProviderPluginEntry({
       ].join("\n"),
     },
     catalog: {
+      discoveryMode: "strict",
       allowExplicitBaseUrl: true,
       liveModelDiscovery: {
         endpointPath: "models?capabilities=chat",

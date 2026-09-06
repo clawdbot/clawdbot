@@ -1,10 +1,10 @@
 import { createServer } from "node:http";
 import { crc32 } from "node:zlib";
+import { runAgentLoop } from "openclaw/plugin-sdk/agent-core";
 import type { Message, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import bedrockPlugin from "../../extensions/amazon-bedrock/index.js";
 import { createSubscribedSessionHarness } from "../../src/agents/embedded-agent-subscribe.e2e-harness.js";
-import { runAgentLoop } from "../../src/agents/runtime/index.js";
 import { onAgentEventForRun } from "../../src/infra/agent-events.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 import { createDeferred } from "../helpers/promise.js";
@@ -60,7 +60,7 @@ describe("native provider reasoning subscription", () => {
   it.for(["incremental", "buffered"] as const)(
     "keeps Bedrock's redacted snapshot with %s consumption",
     async (consumption, { signal }) => {
-      const firstDeltaConsumed = createDeferred<void>();
+      const firstDeltaConsumed = createDeferred();
       async function* responses() {
         yield { messageStart: { role: "assistant" } };
         yield {

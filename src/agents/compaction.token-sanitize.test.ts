@@ -7,6 +7,7 @@ import {
   projectCompactionMessagesForPlanning,
 } from "./compaction-planning.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 describe("compaction token accounting sanitization", () => {
   it("projects worker inputs to planning-safe messages before cloning", () => {
@@ -130,14 +131,7 @@ describe("compaction token accounting sanitization", () => {
             },
           },
         ],
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "toolUse",
         timestamp: 1,
       },
@@ -215,14 +209,7 @@ describe("compaction token accounting sanitization", () => {
         provider: "openai",
         model: "gpt-5.6-luna",
         content: [{ type: "toolCall", id: "call_late", name: "read", arguments: { path: "x" } }],
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "toolUse",
         timestamp: 9,
       } satisfies AgentMessage,

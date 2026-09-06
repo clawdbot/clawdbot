@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import xiaomiPlugin from "./index.js";
@@ -34,14 +35,7 @@ type ReplayToolCall = {
 };
 
 type RegisteredProvider = RegisteredProviderCollections["providers"][number];
-const emptyUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const emptyUsage = createZeroUsageFixture();
 
 function requireThinkingProfileResolver(
   provider: RegisteredProvider,
@@ -274,7 +268,7 @@ describe("xiaomi provider plugin", () => {
   });
 
   it("exposes Token Plan v2.5 catalog rows only after a provider config selects a region", async () => {
-    const response = Response.json({ data: [] });
+    const response = Response.json({ data: [{ id: "mimo-v2.5" }, { id: "mimo-v2.5-pro" }] });
     const release = vi.fn(async () => undefined);
     const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
       response,
@@ -323,8 +317,8 @@ describe("xiaomi provider plugin", () => {
       expect(configured.provider.baseUrl).toBe("https://token-plan-cn.xiaomimimo.com/v1");
       expect(configured.provider.api).toBe("openai-completions");
       expect(configured.provider.models?.map((model) => model.id)).toEqual([
-        "mimo-v2.5-pro",
         "mimo-v2.5",
+        "mimo-v2.5-pro",
       ]);
       expect(configured.provider.models?.find((model) => model.id === "mimo-v2.5")?.input).toEqual([
         "text",

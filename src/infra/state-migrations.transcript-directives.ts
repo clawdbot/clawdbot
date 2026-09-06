@@ -423,15 +423,17 @@ export async function migrateHistoricalTranscriptDirectives(
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
+  let recoverableWarningCount = 0;
   try {
-    const discoveredTargets = resolveAgentDatabaseMigrationTargets({
+    const discovery = resolveAgentDatabaseMigrationTargets({
       changes,
       configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
       env,
       warnings,
     });
-    const targets: typeof discoveredTargets = [];
-    for (const target of discoveredTargets) {
+    recoverableWarningCount = discovery.recoverableWarningCount;
+    const targets: typeof discovery.targets = [];
+    for (const target of discovery.targets) {
       try {
         if (
           agentDatabaseNeedsTranscriptDirectiveMigration({
@@ -448,30 +450,35 @@ export async function migrateHistoricalTranscriptDirectives(
         );
       }
     }
-    if (targets.length === 0) {
-      return { changes, warnings };
-    }
-    await withAgentDatabaseMaintenanceLease({ env }, async () => {
-      for (const target of targets) {
-        try {
-          const result = await migrateAgentDatabase({
-            agentId: target.agentId,
-            pathname: target.path,
-          });
-          if (result.transcriptSessions > 0 || result.archivedTranscripts > 0) {
-            changes.push(
-              `Migrated historical transcript directives in ${target.path}: ${result.transcriptSessions} active session(s), ${result.archivedTranscripts} archived transcript(s).`,
+    if (targets.length > 0) {
+      await withAgentDatabaseMaintenanceLease({ env }, async () => {
+        for (const target of targets) {
+          try {
+            const result = await migrateAgentDatabase({
+              agentId: target.agentId,
+              pathname: target.path,
+            });
+            if (result.transcriptSessions > 0 || result.archivedTranscripts > 0) {
+              changes.push(
+                `Migrated historical transcript directives in ${target.path}: ${result.transcriptSessions} active session(s), ${result.archivedTranscripts} archived transcript(s).`,
+              );
+            }
+          } catch (error) {
+            warnings.push(
+              `Skipped historical transcript directive migration for ${target.path}: ${String(error)}`,
             );
           }
-        } catch (error) {
-          warnings.push(
-            `Skipped historical transcript directive migration for ${target.path}: ${String(error)}`,
-          );
         }
-      }
-    });
+      });
+    }
   } catch (error) {
     warnings.push(`Skipped historical transcript directive migration: ${String(error)}`);
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    ...(warnings.length > 0 && warnings.length === recoverableWarningCount
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
+  };
 }

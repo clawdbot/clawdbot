@@ -9,6 +9,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 
 const durabilityTestState = vi.hoisted(() => ({
+  publicationSyncUnsupported: false,
   syncOutcome: undefined as
     | { status: "synced" }
     | { status: "unsupported"; code?: string }
@@ -19,6 +20,12 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
   return {
     ...actual,
+    publishFileExclusive: async (...args: Parameters<typeof actual.publishFileExclusive>) => {
+      const published = await actual.publishFileExclusive(...args);
+      return durabilityTestState.publicationSyncUnsupported
+        ? { ...published, directorySync: { status: "unsupported" as const, code: "ENOTSUP" } }
+        : published;
+    },
     syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
       durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
   };
@@ -47,6 +54,7 @@ function isDirectoryOpen(flags: string | number | undefined): boolean {
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
+  durabilityTestState.publicationSyncUnsupported = false;
   durabilityTestState.syncOutcome = undefined;
   vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((tempDir) => fs.rm(tempDir, { recursive: true })));
@@ -566,40 +574,115 @@ describe("createVerifiedSqliteSnapshot", () => {
     await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
   });
 
-  it("rejects a target replaced after atomic publication", async () => {
-    __setFsSafeTestHooksForTest({
-      afterPublishTargetCreated: async (method, publishedPath) => {
-        if (method === "hardlink" && path.resolve(publishedPath) === targetPath) {
-          await fs.unlink(targetPath);
-          await fs.writeFile(targetPath, "racer");
+  it.each(["native", "numeric-collision", "windows-zero", "staging-transition"] as const)(
+    "rejects a target replaced after atomic publication (%s)",
+    async (identityObservation) => {
+      let replaced = false;
+      let stagingReplaced = false;
+      let createdIdentity: { dev: number | bigint; ino: number | bigint } | undefined;
+      const originalLstat = fs.lstat.bind(fs);
+      const originalLstatSync = fsSync.lstatSync.bind(fsSync);
+      function projectReplacementIdentity<
+        T extends { dev: number | bigint; ino: number | bigint } | undefined,
+      >(identity: T, filePath: fsSync.PathLike): T {
+        if (
+          identity &&
+          replaced &&
+          createdIdentity &&
+          identityObservation !== "native" &&
+          identityObservation !== "staging-transition" &&
+          typeof identity.ino === "number" &&
+          path.resolve(String(filePath)) === targetPath
+        ) {
+          // Keep bigint observations native so the dependency can preserve the
+          // replacement even when the caller sees lossy or unknown numeric IDs.
+          return Object.assign(identity, {
+            dev: identityObservation === "windows-zero" ? 0 : Number(createdIdentity.dev),
+            ino: identityObservation === "windows-zero" ? 0 : Number(createdIdentity.ino),
+          });
         }
-      },
-    });
+        return identity;
+      }
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        const identity = await originalLstat(...args);
+        const filePath = String(args[0]);
+        if (
+          identityObservation === "staging-transition" &&
+          replaced &&
+          !stagingReplaced &&
+          typeof identity.ino === "number" &&
+          path.basename(filePath) === "database.sqlite" &&
+          path.basename(path.dirname(filePath)).startsWith(".sqlite-publish-")
+        ) {
+          await fs.unlink(filePath);
+          await fs.link(targetPath, filePath);
+          stagingReplaced = true;
+        }
+        return projectReplacementIdentity(identity, args[0]);
+      });
+      vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) =>
+        projectReplacementIdentity(originalLstatSync(...args), args[0]),
+      );
+      __setFsSafeTestHooksForTest({
+        afterPublishTargetCreated: async (method, publishedPath, identity) => {
+          if (method === "hardlink" && path.resolve(publishedPath) === targetPath) {
+            createdIdentity = identity;
+            await fs.unlink(targetPath);
+            await fs.writeFile(targetPath, "racer");
+            replaced = true;
+            if (identityObservation === "windows-zero") {
+              vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+            }
+          }
+        },
+      });
 
-    await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
-      /target changed during publication|staging path changed|snapshot file changed/u,
-    );
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
-  });
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+        /target changed during publication|staging path changed|snapshot file changed/u,
+      );
+      expect(replaced).toBe(true);
+      expect(stagingReplaced).toBe(identityObservation === "staging-transition");
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each(["hardlink", "exclusive-copy"] as const)(
+    "removes its %s target when publication durability is unsupported",
+    async (method) => {
+      durabilityTestState.publicationSyncUnsupported = true;
+      if (method === "exclusive-copy") {
+        vi.spyOn(fs, "link").mockRejectedValue(
+          Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }),
+        );
+      }
+      await expectSnapshotFailureWithoutTarget(
+        { sourcePath, targetPath },
+        /File publication directory does not support crash-durable directory synchronization/u,
+      );
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
-    "removes target bytes linked from a replaced staging pathname",
+    "preserves unowned target bytes linked from a replaced staging pathname",
     async () => {
       const originalLink = fs.link.bind(fs);
+      let replacementBytes: Buffer | undefined;
       vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
         if (path.resolve(String(target)) === targetPath) {
           await fs.unlink(source);
           const replacement = new sqlite.DatabaseSync(String(source));
           replacement.exec("CREATE TABLE replacement (value TEXT NOT NULL);");
           replacement.close();
+          replacementBytes = await fs.readFile(source);
         }
         await originalLink(source, target);
       });
 
-      await expectSnapshotFailureWithoutTarget(
-        { sourcePath, targetPath },
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
         /staging file changed during publication|size mismatch|hash mismatch/u,
       );
+      expect(replacementBytes).toBeDefined();
+      await expect(fs.readFile(targetPath)).resolves.toEqual(replacementBytes);
     },
   );
 
