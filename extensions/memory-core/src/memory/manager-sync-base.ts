@@ -542,13 +542,19 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       return;
     }
     try {
-      this.db
-        .prepare(
-          `DELETE FROM ${VECTOR_TABLE} WHERE id IN (
-             SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?
-           )`,
-        )
-        .run(pathname, source);
+      // sqlite-vec uses a full scan for non-KNN IN queries. Select from the
+      // indexed source table and reuse point deletes so unrelated vectors do
+      // not add work. The caller keeps these chunk rows until cleanup finishes.
+      const ids = this.db.prepare(
+        "SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?",
+      );
+      const deleteVector = this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`);
+      for (const row of ids.iterate(pathname, source)) {
+        if (typeof row.id !== "string") {
+          throw new Error("Invalid memory chunk id");
+        }
+        deleteVector.run(row.id);
+      }
     } catch {
       this.markVectorRebuildRequired();
     }
