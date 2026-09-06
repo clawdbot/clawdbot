@@ -61,7 +61,7 @@ export async function expectRefOnlyAuthProfilesThroughWorker(
     pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
     isCurrent: fixture.isCurrent,
   });
-  const catalog = await worker.loadCatalog();
+  const { modelCatalog: catalog } = await worker.loadCatalog();
 
   expect(catalog.entries).toContainEqual(
     expect.objectContaining({

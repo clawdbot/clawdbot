@@ -17,12 +17,7 @@ struct AgentOverviewRefreshGate {
 
 enum AgentProValueReader {
     static func intValue(_ value: AnyCodable?) -> Int? {
-        switch value?.value {
-        case let int as Int: int
-        case let double as Double where double.isFinite: Int(double)
-        case let string as String: Int(string)
-        default: nil
-        }
+        value?.intValue ?? value?.stringValue.flatMap { Int($0) }
     }
 
     static func doubleValue(_ value: AnyCodable?) -> Double? {

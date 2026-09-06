@@ -1,6 +1,4 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Gateway live chat projector.
-// Converts streaming assistant events into display-safe live chat text.
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import {
@@ -11,6 +9,7 @@ import {
 import { isRelativeAssistantMediaReference, splitMediaFromOutput } from "../media/parse.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import { stripAssistantMediaDirectivesForDisplay } from "./chat-display-projection.helpers.js";
 import {
   isSuppressedControlReplyLeadFragment,
@@ -20,74 +19,14 @@ import {
 
 const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
-/** Normalizes assistant event payloads that contain a snapshot, a delta, or both. */
-export function resolveAssistantLiveChatInput(data: unknown):
-  | {
-      text: string;
-      delta: string;
-      itemId?: string;
-      replaceStream: boolean;
-      managedMediaUrls?: string[];
-    }
-  | undefined {
-  if (!data || typeof data !== "object") {
-    return undefined;
-  }
-  const record = data as {
-    text?: unknown;
-    delta?: unknown;
-    itemId?: unknown;
-    replace?: unknown;
-    replaceable?: unknown;
-    managedMediaUrls?: unknown;
-  };
-  if (typeof record.text !== "string" && typeof record.delta !== "string") {
-    return undefined;
-  }
-  return {
-    text: typeof record.text === "string" ? record.text : "",
-    delta: typeof record.delta === "string" ? record.delta : "",
-    replaceStream: record.replace === true && record.replaceable === true,
-    ...(typeof record.itemId === "string" && record.itemId ? { itemId: record.itemId } : {}),
-    ...(Array.isArray(record.managedMediaUrls)
-      ? {
-          managedMediaUrls: record.managedMediaUrls.filter(
-            (url): url is string => typeof url === "string",
-          ),
-        }
-      : {}),
-  };
-}
-
-/** Merges assistant full-text and delta events into a capped live buffer. */
-export function resolveMergedAssistantText(params: {
-  previousText: string;
-  nextText: string;
-  nextDelta: string;
-  scope?: { prefix: string };
-}): string {
-  const { previousText, nextText, nextDelta, scope } = params;
-  let text: string;
-  if (scope) {
-    text = scope.prefix + nextText;
-  } else if (
-    previousText &&
-    nextText.length > previousText.length &&
-    nextText.startsWith(previousText)
-  ) {
-    text = nextText;
-  } else if (nextDelta) {
-    text = previousText + nextDelta;
-  } else {
-    text = previousText.startsWith(nextText) ? previousText : nextText;
-  }
+/** Cap live display text without letting later snapshots resurrect the retired prefix. */
+export function capLiveAssistantText(snapshot: AssistantTextSnapshot): string {
+  const { text, scope } = snapshot;
   const capped =
     text.length > MAX_LIVE_CHAT_BUFFER_CHARS
       ? sliceUtf16Safe(text, -MAX_LIVE_CHAT_BUFFER_CHARS)
       : text;
   if (scope) {
-    // Retire discarded prefix text with the active scope; a later shorter
-    // snapshot must not resurrect text that already fell out of the run cap.
     scope.prefix = sliceUtf16Safe(scope.prefix, text.length - capped.length);
   }
   return capped;

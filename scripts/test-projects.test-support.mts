@@ -139,7 +139,16 @@ type ChangedTestTargetPlan = {
 };
 
 type ImportGraphOptions = { tooling?: boolean };
-type VitestSpecShape = Pick<VitestRunSpec, "config" | "env">;
+type VitestSpecShape = Pick<VitestRunSpec, "config" | "env"> & {
+  cacheAssignment?: VitestCacheAssignment;
+};
+export type VitestCacheAssignment =
+  | { kind: "scheduler"; root: string; leased?: true }
+  | { kind: "caller" };
+type CacheAssignedSpec<T> = Omit<T, "env"> & {
+  env: NodeJS.ProcessEnv;
+  cacheAssignment?: VitestCacheAssignment;
+};
 type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode">;
 type ImportGraph = {
   reverseImports: Map<string, string[]>;
@@ -4301,7 +4310,7 @@ function sanitizeVitestCachePathSegment(value: string) {
 export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }> {
+): Array<CacheAssignedSpec<T>> {
   const baseEnv = params.env ?? process.env;
   const cwd = params.cwd ?? process.cwd();
   const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
@@ -4311,11 +4320,12 @@ export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   return specs.map((spec, index) => {
     const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
     if (specCachePath && specCachePath !== configuredCacheRoot) {
-      return spec;
+      return { ...spec, cacheAssignment: spec.cacheAssignment ?? { kind: "caller" } };
     }
     const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
     return {
       ...spec,
+      cacheAssignment: { kind: "scheduler", root: cacheRoot },
       env: {
         ...spec.env,
         [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(cacheRoot, cacheSegment),
@@ -4327,7 +4337,7 @@ export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
 export function applyDefaultMultiSpecVitestCachePaths<T extends WatchableVitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }> {
+): Array<CacheAssignedSpec<T>> {
   if (specs.length <= 1 || specs.some((spec) => spec.watchMode)) {
     return specs;
   }

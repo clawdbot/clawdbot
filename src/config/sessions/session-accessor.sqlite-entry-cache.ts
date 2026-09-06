@@ -125,21 +125,29 @@ function loadSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
   projection: "full" | "list" = "list",
   prepared?: ValidatedSessionMetadata,
+  fullEntryKeys?: ReadonlySet<string>,
 ): SessionEntryCacheSnapshot {
   // Validation lends complete parsed facts only within this read. A concurrent external commit
   // requires the ordinary fresh SELECT, never a stale snapshot stamped with its newer version.
   const metadata =
-    prepared && prepared.dataVersion === readSqliteDataVersion(database.db) ? prepared : undefined;
+    !fullEntryKeys && prepared && prepared.dataVersion === readSqliteDataVersion(database.db)
+      ? prepared
+      : undefined;
   const parsedEntries = metadata?.entries ?? new Map<string, SessionEntry>();
   const keys = metadata?.keys ?? [];
   // Stream raw JSON so a full read never holds both serialized and parsed store-wide payloads.
   if (!metadata) {
     for (const row of iterateSqliteQuerySync(
       database.db,
-      selectSessionEntryRows(database, projection).select("updated_at").orderBy("session_key"),
+      selectSessionEntryRows(database, projection, fullEntryKeys ? [...fullEntryKeys] : [])
+        .select("updated_at")
+        .orderBy("session_key"),
     )) {
       keys.push(row.session_key);
-      const entry = parseSessionEntryJson(row, projection);
+      const entry = parseSessionEntryJson(
+        row,
+        fullEntryKeys?.has(row.session_key) ? "full" : projection,
+      );
       if (entry) {
         parsedEntries.set(row.session_key, entry);
       }
@@ -154,20 +162,32 @@ function loadSessionEntrySnapshot(
 
 export function readSessionEntryCache(
   database: SessionEntryCacheDatabase,
-  options: { cache: boolean; latest?: boolean; projection?: "full" | "list" },
+  options: {
+    cache: boolean;
+    latest?: boolean;
+    projection?: "full" | "list";
+    /** Uncached mixed snapshot: retain complete selected rows beside sibling metadata. */
+    fullEntryKeys?: readonly string[];
+  },
 ): SessionEntryCacheSnapshot {
   const prepared = assertCanonicalSqliteSessionKeysCurrent(
     database,
     undefined,
-    options.projection !== "full",
+    options.projection !== "full" && !options.fullEntryKeys,
   );
   if (
     !options.cache ||
+    options.fullEntryKeys ||
     options.latest ||
     options.projection === "full" ||
     database.db.isTransaction
   ) {
-    return loadSessionEntrySnapshot(database, options.projection, prepared);
+    return loadSessionEntrySnapshot(
+      database,
+      options.projection,
+      prepared,
+      options.fullEntryKeys ? new Set(options.fullEntryKeys) : undefined,
+    );
   }
   const validityToken = readCacheValidityToken(database.db);
   const cached = sessionEntryCaches.get(database.db);

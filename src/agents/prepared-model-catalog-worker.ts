@@ -22,7 +22,10 @@ import {
   type PreparedModelRuntimeAuth,
   type PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
+import type {
+  PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogFacts,
+} from "./prepared-model-runtime.catalog-contract.js";
 import {
   PreparedModelCatalogGenerationMismatchError,
   PreparedModelRuntimePublicationSupersededError,
@@ -30,6 +33,7 @@ import {
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
+import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 export type PreparedModelCatalogWorkerInput = Readonly<{
   kind: "catalog";
@@ -61,6 +65,8 @@ export type PreparedModelWorkerResult =
       kind: "catalog";
       generationFingerprint: string;
       snapshot: ModelCatalogSnapshot;
+      configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
+      credentials: Readonly<AuthStorageData>;
       authStore: AuthProfileStore;
       authModes: PreparedAgentCredentialModes;
     }>
@@ -179,7 +185,9 @@ export function createPreparedModelCatalogWorkerInput(params: {
 
 type PreparedModelCatalogWorker = Readonly<{
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
-  loadCatalog: () => Promise<ModelCatalogSnapshot>;
+  loadCatalog: () => Promise<
+    Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels">
+  >;
 }>;
 
 export function createPreparedModelCatalogWorker(
@@ -349,8 +357,9 @@ export function createPreparedModelCatalogWorker(
       setPreparedModelFullCatalogAuth(modelCatalog, {
         authStore: message.authStore,
         authModes: message.authModes,
+        credentials: message.credentials,
       });
-      return modelCatalog;
+      return { modelCatalog, configuredRuntimeModels: message.configuredRuntimeModels };
     },
     loadAuth: async ({ providerIds, profileIds }) => {
       const normalizedProviderIds = [...new Set(providerIds)].toSorted((left, right) =>

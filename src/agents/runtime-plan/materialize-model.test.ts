@@ -1,4 +1,9 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { materializePreparedRuntimeModel } from "./materialize-model.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
@@ -19,6 +24,95 @@ const plan: AgentRuntimeAuthPlan = {
 };
 
 describe("materializePreparedRuntimeModel", () => {
+  it.each(["matching", "resolved", "route-less"] as const)(
+    "rejects a retired final %s route without rejecting its API sibling",
+    async (mode) => {
+      const registry = makeRegistry([
+        { id: "retirement-owner", channels: [], providers: ["openai"], origin: "bundled" },
+      ]);
+      Object.assign(expectDefined(registry.plugins[0], "retirement fixture owner"), {
+        enabledByDefault: true,
+        modelCatalog: {
+          suppressions: [
+            {
+              provider: "openai",
+              model: "gpt-retirement-fixture",
+              retirement: {},
+              when: {
+                baseUrlHosts: ["subscription.example"],
+                providerConfigApiIn: ["openai-chatgpt-responses"],
+              },
+            },
+          ],
+        },
+      });
+      const metadataSnapshot = createPluginMetadataSnapshot({ manifestRegistry: registry });
+      const model = {
+        provider: "openai",
+        id: "gpt-retirement-fixture",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://subscription.example/v1",
+      };
+      const subscriptionPlan: AgentRuntimeAuthPlan = {
+        ...plan,
+        modelRoute: { ...plan.modelRoute!, modelId: model.id, baseUrl: model.baseUrl },
+      };
+      const resolveModel = vi.fn(async () => ({ model }));
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              api: mode === "route-less" ? "openai-chatgpt-responses" : "openai-responses",
+              baseUrl: mode === "route-less" ? model.baseUrl : "https://api.example/v1",
+              models: [],
+            },
+          },
+        },
+      };
+      await expect(
+        materializePreparedRuntimeModel({
+          plan:
+            mode === "route-less"
+              ? { providerForAuth: "openai", authProfileProviderForAuth: "openai" }
+              : subscriptionPlan,
+          provider: "openai",
+          modelId: model.id,
+          config,
+          metadataSnapshot,
+          ...(mode === "resolved" ? {} : { model }),
+          resolveModel,
+        }),
+      ).rejects.toMatchObject({
+        reason: "model_not_found",
+        message: expect.stringContaining("openclaw doctor --fix"),
+      });
+      expect(resolveModel).toHaveBeenCalledTimes(mode === "resolved" ? 1 : 0);
+
+      const apiModel = { ...model, api: "openai-responses", baseUrl: "https://api.example/v1" };
+      const apiPlan: AgentRuntimeAuthPlan = {
+        ...subscriptionPlan,
+        selectedAuthMode: "api-key",
+        modelRoute: {
+          ...subscriptionPlan.modelRoute!,
+          api: "openai-responses",
+          baseUrl: apiModel.baseUrl,
+          authRequirement: "api-key",
+        },
+      };
+      await expect(
+        materializePreparedRuntimeModel({
+          plan: apiPlan,
+          provider: "openai",
+          modelId: model.id,
+          config,
+          metadataSnapshot,
+          model,
+          resolveModel: async () => ({ model: apiModel }),
+        }),
+      ).resolves.toBe(apiModel);
+    },
+  );
+
   it("reuses a model that already matches the prepared route", async () => {
     const model = {
       provider: "openai",
@@ -231,19 +325,23 @@ describe("materializePreparedRuntimeModel", () => {
     );
   });
 
-  it("accepts the canonical model id for the shipped GPT-5.4 Codex alias", async () => {
+  it("accepts the canonical model id for the shipped GPT-5.4 alias on its API route", async () => {
     const aliasPlan: AgentRuntimeAuthPlan = {
       ...plan,
+      selectedAuthMode: "api-key",
       modelRoute: {
         ...plan.modelRoute!,
         modelId: "gpt-5.4-codex",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authRequirement: "api-key",
       },
     };
     const model = {
       provider: "openai",
       id: "gpt-5.4",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
     };
     const resolveModel = vi.fn();
 
