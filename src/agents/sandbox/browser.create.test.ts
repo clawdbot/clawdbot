@@ -585,8 +585,8 @@ describe("ensureSandboxBrowser create args", () => {
       GEMINI_API_KEY: "dummy-gemini",
     };
     const scopeKey = "session-1";
-    const workspaceDir = "/tmp/workspace";
-    const agentWorkspaceDir = "/tmp/workspace";
+    const workspaceDir = tempDirs.make("openclaw-browser-env-policy-");
+    const agentWorkspaceDir = workspaceDir;
     const expectedHash = computeTestBrowserHash({
       cfg,
       dockerEnvPolicyEpoch: SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
