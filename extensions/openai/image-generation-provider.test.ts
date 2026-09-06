@@ -1678,6 +1678,35 @@ describe("openai image generation provider", () => {
     expect(result.images[0]?.buffer).toEqual(Buffer.from("final-image"));
   });
 
+  it("does not let an identified streamed image outlive an id-less terminal failure", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.output_item.done",
+          item: {
+            id: "ig_1",
+            type: "image_generation_call",
+            status: "completed",
+            result: Buffer.from("stale-image").toString("base64"),
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            output: [{ type: "image_generation_call", status: "failed", result: null }],
+          },
+        },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    await expect(
+      generateOpenAIImage("Draw an image whose final snapshot says the call failed"),
+    ).rejects.toThrow(/image call did not complete \(failed\)/i);
+  });
+
   it.each([
     { name: "completed without an image", status: "completed", result: null },
     { name: "failed without an image", status: "failed", result: null },

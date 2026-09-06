@@ -632,18 +632,18 @@ function mergeCodexOutputItems(
   );
   const completedHasImageCall = merged.some((item) => item.type === "image_generation_call");
   for (const item of streamed) {
+    // The completed snapshot owns image state, ids or not: an interim
+    // image_generation_call is superseded by whatever the terminal output says
+    // about it, so the stream only recovers images the terminal output omitted
+    // entirely. Non-image items (messages, reasoning) still merge by id.
+    if (item.type === "image_generation_call" && completedHasImageCall) {
+      continue;
+    }
     if (typeof item.id === "string" && item.id.length > 0) {
       if (seenIds.has(item.id)) {
         continue;
       }
       seenIds.add(item.id);
-      merged.push(item);
-      continue;
-    }
-    // Completed snapshot owns unidentifiable image calls; streamed messages
-    // still recover when the terminal output omitted them.
-    if (item.type === "image_generation_call" && completedHasImageCall) {
-      continue;
     }
     merged.push(item);
   }
