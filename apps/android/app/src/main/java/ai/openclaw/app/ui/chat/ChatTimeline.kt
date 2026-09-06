@@ -13,6 +13,7 @@ import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 internal sealed class ChatTimelineItem {
   data class Message(
     val message: ChatMessage,
+    val turnRecap: TurnRecap? = null,
   ) : ChatTimelineItem()
 
   /** Durable queued/failed offline command shown below the transcript until acked or deleted. */
@@ -44,10 +45,6 @@ internal sealed class ChatTimelineItem {
 
   data class QuestionPrompt(
     val prompt: ChatQuestionPrompt,
-  ) : ChatTimelineItem()
-
-  data class TurnRecapSummary(
-    val recap: TurnRecap,
   ) : ChatTimelineItem()
 
   data class SystemNotice(
@@ -91,6 +88,7 @@ internal fun buildChatTimeline(
   recoveryOutboxItems: List<ChatOutboxItem> = emptyList(),
   questions: List<ChatQuestionPrompt> = emptyList(),
 ): ChatTimeline {
+  val visibleMessages = messages.withCompletedCommentaryRemoved()
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val visibleSubagents = visibleSubagentActivities(subagentActivities.values)
   val items =
@@ -111,8 +109,8 @@ internal fun buildChatTimeline(
         )
       }
       if (pendingRunCount > 0) add(ChatTimelineItem.Thinking)
-      for (index in messages.indices.reversed()) {
-        classifyTranscriptMessage(messages[index], index)?.let(::add)
+      for (index in visibleMessages.indices.reversed()) {
+        classifyTranscriptMessage(visibleMessages[index], index)?.let(::add)
       }
     }
   if (items.isEmpty()) {
@@ -149,7 +147,7 @@ internal fun buildChatTimeline(
     latestUserMessageVersion = latestUserMessage?.let(::stableMessageVersion),
     latestContentVersion =
       latestContentVersion(
-        messages,
+        visibleMessages,
         pendingRunCount,
         pendingToolCalls,
         visibleSubagents.activities,
@@ -160,6 +158,43 @@ internal fun buildChatTimeline(
       ),
   )
 }
+
+/**
+ * Keeps in-progress commentary visible, then removes it once the matching final answer is durable.
+ * Commentary from interrupted runs remains in the transcript so useful partial work is not lost.
+ */
+internal fun List<ChatMessage>.withCompletedCommentaryRemoved(): List<ChatMessage> {
+  val finalizedRunIds =
+    asSequence()
+      .filter(ChatMessage::isFinalAssistantAnswer)
+      .mapNotNull(ChatMessage::runId)
+      .toSet()
+
+  return filterIndexed { index, message ->
+    if (!message.isAssistantCommentary()) return@filterIndexed true
+    val runId = message.runId
+    if (runId != null) return@filterIndexed runId !in finalizedRunIds
+
+    // Older Gateways may omit run identity. In that case, limit fallback matching
+    // to the current turn so an unrelated future answer cannot erase commentary.
+    subList(index + 1, size)
+      .takeWhile { candidate -> !candidate.role.equals("user", ignoreCase = true) }
+      .none(ChatMessage::isFinalAssistantAnswer)
+  }
+}
+
+private fun ChatMessage.isAssistantCommentary(): Boolean = role.equals("assistant", ignoreCase = true) && phase.equals("commentary", ignoreCase = true)
+
+internal fun ChatMessage.isFinalAssistantAnswer(): Boolean =
+  role.equals("assistant", ignoreCase = true) &&
+    (
+      phase.equals("final_answer", ignoreCase = true) ||
+        (
+          phase == null &&
+            !isSyntheticDisplay &&
+            content.any { part -> part.type == "text" && !part.text.isNullOrBlank() }
+        )
+    )
 
 /**
  * Outbox rows for the visible session owner. Rows enqueued under the "main" alias still belong to the
@@ -240,12 +275,17 @@ internal fun ChatTimeline.containsUserMessageVersion(version: String): Boolean =
 
 internal fun ChatTimeline.withTurnRecap(recap: TurnRecap?): ChatTimeline {
   if (recap == null) return this
-  // reverseLayout makes index 0 the newest visual edge. The recap replaces the terminal
-  // thinking slot there, while shifting the saved user-message anchor to the same row.
+  val finalIndex =
+    items.indexOfFirst { item ->
+      val message = (item as? ChatTimelineItem.Message)?.message ?: return@indexOfFirst false
+      message.isFinalAssistantAnswer()
+    }
+  if (finalIndex < 0) return this
+  val updatedItems = items.toMutableList()
+  val finalItem = updatedItems[finalIndex] as ChatTimelineItem.Message
+  updatedItems[finalIndex] = finalItem.copy(turnRecap = recap)
   return copy(
-    items = listOf(ChatTimelineItem.TurnRecapSummary(recap)) + items,
-    readAnchorIndex = readAnchorIndex?.plus(1),
-    latestContentIndex = 0,
+    items = updatedItems,
     latestContentVersion = "$latestContentVersion:recap=${recap.runtimeMs}:${recap.outputTokens ?: ""}",
   )
 }
@@ -351,7 +391,6 @@ internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
     is ChatTimelineItem.PendingTools -> "tools"
     is ChatTimelineItem.SubagentActivity -> "subagent-activity"
     is ChatTimelineItem.QuestionPrompt -> "question:${item.prompt.record.id}"
-    is ChatTimelineItem.TurnRecapSummary -> "turn-recap"
     is ChatTimelineItem.SystemNotice -> item.key
     is ChatTimelineItem.SystemDivider -> item.key
     is ChatTimelineItem.StreamingAssistant -> "stream"

@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.design
 
+import ai.openclaw.app.AppearanceTextScale
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.R
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
@@ -71,20 +72,20 @@ internal data class ClawColors(
 @Immutable
 internal data class ClawSpacing(
   val xxxs: Dp = 4.dp,
-  val xxs: Dp = 8.dp,
-  val xs: Dp = 12.dp,
-  val sm: Dp = 16.dp,
-  val md: Dp = 20.dp,
-  val lg: Dp = 24.dp,
-  val xl: Dp = 32.dp,
-  val xxl: Dp = 40.dp,
+  val xxs: Dp = 6.dp,
+  val xs: Dp = 10.dp,
+  val sm: Dp = 14.dp,
+  val md: Dp = 18.dp,
+  val lg: Dp = 20.dp,
+  val xl: Dp = 28.dp,
+  val xxl: Dp = 36.dp,
   // Touch target and visible shape are separate: `touchTarget` is the minimum
   // hit area every control keeps, while `control`, `row`, `iconSlot`, and `icon`
   // describe the smaller painted geometry that sits inside it.
   val touchTarget: Dp = 48.dp,
-  val control: Dp = 36.dp,
-  val row: Dp = 48.dp,
-  val iconSlot: Dp = 32.dp,
+  val control: Dp = 34.dp,
+  val row: Dp = 44.dp,
+  val iconSlot: Dp = 30.dp,
   val icon: Dp = 18.dp,
 )
 
@@ -371,10 +372,11 @@ internal fun ClawDesignTheme(
   dark: Boolean = true,
   family: AppearanceThemeFamily = AppearanceThemeFamily.Claw,
   accentArgb: Long? = null,
+  textScale: AppearanceTextScale = AppearanceTextScale.Standard,
   content: @Composable () -> Unit,
 ) {
   val colors = clawColorsForTheme(dark = dark, family = family, accentArgb = accentArgb)
-  val typography = clawTypography(clawFontFamily)
+  val typography = clawTypography(clawFontFamily, textScale.factor)
 
   val spacing = ClawSpacing()
 
@@ -396,73 +398,75 @@ internal fun ClawDesignTheme(
   }
 }
 
-private fun clawTypography(fontFamily: FontFamily) =
-  ClawTypography(
-    display =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.Bold,
-        fontSize = 22.sp,
-        lineHeight = 28.sp,
-        letterSpacing = 0.sp,
-      ),
-    title =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 17.sp,
-        lineHeight = 22.sp,
-        letterSpacing = 0.sp,
-      ),
-    section =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 14.sp,
-        lineHeight = 18.sp,
-        letterSpacing = 0.sp,
-      ),
-    body =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = 14.sp,
-        lineHeight = 19.sp,
-        letterSpacing = 0.sp,
-      ),
-    label =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 14.sp,
-        lineHeight = 18.sp,
-        letterSpacing = 0.sp,
-      ),
-    caption =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 0.sp,
-      ),
-    captionSmall =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = 11.sp,
-        lineHeight = 14.sp,
-        letterSpacing = 0.4.sp,
-      ),
-    mono =
-      TextStyle(
-        fontFamily = FontFamily.Monospace,
-        fontWeight = FontWeight.Medium,
-        fontSize = 13.sp,
-        lineHeight = 18.sp,
-        letterSpacing = 0.sp,
-      ),
-  )
+private fun clawTypography(
+  fontFamily: FontFamily,
+  scale: Float = 1f,
+) = ClawTypography(
+  display =
+    TextStyle(
+      fontFamily = fontFamily,
+      fontWeight = FontWeight.Bold,
+      fontSize = (22 * scale).sp,
+      lineHeight = (28 * scale).sp,
+      letterSpacing = 0.sp,
+    ),
+  title =
+    TextStyle(
+      fontFamily = fontFamily,
+      fontWeight = FontWeight.SemiBold,
+      fontSize = (17 * scale).sp,
+      lineHeight = (22 * scale).sp,
+      letterSpacing = 0.sp,
+    ),
+  section =
+    TextStyle(
+      fontFamily = fontFamily,
+      fontWeight = FontWeight.SemiBold,
+      fontSize = (14 * scale).sp,
+      lineHeight = (18 * scale).sp,
+      letterSpacing = 0.sp,
+    ),
+  body =
+    TextStyle(
+      fontFamily = fontFamily,
+      fontWeight = FontWeight.Medium,
+      fontSize = (14 * scale).sp,
+      lineHeight = (19 * scale).sp,
+      letterSpacing = 0.sp,
+    ),
+  label =
+    TextStyle(
+      fontFamily = fontFamily,
+      fontWeight = FontWeight.SemiBold,
+      fontSize = (14 * scale).sp,
+      lineHeight = (18 * scale).sp,
+      letterSpacing = 0.sp,
+    ),
+  caption =
+    TextStyle(
+      fontFamily = fontFamily,
+      fontWeight = FontWeight.Medium,
+      fontSize = (12 * scale).sp,
+      lineHeight = (16 * scale).sp,
+      letterSpacing = 0.sp,
+    ),
+  captionSmall =
+    TextStyle(
+      fontFamily = fontFamily,
+      fontWeight = FontWeight.Medium,
+      fontSize = (11 * scale).sp,
+      lineHeight = (14 * scale).sp,
+      letterSpacing = 0.4.sp,
+    ),
+  mono =
+    TextStyle(
+      fontFamily = FontFamily.Monospace,
+      fontWeight = FontWeight.Medium,
+      fontSize = (13 * scale).sp,
+      lineHeight = (18 * scale).sp,
+      letterSpacing = 0.sp,
+    ),
+)
 
 private fun materialTypography(type: ClawTypography) =
   Typography(

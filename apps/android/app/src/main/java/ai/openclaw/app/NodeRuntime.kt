@@ -2107,7 +2107,7 @@ class NodeRuntime private constructor(
           onSessionDeleted = ::publishChatSessionDeletion,
           onOfflineDefaultAgentRestored = ::syncMainSessionKey,
           onAssistantReplyFinalized = { owner, runId, text ->
-            if (!_isForeground.value) {
+            if (!_isForeground.value && shouldPostConversationReplyNotification(owner, runId)) {
               ConversationReplyNotifier(appContext).show(owner, runId, text)
             }
           },

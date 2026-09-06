@@ -7553,6 +7553,15 @@ class ChatController internal constructor(
       provenance = parseChatMessageProvenance(obj["provenance"]),
       transcriptMarker = parseChatTranscriptMarker(obj["__openclaw"]),
       senderLabel = obj["senderLabel"].asJsonStringOrNull()?.trim()?.takeIf { role == "user" && it.isNotEmpty() },
+      phase =
+        obj["phase"].asJsonStringOrNull()?.trim()?.lowercase()
+          ?: if (obj["openclawStreamFallback"].asObjectOrNull() != null) "commentary" else null,
+      runId =
+        metadata
+          ?.get("runId")
+          .asJsonStringOrNull()
+          ?.trim()
+          ?.takeIf(String::isNotEmpty),
     )
   }
 

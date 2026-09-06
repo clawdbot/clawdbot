@@ -92,6 +92,21 @@ class ChatTurnRecapResolverTest {
   }
 
   @Test
+  fun restoresLatestRecapFromMatchingCompletedTranscriptAfterRecreation() {
+    val terminal = done(runEndedAt, runtimeMs = 8_000L, outputTokens = 42L)
+
+    assertEquals(
+      TurnRecap(runtimeMs = 8_000L, outputTokens = 42L),
+      TurnRecapResolver().resolve(
+        session,
+        false,
+        terminal,
+        transcript("assistant-1", completedEndedAt = runEndedAt),
+      ),
+    )
+  }
+
+  @Test
   fun consumesAWatchWhoseBaselineRowWasNeverObserved() {
     val resolver = TurnRecapResolver()
     assertNull(resolver.resolve(session, true, null))

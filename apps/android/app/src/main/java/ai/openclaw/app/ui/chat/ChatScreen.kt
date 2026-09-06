@@ -47,6 +47,7 @@ import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
@@ -111,6 +112,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -199,6 +201,8 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
@@ -720,8 +724,8 @@ fun ChatScreen(
     modifier =
       Modifier
         .fillMaxSize()
-        .padding(vertical = 10.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
+        .padding(vertical = 4.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
     ChatMessageList(
       sessionKey = sessionKey,
@@ -800,7 +804,7 @@ fun ChatScreen(
       resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
       loadImageArtifact = viewModel::loadChatImageArtifact,
       loadMediaArtifact = viewModel::loadChatMediaArtifact,
-      modifier = Modifier.weight(1f),
+      modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
       header = { onJumpToLatest ->
         ChatHeader(
           activeAgent = activeAgent,
@@ -1200,7 +1204,7 @@ private fun ChatHeader(
         projectLabel?.let { project ->
           Text(
             text = project,
-            style = ClawTheme.type.caption.copy(fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.Normal),
+            style = ClawTheme.type.captionSmall.copy(fontWeight = FontWeight.Normal),
             color = ClawTheme.colors.textMuted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -1212,7 +1216,7 @@ private fun ChatHeader(
         ) {
           Text(
             text = sessionTitle,
-            style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
+            style = ClawTheme.type.body.copy(fontWeight = FontWeight.Medium),
             color = ClawTheme.colors.text,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -1419,8 +1423,8 @@ private fun ChatMessageList(
           modifier = Modifier.fillMaxSize().nestedScroll(readerScroll.nestedScrollConnection),
           state = readerScroll.listState,
           reverseLayout = true,
-          verticalArrangement = Arrangement.spacedBy(12.dp),
-          contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+          contentPadding = PaddingValues(top = 3.dp, bottom = 2.dp),
         ) {
           itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
             when (item) {
@@ -1432,6 +1436,7 @@ private fun ChatMessageList(
                   live = false,
                   content = visibleContent(item.message),
                   timestampMs = item.message.timestampMs,
+                  turnRecap = item.turnRecap,
                   onReplyMessage = onReplyMessage,
                   sessionActionsEnabled = sessionActionsEnabled,
                   onRewindMessage = onRewindMessage,
@@ -1489,10 +1494,6 @@ private fun ChatMessageList(
 
               is ChatTimelineItem.QuestionPrompt -> {
                 ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
-              }
-
-              is ChatTimelineItem.TurnRecapSummary -> {
-                ChatTurnRecapRow(item.recap)
               }
 
               is ChatTimelineItem.SystemNotice -> {
@@ -1736,6 +1737,7 @@ internal fun ChatBubble(
   live: Boolean,
   content: List<ChatMessageContent>,
   timestampMs: Long?,
+  turnRecap: TurnRecap? = null,
   onReplyMessage: (String) -> Unit,
   sessionActionsEnabled: Boolean,
   onRewindMessage: (String) -> Unit,
@@ -1926,16 +1928,44 @@ internal fun ChatBubble(
               onToggle = { onToggleListen(checkNotNull(messageId), messageText) },
             )
           }
-          timestampMs?.let {
-            Text(
-              text = formatChatTimestamp(it),
-              style = ClawTheme.type.caption.copy(fontSize = 11.5.sp, lineHeight = 14.sp, fontWeight = FontWeight.Normal),
-              color = ClawTheme.colors.textSubtle,
+          if (timestampMs != null || turnRecap != null) {
+            ChatMessageFooter(
+              timestampMs = timestampMs,
+              turnRecap = turnRecap.takeIf { normalizedRole == "assistant" && !live },
               modifier = Modifier.align(if (isUser) Alignment.End else Alignment.Start),
             )
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun ChatMessageFooter(
+  timestampMs: Long?,
+  turnRecap: TurnRecap?,
+  modifier: Modifier = Modifier,
+) {
+  val duration = turnRecap?.let { formatLocalizedChatDurationCompact(it.runtimeMs.coerceAtLeast(1_000L)) }
+  val tokens = turnRecap?.outputTokens?.let { localizedChatOutputTokens(it) }
+  Row(
+    modifier = modifier,
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(5.dp),
+  ) {
+    timestampMs?.let {
+      Text(
+        text = formatChatTimestamp(it),
+        style = ClawTheme.type.caption.copy(fontSize = 11.5.sp, lineHeight = 14.sp, fontWeight = FontWeight.Normal),
+        color = ClawTheme.colors.textSubtle,
+      )
+    }
+    listOfNotNull(duration, tokens).forEach { value ->
+      if (timestampMs != null || value != duration) {
+        Text(nativeStringResource("·"), style = ClawTheme.type.caption.copy(fontSize = 11.5.sp), color = ClawTheme.colors.textSubtle)
+      }
+      Text(value, style = ClawTheme.type.caption.copy(fontSize = 11.5.sp, lineHeight = 14.sp), color = ClawTheme.colors.textSubtle)
     }
   }
 }
@@ -2459,7 +2489,7 @@ private fun ChatComposer(
       modelUnavailable = modelUnavailableMessage != null,
     )
 
-  Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+  Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
     if (shareImportNotice != null) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -3364,11 +3394,11 @@ private fun ChatInputPill(
 ) {
   val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
   var attachmentMenuExpanded by rememberSaveable { mutableStateOf(false) }
-  val draftStyle = ClawTheme.type.body.copy(fontSize = 16.sp, lineHeight = 22.sp)
+  val draftStyle = ClawTheme.type.title.copy(fontWeight = FontWeight.Medium)
 
   Surface(
     modifier = modifier.testTag("chat-composer-surface"),
-    shape = RoundedCornerShape(20.dp),
+    shape = RoundedCornerShape(16.dp),
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
@@ -3387,13 +3417,19 @@ private fun ChatInputPill(
           cursorBrush = SolidColor(ClawTheme.colors.primary),
           minLines = 1,
           maxLines = 6,
+          keyboardOptions =
+            KeyboardOptions(
+              capitalization = KeyboardCapitalization.Sentences,
+              autoCorrectEnabled = true,
+              keyboardType = KeyboardType.Text,
+            ),
           modifier =
             Modifier
               .fillMaxWidth()
               // Reserve the action row before measuring the draft in the IME viewport.
               .weight(1f, fill = false)
               .heightIn(min = ClawTheme.spacing.touchTarget)
-              .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp)
+              .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 2.dp)
               .onPreInterceptKeyBeforeSoftKeyboard { event ->
                 hardwareEnterHandler.handle(
                   event = event,
@@ -3415,7 +3451,7 @@ private fun ChatInputPill(
         )
       }
       Row(
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+        modifier = Modifier.padding(horizontal = 3.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Box {

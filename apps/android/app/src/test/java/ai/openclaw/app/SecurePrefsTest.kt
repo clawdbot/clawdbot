@@ -700,4 +700,21 @@ class SecurePrefsTest {
     assertEquals(mapOf("X-Two" to "secret-two"), prefs.loadGatewayCustomHeaders("manual|two.example|443"))
     assertEquals("keep", prefs.getString("unrelated.secret"))
   }
+
+  @Test
+  fun appearanceTextScaleDefaultsAndPersistsLocally() {
+    val context = RuntimeEnvironment.getApplication()
+    context
+      .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+      .edit()
+      .clear()
+      .commit()
+    val prefs = testPrefs(context)
+
+    assertEquals(AppearanceTextScale.Small, prefs.appearanceTextScale.value)
+    prefs.setAppearanceTextScale(AppearanceTextScale.Small)
+
+    assertEquals(AppearanceTextScale.Small, prefs.appearanceTextScale.value)
+    assertEquals(AppearanceTextScale.Small, testPrefs(context).appearanceTextScale.value)
+  }
 }

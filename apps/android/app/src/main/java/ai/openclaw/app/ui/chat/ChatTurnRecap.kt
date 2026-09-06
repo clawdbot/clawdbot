@@ -3,17 +3,8 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
-import ai.openclaw.app.ui.design.ClawTheme
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.unit.dp
 import java.math.RoundingMode
 import java.text.NumberFormat
 import java.util.Locale
@@ -139,7 +130,23 @@ internal class TurnRecapResolver(
       }
       return null
     }
-    if (watch == null) return null
+    if (watch == null) {
+      val restored = restoredTranscriptRecap(sessionKey, row, transcript) ?: return null
+      watches[sessionKey] =
+        TurnRecapWatch(
+          watching = false,
+          baselineKnown = true,
+          baselineEndedAt = rowEndedAt,
+          absorbedTerminal = false,
+          settleStartedAt = null,
+          pendingTerminal = null,
+          pendingTerminalEndedAt = null,
+          settled = restored,
+          settledTranscriptItemId = transcript?.completedNewestItemId,
+          tracksTranscript = true,
+        )
+      return restored
+    }
     watch.watching = false
     watch.settled?.let { settled ->
       if (
@@ -214,27 +221,18 @@ internal class TurnRecapResolver(
       )
     return settled
   }
-}
 
-@Composable
-internal fun ChatTurnRecapRow(recap: TurnRecap) {
-  val duration = formatLocalizedChatDurationFull(recap.runtimeMs.coerceAtLeast(1_000L))
-  val tokens = recap.outputTokens?.let { localizedChatOutputTokens(it) }
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(7.dp),
-  ) {
-    WorkingClawIcon(runKey = "turn-recap", color = ClawTheme.colors.primary, parked = true)
-    Text(
-      text = nativeStringResource("Done in \$duration", duration),
-      style = ClawTheme.type.caption,
-      color = ClawTheme.colors.textMuted,
-    )
-    tokens?.let {
-      Text(text = nativeStringResource("·"), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
-      Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-    }
+  private fun restoredTranscriptRecap(
+    sessionKey: String,
+    row: ChatSessionEntry?,
+    transcript: TurnRecapTranscriptState?,
+  ): TurnRecap? {
+    val endedAt = row?.endedAt ?: return null
+    val runtimeMs = row.runtimeMs ?: return null
+    if (row.status != "done" || transcript?.sessionKey != sessionKey) return null
+    if (transcript.completedEndedAt != endedAt) return null
+    if (transcript.newestItemId == null || transcript.newestItemId != transcript.completedNewestItemId) return null
+    return TurnRecap(runtimeMs = runtimeMs, outputTokens = row.outputTokens)
   }
 }
 

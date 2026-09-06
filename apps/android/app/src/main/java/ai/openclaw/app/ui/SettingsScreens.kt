@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidLicenseNotice
 import ai.openclaw.app.AppLanguage
+import ai.openclaw.app.AppearanceTextScale
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
@@ -2030,6 +2031,7 @@ private fun AppearanceSettingsScreen(
   val themeMode by viewModel.appearanceThemeMode.collectAsState()
   val themeFamily by viewModel.appearanceThemeFamily.collectAsState()
   val accentArgb by viewModel.appearanceAccentArgb.collectAsState()
+  val textScale by viewModel.appearanceTextScale.collectAsState()
   val context = LocalContext.current
   var appLanguage by remember { mutableStateOf(currentAppLanguage()) }
   val systemLanguageTag = currentSystemLanguageTag(context)
@@ -2064,6 +2066,17 @@ private fun AppearanceSettingsScreen(
           options = appearanceThemeOptions(),
           selected = appearanceThemeSummary(themeMode),
           onSelect = { selected -> viewModel.setAppearanceThemeMode(appearanceThemeModeForLabel(selected)) },
+        )
+        Text(
+          text = nativeString("Text size"),
+          style = ClawTheme.type.section,
+          color = ClawTheme.colors.text,
+          modifier = Modifier.padding(top = ClawTheme.spacing.xxs),
+        )
+        ClawSegmentedControl(
+          options = AppearanceTextScale.entries.map { nativeString(it.displayLabel) },
+          selected = nativeString(textScale.displayLabel),
+          onSelect = { selected -> viewModel.setAppearanceTextScale(AppearanceTextScale.fromDisplayLabel(selected)) },
         )
         Text(
           text = nativeString("Accent color"),

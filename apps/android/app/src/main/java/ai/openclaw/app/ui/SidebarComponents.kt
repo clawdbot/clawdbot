@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -61,7 +62,9 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -238,6 +241,8 @@ internal fun SidebarNavigationRow(
   val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
   val pinStateDescription =
     pinned?.let { nativeString(if (it) "Pinned" else "Not pinned") }
+  val moveUpLabel = nativeString("Move up")
+  val moveDownLabel = nativeString("Move down")
   var dragOffset by remember(destination) { mutableFloatStateOf(0f) }
   var dragging by remember(destination) { mutableStateOf(false) }
   val finishDrag = {
@@ -278,6 +283,14 @@ internal fun SidebarNavigationRow(
               modifier = Modifier.size(18.dp),
             )
           }
+          if (pinned != null) {
+            Icon(
+              imageVector = Icons.Default.DragHandle,
+              contentDescription = nativeString("Drag to reorder"),
+              tint = palette.muted,
+              modifier = Modifier.size(18.dp),
+            )
+          }
         }
       },
       selected = selected,
@@ -295,6 +308,17 @@ internal fun SidebarNavigationRow(
           .heightIn(min = 48.dp)
           .semantics {
             if (pinStateDescription != null) stateDescription = pinStateDescription
+            customActions =
+              listOf(
+                CustomAccessibilityAction(moveUpLabel) {
+                  currentOnMove(-1)
+                  true
+                },
+                CustomAccessibilityAction(moveDownLabel) {
+                  currentOnMove(1)
+                  true
+                },
+              )
           }.pointerInput(destination, thresholdPx) {
             detectDragGesturesAfterLongPress(
               onDragStart = {

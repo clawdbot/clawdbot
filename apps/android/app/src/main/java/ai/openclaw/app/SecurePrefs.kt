@@ -110,6 +110,7 @@ class SecurePrefs(
     private const val appearanceThemeModeKey = "appearance.themeMode"
     private const val appearanceThemeFamilyKey = "appearance.themeFamily"
     private const val appearanceAccentArgbKey = "appearance.accentArgb"
+    private const val appearanceTextScaleKey = "appearance.textScale"
     private const val appearancePendingPreferencesKey = "appearance.pendingPreferences"
     private const val appearanceLocalOnlyKeysKey = "appearance.localOnlyKeys"
     private const val appearanceSyncMigrationVersionKey = "appearance.syncMigrationVersion"
@@ -278,6 +279,10 @@ class SecurePrefs(
 
   private val _appearanceAccentArgb = MutableStateFlow(plainPrefs.takeIf { it.contains(appearanceAccentArgbKey) }?.getLong(appearanceAccentArgbKey, 0L))
   val appearanceAccentArgb: StateFlow<Long?> = _appearanceAccentArgb
+
+  private val _appearanceTextScale =
+    MutableStateFlow(AppearanceTextScale.fromRawValue(plainPrefs.getString(appearanceTextScaleKey, null)))
+  val appearanceTextScale: StateFlow<AppearanceTextScale> = _appearanceTextScale
   private var pendingAppearancePreferences: List<PendingAppearancePreference> = loadPendingAppearancePreferences()
   private var localOnlyAppearancePreferenceKeys: Set<String> = loadLocalOnlyAppearancePreferenceKeys()
   private val appearancePreferenceRevisions = appearanceSyncKeys.associateWith { 0L }.toMutableMap()
@@ -814,6 +819,12 @@ class SecurePrefs(
       }
     }
     _appearanceAccentArgb.value = argb
+  }
+
+  /** Text scale is intentionally device-local; unlike theme colors it is not profile-synced. */
+  fun setAppearanceTextScale(scale: AppearanceTextScale) {
+    plainPrefs.edit { putString(appearanceTextScaleKey, scale.rawValue) }
+    _appearanceTextScale.value = scale
   }
 
   private fun editAppearancePreference(

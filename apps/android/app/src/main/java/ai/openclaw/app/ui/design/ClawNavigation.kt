@@ -105,7 +105,7 @@ internal fun ClawBottomNav(
           Modifier
             .fillMaxWidth()
             .windowInsetsPadding(safeInsets)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 6.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
       ) {
@@ -137,7 +137,7 @@ private fun ClawBottomNavItem(
     contentColor = if (selected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
   ) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 3.dp, vertical = 3.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {

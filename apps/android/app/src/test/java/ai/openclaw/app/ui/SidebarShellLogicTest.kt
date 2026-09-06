@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.SessionCatalog
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.ui.design.clawColorsForTheme
 import org.junit.Assert.assertEquals
@@ -11,6 +12,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SidebarShellLogicTest {
+  @Test
+  fun emptyNativeCodexCatalogStaysHiddenUntilRelevant() {
+    val emptyCodex = SessionCatalog(id = "codex", label = "Codex", hosts = emptyList(), canCreateSession = true)
+    val erroredCodex = emptyCodex.copy(errorText = "Unavailable")
+    val otherCreateCatalog = SessionCatalog(id = "claude", label = "Claude", hosts = emptyList(), canCreateSession = true)
+
+    assertTrue(sidebarCatalogSections(listOf(emptyCodex), emptyList()).isEmpty())
+    assertEquals(listOf(erroredCodex), sidebarCatalogSections(listOf(erroredCodex), emptyList()).map { it.catalog })
+    assertEquals(listOf(otherCreateCatalog), sidebarCatalogSections(listOf(otherCreateCatalog), emptyList()).map { it.catalog })
+  }
+
   @Test
   fun sidebarPaletteUsesEveryActiveThemeAndAccentToken() {
     AppearanceThemeFamily.entries.forEach { family ->
@@ -38,9 +50,9 @@ class SidebarShellLogicTest {
     assertEquals(
       listOf(
         SidebarDestination.Threads,
-        SidebarDestination.Home,
+        SidebarDestination.Chat,
         SidebarDestination.Settings,
-        SidebarDestination.Work,
+        SidebarDestination.Overview,
         SidebarDestination.Skills,
       ),
       orderedSidebarDestinations(listOf("threads", "home", "threads", "unknown")),
@@ -95,7 +107,7 @@ class SidebarShellLogicTest {
       listOf("home"),
       updateSidebarDestinationVisibility(
         visibleIds = listOf("home"),
-        destination = SidebarDestination.Home,
+        destination = SidebarDestination.Chat,
         visible = false,
       ),
     )

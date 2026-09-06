@@ -439,6 +439,7 @@ class MainViewModel private constructor(
     prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
     prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Claw)
     prefs.setAppearanceAccentArgb(null)
+    prefs.setAppearanceTextScale(AppearanceTextScale.Standard)
     prefs.setDisplayName("Pixel")
     prefs.setSpeakerEnabled(true)
     prefs.setVoiceWakeEnabled(scene == AndroidScreenshotScene.VoiceWake)
@@ -607,6 +608,7 @@ class MainViewModel private constructor(
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = prefs.appearanceThemeMode
   val appearanceThemeFamily: StateFlow<AppearanceThemeFamily> = prefs.appearanceThemeFamily
   val appearanceAccentArgb: StateFlow<Long?> = prefs.appearanceAccentArgb
+  val appearanceTextScale: StateFlow<AppearanceTextScale> = prefs.appearanceTextScale
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
   val activeAudioInputDevicePreference: StateFlow<String?> =
     runtimeState(initial = null) { it.activeAudioInputDevicePreference }
@@ -1269,6 +1271,10 @@ class MainViewModel private constructor(
       retainLocal = retainLocal,
     )
     if (!retainLocal) syncQueuedAppearancePreference("ui.accent", appearanceAccentPreferenceValue(argb))
+  }
+
+  fun setAppearanceTextScale(scale: AppearanceTextScale) {
+    prefs.setAppearanceTextScale(scale)
   }
 
   fun refreshGatewayConnection() {
