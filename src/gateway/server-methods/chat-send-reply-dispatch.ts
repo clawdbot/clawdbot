@@ -12,6 +12,7 @@ import {
   recordAssistantManagedMediaUrls,
   type PrepareAssistantTranscriptMessage,
 } from "../../config/sessions/transcript-assistant-delivery.js";
+import { stripInternalRuntimeScaffolding } from "../../infra/outbound/protocol-scaffolding.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
@@ -79,7 +80,9 @@ export function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
       } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
         lines.push("[[reply_to_current]]");
       }
-      const text = payload.text ? stripInlineDirectiveTagsForDelivery(payload.text).text : "";
+      const text = payload.text
+        ? stripInlineDirectiveTagsForDelivery(stripInternalRuntimeScaffolding(payload.text)).text
+        : "";
       if (text.trim() && !isSuppressedControlReplyText(text)) {
         lines.push(text);
       }

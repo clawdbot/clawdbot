@@ -4,7 +4,11 @@ import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
-import { buildAssistantDisplayContentFromReplyPayloads } from "./chat-assistant-content.js";
+import {
+  buildAssistantDisplayContentFromReplyPayloads,
+  extractAssistantDisplayTextFromContent,
+  sanitizeAssistantDisplayText,
+} from "./chat-assistant-content.js";
 import {
   buildTranscriptReplyText,
   createChatSendReplyDispatch,
@@ -45,6 +49,18 @@ describe("buildTranscriptReplyText", () => {
     ).toBe("```yaml\r\nroot:\r\n  nested: true\r\n```");
   });
 
+  it("strips internal runtime context envelopes from transcript reply text", () => {
+    const envelope =
+      "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.\n" +
+      "This context is runtime-generated, not user-authored. Keep internal details private.\n" +
+      "\n" +
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n" +
+      'Conversation info: {"source_modality":"document"}\n' +
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    expect(buildTranscriptReplyText([{ text: envelope }])).toBe("");
+    expect(buildTranscriptReplyText([{ text: `Done.\n\n${envelope}` }])).toBe("Done.");
+  });
+
   it("keeps reply directives and safe media while suppressing reasoning", () => {
     expect(
       buildTranscriptReplyText([
@@ -72,6 +88,54 @@ describe("buildTranscriptReplyText", () => {
         "private",
       ].join("\n\n"),
     );
+  });
+});
+
+describe("internal runtime envelope finalizer fallback chain", () => {
+  const envelope =
+    "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.\n" +
+    "This context is runtime-generated, not user-authored. Keep internal details private.\n" +
+    "\n" +
+    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n" +
+    'Conversation info: {"source_modality":"document"}\n' +
+    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+  // Mirrors chat-send-reply-finalization.ts: displayReply feeds
+  // transcriptDisplayReply, which is the last fallback for transcriptReply.
+  const runFinalizerFallbackChain = async (payloads: { text?: string }[]) => {
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      payloads,
+    });
+    const displayReply =
+      extractAssistantDisplayTextFromContent(content) ?? buildTranscriptReplyText(payloads);
+    const transcriptDisplayReply = displayReply?.trim() ?? "";
+    const transcriptReply = buildTranscriptReplyText(payloads) || transcriptDisplayReply;
+    return { content, displayReply, transcriptReply };
+  };
+
+  it("strips envelope-only scaffolding from shared display projection input", () => {
+    expect(sanitizeAssistantDisplayText(envelope)).toBeUndefined();
+    expect(sanitizeAssistantDisplayText(`Done.\n\n${envelope}`)).toBe("Done.");
+    expect(sanitizeAssistantDisplayText("Hello")).toBe("Hello");
+  });
+
+  it("keeps envelope-only payloads out of the transcript fallback chain", async () => {
+    const { content, displayReply, transcriptReply } = await runFinalizerFallbackChain([
+      { text: envelope },
+    ]);
+    expect(transcriptReply).toBe("");
+    expect(displayReply ?? "").not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+    for (const block of content ?? []) {
+      expect(block?.type === "text" ? (block.text as string) : "").not.toContain(
+        "BEGIN_OPENCLAW_INTERNAL_CONTEXT",
+      );
+    }
+  });
+
+  it("keeps visible text while stripping a trailing envelope", async () => {
+    const { transcriptReply } = await runFinalizerFallbackChain([{ text: `Done.\n\n${envelope}` }]);
+    expect(transcriptReply).toBe("Done.");
   });
 });
 
