@@ -562,22 +562,25 @@ the sentinel.
 
 ### Plugin sync details
 
-After a beta core update, eligible official npm and trusted official ClawHub
-plugins with a default/latest catalog target try the exact installed core
-version. This also applies to a one-off `--tag <beta-version>` while the
-configured channel is stable, including when plugin synchronization resumes
-in a fresh process. Other default-line npm and ClawHub plugins on the beta
-channel try their plugin `@beta` tag.
+Managed npm plugins on the beta channel select the newest version by semantic
+version order from their `beta` and `latest` dist-tags, using the same policy as
+the core updater. This includes official plugins with a default/latest catalog
+target and managed `@beta` selectors. OpenClaw installs the exact inspected
+version and retains the recorded selector for future updates.
 
-If the selected beta plugin release is unavailable, OpenClaw falls back to the
-default/latest spec and reports a warning naming the requested and used targets.
+ClawHub plugins on the beta channel try their own `@beta` tag. If that release
+is unavailable, OpenClaw falls back to the default/latest spec and reports a
+warning naming the requested and used targets.
 Integrity, compatibility, trust, install-policy, and capability-consent failures
 do not trigger fallback. Availability fallback warnings do not fail the core
-update. Ordinary exact versions and explicit non-`latest` tags retain their selector.
+update. Ordinary exact versions, ranges, and explicit tags other than `beta`
+retain their selector.
 Doctor can refresh a stale official runtime plugin that is bound to the current
 OpenClaw release cohort. That repair stays on the recorded registry, verifies
 the replacement artifact, and records its exact version if the npm install was
 previously pinned.
+Already-current runtime plugins are kept in place; a no-op startup repair does
+not reinstall the package or invalidate the migration checkpoint.
 
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying you trust the new artifact.
