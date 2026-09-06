@@ -22,7 +22,9 @@ function controlVisibility(initial: DocumentVisibilityState = "visible") {
 }
 
 function settle() {
-  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 afterEach(() => {
@@ -122,10 +124,10 @@ describe("CronPage hidden refreshes", () => {
         expect(current.cronCreateOpen).toBe(true);
         expect(current.cronForm.name).toBe("Unsaved automation");
         expect(
-          request.mock.calls.filter(([method]) => method === "cron.list").at(-1)?.[1],
+          request.mock.calls.findLast(([method]) => method === "cron.list")?.[1],
         ).toMatchObject({ query: "keep my filter" });
         expect(
-          request.mock.calls.filter(([method]) => method === "cron.runs").at(-1)?.[1],
+          request.mock.calls.findLast(([method]) => method === "cron.runs")?.[1],
         ).toMatchObject({ query: "keep my history filter" });
       } finally {
         held.resolve();

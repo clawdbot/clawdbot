@@ -136,7 +136,12 @@ suite.define(() => {
       await gateway.resolveDeferred("cron.list");
       await gateway.resolveDeferred("cron.runs");
       await page.getByText("No automations yet").waitFor({ state: "visible" });
-      await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+          }),
+      );
       expect(await counts()).toEqual(before);
       await page.screenshot({ path: path.join(suite.artifactDir, "hidden-refresh-paused.png") });
       await page.evaluate(() => {
