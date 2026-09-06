@@ -62,7 +62,6 @@ export function registerGenerationRecoveryTests(
           steps: [],
           durationMs: 0,
         },
-        channel: "stable",
         opts: { json: true, run },
         refreshServiceEnv: false,
         serviceUpdateVerdict: before.serviceUpdateVerdict,

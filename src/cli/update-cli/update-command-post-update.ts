@@ -504,7 +504,6 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         maybeRestartService({
           shouldRestart: params.shouldRestart && serviceMutationAllowed,
           result: resultWithPostUpdate,
-          channel: params.channel,
           opts: params.opts,
           refreshServiceEnv: refreshGatewayServiceEnv,
           serviceUpdateVerdict,

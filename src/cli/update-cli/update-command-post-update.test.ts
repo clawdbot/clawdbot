@@ -997,7 +997,6 @@ describe("successful update finalization ordering", () => {
             refreshDefinition: false,
             fingerprint: "sealed",
           },
-          channel: unloaded ? "dev" : "stable",
           result: expect.objectContaining({
             after: { version: "2026.4.24", ...(unloaded ? { buildId: "new-build" } : {}) },
           }),

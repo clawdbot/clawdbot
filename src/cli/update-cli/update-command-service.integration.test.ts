@@ -305,7 +305,7 @@ describe("preserved update activation with real version guards", () => {
       mode,
       outcome,
       denial: "sealed" as const,
-      channel: "stable" as const,
+      json: true,
       phase: "initial",
     })),
     ...(["git", "npm", "pnpm", "bun"] as const).flatMap((mode) =>
@@ -317,7 +317,7 @@ describe("preserved update activation with real version guards", () => {
           mode,
           denial,
           outcome,
-          channel: "stable" as const,
+          json: outcome === "json denial",
           phase: "late",
         })),
       ),
@@ -328,14 +328,14 @@ describe("preserved update activation with real version guards", () => {
           mode: "git" as const,
           denial,
           outcome,
-          channel: "dev" as const,
+          json: false,
           phase,
         })),
       ),
     ),
   ])(
-    "handles $phase $denial denial for $channel $mode activation ($outcome)",
-    async ({ mode, denial, outcome, channel, phase }) => {
+    "handles $phase $denial denial for $mode activation ($outcome; json=$json)",
+    async ({ mode, denial, outcome, json, phase }) => {
       let nowMs = 0;
       vi.spyOn(performance, "now").mockImplementation(() => nowMs);
       vi.spyOn(runtimeUtils, "sleep").mockImplementation(async (ms) => {
@@ -444,7 +444,6 @@ describe("preserved update activation with real version guards", () => {
         return await waitForGatewayHealthyRestart(params);
       });
       const activated = await maybeRestartService({
-        channel,
         shouldRestart: true,
         result: {
           status: "ok",
@@ -455,7 +454,7 @@ describe("preserved update activation with real version guards", () => {
           before: { version: "2026.1.1" },
           after: { version: VERSION, buildId: "new-build" },
         },
-        opts: { json: outcome === "json denial" || (!late && channel === "stable") },
+        opts: { json },
         refreshServiceEnv: late,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
         serviceEnv: before.serviceEnv,
@@ -472,9 +471,7 @@ describe("preserved update activation with real version guards", () => {
       for (const [args, options] of restarts) {
         expect(args).toContain("--preserve-definition");
         expect(typeof options === "object" && options.env?.MANAGED_VALUE).toBe("revalidated");
-        if (!late && channel === "stable") {
-          expect(args).toContain("--json");
-        }
+        expect(args).toContain("--json");
       }
       expect(mocks.start).not.toHaveBeenCalled();
       expect(mocks.child.mock.calls.filter(([args]) => args.includes("install"))).toHaveLength(
@@ -569,7 +566,6 @@ describe("preserved update activation with real version guards", () => {
       }
     });
     const activated = await maybeRestartService({
-      channel: "stable",
       shouldRestart: true,
       result: {
         status: "ok",
@@ -696,7 +692,6 @@ describe("preserved update activation with real version guards", () => {
       });
 
       const activated = await maybeRestartService({
-        channel: "stable",
         shouldRestart: true,
         result: {
           status: "ok",
@@ -942,7 +937,6 @@ describe("preserved update activation with real version guards", () => {
         portUsage: { port, status: "free", listeners: [], hints: [] },
       }));
       result = await maybeRestartService({
-        channel: "stable",
         shouldRestart: true,
         result: {
           status: "ok",

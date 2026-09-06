@@ -2429,7 +2429,6 @@ describe("update-cli", () => {
 
     await expect(
       maybeRestartService({
-        channel: "stable",
         shouldRestart: true,
         result: makeOkUpdateResult({ mode: "npm", after: { version: "2026.4.24" } }),
         opts: { json: true },
@@ -4028,6 +4027,7 @@ describe("update-cli", () => {
   );
 
   it("post-core resume mode uses the parent install records snapshot for missing payload warnings", async () => {
+    mockNoopPostUpdatePluginConvergence();
     const resultDir = createCaseDir("openclaw-post-core-records");
     const recordsPath = path.join(resultDir, "plugin-install-records.json");
     const installPath = path.join(resultDir, "demo-plugin");
@@ -4595,6 +4595,7 @@ describe("update-cli", () => {
   });
 
   it("detects missing plugin payloads from persisted records before npm updates", async () => {
+    mockNoopPostUpdatePluginConvergence();
     const installPath = createCaseDir("openclaw-missing-plugin-payload");
     fsSync.mkdirSync(installPath, { recursive: true });
     const config = {
@@ -4612,7 +4613,6 @@ describe("update-cli", () => {
         installPath,
       },
     });
-    syncPluginsForUpdateChannel.mockResolvedValueOnce(pluginSyncResult(config));
     pathExists.mockImplementation(
       async (candidate: string) =>
         candidate === installPath || candidate === path.join(process.cwd(), "dist", "index.js"),

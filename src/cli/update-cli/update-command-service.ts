@@ -9,7 +9,6 @@ import {
 } from "../../commands/doctor-completion.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { UpdateChannel } from "../../infra/update-channels.js";
 import {
   recordUpdateRunPhase,
   recordUpdateRunVerification,
@@ -185,7 +184,6 @@ export async function recordFailedUpdateGatewayState(
 export async function maybeRestartService(params: {
   shouldRestart: boolean;
   result: UpdateRunResult;
-  channel: UpdateChannel;
   opts: UpdateCommandOptions;
   refreshServiceEnv: boolean;
   serviceEnv?: NodeJS.ProcessEnv;

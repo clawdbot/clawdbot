@@ -307,6 +307,25 @@ describe("formatHealthChannelLines", () => {
     ).toStrictEqual(["Matrix: ok (1ms)"]);
   });
 
+  it("keeps the selected username first, deduplicates it, and preserves webhook text", () => {
+    const summary = createMultiAccountHealthSummary(
+      { accountId: "1", probe: { ok: true, bot: { username: "sibling" } } },
+      {
+        accountId: "9",
+        probe: {
+          ok: true,
+          elapsedMs: 12,
+          bot: { username: "selected" },
+          webhook: { url: "https://example.test/hook" },
+        },
+      },
+    );
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual([
+      "Matrix: ok (@selected, @sibling) (12ms) - webhook https://example.test/hook",
+    ]);
+  });
+
   it.each([undefined, {}])("preserves the channel snapshot when accounts are %j", (accounts) => {
     const summary = createHealthSummary({
       channels: {

@@ -178,7 +178,6 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
           steps: [],
           durationMs: 0,
         },
-        channel: mode === "git" ? "dev" : "stable",
         opts: { json: true },
         refreshServiceEnv: true,
         serviceUpdateVerdict: verdict,
@@ -299,7 +298,6 @@ export function registerRestartOutcomeTests(
         await maybeRestartService({
           shouldRestart: true,
           result: { status: "ok", mode: "npm", root, steps: [], durationMs: 0 },
-          channel: "stable",
           opts: { json: false },
           refreshServiceEnv: false,
           serviceUpdateVerdict: {

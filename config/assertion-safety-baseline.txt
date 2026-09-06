@@ -2487,7 +2487,6 @@ src/commands/doctor/shared/legacy-web-tools-migrate.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
 src/commands/doctor/shared/plugin-runtime-symlinks.ts	4
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	2
-src/commands/doctor/shared/preview-warnings.ts	2
 src/commands/doctor/shared/pristine-startup-state.ts	3
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	3
 src/commands/doctor/shared/stale-auth-order-store.ts	3
