@@ -20,9 +20,15 @@ import { promisify } from "node:util";
 import { z } from "zod";
 import { acquireQaLease } from "../../.agents/skills/telegram-e2e-userbot/scripts/qa-credential-lease.mjs";
 import { restoreTelegramTestCredential } from "../../.agents/skills/telegram-e2e-userbot/scripts/telegram-test-credential.mjs";
+import { createTelegramFailureDiagnostic } from "./request-proof.ts";
 import { normalizeTelegramCapture } from "./telegram-capture.ts";
 import { startTelegramProofIngress } from "./telegram-proof-ingress.mts";
 import { parseTelegramProofPlan, type TelegramProofPlan } from "./telegram-proof-plan.ts";
+import {
+  assertPodmanProofStorage,
+  assertProofImage,
+  proofImageTag,
+} from "./telegram-proof-storage.mts";
 import { telegramProofIdentitySchema } from "./telegram-request-proof.ts";
 import {
   assertCurrentTelegramRequest,
@@ -102,6 +108,7 @@ function telegramCandidateConfig(alias: string, testerId: string, plan?: Telegra
   };
 }
 async function preflight(candidate: string, image: string) {
+  const storageEnvironment = assertPodmanProofStorage();
   if (!/^[a-f0-9]{40}$/.test(candidate) || !/^[a-z0-9][a-z0-9/.:@-]*$/.test(image)) {
     throw new Error("Invalid candidate/image selection");
   }
@@ -109,20 +116,32 @@ async function preflight(candidate: string, image: string) {
   if (!info || info.Config.Labels["org.openclaw.mantis.candidate-sha"] !== candidate) {
     throw new Error("Prepared runtime does not match exact candidate");
   }
-  await podman([
-    "run",
-    "--rm",
-    "--network",
-    "none",
-    "--cap-drop",
-    "ALL",
-    "--security-opt",
-    "no-new-privileges",
-    info.Id,
-    "node",
-    "dist/entry.js",
-    "--version",
-  ]);
+  const versionName = `mantis-tg-version-${randomUUID()}`;
+  try {
+    await podman([
+      "run",
+      "--name",
+      versionName,
+      "--memory",
+      "8g",
+      "--cpus",
+      "2",
+      "--pids-limit",
+      "512",
+      "--network",
+      "none",
+      "--cap-drop",
+      "ALL",
+      "--security-opt",
+      "no-new-privileges",
+      info.Id,
+      "node",
+      "dist/entry.js",
+      "--version",
+    ]);
+  } finally {
+    await podman(["rm", "--force", "--ignore", versionName]);
+  }
   const root = path.resolve(".artifacts");
   await mkdir(root, { recursive: true });
   const temp = await mkdtemp(path.join(root, "telegram-preflight-"));
@@ -138,6 +157,12 @@ async function preflight(candidate: string, image: string) {
         "create",
         "--name",
         validationName,
+        "--memory",
+        "8g",
+        "--cpus",
+        "2",
+        "--pids-limit",
+        "512",
         "--network",
         "none",
         "--cap-drop",
@@ -165,9 +190,7 @@ async function preflight(candidate: string, image: string) {
       throw new Error("Candidate Gateway configuration is not ready");
     }
   } finally {
-    if (validationId) {
-      await podman(["rm", "--force", validationId]);
-    }
+    await podman(["rm", "--force", "--ignore", validationName]);
     await rm(temp, { recursive: true, force: true });
   }
   const probe = await execute(
@@ -185,7 +208,9 @@ async function preflight(candidate: string, image: string) {
   );
   const tdlib = probe.stdout.trim();
   await access(tdlib);
-  return { imageId: info.Id, tdlib };
+  const imageTag = proofImageTag(info.Id);
+  await podman(["tag", info.Id, imageTag]);
+  return { imageId: info.Id, imageTag, tdlib, storageEnvironment };
 }
 const args = process.argv.slice(2);
 if (args[0] === "--preflight") {
@@ -307,6 +332,7 @@ async function run() {
     HOME: boxRoot,
     XDG_CONFIG_HOME: path.join(boxRoot, "config"),
     XDG_CACHE_HOME: path.join(boxRoot, "cache"),
+    ...ready.storageEnvironment,
   };
   const box = async (boxArgs: string[]) =>
     (
@@ -492,6 +518,14 @@ async function run() {
     await writeFile(configPath, JSON.stringify(config), { mode: 0o644 });
     boxAttempted = true;
     quiescent = false;
+    // Podman normalizes Config.Image to a canonical tag; Crabbox validates that
+    // field literally. Bind a private tag to the immutable image before creation,
+    // then verify the created container's immutable image before Gateway startup.
+    assertPodmanProofStorage();
+    const tagged = imageInfo.parse(
+      JSON.parse(await podman(["image", "inspect", ready.imageTag])),
+    )[0];
+    assertProofImage(ready.imageId, tagged?.Id ?? "");
     await box([
       "warmup",
       "--provider",
@@ -501,7 +535,7 @@ async function run() {
       "--local-container-runtime",
       "podman",
       "--local-container-image",
-      ready.imageId,
+      ready.imageTag,
       "--local-container-network",
       network,
       "--local-container-docker-socket=false",
@@ -528,6 +562,7 @@ async function run() {
     }
     sutId = containers[0]!;
     const sutMeta = JSON.parse(await podman(["inspect", sutId]))[0];
+    assertProofImage(ready.imageId, String(sutMeta.Image));
     const bootstrapRoot = path.resolve(sutMeta.Config.Labels.bootstrap_dir ?? "");
     if (
       Object.keys(sutMeta.NetworkSettings.Networks).join(",") !== network ||
@@ -787,6 +822,14 @@ async function run() {
     clearInterval(reviewTimer);
   }
   if (primaryError || cleanupErrors.length || lease) {
+    const diagnostics = ingress?.getDiagnostics() ?? [];
+    if (diagnostics.length) {
+      await writeFile(
+        path.join(output, "telegram-failure.json"),
+        JSON.stringify(createTelegramFailureDiagnostic(identity, diagnostics)) + "\n",
+        { mode: 0o600, flag: "wx" },
+      );
+    }
     throw new AggregateError(
       [primaryError, ...cleanupErrors].filter((error) => error !== undefined),
       lease

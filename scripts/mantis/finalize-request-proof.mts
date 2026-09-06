@@ -234,7 +234,7 @@ try {
   );
   files = JSON.parse(readFileSync(filesPath, "utf8"));
 } catch {
-  reason =
+  reason ??=
     "Evidence archive is unavailable, ambiguous, expired, malformed, unsafe, partial, or does not match its authoritative identity/digest.";
 }
 const receipt = createRequestReceipt(identity, execution, evidence, files, reason);

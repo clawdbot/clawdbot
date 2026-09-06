@@ -228,10 +228,16 @@ try {
   }
   const rendered = page.locator(".chat-thread-inner").getByText(reply, { exact: true });
   await rendered.waitFor({ state: "visible", timeout: 30_000 });
-  const actualText = await rendered.textContent();
   await page.waitForTimeout(1000);
   if (sendRequestCount !== 1 || protocolError) {
     throw new Error("Unexpected chat.send count");
+  }
+  if (!(await rendered.isVisible())) {
+    throw new Error("Final reply is no longer visible");
+  }
+  const actualText = await rendered.textContent();
+  if (actualText !== reply) {
+    throw new Error("Final reply does not match the observed response");
   }
   // Capture after the final assertion, unlike the legacy working-state image.
   await page.screenshot({ path: path.join(output, "final-reply.png"), fullPage: true });

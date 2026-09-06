@@ -113,7 +113,7 @@ jobs:
   run_telegram_proof:
     name: Run request-bound Telegram bot proof
     needs: admit_request
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       actions: read
@@ -134,12 +134,14 @@ jobs:
           node-version: 24.x
           install-bun: "false"
           cache-mode: restore
+      - name: Prepare bounded rootless candidate storage
+        run: node scripts/mantis/telegram-proof-storage.mts setup
       - name: Prepare trusted dependencies before candidate execution
         shell: bash
         run: |
           set -euo pipefail
           git archive "$GITHUB_WORKFLOW_SHA" |
-            podman build --file scripts/mantis/telegram-test-server-proof.Dockerfile \
+            podman build --memory 16g --cpu-period 100000 --cpu-quota 200000 --file scripts/mantis/telegram-test-server-proof.Dockerfile \
               --tag localhost/mantis-telegram-proof -
       - name: Install pinned Crabbox for disposable candidate lifecycle
         if: ${{ inputs.scenario == 'telegram-bot-e2e-proof' }}
@@ -189,14 +191,17 @@ jobs:
         run: >-
           node scripts/mantis/run-request-telegram-qa.mts
           "$CANDIDATE_SHA" .artifacts/telegram-test-server-proof
+      - name: Remove bounded candidate storage
+        if: ${{ always() && env.MANTIS_PODMAN_ROOT != '' }}
+        run: node scripts/mantis/telegram-proof-storage.mts cleanup
       - name: Upload normalized public observations
-        if: ${{ success() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-request-telegram-${{ github.run_id }}-1
           path: ${{ inputs.scenario == 'telegram-markdown-parser-fidelity' && '.artifacts/telegram-test-server-proof/qa-*.json' || '.artifacts/telegram-test-server-proof/*.json' }}
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: ignore
       - name: Summarize proof limits
         if: ${{ success() }}
         shell: bash

@@ -35,6 +35,7 @@ execFileSync(
   { stdio: "pipe" },
 );
 const name = `mantis-telegram-build-${randomUUID()}`;
+const versionName = `mantis-telegram-version-${randomUUID()}`;
 const podman = (args: string[], input?: Buffer) =>
   execFileSync("podman", args, { input, maxBuffer: 1024 * 1024 * 1024, timeout: 1200_000 });
 try {
@@ -52,10 +53,14 @@ try {
     "1024",
     "--memory",
     "16g",
+    "--cpus",
+    "2",
     "--env",
     `GITHUB_SHA=${candidate}`,
     "--env",
     "OPENCLAW_BUILD_PRIVATE_QA=1",
+    "--env",
+    "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=8192",
     "--workdir",
     "/candidate",
     baseImage,
@@ -83,7 +88,14 @@ try {
   ]);
   podman([
     "run",
-    "--rm",
+    "--name",
+    versionName,
+    "--memory",
+    "8g",
+    "--cpus",
+    "2",
+    "--pids-limit",
+    "512",
     "--network",
     "none",
     "--cap-drop",
@@ -105,5 +117,9 @@ try {
     }),
   );
 } finally {
-  podman(["rm", "--force", name]);
+  try {
+    podman(["rm", "--force", "--ignore", versionName]);
+  } finally {
+    podman(["rm", "--force", "--ignore", name]);
+  }
 }

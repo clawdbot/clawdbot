@@ -268,6 +268,7 @@ describe("trusted finalizer CLI", () => {
     "digest-mismatch",
     "wrong-run",
     "stale-head",
+    "stale-head-and-digest-mismatch",
     "wrong-attempt",
     "timed-out",
     "wrong-title",
@@ -312,7 +313,7 @@ describe("trusted finalizer CLI", () => {
           fault === "missing-digest"
             ? null
             : "sha256:" +
-              (fault === "digest-mismatch" ? "e".repeat(64) : requestEvidenceDigest(archive)),
+              (fault.includes("digest-mismatch") ? "e".repeat(64) : requestEvidenceDigest(archive)),
         workflow_run: {
           id: fault === "wrong-run" ? 999 : 456,
           repository_id: 123,
@@ -323,7 +324,7 @@ describe("trusted finalizer CLI", () => {
       const pr = {
         state: "open",
         head: {
-          sha: fault === "stale-head" ? "f".repeat(40) : identity.candidate_sha,
+          sha: fault.startsWith("stale-head") ? "f".repeat(40) : identity.candidate_sha,
           repo: { id: 123 },
         },
       };
@@ -411,6 +412,15 @@ describe("trusted finalizer CLI", () => {
       }
       if (["digest-mismatch", "wrong-run"].includes(fault)) {
         expect(receipt.evidence).toBeNull();
+      }
+      if (fault.startsWith("stale-head")) {
+        expect(receipt.reason).toBe(
+          "PR is no longer open at the exact same-repository candidate head.",
+        );
+      } else if (fault === "digest-mismatch") {
+        expect(receipt.reason).toBe(
+          "Evidence archive is unavailable, ambiguous, expired, malformed, unsafe, partial, or does not match its authoritative identity/digest.",
+        );
       }
     } finally {
       rmSync(temp, { recursive: true, force: true });

@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { assertPodmanProofStorage } from "./telegram-proof-storage.mts";
 
 const [candidate, outputArg, image = "localhost/mantis-request-proof"] = process.argv.slice(2);
 if (
@@ -43,6 +44,7 @@ try {
     "Cannot verify matching candidate/harness dependency inputs. This scenario requires unchanged manifests, lockfile, workspace configuration, and patches; no candidate code was executed.",
   );
 }
+assertPodmanProofStorage();
 const output = path.resolve(outputArg);
 mkdirSync(path.dirname(output), { recursive: true });
 mkdirSync(output);

@@ -137,6 +137,39 @@ export type RequestIdentity = z.infer<typeof requestIdentitySchema>;
 export type RequestReceipt = z.infer<typeof requestReceiptSchema>;
 export type RequestExecution = z.infer<typeof executionSchema>;
 export type RequestEvidence = z.infer<typeof evidenceSchema>;
+export const telegramFailureDiagnosticsSchema = z
+  .array(
+    z.strictObject({
+      sequence: z.number().int().min(1).max(16),
+      category: z.enum([
+        "authority_unavailable",
+        "scope_rejected",
+        "malformed_request",
+        "upstream_failure",
+        "network_failure",
+      ]),
+    }),
+  )
+  .min(1)
+  .max(16)
+  .refine(
+    (entries) => entries.every((entry, index) => entry.sequence === index + 1),
+    "Noncanonical diagnostic sequence",
+  );
+export type TelegramFailureDiagnostic = z.infer<typeof telegramFailureDiagnosticsSchema>[number];
+export const telegramFailureSchema = telegramProofIdentitySchema.safeExtend({
+  schema: z.literal("mantis.telegram-failure.v1"),
+  assertion_outcome: z.literal("inconclusive"),
+  diagnostics: telegramFailureDiagnosticsSchema,
+});
+export function createTelegramFailureDiagnostic(identity: unknown, diagnostics: unknown) {
+  return telegramFailureSchema.parse({
+    ...telegramProofIdentitySchema.parse(identity),
+    schema: "mantis.telegram-failure.v1",
+    assertion_outcome: "inconclusive",
+    diagnostics,
+  });
+}
 const filesSchema = z.strictObject({
   "observer.json": z.string(),
   "chat-send.json": z.string(),
@@ -200,6 +233,51 @@ export function createRequestReceipt(
               "Production build-identity admission is not covered: this scenario uses the canonical mock Gateway e2e build ID.",
             ],
   };
+  if (
+    identity.scenario === "telegram-bot-e2e-proof" &&
+    encodedFiles &&
+    typeof encodedFiles === "object" &&
+    Object.hasOwn(encodedFiles, "telegram-failure.json")
+  ) {
+    try {
+      const encoded = z
+        .strictObject({ "telegram-failure.json": z.string().max(22000) })
+        .parse(encodedFiles);
+      const bytes = Buffer.from(encoded["telegram-failure.json"], "base64");
+      if (bytes.length > 16384 || bytes.toString("base64") !== encoded["telegram-failure.json"]) {
+        throw new Error("Invalid diagnostic encoding");
+      }
+      const diagnostic = telegramFailureSchema.parse(JSON.parse(bytes.toString("utf8")));
+      const actualIdentity = requestIdentitySchema.parse(
+        telegramProofIdentitySchema.parse({
+          request_id: diagnostic.request_id,
+          plan_sha256: diagnostic.plan_sha256,
+          repository: diagnostic.repository,
+          pull_request: diagnostic.pull_request,
+          candidate_sha: diagnostic.candidate_sha,
+          scenario: diagnostic.scenario,
+          workflow: diagnostic.workflow,
+          harness: diagnostic.harness,
+          run: diagnostic.run,
+        }),
+      );
+      if (
+        JSON.stringify(actualIdentity) !== JSON.stringify(requestIdentitySchema.parse(identity)) ||
+        !evidence
+      ) {
+        throw new Error("Diagnostic identity mismatch");
+      }
+      receipt.reason =
+        reason ??
+        `Telegram proof inconclusive: ${diagnostic.diagnostics.map((entry) => `${entry.sequence}:${entry.category}`).join(", ")}.`;
+    } catch {
+      receipt.reason =
+        reason ??
+        "Telegram failure diagnostic is malformed, oversized, or does not match the exact request identity.";
+    }
+    receipt.limits.push(receipt.reason);
+    return requestReceiptSchema.parse(receipt);
+  }
   if (!evidence || execution !== "completed" || reason) {
     receipt.reason =
       reason ??

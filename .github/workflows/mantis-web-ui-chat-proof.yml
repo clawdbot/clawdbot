@@ -271,7 +271,7 @@ jobs:
   run_request_proof:
     name: Run request-bound web chat proof
     needs: [admit_bound_request, validate_candidate]
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read
@@ -288,7 +288,9 @@ jobs:
           cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
-          install-deps: "false"
+          install-deps: "true"
+      - name: Prepare bounded rootless candidate storage
+        run: node scripts/mantis/telegram-proof-storage.mts setup
       - name: Bootstrap trusted image before candidate execution
         shell: bash
         run: |
@@ -298,6 +300,9 @@ jobs:
         env:
           CANDIDATE_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
         run: node scripts/mantis/run-request-web-ui.mts "$CANDIDATE_SHA" .artifacts/mantis-request-observations
+      - name: Remove bounded candidate storage
+        if: ${{ always() && env.MANTIS_PODMAN_ROOT != '' }}
+        run: node scripts/mantis/telegram-proof-storage.mts cleanup
       - name: Upload independently captured observations
         if: ${{ success() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

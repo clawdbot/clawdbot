@@ -69,6 +69,7 @@ elif mode in ("evidence", "telegram-evidence", "telegram-qa-evidence"):
                 if mode == "telegram-evidence" else
                 {"observer.json", "chat-send.json", "final-reply.json", "final-reply.png"})
     files = {}
+    diagnostic = {"telegram-failure.json"} if mode == "telegram-evidence" else set()
     with zipfile.ZipFile(source) as archive:
         for entry in archive.infolist():
             name = entry.filename
@@ -76,16 +77,18 @@ elif mode in ("evidence", "telegram-evidence", "telegram-qa-evidence"):
                 raise ValueError("noncanonical archive path")
             admit(name, entry.file_size)
             kind = stat.S_IFMT(entry.external_attr >> 16)
-            if name not in required or kind not in (0, stat.S_IFREG) or entry.is_dir() or entry.flag_bits & 1:
+            if name not in required | diagnostic or kind not in (0, stat.S_IFREG) or entry.is_dir() or entry.flag_bits & 1:
                 raise ValueError("unexpected or unsafe evidence entry")
             if name.endswith(".json") and entry.file_size > 65536:
                 raise ValueError("oversized evidence JSON")
+            if name in diagnostic and entry.file_size > 16384:
+                raise ValueError("oversized failure diagnostic")
             with archive.open(entry) as stream:
                 data = stream.read(limit + 1)
             if len(data) != entry.file_size:
                 raise ValueError("truncated evidence entry")
             files[name] = base64.b64encode(data).decode("ascii")
-    if set(files) != required:
+    if set(files) != required and (not diagnostic or set(files) != diagnostic):
         raise ValueError("incomplete evidence inventory")
     Path(destination).write_text(json.dumps(files), encoding="utf-8")
 else:

@@ -2,6 +2,7 @@ import { appendFile } from "node:fs/promises";
 import http from "node:http";
 import { z } from "zod";
 import { startTelegramTestApiProxy } from "../../.agents/skills/telegram-e2e-userbot/scripts/telegram-test-api-proxy.mjs";
+import type { TelegramFailureDiagnostic } from "./request-proof.ts";
 import type { TelegramProofPlan } from "./telegram-proof-plan.ts";
 
 const chat = z.union([z.number().int().safe(), z.string().regex(/^-?[1-9][0-9]*$/)]);
@@ -88,6 +89,12 @@ export async function startTelegramProofIngress(options: {
   const messageIds = new Set<number>();
   const callbackIds = new Set<string>();
   const readers = new Set<AbortController>();
+  const diagnostics: TelegramFailureDiagnostic[] = [];
+  const recordDiagnostic = (category: TelegramFailureDiagnostic["category"]) => {
+    if (diagnostics.length < 16) {
+      diagnostics.push({ sequence: diagnostics.length + 1, category });
+    }
+  };
   let stopForwarding!: (error: Error) => void;
   const stopped = new Promise<Error>((resolve) => {
     stopForwarding = resolve;
@@ -113,7 +120,19 @@ export async function startTelegramProofIngress(options: {
       assertHealthy,
       whenUnhealthy: Promise.race([options.lease.whenUnhealthy, stopped]),
     },
-    fetchImpl: options.fetchImpl ?? fetch,
+    fetchImpl: async (...args) => {
+      try {
+        return await (options.fetchImpl ?? fetch)(...args);
+      } catch (error) {
+        try {
+          assertHealthy();
+          recordDiagnostic("network_failure");
+        } catch {
+          recordDiagnostic("authority_unavailable");
+        }
+        throw error;
+      }
+    },
   });
   const refuse = (response: http.ServerResponse) => {
     if (!response.headersSent) {
@@ -122,8 +141,20 @@ export async function startTelegramProofIngress(options: {
     response.end(JSON.stringify({ ok: false, description: "Outside active Telegram proof scope" }));
   };
   const server = http.createServer((request, response) => {
-    void (async () => {
+    let category: TelegramFailureDiagnostic["category"] = "authority_unavailable";
+    const assertRequestHealthy = () => {
+      const previous = category;
+      category = "authority_unavailable";
       assertHealthy();
+      category = previous;
+    };
+    const rejectScope: (message: string) => never = (message) => {
+      category = "scope_rejected";
+      throw new Error(message);
+    };
+    void (async () => {
+      assertRequestHealthy();
+      category = "malformed_request";
       const probe =
         request.method === "GET" &&
         [
@@ -131,7 +162,7 @@ export async function startTelegramProofIngress(options: {
           `/telegram/bot${options.alias}/getWebhookInfo`,
         ].includes(request.url ?? "");
       if (++requests > 512 || (request.method !== "POST" && !probe)) {
-        throw new Error("Unsupported request");
+        rejectScope("Unsupported request");
       }
       const chunks: Buffer[] = [];
       let length = 0;
@@ -142,12 +173,12 @@ export async function startTelegramProofIngress(options: {
         }
         chunks.push(Buffer.from(chunk));
       }
-      assertHealthy();
+      assertRequestHealthy();
       const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
       const record = z.record(z.string(), z.unknown()).parse(parsed);
       if (request.url === "/provider/v1/chat/completions") {
         if (!armed || request.headers.authorization !== `Bearer ${options.alias}`) {
-          throw new Error("Inactive provider capability");
+          rejectScope("Inactive provider capability");
         }
         const messages = z
           .array(z.object({ role: z.string(), content: z.unknown() }))
@@ -161,7 +192,7 @@ export async function startTelegramProofIngress(options: {
           .join("\n");
         const reply = options.plan.modelReplies[provider.length];
         if (reply === undefined || userText.length > 16384) {
-          throw new Error("Provider budget exhausted");
+          rejectScope("Provider budget exhausted");
         }
         const entry = {
           user_text: userText,
@@ -171,7 +202,7 @@ export async function startTelegramProofIngress(options: {
         // Reserve the response before yielding, so concurrent calls cannot reuse it.
         provider.push(entry);
         await appendFile(options.providerLog, JSON.stringify(entry) + "\n", { mode: 0o600 });
-        assertHealthy();
+        assertRequestHealthy();
         if (record.stream === true) {
           response.writeHead(200, { "Content-Type": "text/event-stream" });
           response.end(
@@ -204,7 +235,7 @@ export async function startTelegramProofIngress(options: {
       }
       const prefix = `/telegram/bot${options.alias}/`;
       if (!request.url?.startsWith(prefix)) {
-        throw new Error("Wrong Telegram capability");
+        rejectScope("Wrong Telegram capability");
       }
       const method = request.url.slice(prefix.length);
       // Startup registry operations are simulated; the scenario tests command
@@ -236,12 +267,12 @@ export async function startTelegramProofIngress(options: {
           })
           .parse(record);
         if (!armed || ++writes > 64 || !callbackIds.delete(answer.callback_query_id)) {
-          throw new Error("Callback outside this proof");
+          rejectScope("Callback outside this proof");
         }
         outbound = answer;
       } else {
         if (!armed || ++writes > 64 || String(record.chat_id) !== options.testerId) {
-          throw new Error("Outside leased DM budget");
+          rejectScope("Outside leased DM budget");
         }
         if (method === "sendMessage") {
           outbound = { ...send.parse(record), link_preview_options: { is_disabled: true } };
@@ -252,24 +283,25 @@ export async function startTelegramProofIngress(options: {
         } else if (method === "sendChatAction") {
           outbound = z.strictObject({ chat_id: chat, action: z.literal("typing") }).parse(record);
         } else {
-          throw new Error("Method outside the selected DM observation surface");
+          rejectScope("Method outside the selected DM observation surface");
         }
         if ("message_id" in outbound && !messageIds.has(Number(outbound.message_id))) {
-          throw new Error("Mutation targets a message outside this proof");
+          rejectScope("Mutation targets a message outside this proof");
         }
         if ("reply_parameters" in outbound) {
           const parameters = outbound.reply_parameters as { message_id: number };
           if (!messageIds.has(parameters.message_id)) {
-            throw new Error("Reply targets stale message");
+            rejectScope("Reply targets stale message");
           }
         }
       }
       const controller = new AbortController();
       readers.add(controller);
       try {
-        assertHealthy();
+        assertRequestHealthy();
         const upstreamUrl = new URL(upstream.apiRoot);
         upstreamUrl.pathname = `/bot${options.sutToken}/${method}`;
+        category = "network_failure";
         const result = await fetch(upstreamUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -277,6 +309,10 @@ export async function startTelegramProofIngress(options: {
           redirect: "error",
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(40_000)]),
         });
+        category = "upstream_failure";
+        if (!result.ok) {
+          throw new Error("Upstream request failed");
+        }
         const upstreamChunks: Uint8Array[] = [];
         let size = 0;
         if (!result.body) {
@@ -292,7 +328,10 @@ export async function startTelegramProofIngress(options: {
         const data = z
           .record(z.string(), z.unknown())
           .parse(JSON.parse(Buffer.concat(upstreamChunks).toString("utf8")));
-        assertHealthy();
+        if (data.ok !== true) {
+          throw new Error("Upstream result failed");
+        }
+        assertRequestHealthy();
         if (method === "getUpdates") {
           polls += 1;
           const updates = z.array(z.record(z.string(), z.unknown())).parse(data.result);
@@ -336,7 +375,7 @@ export async function startTelegramProofIngress(options: {
             return accepted;
           });
         }
-        if (method === "sendMessage" && data.ok === true) {
+        if (method === "sendMessage") {
           const sent = z
             .object({
               message_id: z.number().int().positive(),
@@ -359,6 +398,7 @@ export async function startTelegramProofIngress(options: {
         readers.delete(controller);
       }
     })().catch(() => {
+      recordDiagnostic(category);
       invalid = true;
       cancel();
       refuse(response);
@@ -371,6 +411,8 @@ export async function startTelegramProofIngress(options: {
     server.listen(options.socket, resolve);
   });
   return {
+    getDiagnostics: () =>
+      diagnostics.map((entry) => ({ sequence: entry.sequence, category: entry.category })),
     assertHealthy,
     drainStaleUpdates: () => upstream.drainUpdates(options.sutToken),
     isPolling: () => polls > 0,
