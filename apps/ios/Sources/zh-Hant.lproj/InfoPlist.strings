@@ -1,30 +1,30 @@
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
-"NSCalendarsFullAccessUsageDescription" = "啟用行事曆存取權後，OpenClaw 會使用您的行事曆來顯示行程及排程相關資訊。";
+"NSCalendarsFullAccessUsageDescription" = "當您啟用行事曆存取權時，OpenClaw 會使用您的行事曆顯示行程及排程內容。";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
-"NSCalendarsUsageDescription" = "啟用行事曆存取權後，OpenClaw 會使用您的行事曆來顯示行程及排程相關資訊。";
+"NSCalendarsUsageDescription" = "當您啟用行事曆存取權時，OpenClaw 會使用您的行事曆顯示行程及排程內容。";
 /* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
-"NSCalendarsWriteOnlyAccessUsageDescription" = "啟用行事曆存取權後，OpenClaw 會使用您的行事曆來新增行程。";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "當您啟用行事曆存取權時，OpenClaw 會使用您的行事曆新增行程。";
 /* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
-"NSCameraUsageDescription" = "當您掃描 Gateway 設定 QR 碼，或要求已配對的 Gateway 或助理使用這部 iPhone 拍攝照片或短片時，OpenClaw 會使用相機，例如用於連線至您的 Gateway，或向助理展示文件、裝置螢幕或工作空間。";
+"NSCameraUsageDescription" = "當您掃描 Gateway 設定 QR Code，或要求已配對的 Gateway 或助理使用這部 iPhone 拍攝照片或短片時，OpenClaw 會使用相機，例如用於連線至您的 Gateway，或向助理展示文件、裝置螢幕或工作空間。";
 /* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
-"NSContactsUsageDescription" = "OpenClaw 會使用你的聯絡人資料，讓你在使用助理時搜尋及提及聯絡人。";
+"NSContactsUsageDescription" = "OpenClaw 會使用您的聯絡人，讓您在使用助理時搜尋及提及聯絡人。";
 /* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */
-"NSHealthShareUsageDescription" = "OpenClaw 會從 Apple Health app 讀取您的步數、睡眠、靜止心率和體能訓練資料，以建立您要求的摘要，並透過您的 Gateway 將資料傳送至您設定的 AI 供應商。";
+"NSHealthShareUsageDescription" = "OpenClaw 會從 Apple Health App 讀取您的步數、睡眠、靜息心率和體能訓練資料，以建立您要求的摘要，並透過您的 Gateway 傳送給您設定的 AI 供應商。";
 /* OpenClaw source: "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider." */
-"NSHealthUpdateUsageDescription" = "OpenClaw 不會將資料寫入 Apple Health app。它會使用唯讀資料建立您要求的摘要，並透過您的 Gateway 將摘要傳送至您設定的 AI 供應商。";
+"NSHealthUpdateUsageDescription" = "OpenClaw 不會寫入「Apple 健康」App。它會使用唯讀資料建立您要求的摘要，並透過 Gateway 將摘要傳送至您設定的 AI 供應商。";
 /* OpenClaw source: "OpenClaw discovers and connects to your OpenClaw gateway on the local network." */
-"NSLocalNetworkUsageDescription" = "OpenClaw 會在區域網路上探索並連線至您的 OpenClaw Gateway.";
+"NSLocalNetworkUsageDescription" = "OpenClaw 會探索並連線至區域網路上的 OpenClaw Gateway。";
 /* OpenClaw source: "OpenClaw can share your location in the background when you enable Always." */
-"NSLocationAlwaysAndWhenInUseUsageDescription" = "啟用「永遠」後，OpenClaw 可在背景分享您的位置。";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "當您啟用「永遠」時，OpenClaw 可以在背景分享您的位置。";
 /* OpenClaw source: "OpenClaw uses your location when you allow location sharing." */
-"NSLocationWhenInUseUsageDescription" = "當你允許分享位置時，OpenClaw 會使用你的位置資訊。";
+"NSLocationWhenInUseUsageDescription" = "當您允許分享位置時，OpenClaw 會使用您的位置。";
 /* OpenClaw source: "OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes." */
-"NSMicrophoneUsageDescription" = "OpenClaw 使用麥克風來提供即時聊天、語音喚醒、按住說話及語音筆記功能。";
+"NSMicrophoneUsageDescription" = "OpenClaw 會使用麥克風進行即時聊天、語音喚醒、按住說話及語音留言。";
 /* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
-"NSMotionUsageDescription" = "OpenClaw 可能會使用動作資料，以支援感知裝置狀態的互動與自動化。";
+"NSMotionUsageDescription" = "OpenClaw 可能會使用動作資料，以支援可感知裝置狀態的互動與自動化。";
 /* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
-"NSPhotoLibraryUsageDescription" = "OpenClaw 可讓您的助理讀取您允許存取的照片，並讓您選擇要分享的照片。";
+"NSPhotoLibraryUsageDescription" = "OpenClaw 可讓您的助理讀取您允許的照片，並讓您選擇要分享的照片。";
 /* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */
-"NSRemindersFullAccessUsageDescription" = "當你啟用提醒事項存取權限時，OpenClaw 會使用你的提醒事項來列出、新增及完成任務。";
+"NSRemindersFullAccessUsageDescription" = "當您啟用提醒事項存取權時，OpenClaw 會使用您的提醒事項列出、新增及完成任務。";
 /* OpenClaw source: "OpenClaw uses on-device speech recognition for talk mode and voice wake." */
-"NSSpeechRecognitionUsageDescription" = "OpenClaw 使用裝置端語音辨識來提供對話模式和語音喚醒功能。";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw 使用裝置端語音辨識來支援對話模式和語音喚醒。";

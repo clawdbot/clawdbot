@@ -1,7 +1,7 @@
 <resources>
     <string-array name="ask_openclaw_query_patterns">
         <item>"OpenClaw\'a sor %1$s"</item>
-        <item>"OpenClaw\'a %1$s yapmasını söyle"</item>
-        <item>"OpenClaw uygulamasını aç ve %1$s sor"</item>
+        <item>"OpenClaw\'a %1$s komutunu ver"</item>
+        <item>"OpenClaw\'ı aç ve %1$s isteğini gönder"</item>
     </string-array>
 </resources>

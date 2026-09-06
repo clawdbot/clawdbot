@@ -5,26 +5,26 @@
     <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"النموذج"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عناصر التحكم"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التحدث"</string>
-    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فشل صوت الساعة"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فشل الصوت على الساعة"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إملاء"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مباشر"</string>
-    <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سلسلة محادثة"</string>
+    <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سلسلة"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"فتح المحادثة"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← اسحب →"</string>
-    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اضغط مطولًا"</string>
-    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"انقر"</string>
-    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نقر مزدوج"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعليق"</string>
+    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اضغط"</string>
+    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"انقر نقرًا مزدوجًا"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"عرض الرسائل الجديدة"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ابدأ الوضع المباشر لرؤية المحادثة هنا."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جديد"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اكتب"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"النوع"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رسالة"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مراسلة الوكيل"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إرسال"</string>
-    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحدث إلى وكيلك"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحدّث إلى وكيلك"</string>
     <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إيقاف التحدث"</string>
-    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"قراءة أحدث رد بصوت عالٍ"</string>
-    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التحدث"</string>
+    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نطق أحدث رد"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ النطق"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الاستماع"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الاتصال"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التفكير"</string>
@@ -37,7 +37,7 @@
     <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الوكيل"</string>
     <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"النظام"</string>
     <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بدء محادثة"</string>
-    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحدث أو اكتب على ساعتك. يرسل الهاتف المقترن الرسالة عبر جلسة OpenClaw الموثّقة الخاصة به."</string>
+    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحدث أو اكتب على ساعتك. يرسل الهاتف المقترن الرسالة عبر جلسة OpenClaw المصادق عليها."</string>
     <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الجلسة الحالية"</string>
     <string name="context_label_value" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
     <string name="close" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"إغلاق"</string>
@@ -53,34 +53,34 @@
     <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المظهر"</string>
     <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"داكن"</string>
     <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فاتح"</string>
-    <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"قراءة الردود بصوت عالٍ تلقائيًا"</string>
+    <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نطق الردود تلقائيًا"</string>
     <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تنبيهات الردود"</string>
-    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تفعيل التنبيهات"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تمكين التنبيهات"</string>
     <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إيقاف التشغيل"</string>
     <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح إعدادات الإشعارات"</string>
-    <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مفعّل"</string>
+    <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"قيد التشغيل"</string>
     <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"متوقف"</string>
     <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الاتصال"</string>
     <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
     <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الأمان"</string>
     <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتحكم فيه الهاتف"</string>
-    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تبقى بيانات اعتماد Gateway والهوية على الهاتف المقترن. تستخدم الساعة Wear Data Layer فقط."</string>
-    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التحقّق من الهاتف"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تظل بيانات اعتماد Gateway وهويته على الهاتف المقترن. تستخدم الساعة Wear Data Layer فقط."</string>
+    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التحقق من الهاتف"</string>
     <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ قراءة الوكلاء والجلسات والدردشة"</string>
     <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الهاتف جاهز"</string>
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم الاتصال بـ Gateway"</string>
     <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway غير متصل"</string>
-    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أعد توصيل Gateway في OpenClaw على الهاتف المقترن."</string>
+    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أعِد توصيل Gateway في OpenClaw على الهاتف المقترن."</string>
     <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح OpenClaw على الهاتف"</string>
-    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا تشغّل الساعة Gateway نفسه ولا تصادق عليه مطلقًا."</string>
-    <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتعذر الوصول إلى الهاتف"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا تشغّل الساعة Gateway أو تصادق عليه بنفسها مطلقًا."</string>
+    <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا يمكن الوصول إلى الهاتف"</string>
     <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أبقِ الهاتف المقترن قريبًا وثبّت تطبيق OpenClaw المطابق."</string>
     <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يعد التحديد متاحًا"</string>
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يُقبل الإجراء"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حدث خطأ ما"</string>
-    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حدّث القوائم وحاول مرة أخرى."</string>
-    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حاول مرة أخرى من الساعة."</string>
-    <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يلزم التحديث"</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حدِّث القوائم وحاول مرة أخرى."</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حاول مجددًا من الساعة."</string>
+    <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التحديث مطلوب"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حدّث OpenClaw على كل من الهاتف والساعة."</string>
     <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحديث"</string>
     <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إعادة المحاولة"</string>
@@ -88,9 +88,9 @@
     <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رد"</string>
     <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رد OpenClaw"</string>
     <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يُرسل الرد"</string>
-    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الهاتف غير متاح. انقر على رد للمحاولة مرة أخرى."</string>
-    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح OpenClaw للرد"</string>
-    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تغيّر هاتفك المفضّل. افتح التطبيق لإعادة تحميل الجلسة قبل الرد."</string>
+    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الهاتف غير متاح. اضغط على «رد» للمحاولة مرة أخرى."</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"افتح OpenClaw للرد"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم تغيير هاتفك المفضّل. افتح التطبيق لإعادة تحميل الجلسة قبل الرد."</string>
     <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
     <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"افتح الجلسات وردّ عبر هاتفك المقترن"</string>
     <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح"</string>
@@ -104,21 +104,21 @@
     <string name="pulse_refreshing" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"جارٍ التحديث"</string>
     <string name="pulse_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"غير متاح"</string>
     <string name="pulse_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"جارٍ تحميل Pulse"</string>
-    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"جارٍ قراءة بيانات مجمّعة محدودة النطاق من الهاتف المقترن."</string>
+    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"جارٍ قراءة البيانات المجمّعة المحدودة من الهاتف المقترن."</string>
     <string name="pulse_queued" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"في قائمة الانتظار"</string>
     <string name="pulse_running" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"قيد التشغيل"</string>
     <string name="pulse_completed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"مكتمل"</string>
     <string name="pulse_done" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"تم"</string>
     <string name="pulse_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"فشل"</string>
     <string name="pulse_groups" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"المجموعات"</string>
-    <string name="pulse_pending_requests" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"الطلبات المعلّقة"</string>
+    <string name="pulse_pending_requests" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"الطلبات المعلقة"</string>
     <string name="pulse_task_snapshot_bounded" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"لقطة محدودة للنشاط الحالي والأخير"</string>
     <string name="pulse_active_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"بلغت قائمة المهام النشطة حدها الأقصى"</string>
     <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"بلغت قائمة المهام الأخيرة حدها الأقصى"</string>
     <string name="pulse_swarm_active" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"نشط"</string>
     <string name="pulse_swarm_idle" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"خامل"</string>
     <string name="pulse_phase" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"المرحلة %1$d"</string>
-    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"في قائمة الانتظار %1$d, قيد التشغيل %2$d, مكتمل %3$d, فاشل %4$d, مخفي %5$d"</string>
-    <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"مراحل إضافية غير معروضة"</string>
+    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"في قائمة الانتظار %1$d، قيد التشغيل %2$d، مكتمل %3$d، فاشل %4$d، مخفي %5$d"</string>
+    <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"مراحل أخرى غير معروضة"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"غير معروف"</string>
 </resources>
