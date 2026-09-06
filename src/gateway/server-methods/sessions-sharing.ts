@@ -200,7 +200,8 @@ function knownSessionIdentities(params: {
     remember(params.actor.actor);
   }
   for (const entry of Object.values(loadCombinedSessionStoreForGatewayCore(params.cfg).store)) {
-    remember(entry.createdActor ?? null);
+    const creator = entry.createdActor;
+    remember(creator?.type === "human" && creator.source === "profile" ? creator : null);
   }
   for (const profile of listProfiles()) {
     remember({
