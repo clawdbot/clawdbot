@@ -158,6 +158,8 @@ Automation jobs, pending runtime state, and run history live in the shared SQLit
 
 ### Manual runs
 
+Manually running a disabled job does not enable its schedule or create automatic retries. Use `openclaw automations enable <job-id>` to resume scheduled runs.
+
 `openclaw automations run <job-id>` force-runs by default and returns as soon as the manual run is queued. Successful responses include `{ ok: true, enqueued: true, runId }`. Use the returned `runId` to inspect the later result:
 
 ```bash

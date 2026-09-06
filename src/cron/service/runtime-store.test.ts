@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
@@ -25,7 +26,6 @@ import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronStoredJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
-import { createCronServiceState } from "./state.js";
 import { armTimer } from "./timer.js";
 
 const runtimeStoreFixtures = setupCronRegressionFixtures({ prefix: "cron-runtime-store-" });
@@ -75,12 +75,8 @@ describe("cron runtime row publication", () => {
     const before = database
       .prepare("SELECT * FROM cron_jobs WHERE store_key = ? ORDER BY sort_order")
       .all(storeKey);
-    const state = createCronServiceState({
+    const state = createCronRegressionState({
       storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     // A large missing-ID set must not hit SQLite's bound-parameter limit or widen the read.
@@ -276,13 +272,9 @@ describe("cron runtime row publication", () => {
       nowMs: now,
       nextRunAtMs: now + 60_000,
     });
-    const state = createCronServiceState({
+    const state = createCronRegressionState({
       storePath: "/tmp/runtime-store-import.json",
-      cronEnabled: true,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     state.store = { version: 1, jobs: [resident] };

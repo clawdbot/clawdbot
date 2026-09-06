@@ -5,10 +5,15 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { runDaemonInstall } from "../daemon-cli/install.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
-import { isPackageManagerUpdateMode } from "./update-command-service-recovery.js";
 
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 export const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*/;
+
+export function isPackageManagerUpdateMode(
+  mode: UpdateRunResult["mode"],
+): mode is "npm" | "pnpm" | "bun" {
+  return mode === "npm" || mode === "pnpm" || mode === "bun";
+}
 
 function formatCommandFailure(stdout: string, stderr: string): string {
   // Keep the stable denial even when JSON stdout accompanies unrelated stderr warnings.
@@ -31,18 +36,21 @@ export async function runUpdatedInstallGatewayCommand(
     nodeRunner?: string;
     timeoutMs?: number;
     invocationCwd?: string;
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
   },
   action: "install" | "restart",
   preserveDefinition = false,
 ): Promise<boolean> {
+  params.signal?.throwIfAborted();
   const installing = action === "install";
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
   if (!entrypoint) {
-    if (installing) {
-      if (!isPackageManagerUpdateMode(params.result.mode ?? "unknown")) {
-        await runDaemonInstall({ force: true, json: params.opts.json || undefined });
-        return true;
-      }
+    if (installing && !isPackageManagerUpdateMode(params.result.mode ?? "unknown")) {
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
+      await runDaemonInstall({ force: true, json: params.opts.json || undefined });
+      return true;
     }
     throw new Error(
       `updated install entrypoint not found under ${params.result.root ?? "unknown"}`,
@@ -58,20 +66,25 @@ export async function runUpdatedInstallGatewayCommand(
     args.push("--json");
   }
   const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
+  const commandEnv = resolveUpdatedInstallCommandEnv({
+    processEnv: installing
+      ? (params.serviceInstallEnv ?? params.invocationEnv)
+      : params.invocationEnv,
+    serviceEnv: installing ? undefined : params.serviceEnv,
+    invocationCwd: params.invocationCwd,
+  });
+  params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   const res = await runCommandWithTimeout([nodeRunner, entrypoint, ...args], {
     // The complete owned env must not regain selectors removed during capture.
     baseEnv: {},
     cwd: params.result.root,
-    env: resolveUpdatedInstallCommandEnv({
-      processEnv: installing
-        ? (params.serviceInstallEnv ?? params.invocationEnv)
-        : params.invocationEnv,
-      serviceEnv: installing ? undefined : params.serviceEnv,
-      invocationCwd: params.invocationCwd,
-    }),
+    env: commandEnv,
     // Restart owns migration-aware readiness; only refresh has the fixed watchdog.
     timeoutMs: installing ? SERVICE_REFRESH_TIMEOUT_MS : params.timeoutMs,
+    ...(params.signal ? { signal: params.signal, killProcessTree: true } : {}),
   });
+  params.signal?.throwIfAborted();
   if (res.code === 0) {
     return true;
   }

@@ -615,7 +615,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       );
   }
 
-  protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): Promise<void>;
+  protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): boolean;
   protected abstract commitSidebarLayout(layout: SidebarLayout): void;
   protected abstract refreshSwarmRoster(): void;
   protected abstract resolveBoardProvider(): BoardProvider;

@@ -56,7 +56,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
-  agentDatabaseLog as agentDbLog,
+  startAgentDatabaseOpenTiming,
   closeCachedOpenClawAgentDatabase,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabases,
@@ -126,15 +126,6 @@ export {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-
-/**
- * Per-agent SQLite database lifecycle and shared-state registration.
- *
- * Each opened agent database is schema-owned by one normalized agent id, cached
- * per pathname, protected with private file modes, and registered in the shared
- * OpenClaw state database for discovery and maintenance.
- */
-const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
 
 export class IncognitoAgentDatabasePathCollisionError extends Error {
   readonly path: string;
@@ -429,7 +420,7 @@ function* openOpenClawAgentDatabaseSteps(
         env: leaseEnvironment,
       });
   }
-  const openStartedAt = Date.now();
+  const finishPhase = startAgentDatabaseOpenTiming(agentId, pathname);
   let openedDb: DatabaseSync | undefined;
   let openedDatabase: OpenClawAgentDatabase | undefined;
   let openedWalMaintenance: SqliteWalMaintenance | undefined;
@@ -444,6 +435,7 @@ function* openOpenClawAgentDatabaseSteps(
     db.enableLoadExtension(false);
     enableNodeSqliteKyselyStatementCache(db);
     openedDb = db;
+    finishPhase("open");
     // Eviction churn must avoid migration/convergence and registry busy waits.
     // Version and owner can change while evicted, so their read-only gates run on every open.
     let isValidatedReopen = getValidatedOpenClawAgentDatabaseOwner(pathname) === agentId;
@@ -468,6 +460,7 @@ function* openOpenClawAgentDatabaseSteps(
           isValidatedReopen = false;
         }
         assertCanonicalAgentPersistenceVersion(db, pathname);
+        finishPhase("validation");
         configureSqlitePreSchemaPragmas(db, {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         });
@@ -479,9 +472,11 @@ function* openOpenClawAgentDatabaseSteps(
           synchronous: "NORMAL",
         });
         openedWalMaintenance = maintenance;
+        finishPhase("configuration");
         if (!isValidatedReopen) {
           ensureOpenClawAgentSchema(db, agentId, pathname);
         }
+        finishPhase("schema");
         return maintenance;
       } catch (err) {
         maintenance?.close();
@@ -527,15 +522,7 @@ function* openOpenClawAgentDatabaseSteps(
     // Safety net for processes that end without an orderly close: agent DBs have
     // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
-    const elapsedMs = Date.now() - openStartedAt;
-    if (elapsedMs >= OPENCLAW_AGENT_DB_SLOW_OPEN_MS) {
-      agentDbLog.warn("slow OpenClaw agent database open", {
-        agentId,
-        elapsedMs,
-        path: pathname,
-        thresholdMs: OPENCLAW_AGENT_DB_SLOW_OPEN_MS,
-      });
-    }
+    finishPhase("registration");
     cache.leases.set(pathname, { leaseId, env: leaseEnvironment });
     cache.databases.set(pathname, database);
     return database;

@@ -128,6 +128,7 @@
   "provider-stream-family",
   "provider-stream-shared",
   "provider-test-contracts",
+  "provider-thinking-runtime",
   "provider-tools",
   "provider-transport-runtime",
   "provider-usage",

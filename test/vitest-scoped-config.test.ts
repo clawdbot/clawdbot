@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { minimatch } from "minimatch";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
@@ -287,6 +288,12 @@ describe("createScopedVitestConfig", () => {
       includePattern: "extensions/**/*.test.ts",
       target: "extensions/browser/index.test.ts",
       expectedInclude: "browser/index.test.ts",
+    },
+    {
+      title: "keeps explicitly selected files owned by negative extglobs",
+      includePattern: "extensions/*/browser/**/!(*.browser).test.ts",
+      target: "extensions/example/browser/view.test.ts",
+      expectedInclude: "example/browser/view.test.ts",
     },
     {
       title: "narrows scoped includes to matching dot-prefixed CLI file filters",
@@ -1162,7 +1169,7 @@ describe("scoped vitest configs", () => {
       ["extensions/workboard/browser/native.browser.test.ts", false],
     ] as const) {
       expect(
-        testConfig.include?.some((pattern) => path.matchesGlob(file, pattern)),
+        testConfig.include?.some((pattern) => minimatch(file, pattern)),
         file,
       ).toBe(included);
     }

@@ -3,21 +3,21 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   buildBundleMcpToolsFromCatalog,
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
-import type {
-  McpCatalogTool,
-  McpToolCatalogDiagnostic,
-  SessionMcpRuntime,
-} from "./agent-bundle-mcp-types.js";
+import { makeToolRuntime } from "./agent-bundle-mcp-tools.test-support.js";
+import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
+import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 import { isToolResultError } from "./tool-result-error.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
@@ -26,71 +26,6 @@ function expectTextContentBlock(block: unknown, text: string) {
   const content = block as { type?: string; text?: string } | undefined;
   expect(content?.type).toBe("text");
   expect(content?.text).toBe(text);
-}
-
-function makeToolRuntime(
-  params: {
-    tools?: McpCatalogTool[];
-    serverName?: string;
-    result?: CallToolResult;
-    resultText?: string;
-    diagnostics?: readonly McpToolCatalogDiagnostic[];
-    supportsParallelToolCalls?: boolean;
-  } = {},
-): SessionMcpRuntime {
-  const serverName = params.serverName ?? "bundleProbe";
-  const tools = params.tools ?? [
-    {
-      serverName,
-      safeServerName: serverName,
-      toolName: "bundle_probe",
-      description: "Bundle probe",
-      inputSchema: { type: "object", properties: {} },
-      fallbackDescription: "Bundle probe",
-    },
-  ];
-  return {
-    sessionId: "session-collision",
-    workspaceDir: "/tmp",
-    configFingerprint: "fingerprint",
-    createdAt: 0,
-    lastUsedAt: 0,
-    markUsed: () => {},
-    getCatalog: async () => ({
-      version: 1,
-      generatedAt: 0,
-      servers: {
-        [serverName]: {
-          serverName,
-          launchSummary: serverName,
-          toolCount: tools.length,
-          supportsParallelToolCalls: params.supportsParallelToolCalls ?? false,
-        },
-      },
-      tools,
-      ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
-    }),
-    peekCatalog: () => ({
-      version: 1,
-      generatedAt: 0,
-      servers: {
-        [serverName]: {
-          serverName,
-          launchSummary: serverName,
-          toolCount: tools.length,
-          supportsParallelToolCalls: params.supportsParallelToolCalls ?? false,
-        },
-      },
-      tools,
-      ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
-    }),
-    callTool: async () =>
-      params.result ?? {
-        content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
-        isError: false,
-      },
-    dispose: async () => {},
-  };
 }
 
 async function executeMcpToolResult(result: CallToolResult) {
@@ -109,6 +44,150 @@ describe("createBundleMcpToolRuntime", () => {
   afterEach(() => {
     mcpUiResourceTesting.clearViewStore();
   });
+
+  it("joins concurrent disposal without releasing the captured lease twice", async () => {
+    const closing = createDeferred();
+    const started = createDeferred();
+    const releaseLease = vi.fn();
+    const runtime = makeToolRuntime();
+    runtime.acquireLease = () => releaseLease;
+    const disposeRuntime = vi.fn(async () => {
+      started.resolve();
+      await closing.promise;
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime, disposeRuntime });
+    const first = materialized.dispose();
+    await started.promise;
+    let joined = false;
+    const second = materialized.dispose().then(() => {
+      joined = true;
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(joined).toBe(false);
+      expect(releaseLease).toHaveBeenCalledOnce();
+    } finally {
+      closing.resolve();
+      await Promise.all([first, second]);
+    }
+    expect(disposeRuntime).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { kind: "single", failureAt: "join" },
+    { kind: "combined", failureAt: "join" },
+    { kind: "combined", failureAt: "synchronous-join" },
+    { kind: "combined", failureAt: "dispose" },
+    { kind: "combined", failureAt: "synchronous-dispose" },
+  ] as const)(
+    "replays a $kind owner's $failureAt failure in each final caller",
+    async ({ kind, failureAt }) => {
+      const failed = makeToolRuntime();
+      const sibling = makeToolRuntime();
+      sibling.dispose = vi.fn(async () => {});
+      sibling.joinCleanup = vi.fn(async () => {});
+      const failure = new Error("cleanup owner lost");
+      const failingCleanup = failureAt.startsWith("synchronous")
+        ? vi.fn(() => {
+            throw failure;
+          })
+        : vi.fn(async () => {
+            throw failure;
+          });
+      const disposing = failureAt.endsWith("dispose");
+      if (disposing) {
+        failed.dispose = failingCleanup;
+      } else {
+        failed.joinCleanup = failingCleanup;
+      }
+      const runtime =
+        kind === "single"
+          ? failed
+          : createCombinedSessionMcpRuntime({
+              sessionId: failed.sessionId,
+              workspaceDir: failed.workspaceDir,
+              parts: [failed, sibling],
+            });
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      if (disposing) {
+        // The physical failure predates both final callers' cleanup contexts.
+        await runtime.dispose();
+        await runtime.dispose();
+        expect(failingCleanup).toHaveBeenCalledOnce();
+        expect(sibling.dispose).toHaveBeenCalledOnce();
+      }
+      for (let index = 0; index < 2; index += 1) {
+        const cleanupScope = createAgentCleanupScope();
+        await cleanupScope.run(async () => {
+          await expect(materialized.dispose()).rejects.toBe(failure);
+        });
+        expect(cleanupScope.outcome).toBe("uncertain");
+      }
+      if (kind === "combined") {
+        expect(sibling.joinCleanup).toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("keeps an unreported shared cleanup owner uncertain without closing its peers", async () => {
+    const runtime = makeToolRuntime();
+    delete runtime.joinCleanup;
+    const dispose = vi.spyOn(runtime, "dispose");
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const cleanupScope = createAgentCleanupScope();
+    await cleanupScope.run(() => materialized.dispose());
+    expect(cleanupScope.outcome).toBe("uncertain");
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { failureAt: "catalog", cleanupFault: "dispose", outcome: "uncertain" },
+    { failureAt: "catalog", cleanupFault: "release", outcome: "uncertain" },
+    { failureAt: "acquire", cleanupFault: "none", outcome: "closed" },
+    { failureAt: "dispose", cleanupFault: "release", outcome: "uncertain" },
+  ] as const)(
+    "settles every private cleanup step after $failureAt fails ($cleanupFault)",
+    async ({ failureAt, cleanupFault, outcome }) => {
+      const runtime = makeToolRuntime();
+      const cause = new Error("preparation failed");
+      const releaseFailure = new Error("lease release failed");
+      if (failureAt === "catalog") {
+        runtime.getCatalog = vi.fn().mockRejectedValue(cause);
+      }
+      runtime.acquireLease = () => {
+        if (failureAt === "acquire") {
+          throw cause;
+        }
+        return () => {
+          if (cleanupFault === "release") {
+            throw releaseFailure;
+          }
+        };
+      };
+      runtime.dispose =
+        cleanupFault === "dispose"
+          ? vi.fn().mockRejectedValue(new Error("cleanup failed"))
+          : vi.fn(async () => {});
+      runtime.joinCleanup = vi.fn(async () => {});
+      const cleanupScope = createAgentCleanupScope();
+      await cleanupScope.run(async () => {
+        await expect(
+          (async () => {
+            const materialized = await createBundleMcpToolRuntime({
+              workspaceDir: "/tmp",
+              createRuntime: () => runtime,
+            });
+            await materialized.dispose();
+          })(),
+        ).rejects.toBe(failureAt === "dispose" ? releaseFailure : cause);
+      });
+      expect(runtime.dispose).toHaveBeenCalledOnce();
+      expect(runtime.joinCleanup).toHaveBeenCalledOnce();
+      expect(cleanupScope.outcome).toBe(outcome);
+    },
+  );
 
   it("keeps app-only MCP tools out of the model tool catalog", async () => {
     const runtime = await materializeBundleMcpToolsForRun({

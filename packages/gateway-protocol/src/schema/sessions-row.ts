@@ -18,6 +18,11 @@ export const SessionPermissionModeSchema = Type.Union([
   Type.Literal("full"),
 ]);
 
+export const SessionRepositorySourceSchema = closedObject({
+  url: Type.String({ minLength: 1, maxLength: 2048 }),
+  ref: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
+});
+
 export const SessionRunStatusSchema = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
@@ -158,6 +163,13 @@ export const SessionRowSchema = Type.Object(
         id: Type.String(),
         branch: Type.String(),
         repoRoot: Type.String(),
+      }),
+    ),
+    repositoryWorkspaceId: Type.Optional(NonEmptyString),
+    repository: Type.Optional(
+      closedObject({
+        ...SessionRepositorySourceSchema.properties,
+        branch: NonEmptyString,
       }),
     ),
     execNode: Type.Optional(Type.String()),

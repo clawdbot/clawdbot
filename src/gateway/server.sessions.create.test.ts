@@ -2175,7 +2175,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
     const successorWorktree = successor.payload!.worktree;
     successorWorktreeId = successorWorktree.id;
     expect(successorWorktree.id).not.toBe(failedWorktreeId);
-    await expect(fs.access(successorWorktree.path)).resolves.toBeUndefined();
+    await fs.access(successorWorktree.path);
     expect(loadSessionEntry({ sessionKey: key, storePath })?.worktree).toEqual({
       id: successorWorktree.id,
       branch: successorWorktree.branch,
@@ -3763,7 +3763,7 @@ test.each([
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("retained-dirty"));
       } else if (outcome === "failed") {
         expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
-        await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+        await fs.access(worktree.path);
         expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
           "failed to finalize session worktree lifecycle: simulated cleanup failure",
         );
@@ -3915,7 +3915,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     const successorWorktree = successor.payload!.worktree;
     expect(successorWorktree.id).not.toBe(worktree?.id);
     worktreeId = successorWorktree.id;
-    await expect(fs.access(successorWorktree.path)).resolves.toBeUndefined();
+    await fs.access(successorWorktree.path);
     expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
       spawnedCwd: successorWorktree.path,
       worktree: {

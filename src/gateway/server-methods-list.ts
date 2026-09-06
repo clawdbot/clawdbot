@@ -8,17 +8,11 @@ import {
   GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
 import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-descriptors.js";
-import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
 
 type GatewayMethodChannelPlugin = {
   gatewayMethods?: readonly string[];
   gatewayMethodDescriptors?: readonly { name: string }[];
 };
-
-/** Lists core methods intentionally advertised to gateway clients. */
-function listCoreGatewayMethods(): string[] {
-  return listCoreAdvertisedGatewayMethodNames();
-}
 
 function listChannelGatewayMethods(): string[] {
   const methods: string[] = [];
@@ -36,7 +30,7 @@ function listChannelGatewayMethods(): string[] {
 /** Returns the de-duplicated gateway method catalog advertised through method-list APIs. */
 export function listGatewayMethods(): string[] {
   return Array.from(
-    new Set([...listCoreGatewayMethods(), ...GATEWAY_AUX_METHODS, ...listChannelGatewayMethods()]),
+    new Set([...listCoreAdvertisedGatewayMethodNames(), ...listChannelGatewayMethods()]),
   );
 }
 

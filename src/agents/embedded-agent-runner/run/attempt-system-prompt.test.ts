@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 // Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
@@ -93,16 +94,19 @@ async function preparePermissionPrompt(
       workspaceNotes: [],
     },
     capabilityToolNames,
-    effectiveCwd: "/tmp/openclaw",
     effectiveTools: tools,
-    effectiveWorkspace: "/tmp/openclaw",
-    getProviderRuntimeHandle: () => ({ provider: attempt.provider, modelId: attempt.modelId }),
+    setup: createAttemptSetupFixture({
+      effectiveCwd: "/tmp/openclaw",
+      effectiveWorkspace: "/tmp/openclaw",
+      getProviderRuntimeHandle: () => ({
+        provider: attempt.provider,
+        modelId: attempt.modelId,
+        prepared: true,
+      }),
+      sandboxSessionKey: attempt.sessionKey!,
+    }),
     isRawModelRun,
-    markStage: vi.fn(),
     modelToolsEnabled: true,
-    proactiveSubagentOrchestration: false,
-    sandboxSessionKey: attempt.sessionKey!,
-    sessionAgentId: "main",
     skillsPrompt: "",
     toolSearchDirectoryEnabled: false,
     toolSearchRuntimeConfig: attempt.config,
@@ -169,18 +173,21 @@ describe("buildAttemptSystemPrompt", () => {
         } as never,
         activeContextEngine: undefined,
         capabilityToolNames: new Set(),
-        effectiveCwd: workspaceDir,
         effectiveTools: [],
-        effectiveWorkspace: workspaceDir,
-        // Attempt setup binds even an absent provider plugin to the selected model.
-        // Omitting that binding makes this policy test rediscover runtime plugins.
-        getProviderRuntimeHandle: () => ({ provider: attempt.provider, modelId: attempt.modelId }),
+        setup: createAttemptSetupFixture({
+          effectiveCwd: workspaceDir,
+          effectiveWorkspace: workspaceDir,
+          // Preserve the prepared model binding instead of discovering provider plugins.
+          getProviderRuntimeHandle: () => ({
+            provider: attempt.provider,
+            modelId: attempt.modelId,
+            prepared: true,
+          }),
+          sandboxSessionKey: testCase.sandboxSessionKey,
+          sessionAgentId: "marketing",
+        }),
         isRawModelRun: true,
-        markStage: vi.fn(),
         modelToolsEnabled: false,
-        proactiveSubagentOrchestration: false,
-        sandboxSessionKey: testCase.sandboxSessionKey,
-        sessionAgentId: "marketing",
         skillsPrompt: "",
         toolSearchDirectoryEnabled: false,
         toolSearchRuntimeConfig: config,
@@ -257,10 +264,11 @@ describe("buildAttemptSystemPrompt", () => {
   it("does not invoke ambient contributors during settled finalization", async () => {
     const getProviderRuntimeHandle = vi.fn();
     const markStage = vi.fn();
+    const setup = createAttemptSetupFixture({ getProviderRuntimeHandle });
+    setup.prepStages.mark = markStage;
     const result = await prepareEmbeddedAttemptSystemPrompt({
       attempt: { operation: "settled-tool-finalization" },
-      getProviderRuntimeHandle,
-      markStage,
+      setup,
     } as never);
 
     expect(result.systemPromptText).toBe("");

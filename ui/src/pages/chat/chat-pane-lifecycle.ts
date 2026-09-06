@@ -630,7 +630,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.setTaskSuggestions([]);
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
-    this.resetTaskSuggestionCloudProfiles();
     this.resetSessionSuggestions();
     this.clearTypingActors();
     this.resetSessionPullRequests();

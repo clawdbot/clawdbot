@@ -500,7 +500,7 @@ describe("opencode-go provider plugin", () => {
     }
   });
 
-  it("caches both catalog requests and falls back to trusted seeds on failure", async () => {
+  it("caches both catalog requests without concealing later acquisition failure", async () => {
     const liveIds = ["minimax-m3", "qwen3.7-max", "qwen3.7-plus"];
     const fetchGuard = createCatalogFetchGuard({
       upstreamModels: Object.fromEntries(liveIds.map((id) => [id, upstreamModel(id)])),
@@ -525,15 +525,13 @@ describe("opencode-go provider plugin", () => {
 
     clearLiveCatalogCacheForTests();
     fetchGuard.mockRejectedValue(new Error("network unavailable"));
-    const fallback = await buildOpencodeGoLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
-    expect(fallback.apiKey).toBe("OPENCODE_API_KEY");
-    expect(fallback.models.map((model) => model.id).toSorted()).toEqual(
-      ACTIVE_MODEL_IDS.toSorted(),
-    );
+    await expect(
+      buildOpencodeGoLiveProviderConfig({
+        apiKey: "OPENCODE_API_KEY",
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      }),
+    ).rejects.toThrow("network unavailable");
   });
 
   it.each([
@@ -541,7 +539,7 @@ describe("opencode-go provider plugin", () => {
     ["retired seed", "filtered"],
     ["activated preview", "failed"],
   ] as const)(
-    "uses refreshed %s lifecycle on the first fallback after %s model advertising",
+    "keeps refreshed %s metadata separate from %s model advertising",
     async (lifecycle, advertising) => {
       const retired = lifecycle === "retired seed";
       const modelId = retired ? "deepseek-v4-pro" : "hy3-preview";
@@ -562,19 +560,17 @@ describe("opencode-go provider plugin", () => {
         expect(buildStaticOpencodeGoProviderConfig().models.map((model) => model.id)).toEqual(
           ACTIVE_MODEL_IDS,
         );
-        const fallback = await buildOpencodeGoLiveProviderConfig({
+        const discovery = buildOpencodeGoLiveProviderConfig({
           apiKey: "runtime-key",
           discoveryApiKey: "discovery-key",
           fetchGuard,
         });
 
-        expect(fallback.apiKey).toBe("runtime-key");
-        expect(fallback.models.map((model) => model.id).toSorted()).toEqual(
-          (retired
-            ? ACTIVE_MODEL_IDS.filter((id) => id !== modelId)
-            : [...ACTIVE_MODEL_IDS, modelId]
-          ).toSorted(),
-        );
+        if (advertising === "failed") {
+          await expect(discovery).rejects.toThrow("model advertising unavailable");
+        } else {
+          await expect(discovery).resolves.toMatchObject({ models: [] });
+        }
         expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({
           id: modelId,
         });

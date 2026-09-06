@@ -183,6 +183,9 @@ export function createFixture(
     "src/worker/worker-deploy-browser-runtime.ts",
     "extensions/browser/src/browser/playwright-core.runtime.ts",
     "src/infra/net/undici-dispatcher-options.ts",
+    "packages/gateway-client/src/websocket.ts",
+    "src/gateway/server-runtime-state.ts",
+    "src/realtime-transcription/websocket-session.ts",
   ]) {
     write(source, "export {};\n");
   }

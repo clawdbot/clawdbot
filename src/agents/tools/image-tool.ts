@@ -1041,13 +1041,7 @@ export function createImageTool(options?: {
           throw new Error(`Unsupported media type: ${media.kind}`);
         }
 
-        const contentType =
-          "contentType" in media && typeof media.contentType === "string"
-            ? media.contentType
-            : undefined;
-        const legacyMimeType =
-          "mimeType" in media && typeof media.mimeType === "string" ? media.mimeType : undefined;
-        const mimeType = contentType ?? legacyMimeType ?? "image/png";
+        const mimeType = media.contentType ?? "image/png";
         loadedImages.push({
           buffer: media.buffer,
           mimeType,

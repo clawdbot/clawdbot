@@ -290,7 +290,7 @@ export class DraftPlaceBrowser {
     const serverRecents = this.projectRecentsValue?.filter((recent) =>
       recent.kind === "project"
         ? this.projectsValue.some((project) => project.id === recent.projectId)
-        : !recent.execNode && allowGatewayFolder(recent.folder),
+        : recent.kind === "repository" || (!recent.execNode && allowGatewayFolder(recent.folder)),
     );
     return (
       serverRecents ??

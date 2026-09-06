@@ -425,13 +425,14 @@ function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
+    const runId = params.cronSession.sessionEntry.sessionId;
     const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
+      identity: { runId, sessionId: runId },
       config: params.cfgWithAgentDefaults,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     });
     let acceptedContextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
-    const runId = params.cronSession.sessionEntry.sessionId;
     const basePreparedRunAdmission = prepareAgentRunAdmission({
       operationalRunInstance: createOperationalRunInstanceRef(runId),
       cfg: params.cfgWithAgentDefaults,
@@ -573,6 +574,7 @@ function createCronPromptExecutor(
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({
             cfg: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
             provider: providerOverride,
             model: modelOverride,
           });
@@ -595,6 +597,7 @@ function createCronPromptExecutor(
           candidateConfiguredThinkLevel ??
           resolveThinkingDefault({
             cfg: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
             provider: providerOverride,
             model: modelOverride,
             catalog: thinkingCatalog,

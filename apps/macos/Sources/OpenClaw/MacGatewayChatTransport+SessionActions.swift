@@ -79,36 +79,10 @@ extension MacGatewayChatTransport {
             ifCurrentServerLease: serverLease)
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            patchSession: { key, expectedID, expectedMarkedUnreadAt, label, category, color, pinned, archived, unread in
-                guard unread != false || unreadAckContract != nil else {
-                    throw OpenClawChatTransportSendError.notDispatched
-                }
-                let target = transport.sessionTarget(for: key)
-                let request = OpenClawChatGatewayRequests.patchSession(
-                    sessionKey: target.sessionKey,
-                    agentID: target.agentID,
-                    expectedSessionID: expectedID,
-                    label: label,
-                    category: category,
-                    color: color,
-                    pinned: pinned,
-                    archived: archived,
-                    unreadPatch: .routed(
-                        unread: unread,
-                        expectedMarkedUnreadAt: expectedMarkedUnreadAt,
-                        supportsReadContract: unreadAckContract == true))
-                _ = try await self.connection.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
-                    ifCurrentServerLease: serverLease)
-            },
-            deleteSession: { key in
-                let target = transport.sessionTarget(for: key)
-                let request = OpenClawChatGatewayRequests.deleteSession(
-                    sessionKey: target.sessionKey,
-                    agentID: target.agentID)
-                _ = try await self.connection.request(
+            sessionTarget: { transport.sessionTarget(for: $0) },
+            unreadAckContract: unreadAckContract,
+            request: { request in
+                try await self.connection.request(
                     method: request.method,
                     params: request.params,
                     timeoutMs: request.timeoutMs,
