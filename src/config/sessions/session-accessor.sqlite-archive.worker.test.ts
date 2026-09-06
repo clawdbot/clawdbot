@@ -172,7 +172,7 @@ describe("SQLite transcript archive worker", () => {
     const archivedSessions = [0, 1].map((index) => ({
       event: createTranscriptEvent(`worker-byte-session-${index}`, `${index}:${largeContent}`),
       sessionId: `worker-byte-session-${index}`,
-      sessionKey: `agent:main:worker-byte-${index}`,
+      sessionKey: `agent:main:subagent:worker-byte-${index}`,
     }));
     for (const [index, session] of archivedSessions.entries()) {
       await replaceSessionEntry(
@@ -186,7 +186,7 @@ describe("SQLite transcript archive worker", () => {
     }
     const retainedSession = {
       sessionId: "worker-byte-session-retained",
-      sessionKey: "agent:main:worker-byte-retained",
+      sessionKey: "agent:main:subagent:worker-byte-retained",
     };
     await replaceSessionEntry(
       { sessionKey: retainedSession.sessionKey, storePath },

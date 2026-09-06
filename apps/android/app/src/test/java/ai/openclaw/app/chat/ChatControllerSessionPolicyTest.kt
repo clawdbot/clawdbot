@@ -169,7 +169,7 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
-  fun compactionSnapshotUpdatesContextAndPreservesLatestRunUsage() {
+  fun partialContextUpdatePreservesLatestRunUsage() {
     val existing =
       ChatSessionEntry(
         key = "agent:main:phone",
@@ -228,7 +228,7 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
-  fun sessionSnapshotWithoutUsagePreservesKnownTotals() {
+  fun partialSessionUpdateWithoutUsagePreservesKnownTotals() {
     val existing =
       ChatSessionEntry(
         key = "agent:main:phone",

@@ -96,6 +96,11 @@ Retained compatibility entrypoints keep their shipped caller names:
 `resolvePluginProviders`, and `agent-runtime`'s
 `resolveThinkingDefaultWithRuntimeCatalog` accepts `loadModelCatalog`.
 
+`text-chunking` retains positional `CodeRegion` inputs with `start` and `end`
+offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
+include parser-owned `block` metadata; callers supplying their own ranges do not
+need to provide it.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from
@@ -140,9 +145,20 @@ next Plugin SDK major.
 
 ### Plugin state migration declarations
 
-Plugins should declare `doctorContract.stateMigrations: true` in
-`openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
-artifact. Plan-based migrations can use
+Bundled plugins should list every migration under
+`doctorContract.stateMigrations` in `openclaw.plugin.json` and export the
+matching `stateMigrations` array from their doctor-contract artifact. Keep the
+IDs, order, `doctorOnly` flags, and phases identical. Read-only Doctor planning
+uses candidate-bundled descriptors to record exact plugin owners without
+loading the plugin.
+
+Installed external plugin artifacts are not part of the copied-state or
+candidate content identity. Copied-state planning refuses their migrations,
+including manifests that contain descriptor arrays, until candidate validation
+binds those artifacts separately. The legacy value `true` continues to locate
+their dynamic contract for non-planning Doctor flows.
+
+Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
@@ -1257,14 +1273,15 @@ until the next Plugin SDK major.
 
 | Removal gate            | Tier                               | SDK subpaths                                                                                                                                                                        |
 | ----------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `2026-09-01`            | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                 |
+| `2026-10-01`            | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                 |
 | `next-plugin-sdk-major` | Major-version compatibility gate   | `inbound-reply-dispatch`                                                                                                                                                            |
 | `2026-10-01`            | Media legacy projection            | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |
 
 The five September 1 subpaths remain available in 2026.8.2 under an approved
 retention exception; that release’s registry still labels them `deprecated`.
-The post-release registry marks them `removal-pending`, preserving their original
-`2026-09-01` removal target and replacement mappings. Removal awaits verification
+For 2026.9.1, the release maintainer approved renewing their `removeAfter` date
+from `2026-09-01` to `2026-10-01` on September 2, 2026. The registry keeps them
+`removal-pending` with the same replacement mappings. Removal awaits verification
 that supported external plugins have migrated. `infra-runtime` additionally retains
 system-event snapshot inspection and consumption until a modern public replacement
 exists. This changes compatibility tracking only, not the exported SDK or runtime

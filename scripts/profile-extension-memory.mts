@@ -19,6 +19,7 @@ import {
   findBuiltExtensionMemoryEntries,
 } from "./ensure-extension-memory-build.mts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import { appendBoundedTail } from "./lib/bounded-output-tail.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
@@ -173,21 +174,6 @@ function createOutputCapture(): OutputCapture {
   return { text: "", truncatedChars: 0 };
 }
 
-function appendBoundedOutput(
-  capture: OutputCapture,
-  chunk: unknown,
-  maxChars = OUTPUT_CAPTURE_MAX_CHARS,
-): OutputCapture {
-  const nextText = capture.text + String(chunk);
-  if (nextText.length <= maxChars) {
-    return capture.truncatedChars === 0
-      ? { text: nextText, truncatedChars: 0 }
-      : { text: nextText, truncatedChars: capture.truncatedChars };
-  }
-  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
-  return { text: nextText.slice(-maxChars), truncatedChars };
-}
-
 function formatCapturedOutput(capture: OutputCapture): string {
   if (capture.truncatedChars === 0) {
     return capture.text;
@@ -280,13 +266,13 @@ export async function runCase({
     }
 
     child.stdout.on("data", (chunk) => {
-      stdout = appendBoundedOutput(stdout, chunk);
+      stdout = appendBoundedTail(stdout, chunk, OUTPUT_CAPTURE_MAX_CHARS);
     });
     child.stderr.on("data", (chunk) => {
       const rssScan = scanMaxRssMb(stderrRssTail, chunk, maxRssMb);
       stderrRssTail = rssScan.tail;
       maxRssMb = rssScan.maxRssMb;
-      stderr = appendBoundedOutput(stderr, chunk);
+      stderr = appendBoundedTail(stderr, chunk, OUTPUT_CAPTURE_MAX_CHARS);
     });
     child.on("error", (error) => {
       const stderrText = formatCapturedOutput(stderr);

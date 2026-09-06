@@ -107,6 +107,29 @@ describe("normalizeRegisteredChannelPlugin", () => {
     ]);
   });
 
+  it("fills official external channel aliases omitted by the runtime plugin", () => {
+    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+
+    const normalized = normalizeRegisteredChannelPlugin({
+      pluginId: "openclaw-weixin",
+      source: "/tmp/openclaw-weixin/index.ts",
+      plugin: createChannelPlugin({
+        id: "openclaw-weixin",
+        meta: {
+          id: "openclaw-weixin",
+          label: "openclaw-weixin",
+          selectionLabel: "openclaw-weixin (long-poll)",
+          docsPath: "/channels/openclaw-weixin",
+          blurb: "Weixin channel",
+        },
+      }),
+      pushDiagnostic,
+    });
+
+    expect(normalized?.meta.aliases).toEqual(["weixin", "wechat", "微信"]);
+    expect(diagnostics).toEqual([]);
+  });
+
   it("warns and repairs mismatched meta ids", () => {
     const { diagnostics, pushDiagnostic } = collectDiagnostics();
 

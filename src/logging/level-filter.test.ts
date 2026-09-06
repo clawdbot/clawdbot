@@ -95,18 +95,6 @@ describe("resolved logging settings cache", () => {
   });
 });
 
-function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected mock call");
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error("expected mock call argument to be an object");
-  }
-  return arg as Record<string, unknown>;
-}
-
 describe("isFileLogLevelEnabled", () => {
   for (const { name, level, expected } of [
     {
@@ -182,26 +170,19 @@ describe("getChildLogger minLevel inheritance", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("pino child logger propagates the parent minLevel", () => {
-    logging.setLoggerOverride({ level: "error" });
+  it.each(["error", "silent"] as const)("pino child preserves its parent's %s policy", (level) => {
+    logging.setLoggerOverride({ level });
     const base = logging.getLogger();
-    const getSubLoggerSpy = vi.spyOn(base, "getSubLogger");
-
-    logging.toPinoLikeLogger(base, "info").child({ component: "test" });
-
-    expect(getSubLoggerSpy).toHaveBeenCalledOnce();
-    expect(firstMockArg(getSubLoggerSpy).minLevel).toBe(logging.levelToMinLevel("error"));
-  });
-
-  it("pino child logger preserves a silent parent without triggering tslog validation", () => {
-    logging.setLoggerOverride({ level: "silent" });
-    const base = logging.getLogger();
-    const getSubLoggerSpy = vi.spyOn(base, "getSubLogger");
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const records: unknown[] = [];
+    base.attachTransport((record) => records.push(record));
 
-    logging.toPinoLikeLogger(base, "info").child({ component: "test" });
+    const child = logging.toPinoLikeLogger(base, "info").child({ component: "test" });
+    child.warn("filtered warning");
+    child.error("parent error policy");
 
-    expect(firstMockArg(getSubLoggerSpy).minLevel).toBe(logging.levelToMinLevel("fatal"));
+    expect(records).toHaveLength(level === "silent" ? 0 : 1);
+    expect(JSON.stringify(records)).not.toContain("filtered warning");
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });

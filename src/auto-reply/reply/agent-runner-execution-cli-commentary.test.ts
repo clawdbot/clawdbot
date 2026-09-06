@@ -220,6 +220,47 @@ describe("executeAgentTurn: CLI durable commentary", () => {
     }
   });
 
+  it("forwards channel presentation callbacks to native CLI input", async () => {
+    useClaudeCliFallback();
+    state.createBlockReplyDeliveryHandlerMock.mockImplementationOnce(
+      (params: { onBlockReply: NonNullable<GetReplyOptions["onBlockReply"]> }) =>
+        params.onBlockReply,
+    );
+    state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+      await params.onBlockReply?.({
+        text: "Which color?",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Blue",
+                  action: { type: "question", questionId: "question-1", optionValue: "Blue" },
+                },
+              ],
+            },
+          ],
+        },
+      });
+      await params.onPartialReply?.({ text: "Fallback question" });
+      return { payloads: [{ text: "Answered." }], meta: {} };
+    });
+
+    const onBlockReply = vi.fn<NonNullable<GetReplyOptions["onBlockReply"]>>(async () => undefined);
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
+      async () => undefined,
+    );
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+
+    await executeAgentTurn(createTurnParams({ onBlockReply, onPartialReply }, false));
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Which color?", presentation: expect.any(Object) }),
+    );
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "Fallback question" });
+  });
+
   it("delivers commentary payloads without block streaming", async () => {
     useClaudeCliFallback();
     state.createBlockReplyDeliveryHandlerMock.mockImplementationOnce(

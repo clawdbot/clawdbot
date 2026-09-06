@@ -15,6 +15,10 @@ import {
   type IndexRepairJournalMode,
   type ReliabilityReport,
 } from "./sqlite-reliability-contract.js";
+import {
+  assertReliabilityForcedExit,
+  waitForReliabilityWorkerExit,
+} from "./sqlite-reliability-process.js";
 
 type IndexRepairProof = ReliabilityReport["indexRepairInterruptionProof"]["rollbackJournal"];
 
@@ -23,8 +27,6 @@ type IndexRepairState = {
   sha256: string;
 };
 
-type WorkerExit = IndexRepairProof["exit"];
-
 const INDEX_REPAIR_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-index-repair-worker.ts", import.meta.url),
 );
@@ -32,6 +34,8 @@ const INDEX_REPAIR_WORKER_PATH = fileURLToPath(
 // before the worker reports its explicit crash point.
 const INDEX_REPAIR_ROWS = 16_384;
 const INDEX_REPAIR_TIMEOUT_MS = 30_000;
+const WORKER_EXIT_TIMEOUT_MESSAGE =
+  "SQLite index repair worker did not exit after forced termination.";
 
 function fileSize(filePath: string): number {
   try {
@@ -189,50 +193,6 @@ async function waitForActiveTransaction(params: {
   );
 }
 
-async function waitForChildExit(child: ChildProcess): Promise<WorkerExit> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return { code: child.exitCode, signal: child.signalCode };
-  }
-  return await new Promise<WorkerExit>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("SQLite index repair worker did not exit after forced termination."));
-    }, INDEX_REPAIR_TIMEOUT_MS);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      resolve({ code, signal });
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.off("exit", onExit);
-      child.off("error", onError);
-    };
-    child.on("exit", onExit);
-    child.on("error", onError);
-  });
-}
-
-function assertForcedExit(exit: WorkerExit): void {
-  if (exit.code === 0) {
-    throw new Error("SQLite index repair worker exited cleanly before forced termination.");
-  }
-  if (process.platform === "win32") {
-    if (exit.code === null && exit.signal === null) {
-      throw new Error("SQLite index repair worker reported no forced Windows exit.");
-    }
-    return;
-  }
-  if (exit.signal !== "SIGKILL") {
-    throw new Error(
-      `SQLite index repair worker exited without SIGKILL: code=${String(exit.code)} signal=${String(exit.signal)}`,
-    );
-  }
-}
-
 function recoverAndRepair(databasePath: string, expectedState: IndexRepairState): string[] {
   const database = openNodeSqliteDatabase(databasePath);
   try {
@@ -307,8 +267,8 @@ async function runJournalModeProof(params: {
     if (!child.kill("SIGKILL")) {
       throw new Error("SQLite index repair worker exited before the crash signal was delivered.");
     }
-    const exit = await waitForChildExit(child);
-    assertForcedExit(exit);
+    const exit = await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE);
+    assertReliabilityForcedExit(exit, "SQLite index repair worker");
     const repairedIndexes = recoverAndRepair(params.databasePath, expectedState);
     return {
       exit,
@@ -321,7 +281,7 @@ async function runJournalModeProof(params: {
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGKILL");
-      await waitForChildExit(child).catch(() => undefined);
+      await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE).catch(() => undefined);
     }
   }
 }

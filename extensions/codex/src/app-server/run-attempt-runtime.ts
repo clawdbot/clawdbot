@@ -8,11 +8,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexMcpToolOverridesForAgent } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
+import { resolveCodexAppServerAuthAccountCacheKey } from "./auth-bridge.js";
 import {
-  resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey,
-} from "./auth-bridge.js";
+} from "./auth-cache-key.js";
 import { isCodexSandboxExecServerEnabled } from "./config.js";
 import {
   resolveCodexAppServerHookChannelId,
@@ -184,7 +184,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     params.trigger === "cron" &&
     params.scheduledToolPolicy !== undefined &&
     Array.isArray(params.toolsAllow);
-  const ownsScheduledConfiguredMcpSurface =
+  const scheduledConfiguredMcpSurface =
     authenticatedScheduledMode &&
     (bundleMcpThreadConfig.staticServerNames.length > 0 ||
       mutable.startupBinding?.configuredMcpOwnershipVersion === 1);
@@ -193,6 +193,10 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   // capability; do not promote that fact to general sender ownership.
   const hasFreshCreatorAuthority =
     cronCreatorAuthorityCapability?.active === true &&
+    !(
+      cronCreatorAuthorityCapability.controlUiAdmin &&
+      cronCreatorAuthorityCapability.callerOrigin.kind === "unknown"
+    ) &&
     cronCreatorAuthorityCapability.runId === params.runId &&
     !cronCreatorAuthorityCapability.signal.aborted;
   const mayResolveScheduledConfiguredMcpCreatorAuthority =
@@ -224,6 +228,11 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     sandbox,
     { agentId: policyAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
   );
+  const configuredMcpSurface = scheduledConfiguredMcpSurface
+    ? "scheduled"
+    : !nativeToolSurfaceEnabled && bundleMcpThreadConfig.staticServerNames.length > 0
+      ? "transient"
+      : undefined;
   preDynamicStartupStages.mark("native-tool-surface");
   const nativeProviderWebSearchSupport =
     resolveCodexWebSearchPlan({
@@ -282,7 +291,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     bundleMcpThreadConfig,
     bundleManifestRegistry,
     authenticatedScheduledMode,
-    ownsScheduledConfiguredMcpSurface,
+    configuredMcpSurface,
     canResolveScheduledConfiguredMcpCreatorAuthority:
       mayResolveScheduledConfiguredMcpCreatorAuthority,
     codexMcpToolOverrides,

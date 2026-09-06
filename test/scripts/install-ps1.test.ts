@@ -1122,6 +1122,57 @@ try {
 `,
         ].join("\n"),
       });
+      cases.push({
+        name: "portable-node-tar-fallback",
+        source: [
+          scriptWithoutEntryPoint,
+          String.raw`
+$root = Join-Path $script:InstallerTempDirectory ("openclaw portable node " + [guid]::NewGuid().ToString("N"))
+$bin = Join-Path $root "bin"
+$archiveRoot = Join-Path $root "archive"
+$nodeRoot = Join-Path $archiveRoot "node-fixture"
+$zip = Join-Path $root "node archive.zip"
+$destination = Join-Path $root "portable node"
+$tarArgsLog = Join-Path $root "tar-args.txt"
+$previousPath = $env:PATH
+$previousLocation = (Get-Location).Path
+try {
+    New-Item -ItemType Directory -Force -Path $bin, $nodeRoot | Out-Null
+    [IO.File]::WriteAllText((Join-Path $nodeRoot "node.exe"), "node fixture bytes")
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::CreateFromDirectory($archiveRoot, $zip)
+    $tarScript = @(
+        "@echo off",
+        ('echo %~1 > "' + $tarArgsLog + '"'),
+        ('echo %~2 >> "' + $tarArgsLog + '"'),
+        ('echo %~3 >> "' + $tarArgsLog + '"'),
+        ('echo %~4 >> "' + $tarArgsLog + '"'),
+        ('echo %~5 >> "' + $tarArgsLog + '"'),
+        ('echo %~6 >> "' + $tarArgsLog + '"'),
+        'echo partial> "%~4\partial.marker"',
+        "echo tar fixture failure 1>&2",
+        "exit /b 17"
+    )
+    [IO.File]::WriteAllLines((Join-Path $bin "tar.cmd"), $tarScript)
+    $env:PATH = "$bin;$env:PATH"
+    # Explicit PowerShell redirection preserves the Windows PowerShell 5.1 failure mode.
+    $output = @(Expand-PortableNodeArchive -ZipPath $zip -DestinationPath $destination 2>&1)
+    if ($LASTEXITCODE -ne 17) { throw "native exit changed: $LASTEXITCODE" }
+    $expectedArguments = @("-xf", $zip, "-C", $destination, "--strip-components", "1")
+    $actualArguments = @(Get-Content -LiteralPath $tarArgsLog | ForEach-Object { $_.TrimEnd() })
+    if (($actualArguments -join "|") -cne ($expectedArguments -join "|")) { throw "tar argument mismatch" }
+    if ([IO.File]::ReadAllText((Join-Path $destination "node.exe")) -cne "node fixture bytes") { throw "fallback bytes changed" }
+    if (Test-Path -LiteralPath (Join-Path $destination "partial.marker")) { throw "partial tar output remains" }
+    if (@(Get-ChildItem -LiteralPath $root -Filter "portable-node-extract-*").Count -ne 0) { throw "fallback temporary directory remains" }
+    if (($output | Out-String) -notmatch "tar fixture failure") { throw "native stderr lost" }
+    if ($ErrorActionPreference -ne "Stop" -or (Get-Location).Path -ne $previousLocation) { throw "caller state leaked" }
+} finally {
+    $env:PATH = $previousPath
+    if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+}
+`,
+        ].join("\n"),
+      });
     }
     const tempDir = harness.createTempDir("openclaw-install-ps1-batch-");
     const fixtures = cases.map((testCase, index) => {
@@ -1168,6 +1219,7 @@ try {
         "native-npm-stderr",
         "pnpm-source-bootstrap-lifecycle",
         "portable-git-layout",
+        "portable-node-tar-fallback",
       ]) {
         const fixture = fixtures.find((entry) => entry.name === name);
         if (!fixture) {
@@ -1179,7 +1231,10 @@ try {
         });
         batchedPowerShellResults.set(`${name}:${engine}`, {
           ok: engineResult.status === 0,
-          error: engineResult.status === 0 ? "" : engineResult.stdout + engineResult.stderr,
+          error:
+            engineResult.status === 0
+              ? ""
+              : (engineResult.error?.message ?? engineResult.stdout + engineResult.stderr),
         });
       }
     }
@@ -1334,6 +1389,17 @@ try {
       expect(bootstrapShells).toContain("powershell");
       for (const engine of bootstrapShells) {
         const name = "pnpm-source-bootstrap-lifecycle";
+        expectBatchedPowerShellCase(engine === powershell ? name : `${name}:${engine}`);
+      }
+    },
+  );
+
+  (process.platform === "win32" ? it : it.skip)(
+    "reaches portable Node ZIP fallback after redirected native tar stderr",
+    () => {
+      expect(bootstrapShells).toContain("powershell");
+      for (const engine of bootstrapShells) {
+        const name = "portable-node-tar-fallback";
         expectBatchedPowerShellCase(engine === powershell ? name : `${name}:${engine}`);
       }
     },
@@ -1577,7 +1643,6 @@ try {
     expect(portableNodeBody).not.toContain("Expand-Archive");
     expect(portableNodeBody).not.toContain("New-Item -ItemType Directory -Force -Path $tmpExtract");
     expect(expandNodeBody).toContain("Get-Command tar");
-    expect(expandNodeBody).toContain("-xf $ZipPath -C $DestinationPath --strip-components 1");
     expect(expandNodeBody).toContain(
       "Copy-Item -LiteralPath $nodeDir.FullName -Destination $DestinationPath -Recurse -Force",
     );

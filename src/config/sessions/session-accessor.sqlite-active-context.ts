@@ -13,6 +13,7 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import { resolveTranscriptBoundaryWindow } from "./session-accessor.sqlite-reset-window.js";
 import {
   DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
   DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
@@ -144,6 +145,14 @@ export function readSessionTranscriptBoundedActiveContextCore(
     if (headerBytes > maxBytes) {
       throw new RangeError("Session transcript header exceeds the active-context byte limit");
     }
+    // Explicit reset retention wins over ordinary exclusion. The window owner
+    // selects paired entries; only its newest candidates can fit this bounded read.
+    const retained =
+      resolveTranscriptBoundaryWindow(
+        projection,
+        "context",
+        fence?.beforeRawSeq,
+      )?.keptMessagePositions.slice(-(maxEvents + 1)) ?? [];
     const metadata = executeSqliteQuerySync(
       projection.database.db,
       db
@@ -162,7 +171,14 @@ export function readSessionTranscriptBoundedActiveContextCore(
         .$if(fence !== undefined, (query) =>
           query.where("active.event_seq", "<", fence!.beforeRawSeq),
         )
-        .where("active.context_eligible", "=", 1)
+        .where((eb) =>
+          retained.length > 0
+            ? eb.or([
+                eb("active.context_eligible", "=", 1),
+                eb("active.message_position", "in", retained),
+              ])
+            : eb("active.context_eligible", "=", 1),
+        )
         .orderBy("active.active_position", "desc")
         .limit(maxEvents + 1),
     ).rows;

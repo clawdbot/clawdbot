@@ -7,6 +7,7 @@ import {
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listGatewayActivatedChannelIds } from "./channel-presence-policy.js";
+import { canStartConfiguredChannelPlugin } from "./channel-startup-policy.js";
 import {
   normalizePluginsConfigWithResolverCore,
   type NormalizePluginId,
@@ -14,10 +15,7 @@ import {
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
-import {
-  canStartConfiguredChannelPlugin,
-  canStartGatewayStartupPlugin,
-} from "./gateway-startup-plugin-activation.js";
+import { canStartGatewayStartupPlugin } from "./gateway-startup-plugin-activation.js";
 import {
   hasConfiguredStartupChannel,
   resolveAuthorizedGatewayStartupDreamingPluginIds,
@@ -26,6 +24,7 @@ import {
   shouldConsiderForGatewayStartup,
   createManifestRegistryLookup,
   findManifestPlugin,
+  listManifestChannelIds,
 } from "./gateway-startup-plugin-config.js";
 import type { GatewayStartupPluginPlan } from "./gateway-startup-plugin-contracts.js";
 import {
@@ -165,13 +164,15 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       hasExplicitlyEnabledNonBundledChannel
     ) {
       const canStartConfiguredChannel = canStartConfiguredChannelPlugin({
-        plugin,
+        id: plugin.pluginId,
+        origin: plugin.origin,
+        channelIds:
+          plugin.origin === "bundled"
+            ? listManifestChannelIds(manifestLookup, plugin.pluginId)
+            : plugin.contributions?.channels,
         config: params.config,
         pluginsConfig,
         activationSource,
-        manifestLookup,
-        platform: params.platform,
-        env: params.env,
       });
       if (canStartConfiguredChannel) {
         pluginIds.push(plugin.pluginId);

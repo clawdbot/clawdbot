@@ -19,6 +19,38 @@ vi.mock("../../subagents/registry/subagent-registry.js", () => ({
 }));
 
 describe("embedded attempt backend", () => {
+  it.each([true, false])(
+    "keeps runtime model selection only for prepared ownership (%s)",
+    async (runtimeOwned) => {
+      const selection = { provider: "native-provider", model: "native-model" };
+      harnessMocks.runAttempt.mockResolvedValueOnce({
+        agentHarnessId: "native-runtime",
+        runtimeModelSelection: selection,
+      });
+      const nativeRuntime: NonNullable<Parameters<typeof runEmbeddedAttemptWithBackend>[1]> = {
+        harness: {
+          id: "native-runtime",
+          label: "Native runtime",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("unexpected direct harness call");
+          },
+        },
+        auth: "native",
+        assertCurrent: async () => {},
+      };
+      const result = await runEmbeddedAttemptWithBackend(
+        {} as never,
+        runtimeOwned ? nativeRuntime : undefined,
+      );
+      if (runtimeOwned) {
+        expect(result).toMatchObject({ runtimeModelSelection: selection });
+      } else {
+        expect(result).not.toHaveProperty("runtimeModelSelection");
+      }
+    },
+  );
+
   it("preserves core TTS delivery provenance through backend projection", async () => {
     const operationalRunInstance = {};
     const attempt = markCoreTtsAttemptResult(

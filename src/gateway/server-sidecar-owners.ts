@@ -5,14 +5,13 @@ export function createGatewaySidecarStopOwner(params: {
   setRegistered: (sidecars: GatewayPostReadySidecarHandle[]) => void;
 }) {
   let activeStop: Promise<void> | null = null;
+  let failure: Error | undefined;
   let phase: "open" | "closing" | "sealed" = "open";
   const publish = (sidecars: readonly GatewayPostReadySidecarHandle[]) => {
     if (phase === "sealed") {
       throw new Error("cannot publish a Gateway sidecar after shutdown sealed its owner");
     }
-    params.setRegistered(
-      mergeGatewaySidecarOwners({ registered: params.getRegistered(), published: sidecars }),
-    );
+    params.setRegistered([...new Set([...params.getRegistered(), ...sidecars])]);
     if (phase === "closing") {
       void stop().catch(() => {});
     }
@@ -23,13 +22,14 @@ export function createGatewaySidecarStopOwner(params: {
     }
   };
   const stop = () => {
+    beginClose();
     if (activeStop) {
       return activeStop;
     }
     // Install single-flight before any stop can synchronously publish another owner.
     const stopping = Promise.resolve().then(async () => {
       const failedSidecars = new Set<GatewayPostReadySidecarHandle>();
-      let failure: unknown;
+      failure = undefined;
       try {
         while (params.getRegistered().some((sidecar) => !failedSidecars.has(sidecar))) {
           const sidecars = [
@@ -57,13 +57,16 @@ export function createGatewaySidecarStopOwner(params: {
           );
           if (pending.length > 0) {
             const rejected = results.find((result) => result.status === "rejected");
-            failure ??= rejected?.reason;
+            failure ??=
+              rejected?.reason instanceof Error
+                ? rejected.reason
+                : new Error(String(rejected?.reason));
             for (const sidecar of pending) {
               failedSidecars.add(sidecar);
             }
           }
         }
-        if (failedSidecars.size > 0) {
+        if (failure) {
           // Preserve ownership after the bounded shutdown retry. A later close can try again.
           params.setRegistered([...failedSidecars, ...params.getRegistered()]);
           throw failure;
@@ -78,30 +81,19 @@ export function createGatewaySidecarStopOwner(params: {
   };
 
   const sealAndJoin = async () => {
-    let failure: Error | undefined;
-    while (true) {
-      const stopping = activeStop;
-      if (!stopping) {
-        phase = "sealed";
-        break;
-      }
+    for (let pending = activeStop; pending; pending = activeStop) {
       try {
-        await stopping;
+        await pending;
       } catch (error) {
         failure ??= error instanceof Error ? error : new Error(String(error));
       }
     }
-    if (failure) {
-      throw failure;
+    phase = "sealed";
+    // A settled failed stop still owns its handles and original failure until a retry succeeds.
+    if (failure || params.getRegistered().length > 0) {
+      throw failure ?? new Error("Gateway sidecar cleanup did not complete");
     }
   };
 
   return { publish, beginClose, stop, sealAndJoin };
-}
-
-function mergeGatewaySidecarOwners(params: {
-  registered: readonly GatewayPostReadySidecarHandle[];
-  published: readonly GatewayPostReadySidecarHandle[];
-}): GatewayPostReadySidecarHandle[] {
-  return [...new Set([...params.registered, ...params.published])];
 }

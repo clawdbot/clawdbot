@@ -48,7 +48,8 @@ vi.mock("../fallback-state.js", () => ({
   }),
 }));
 
-vi.mock("./agent-runner-core.js", () => ({
+vi.mock("./agent-runner-core.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-core.js")>()),
   resolveFallbackOriginModel: () => ({
     provider: "anthropic",
     model: "claude",

@@ -12,6 +12,8 @@ export type SessionTabInteractionIdentity = {
 
 export type VolatileSessionTab = SessionTabInteractionIdentity & {
   kind: "volatile";
+  // Activity preserves this identity; registration replaces it even within one clock tick.
+  registration: object;
   ownership?: BrowserTabOwnership;
   trackedAt: number;
   lastUsedAt: number;
@@ -62,13 +64,40 @@ export function volatileTabsBySession(): Map<string, Map<string, VolatileSession
   return state[volatileStateSymbol];
 }
 
+type VolatileTabCleanup = {
+  registrations: VolatileSessionTab[];
+  promise: Promise<number>;
+};
+
 /** Keeps one in-flight volatile target close shared across Browser plugin bundles. */
-export function volatileTabCleanupByTarget(): Map<string, Promise<number>> {
+export function volatileTabCleanupByTarget(): Map<string, VolatileTabCleanup> {
   const state = globalThis as typeof globalThis & {
-    [volatileCleanupStateSymbol]?: Map<string, Promise<number>>;
+    [volatileCleanupStateSymbol]?: Map<string, VolatileTabCleanup>;
   };
   state[volatileCleanupStateSymbol] ??= new Map();
   return state[volatileCleanupStateSymbol];
+}
+
+export function volatileRegistrationsForTarget(targetKey: string): VolatileSessionTab[] {
+  const result: VolatileSessionTab[] = [];
+  for (const tabs of volatileTabsBySession().values()) {
+    for (const tab of tabs.values()) {
+      if (volatileSessionTabTargetKey(tab) === targetKey) {
+        result.push(tab);
+      }
+    }
+  }
+  return result;
+}
+
+export function deleteVolatileRegistrations(tabs: VolatileSessionTab[]): void {
+  for (const tab of tabs) {
+    const targetKey = volatileSessionTabTargetKey(tab);
+    const current = volatileTabsBySession().get(tab.sessionKey)?.get(targetKey);
+    if (current?.registration === tab.registration) {
+      deleteVolatileSessionTab(tab.sessionKey, targetKey);
+    }
+  }
 }
 
 export function deleteVolatileSessionTab(sessionKey: string, tabKey: string): void {

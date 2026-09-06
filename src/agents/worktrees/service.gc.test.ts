@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireGit } from "./git.js";
 import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
@@ -86,6 +88,51 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeTruthy();
     expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
     expect(await fs.stat(manual.path)).toBeTruthy();
+  });
+
+  it("garbage collects a large Git index and restores local edits and deletions", async () => {
+    const created = await materializeRunOwnedFixture("large-index", "workboard");
+    const blob = await git(created.path, "rev-parse", "HEAD:README.md");
+    // Build real tracked entries without creating thousands of files; their absence is a deletion.
+    const entries = Array.from(
+      { length: 180_000 },
+      (_, index) => `100644 ${blob}\tfile-${String(index).padStart(6, "0")}\n`,
+    ).join("");
+    await requireGit(created.path, ["update-index", "--index-info"], { input: entries });
+    const tree = await git(created.path, "write-tree");
+    const parent = await git(created.path, "rev-parse", "HEAD");
+    const commit = await git(created.path, "commit-tree", tree, "-p", parent, "-m", "large tree");
+    await git(created.path, "update-ref", "HEAD", commit);
+    await fs.writeFile(path.join(created.path, "README.md"), "preserve local edit\n");
+    now += IDLE_GC_MS + 1;
+
+    // Gateway cleanup runs on Node's main thread, whose stack limit differs from Vitest workers.
+    const collected = await runNodeScript(
+      [
+        "--import",
+        path.resolve("scripts/tsx.mjs"),
+        "--input-type=module",
+        "--eval",
+        `import { ManagedWorktreeService } from ${JSON.stringify(new URL("./service.ts", import.meta.url).href)};
+         const service = new ManagedWorktreeService({ now: () => ${now} });
+         console.log(JSON.stringify(await service.gc()));`,
+      ],
+      env,
+      60_000,
+      { requireProcessTreeExit: true },
+    );
+    expect(collected.error).toBeUndefined();
+    expect(collected.status, collected.stderr).toBe(0);
+    expect(JSON.parse(collected.stdout).removed, collected.stderr).toEqual([created.id]);
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    const restored = await service.restore({ id: created.id });
+    expect(await git(restored.path, "rev-parse", "HEAD")).toBe(commit);
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+      "preserve local edit\n",
+    );
+    await expect(fs.stat(path.join(restored.path, "file-000000"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("preserves an ignored unregistered nested linked worktree without cleanup warnings", async () => {

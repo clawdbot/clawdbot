@@ -28,20 +28,108 @@ function createMessage(
 
 /** Run-scoped terminal state: final acceptance, late diagnostics, and retention. */
 describe("session run terminal bookkeeping", () => {
-  it("does not reopen a completed run when a stale stream delta arrives", () => {
-    const completed = reduceSessionProjection(createSessionProjection(primaryScope), {
+  it.each([
+    { content: [] },
+    { content: [{ type: "input_text", text: "" }] },
+    { content: [{ type: "input_text", text: "provider rate limit" }] },
+    { content: [{ type: "input_text", text: "[assistant turn failed before producing content]" }] },
+    { content: [{ type: "output_text", text: "provider rate limit" }] },
+    { content: [{ type: "thinking", thinking: "Internal reasoning" }] },
+    { content: [{ type: "reasoning", text: "Internal reasoning" }] },
+    { content: [{ type: "redacted_thinking", data: "redacted" }] },
+    { content: [{ type: "text", text: "[assistant turn failed before producing content]" }] },
+    { content: [{ type: "text", text: "⚠️ Error: provider rate limit" }] },
+    {
+      content: [
+        { type: "text", text: "⚠️ Error: provider" },
+        { type: "text", text: "rate limit" },
+      ],
+    },
+    { role: " Assistant ", content: [{ type: "text", text: "⚠️ Error: provider rate limit" }] },
+    { content: [{ type: "text", text: "The agent run failed before producing a reply." }] },
+    {
+      content: [
+        { type: "text", text: "⚠️ Error: The agent run failed" },
+        { type: "text", text: "before producing a reply." },
+      ],
+    },
+  ])(
+    "reopens a pure error projection when the same run resumes streaming: %j",
+    ({ content, role = "assistant" }) => {
+      const failed = reduceSessionProjection(createSessionProjection(primaryScope), {
+        type: "runTerminal",
+        runId: "run-1",
+        status: "error",
+        seq: 10,
+        errorMessage: "provider rate limit",
+        message: { role, content, stopReason: "error" },
+      });
+      const resumed = reduceSessionProjection(failed, {
+        type: "runDelta",
+        seq: 11,
+        runId: "run-1",
+        message: createMessage("assistant", "I"),
+      });
+      expect(resumed.runs["run-1"]).toMatchObject({ status: "streaming" });
+      expect(resumed.runs["run-1"]?.errorMessage).toBeUndefined();
+      expect(resumed.runs["run-1"]?.stopReason).toBeUndefined();
+    },
+  );
+
+  it.each(["completed", "aborted", "timeout"] as const)(
+    "does not reopen a %s run when a stale stream delta arrives",
+    (status) => {
+      const completed = reduceSessionProjection(createSessionProjection(primaryScope), {
+        type: "runTerminal",
+        runId: "run-1",
+        status,
+      });
+
+      expect(
+        reduceSessionProjection(completed, {
+          type: "runDelta",
+          runId: "run-1",
+          message: createMessage("assistant", "late stream"),
+        }),
+      ).toBe(completed);
+    },
+  );
+
+  it.each([
+    { content: [{ type: "text", text: "Useful partial reply." }] },
+    {
+      content: [
+        { type: "thinking", thinking: "Internal reasoning" },
+        { type: "image", source: "synthetic-image" },
+      ],
+    },
+    {
+      content: [
+        { type: "reasoning", text: "Internal reasoning" },
+        { type: "text", text: "Useful partial reply." },
+      ],
+    },
+    {
+      content: [
+        { type: "text", text: "provider rate limit" },
+        { type: "toolCall", id: "tool-1", name: "exec", arguments: {} },
+      ],
+    },
+  ])("preserves useful failed-run content on a late delta: %j", ({ content }) => {
+    const failed = reduceSessionProjection(createSessionProjection(primaryScope), {
       type: "runTerminal",
       runId: "run-1",
-      status: "completed",
+      status: "error",
+      errorMessage: "provider rate limit",
+      message: { role: "assistant", content, stopReason: "error" },
     });
-
     expect(
-      reduceSessionProjection(completed, {
+      reduceSessionProjection(failed, {
         type: "runDelta",
         runId: "run-1",
         message: createMessage("assistant", "late stream"),
       }),
-    ).toBe(completed);
+    ).toBe(failed);
   });
 
   it("upgrades an empty completed final exactly once without reopening the run", () => {
@@ -202,28 +290,40 @@ describe("session run terminal bookkeeping", () => {
     expect(state.runs["run-1"]?.message).toBe(errorMessage);
   });
 
-  it("distinguishes and deduplicates metadata-free finals by canonical visible content", () => {
-    const first = createMessage("assistant", "first metadata-free final");
-    const second = createMessage("assistant", "second metadata-free final");
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: first,
-    });
-    const secondEvent = {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: second,
-    } as const;
-    state = reduceSessionProjection(state, secondEvent);
+  it.each(["content", "text", "empty-content-text"] as const)(
+    "distinguishes and deduplicates metadata-free finals using %s",
+    (format) => {
+      const message = (text: string) =>
+        format === "content"
+          ? createMessage("assistant", text)
+          : {
+              role: "assistant",
+              text,
+              ...(format === "empty-content-text" ? { content: [] } : {}),
+            };
+      const first = message("first metadata-free final");
+      const second = message("second metadata-free final");
+      let state = reduceSessionProjection(createSessionProjection(primaryScope), {
+        type: "runTerminal",
+        runId: "run-1",
+        status: "completed",
+        message: first,
+      });
+      expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(false);
+      const secondEvent = {
+        type: "runTerminal",
+        runId: "run-1",
+        status: "completed",
+        message: second,
+      } as const;
+      state = reduceSessionProjection(state, secondEvent);
 
-    expect(state.runs["run-1"]?.message).toBe(first);
-    expect(state.runs["run-1"]?.acceptedFinalMessageIdentities).toHaveLength(2);
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(true);
-    expect(reduceSessionProjection(state, secondEvent)).toBe(state);
-  });
+      expect(state.runs["run-1"]?.message).toBe(first);
+      expect(state.runs["run-1"]?.acceptedFinalMessageIdentities).toHaveLength(2);
+      expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(true);
+      expect(reduceSessionProjection(state, secondEvent)).toBe(state);
+    },
+  );
 
   it("bounds accepted same-run final identities without losing the first delivered reply", () => {
     const first = createMessage("assistant", "final 0", { id: "assistant-0", seq: 1 });

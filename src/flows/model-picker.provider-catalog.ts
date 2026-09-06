@@ -1,7 +1,7 @@
 // Model picker provider choices projected from the lifecycle-owned catalog.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { createPreparedModelCatalogProviderNormalizer } from "../agents/model-catalog.js";
+import { createPreparedModelCatalogProviderNormalizer } from "../agents/model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -14,10 +14,14 @@ function filterProviderSnapshot(
   const matchesProvider = (entry: { provider: string }) =>
     normalizeProviderId(entry.provider) === provider;
   return {
+    ...snapshot,
     entries: snapshot.entries.filter(matchesProvider),
     routeVariants: snapshot.routeVariants.filter(matchesProvider),
     ...(snapshot.staticEntries
       ? { staticEntries: snapshot.staticEntries.filter(matchesProvider) }
+      : {}),
+    ...(snapshot.providerOutcomes
+      ? { providerOutcomes: snapshot.providerOutcomes.filter(matchesProvider) }
       : {}),
   };
 }
@@ -40,8 +44,11 @@ export async function loadPreferredProviderPickerCatalog(params: {
     env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
-  const providerFilter =
-    createPreparedModelCatalogProviderNormalizer(metadataSnapshot)(requestedProvider);
+  const providerFilter = createPreparedModelCatalogProviderNormalizer(
+    metadataSnapshot,
+    params.cfg,
+    env,
+  )(requestedProvider);
   const snapshot = await loadPreparedModelCatalogSnapshot({
     config: params.cfg,
     agentDir: params.agentDir ?? resolveDefaultAgentDir(params.cfg, params.env),

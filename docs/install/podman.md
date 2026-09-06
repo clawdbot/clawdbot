@@ -98,8 +98,6 @@ Podman reuses the same `agents.defaults.sandbox.docker.*` container settings as 
 
 See [Sandboxing](/gateway/sandboxing#podman-backend) for the config example and image-build command.
 
-<a id="podman-and-tailscale"></a>
-
 ## Podman and Tailscale
 
 For HTTPS or remote browser access, follow the main Tailscale docs.

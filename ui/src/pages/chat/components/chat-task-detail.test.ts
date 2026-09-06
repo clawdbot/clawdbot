@@ -248,6 +248,8 @@ describe("task detail panel", () => {
     const chat = {
       ...threadProps("pane-1", host.sessionKey),
       selectedSession: parentRow,
+      userId: "viewer",
+      userName: "Example User",
       sessions,
     };
     const transcript = createTestTranscript();
@@ -274,6 +276,8 @@ describe("task detail panel", () => {
     await flushDeferredRowPrune();
 
     expect(container.textContent).not.toContain("Archived by Parent Owner");
+    expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
+    expect(container.querySelector(".chat-sender-name")?.textContent).toContain("Example User");
     if (expected) {
       expect(container.textContent).toContain(expected);
     } else {

@@ -1,7 +1,8 @@
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
   createParams,
@@ -14,7 +15,23 @@ import {
 
 setupRunAttemptTestHooks();
 
+function createHookHarness() {
+  const turnStarted = createDeferred<void>();
+  const harness = createStartedThreadHarness(async (method) => {
+    if (method === "turn/start") {
+      turnStarted.resolve();
+    }
+  });
+  return { ...harness, turnStarted: turnStarted.promise };
+}
+
 describe("runCodexAppServerAttempt authenticated hook context", () => {
+  beforeEach(() => {
+    // These success-path assertions own the clock; cold worker startup must not
+    // turn hook-context coverage into an accidental execution-timeout scenario.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  });
+
   it("preserves authenticated channel context across prompt and compaction hooks", async () => {
     const beforePromptBuild = vi.fn(() => undefined);
     const beforeCompaction = vi.fn(() => undefined);
@@ -40,10 +57,10 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
       sender: { id: "stale-sender", profile: "sender-profile" },
       chat: { id: "stale-chat", thread: "chat-thread" },
     };
-    const harness = createStartedThreadHarness();
+    const harness = createHookHarness();
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await harness.turnStarted;
     await harness.notify(
       itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
     );
@@ -51,7 +68,7 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
       itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
     );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    expect((await run).terminal).toEqual({ kind: "ok" });
 
     const expectedContext = {
       accountId: "account-a",
@@ -102,10 +119,10 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
       sender: { id: "must-not-leak" },
       chat: { id: "must-not-leak" },
     };
-    const harness = createStartedThreadHarness();
+    const harness = createHookHarness();
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await harness.turnStarted;
     await harness.notify(
       itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
     );
@@ -113,7 +130,7 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
       itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
     );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    expect((await run).terminal).toEqual({ kind: "ok" });
 
     for (const [hookName, hook] of [
       ["before_prompt_build", beforePromptBuild],

@@ -16,7 +16,7 @@ import {
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
-import { createImportedCodexSession } from "./app-server/session-history-import.js";
+import type { createImportedCodexSession } from "./app-server/session-history-import.js";
 import {
   adoptionSessionKeyRest,
   continueOperations,
@@ -126,7 +126,7 @@ export async function listAdoptedSessionEntries(params: {
     if (!sessionId) {
       continue;
     }
-    const binding = await params.bindingStore.read(
+    const binding = params.bindingStore.read(
       sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
     );
     const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
@@ -228,7 +228,7 @@ async function ensurePendingAdoptionBinding(params: {
   if (!ownsGeneration) {
     throw new Error(`failed to claim the OpenClaw session generation for ${params.sourceThreadId}`);
   }
-  const existing = await params.bindingStore.read(params.identity);
+  const existing = params.bindingStore.read(params.identity);
   params.initialization.assertCurrent();
   if (existing) {
     if (matchesPendingAdoptionBinding(existing, params)) {
@@ -272,6 +272,7 @@ async function createOrReuseAdoptedSession(params: {
       sourceThreadId: params.sourceThread.id,
       ...(params.sourceHomeId ? { sourceHomeId: params.sourceHomeId } : {}),
     };
+    const { createImportedCodexSession } = await import("./app-server/session-history-import.js");
     const created = await createImportedCodexSession({
       runtime: params.api.runtime,
       bindingStore: params.bindingStore,
@@ -378,7 +379,7 @@ async function continueLocalCodexSessionInner(
         ) {
           throw changedError();
         }
-        return { archivedAt: undefined };
+        return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
       },
     });
     if (!restored) {

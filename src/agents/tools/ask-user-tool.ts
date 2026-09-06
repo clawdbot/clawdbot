@@ -1,6 +1,5 @@
 /** Built-in blocking user-question tool and its active-session answer bridge. */
 import { createHash } from "node:crypto";
-import { Type } from "typebox";
 import type {
   QuestionAnswers,
   QuestionRequestQuestion,
@@ -8,9 +7,19 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  resolveAgentQuestionGatewayCall,
+  type AgentHarnessQuestionGatewayCall,
+  type AgentQuestionDispatcher,
+} from "../harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../harness/gateway-question.js";
+import {
+  resolveAgentQuestionAnswerAuthority,
+  withAgentQuestionAnswerAuthority,
+} from "../harness/host-private-capabilities.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import {
+  AskUserToolSchema,
   DEFAULT_ASK_USER_TIMEOUT_SECONDS,
   type NormalizedAskUserParams,
   normalizeAskUserParams,
@@ -18,72 +27,14 @@ import {
 import { type AnyAgentTool, ToolInputError, textResult } from "./common.js";
 import {
   createGatewayQuestionCanceller,
+  createQuestionPromptLifetime,
   readQuestionErrorReason,
+  type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
-import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
+import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
 
 const ASK_USER_RPC_GRACE_MS = 10_000;
 const ASK_USER_PROMPT_RECHECK_MS = 50;
-
-const AskUserToolSchema = Type.Object(
-  {
-    questions: Type.Array(
-      Type.Object(
-        {
-          id: Type.String({
-            minLength: 1,
-            pattern: "^[a-z][a-z0-9_]*$",
-            description: "Unique snake_case answer key.",
-          }),
-          header: Type.String({
-            minLength: 1,
-            description: "Short chip label; longer input is truncated to 12 characters.",
-          }),
-          question: Type.String({
-            minLength: 1,
-            description: "Single-sentence question only. Put all selectable choices in options.",
-          }),
-          options: Type.Array(
-            Type.Object(
-              {
-                label: Type.String({ minLength: 1 }),
-                description: Type.Optional(Type.String()),
-              },
-              { additionalProperties: false },
-            ),
-            {
-              minItems: 2,
-              maxItems: 4,
-              description:
-                "Every selectable choice. Put the recommended choice first; do not repeat choices only in the question text.",
-            },
-          ),
-          multiSelect: Type.Optional(
-            Type.Boolean({
-              description: "True only when the user may choose several options at once.",
-            }),
-          ),
-        },
-        { additionalProperties: false },
-      ),
-      { minItems: 1, maxItems: 3 },
-    ),
-    timeoutSeconds: Type.Optional(
-      Type.Integer({
-        description:
-          "Maximum human wait in seconds; default 900, clamped 30-3600. Earlier run cancellation or overall run timeout still applies.",
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
-
-type AskUserGatewayCall = (
-  method: string,
-  opts: GatewayCallOptions,
-  params?: unknown,
-  extra?: { signal?: AbortSignal },
-) => Promise<unknown>;
 
 type AskUserQuestionPhase =
   | { kind: "reserved" }
@@ -225,7 +176,7 @@ export function reserveAskUserPromptDelivery(params: {
 /** Waits until policy-accepted tool execution has registered the gateway question. */
 export async function waitForAskUserPromptReady(
   questionId: string,
-  gatewayCall: AskUserGatewayCall = callGatewayTool,
+  gatewayCall: GatewayQuestionCall = resolveAgentQuestionGatewayCall(),
 ): Promise<QuestionRequestQuestion[] | undefined> {
   const state = askUserQuestions.get(questionId);
   if (!state) {
@@ -263,7 +214,7 @@ export async function waitForAskUserPromptReady(
 
 async function readAskUserQuestionStatus(
   questionId: string,
-  gatewayCall: AskUserGatewayCall,
+  gatewayCall: GatewayQuestionCall,
 ): Promise<string | undefined> {
   const result = await gatewayCall("question.list", { timeoutMs: ASK_USER_RPC_GRACE_MS }, {});
   const questions =
@@ -294,7 +245,7 @@ type AskUserPromptStatusRead =
 async function readAskUserQuestionStatusBeforeExpiry(
   questionId: string,
   expiresAtMs: number,
-  gatewayCall: AskUserGatewayCall,
+  gatewayCall: GatewayQuestionCall,
 ): Promise<AskUserPromptStatusRead> {
   const remainingMs = expiresAtMs - Date.now();
   if (remainingMs <= 0) {
@@ -340,10 +291,23 @@ export function settleAskUserPromptDelivery(questionId: string, error?: unknown)
   );
 }
 
+/**
+ * Settles the prompt wait from the same run that published the prompt.
+ *
+ * Detached on purpose: the waiter below races prompt delivery against the answer,
+ * so this must not block the tool call that is registering that answer.
+ */
+function settleAfterOwnPromptDelivery(questionId: string, delivery: Promise<void>): void {
+  void delivery.then(
+    () => settleAskUserPromptDelivery(questionId),
+    (error: unknown) => settleAskUserPromptDelivery(questionId, error),
+  );
+}
+
 /** Rechecks the Gateway immediately before exposing an answerable prompt. */
 export async function isAskUserPromptPending(
   questionId: string,
-  gatewayCall: AskUserGatewayCall = callGatewayTool,
+  gatewayCall: GatewayQuestionCall = resolveAgentQuestionGatewayCall(),
 ): Promise<boolean> {
   const state = askUserQuestions.get(questionId);
   if (!state) {
@@ -444,6 +408,8 @@ export function beginAskUserPromptDelivery(params: {
   agentId?: string;
   questions: QuestionRequestQuestion[];
   timeoutSeconds: number;
+  /** Publishes the prompt when no harness reserved one for this call. */
+  deliverPrompt?: (questionId: string) => Promise<void>;
 }) {
   const questionId = buildAskUserQuestionId(
     params.toolCallId,
@@ -473,13 +439,19 @@ export function beginAskUserPromptDelivery(params: {
   askUserQuestions.set(questionId, state);
   return {
     questionId,
-    hasSubscriber: reserved !== undefined,
+    hasSubscriber: reserved !== undefined || params.deliverPrompt !== undefined,
     markReady() {
       if (reserved) {
         markAskUserPromptReady(questionId, params.questions);
-      } else {
-        transitionAskUserQuestion(state, { kind: "answerable" });
+        return;
       }
+      if (params.deliverPrompt) {
+        // Nothing reserved this prompt, so this run publishes it and settles its own wait.
+        markAskUserPromptReady(questionId, params.questions);
+        settleAfterOwnPromptDelivery(questionId, params.deliverPrompt(questionId));
+        return;
+      }
+      transitionAskUserQuestion(state, { kind: "answerable" });
     },
     waitForDelivery(signal?: AbortSignal) {
       return waitForPromptDelivery(state, signal);
@@ -509,9 +481,13 @@ export function createAskUserTool(params: {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  gatewayCall?: AskUserGatewayCall;
+  gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
+  /** How this run shows a prompt when its harness does not reserve one. */
+  questionPrompt?: QuestionPromptDelivery;
 }): AnyAgentTool {
-  const gatewayCall: AskUserGatewayCall = params.gatewayCall ?? callGatewayTool;
+  // Tool callbacks may run outside their creation scope; never borrow the invoker's owner.
+  const questionAuthority = resolveAgentQuestionAnswerAuthority();
+  const gatewayCall = resolveAgentQuestionGatewayCall(params.gatewayCall);
   return {
     label: "Ask User",
     name: "ask_user",
@@ -543,7 +519,12 @@ export function createAskUserTool(params: {
       }
 
       const timeoutMs = normalized.timeoutSeconds * 1_000;
-      const deliverPrompt = reserved?.phase.kind === "reserved";
+      // A harness that runs tools through the embedded tool lifecycle reserves the
+      // prompt before this call. One that dispatches tools itself reserves nothing,
+      // so the tool publishes its own prompt rather than blocking on a silent wait.
+      const publishOwnPrompt = reserved ? undefined : params.questionPrompt?.send;
+      using prompt = createQuestionPromptLifetime(signal);
+      const deliverPrompt = reserved?.phase.kind === "reserved" || publishOwnPrompt !== undefined;
       const state: AskUserQuestionState =
         reserved ??
         ({
@@ -559,8 +540,13 @@ export function createAskUserTool(params: {
       transitionAskUserQuestion(state, { kind: "registering" });
       askUserQuestions.set(questionId, state);
       let registered = false;
-      const cancelPendingQuestion = createGatewayQuestionCanceller({ gatewayCall, questionId });
+      const cancelPendingQuestion = createGatewayQuestionCanceller({
+        gatewayCall,
+        questionId,
+        beforeCancel: prompt.close,
+      });
       const cancelOnAbort = () => {
+        prompt.close();
         if (askUserQuestions.get(questionId) === state) {
           releaseAskUserQuestion(questionId);
         }
@@ -586,25 +572,28 @@ export function createAskUserTool(params: {
         throw new Error("question.waitAnswer returned an invalid status");
       };
       try {
-        state.claim = registerPendingAgentQuestion({
-          questionId,
-          sessionKey,
-          questions: normalized.questions.map(({ questionId: id, ...question }) => ({
-            ...question,
-            id,
-          })),
-          gatewayCall,
-          onCancel: () => {
-            if (
-              askUserQuestions.get(questionId) === state &&
-              state.phase.kind !== "reserved" &&
-              state.phase.kind !== "resolving" &&
-              state.phase.kind !== "prompt-failed"
-            ) {
-              transitionAskUserQuestion(state, { kind: "resolving" });
-            }
-          },
-        });
+        state.claim = withAgentQuestionAnswerAuthority(questionAuthority, () =>
+          registerPendingAgentQuestion({
+            questionId,
+            sessionKey,
+            questions: normalized.questions.map(({ questionId: id, ...question }) => ({
+              ...question,
+              id,
+            })),
+            gatewayCall: params.gatewayCall,
+            onCancel: () => {
+              prompt.close();
+              if (
+                askUserQuestions.get(questionId) === state &&
+                state.phase.kind !== "reserved" &&
+                state.phase.kind !== "resolving" &&
+                state.phase.kind !== "prompt-failed"
+              ) {
+                transitionAskUserQuestion(state, { kind: "resolving" });
+              }
+            },
+          }),
+        );
         const registration = Promise.resolve().then(
           () =>
             gatewayCall(
@@ -641,21 +630,36 @@ export function createAskUserTool(params: {
         const answerPromise = gatewayCall(
           "question.waitAnswer",
           { timeoutMs: timeoutMs + ASK_USER_RPC_GRACE_MS },
-          { id: questionId, timeoutMs },
+          { id: questionId, timeoutMs, includeResolutionId: true },
           signal ? { signal } : undefined,
-        ) as Promise<QuestionWaitAnswerResult>;
+        ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
         state.answer = answerPromise;
-        const bufferedAnswer = await state.claim.setAnswer(answerPromise);
-        if (bufferedAnswer) {
-          return await finishWait(await answerPromise);
-        }
-        if (deliverPrompt && !state.claim.isResolving()) {
+        state.claim.setAnswer(answerPromise);
+        // A refused registration-time claim releases prompt delivery, not the question.
+        let consumed: boolean;
+        do {
+          consumed = await Promise.race([
+            state.claim.waitForResolution(),
+            answerPromise.then(() => true),
+          ]);
+        } while (!consumed && state.claim.isResolving());
+        if (deliverPrompt && !consumed) {
           // Tool-start reserves the prompt, but only a committed Gateway record opens delivery.
           // This prevents channels from exposing a question ID that cannot accept an answer.
-          // A registration-time claim in flight suppresses delivery entirely: the
-          // user already answered, so a late prompt would be stale and the race
-          // below could stall on a delivery that never happens.
+          // A consumed registration-time claim must not expose a stale prompt.
           markAskUserPromptReady(questionId, normalized.questions);
+          if (publishOwnPrompt) {
+            settleAfterOwnPromptDelivery(
+              questionId,
+              sendQuestionToolPrompt({
+                toolName: "ask_user",
+                questionId,
+                questions: normalized.questions,
+                send: publishOwnPrompt,
+                signal: prompt.signal,
+              }),
+            );
+          }
           const promptDeliveryPromise = waitForPromptDelivery(state, signal);
           const first = await Promise.race([
             promptDeliveryPromise.then((result) => ({
@@ -689,7 +693,7 @@ export function createAskUserTool(params: {
             }
             throw new Error("ask_user prompt delivery failed", { cause: deliveryResult.error });
           }
-        } else if (!state.claim.isResolving()) {
+        } else if (!consumed) {
           transitionAskUserQuestion(state, { kind: "answerable" });
         }
         const result = await state.answer;

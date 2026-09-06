@@ -163,7 +163,7 @@ describe("release preparation plan", () => {
 });
 
 describe("release preparation manifest", () => {
-  it("fingerprints generated diffs larger than Node's default child buffer", () => {
+  it("fingerprints complete generated diffs beyond the former capture limit", async () => {
     const rootDir = mkdtempSync(path.join(tmpdir(), "openclaw-release-prepare-"));
     try {
       execFileSync("git", ["init", "-q"], { cwd: rootDir });
@@ -172,15 +172,19 @@ describe("release preparation manifest", () => {
       });
       execFileSync("git", ["config", "user.name", "OpenClaw Release Test"], { cwd: rootDir });
       writeFileSync(path.join(rootDir, "package.json"), '{"version":"2026.7.2"}\n');
-      writeFileSync(path.join(rootDir, "generated.txt"), `${"a".repeat(2 * 1024 * 1024)}\n`);
+      writeFileSync(path.join(rootDir, "generated.txt"), `${"a".repeat(33 * 1024 * 1024)}\n`);
       execFileSync("git", ["add", "."], { cwd: rootDir });
       execFileSync("git", ["commit", "-q", "-m", "test fixture"], { cwd: rootDir });
-      writeFileSync(path.join(rootDir, "generated.txt"), `${"b".repeat(2 * 1024 * 1024)}\n`);
+      const generated = "b".repeat(33 * 1024 * 1024);
+      writeFileSync(path.join(rootDir, "generated.txt"), `${generated}\n`);
 
-      const state = readWorktreeState(rootDir);
+      const state = await readWorktreeState(rootDir);
 
       expect(state.changedFiles).toEqual(["generated.txt"]);
       expect(state.fingerprint).toMatch(/^[0-9a-f]{64}$/u);
+      writeFileSync(path.join(rootDir, "generated.txt"), `${generated}changed-tail\n`);
+      const changedTail = await readWorktreeState(rootDir);
+      expect(changedTail.fingerprint).not.toBe(state.fingerprint);
     } finally {
       rmSync(rootDir, { force: true, recursive: true });
     }

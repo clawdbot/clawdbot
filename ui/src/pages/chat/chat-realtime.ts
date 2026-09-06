@@ -10,6 +10,7 @@ import {
 } from "./realtime-talk-conversation.ts";
 import {
   discoverRealtimeTalkCameras,
+  RealtimeTalkSelectedMicrophoneError,
   type RealtimeTalkCameraDevice,
 } from "./realtime-talk-input.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
@@ -25,6 +26,7 @@ export type ChatRealtimeState = {
   realtimeTalkActive: boolean;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
+  realtimeTalkUseSystemDefault: (() => Promise<void>) | null;
   realtimeTalkInputLevel: RealtimeTalkLevelSignal;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream: MediaStream | null;
@@ -41,11 +43,15 @@ export type ChatRealtimeState = {
   switchRealtimeTalkCamera: () => Promise<void>;
 };
 
-export function createInitialChatRealtimeState() {
+export function createInitialChatRealtimeState(): Pick<
+  ChatRealtimeState,
+  Extract<keyof ChatRealtimeState, `realtimeTalk${string}`>
+> {
   return {
     realtimeTalkActive: false,
-    realtimeTalkStatus: "idle" as RealtimeTalkStatus,
+    realtimeTalkStatus: "idle",
     realtimeTalkDetail: null,
+    realtimeTalkUseSystemDefault: null,
     realtimeTalkInputLevel: new RealtimeTalkLevelSignal(),
     realtimeTalkConversation: [],
     realtimeTalkVideoStream: null,
@@ -68,6 +74,7 @@ export function stopChatRealtimeTalk(state: ChatRealtimeState) {
   // Retire callback ownership before stop() can synchronously report idle.
   // Otherwise a closing session can still mutate the newly selected route.
   state.realtimeTalkSession = null;
+  state.realtimeTalkUseSystemDefault = null;
   state.realtimeTalkActive = false;
   state.realtimeTalkStatus = "idle";
   state.realtimeTalkDetail = null;
@@ -99,7 +106,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     state.requestUpdate();
   };
   const refreshCameraDevices = async (session: RealtimeTalkSession) => {
-    const result = await discoverRealtimeTalkCameras(false);
+    const result = await discoverRealtimeTalkCameras(() => false);
     if (state.realtimeTalkSession !== session) {
       return;
     }
@@ -150,12 +157,8 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
   state.resetRealtimeTalkConversation = () => {
     resetChatRealtimeConversation(state);
   };
-  state.toggleRealtimeTalk = async () => {
-    if (state.realtimeTalkSession) {
-      stopChatRealtimeTalk(state);
-      state.requestUpdate();
-      return;
-    }
+  const startRealtimeTalk = async (useSystemDefault = false) => {
+    state.realtimeTalkUseSystemDefault = null;
     if (!state.client || !state.connected) {
       state.lastError = "Gateway not connected";
       state.chatError = state.lastError;
@@ -165,7 +168,10 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     // Re-read persisted settings so device choices made elsewhere apply to the
     // next talk session without a reload.
     const talkSettings = loadSettings();
-    const inputDeviceId = talkSettings.realtimeTalkInputDeviceId?.trim() || undefined;
+    const inputDeviceId = useSystemDefault
+      ? undefined
+      : talkSettings.realtimeTalkInputDeviceId?.trim() || undefined;
+    const { client, sessionKey } = state;
     const videoDeviceId = talkSettings.realtimeTalkVideoDeviceId?.trim() || undefined;
     const autoEnableCamera = talkSettings.talkCameraAutoEnable === true;
     let autoEnableCameraAttempted = false;
@@ -178,8 +184,8 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     state.realtimeTalkInputLevel.set(0);
     state.resetRealtimeTalkConversation();
     const session = new RealtimeTalkSession(
-      state.client,
-      state.sessionKey,
+      client,
+      sessionKey,
       {
         onStatus: (status, detail) => {
           if (state.realtimeTalkSession !== session) {
@@ -279,8 +285,32 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       stopChatRealtimeTalk(state);
       state.realtimeTalkStatus = "error";
       state.realtimeTalkDetail = detail;
+      if (error instanceof RealtimeTalkSelectedMicrophoneError) {
+        const retry = async () => {
+          // This exact failed attempt owns consent. Stop/dismiss/route teardown or
+          // another start revokes it; consume synchronously before any async work.
+          if (state.realtimeTalkUseSystemDefault !== retry) {
+            return;
+          }
+          state.realtimeTalkUseSystemDefault = null;
+          if (!state.connected || state.client !== client || state.sessionKey !== sessionKey) {
+            state.requestUpdate();
+            return;
+          }
+          await startRealtimeTalk(true);
+        };
+        state.realtimeTalkUseSystemDefault = retry;
+      }
       state.requestUpdate();
     }
+  };
+  state.toggleRealtimeTalk = async () => {
+    if (state.realtimeTalkSession) {
+      stopChatRealtimeTalk(state);
+      state.requestUpdate();
+      return;
+    }
+    await startRealtimeTalk();
   };
   state.toggleRealtimeTalkCamera = async () => {
     const enabled = state.realtimeTalkVideoStream === null;

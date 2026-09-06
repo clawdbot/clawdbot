@@ -32,6 +32,25 @@ describe("create-as-draft availability", () => {
 });
 
 describe("buildDraftSessionCreateParams", () => {
+  it("retains a cloud repository through the empty create without sending local checkout options", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "",
+        repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
+        projectId: "old-clone",
+        worktree: true,
+        baseRef: "ignored-local-ref",
+        worktreeName: "ignored-local-name",
+        cwd: "/local/clone",
+        workspace: "/workspace",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "",
+      repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
+    });
+  });
   it("keeps plain chats minimal", () => {
     expect(
       buildDraftSessionCreateParams({

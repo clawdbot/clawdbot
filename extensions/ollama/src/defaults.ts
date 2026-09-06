@@ -3,6 +3,12 @@ export const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 export const OLLAMA_DEFAULT_API_KEY = "ollama-local";
 const OLLAMA_DOCKER_HOST_BASE_URL = "http://host.docker.internal:11434";
 export const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";
+
+/** Recognizes the hosted origin even when a transport path is appended. */
+export function isOllamaCloudOrigin(baseUrl: string | undefined): boolean {
+  return baseUrl !== undefined && URL.parse(baseUrl)?.origin === OLLAMA_CLOUD_BASE_URL;
+}
+
 export const OLLAMA_CLOUD_PROVIDER_ID = "ollama-cloud";
 export const OLLAMA_GLM52_CLOUD_MODEL_ID = "glm-5.2";
 /**

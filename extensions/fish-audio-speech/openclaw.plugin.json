@@ -1,5 +1,6 @@
 {
   "id": "fish-audio-speech",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "legacyPluginIds": ["fish-audio"],
   "activation": {
     "onStartup": false

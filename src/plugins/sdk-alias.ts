@@ -585,15 +585,13 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
 
 const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] =
   WORKSPACE_PACKAGE_ALIAS_SUBPATHS.flatMap(([packageDir, subpaths]) =>
-    subpaths.map(
-      (subpath): WorkspacePackageAliasEntry => ({
-        packageName: `@openclaw/${packageDir}`,
-        packageDir,
-        subpath,
-        srcFile: `${subpath || "index"}.ts`,
-        distFile: `${subpath || "index"}.mjs`,
-      }),
-    ),
+    subpaths.map((subpath): WorkspacePackageAliasEntry => ({
+      packageName: `@openclaw/${packageDir}`,
+      packageDir,
+      subpath,
+      srcFile: `${subpath || "index"}.ts`,
+      distFile: `${subpath || "index"}.mjs`,
+    })),
   );
 const WORKSPACE_PACKAGE_ALIAS_NAMES = new Set([
   ...WORKSPACE_PACKAGE_ALIAS_SUBPATHS.map(([name]) => `@openclaw/${name}`),
@@ -1119,16 +1117,6 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(
   );
 }
 
-function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
-  const distPath = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
-  if (isUsableDistPluginSdkArtifact(distPath)) {
-    return true;
-  }
-  return PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.some((ext) =>
-    pluginCacheExistsSync(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
-  );
-}
-
 function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
   try {
     const distPluginSdkDir = path.join(packageRoot, "dist", "plugin-sdk");
@@ -1161,10 +1149,8 @@ function listPluginSdkExportedSubpaths(context: PluginLoaderAliasContext): strin
   const subpaths = [
     ...new Set([
       ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
-      ...readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter(
-        (subpath) =>
-          shouldIncludePrivateLocalOnlyPluginSdkSubpath(context, subpath) &&
-          hasPluginSdkSubpathArtifact(packageRoot, subpath),
+      ...readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter((subpath) =>
+        shouldIncludePrivateLocalOnlyPluginSdkSubpath(context, subpath),
       ),
     ]),
   ].toSorted();
@@ -1172,53 +1158,62 @@ function listPluginSdkExportedSubpaths(context: PluginLoaderAliasContext): strin
   return subpaths;
 }
 
-function resolvePluginSdkScopedAliasMap(context: PluginLoaderAliasContext): Record<string, string> {
+function createPluginSdkScopedAliases(context: PluginLoaderAliasContext) {
   const { packageRoot, orderedKinds } = context;
-  if (!packageRoot) {
-    return {};
-  }
-  const cacheKey = `${pluginSdkAuthorityCacheKey(context)}::${orderedKinds.join(",")}`;
-  const cachedPluginSdkScopedAliasMaps = sdkHost(packageRoot).aliasesByOwner;
-  const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const aliasMap: Record<string, string> = {};
-  const distPluginSdkArtifacts = orderedKinds.includes("dist")
-    ? listDistPluginSdkArtifactSubpaths(packageRoot)
-    : new Set<string>();
-  for (const subpath of listPluginSdkExportedSubpaths(context)) {
+  // Only permitted inventory names enter the cache; missing targets are also
+  // generation-owned facts. A first import must not validate every SDK artifact.
+  const targets = new Map<string, string | null | undefined>(
+    listPluginSdkExportedSubpaths(context).map((subpath) => [subpath, undefined]),
+  );
+  let distArtifacts: Set<string> | undefined;
+  let aliasMap: Record<string, string> | undefined;
+  const resolveSubpath = (subpath: string): string | undefined => {
+    if (!packageRoot || !targets.has(subpath)) {
+      return undefined;
+    }
+    const cachedTarget = targets.get(subpath);
+    if (cachedTarget !== undefined) {
+      return cachedTarget ?? undefined;
+    }
     for (const kind of orderedKinds) {
       if (kind === "dist") {
-        if (!distPluginSdkArtifacts.has(subpath)) {
-          continue;
-        }
+        distArtifacts ??= listDistPluginSdkArtifactSubpaths(packageRoot);
         const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
-        if (isUsableDistPluginSdkArtifact(candidate)) {
-          for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
-            aliasMap[`${packageName}/${subpath}`] = candidate;
-          }
-          break;
+        if (distArtifacts.has(subpath) && isUsableDistPluginSdkArtifact(candidate)) {
+          targets.set(subpath, candidate);
+          return candidate;
         }
         continue;
       }
       for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
         const candidate = path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`);
-        if (!pluginCacheExistsSync(candidate)) {
-          continue;
+        if (pluginCacheExistsSync(candidate)) {
+          targets.set(subpath, candidate);
+          return candidate;
         }
-        for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
-          aliasMap[`${packageName}/${subpath}`] = candidate;
-        }
-        break;
-      }
-      if (Object.hasOwn(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
-        break;
       }
     }
-  }
-  cachedPluginSdkScopedAliasMaps.set(cacheKey, aliasMap);
-  return aliasMap;
+    targets.set(subpath, null);
+    return undefined;
+  };
+  return {
+    resolveSubpath,
+    getAliasMap: (): Record<string, string> => {
+      if (aliasMap) {
+        return aliasMap;
+      }
+      aliasMap = {};
+      for (const subpath of targets.keys()) {
+        const target = resolveSubpath(subpath);
+        if (target) {
+          for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
+            aliasMap[`${packageName}/${subpath}`] = target;
+          }
+        }
+      }
+      return aliasMap;
+    },
+  };
 }
 
 const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
@@ -1401,6 +1396,8 @@ export function preparePluginLoaderAliases(
     return cached;
   }
   let aliasMap: Record<string, string> | undefined;
+  let sdkAliases: ReturnType<typeof createPluginSdkScopedAliases> | undefined;
+  const getSdkAliases = () => (sdkAliases ??= createPluginSdkScopedAliases(context));
   const getAliasMap = () =>
     withPluginCache(
       cache,
@@ -1408,7 +1405,7 @@ export function preparePluginLoaderAliases(
         (aliasMap ??= mergeAliasMaps(
           resolveBundledPluginPackagePublicSurfaceAliasMap(context),
           resolveWorkspacePackageAliasMap(context),
-          normalizeAliasTargets(resolvePluginSdkScopedAliasMap(context)),
+          normalizeAliasTargets(getSdkAliases().getAliasMap()),
         )),
     );
   const prepared = {
@@ -1416,8 +1413,22 @@ export function preparePluginLoaderAliases(
     // stable for the loader lifecycle. Key the captured authority, not raw hints.
     cacheKey,
     getAliasMap,
-    resolveAlias: (specifier: string): string | undefined =>
-      isPluginLoaderAliasSpecifier(specifier) ? getAliasMap()[specifier] : undefined,
+    resolveAlias: (specifier: string): string | undefined => {
+      if (!isPluginLoaderAliasSpecifier(specifier)) {
+        return undefined;
+      }
+      if (aliasMap) {
+        return aliasMap[specifier];
+      }
+      return withPluginCache(cache, () => {
+        const prefix = PLUGIN_SDK_PACKAGE_NAMES.find((name) => specifier.startsWith(`${name}/`));
+        if (!prefix) {
+          return getAliasMap()[specifier];
+        }
+        const target = getSdkAliases().resolveSubpath(specifier.slice(prefix.length + 1));
+        return target ? normalizeJitiAliasTargetPath(target) : undefined;
+      });
+    },
   };
   cache.sdk.contexts.set(cacheKey, prepared);
   return prepared;

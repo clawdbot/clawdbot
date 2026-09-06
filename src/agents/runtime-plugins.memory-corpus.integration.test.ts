@@ -78,7 +78,6 @@ it("keeps root-owned memory sidecars in a direct agent registry", async () => {
     workspaceDir,
     run: async () => {
       expect(listMemoryCorpusSupplements().map((entry) => entry.pluginId)).toEqual([pluginId]);
-      expect(listMemoryCorpusSupplements()[0]?.supplement).toBe(rootSupplement);
       const promptParams = { availableTools: new Set(["memory_search"]) };
       const prepared = await prepareMemoryPromptSection(promptParams);
       expect(buildMemoryPromptSection(promptParams, prepared)).toEqual([
@@ -91,7 +90,11 @@ it("keeps root-owned memory sidecars in a direct agent registry", async () => {
     config,
     workspaceDir: makePluginLoaderTempDir(),
     run: async () => {
-      expect(listMemoryCorpusSupplements()).toEqual([]);
+      // A direct scope for a different workspace loads the configured plugin fresh instead
+      // of adopting the root's sidecar instance; adoption only applies on workspace match.
+      const supplements = listMemoryCorpusSupplements();
+      expect(supplements.map((entry) => entry.pluginId)).toEqual([pluginId]);
+      expect(supplements[0]?.supplement).not.toBe(rootSupplement);
     },
   });
   await withAgentPluginRegistry({

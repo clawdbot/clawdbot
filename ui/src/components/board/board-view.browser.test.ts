@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildWidgetDocument } from "../../../../src/canvas/wrap.js";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import "../../styles/base.css";
@@ -405,9 +406,10 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
         data: { type: "openclaw:widget-size", height: 300 },
       }),
     );
-    // The card hugs its exact content height (300px + 2x12px card inset); the
+    // The card hugs its content (300px + 2x12px inset + 2px border); the
     // ceil-to-row slack stays outside the card as grid background.
-    await vi.waitFor(() => expect(Math.round(first.getBoundingClientRect().height)).toBe(324));
+    await vi.waitFor(() => expect(Math.round(frame.getBoundingClientRect().height)).toBe(300));
+    expect(Math.round(first.getBoundingClientRect().height)).toBe(326);
     expect(second.getBoundingClientRect().top).toBeGreaterThan(secondTopBefore);
 
     const cardBody = first.querySelector<HTMLElement>(".board-widget__body");
@@ -421,6 +423,47 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     finishDocumentAnimations();
     expect(getComputedStyle(second).borderTopColor).not.toBe("rgba(0, 0, 0, 0)");
   });
+
+  it.each(["card", "full-bleed", "frameless"] as const)(
+    "keeps a %s widget stable when its content fills the iframe viewport",
+    async (presentation) => {
+      const view = await mount();
+      view.snapshot = {
+        ...structuredClone(source),
+        widgets: [{ ...source.widgets[0]!, presentation }],
+      };
+      await view.updateComplete;
+      const cell = view.querySelector("openclaw-board-widget-cell")!;
+      await cell.updateComplete;
+      const frame = cell.querySelector("iframe")!;
+      const initialHeight = frame.getBoundingClientRect().height;
+      const reports: number[] = [];
+      const recordSize = (event: MessageEvent) => {
+        if (event.source === frame.contentWindow && event.data?.type === "openclaw:widget-size") {
+          reports.push(event.data.height);
+        }
+      };
+      window.addEventListener("message", recordSize);
+      try {
+        frame.srcdoc = buildWidgetDocument(
+          "Viewport-sized dashboard",
+          "<style>body{min-height:100vh}</style><main>Dashboard content</main>",
+        );
+        await vi.waitFor(() => expect(reports.length).toBeGreaterThan(0));
+        // Each host resize can trigger another content report; allow repeated
+        // layout cycles so a missing border cannot silently shrink the frame.
+        for (let index = 0; index < 12; index += 1) {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+        }
+        expect(frame.getBoundingClientRect().height).toBeCloseTo(initialHeight, 0);
+        expect(reports.every((height) => height === initialHeight)).toBe(true);
+      } finally {
+        window.removeEventListener("message", recordSize);
+      }
+    },
+  );
 
   it("rejects tab drop targets owned by another board", async () => {
     const applyOps = vi.fn(async () => undefined);
