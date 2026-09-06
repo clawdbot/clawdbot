@@ -87,6 +87,17 @@ struct ChatSurfacePresentationTests {
         #expect(decision.mountsComposer)
     }
 
+    @Test func `iOS disconnected toolbar owns connection chrome over a visible transcript`() {
+        let decision = chatSurfaceDecision(Self.state(
+            hasVisibleTranscript: true,
+            isEmptyThread: false,
+            errorText: "not connected",
+            hostConnection: .disconnected))
+
+        #expect(decision.presentation == .transcript)
+        #expect(!decision.showsErrorBanner)
+    }
+
     @Test func `iOS connecting with no transcript stays loading instead of flashing disconnected`() {
         let decision = chatSurfaceDecision(Self.state(
             isEmptyThread: true,

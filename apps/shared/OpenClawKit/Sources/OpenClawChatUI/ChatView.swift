@@ -1009,10 +1009,10 @@ extension OpenClawChatView {
     private func errorPresentation(
         for error: String) -> (title: String, message: String, systemImage: String, tint: Color)
     {
-        let lower = error.lowercased()
-        if lower.contains("not connected") || lower.contains("socket") {
+        if chatSurfaceErrorIsConnectionFailure(error) {
             return ("Disconnected", "Reconnect to your gateway to continue.", "wifi.slash", .orange)
         }
+        let lower = error.lowercased()
         if lower.contains("timed out") {
             return ("Timed out", "The gateway took too long to respond.", "clock.badge.exclamationmark", .orange)
         }
