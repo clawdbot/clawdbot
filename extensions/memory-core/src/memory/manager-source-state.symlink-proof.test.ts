@@ -85,7 +85,6 @@ describe("symlink extra-path root real-behavior proof", () => {
       );
 
       // Print the simulated CLI output for the PR evidence trail.
-      // eslint-disable-next-line no-console
       console.log(
         [
           "memory status (deep) — simulated CLI output",
