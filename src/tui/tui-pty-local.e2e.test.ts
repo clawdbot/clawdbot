@@ -1053,12 +1053,85 @@ describe("TUI PTY real backends", () => {
       async ({ onTestFinished }) => {
         const replyText = `${alias.toUpperCase()}_ALIAS_RESPONSE`;
         const prompt = `message through ${alias} alias`;
+        const cliModelId = "claude-sonnet-5";
+        const cliModelRef = `claude-cli/${cliModelId}`;
+        const canonicalModelRef = `anthropic/${cliModelId}`;
         const fixture = await startLocalModeTui(onTestFinished, {
           cliArgs: [alias],
           replyText,
+          ...(alias === "chat"
+            ? {
+                prepareConfig: ({ config }: { config: OpenClawConfig }) => {
+                  const mockProvider = config.models?.providers?.["tui-pty-mock"];
+                  if (!mockProvider) {
+                    throw new Error("local PTY fixture model provider is missing");
+                  }
+                  return {
+                    ...config,
+                    plugins: {
+                      enabled: true,
+                      allow: ["anthropic"],
+                      entries: { anthropic: { enabled: true } },
+                      slots: { memory: "none" },
+                    },
+                    agents: {
+                      ...config.agents,
+                      defaults: {
+                        ...config.agents?.defaults,
+                        models: {
+                          ...config.agents?.defaults?.models,
+                          [cliModelRef]: { agentRuntime: { id: "claude-cli" } },
+                        },
+                      },
+                    },
+                    models: {
+                      ...config.models,
+                      providers: {
+                        ...config.models?.providers,
+                        "claude-cli": {
+                          ...mockProvider,
+                          models: mockProvider.models.map((model) => ({
+                            ...model,
+                            id: cliModelId,
+                            name: cliModelId,
+                          })),
+                        },
+                      },
+                    },
+                  } satisfies OpenClawConfig;
+                },
+              }
+            : {}),
         });
         try {
           await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+          if (alias === "chat") {
+            const modelOffset = fixture.run.visibleOutput().length;
+            await fixture.run.write(`/model ${cliModelRef}\r`, { delay: false });
+            await waitForOutputAfter(
+              fixture.run,
+              `model set to ${canonicalModelRef}`,
+              modelOffset,
+            );
+            expect(fixture.run.visibleOutput().slice(modelOffset)).not.toContain(
+              `model set to ${cliModelRef}`,
+            );
+            expect(fixture.mockModel.requests()).toHaveLength(0);
+            console.log(
+              `[behavior-evidence] tui-local-cli-model-identity ${JSON.stringify({
+                requested: cliModelRef,
+                displayed: canonicalModelRef,
+              })}`,
+            );
+
+            const restoreOffset = fixture.run.visibleOutput().length;
+            await fixture.run.write("/model tui-pty-mock/gpt-5.5\r", { delay: false });
+            await waitForOutputAfter(
+              fixture.run,
+              "model set to tui-pty-mock/gpt-5.5",
+              restoreOffset,
+            );
+          }
           await fixture.run.write(`${prompt}\r`);
           await waitFor({
             timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
@@ -1145,90 +1218,6 @@ describe("TUI PTY real backends", () => {
         await fixture.run.waitForOutput("Usage cost", LOCAL_OUTPUT_TIMEOUT_MS);
         await fixture.run.waitForOutput("Last 30d", LOCAL_OUTPUT_TIMEOUT_MS);
         expect(fixture.mockModel.requests()).toHaveLength(0);
-      } finally {
-        await fixture.cleanup();
-      }
-    },
-    LOCAL_TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "shows the canonical provider after a local CLI-runtime model patch",
-    async ({ onTestFinished }) => {
-      const modelId = "claude-sonnet-5";
-      const cliModelRef = `claude-cli/${modelId}`;
-      const canonicalModelRef = `anthropic/${modelId}`;
-      const fixture = await startLocalModeTui(onTestFinished, {
-        prepareConfig: ({ config }) => {
-          const mockProvider = config.models?.providers?.["tui-pty-mock"];
-          if (!mockProvider) {
-            throw new Error("local PTY fixture model provider is missing");
-          }
-          return {
-            ...config,
-            plugins: {
-              enabled: true,
-              allow: ["anthropic"],
-              entries: { anthropic: { enabled: true } },
-              slots: { memory: "none" },
-            },
-            agents: {
-              ...config.agents,
-              defaults: {
-                ...config.agents?.defaults,
-                models: {
-                  ...config.agents?.defaults?.models,
-                  [cliModelRef]: { agentRuntime: { id: "claude-cli" } },
-                },
-              },
-            },
-            models: {
-              ...config.models,
-              providers: {
-                ...config.models?.providers,
-                "claude-cli": {
-                  ...mockProvider,
-                  models: mockProvider.models.map((model) => ({
-                    ...model,
-                    id: modelId,
-                    name: modelId,
-                  })),
-                },
-              },
-            },
-          } satisfies OpenClawConfig;
-        },
-      });
-      try {
-        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
-        const outputOffset = fixture.run.visibleOutput().length;
-        await fixture.run.write(`/model ${cliModelRef}\r`, { delay: false });
-        await waitForOutputAfter(
-          fixture.run,
-          `model set to ${canonicalModelRef}`,
-          outputOffset,
-        );
-        await waitFor({
-          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () => {
-            const screen = synchronizedFrameRows(fixture.run.output(), fixture.run)[0]?.join(
-              "\n",
-            );
-            return screen?.includes(canonicalModelRef) && screen.includes("| idle") ? screen : null;
-          },
-          onTimeout: () =>
-            new Error(`local TUI did not render the canonical model\n${fixture.run.output()}`),
-        });
-        expect(fixture.run.visibleOutput().slice(outputOffset)).not.toContain(
-          `model set to ${cliModelRef}`,
-        );
-        expect(fixture.mockModel.requests()).toHaveLength(0);
-        console.log(
-          `[behavior-evidence] tui-local-cli-model-identity ${JSON.stringify({
-            requested: cliModelRef,
-            displayed: canonicalModelRef,
-          })}`,
-        );
       } finally {
         await fixture.cleanup();
       }
