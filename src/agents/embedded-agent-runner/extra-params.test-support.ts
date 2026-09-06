@@ -1,39 +1,61 @@
 // Shared harness for extra-params wrapper tests.
+import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
-import type {
-  prepareProviderExtraParams,
-  resolveProviderExtraParamsForTransport,
-  wrapProviderStreamFn,
-} from "../../plugins/provider-hook-runtime.js";
+import * as providerRuntime from "../../plugins/provider-hook-runtime.js";
+import type { ProviderPlugin } from "../../plugins/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 import type { ProviderThinkLevel } from "./utils.js";
 
-type ExtraParamsTestApi = {
-  setProviderRuntimeDepsForTest(
-    deps:
-      | Partial<{
-          prepareProviderExtraParams: typeof prepareProviderExtraParams;
-          resolveProviderExtraParamsForTransport: typeof resolveProviderExtraParamsForTransport;
-          wrapProviderStreamFn: typeof wrapProviderStreamFn;
-        }>
-      | undefined,
-  ): void;
-  resetProviderRuntimeDepsForTest(): void;
+type ProviderHook<K extends keyof ProviderPlugin> = Extract<
+  ProviderPlugin[K],
+  (...args: never[]) => unknown
+>;
+type ProviderHookCall<K extends keyof ProviderPlugin> = {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  context: Parameters<ProviderHook<K>>[0];
+};
+export type WrapProviderStreamFnParams = ProviderHookCall<"wrapStreamFn">;
+type ProviderRuntimeDeps = {
+  prepareProviderExtraParams: (
+    params: ProviderHookCall<"prepareExtraParams">,
+  ) => ReturnType<ProviderHook<"prepareExtraParams">>;
+  resolveProviderExtraParamsForTransport: (
+    params: ProviderHookCall<"extraParamsForTransport">,
+  ) => ReturnType<ProviderHook<"extraParamsForTransport">>;
+  wrapProviderStreamFn: (
+    params: WrapProviderStreamFnParams,
+  ) => ReturnType<ProviderHook<"wrapStreamFn">>;
 };
 
-function getTestApi(): ExtraParamsTestApi {
-  const api = (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.extraParamsTestApi")
-  ];
-  if (!api) {
-    throw new Error("extra params test API is unavailable");
-  }
-  return api as ExtraParamsTestApi;
-}
-
-export const testing = getTestApi();
+export const testing = {
+  setProviderRuntimeDepsForTest(deps: Partial<ProviderRuntimeDeps> = {}): void {
+    vi.spyOn(providerRuntime, "ensureProviderRuntimePluginHandle").mockImplementation((params) => {
+      if (params.runtimeHandle) {
+        return params.runtimeHandle;
+      }
+      return {
+        ...params,
+        plugin: {
+          id: params.provider,
+          label: params.provider,
+          auth: [],
+          prepareExtraParams: (context) =>
+            deps.prepareProviderExtraParams?.({ ...params, context }),
+          extraParamsForTransport: (context) =>
+            deps.resolveProviderExtraParamsForTransport?.({ ...params, context }),
+          wrapStreamFn: (context) => deps.wrapProviderStreamFn?.({ ...params, context }),
+        },
+      };
+    });
+  },
+  resetProviderRuntimeDepsForTest(): void {
+    vi.mocked(providerRuntime.ensureProviderRuntimePluginHandle).mockRestore();
+  },
+};
 
 type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
   headers?: Record<string, string>;

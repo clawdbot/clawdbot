@@ -1108,6 +1108,8 @@ describe("gateway sessions patch", () => {
         },
       } as SessionEntry,
     };
+    const input = store[MAIN_SESSION_KEY]!;
+    const before = structuredClone(input);
     const entry = expectPatchOk(
       await runPatch({ store, patch: { key: MAIN_SESSION_KEY, thinkingLevel: "low" } }),
     );
@@ -1121,6 +1123,7 @@ describe("gateway sessions patch", () => {
       ts: 1,
       source: "agent-patch",
     });
+    expect(input).toEqual(before);
   });
 
   test("clears the marker thinkingLevel restore when the user clears thinkingLevel", async () => {
@@ -1136,13 +1139,50 @@ describe("gateway sessions patch", () => {
         },
       } as SessionEntry,
     };
+    const input = store[MAIN_SESSION_KEY]!;
+    const before = structuredClone(input);
     const entry = expectPatchOk(
       await runPatch({ store, patch: { key: MAIN_SESSION_KEY, thinkingLevel: null } }),
     );
     expect(entry.thinkingLevel).toBeUndefined();
     expect(entry.modelFallback?.prevThinkingLevel).toBeUndefined();
     expect(entry.modelFallback?.prevModel).toBe(OPENAI_GPT_ID);
+    expect(input).toEqual(before);
   });
+
+  test.each([false, true])(
+    "projects context rollback metadata without mutating its input (clear thinking=%s)",
+    async (clearThinking) => {
+      const store = mainStoreEntry({
+        thinkingLevel: "high",
+        contextWindow: "extended",
+        modelFallback: {
+          prevModel: OPENAI_GPT_ID,
+          prevProvider: "openai",
+          prevThinkingLevel: "high",
+          prevContextWindow: "extended",
+          ts: 1,
+          source: "agent-patch",
+        },
+      });
+      const input = store[MAIN_SESSION_KEY]!;
+      const before = structuredClone(input);
+      const entry = expectPatchOk(
+        await runPatch({
+          store,
+          patch: {
+            key: MAIN_SESSION_KEY,
+            contextWindow: null,
+            ...(clearThinking ? { thinkingLevel: null } : {}),
+          },
+        }),
+      );
+      expect(entry.contextWindow).toBeUndefined();
+      expect(entry.modelFallback?.prevContextWindow).toBeUndefined();
+      expect(entry.modelFallback?.prevThinkingLevel).toBe(clearThinking ? undefined : "high");
+      expect(input).toEqual(before);
+    },
+  );
 
   test("clears pending live model switches for model reset patches", async () => {
     const store = mainStoreEntry({

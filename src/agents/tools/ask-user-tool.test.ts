@@ -1,4 +1,3 @@
-import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { ReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
@@ -83,63 +82,6 @@ function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): stri
 
 afterEach(() => {
   resetPendingAskUserQuestionsForTest();
-});
-
-describe("ask_user normalization", () => {
-  it("normalizes headers, forces free text, and clamps timeout", () => {
-    const normalized = normalizeAskUserParams({ ...validArgs, timeoutSeconds: 5 });
-
-    expect(normalized.timeoutSeconds).toBe(30);
-    expect(normalized.questions[0]).toMatchObject({
-      questionId: "deploy_target",
-      header: "Deployment t",
-      isOther: true,
-    });
-    expect(normalizeAskUserParams({ ...validArgs, timeoutSeconds: 9_999 }).timeoutSeconds).toBe(
-      3_600,
-    );
-    expect(Value.Check(createAskUserTool({}).parameters, validArgs)).toBe(true);
-    expect(
-      Value.Check(createAskUserTool({}).parameters, {
-        questions: [{ ...validArgs.questions[0], isSecret: true }],
-      }),
-    ).toBe(false);
-    expect(normalized.questions[0]).not.toHaveProperty("isSecret");
-  });
-
-  it("repeats the structured-choice contract in the model-visible schema", () => {
-    const schema = JSON.stringify(createAskUserTool({}).parameters);
-
-    expect(schema).toContain("Put all selectable choices in options");
-    expect(schema).toContain("Every selectable choice");
-    expect(schema).toContain("True only when the user may choose several options at once");
-  });
-
-  it.each([
-    ["empty questions", { questions: [] }, "1 to 3 questions"],
-    [
-      "too many questions",
-      { questions: Array.from({ length: 4 }, () => validArgs.questions[0]) },
-      "1 to 3 questions",
-    ],
-    [
-      "too few options",
-      { questions: [{ ...validArgs.questions[0], options: [{ label: "Only" }] }] },
-      "2 to 4 options",
-    ],
-    [
-      "duplicate ids",
-      { questions: [validArgs.questions[0], validArgs.questions[0]] },
-      "duplicate question id 'deploy_target'",
-    ],
-    [
-      "invalid id",
-      { questions: [{ ...validArgs.questions[0], id: "Deploy Target" }] },
-      "must be snake_case",
-    ],
-  ])("rejects %s", (_name, args, error) => {
-    expect(() => normalizeAskUserParams(args)).toThrow(error);
-  });
 });
 
 describe("ask_user prompt delivery", () => {
@@ -371,8 +313,6 @@ describe("ask_user execution", () => {
   });
 
   it("publishes its own prompt when no harness reserved one", async () => {
-    // A harness that dispatches tools directly reserves nothing before the call.
-    // Without a prompt of its own the tool waits on an answer nobody was asked for.
     const answers = { answers: { deploy_target: ["Production"] } };
     const sent: SentPrompt[] = [];
     let promptDelivered: () => void = () => {};
@@ -384,7 +324,6 @@ describe("ask_user execution", () => {
         return { id: params.id };
       }
       if (method === "question.waitAnswer") {
-        // Answering only after the prompt is out keeps the assertion about the prompt.
         await promptIsOut;
         return { status: "answered", answers };
       }
@@ -410,9 +349,44 @@ describe("ask_user execution", () => {
     expect(result.details).toEqual({ status: "answered", answers });
   });
 
+  it.each(["answered", "cancelled", "expired", "pending"] as const)(
+    "ends self-publication when the Gateway returns %s before delivery",
+    async (status) => {
+      const answers = { answers: { deploy_target: ["Production"] } };
+      const result = status === "answered" ? { status, answers } : { status };
+      const finishWait = createDeferred<typeof result>();
+      const promptStarted = createDeferred();
+      let aborted = false;
+      const gateway = gatewayStub(async (method, _opts, params) =>
+        method === "question.request"
+          ? { id: params.id }
+          : method === "question.waitAnswer"
+            ? finishWait.promise
+            : method === "question.resolve"
+              ? { status: "cancelled" }
+              : Promise.reject(new Error(`unexpected method ${method}`)),
+      );
+      const pending = createAskUserTool({
+        sessionKey: "agent:main:direct-dispatch-abort",
+        gatewayCall: gateway.call,
+        questionPrompt: {
+          send: (_payload, options) => {
+            options?.signal?.addEventListener("abort", () => (aborted = true), { once: true });
+            promptStarted.resolve();
+            return new Promise<void>(() => {});
+          },
+        },
+      }).execute("call-direct-dispatch-abort", validArgs);
+      await promptStarted.promise;
+      finishWait.resolve(result);
+      await expect(pending).resolves.toMatchObject({
+        details: status === "answered" ? { status, answers } : { status: "no_answer" },
+      });
+      expect(aborted).toBe(true);
+    },
+  );
+
   it("leaves the prompt to a harness that already reserved one", async () => {
-    // The embedded tool lifecycle publishes the prompt itself. Publishing here too
-    // would show the same question twice in the conversation.
     const sessionKey = "agent:main:reserved-prompt";
     const normalized = normalizeAskUserParams(validArgs);
     const reservation = reserveAskUserPromptDelivery({

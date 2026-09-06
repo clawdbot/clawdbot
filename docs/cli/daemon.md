@@ -49,7 +49,7 @@ openclaw daemon uninstall
 - Token-drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env). If token auth is not effectively active (`gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or unset with password able to win), config token resolution is skipped.
 - `install` validates a SecretRef-managed `gateway.auth.token` is resolvable but never persists the resolved value into service environment metadata; if it can't resolve, install fails closed.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, `install` blocks until you set the mode explicitly.
-- On macOS, `install` keeps LaunchAgent plists and the generated env file/wrapper owner-only (mode `0600`/`0700`) instead of embedding secrets in `EnvironmentVariables`.
+- On macOS, `install` writes LaunchAgent plists with mode `0644`; secrets stay in the generated owner-only environment file (`0600`), loaded through an owner-only wrapper (`0700`).
 - Running multiple Gateways on one host: isolate ports, config/state, and workspaces. See [Multiple gateways](/gateway#multiple-gateways-same-host).
 
 ## Related

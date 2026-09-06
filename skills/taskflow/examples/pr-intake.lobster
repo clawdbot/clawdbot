@@ -1,32 +1,32 @@
-# Illustrative Lobster authoring example for a TaskFlow-style PR intake lane.
-# Replace the placeholder commands with repo-specific tooling.
-
+# Runnable synthetic preview. Requires Node; no GitHub reads or mutations.
 name: pr-intake
+args:
+  items:
+    default:
+      - { id: demo-pr-1, intent: close }
+      - { id: demo-pr-2, intent: request_changes }
+      - { id: demo-pr-3, intent: refactor }
+      - { id: demo-pr-4, intent: maintainer_review }
+      - { id: demo-pr-5, intent: refactor }
 steps:
-  - id: fetch
-    command: gh pr list --repo owner/repo --state open --json number,title,body,headRefName
-
-  - id: classify
+  - id: review
     command: >-
-      openclaw.invoke --tool llm-task --action json --args-json
-      '{"prompt":"Classify each PR as close, request_changes, refactor, or maintainer_review. Return intent and recommended next action.","thinking":"low","schema":{"type":"object","properties":{"items":{"type":"array"}},"required":["items"],"additionalProperties":false}}'
-    stdin: $fetch.stdout
+      node -e '
+      const { items } = JSON.parse(process.env.LOBSTER_ARGS_JSON);
+      if (!Array.isArray(items) || items.length > 20) throw new Error("Expected at most 20 synthetic items");
+      const routes = { close: [], request_changes: [], refactor: [], maintainer_review: [] };
+      for (const item of items) {
+        if (!item || typeof item.id !== "string" || !item.id.trim() || item.id.length > 80 ||
+            typeof item.intent !== "string" || !Object.hasOwn(routes, item.intent)) {
+          throw new Error("Each item needs an id and a close, request_changes, refactor or maintainer_review intent");
+        }
+        routes[item.intent].push(item.id);
+      }
+      process.stdout.write(JSON.stringify({ synthetic: true, routes }));'
+    approval:
+      prompt: "Approve this synthetic PR routing? No GitHub actions will be performed."
 
-  - id: close_low_signal
-    command: pr-close-low-signal
-    stdin: $classify.stdout
-    condition: $classify.json.items[0].nextAction == "close"
-
-  - id: request_changes
-    command: pr-request-changes
-    stdin: $classify.stdout
-    condition: $classify.json.items[0].nextAction == "request_changes"
-
-  - id: refactor_branch
-    command: pr-refactor-branch
-    stdin: $classify.stdout
-    condition: $classify.json.items[0].nextAction == "refactor"
-
-  - id: escalate
-    command: echo '{"status":"notify","target":"maintainer"}'
-    condition: $classify.json.items[0].nextAction == "maintainer_review"
+  - id: result
+    command: node -e 'process.stdout.write(require("node:fs").readFileSync(0))'
+    stdin: $review.stdout
+    condition: $review.approved

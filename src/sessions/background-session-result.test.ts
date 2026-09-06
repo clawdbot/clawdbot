@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { commitBackgroundResultToSession } from "./background-session-result.js";
 import {
@@ -87,6 +88,17 @@ describe("commitBackgroundResultToSession", () => {
       config: target.config,
     });
     expect(retry).toEqual(first);
+    await expect(
+      commitBackgroundResultToSession({
+        agentId: "main",
+        sessionKey: target.sessionKey,
+        expectedGeneration: target.generation,
+        text: "A different completion must not reuse the committed run.",
+        idempotencyKey: "cron-current-completion:cron:job-1:1000",
+        provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
+        config: target.config,
+      }),
+    ).rejects.toThrow("conflicts with the admitted message");
 
     const events = await loadTranscriptEvents({
       agentId: "main",
@@ -115,6 +127,44 @@ describe("commitBackgroundResultToSession", () => {
     unsubscribe();
   });
 
+  it("keeps canonical model text separate from structured display content", async () => {
+    const target = await createTarget();
+    const content = [
+      { type: "text", text: "Example report" },
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session/attachment-1/full",
+        alt: "report.png",
+      },
+    ];
+    const commit = await commitBackgroundResultToSession({
+      agentId: "main",
+      sessionKey: target.sessionKey,
+      expectedGeneration: target.generation,
+      text: "Example report\nreport.png",
+      prepareDisplayContent: async () => content,
+      idempotencyKey: "cron-current-completion:cron:job-media:4000",
+      provenance: { kind: "cron", jobId: "job-media", runId: "cron:job-media:4000" },
+      config: target.config,
+    });
+    expect(commit).toMatchObject({ ok: true });
+
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
+    });
+    const messageEvent = events.find(
+      (event) =>
+        readTranscriptEventMessage(event)?.idempotencyKey ===
+        "cron-current-completion:cron:job-media:4000",
+    );
+    const message = readTranscriptEventMessage(messageEvent);
+    expect(message?.content).toEqual([{ type: "text", text: "Example report\nreport.png" }]);
+    expect(message?.openclawDisplayContent).toEqual(content);
+  });
+
   it("refuses an archived target conversation", async () => {
     const target = await createTarget();
     await replaceSessionEntry(
@@ -138,6 +188,35 @@ describe("commitBackgroundResultToSession", () => {
         config: target.config,
       }),
     ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("archived") });
+  });
+
+  it("does not commit when cancelled during display preparation", async () => {
+    const target = await createTarget();
+    const controller = new AbortController();
+    await expect(
+      commitBackgroundResultToSession({
+        agentId: "main",
+        sessionKey: target.sessionKey,
+        expectedGeneration: target.generation,
+        text: "Cancelled report",
+        prepareDisplayContent: async () => {
+          controller.abort();
+          return [{ type: "text", text: "Cancelled report" }];
+        },
+        idempotencyKey: "cancelled-completion",
+        provenance: { kind: "cron", jobId: "cancelled-job", runId: "cancelled-run" },
+        config: target.config,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(
+      await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      }),
+    ).toEqual([]);
   });
 
   it.each([

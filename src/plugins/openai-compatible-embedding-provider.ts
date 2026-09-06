@@ -8,7 +8,7 @@ import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-erro
 import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
-} from "../agents/provider-local-service.js";
+} from "../agents/provider-local-service-target.js";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";

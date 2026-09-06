@@ -31,6 +31,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -831,7 +832,15 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
     },
     mentions: {
-      stripPatterns: () => ["<@[^>\\s]+>"],
+      stripPatterns: ({ ctx }) => {
+        const preparedPatterns = ctx.ChannelContext?.chat?.mentionStripPatterns;
+        const exactPatterns = Array.isArray(preparedPatterns)
+          ? preparedPatterns.flatMap((pattern) =>
+              typeof pattern === "string" ? [escapeRegExp(pattern)] : [],
+            )
+          : [];
+        return [...exactPatterns, "<@[^>\\s]+>"];
+      },
     },
   },
   pairing: {

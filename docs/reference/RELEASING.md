@@ -224,6 +224,8 @@ website, and private dist-tags; do not run those steps for this Gateway path.
 
 This checklist is the public shape of the release flow. Private credentials and service-specific signing, notarization, dist-tag recovery, and emergency rollback procedures stay in the maintainer-only release runbook.
 
+An explicit stable or full release request includes macOS publication unless the operator limits its scope. That authorization carries through macOS validation, signing, notarization, promotion, and verification without a separate macOS consent step. Follow the current owner-configured environment policy and retain all enforced rules and exact-source artifact checks.
+
 For beta, stable, and full profiles, Linux (`ubuntu`) cross-OS lanes gate npm publication. Windows and macOS cross-OS lanes run in parallel as advisory coverage; their failures remain visible under **advisory** in `release-ci-summary` and in the evidence manifest without blocking Release Decision or `pnpm release:candidate`. Selected lanes still finish for terminal evidence. npm qualification, Docker, Package Acceptance, normal CI, and the profile's performance and soak gates remain required. macOS app signing/notarization/appcast and Windows Hub asset promotion run in parallel with or after npm publication and never delay it; verify platform readiness separately.
 
 1. Start from current `main`: pull latest, confirm the target commit is pushed, and confirm `main` CI is green enough to branch from.

@@ -44,48 +44,6 @@ export type CreateNodeProxyAgentOptions =
       agentOptions?: NodeProxyAgentOptions;
     };
 
-function inferTargetProtocol(targetUrl: string | URL): NodeProxyProtocol | undefined {
-  const parsed = parseTargetUrl(targetUrl);
-  if (parsed === undefined) {
-    return undefined;
-  }
-  if (parsed.protocol === "http:" || parsed.protocol === "ws:") {
-    return "http";
-  }
-  if (parsed.protocol === "https:" || parsed.protocol === "wss:") {
-    return "https";
-  }
-  return undefined;
-}
-
-function parseTargetUrl(targetUrl: string | URL): URL | undefined {
-  let parsed: URL;
-  try {
-    parsed = targetUrl instanceof URL ? targetUrl : new URL(targetUrl);
-  } catch {
-    return undefined;
-  }
-  return parsed;
-}
-
-function formatNoProxyTargetUrl(targetUrl: string | URL): string | undefined {
-  // WebSocket proxy bypass uses HTTP(S) semantics so NO_PROXY default ports and
-  // hostname matching stay aligned with normal requests.
-  const target = parseTargetUrl(targetUrl);
-  if (target === undefined) {
-    return undefined;
-  }
-  const parsed = new URL(target.href);
-  // Bypass matching uses web request semantics. Map WebSocket schemes to the
-  // equivalent request schemes so default ports and host rules line up.
-  if (parsed.protocol === "ws:") {
-    parsed.protocol = "http:";
-  } else if (parsed.protocol === "wss:") {
-    parsed.protocol = "https:";
-  }
-  return parsed.href;
-}
-
 function proxyUrlWithDefaultScheme(proxyUrl: string, protocol: NodeProxyProtocol): URL {
   const withScheme = proxyUrl.includes("://") ? proxyUrl : `${protocol}://${proxyUrl}`;
   let parsed: URL;
@@ -161,20 +119,42 @@ export function resolveEnvNodeProxyUrlForTarget(
   targetUrl: string | URL,
   env: NodeJS.ProcessEnv = process.env,
 ): URL | undefined {
-  const protocol = inferTargetProtocol(targetUrl);
-  if (protocol === undefined) {
+  return resolveEnvNodeProxyTarget(targetUrl, env)?.proxyUrl;
+}
+
+function resolveEnvNodeProxyTarget(
+  targetUrl: string | URL,
+  env: NodeJS.ProcessEnv = process.env,
+): { proxyUrl: URL; protocol: NodeProxyProtocol } | undefined {
+  let target: URL;
+  try {
+    target = new URL(targetUrl instanceof URL ? targetUrl.href : targetUrl);
+  } catch {
     return undefined;
   }
-  const formattedTarget = formatNoProxyTargetUrl(targetUrl);
-  if (formattedTarget === undefined) {
+  // Normalize only this request's snapshot: WebSocket bypass uses HTTP(S)
+  // default ports without mutating the caller's URL.
+  if (target.protocol === "ws:") {
+    target.protocol = "http:";
+  } else if (target.protocol === "wss:") {
+    target.protocol = "https:";
+  }
+  let protocol: NodeProxyProtocol;
+  if (target.protocol === "http:") {
+    protocol = "http";
+  } else if (target.protocol === "https:") {
+    protocol = "https";
+  } else {
     return undefined;
   }
-  if (matchesNoProxy(formattedTarget, env)) {
+  if (matchesNoProxy(target, env)) {
     return undefined;
   }
   const proxyOptions = resolveEnvHttpProxyAgentOptions(env);
   const proxyUrl = protocol === "https" ? proxyOptions?.httpsProxy : proxyOptions?.httpProxy;
-  return proxyUrl ? proxyUrlWithDefaultScheme(proxyUrl, protocol) : undefined;
+  return proxyUrl
+    ? { proxyUrl: proxyUrlWithDefaultScheme(proxyUrl, protocol), protocol }
+    : undefined;
 }
 
 function createFixedNodeProxyAgent(
@@ -229,13 +209,13 @@ function createEnvNodeProxyAgentForTarget(
     agentOptions?: NodeProxyAgentOptions;
   } = {},
 ): HttpAgent | undefined {
-  const proxyUrl = resolveEnvNodeProxyUrlForTarget(targetUrl);
-  if (proxyUrl === undefined) {
+  const target = resolveEnvNodeProxyTarget(targetUrl);
+  if (target === undefined) {
     return undefined;
   }
-  return createFixedNodeProxyAgent(proxyUrl, {
-    protocol: options.protocol ?? inferTargetProtocol(targetUrl) ?? "https",
-    proxyTls: resolveActiveManagedProxyTlsOptions({ proxyUrl: proxyUrl.href }),
+  return createFixedNodeProxyAgent(target.proxyUrl, {
+    protocol: options.protocol ?? target.protocol,
+    proxyTls: resolveActiveManagedProxyTlsOptions({ proxyUrl: target.proxyUrl.href }),
     agentOptions: options.agentOptions,
   });
 }

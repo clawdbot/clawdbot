@@ -148,18 +148,28 @@ describe("Matrix account state Doctor migration", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("repairs a 2026.7.1 account database before Matrix persists a new sync cursor", async () => {
+  it("repairs active account state without opening token-root archives", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const storageRootDir = path.join(
       stateDir,
       "matrix",
       "accounts",
+      "sync-cache-backup",
+      "matrix.example.org__bot",
+      "0123456789abcdef",
+    );
+    const archivedStorageRootDir = path.join(
+      stateDir,
+      "matrix",
+      "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "sync-cache-backup",
     );
     const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
+    const archivedDatabasePath = path.join(archivedStorageRootDir, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.mkdirSync(path.dirname(archivedDatabasePath), { recursive: true });
     const compressedFixture = Buffer.from(
       fs.readFileSync(MATRIX_V2026_7_1_FIXTURE_BASE64, "utf8").replaceAll(/\s/gu, ""),
       "base64",
@@ -170,6 +180,7 @@ describe("Matrix account state Doctor migration", () => {
     const rawFixture = gunzipSync(compressedFixture);
     expect(createHash("sha256").update(rawFixture).digest("hex")).toBe(MATRIX_V2026_7_1_RAW_SHA256);
     fs.writeFileSync(databasePath, rawFixture);
+    fs.writeFileSync(archivedDatabasePath, rawFixture);
 
     const beforeRepairRowsSha256 = matrixStateRowsSha256(databasePath);
     const staleStore = new SqliteBackedMatrixSyncStore(storageRootDir);
@@ -197,10 +208,12 @@ describe("Matrix account state Doctor migration", () => {
     expect(doctor.signal, doctorOutput).toBeNull();
     expect(doctor.status, doctorOutput).toBe(0);
     expect(doctorOutput).toContain(`Matrix account SQLite ${storageRootDir}`);
+    expect(doctorOutput).not.toContain(`Matrix account SQLite ${archivedStorageRootDir}`);
     expect(doctorOutput).toContain(
       "Migrated shared state audit event ledger → versioned message lifecycle schema",
     );
     expect(matrixStateRowsSha256(databasePath)).toBe(beforeRepairRowsSha256);
+    expect(fs.readFileSync(archivedDatabasePath)).toEqual(rawFixture);
 
     const repairedStore = new SqliteBackedMatrixSyncStore(storageRootDir);
     await expect(repairedStore.getSavedSyncToken()).resolves.toBe("cursor-a");

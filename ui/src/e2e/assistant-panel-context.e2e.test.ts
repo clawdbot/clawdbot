@@ -103,7 +103,7 @@ suite.define(() => {
     },
   );
 
-  it("refreshes open Home context after a roster-only title update", async () => {
+  it("refreshes reconnected Home context after a roster-only title update", async () => {
     const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
       ? suite.artifactDir
       : undefined;
@@ -148,6 +148,14 @@ suite.define(() => {
           await page.screenshot({ path: path.join(proofDir, "01-initial-context.png") });
         }
 
+        await panel.evaluate(async (element) => {
+          const parent = element.parentElement!;
+          const next = element.nextSibling;
+          element.remove();
+          parent.insertBefore(element, next);
+          await (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+        });
+
         const renamed = { ...work, label: "Renamed workspace", updatedAt: Date.now() + 1 };
         const list: SessionsListResult = {
           ts: Date.now(),
@@ -165,10 +173,10 @@ suite.define(() => {
         const row = page.locator(`.sidebar-recent-session[data-session-key="${work.key}"]`);
         // Confirm the roster and shell observed the update without changing the route or pane.
         await expect.poll(() => row.textContent()).toContain(renamed.label);
-        await expect.poll(() => reference.textContent()).toContain('"title":"Renamed workspace"');
         if (proofDir) {
           await page.screenshot({ path: path.join(proofDir, "02-renamed-context.png") });
         }
+        await expect.poll(() => reference.textContent()).toContain('"title":"Renamed workspace"');
 
         const composer = panel.locator(".agent-chat__composer-combobox textarea");
         await composer.fill("Review the current work");
