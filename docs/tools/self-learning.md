@@ -10,7 +10,7 @@ sidebarTitle: "Self-learning"
 
 Self-learning turns corrections and successful work into reusable skills. Skills
 are the durable unit: they hold procedures that future sessions can discover and
-follow. Every learned skill flows through [Skill Workshop](/tools/skill-workshop),
+follow. Self-learning captures flow through [Skill Workshop](/tools/skill-workshop),
 the same governed proposal, scan, apply, and lifecycle path used for explicit
 skill authoring.
 
@@ -70,7 +70,7 @@ Experience review starts only when all of these conditions hold:
 A later foreground completion in the same session restarts the quiet period.
 It does not replace the saved evidence unless that turn also qualifies for review.
 Pending reviews belong to an agent and session together, so agents using `global`
-retain separate candidates. Experience, history, and collection reviews share
+retain separate candidates. Experience and history reviews share
 one Workshop slot within the [shared background work budget](/concepts/queue#background-work).
 The foreground answer never waits for the model's review.
 
@@ -164,7 +164,7 @@ Automatic learning uses the same apply path as an operator-approved Workshop
 proposal. It does not give the isolated reviewer new tools or a way to bypass
 lifecycle checks.
 
-Every learned skill receives these controls:
+Every self-learning capture receives these controls:
 
 - **Security scan at apply:** Workshop reruns the scanner immediately before the
   live write. A critical finding quarantines the proposal instead of applying it.
@@ -177,10 +177,6 @@ Every learned skill receives these controls:
   already above the cap can only become shorter.
 - **Rollback metadata:** apply records the prior skill and support-file contents
   before the live write.
-- **Collection review:** a weekly automation maintains the Workshop directory
-  with normal file tools and records its result in automation history. See
-  [collection changes and recovery](/tools/skill-workshop#changes-and-recovery)
-  for its separate editing and recovery rules.
 - **Authoring standards:** learned skills use class-level names, trigger-first
   descriptions, evidence-backed steps, and token-efficient language.
 - **Bounded failure:** an automatic apply is attempted once. A normal apply
@@ -194,9 +190,11 @@ openclaw skills workshop reject <proposal-id> --reason "Not reusable"
 ```
 
 Applied captures remain visible in `openclaw skills workshop list` and retain
-their rollback metadata. The weekly collection review can later improve, merge,
-or remove them. This makes
-approval-free learning reversible and observable rather than silent.
+their rollback metadata. Weekly collection review follows a separate
+[normal-cron workflow](/tools/skill-workshop#collection-review): completed file
+edits survive failure or cancellation, and new reviews do not create collection
+backups. Current results appear in automation run history; retained legacy
+backups have a separate [restore path](/tools/skill-workshop#changes-and-recovery).
 
 Residual risk remains: learned content comes from conversation and tool output,
 and the scanner blocks recognized dangerous patterns, not every possible piece
@@ -310,10 +308,11 @@ Check the following:
 
 An eligible experience review can still abstain. No proposal is the expected
 result when the evidence does not clear the reusable-procedure bar.
-Use `openclaw skills curator status` to inspect the last collection and
-experience review outcomes alongside live skill usage. Age-based curation is
-retired; the `curator pin`, `unpin`, and `restore` commands return an error
-explaining that weekly collection review manages the skill collection.
+Use `openclaw skills curator status` to inspect experience review outcomes and
+live skill usage. Current weekly collection results are in automation run history;
+Curator retains only the earlier collection records. Age-based curation is retired;
+the `curator pin`, `unpin`, and `restore` commands return an error explaining that
+weekly collection review manages the skill collection.
 
 ### Doctor reports that Workshop is hidden
 

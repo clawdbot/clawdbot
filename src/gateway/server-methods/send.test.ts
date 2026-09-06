@@ -36,6 +36,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import {
   mintMessageActionTurnCapability,
@@ -3644,6 +3645,8 @@ describe("gateway send mirroring", () => {
   });
 
   it("keeps a diverted terminal send fail closed instead of claiming a source reply", async () => {
+    // Group policy needs the loaded fixture's conversation grammar.
+    setActivePluginRegistry(createSessionConversationTestRegistry());
     mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
       jsonResult({ ok: true, result: { messageId: "tg-diverted", receipt: {} } }),
     );

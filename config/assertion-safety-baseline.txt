@@ -1659,7 +1659,7 @@ src/agents/bash-tools.exec-request-preparation.ts	6
 src/agents/bash-tools.exec-run.ts	1
 src/agents/bash-tools.exec-runtime.ts	2
 src/agents/bash-tools.exec-script-preflight.ts	2
-src/agents/bash-tools.process.ts	6
+src/agents/bash-tools.process.ts	5
 src/agents/bootstrap-files.ts	1
 src/agents/bootstrap-hooks.ts	1
 src/agents/btw-transcript.ts	5
@@ -2741,7 +2741,7 @@ src/gateway/call.ts	6
 src/gateway/channel-health-monitor.ts	6
 src/gateway/channel-thaw-restart.ts	1
 src/gateway/chat-attachments.ts	4
-src/gateway/chat-display-projection.canvas.ts	14
+src/gateway/chat-display-projection.canvas.ts	13
 src/gateway/chat-display-projection.core.ts	5
 src/gateway/chat-display-projection.helpers.ts	10
 src/gateway/chat-display-projection.history.ts	1

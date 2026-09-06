@@ -83,6 +83,10 @@ describe("Provider model discovery auth preparation", () => {
         },
       }),
     );
+    vi.spyOn(providerRuntime, "formatProviderAuthProfileApiKeyWithPlugin").mockImplementation(
+      async ({ provider, context }) =>
+        discovery.providers.find((candidate) => candidate.id === provider)?.formatApiKey?.(context),
+    );
     const profileId = "chutes:oauth";
     const config: OpenClawConfig = { auth: { order: { chutes: [profileId] } } };
     const store = createExpiredOauthStore({
@@ -350,50 +354,134 @@ describe("Provider model discovery auth preparation", () => {
     }
   });
 
-  it("does not start a live catalog after OAuth preparation times out", async () => {
-    const { config, store, refreshedCredential } = await createChutesCatalogFixture();
-    const refreshResult =
-      createDeferredCore<
-        Awaited<ReturnType<typeof providerRuntime.resolveProviderOAuthCredentialWithPlugin>>
-      >();
-    const refresh = vi
-      .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
-      .mockImplementation(() => refreshResult.promise);
-    const preparation = vi.spyOn(catalogContext, "prepareProviderCatalogRun");
-    const catalog = vi.spyOn(providerDiscovery, "runProviderCatalog");
-    const fetch = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(Response.json({ data: [{ id: "late-account-model" }] }));
-    const outcomes: ProviderCatalogOutcome[] = [];
-
-    try {
-      const plan = await planCatalog(config, store, {
+  it.each([
+    { completion: "success", timedOut: true },
+    { completion: "failure", timedOut: true },
+    { completion: "failure", timedOut: false },
+  ] as const)(
+    "keeps OAuth preparation bounded after $completion (timeout: $timedOut)",
+    async ({ completion, timedOut }) => {
+      const { profileId, config, store, capturedCredential, refreshedCredential } =
+        await createChutesCatalogFixture();
+      const fallbackProfileId = "chutes:fallback";
+      const fallbackCredential: OAuthCredential = {
+        type: "oauth",
+        provider: "chutes",
+        access: "expired-fallback-access",
+        refresh: "fallback-refresh-token",
+        expires: Date.now() - 60_000,
+      };
+      const refreshedFallback: OAuthCredential = {
+        ...fallbackCredential,
+        access: "refreshed-fallback-access",
+        refresh: "rotated-fallback-refresh-token",
+        expires: Date.now() + 3_600_000,
+      };
+      config.auth = { order: { chutes: [profileId, fallbackProfileId] } };
+      store.profiles[fallbackProfileId] = fallbackCredential;
+      await state.writeAuthProfiles(store);
+      const persistedBefore = readAuthProfileStoreForTest(agentDir);
+      const persistedFirstProfile = persistedBefore.profiles[profileId];
+      if (!persistedFirstProfile) {
+        throw new Error("missing persisted first-profile fixture");
+      }
+      const refreshStarted = createDeferredCore();
+      const refreshResult =
+        createDeferredCore<
+          Awaited<ReturnType<typeof providerRuntime.resolveProviderOAuthCredentialWithPlugin>>
+        >();
+      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
+        undefined,
+      );
+      const refresh = vi
+        .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
+        .mockImplementation(async ({ credential }) => {
+          if (credential.access !== fallbackCredential.access) {
+            refreshStarted.resolve();
+            return refreshResult.promise;
+          }
+          return {
+            status: "available",
+            credential: refreshedFallback,
+            apiKey: refreshedFallback.access,
+          };
+        });
+      const preparation = vi.spyOn(catalogContext, "prepareProviderCatalogRun");
+      const catalog = vi.spyOn(providerDiscovery, "runProviderCatalog");
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ data: [{ id: "late-account-model" }] }));
+      const outcomes: ProviderCatalogOutcome[] = [];
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const planning = planCatalog(config, store, {
         providerId: "chutes",
-        timeoutMs: 25,
+        timeoutMs: timedOut ? 25 : undefined,
         outcomes,
       });
 
-      expect(outcomes).toEqual([{ provider: "chutes", status: "unavailable" }]);
-      expect(readPlannedProvider(plan, "chutes")?.models.length).toBeGreaterThan(0);
-      expect(fetch).not.toHaveBeenCalled();
-    } finally {
-      refreshResult.resolve({
-        status: "available",
-        credential: refreshedCredential,
-        apiKey: refreshedCredential.access,
-      });
-      // Drain the real preparation and any erroneously started catalog before checking late I/O.
-      const completedPreparation = await Promise.allSettled(
-        preparation.mock.results.map((result) => result.value),
-      );
-      await Promise.allSettled(catalog.mock.results.map((result) => result.value));
-      expect(completedPreparation).toEqual([expect.objectContaining({ status: "fulfilled" })]);
-    }
+      try {
+        await refreshStarted.promise;
+        if (timedOut) {
+          await vi.advanceTimersByTimeAsync(25);
+          const plan = await planning;
+          expect(outcomes).toEqual([{ provider: "chutes", status: "unavailable" }]);
+          expect(readPlannedProvider(plan, "chutes")?.models.length).toBeGreaterThan(0);
+        }
+        expect(refresh).toHaveBeenCalledOnce();
+        expect(fetch).not.toHaveBeenCalled();
+      } finally {
+        try {
+          if (completion === "success") {
+            refreshResult.resolve({
+              status: "available",
+              credential: refreshedCredential,
+              apiKey: refreshedCredential.access,
+            });
+          } else {
+            refreshResult.reject(new Error("synthetic OAuth refresh failure"));
+          }
+          // Join the real refresh owner so late credential persistence and I/O are observable.
+          const completedPreparation = await Promise.allSettled(
+            preparation.mock.results.map((result) => result.value),
+          );
+          await Promise.allSettled(catalog.mock.results.map((result) => result.value));
+          expect(completedPreparation).toEqual([expect.objectContaining({ status: "fulfilled" })]);
+        } finally {
+          vi.useRealTimers();
+        }
+      }
 
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(preparation).toHaveBeenCalledOnce();
-    expect(catalog).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-    expect(outcomes).toEqual([{ provider: "chutes", status: "unavailable" }]);
-  });
+      const plan = await planning;
+      expect(refresh.mock.calls.map(([params]) => params.credential)).toEqual(
+        timedOut ? [capturedCredential] : [capturedCredential, fallbackCredential],
+      );
+      const persisted = readAuthProfileStoreForTest(agentDir);
+      expect(persisted.profiles[profileId]).toMatchObject(
+        completion === "success" ? refreshedCredential : persistedFirstProfile,
+      );
+      expect(persisted.profiles[fallbackProfileId]).toMatchObject(
+        timedOut ? fallbackCredential : refreshedFallback,
+      );
+      expect(store.profiles[profileId]).toEqual(capturedCredential);
+      expect(store.profiles[fallbackProfileId]).toEqual(fallbackCredential);
+      expect(preparation).toHaveBeenCalledOnce();
+      if (timedOut) {
+        expect(catalog).not.toHaveBeenCalled();
+        expect(fetch).not.toHaveBeenCalled();
+        expect(outcomes).toEqual([{ provider: "chutes", status: "unavailable" }]);
+      } else {
+        expect(catalog).toHaveBeenCalledOnce();
+        expect(fetch).toHaveBeenCalledOnce();
+        expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+          `Bearer ${refreshedFallback.access}`,
+        );
+        expect(outcomes).toEqual([
+          { provider: "chutes", profileId: fallbackProfileId, status: "ready" },
+        ]);
+        expect(readPlannedProvider(plan, "chutes")?.models.map((model) => model.id)).toContain(
+          "late-account-model",
+        );
+      }
+    },
+  );
 });

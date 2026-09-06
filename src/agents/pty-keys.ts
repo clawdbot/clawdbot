@@ -115,7 +115,7 @@ type KeyEncodingRequest = {
 };
 
 type KeyEncodingResult = {
-  data: string;
+  data: Buffer;
   warnings: string[];
 };
 
@@ -136,35 +136,30 @@ export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean
   );
 }
 
-/** Encodes literal, hex, and named key tokens into one PTY input string. */
+/** Encodes literal, hex, and named key tokens into one PTY byte payload. */
 export function encodeKeySequence(
   request: KeyEncodingRequest,
   cursorKeyMode?: "normal" | "application",
 ): KeyEncodingResult {
   const warnings: string[] = [];
-  let data = "";
-
-  if (request.literal) {
-    data += request.literal;
-  }
-
-  if (request.hex?.length) {
-    for (const raw of request.hex) {
-      const byte = parseHexByte(raw);
-      if (byte === null) {
-        warnings.push(`Invalid hex byte: ${raw}`);
-        continue;
-      }
-      data += String.fromCharCode(byte);
+  const hexBytes: number[] = [];
+  for (const raw of request.hex ?? []) {
+    const byte = parseHexByte(raw);
+    if (byte === null) {
+      warnings.push(`Invalid hex byte: ${raw}`);
+      continue;
     }
+    hexBytes.push(byte);
   }
-
-  if (request.keys?.length) {
-    for (const token of request.keys) {
-      data += encodeKeyToken(token, warnings, cursorKeyMode);
-    }
-  }
-
+  const keys = request.keys
+    ?.map((token) => encodeKeyToken(token, warnings, cursorKeyMode))
+    .join("");
+  // Hex values are already bytes; only text fragments pass through UTF-8 encoding.
+  const data = Buffer.concat([
+    Buffer.from(request.literal ?? ""),
+    Buffer.from(hexBytes),
+    Buffer.from(keys ?? ""),
+  ]);
   return { data, warnings };
 }
 

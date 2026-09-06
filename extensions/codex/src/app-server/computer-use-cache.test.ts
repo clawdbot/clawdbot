@@ -133,10 +133,8 @@ describe("Codex Computer Use shared plugin cache", () => {
     expect(activeCacheEntry?.isSymbolicLink()).toBe(false);
     expect((await fs.lstat(activeCachePath)).isDirectory()).toBe(true);
     expect((await fs.lstat(activeCachePath)).isSymbolicLink()).toBe(false);
-    await expect(
-      fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json")),
-    ).resolves.toBe(undefined);
-    await expect(fs.access(priorCachePath)).resolves.toBe(undefined);
+    await fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json"));
+    await fs.access(priorCachePath);
   });
 
   it("leaves an up-to-date copied cache entry unchanged", async () => {
@@ -174,9 +172,7 @@ describe("Codex Computer Use shared plugin cache", () => {
     });
     expect((await fs.lstat(activeCachePath)).isDirectory()).toBe(true);
     expect((await fs.lstat(activeCachePath)).isSymbolicLink()).toBe(false);
-    await expect(
-      fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json")),
-    ).resolves.toBe(undefined);
+    await fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json"));
   });
 
   it("refreshes same-version cache bytes for a new desktop generation", async () => {
@@ -364,8 +360,8 @@ describe("Codex Computer Use shared plugin cache", () => {
       changed: false,
       removedStaleVersions: [],
     });
-    await expect(fs.access(path.join(cacheRoot, "1.0.101"))).resolves.toBe(undefined);
-    await expect(fs.access(path.join(cacheRoot, "1.0.102"))).resolves.toBe(undefined);
+    await fs.access(path.join(cacheRoot, "1.0.101"));
+    await fs.access(path.join(cacheRoot, "1.0.102"));
   });
 
   it("preserves the default namespace when marketplacePath is explicit", async () => {
@@ -394,8 +390,8 @@ describe("Codex Computer Use shared plugin cache", () => {
       changed: false,
       removedStaleVersions: [],
     });
-    await expect(fs.access(path.join(cacheRoot, "1.0.101"))).resolves.toBe(undefined);
-    await expect(fs.access(path.join(cacheRoot, "1.0.102"))).resolves.toBe(undefined);
+    await fs.access(path.join(cacheRoot, "1.0.101"));
+    await fs.access(path.join(cacheRoot, "1.0.102"));
   });
 
   it("preserves the active cache when replacement copying fails", async () => {
