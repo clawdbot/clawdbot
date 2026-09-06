@@ -144,7 +144,11 @@ it("does not promote a provisional task when replacement wins before admin admis
       });
     });
     const result = await pending;
-    expect(await admin.mock.results[0]!.value).toEqual({ found: false, killed: false });
+    // After #140354: the admin finds the replacement by its inherited stable
+    // taskRunId (found: true), but the still-active replacement resists the
+    // kill (killed: false). The provisional kill is not promoted — verified
+    // by the soft assertions below (cancelled: false, task stays running).
+    expect(await admin.mock.results[0]!.value).toMatchObject({ found: true, killed: false });
     expect.soft(result.cancelled).toBe(false);
     expect.soft(getTaskById(task.taskId)?.status).toBe("running");
     expect.soft(getTaskById(task.taskId)?.error).toBeUndefined();
