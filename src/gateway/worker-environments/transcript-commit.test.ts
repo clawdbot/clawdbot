@@ -399,6 +399,8 @@ describe("worker transcript commit application", () => {
   });
 
   it("commits a non-default agent's global session", async () => {
+    const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
+    unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     const workStorePath = path.join(root, "agents", "work", "sessions", "sessions.json");
     cfg = {
       agents: {
@@ -413,14 +415,12 @@ describe("worker transcript commit application", () => {
       { agentId: "work", sessionKey: "global", storePath: workStorePath },
       { sessionId: SESSION_ID, updatedAt: 20 },
     );
-    sessionTarget = await resolveSessionTranscriptRuntimeTarget({
+    const workTarget = await resolveSessionTranscriptRuntimeTarget({
       agentId: "work",
       sessionId: SESSION_ID,
       sessionKey: "global",
       storePath: workStorePath,
     });
-    committer = createWorkerTranscriptCommitter({ getConfig: () => cfg, store: ledgerStore });
-
     const outcome = await committer.commit({
       ...ADMITTED_OWNER,
       request: createRequest({
@@ -434,14 +434,26 @@ describe("worker transcript commit application", () => {
       }),
     });
 
-    expect(outcome.ok).toBe(true);
+    expect(outcome.ok, "WORKER_OWNER_COMMIT_139216").toBe(true);
     if (!outcome.ok) {
       throw new Error(`expected global transcript commit, received ${outcome.reason}`);
     }
-    expect(SessionManager.open(sessionTarget).getEntries()).toEqual([
+    expect(SessionManager.open(workTarget).getEntries()).toEqual([
       expect.objectContaining({
         id: outcome.result.newLeafId,
-        message: expect.objectContaining({ role: "user" }),
+        message: expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "Persist in the owning agent" }],
+        }),
+      }),
+    ]);
+    expect(SessionManager.open(sessionTarget).getEntries()).toEqual([]);
+    expect(updates).toEqual([
+      expect.objectContaining({
+        agentId: "work",
+        sessionId: SESSION_ID,
+        sessionKey: "global",
+        messageId: outcome.result.newLeafId,
       }),
     ]);
   });

@@ -12,6 +12,7 @@ export type ResolvedWorkerSessionTarget = Omit<
   SessionTranscriptWriteScope,
   "sessionId" | "sessionKey" | "storePath"
 > & {
+  agentId: string;
   sessionEntry: NonNullable<ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>>;
   sessionId: string;
   sessionKey: string;
