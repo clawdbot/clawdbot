@@ -1,13 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  registerWorkspaceReconcileReporter,
+  runInstrumentedWorkspaceReconcile,
   verifyReconciledWorkspaceFinal,
 } from "./workspace-finalize.js";
+
+const workspaceDebug = vi.hoisted(() => vi.fn());
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/worker-workspace"
+        ? { ...logger, debug: workspaceDebug }
+        : logger;
+    },
+  };
+});
 
 describe("final worker workspace fences", () => {
   it("rechecks remote and local stability after the final quiescence renewal", async () => {
     const log: string[] = [];
-    const reconciliation = {
+    workspaceDebug.mockClear();
+    const reconciliation = await runInstrumentedWorkspaceReconcile(async () => ({
       manifestRef: "sha256:" + "a".repeat(64),
       changed: true,
       verifyStable: async () => {
@@ -16,9 +31,8 @@ describe("final worker workspace fences", () => {
       verifyLocalStable: async () => {
         log.push("local");
       },
-    };
-    const outcomes: string[] = [];
-    registerWorkspaceReconcileReporter(reconciliation, (outcome) => outcomes.push(outcome));
+    }));
+    expect(workspaceDebug).not.toHaveBeenCalled();
     await verifyReconciledWorkspaceFinal(reconciliation, {
       assertActive: async () => {
         log.push("quiescence");
@@ -27,7 +41,10 @@ describe("final worker workspace fences", () => {
     });
 
     expect(log).toEqual(["remote", "local", "quiescence", "remote", "local"]);
-    expect(outcomes).toEqual(["succeeded"]);
+    expect(workspaceDebug).toHaveBeenCalledExactlyOnceWith(
+      "worker workspace reconcile completed",
+      expect.objectContaining({ outcome: "succeeded" }),
+    );
   });
 
   it("rejects a remote write observed after the final quiescence renewal", async () => {

@@ -1,15 +1,18 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import * as ts from "typescript";
 import {
+  loadControlUiSourceCatalog,
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
+  readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
-import type { TranslationMap } from "./lib/control-ui-i18n-sync-plan.ts";
+import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
 export type CatalogFallbackBaseline = {
   fallbacks: Record<string, string[]>;
@@ -18,12 +21,14 @@ export type CatalogFallbackBaseline = {
 };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
-const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const FALLBACK_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "catalog-fallbacks.json");
 const FALLBACK_BASELINE_VERSION = 1;
-
+const CONTROL_UI_TEST_FILE_PATTERN = /\.(?:test|browser\.test|node\.test)\.tsx?$/u;
+const AUTOMATIONS_FEATURE_KEYS =
+  `sessionsView.showCronSessions sessionsView.subagentPrefix sessionsView.automationPrefix agents.cronPanel.schedulerSubtitle agents.cronPanel.agentJobsTitle configForm.sections.cron.label configView.sections.cron subtitles.tasks subtitles.automation memoryPage.dreaming.intro tasksPage.runtime.cron attention.cronFailed attention.cronOverdue palette.items.scheduled`.split(
+    " ",
+  );
 function compareStringArrays(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -37,19 +42,6 @@ export function formatControlUiCatalogFallbackDriftError(): string {
     "control-ui catalog fallback baseline drift detected.",
     "Run `pnpm ui:i18n:sync` (included in `pnpm release:prep`) and commit the generated locale artifacts.",
   ].join("\n");
-}
-
-async function importLocaleModule<T>(filePath: string): Promise<T> {
-  const stats = await stat(filePath);
-  return (await import(`${pathToFileURL(filePath).href}?ts=${stats.mtimeMs}`)) as T;
-}
-
-async function loadLocaleMap(filePath: string, exportName: string): Promise<TranslationMap | null> {
-  if (!existsSync(filePath)) {
-    return null;
-  }
-  const mod = await importLocaleModule<Record<string, TranslationMap>>(filePath);
-  return mod[exportName] ?? null;
 }
 
 function extractPlaceholders(text: string): string[] {
@@ -131,16 +123,78 @@ export function analyzeControlUiCatalogs(
   return { errors, fallbacks };
 }
 
+export function verifyControlUiReferencedKeys(
+  sourceFlat: ReadonlyMap<string, string>,
+  sourceFiles: readonly { content: string; relativeFile: string }[],
+): { literalReferences: number; templatePrefixReferences: number } {
+  const sourceKeys = [...sourceFlat.keys()];
+  const errors: string[] = [];
+  let literalReferences = 0;
+  let templatePrefixReferences = 0;
+
+  for (const { content, relativeFile } of sourceFiles) {
+    const sourceFile = ts.createSourceFile(relativeFile, content, ts.ScriptTarget.Latest, true);
+    const reportMissing = (node: ts.Node, description: string) => {
+      const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+      errors.push(`${relativeFile}:${line}: ${description}`);
+    };
+    const verifyArgument = (rawArgument: ts.Expression): void => {
+      const argument = ts.isParenthesizedExpression(rawArgument)
+        ? rawArgument.expression
+        : ts.isAsExpression(rawArgument) || ts.isTypeAssertionExpression(rawArgument)
+          ? rawArgument.expression
+          : rawArgument;
+      if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) {
+        literalReferences += 1;
+        if (!sourceFlat.has(argument.text)) {
+          reportMissing(argument, `missing English catalog key ${JSON.stringify(argument.text)}`);
+        }
+      } else if (ts.isTemplateExpression(argument)) {
+        templatePrefixReferences += 1;
+        const prefix = argument.head.text;
+        if (prefix && !sourceKeys.some((key) => key.startsWith(prefix))) {
+          reportMissing(argument, `missing English catalog subtree ${JSON.stringify(prefix)}`);
+        }
+      } else if (ts.isConditionalExpression(argument)) {
+        verifyArgument(argument.whenTrue);
+        verifyArgument(argument.whenFalse);
+      }
+    };
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "t" &&
+        node.arguments[0]
+      ) {
+        verifyArgument(node.arguments[0]);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      [
+        "control-ui referenced translation key verification failed.",
+        errors.slice(0, 50).join("\n"),
+        errors.length > 50 ? `...and ${errors.length - 50} more` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+  return { literalReferences, templatePrefixReferences };
+}
+
 async function buildCatalogFallbackBaseline(
   options: {
     allowCatalogDrift?: boolean;
   } = {},
 ): Promise<CatalogFallbackBaseline> {
-  const sourceRaw = await readFile(SOURCE_LOCALE_PATH, "utf8");
-  const sourceMap = await loadLocaleMap(SOURCE_LOCALE_PATH, "en");
-  if (!sourceMap) {
-    throw new Error("ui/src/i18n/locales/en.ts does not export en");
-  }
+  const sourceRaw = await readControlUiSourceCatalog();
+  const sourceMap = loadControlUiSourceCatalog();
   const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
   const localeFlats = new Map<string, Map<string, string>>();
   for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
@@ -148,11 +202,19 @@ async function buildCatalogFallbackBaseline(
     if (!existsSync(memoryPath)) {
       throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
     }
+    // Match the source + translation-memory materialization served by the runtime Vite module.
     const localeMap = materializeControlUiLocaleCatalog(
       sourceFlat,
       loadControlUiTranslationMemory(memoryPath),
     );
-    localeFlats.set(entry.locale, flattenControlUiCatalog(localeMap, entry.locale));
+    const localeFlat = flattenControlUiCatalog(localeMap, entry.locale);
+    const invalid = AUTOMATIONS_FEATURE_KEYS.slice(1, 3).filter((key) =>
+      /\bcron\b/i.test(localeFlat.get(key) ?? ""),
+    );
+    if (invalid.length > 0) {
+      throw new Error(`${entry.locale}: ${invalid.join(", ")}`);
+    }
+    localeFlats.set(entry.locale, localeFlat);
   }
 
   const analysis = analyzeControlUiCatalogs(sourceFlat, localeFlats);
@@ -191,12 +253,25 @@ function printCatalogFallbackSummary(baseline: CatalogFallbackBaseline) {
 }
 
 async function verifyControlUiSourceCatalogShape() {
-  const sourceMap = await loadLocaleMap(SOURCE_LOCALE_PATH, "en");
-  if (!sourceMap) {
-    throw new Error("ui/src/i18n/locales/en.ts does not export en");
+  const sourceFlat = flattenControlUiCatalog(loadControlUiSourceCatalog(), "en");
+  const invalidRenamedValues = AUTOMATIONS_FEATURE_KEYS.filter((key) =>
+    /\bcron\b/i.test(sourceFlat.get(key) ?? "cron"),
+  );
+  if (invalidRenamedValues.length > 0) {
+    throw new Error(`automations terminology drift: ${invalidRenamedValues.join(", ")}`);
   }
-  const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
-  process.stdout.write(`control-ui-i18n: source: keys=${sourceFlat.size}\n`);
+  const sourceFiles = (
+    await collectSourceFileContents({
+      ignoredDirNames: new Set(["test-helpers"]),
+      repoRoot: ROOT,
+      scanExtensions: new Set([".ts", ".tsx"]),
+      scanRoots: ["ui/src"],
+    })
+  ).filter(({ relativeFile }) => !CONTROL_UI_TEST_FILE_PATTERN.test(relativeFile));
+  const referenced = verifyControlUiReferencedKeys(sourceFlat, sourceFiles);
+  process.stdout.write(
+    `control-ui-i18n: source: keys=${sourceFlat.size} literal_references=${referenced.literalReferences} template_prefix_references=${referenced.templatePrefixReferences}\n`,
+  );
 }
 
 export async function syncControlUiCatalogFallbackBaseline(options: {
@@ -222,19 +297,18 @@ export async function syncControlUiCatalogFallbackBaseline(options: {
 }
 
 export async function verifyRuntimeLocaleConfig() {
-  const registryRaw = await readFile(
-    path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts"),
-    "utf8",
-  );
-  const typesRaw = await readFile(path.join(ROOT, "ui", "src", "i18n", "lib", "types.ts"), "utf8");
-  for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
-    if (!registryRaw.includes(`"${entry.locale}"`) || !typesRaw.includes(`| "${entry.locale}"`)) {
-      throw new Error(`runtime locale config is missing ${entry.locale}`);
-    }
+  const registryPath = path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts");
+  const registry = (await import(pathToFileURL(registryPath).href)) as {
+    SUPPORTED_LOCALES: readonly string[];
+  };
+  const expectedLocales = ["en", ...CONTROL_UI_LOCALE_ENTRIES.map((entry) => entry.locale)];
+  if (!compareStringArrays(registry.SUPPORTED_LOCALES, expectedLocales)) {
+    throw new Error(
+      `runtime locale config is out of sync: expected ${expectedLocales.join(", ")}, got ${registry.SUPPORTED_LOCALES.join(", ")}`,
+    );
   }
 
-  const enMap = (await loadLocaleMap(SOURCE_LOCALE_PATH, "en")) ?? {};
-  const languageMap = enMap.languages;
+  const languageMap = loadControlUiSourceCatalog().languages;
   const languageKeys =
     languageMap && typeof languageMap === "object"
       ? Object.keys(languageMap).toSorted((left, right) => left.localeCompare(right))

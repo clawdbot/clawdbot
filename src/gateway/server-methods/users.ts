@@ -1,17 +1,21 @@
 // Gateway methods for durable user profile administration.
 import {
   ErrorCodes,
+  GatewayErrorDetailCodes,
   errorShape,
-  formatValidationErrors,
   validateUsersLinkEmailParams,
   validateUsersListParams,
+  validateUsersPrefsGetParams,
+  validateUsersPrefsSetParams,
   validateUsersSelfParams,
   validateUsersSetAvatarParams,
   validateUsersSetDisplayNameParams,
+  validateUsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
+import { UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import {
-  ensureProfileForEmail,
   getUserProfileDisplay,
   getUserProfileListItem,
   linkEmail,
@@ -19,10 +23,23 @@ import {
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
+  setUserProfileRole,
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
+import {
+  authenticatedProfileUnavailableError,
+  isGatewayClientProfilePending,
+} from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { usersAuthConnectHandlers } from "./users-auth-connect.js";
+import { usersGitHubHandlers } from "./users-github.js";
+import {
+  requireProfileMutationAccess,
+  resolveAuthenticatedProfileId,
+} from "./users-profile-access.js";
+import { assertValidParams } from "./validation.js";
 
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
@@ -48,84 +65,27 @@ function decodeBase64(value: string): Uint8Array | undefined {
   return Buffer.from(trimmed, "base64");
 }
 
-function invalidParams(name: string, errors: Parameters<typeof formatValidationErrors>[0]) {
-  return errorShape(
-    ErrorCodes.INVALID_REQUEST,
-    `invalid ${name} params: ${formatValidationErrors(errors)}`,
-  );
-}
-
 function profileError(error: unknown) {
-  if (error instanceof UserProfileNotFoundError) {
+  if (error instanceof UserProfileNotFoundError || error instanceof UserProfileOwnerError) {
     return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
   }
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
 }
 
-function resolveAuthenticatedProfileId(
-  client: GatewayRequestHandlerOptions["client"],
-): string | undefined {
-  if (client?.authenticatedUserProfile?.profileId) {
-    return resolveUserProfileId(client.authenticatedUserProfile.profileId);
-  }
-  const authenticatedUserId = client?.authenticatedUserId;
-  if (!authenticatedUserId) {
-    return undefined;
-  }
-  // A failed Tailscale profile snapshot must not recreate its provider login
-  // through the legacy email resolver on a later self-profile request.
-  if (client.authenticatedUserIsTailscaleProvider) {
-    return undefined;
-  }
-  return ensureProfileForEmail(authenticatedUserId).id;
-}
-
-function canMutateProfile(
-  client: GatewayRequestHandlerOptions["client"],
-  profileId: string,
-): boolean {
-  if (client?.connect.scopes?.includes(ADMIN_SCOPE)) {
-    return true;
-  }
-  const authenticatedProfileId = resolveAuthenticatedProfileId(client);
-  return (
-    authenticatedProfileId !== undefined &&
-    authenticatedProfileId === resolveUserProfileId(profileId)
-  );
-}
-
-function requireProfileMutationAccess(
-  client: GatewayRequestHandlerOptions["client"],
-  profileId: string,
-  respond: GatewayRequestHandlerOptions["respond"],
-): boolean {
-  // These methods are write-scoped so an identified caller can edit only its own profile;
-  // edits targeting any other profile remain admin-only.
-  if (canMutateProfile(client, profileId)) {
-    return true;
-  }
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.FORBIDDEN, "profile edits require the owning user or operator.admin"),
-  );
-  return false;
-}
-
 export const usersHandlers: GatewayRequestHandlers = {
+  ...usersAuthConnectHandlers,
+  ...usersGitHubHandlers,
   "users.list": ({ params, respond }) => {
-    if (!validateUsersListParams(params)) {
-      respond(false, undefined, invalidParams("users.list", validateUsersListParams.errors));
+    if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
     }
     respond(true, { profiles: listProfiles() });
   },
-  "users.self": ({ client, params, respond }) => {
-    if (!validateUsersSelfParams(params)) {
-      respond(false, undefined, invalidParams("users.self", validateUsersSelfParams.errors));
+  "users.self": async ({ client, params, respond }) => {
+    if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
-    if (!client?.authenticatedUserId) {
+    if (!client?.authenticatedUserId && !client?.authenticatedUserProfile) {
       respond(
         false,
         undefined,
@@ -134,13 +94,16 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      if (client.authenticatedGitHubIdentitySync) {
+        try {
+          await client.authenticatedGitHubIdentitySync();
+        } catch {
+          // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
+        }
+      }
       const profileId = resolveAuthenticatedProfileId(client);
       if (!profileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
-        );
+        respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       respond(true, { profile: getUserProfileListItem(profileId) });
@@ -148,13 +111,110 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.linkEmail": ({ context, params, respond }) => {
-    if (!validateUsersLinkEmailParams(params)) {
+  "users.prefs.get": ({ client, params, respond }) => {
+    if (!assertValidParams(params, validateUsersPrefsGetParams, "users.prefs.get", respond)) {
+      return;
+    }
+    const profileId = client?.authenticatedUserProfile?.profileId ?? "";
+    if (!profileId) {
+      if (isGatewayClientProfilePending(client)) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
+      respond(true, { status: "no_durable_identity" }, undefined);
+      return;
+    }
+    try {
+      const canonicalProfileId = resolveUserProfileId(profileId);
+      if (!canonicalProfileId) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
       respond(
-        false,
+        true,
+        { status: "ok", entries: getUserPreferences(canonicalProfileId, params.keys) },
         undefined,
-        invalidParams("users.linkEmail", validateUsersLinkEmailParams.errors),
       );
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.prefs.set": ({ client, context, params, respond }) => {
+    if (!assertValidParams(params, validateUsersPrefsSetParams, "users.prefs.set", respond)) {
+      return;
+    }
+    const profileId = client?.authenticatedUserProfile?.profileId ?? "";
+    if (!profileId) {
+      if (isGatewayClientProfilePending(client)) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
+      respond(true, { status: "no_durable_identity" }, undefined);
+      return;
+    }
+    try {
+      const canonicalProfileId = resolveUserProfileId(profileId);
+      if (!canonicalProfileId) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
+      const result = setUserPreferences(canonicalProfileId, params.entries);
+      if (!result.ok) {
+        if (result.error.code === "profile-key-limit") {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount})`,
+              {
+                details: {
+                  code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
+                  limit: result.error.limit,
+                  currentCount: result.error.currentCount,
+                },
+              },
+            ),
+          );
+          return;
+        }
+        const key = "key" in result.error ? ` for ${result.error.key}` : "";
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid users.prefs.set entry${key}: ${result.error.code}`,
+          ),
+        );
+        return;
+      }
+      respond(true, { status: "ok" }, undefined);
+      const keys = Object.keys(params.entries);
+      if (keys.length === 0) {
+        return;
+      }
+      const connIds = context.getClientConnIds?.((connectedClient) => {
+        const connectedProfileId = connectedClient.authenticatedUserProfile?.profileId;
+        return Boolean(
+          connectedProfileId &&
+          (connectedProfileId === canonicalProfileId ||
+            resolveUserProfileId(connectedProfileId) === canonicalProfileId),
+        );
+      });
+      if (connIds?.size) {
+        context.broadcastToConnIds(
+          "users.prefs.changed",
+          { profileId: canonicalProfileId, keys },
+          connIds,
+        );
+      }
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.linkEmail": ({ context, params, respond }) => {
+    if (!assertValidParams(params, validateUsersLinkEmailParams, "users.linkEmail", respond)) {
       return;
     }
     const email = params.email.trim();
@@ -165,18 +225,16 @@ export const usersHandlers: GatewayRequestHandlers = {
     try {
       const profile = linkEmail(email, params.targetProfileId);
       refreshConnectedProfile(context, profile);
+      broadcastChatMetadataChanged(context);
       respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
   "users.setDisplayName": ({ client, context, params, respond }) => {
-    if (!validateUsersSetDisplayNameParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.setDisplayName", validateUsersSetDisplayNameParams.errors),
-      );
+    if (
+      !assertValidParams(params, validateUsersSetDisplayNameParams, "users.setDisplayName", respond)
+    ) {
       return;
     }
     try {
@@ -190,13 +248,36 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setAvatar": ({ client, context, params, respond }) => {
-    if (!validateUsersSetAvatarParams(params)) {
+  "users.setRole": ({ context, params, respond }) => {
+    if (!assertValidParams(params, validateUsersSetRoleParams, "users.setRole", respond)) {
+      return;
+    }
+    const roleDefinitions = context.getRuntimeConfig().gateway?.roles?.definitions;
+    if (
+      params.role !== null &&
+      (!roleDefinitions || !Object.hasOwn(roleDefinitions, params.role))
+    ) {
       respond(
         false,
         undefined,
-        invalidParams("users.setAvatar", validateUsersSetAvatarParams.errors),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unknown operator role "${params.role}"; define it under gateway.roles.definitions before assigning it`,
+        ),
       );
+      return;
+    }
+    try {
+      const profile = setUserProfileRole(params.profileId, params.role);
+      invalidateOperatorRolePolicy(profile.id);
+      context.disconnectClientsForUserProfile?.(profile.id);
+      respond(true, { profile });
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.setAvatar": ({ client, context, params, respond }) => {
+    if (!assertValidParams(params, validateUsersSetAvatarParams, "users.setAvatar", respond)) {
       return;
     }
     const bytes = decodeBase64(params.avatarBase64);

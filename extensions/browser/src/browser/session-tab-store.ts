@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import { z } from "zod";
 import {
   getBrowserStateRuntime,
   getOptionalBrowserStateRuntime,
@@ -13,21 +14,53 @@ import {
 const BROWSER_SESSION_TABS_NAMESPACE = "browser.session-tabs";
 const BROWSER_SESSION_TABS_MAX_ENTRIES = 5_000;
 
-export type BrowserSessionTabRecord = {
-  version: 1;
-  sessionKey: string;
-  nativeTargetId: string;
-  profile: string;
-  profileAliases?: string[];
-  profileFingerprint: string;
-  browserInstanceFingerprint: string;
-  interactionTargetKind: "native" | "opaque";
-  trackedAt: number;
-  lastUsedAt: number;
-  cleanupRequestedAt?: number;
-  cleanupAttemptToken?: string;
-  cleanupKind?: "lifecycle" | "sweep";
-};
+const browserSessionTimestampSchema = z.number().finite().nonnegative();
+const browserProfileAliasSchema = z
+  .string()
+  .min(1)
+  .refine((value) => value === value.trim().toLowerCase());
+const browserSessionTabRecordSchema = z
+  .looseObject({
+    version: z.literal(1),
+    sessionKey: z.string().min(1),
+    nativeTargetId: z.string().min(1),
+    profile: z.string().min(1),
+    profileAliases: z.array(browserProfileAliasSchema).min(1).optional(),
+    profileFingerprint: z.string().min(1),
+    browserInstanceFingerprint: z.string().min(1),
+    interactionTargetKind: z.enum(["native", "opaque"]),
+    trackedAt: browserSessionTimestampSchema,
+    lastUsedAt: browserSessionTimestampSchema,
+    cleanupRequestedAt: browserSessionTimestampSchema.optional(),
+    cleanupAttemptToken: z.string().min(1).optional(),
+    cleanupKind: z.enum(["lifecycle", "sweep"]).optional(),
+  })
+  .superRefine((record, context) => {
+    if (record.profileAliases) {
+      const canonical = [...new Set(record.profileAliases)].toSorted(
+        compareBrowserSessionTabProfileAliases,
+      );
+      if (
+        canonical.includes(record.profile) ||
+        !canonical.every((entry, index) => entry === record.profileAliases?.[index])
+      ) {
+        context.addIssue({ code: "custom", message: "profile aliases must be canonical" });
+      }
+    }
+    const cleanupFieldCount = [
+      record.cleanupRequestedAt,
+      record.cleanupAttemptToken,
+      record.cleanupKind,
+    ].filter((value) => value !== undefined).length;
+    if (cleanupFieldCount !== 0 && cleanupFieldCount !== 3) {
+      context.addIssue({ code: "custom", message: "cleanup fields must be all present or absent" });
+    }
+    if (Object.hasOwn(record, "baseUrl") || Object.hasOwn(record, "interactionTargetId")) {
+      context.addIssue({ code: "custom", message: "retired browser tab fields are not allowed" });
+    }
+  });
+
+export type BrowserSessionTabRecord = z.infer<typeof browserSessionTabRecordSchema>;
 
 type BrowserSessionTabStoreRuntime = {
   state: Pick<PluginRuntime["state"], "openSyncKeyedStore">;
@@ -92,73 +125,13 @@ export function browserSessionTabNativeIdentity(
   return `${record.sessionKey}\u0000${record.profile}\u0000${record.nativeTargetId}`;
 }
 
-function isTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
 export function compareBrowserSessionTabProfileAliases(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function isCanonicalProfileAliases(
-  value: unknown,
-  profile: unknown,
-): value is string[] | undefined {
-  if (value === undefined) {
-    return true;
-  }
-  if (
-    !Array.isArray(value) ||
-    value.length === 0 ||
-    value.some(
-      (entry) => typeof entry !== "string" || !entry || entry !== entry.trim().toLowerCase(),
-    )
-  ) {
-    return false;
-  }
-  const canonical = [...new Set(value)].toSorted(compareBrowserSessionTabProfileAliases);
-  return (
-    !canonical.includes(String(profile)) &&
-    canonical.every((entry, index) => entry === value[index])
-  );
-}
-
 export function parseBrowserSessionTabRecord(value: unknown): BrowserSessionTabRecord | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const cleanupFieldsValid =
-    (record.cleanupRequestedAt === undefined &&
-      record.cleanupAttemptToken === undefined &&
-      record.cleanupKind === undefined) ||
-    (isTimestamp(record.cleanupRequestedAt) &&
-      typeof record.cleanupAttemptToken === "string" &&
-      record.cleanupAttemptToken.length > 0 &&
-      (record.cleanupKind === "lifecycle" || record.cleanupKind === "sweep"));
-  if (
-    record.version !== 1 ||
-    typeof record.sessionKey !== "string" ||
-    !record.sessionKey ||
-    typeof record.nativeTargetId !== "string" ||
-    !record.nativeTargetId ||
-    typeof record.profile !== "string" ||
-    !record.profile ||
-    !isCanonicalProfileAliases(record.profileAliases, record.profile) ||
-    typeof record.profileFingerprint !== "string" ||
-    !record.profileFingerprint ||
-    typeof record.browserInstanceFingerprint !== "string" ||
-    !record.browserInstanceFingerprint ||
-    (record.interactionTargetKind !== "native" && record.interactionTargetKind !== "opaque") ||
-    !isTimestamp(record.trackedAt) ||
-    !isTimestamp(record.lastUsedAt) ||
-    !cleanupFieldsValid ||
-    Object.hasOwn(record, "baseUrl") ||
-    Object.hasOwn(record, "interactionTargetId")
-  ) {
-    return undefined;
-  }
-  return record as BrowserSessionTabRecord;
+  const parsed = browserSessionTabRecordSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 export function sameBrowserSessionTabRecord(

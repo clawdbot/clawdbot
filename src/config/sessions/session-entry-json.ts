@@ -1,4 +1,4 @@
-export function hasValidSqliteSessionEntryIdentity(entry: {
+export function hasValidSessionEntryIdentity(entry: {
   sessionId?: unknown;
   updatedAt?: unknown;
 }): entry is { sessionId: string; updatedAt: number } {
@@ -20,7 +20,7 @@ export function parseSqliteSessionEntryRecord(row: {
       return null;
     }
     const record = parsed as Record<string, unknown>;
-    if (!hasValidSqliteSessionEntryIdentity(record)) {
+    if (!hasValidSessionEntryIdentity(record)) {
       return null;
     }
     if (

@@ -1,5 +1,4 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
@@ -28,12 +27,14 @@ import {
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export function createAgentAdmissionController(params: {
+  assertAdmissionCurrent?: () => void;
   cfg: OpenClawConfig;
   runId: string;
   lifecycleGeneration: string;
   agentDedupeKeys: string[];
   preAcceptedReservedSessionKey?: string;
   expectedSession?: ExpectedExistingSessionConstraint;
+  admissionOwner?: symbol;
   context: AgentTurnContext;
   io: AgentTurnIo;
   dedupeLifecycle: AgentDedupeLifecycle;
@@ -66,14 +67,12 @@ export function createAgentAdmissionController(params: {
   const admissionAgentId = () => {
     const resolvedSessionKey = params.getResolvedSessionKey();
     return (
-      params.getResolvedSessionAgentId() ??
-      (resolvedSessionKey === "global"
-        ? (params.getAgentId() ?? resolveDefaultAgentId(params.getCfgForAgent() ?? params.cfg))
-        : undefined)
+      params.getResolvedSessionAgentId() ?? (resolvedSessionKey ? params.getAgentId() : undefined)
     );
   };
 
   const assertAllowed = (commitOutcome = true) => {
+    params.assertAdmissionCurrent?.();
     const resolvedSessionKey = params.getResolvedSessionKey();
     const requestedSessionKey = params.getRequestedSessionKey();
     const latest = readGatewayDedupeEntry({
@@ -86,6 +85,7 @@ export function createAgentAdmissionController(params: {
         runId: params.runId,
         sessionKey: resolvedSessionKey,
         alternateSessionKeys: [params.preAcceptedReservedSessionKey, requestedSessionKey],
+        agentId: admissionAgentId(),
       })
     ) {
       if (commitOutcome) {
@@ -151,11 +151,13 @@ export function createAgentAdmissionController(params: {
     let latestEntry = loadSessionEntry(resolvedSessionKey, {
       agentId: admissionAgent,
       clone: false,
+      projection: "list",
     }).entry;
     if (!latestEntry && requestedSessionKey && requestedSessionKey !== resolvedSessionKey) {
       latestEntry = loadSessionEntry(requestedSessionKey, {
         agentId: admissionAgent,
         clone: false,
+        projection: "list",
       }).entry;
     }
     assertExpectedExistingSession({
@@ -180,6 +182,10 @@ export function createAgentAdmissionController(params: {
   };
 
   const interrupt = () => {
+    // Draining an already-stopped admission must preserve its original cancellation reason.
+    if (admittedRunAbort?.controller.signal.aborted) {
+      return;
+    }
     if (admittedRunAbort?.entry) {
       admittedRunAbort.entry.abortStopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     }
@@ -221,6 +227,7 @@ export function createAgentAdmissionController(params: {
       (await beginSessionWorkAdmission({
         scope,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
+        ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
         assertAllowed: () => assertAllowed(false),
         revalidateAllowed: assertAllowed,
         onInterrupt: interrupt,

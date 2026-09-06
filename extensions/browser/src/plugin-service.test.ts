@@ -20,8 +20,6 @@ type StartLazyPluginServiceModuleParamsWithValidator = {
 const runtimeMocks = vi.hoisted(() => ({
   startLazyPluginServiceModule: vi.fn(async (_params: StartLazyPluginServiceModuleParams) => null),
   stopBrowserControlService: vi.fn(async () => undefined),
-  createGatewayPageShareSink: vi.fn(() => ({ id: "gateway-page-share-sink" })),
-  setPageShareSink: vi.fn(),
 }));
 
 vi.mock("./sdk-node-runtime.js", () => ({
@@ -32,19 +30,10 @@ vi.mock("./control-service.js", () => ({
   stopBrowserControlService: runtimeMocks.stopBrowserControlService,
 }));
 
-vi.mock("./browser/extension-relay/page-share.js", () => ({
-  createGatewayPageShareSink: runtimeMocks.createGatewayPageShareSink,
-  setPageShareSink: runtimeMocks.setPageShareSink,
-}));
-
 describe("createBrowserPluginService", () => {
   beforeEach(() => {
     runtimeMocks.startLazyPluginServiceModule.mockReset().mockResolvedValue(null);
     runtimeMocks.stopBrowserControlService.mockReset().mockResolvedValue(undefined);
-    runtimeMocks.createGatewayPageShareSink
-      .mockReset()
-      .mockReturnValue({ id: "gateway-page-share-sink" });
-    runtimeMocks.setPageShareSink.mockReset();
   });
 
   afterEach(() => {
@@ -63,30 +52,21 @@ describe("createBrowserPluginService", () => {
     return { validateOverrideSpecifier: params.validateOverrideSpecifier };
   }
 
+  const createService = () =>
+    createBrowserPluginService({ stopOnDemand: runtimeMocks.stopBrowserControlService });
+
   it("does not start the control server during gateway startup by default", async () => {
-    const service = createBrowserPluginService();
+    const service = createService();
 
     await service.start(SERVICE_CONTEXT);
 
     expect(runtimeMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
   });
 
-  it("marks page-share delivery available for the full service lifecycle", async () => {
-    const service = createBrowserPluginService();
-
-    await service.start(SERVICE_CONTEXT);
-    expect(runtimeMocks.setPageShareSink).toHaveBeenCalledWith({
-      id: "gateway-page-share-sink",
-    });
-
-    await service.stop?.(SERVICE_CONTEXT);
-    expect(runtimeMocks.setPageShareSink).toHaveBeenLastCalledWith(null);
-  });
-
   for (const value of ["0", "", "disabled"]) {
     it(`does not start the control server for eager env value ${JSON.stringify(value)}`, async () => {
       vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", value);
-      const service = createBrowserPluginService();
+      const service = createService();
 
       await service.start(SERVICE_CONTEXT);
 
@@ -96,7 +76,7 @@ describe("createBrowserPluginService", () => {
 
   it("passes a browser override validator to the eager service loader", async () => {
     vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
-    const service = createBrowserPluginService();
+    const service = createService();
 
     await service.start(SERVICE_CONTEXT);
 
@@ -106,7 +86,7 @@ describe("createBrowserPluginService", () => {
 
   it("rejects unsafe browser override specifiers", async () => {
     vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
-    const service = createBrowserPluginService();
+    const service = createService();
 
     await service.start(SERVICE_CONTEXT);
 
@@ -123,7 +103,7 @@ describe("createBrowserPluginService", () => {
   });
 
   it("stops an on-demand browser runtime even when startup stayed lazy", async () => {
-    const service = createBrowserPluginService();
+    const service = createService();
 
     await service.stop?.(SERVICE_CONTEXT);
 
@@ -132,7 +112,7 @@ describe("createBrowserPluginService", () => {
 
   it("propagates on-demand cleanup failures", async () => {
     runtimeMocks.stopBrowserControlService.mockRejectedValueOnce(new Error("cleanup failed"));
-    const service = createBrowserPluginService();
+    const service = createService();
 
     await expect(service.stop?.(SERVICE_CONTEXT)).rejects.toThrow("cleanup failed");
   });
@@ -144,7 +124,7 @@ describe("createBrowserPluginService", () => {
       .mockRejectedValueOnce(new Error("loaded cleanup failed"))
       .mockResolvedValue(undefined);
     runtimeMocks.startLazyPluginServiceModule.mockResolvedValue({ stop } as never);
-    const service = createBrowserPluginService();
+    const service = createService();
     await service.start(SERVICE_CONTEXT);
 
     await expect(service.stop?.(SERVICE_CONTEXT)).rejects.toThrow("loaded cleanup failed");

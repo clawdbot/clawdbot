@@ -91,7 +91,7 @@ function createBaseState(overrides?: Partial<ConnectAuthState>): ConnectAuthStat
     authOk: false,
     authMethod: "token",
     sharedAuthOk: false,
-    sharedAuthProvided: true,
+    pendingSharedAuthFailure: false,
     deviceTokenCandidate: "device-token",
     deviceTokenCandidateSource: "shared-token-fallback",
     ...overrides,
@@ -262,6 +262,24 @@ function expectBootstrapTokenAccepted(params: {
 }
 
 describe("resolveConnectAuthDecision", () => {
+  it("does not try credential fallbacks after proxy attribution fails", async () => {
+    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
+    const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
+    const decision = await resolveDeviceTokenDecision({
+      verifyDeviceToken,
+      verifyBootstrapToken,
+      stateOverrides: {
+        authResult: { ok: false, reason: "proxy_attribution_required" },
+        bootstrapTokenCandidate: BOOTSTRAP_TOKEN,
+      },
+    });
+
+    expect(decision.authOk).toBe(false);
+    expect(decision.authResult.reason).toBe("proxy_attribution_required");
+    expect(verifyDeviceToken).not.toHaveBeenCalled();
+    expect(verifyBootstrapToken).not.toHaveBeenCalled();
+  });
+
   it("keeps shared-secret mismatch when fallback device-token check fails", async () => {
     const verifyDeviceToken = createVerifyDeviceToken({ ok: false });
     const verifyBootstrapToken = createVerifyBootstrapToken({

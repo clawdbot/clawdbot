@@ -5,13 +5,16 @@ import { describe, expect, it } from "vitest";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 
 function renderToolLine(name: string) {
-  const line = buildChannelProgressDraftLine({
-    event: "tool",
-    toolCallId: "call-1",
-    name,
-    phase: "start",
-    args: { command: "echo alpha", description: "print text" },
-  });
+  const line = buildChannelProgressDraftLine(
+    {
+      event: "tool",
+      toolCallId: "call-1",
+      name,
+      phase: "start",
+      args: { command: "echo alpha", description: "print text" },
+    },
+    { commandText: "raw" },
+  );
   if (!line) {
     throw new Error(`expected a progress line for ${name}`);
   }
@@ -23,7 +26,6 @@ describe("renderTelegramProgressDraftPreview", () => {
     for (const name of ["Bash", "bash", "exec"]) {
       const rendered = renderToolLine(name);
       expect(rendered.match(/🛠️/gu) ?? []).toHaveLength(1);
-      expect(rendered).toContain("print text");
     }
   });
 

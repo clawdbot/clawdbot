@@ -1,6 +1,6 @@
 // Entry points for the full configure wizard and section-limited runs.
-import process from "node:process";
 import { formatCliCommand } from "../cli/command-format.js";
+import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import type { WizardSection } from "./configure.shared.js";
@@ -34,7 +34,7 @@ const CONFIGURE_NON_TTY_HINT = [
  * Returns true when the wizard may proceed.
  */
 function assertInteractiveConfigureTerminal(runtime: RuntimeEnv, interactive?: boolean): boolean {
-  const interactiveTerminal = interactive ?? (process.stdin.isTTY && process.stdout.isTTY);
+  const interactiveTerminal = interactive ?? isTerminalInteractive();
   if (interactiveTerminal) {
     return true;
   }

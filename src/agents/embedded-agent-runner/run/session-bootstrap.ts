@@ -1,26 +1,36 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveStorePath, SESSION_TOTAL_TOKENS_VERSION } from "../../../config/sessions.js";
+import {
+  resolveSessionStorePathCore,
+  SESSION_TOTAL_TOKENS_VERSION,
+} from "../../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
+  listSessionEntriesReadOnly,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
+  patchSessionEntryCore,
   updateSessionEntry,
+  type SessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
-import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
+import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  type InitialSessionTranscriptWriter,
+  type SessionTranscriptWriterFence,
+} from "../../../config/sessions/transcript-write-context.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { emitAgentEventIfCurrent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import {
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
-import { resolveDefaultAgentId } from "../../agent-scope.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { resolveSessionAgentId } from "../../agent-scope.js";
 import {
-  resolveSessionKeyForRequest,
+  resolveSessionKeyForRequestCore,
   resolveStoredSessionKeyForSessionId,
 } from "../../command/session.js";
 import {
@@ -56,14 +66,14 @@ export function buildContextEngineCompactionSessionTarget(params: {
   const candidateKeyAgentId = parseAgentSessionKey(candidateSessionKey)?.agentId;
   const suppliedEntry =
     marker && candidateSessionKey
-      ? loadSessionEntry({
+      ? loadSessionEntryReadOnly({
           agentId: marker.agentId,
           sessionKey: candidateSessionKey,
           storePath: marker.storePath,
         })
       : undefined;
   const markerMatches = marker
-    ? listSessionEntries({
+    ? listSessionEntriesReadOnly({
         agentId: marker.agentId,
         storePath: marker.storePath,
       }).filter(({ entry }) => entry.sessionId === marker.sessionId)
@@ -99,15 +109,29 @@ export function buildContextEngineCompactionSessionTarget(params: {
     : marker
       ? markerSessionKey
       : (targetSessionKey ?? suppliedSessionKey);
+  const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+    config: params.config ?? {},
+    sessionKey,
+    storePath: targetStorePath,
+  });
+  const trustExplicitAlternateStoreAgent = Boolean(
+    targetAgentId &&
+    targetStorePath &&
+    !parseAgentSessionKey(sessionKey)?.agentId &&
+    targetStoreOwner.kind === "none",
+  );
   const agentId =
-    targetAgentId ??
+    (trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??
     marker?.agentId ??
-    params.agentId ??
-    resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(params.config ?? {}));
+    resolveSessionAgentId({
+      agentId: targetAgentId ?? params.agentId,
+      config: params.config,
+      sessionKey,
+    });
   const storePath =
     targetStorePath ??
     marker?.storePath ??
-    resolveStorePath(params.config?.session?.store, { agentId });
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId });
   return {
     agentId,
     sessionId: targetSessionId ?? marker?.sessionId ?? params.sessionId,
@@ -132,21 +156,18 @@ export function isNoRealConversationCompactionNoop(params: {
 }
 
 export async function resetNoRealConversationTokenSnapshot(params: {
-  config?: RunEmbeddedAgentParams["config"];
-  sessionKey?: string;
-  agentId?: string;
+  sessionTarget: SessionTranscriptRuntimeTarget | undefined;
+  sessionPersistence?: RunEmbeddedAgentParams["sessionPersistence"];
+  assertActive: () => void;
 }): Promise<void> {
-  if (!params.sessionKey) {
+  if (!params.sessionTarget || params.sessionPersistence === "detached") {
     return;
   }
-  const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  params.assertActive();
   try {
-    await updateSessionEntry(
-      {
-        storePath,
-        sessionKey: params.sessionKey,
-      },
-      async () => ({
+    await patchSessionEntryCore(
+      params.sessionTarget,
+      () => ({
         totalTokens: 0,
         totalTokensFresh: true,
         totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
@@ -160,12 +181,15 @@ export async function resetNoRealConversationTokenSnapshot(params: {
       {
         skipMaintenance: true,
         takeCacheOwnership: true,
+        assertCommitAllowed: params.assertActive,
       },
     );
+    params.assertActive();
   } catch (err) {
+    params.assertActive();
     log.warn(
       `[context-overflow-precheck] failed to reset stale context snapshot for ` +
-        `${params.sessionKey}: ${String(err)}`,
+        `${params.sessionTarget.sessionKey}: ${String(err)}`,
     );
   }
 }
@@ -191,10 +215,9 @@ export function backfillSessionKey(params: {
           sessionId: params.sessionId,
           agentId: params.agentId,
         })
-      : resolveSessionKeyForRequest({
+      : resolveSessionKeyForRequestCore({
           cfg: params.config,
           sessionId: params.sessionId,
-          clone: false,
         });
     return normalizeOptionalString(resolved.sessionKey);
   } catch (err) {
@@ -203,6 +226,56 @@ export function backfillSessionKey(params: {
     );
     return undefined;
   }
+}
+
+/** Reserves only a missing row's first writer; no row or claim exists until lazy persistence. */
+export function prepareInitialSessionWriter(params: {
+  runParams: RunEmbeddedAgentParams;
+  target: ContextEngineSessionTarget | undefined;
+}): InitialSessionTranscriptWriter | undefined {
+  const { runParams, target } = params;
+  if (
+    runParams.sessionPersistence === "detached" ||
+    (runParams.sessionManager && !runParams.sessionManager.getSessionTarget()) ||
+    runParams.sessionTarget?.expectedWriterRunId ||
+    !target?.agentId ||
+    !target.sessionId ||
+    !target.sessionKey ||
+    !target.storePath
+  ) {
+    return undefined;
+  }
+  const signal = runParams.abortSignal;
+  const assertion =
+    runParams.admittedRunContext &&
+    resolveAdmittedRunActiveAssertion(runParams.admittedRunContext, signal);
+  if (!assertion) {
+    return undefined;
+  }
+  if (
+    loadSessionEntryReadOnly({
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
+    })
+  ) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
+  const writerRunId = runParams.runId;
+  let committedFence: SessionTranscriptWriterFence | undefined;
+  return Object.freeze({
+    writerRunId,
+    get committedFence() {
+      return committedFence;
+    },
+    assertActive: () => {
+      signal?.throwIfAborted();
+      assertion();
+    },
+    recordCommitted: (fence: SessionTranscriptWriterFence) => {
+      committedFence = Object.freeze({ ...fence });
+    },
+  });
 }
 
 type AgentSessionWriterAdmissionSnapshot = {
@@ -215,14 +288,36 @@ type AgentSessionWriterAdmissionSnapshot = {
 export function assertAgentHarnessRunAdmission(
   params: RunEmbeddedAgentParams,
 ): AgentSessionWriterAdmissionSnapshot | undefined {
+  if (params.sessionPersistence === "detached") {
+    return undefined;
+  }
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
     return undefined;
   }
-  const admissionAgentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const targetAgentId = normalizeOptionalString(params.sessionTarget?.agentId);
+  const targetStorePath = normalizeOptionalString(params.sessionTarget?.storePath);
+  const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+    config: params.config ?? {},
+    sessionKey,
+    storePath: targetStorePath,
+  });
+  const trustExplicitAlternateStoreAgent = Boolean(
+    targetAgentId &&
+    targetStorePath &&
+    !parseAgentSessionKey(sessionKey)?.agentId &&
+    targetStoreOwner.kind === "none",
+  );
+  const admissionAgentId = trustExplicitAlternateStoreAgent
+    ? targetAgentId
+    : resolveSessionAgentId({
+        agentId: targetAgentId ?? params.agentId,
+        config: params.config,
+        sessionKey,
+      });
   const storePath =
-    normalizeOptionalString(params.sessionTarget?.storePath) ??
-    resolveStorePath(params.config?.session?.store, { agentId: admissionAgentId });
+    targetStorePath ??
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: admissionAgentId });
   const durableEntry = loadSessionEntry({
     ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
     readConsistency: "latest",
@@ -280,9 +375,9 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
       ) {
         throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
       }
-      return {
+      return Object.assign({}, entry, {
         activeWriterRunId: params.runId,
-      } as Partial<InternalSessionEntry> as Partial<SessionEntry>;
+      });
     },
     { skipMaintenance: true },
   );
@@ -317,11 +412,13 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
         throw new Error(`Could not record superseded writer outcome: ${previousWriterRunId}`);
       }
     });
-    log.warn(
-      `[session-writer] replacing claim session=${sanitizeForLog(snapshot.sessionKey)} ` +
-        `previousRunId=${redactRunIdentifier(sanitizeForLog(previousWriterRunId))} ` +
-        `nextRunId=${redactRunIdentifier(sanitizeForLog(params.runId))} live=${superseded}`,
-    );
+    if (superseded) {
+      log.warn(
+        `[session-writer] replacing claim session=${sanitizeForLog(snapshot.sessionKey)} ` +
+          `previousRunId=${redactRunIdentifier(sanitizeForLog(previousWriterRunId))} ` +
+          `nextRunId=${redactRunIdentifier(sanitizeForLog(params.runId))} live=true`,
+      );
+    }
   }
   return {
     expectedLifecycleRevision,

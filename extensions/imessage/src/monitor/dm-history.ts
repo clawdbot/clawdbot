@@ -3,6 +3,7 @@ import {
   formatInboundEnvelope,
   type resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageRpcClient } from "../client.js";
 import { normalizeIMessageHandle } from "../targets.js";
@@ -87,8 +88,7 @@ function historyEntryFromMessage(message: IMessagePayload, fallbackSender: strin
   if (!body) {
     return null;
   }
-  const timestamp =
-    typeof message.created_at === "string" ? Date.parse(message.created_at) : Number.NaN;
+  const timestamp = parseDateStringTimestampMs(message.created_at);
   return {
     sender:
       message.is_from_me === true
@@ -96,7 +96,7 @@ function historyEntryFromMessage(message: IMessagePayload, fallbackSender: strin
         : normalizeIMessageHandle(normalizeOptionalString(message.sender) ?? fallbackSender) ||
           fallbackSender,
     body,
-    ...(Number.isFinite(timestamp) ? { timestamp } : {}),
+    ...(timestamp !== undefined ? { timestamp } : {}),
   };
 }
 

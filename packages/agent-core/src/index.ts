@@ -36,6 +36,7 @@ export {
   findTurnStartIndex,
   generateSummary,
   getLastAssistantUsage,
+  IMAGE_BLOCK_TOKENS,
   prepareCompaction,
   serializeConversation,
   shouldCompact,
@@ -43,6 +44,7 @@ export {
   type CompactionPreparation,
   type CompactionResult,
   type CompactionSettings,
+  type CompactionSummaryPrompt,
   type ContextUsageEstimate,
 } from "./harness/compaction/compaction.js";
 export * from "./harness/utils/truncate.js";

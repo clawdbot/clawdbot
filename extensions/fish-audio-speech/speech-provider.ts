@@ -1,5 +1,4 @@
 // Fish Audio provider maps OpenClaw speech contracts to the hosted S2.1 API.
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -10,13 +9,16 @@ import type {
   SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
 import {
-  asBoolean,
-  asFiniteNumber,
-  asObject,
   parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
-  trimToUndefined,
-} from "openclaw/plugin-sdk/speech-core";
+} from "openclaw/plugin-sdk/speech-provider";
+import {
+  asBoolean,
+  asFiniteNumberInRange,
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+  parseBooleanValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FISH_AUDIO_STREAM_MAX_BYTES,
   type FishAudioFormat,
@@ -71,8 +73,7 @@ function normalizeLatency(value: unknown): FishAudioLatency {
 }
 
 function normalizeNumber(value: unknown, min: number, max: number): number | undefined {
-  const number = asFiniteNumber(value);
-  return number != null && number >= min && number <= max ? number : undefined;
+  return asFiniteNumberInRange(value, { min, max });
 }
 
 function resolveReferenceId(raw: Record<string, unknown> | undefined): string | undefined {
@@ -80,8 +81,9 @@ function resolveReferenceId(raw: Record<string, unknown> | undefined): string | 
 }
 
 function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.["fish-audio"]) ?? asObject(rawConfig["fish-audio"]);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw =
+    asOptionalRecord(providers?.["fish-audio"]) ?? asOptionalRecord(rawConfig["fish-audio"]);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -100,7 +102,7 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioP
 
 function readProviderConfig(config: SpeechProviderConfig): FishAudioProviderConfig {
   const defaults = normalizeProviderConfig({});
-  const raw = asObject(config) ?? {};
+  const raw = asOptionalRecord(config) ?? {};
   return {
     apiKey: trimToUndefined(raw.apiKey) ?? defaults.apiKey,
     baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(raw.baseUrl) ?? defaults.baseUrl),
@@ -115,7 +117,7 @@ function readProviderConfig(config: SpeechProviderConfig): FishAudioProviderConf
 }
 
 function readOverrides(overrides: SpeechProviderOverrides | undefined): FishAudioOverrides {
-  const raw = asObject(overrides) ?? {};
+  const raw = asOptionalRecord(overrides) ?? {};
   return {
     model: trimToUndefined(raw.model ?? raw.modelId)
       ? normalizeModel(raw.model ?? raw.modelId)
@@ -208,12 +210,9 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
       if (!ctx.policy.allowNormalization) {
         return { handled: true };
       }
-      const value = ctx.value.trim().toLowerCase();
-      if (["true", "1", "yes", "on"].includes(value)) {
-        return { handled: true, overrides: { ...ctx.currentOverrides, normalize: true } };
-      }
-      if (["false", "0", "no", "off"].includes(value)) {
-        return { handled: true, overrides: { ...ctx.currentOverrides, normalize: false } };
+      const normalize = parseBooleanValue(ctx.value);
+      if (normalize !== undefined) {
+        return { handled: true, overrides: { ...ctx.currentOverrides, normalize } };
       }
       return { handled: true, warnings: [`invalid Fish Audio normalize "${ctx.value}"`] };
     }
@@ -242,7 +241,7 @@ function resolveSynthesisRequest(
     SpeechSynthesisRequest,
     "cfg" | "providerConfig" | "providerOverrides" | "text" | "timeoutMs" | "target"
   >,
-): FishAudioTtsRequest & { fileExtension: string; voiceCompatible: boolean } {
+): Omit<FishAudioTtsRequest, "maxBytes"> & { fileExtension: string; voiceCompatible: boolean } {
   const config = readProviderConfig(req.providerConfig);
   const overrides = readOverrides(req.providerOverrides);
   const apiKey = resolveApiKey(config.apiKey);
@@ -262,7 +261,6 @@ function resolveSynthesisRequest(
     topP: overrides.topP ?? config.topP,
     normalize: overrides.normalize ?? config.normalize,
     timeoutMs: req.timeoutMs,
-    maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
     ...output,
   };
 }
@@ -331,8 +329,13 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
       Boolean(resolveApiKey(readProviderConfig(providerConfig).apiKey)),
     synthesize: async (req) => {
       const params = resolveSynthesisRequest(req);
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       return {
-        audioBuffer: await fishAudioTts(params),
+        audioBuffer: await fishAudioTts({
+          ...params,
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+        }),
         outputFormat: params.format,
         fileExtension: params.fileExtension,
         voiceCompatible: params.voiceCompatible,
@@ -340,9 +343,14 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
     },
     streamSynthesize: async (req) => {
       const params = resolveSynthesisRequest(req);
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       const stream = await fishAudioTtsStream({
         ...params,
-        maxBytes: Math.min(params.maxBytes, FISH_AUDIO_STREAM_MAX_BYTES),
+        maxBytes: Math.min(
+          resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+          FISH_AUDIO_STREAM_MAX_BYTES,
+        ),
       });
       return {
         audioStream: stream.audioStream,
@@ -354,8 +362,13 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
     },
     synthesizeTelephony: async (req) => {
       const params = resolveSynthesisRequest({ ...req, target: "telephony" });
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       return {
-        audioBuffer: await fishAudioTts(params),
+        audioBuffer: await fishAudioTts({
+          ...params,
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+        }),
         outputFormat: "pcm",
         sampleRate: 8_000,
       };

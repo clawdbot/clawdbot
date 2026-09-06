@@ -14,7 +14,12 @@ const {
 } = pwAi;
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
-const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
+
+vi.mock(
+  "./pw-session-cdp-transport.js",
+  () => import("./pw-session-cdp-transport.test-support.js"),
+);
 
 type MockPageSpec = {
   targetId?: string;
@@ -107,13 +112,13 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
 function installBrowser(pages: MockPageSpec[]): BrowserMockBundle {
   const bundle = makeBrowser(pages);
   connectOverCdpSpy.mockResolvedValue(bundle.browser);
-  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+  getChromeWebSocketEndpointSpy.mockResolvedValue(null);
   return bundle;
 }
 
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
-  getChromeWebSocketUrlSpy.mockReset();
+  getChromeWebSocketEndpointSpy.mockReset();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
@@ -227,7 +232,7 @@ describe("pw-session getPageForTargetId", () => {
     const fresh = makeBrowser([{ targetId: "TARGET_OK", url: "https://fresh.example" }]);
 
     connectOverCdpSpy.mockResolvedValueOnce(stale.browser).mockResolvedValueOnce(fresh.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    getChromeWebSocketEndpointSpy.mockResolvedValue(null);
 
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
 
@@ -249,7 +254,7 @@ describe("pw-session getPageForTargetId", () => {
     ]);
 
     connectOverCdpSpy.mockResolvedValueOnce(stale.browser).mockResolvedValueOnce(fresh.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    getChromeWebSocketEndpointSpy.mockResolvedValue(null);
 
     await getPageForTargetId({ cdpUrl: "http://127.0.0.1:9333" });
 
@@ -270,7 +275,7 @@ describe("pw-session getPageForTargetId", () => {
     connectOverCdpSpy
       .mockResolvedValueOnce(stale.browser)
       .mockResolvedValueOnce(stillBroken.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    getChromeWebSocketEndpointSpy.mockResolvedValue(null);
 
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9444" });
 
@@ -283,7 +288,7 @@ describe("pw-session getPageForTargetId", () => {
 
   it("does not add an extra top-level retry for non-recoverable connect failures", async () => {
     connectOverCdpSpy.mockRejectedValue(new Error("connectOverCDP exploded"));
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    getChromeWebSocketEndpointSpy.mockResolvedValue(null);
 
     await expect(getPageForTargetId({ cdpUrl: "http://127.0.0.1:9555" })).rejects.toThrow(
       "connectOverCDP exploded",

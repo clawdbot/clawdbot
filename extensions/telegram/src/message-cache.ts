@@ -69,7 +69,7 @@ type TelegramMessageCache = {
     botUserId?: number;
     chatId: string | number;
     messageId: string;
-    media: TelegramResolvedMedia;
+    media: TelegramResolvedMedia & { path?: string; fileName?: string };
   }) => Promise<void>;
   get: (params: {
     accountId: string;
@@ -720,7 +720,9 @@ export function createTelegramMessageCache(params?: {
       if (fileUniqueId !== media.fileUniqueId) {
         throw new Error(`Telegram message ${messageId} media changed during resolution`);
       }
-      const resolvedNode = { ...node, resolvedMedia: media };
+      // Runtime downloads carry private paths/names; cache only the existing persisted projection.
+      const { path: _path, fileName: _fileName, ...resolvedMedia } = media;
+      const resolvedNode = { ...node, resolvedMedia };
       messages.delete(key);
       messages.set(key, resolvedNode);
       await persistCachedNode({
@@ -886,6 +888,13 @@ async function resolveSessionBoundaryNode(params: {
   );
 }
 
+/**
+ * Hard cap on reply-chain nodes rendered into the prompt. Model-visible context
+ * must be bounded; every producer that appends chain entries shares this ceiling
+ * so a busy chat cannot grow the turn past its budget.
+ */
+export const TELEGRAM_REPLY_CHAIN_MAX_DEPTH = 4;
+
 export async function buildTelegramReplyChain(params: {
   cache: TelegramMessageCache;
   accountId: string;
@@ -897,7 +906,7 @@ export async function buildTelegramReplyChain(params: {
   if (!replyMessage?.message_id) {
     return [];
   }
-  const maxDepth = params.maxDepth ?? 4;
+  const maxDepth = params.maxDepth ?? TELEGRAM_REPLY_CHAIN_MAX_DEPTH;
   const visited = new Set<string>();
   const chain: TelegramCachedMessageNode[] = [];
   let current: TelegramCachedMessageNode | null =

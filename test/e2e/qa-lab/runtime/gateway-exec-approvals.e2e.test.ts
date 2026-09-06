@@ -8,9 +8,9 @@ import {
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
-  startGatewayServer,
+  startTestGatewayServer,
 } from "../../../../src/gateway/test-helpers.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { readExecApprovalsSnapshot } from "../../../../src/infra/exec-approvals.js";
@@ -36,14 +36,14 @@ describe("gateway exec approvals QA", () => {
   });
 
   it("protects policy snapshots and resolves a pending request from another reviewer", async () => {
-    const port = await getFreePort();
+    const port = await getGatewayTestPort();
     const token = "gateway-exec-approvals-qa-token";
     const stateDir = process.env.OPENCLAW_STATE_DIR;
     if (!stateDir) {
       throw new Error("OPENCLAW_STATE_DIR is required for gateway QA fixtures");
     }
 
-    const server = await startGatewayServer(port, {
+    const server = await startTestGatewayServer(port, {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,

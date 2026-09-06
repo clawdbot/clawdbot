@@ -6,6 +6,7 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mts";
 import {
   createQaScriptBlockedStatusTracker,
@@ -168,10 +169,6 @@ const EVIDENCE_SUITES: Record<EvidenceSuiteId, HostedMediaSuiteDefinition> = {
 
 function formatProviderList(providers: Iterable<string>): string {
   return [...providers].toSorted().join(", ");
-}
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }) {

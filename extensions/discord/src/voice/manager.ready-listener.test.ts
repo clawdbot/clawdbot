@@ -6,7 +6,7 @@ import {
   DiscordVoiceReadyListener,
   DiscordVoiceResumedListener,
   DiscordVoiceStateUpdateListener,
-} from "./manager.js";
+} from "./voice-runtime.js";
 
 describe("DiscordVoiceReadyListener", () => {
   it("starts auto-join without blocking the ready listener", async () => {
@@ -43,8 +43,10 @@ describe("DiscordVoiceReadyListener", () => {
 
   it("refreshes active voice rosters after an available guild snapshot", async () => {
     const refreshGuildRoster = vi.fn();
+    const reconcileAutoJoinGuild = vi.fn(async () => {});
     const listener = new DiscordVoiceGuildCreateListener({
       refreshGuildRoster,
+      reconcileAutoJoinGuild,
     } as unknown as ConstructorParameters<typeof DiscordVoiceGuildCreateListener>[0]);
 
     await expect(
@@ -53,12 +55,15 @@ describe("DiscordVoiceReadyListener", () => {
 
     expect(listener.type).toBe(GatewayDispatchEvents.GuildCreate);
     expect(refreshGuildRoster).toHaveBeenCalledWith("g1");
+    expect(reconcileAutoJoinGuild).toHaveBeenCalledWith("g1");
   });
 
   it("ignores unavailable guild snapshots", async () => {
     const refreshGuildRoster = vi.fn();
+    const reconcileAutoJoinGuild = vi.fn(async () => {});
     const listener = new DiscordVoiceGuildCreateListener({
       refreshGuildRoster,
+      reconcileAutoJoinGuild,
     } as unknown as ConstructorParameters<typeof DiscordVoiceGuildCreateListener>[0]);
 
     await expect(
@@ -66,6 +71,7 @@ describe("DiscordVoiceReadyListener", () => {
     ).resolves.toBeUndefined();
 
     expect(refreshGuildRoster).not.toHaveBeenCalled();
+    expect(reconcileAutoJoinGuild).not.toHaveBeenCalled();
   });
 
   it("forwards bot voice state updates to the voice manager", async () => {

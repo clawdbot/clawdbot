@@ -1,11 +1,7 @@
 import { createQaBusState } from "./bus-state.js";
 import { readQaScenarioById, type QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
-
-type QaFlowStep = {
-  name: string;
-  run: () => Promise<string | void>;
-};
+import type { QaSuiteStep } from "./suite-types.js";
 
 function formatTestTranscript(state: ReturnType<typeof createQaBusState>) {
   return state
@@ -78,6 +74,7 @@ export async function runLoadedScenarioFlow(
         state.resolvePollCursor({
           accountId: "qa-channel",
           cursor: state.getSnapshot().cursor,
+          acknowledgedCursor: state.getSnapshot().cursor,
         });
         return match;
       }
@@ -145,10 +142,11 @@ export async function runLoadedScenarioFlow(
       }
       throw new Error(`timed out after ${timeoutMs}ms waiting for outbound marker`);
     },
-    runScenario: async (_name: string, steps: QaFlowStep[]) => {
+    runScenario: async (_name: string, steps: QaSuiteStep[]) => {
       const stepResults = [];
       for (const step of steps) {
-        const details = await step.run();
+        const outcome = await step.run();
+        const details = outcome?.details;
         stepResults.push({
           name: step.name,
           status: "pass" as const,

@@ -1,36 +1,31 @@
 // Shared provider HTTP/audio helpers for media-understanding integrations,
 // including guarded fetches, deadlines, retries, and multipart upload bodies.
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  assertOkOrThrowHttpError,
-  createProviderHttpError,
-  readProviderJsonObjectResponse,
-} from "../agents/provider-http-errors.js";
-export {
-  assertOkOrThrowHttpError,
-  readProviderJsonObjectResponse,
-  readProviderJsonResponse,
-} from "../agents/provider-http-errors.js";
 import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
 } from "../agents/provider-attribution.js";
 import {
+  assertOkOrThrowHttpError,
+  createProviderHttpError,
+  readProviderJsonObjectResponse,
+} from "../agents/provider-http-errors.js";
+import {
   buildProviderRequestDispatcherPolicy,
   resolveProviderRequestPolicyConfig,
   type ModelProviderRequestTransportOverrides,
-  type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { bufferToBlobPart } from "../plugin-sdk/blob-runtime.js";
 import {
   executeProviderOperationWithRetry,
   isTransientProviderHttpStatus,
@@ -38,12 +33,28 @@ import {
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import type { AudioTranscriptionRequest } from "./types.js";
+export {
+  assertOkOrThrowHttpError,
+  readProviderJsonObjectResponse,
+  readProviderJsonResponse,
+} from "../agents/provider-http-errors.js";
 export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
+
+export function buildOpenAiCompatibleAuthHeaders(
+  params: Pick<AudioTranscriptionRequest, "apiKey" | "auth">,
+) {
+  const apiKey = params.auth?.kind === "api-key" ? params.auth.apiKey : params.apiKey;
+  // Explicit no-auth suppresses legacy markers; configured headers still override these defaults.
+  return params.auth?.kind === "none" || !apiKey
+    ? undefined
+    : { authorization: `Bearer ${apiKey}` };
+}
 
 /** Resolves the multipart upload filename, mapping AAC inputs to provider-friendly `.m4a`. */
 export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
@@ -62,7 +73,7 @@ export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?
   return baseName;
 }
 
-/** Builds provider-compatible multipart form data for audio transcription requests. */
+/** Places options before the audio file so streaming multipart parsers can apply them. */
 export function buildAudioTranscriptionFormData(params: {
   buffer: Buffer;
   fileName?: string;
@@ -70,17 +81,16 @@ export function buildAudioTranscriptionFormData(params: {
   fields?: Record<string, string | number | boolean | undefined>;
 }): FormData {
   const form = new FormData();
-  const bytes = new Uint8Array(params.buffer);
-  const blob = new Blob([bytes], {
+  const blob = new Blob([bufferToBlobPart(params.buffer)], {
     type: params.mime ?? "application/octet-stream",
   });
-  form.append("file", blob, resolveAudioTranscriptionUploadFileName(params.fileName, params.mime));
   for (const [name, value] of Object.entries(params.fields ?? {})) {
     const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value);
     if (text) {
       form.append(name, text);
     }
   }
+  form.append("file", blob, resolveAudioTranscriptionUploadFileName(params.fileName, params.mime));
   return form;
 }
 
@@ -386,7 +396,6 @@ type ResolvedProviderHttpRequestConfig = {
   allowPrivateNetwork: boolean;
   headers: Headers;
   dispatcherPolicy?: PinnedDispatcherPolicy;
-  requestConfig: ResolvedProviderRequestConfig;
 };
 
 type ResolvedProviderHttpRequestConfigWithOriginTrust = ResolvedProviderHttpRequestConfig & {
@@ -430,11 +439,7 @@ function resolveProviderHttpRequestConfigWithOriginTrustInternal(params: {
     allowPrivateNetwork: requestConfig.allowPrivateNetwork,
     headers,
     dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
-    requestConfig,
-    trustConfiguredBaseUrlOrigin:
-      !requestConfig.privateNetworkExplicitlyDenied &&
-      (requestConfig.policy.endpointClass === "custom" ||
-        requestConfig.policy.endpointClass === "local"),
+    trustConfiguredBaseUrlOrigin: requestConfig.trustConfiguredBaseUrlOrigin,
   };
 }
 
@@ -447,7 +452,6 @@ export function resolveProviderHttpRequestConfig(
     allowPrivateNetwork: resolved.allowPrivateNetwork,
     headers: resolved.headers,
     dispatcherPolicy: resolved.dispatcherPolicy,
-    requestConfig: resolved.requestConfig,
   };
 }
 
@@ -657,23 +661,6 @@ type GuardedPostRequestParams<TBody> = GuardedProviderRequestParams &
     fetchFn: typeof fetch;
   };
 
-export async function postTranscriptionRequest(params: GuardedPostRequestParams<BodyInit>) {
-  return await postGuardedRequest({
-    url: params.url,
-    init: {
-      method: "POST",
-      headers: params.headers,
-      body: params.body,
-      ...(params.signal ? { signal: params.signal } : {}),
-    },
-    timeoutMs: params.timeoutMs,
-    fetchFn: params.fetchFn,
-    guardedOptions: resolveGuardedRequestOptions(params),
-    retryStage: params.retryStage,
-    retry: params.retry,
-  });
-}
-
 async function postGuardedRequest(params: {
   url: string;
   init: RequestInit;
@@ -748,6 +735,9 @@ export async function postMultipartRequest(params: GuardedPostRequestParams<Body
     retry: params.retry,
   });
 }
+
+// Keep the shipped transcription name on the canonical multipart transport.
+export { postMultipartRequest as postTranscriptionRequest };
 
 export function requireTranscriptionText(
   value: string | undefined,

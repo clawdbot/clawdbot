@@ -17,7 +17,9 @@ import {
   composeProviderStreamWrappers,
   createAnthropicThinkingPrefillPayloadWrapper,
   createPayloadPatchStreamWrapper,
+  isAnthropicOAuthApiKey,
   resolveAnthropicPayloadPolicy,
+  resolveAnthropicServerCompactionPlan,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -29,6 +31,7 @@ import {
 const log = createSubsystemLogger("anthropic-stream");
 
 const ANTHROPIC_CONTEXT_1M_BETA_LEGACY = "context-1m-2025-08-07";
+const ANTHROPIC_COMPACTION_BETA = "compact-2026-01-12";
 const ANTHROPIC_FAST_MODE_BETA = "fast-mode-2026-02-01";
 const ANTHROPIC_FAST_MODE_COST_MULTIPLIER = 2;
 const OPENCLAW_DEFAULT_ANTHROPIC_BETAS = [
@@ -73,14 +76,7 @@ function mergeAnthropicBetaHeader(
   return merged;
 }
 
-/**
- * Claude subscription credentials are OAuth access tokens rather than API keys.
- * Anthropic authenticates them through `Authorization: Bearer`, so every caller
- * that builds request auth must branch on this instead of assuming `x-api-key`.
- */
-export function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
-  return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
-}
+export { isAnthropicOAuthApiKey } from "openclaw/plugin-sdk/provider-stream-shared";
 
 function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier {
   return enabled ? "auto" : "standard_only";
@@ -216,6 +212,27 @@ export function createAnthropicFastModeWrapper(
   };
 }
 
+/** Pass opt-in server compaction to the shared request payload policy. */
+function createAnthropicCompactionWrapper(
+  baseStreamFn: StreamFn | undefined,
+  extraParams: Record<string, unknown> | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const compaction = resolveAnthropicServerCompactionPlan(model, extraParams, options?.apiKey);
+    if (!compaction.enabled) {
+      return underlying(model, context, options);
+    }
+    const requestOptions = {
+      ...options,
+      anthropicServerCompaction: true,
+      anthropicCompactThreshold: compaction.threshold,
+      headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_COMPACTION_BETA]),
+    };
+    return underlying(model, context, requestOptions);
+  };
+}
+
 /** Wrap a stream function with an explicit Anthropic service tier when allowed. */
 export function createAnthropicServiceTierWrapper(
   baseStreamFn: StreamFn | undefined,
@@ -311,6 +328,9 @@ export function wrapAnthropicProviderStream(
     hasFastModeParam && serviceTier === undefined
       ? (streamFn) =>
           createAnthropicFastModeWrapper(streamFn, () => resolveAnthropicFastMode(ctx.extraParams))
+      : undefined,
+    ctx.extraParams?.anthropicServerCompaction === true
+      ? (streamFn) => createAnthropicCompactionWrapper(streamFn, ctx.extraParams)
       : undefined,
     (streamFn) => createAnthropicThinkingPrefillWrapper(streamFn),
   );

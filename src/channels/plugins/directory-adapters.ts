@@ -19,8 +19,8 @@ export function createChannelDirectoryAdapter(
   } = {},
 ): ChannelDirectoryAdapter {
   return {
-    self: params.self ?? nullChannelDirectorySelf,
     ...params,
+    self: params.self ?? nullChannelDirectorySelf,
   };
 }
 

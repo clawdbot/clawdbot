@@ -44,22 +44,13 @@ function toAllowedValueLabel(value: unknown): string {
 }
 
 function toAllowedValueValue(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  return safeStringify(value);
+  return typeof value === "string" ? value : safeStringify(value);
 }
 
 function toAllowedValueDedupKey(value: unknown): string {
-  if (value === null) {
-    return "null:null";
-  }
-  const kind = typeof value;
+  const kind = value === null ? "null" : typeof value;
   // Preserve schema distinctions such as numeric 1 vs string "1" even when labels match.
-  if (kind === "string") {
-    return `string:${value as string}`;
-  }
-  return `${kind}:${safeStringify(value)}`;
+  return `${kind}:${toAllowedValueValue(value)}`;
 }
 
 /** Summarizes enum/allowed-value candidates for compact validation error hints. */
@@ -97,14 +88,10 @@ export function summarizeAllowedValues(
   };
 }
 
-function messageAlreadyIncludesAllowedValues(message: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(message);
-  return lower.includes("(allowed:") || lower.includes("expected one of");
-}
-
 /** Appends an allowed-values hint unless the validation message already includes one. */
 export function appendAllowedValuesHint(message: string, summary: AllowedValuesSummary): string {
-  if (messageAlreadyIncludesAllowedValues(message)) {
+  const lower = normalizeLowercaseStringOrEmpty(message);
+  if (lower.includes("(allowed:") || lower.includes("expected one of")) {
     return message;
   }
   return `${message} (allowed: ${summary.formatted})`;

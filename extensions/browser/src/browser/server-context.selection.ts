@@ -5,6 +5,7 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { assertChromeMcpCdpTransportAllowed } from "./cdp-reachability-policy.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
@@ -30,7 +31,6 @@ type SelectionDeps = {
   profile: ResolvedBrowserProfile;
   runtime: ProfileRuntimeState;
   getCdpControlPolicy: () => SsrFPolicy | undefined;
-  ensureBrowserAvailable: (opts?: { headless?: boolean; signal?: AbortSignal }) => Promise<void>;
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (url: string, options?: BrowserOperationOptions) => Promise<BrowserTab>;
 };
@@ -39,10 +39,9 @@ type SelectionOps = {
   ensureTabAvailable: (
     targetId?: string,
     options?: EnsureTabAvailableOptions,
-    browserAlreadyEnsured?: boolean,
   ) => Promise<BrowserTab>;
   focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
-  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
+  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<string>;
 };
 
 function mergeOpenedTabSnapshot(
@@ -61,7 +60,11 @@ function mergeOpenedTabSnapshot(
     return tabs;
   }
   const merged = tabs.slice();
-  merged[index] = { ...listedTab, wsUrl: openedTab.wsUrl };
+  merged[index] = {
+    ...listedTab,
+    wsUrl: openedTab.wsUrl,
+    ...(openedTab.wsLookup ? { wsLookup: openedTab.wsLookup } : {}),
+  };
   return merged;
 }
 
@@ -70,7 +73,6 @@ export function createProfileSelectionOps({
   profile,
   runtime,
   getCdpControlPolicy,
-  ensureBrowserAvailable,
   listTabs,
   openTab,
 }: SelectionDeps): SelectionOps {
@@ -80,12 +82,7 @@ export function createProfileSelectionOps({
   const ensureTabAvailable = async (
     targetId?: string,
     options?: EnsureTabAvailableOptions,
-    browserAlreadyEnsured = false,
   ): Promise<BrowserTab> => {
-    options?.signal?.throwIfAborted();
-    if (!browserAlreadyEnsured) {
-      await ensureBrowserAvailable({ signal: options?.signal });
-    }
     options?.signal?.throwIfAborted();
     let lastNonEmptyTabs: BrowserTab[] = [];
     let lastListError: unknown;
@@ -109,6 +106,9 @@ export function createProfileSelectionOps({
     };
 
     const openWhenConfirmedEmpty = async (tabs: BrowserTab[]): Promise<void> => {
+      if (targetId !== undefined) {
+        return;
+      }
       if (!openedTab && sawSuccessfulList && lastNonEmptyTabs.length === 0 && tabs.length === 0) {
         openedTab = await openTab("about:blank", options);
       }
@@ -249,7 +249,9 @@ export function createProfileSelectionOps({
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
 
     if (capabilities.usesChromeMcp) {
+      assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
       const { focusChromeMcpTab } = await getChromeMcpModule();
+      options?.signal?.throwIfAborted();
       await focusChromeMcpTab(profile.name, resolvedTargetId, profile, options);
       runtime.lastTargetId = resolvedTargetId;
       return;
@@ -260,30 +262,35 @@ export function createProfileSelectionOps({
       const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.focusPageByTargetIdViaPlaywright;
       if (typeof focusPageByTargetIdViaPlaywright === "function") {
+        options?.signal?.throwIfAborted();
         await focusPageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
           ssrfPolicy: getCdpControlPolicy(),
+          ...(options?.signal ? { signal: options.signal } : {}),
         });
         runtime.lastTargetId = resolvedTargetId;
         return;
       }
     }
 
+    options?.signal?.throwIfAborted();
     await fetchOk(
       appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`),
       undefined,
-      undefined,
+      options?.signal ? { signal: options.signal } : undefined,
       getCdpControlPolicy(),
     );
     runtime.lastTargetId = resolvedTargetId;
   };
 
-  const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
+  const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<string> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
 
     if (capabilities.usesChromeMcp) {
+      assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
       const { closeChromeMcpTab } = await getChromeMcpModule();
+      options?.signal?.throwIfAborted();
       await closeChromeMcpTab(profile.name, resolvedTargetId, profile, options);
     } else {
       let closedViaPlaywright = false;
@@ -293,20 +300,23 @@ export function createProfileSelectionOps({
         const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
           ?.closePageByTargetIdViaPlaywright;
         if (typeof closePageByTargetIdViaPlaywright === "function") {
+          options?.signal?.throwIfAborted();
           await closePageByTargetIdViaPlaywright({
             cdpUrl: profile.cdpUrl,
             targetId: resolvedTargetId,
             ssrfPolicy: getCdpControlPolicy(),
+            ...(options?.signal ? { signal: options.signal } : {}),
           });
           closedViaPlaywright = true;
         }
       }
 
       if (!closedViaPlaywright) {
+        options?.signal?.throwIfAborted();
         await fetchOk(
           appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
           undefined,
-          undefined,
+          options?.signal ? { signal: options.signal } : undefined,
           getCdpControlPolicy(),
         );
       }
@@ -317,6 +327,7 @@ export function createProfileSelectionOps({
       // handle can block every later targetless action.
       runtime.lastTargetId = null;
     }
+    return resolvedTargetId;
   };
 
   return {

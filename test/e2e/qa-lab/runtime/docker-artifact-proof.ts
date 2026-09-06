@@ -7,6 +7,7 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/docker-artifact-proof.ts";
@@ -41,10 +42,6 @@ type ArtifactIdentity = {
   package: { fileName: string; name: string; sha256: string; sizeBytes: number; version: string };
   scenarioId: string;
 };
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function isProofLane(value: string): value is DockerArtifactProofLane {
   return Object.hasOwn(PROOFS, value);

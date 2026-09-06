@@ -39,6 +39,7 @@ async function syncNativeCommands(
   mocks.listNativeCommandSpecsForConfig.mockReturnValue(specs);
 
   await syncClickClackCommandMenu({
+    accountId: "default",
     cfg: {} as CoreConfig,
     client: { setBotCommands } as unknown as ReturnType<typeof createClickClackClient>,
     log,
@@ -130,6 +131,7 @@ describe("ClickClack command menu", () => {
     ]);
 
     await syncClickClackCommandMenu({
+      accountId: "default",
       cfg,
       client: { setBotCommands } as unknown as ReturnType<typeof createClickClackClient>,
     });

@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { withSince } from "./since.js";
 
 /**
  * Task ledger protocol schemas.
@@ -31,6 +32,18 @@ const TaskDeliveryStatusSchema = Type.Union([
   Type.Literal("not_applicable"),
 ]);
 const TaskTerminalOutcomeSchema = Type.Union([Type.Literal("succeeded"), Type.Literal("blocked")]);
+const TaskListSortBySchema = Type.Unsafe<"updatedAt" | "endedAt">({
+  type: "string",
+  enum: ["updatedAt", "endedAt"],
+});
+const TaskDiffStatSchema = withSince(
+  "2026.8",
+  closedObject({
+    files: Type.Integer({ minimum: 0 }),
+    added: Type.Integer({ minimum: 0 }),
+    removed: Type.Integer({ minimum: 0 }),
+  }),
+);
 
 /** Public task summary returned by task list/get/cancel responses. */
 export const TaskSummarySchema = closedObject({
@@ -54,6 +67,8 @@ export const TaskSummarySchema = closedObject({
   endedAt: Type.Optional(TimestampSchema),
   toolUseCount: Type.Optional(Type.Integer({ minimum: 0 })),
   lastToolName: Type.Optional(Type.String()),
+  lastActivity: Type.Optional(withSince("2026.8", Type.String({ maxLength: 200 }))),
+  diffStat: Type.Optional(TaskDiffStatSchema),
   progressSummary: Type.Optional(Type.String()),
   terminalSummary: Type.Optional(Type.String()),
   error: Type.Optional(Type.String()),
@@ -66,18 +81,21 @@ export const TaskSummarySchema = closedObject({
 });
 
 /** Task list filters with bounded pagination. */
+export const TASKS_LIST_CURSOR_MAX_LENGTH = 512;
+
 export const TasksListParamsSchema = closedObject({
   status: Type.Optional(Type.Union([TaskLedgerStatusSchema, Type.Array(TaskLedgerStatusSchema)])),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-  cursor: Type.Optional(Type.String()),
+  cursor: Type.Optional(Type.String({ maxLength: TASKS_LIST_CURSOR_MAX_LENGTH })),
+  sortBy: Type.Optional(withSince("2026.8", TaskListSortBySchema)),
 });
 
 /** Task list page response. */
 export const TasksListResultSchema = closedObject({
   tasks: Type.Array(TaskSummarySchema),
-  nextCursor: Type.Optional(Type.String()),
+  nextCursor: Type.Optional(Type.String({ maxLength: TASKS_LIST_CURSOR_MAX_LENGTH })),
 });
 
 /** Lookup request for one task id. */

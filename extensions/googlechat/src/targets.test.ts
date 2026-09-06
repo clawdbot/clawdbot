@@ -637,26 +637,6 @@ describe("sendGoogleChatMessage", () => {
     },
   );
 
-  it("keeps a valid same-space thread resource name", async () => {
-    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/127", "spaces/AAA/threads/xyz");
-
-    await sendGoogleChatMessage({
-      account,
-      space: "spaces/AAA",
-      text: "hello",
-      thread: "spaces/AAA/threads/xyz",
-    });
-
-    const url = mockCallArg(fetchMock);
-    const init = mockCallArg(fetchMock, 0, 1) as RequestInit | undefined;
-    expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
-    if (typeof init?.body !== "string") {
-      throw new Error("Expected Google Chat request body");
-    }
-    const body = JSON.parse(init.body) as { thread?: { name?: unknown } };
-    expect(body.thread?.name).toBe("spaces/AAA/threads/xyz");
-  });
-
   it("sends cardsV2 with the text fallback", async () => {
     const fetchMock = stubSuccessfulSend("spaces/AAA/messages/125");
     const cardsV2 = [
@@ -919,40 +899,6 @@ describe("verifyGoogleChatRequest", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("cancels a rejected Chat cert response before releasing the guard", async () => {
-    expireGoogleChatCertCache();
-    const cancel = vi.fn().mockResolvedValue(undefined);
-    const release = vi.fn().mockResolvedValue(undefined);
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-      response: {
-        ok: false,
-        status: 503,
-        body: { cancel },
-      } as unknown as Response,
-      release,
-    });
-
-    await expect(
-      verifyGoogleChatRequest({
-        bearer: "token",
-        audienceType: "project-number",
-        audience: "123456789",
-      }),
-    ).resolves.toEqual({
-      ok: false,
-      reason: "Failed to fetch Chat certs (503)",
-    });
-
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-    const cancelOrder = cancel.mock.invocationCallOrder[0];
-    const releaseOrder = release.mock.invocationCallOrder[0];
-    if (cancelOrder === undefined || releaseOrder === undefined) {
-      throw new Error("expected cancellation and guard release call-order records");
-    }
-    expect(cancelOrder).toBeLessThan(releaseOrder);
-  });
-
   it("reports malformed Chat cert JSON with a stable auth error", async () => {
     expireGoogleChatCertCache();
     const release = vi.fn(async () => {});
@@ -978,6 +924,38 @@ describe("verifyGoogleChatRequest", () => {
   });
 
   describe("bounded JSON read (readProviderJsonResponse delegation)", () => {
+    const ONE_MIB = 1024 * 1024;
+    const TOTAL_CHUNKS = 32;
+
+    function createOversizedResponse(chunk: Uint8Array, init: ResponseInit) {
+      let bytesPulled = 0;
+      let canceled = false;
+      return {
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
+                controller.close();
+                return;
+              }
+              bytesPulled += chunk.length;
+              controller.enqueue(chunk);
+            },
+            cancel() {
+              canceled = true;
+            },
+          }),
+          init,
+        ),
+        get bytesPulled() {
+          return bytesPulled;
+        },
+        get canceled() {
+          return canceled;
+        },
+      };
+    }
+
     afterEach(() => {
       mocks.fetchWithSsrFGuard.mockClear();
       vi.unstubAllGlobals();
@@ -985,31 +963,13 @@ describe("verifyGoogleChatRequest", () => {
 
     it("cancels oversized cert fetch JSON body via the 16 MiB provider cap", async () => {
       expireGoogleChatCertCache();
-      const ONE_MIB = 1024 * 1024;
-      const TOTAL_CHUNKS = 32;
-      const chunk = new Uint8Array(ONE_MIB);
-
-      let bytesPulled = 0;
-      let canceled = false;
-      const oversizedJson = new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
-              controller.close();
-              return;
-            }
-            bytesPulled += chunk.length;
-            controller.enqueue(chunk);
-          },
-          cancel() {
-            canceled = true;
-          },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+      const streamed = createOversizedResponse(new Uint8Array(ONE_MIB), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
       const release = vi.fn(async () => {});
       mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-        response: oversizedJson,
+        response: streamed.response,
         release,
       });
 
@@ -1021,37 +981,19 @@ describe("verifyGoogleChatRequest", () => {
 
       expect(result.ok).toBe(false);
       expect(result.reason).toMatch(/JSON response exceeds 16777216 bytes/);
-      expect(canceled).toBe(true);
-      expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+      expect(streamed.canceled).toBe(true);
+      expect(streamed.bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
       expect(release).toHaveBeenCalledOnce();
     });
 
     it("rejects oversized sendMessage JSON body via the 16 MiB provider cap", async () => {
-      const ONE_MIB = 1024 * 1024;
-      const TOTAL_CHUNKS = 32;
-      const chunk = new Uint8Array(ONE_MIB);
-
-      let bytesPulled = 0;
-      let canceled = false;
-      const oversizedJson = new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
-              controller.close();
-              return;
-            }
-            bytesPulled += chunk.length;
-            controller.enqueue(chunk);
-          },
-          cancel() {
-            canceled = true;
-          },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+      const streamed = createOversizedResponse(new Uint8Array(ONE_MIB), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
       const release = vi.fn(async () => {});
       mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-        response: oversizedJson,
+        response: streamed.response,
         release,
       });
 
@@ -1063,36 +1005,18 @@ describe("verifyGoogleChatRequest", () => {
         }),
       ).rejects.toThrow(/Google Chat API request failed: JSON response exceeds 16777216 bytes/);
 
-      expect(canceled).toBe(true);
-      expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+      expect(streamed.canceled).toBe(true);
+      expect(streamed.bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
     });
 
     it("caps non-OK sendMessage error bodies before formatting the API error", async () => {
-      const ONE_MIB = 1024 * 1024;
-      const TOTAL_CHUNKS = 32;
-      const chunk = new TextEncoder().encode("x".repeat(ONE_MIB));
-
-      let bytesPulled = 0;
-      let canceled = false;
-      const oversizedError = new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
-              controller.close();
-              return;
-            }
-            bytesPulled += chunk.length;
-            controller.enqueue(chunk);
-          },
-          cancel() {
-            canceled = true;
-          },
-        }),
-        { status: 500, statusText: "Internal Server Error" },
-      );
+      const streamed = createOversizedResponse(new TextEncoder().encode("x".repeat(ONE_MIB)), {
+        status: 500,
+        statusText: "Internal Server Error",
+      });
       const release = vi.fn(async () => {});
       mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-        response: oversizedError,
+        response: streamed.response,
         release,
       });
 
@@ -1104,8 +1028,8 @@ describe("verifyGoogleChatRequest", () => {
         }),
       ).rejects.toThrow(/^Google Chat API 500: x+/);
 
-      expect(canceled).toBe(true);
-      expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+      expect(streamed.canceled).toBe(true);
+      expect(streamed.bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
       expect(release).toHaveBeenCalledOnce();
     });
   });

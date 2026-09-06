@@ -31,18 +31,13 @@ const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 const QA_SUMMARY_MAX_BYTES_ENV = "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES";
 const DEFAULT_QA_SUMMARY_MAX_BYTES = 2 * 1024 * 1024;
 
-function readPositiveIntEnv(name: string, fallback: number) {
-  const raw = process.env[name];
-  return raw === undefined || raw === "" ? fallback : parsePositiveInt(raw, name);
-}
-
-function normalizeString(value: unknown) {
+function normalizeStringOrEmpty(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
 function normalizeStringArray(value: unknown) {
   return Array.isArray(value)
-    ? value.map((entry) => normalizeString(entry)).filter((entry) => entry.length > 0)
+    ? value.map((entry) => normalizeStringOrEmpty(entry)).filter((entry) => entry.length > 0)
     : [];
 }
 
@@ -102,20 +97,20 @@ function collectCommandAliasRecords(manifest: PluginManifest) {
   return aliases
     .map((alias) => {
       if (typeof alias === "string") {
-        const name = normalizeString(alias);
+        const name = normalizeStringOrEmpty(alias);
         return name ? { name, kind: "runtime-slash", cliCommand: null } : null;
       }
       if (!isRecord(alias)) {
         return null;
       }
-      const name = normalizeString(alias.name);
+      const name = normalizeStringOrEmpty(alias.name);
       if (!name) {
         return null;
       }
       return {
         name,
-        kind: normalizeString(alias.kind) || "runtime-slash",
-        cliCommand: normalizeString(alias.cliCommand) || null,
+        kind: normalizeStringOrEmpty(alias.kind) || "runtime-slash",
+        cliCommand: normalizeStringOrEmpty(alias.cliCommand) || null,
       };
     })
     .filter((alias) => alias !== null);
@@ -124,7 +119,7 @@ function collectCommandAliasRecords(manifest: PluginManifest) {
 function collectAuthMethods(manifest: PluginManifest) {
   const auth = Array.isArray(manifest.auth) ? manifest.auth : [];
   return auth
-    .map((entry) => (isRecord(entry) ? normalizeString(entry.method) : ""))
+    .map((entry) => (isRecord(entry) ? normalizeStringOrEmpty(entry.method) : ""))
     .filter((method) => method.length > 0);
 }
 
@@ -153,7 +148,7 @@ function buildPluginMatrixEntry(repoRoot: string, manifestPath: string, manifest
   return {
     id: manifest.id,
     buildId: path.basename(pluginDir),
-    name: normalizeString(manifest.name) || manifest.id,
+    name: normalizeStringOrEmpty(manifest.name) || manifest.id,
     dir: path.relative(repoRoot, pluginDir),
     manifestPath: relativeManifestPath,
     enabledByDefault: manifest.enabledByDefault === true,
@@ -291,7 +286,7 @@ function median(values: unknown[]) {
 function groupByPhase(rows: JsonRecord[]) {
   const phases = new Map<string, JsonRecord[]>();
   for (const row of rows) {
-    const phase = normalizeString(row.phase) || "unknown";
+    const phase = normalizeStringOrEmpty(row.phase) || "unknown";
     const current = phases.get(phase) ?? [];
     current.push(row);
     phases.set(phase, current);
@@ -515,7 +510,7 @@ function collectGatewayCpuObservations(params: {
     if (!isRecord(result)) {
       continue;
     }
-    const id = normalizeString(result.id) || "unknown";
+    const id = normalizeStringOrEmpty(result.id) || "unknown";
     const cpuCoreMax = metricMax(result.summary, "cpuCoreRatio");
     const wallMax = metricMax(result.summary, "readyzMs") ?? metricMax(result.summary, "healthzMs");
     if (
@@ -583,7 +578,10 @@ function readQaSuiteSummary(summaryPath: string) {
 }
 
 function readQaSuiteSummaryText(summaryPath: string) {
-  const maxBytes = readPositiveIntEnv(QA_SUMMARY_MAX_BYTES_ENV, DEFAULT_QA_SUMMARY_MAX_BYTES);
+  const maxBytes = parsePositiveInt(
+    process.env[QA_SUMMARY_MAX_BYTES_ENV] || String(DEFAULT_QA_SUMMARY_MAX_BYTES),
+    QA_SUMMARY_MAX_BYTES_ENV,
+  );
   const stat = fs.statSync(summaryPath);
   if (!stat.isFile()) {
     throw new Error(`QA suite summary is not a file: ${summaryPath}`);
@@ -620,6 +618,11 @@ function validateQaSuiteSummary(summary: unknown) {
   }
   if (!isRecord(summary.run)) {
     throw new Error("QA suite summary missing run metadata");
+  }
+  if (summary.run.status !== "completed") {
+    throw new Error(
+      `QA suite summary run.status must be completed, got ${String(summary.run.status)}`,
+    );
   }
   const statusCounts = { failed: 0, passed: 0, skipped: 0 };
   for (const scenario of scenarios) {

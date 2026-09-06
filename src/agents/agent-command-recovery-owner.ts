@@ -1,10 +1,11 @@
 import path from "node:path";
 import type { InternalSessionEntry } from "../config/sessions.js";
+import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { AgentCommandOpts } from "./command/types.js";
-import { repairMainSessionRecoveryMutation } from "./main-session-recovery-lifecycle.js";
-import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery-owner-release.js";
+import { repairMainSessionRecoveryMutation } from "./main-session-recovery/main-session-recovery-lifecycle.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-owner-release.js";
 import {
   claimMainSessionRecoveryOwner,
   inspectMainSessionRecoveryRequired,
@@ -12,7 +13,7 @@ import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryOwnerLease,
   type MainSessionRecoveryPendingTarget,
-} from "./main-session-recovery-store.js";
+} from "./main-session-recovery/main-session-recovery-store.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -107,7 +108,7 @@ async function claimAgentCommandRecoveryOwner(params: {
       target: { sessionKey, storePath: params.prepared.storePath },
     });
     if (recoveryInspection.kind === "invalidated") {
-      throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+      throw createSessionWorkStartChangedError(sessionKey);
     }
     if (recoveryInspection.kind === "required") {
       throw new Error(
@@ -129,7 +130,7 @@ async function claimAgentCommandRecoveryOwner(params: {
     target: { sessionKey, storePath: params.prepared.storePath },
   });
   if (claim.kind === "invalidated") {
-    throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+    throw createSessionWorkStartChangedError(sessionKey);
   }
   if (claim.kind === "not_required") {
     return undefined;

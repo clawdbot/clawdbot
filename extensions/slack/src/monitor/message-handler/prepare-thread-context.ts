@@ -1,5 +1,4 @@
 // Slack plugin module implements prepare thread context behavior.
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import {
   formatInboundEnvelope,
   resolveInboundSupplementalSenderAllowed,
@@ -20,6 +19,7 @@ import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import type { SlackMediaResult } from "../media-types.js";
 import { resolveSlackThreadHistory, type SlackThreadStarter } from "../thread.js";
+import { formatSlackUnavailableMedia } from "./prepare-content.js";
 import {
   applySlackThreadHistoryFilterPolicy,
   ensureSlackThreadHistoryHasBotRoot,
@@ -59,7 +59,7 @@ type SlackSessionResetFreshness =
 type SlackSessionFreshnessRuntime = {
   session?: {
     resolveEntryResetFreshness?: (params: {
-      defaultAgentId?: string;
+      agentId: string;
       storePath?: string;
       sessionKey: string;
       sessionCfg?: OpenClawConfig["session"];
@@ -71,6 +71,7 @@ type SlackSessionFreshnessRuntime = {
 
 function resolveSlackThreadSessionFreshness(params: {
   ctx: SlackMonitorContext;
+  agentId: string;
   storePath: string;
   sessionKey: string;
 }): SlackSessionResetFreshness | undefined {
@@ -78,7 +79,7 @@ function resolveSlackThreadSessionFreshness(params: {
   // intentionally keeps non-context helpers untyped for external plugins.
   const runtime = params.ctx.channelRuntime as SlackSessionFreshnessRuntime | undefined;
   return runtime?.session?.resolveEntryResetFreshness?.({
-    defaultAgentId: resolveDefaultAgentId(params.ctx.cfg),
+    agentId: params.agentId,
     storePath: params.storePath,
     sessionKey: params.sessionKey,
     sessionCfg: params.ctx.cfg.session,
@@ -153,6 +154,7 @@ async function resolveSlackThreadUserMap(params: {
 
 export async function resolveSlackThreadContextData(params: {
   ctx: SlackMonitorContext;
+  agentId: string;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
   isGroupDm: boolean;
@@ -187,6 +189,7 @@ export async function resolveSlackThreadContextData(params: {
     params.isThreadReply && params.threadTs
       ? resolveSlackThreadSessionFreshness({
           ctx: params.ctx,
+          agentId: params.agentId,
           storePath: params.storePath,
           sessionKey: params.sessionKey,
         })
@@ -271,13 +274,23 @@ export async function resolveSlackThreadContextData(params: {
       starter.files &&
       starter.files.length > 0
     ) {
-      const { resolveSlackMedia } = await loadSlackMediaModule();
-      threadStarterMedia = await resolveSlackMedia({
+      const { resolveSlackAttachmentContent } = await loadSlackMediaModule();
+      const attachmentContent = await resolveSlackAttachmentContent({
         files: starter.files,
         client: params.eventScope?.client ?? params.ctx.app.client,
         token: params.ctx.botToken,
         maxBytes: params.ctx.mediaMaxBytes,
       });
+      threadStarterMedia = attachmentContent?.media.length ? attachmentContent.media : null;
+      if (attachmentContent) {
+        threadStarterBody = formatSlackUnavailableMedia({
+          body: threadStarterBody,
+          files: attachmentContent.files,
+          unavailableMediaCount: attachmentContent.unavailableMediaCount,
+          // Prompt serialization truncates long starter bodies from the tail.
+          prependUnavailable: true,
+        });
+      }
       if (threadStarterMedia) {
         const starterPlaceholders = threadStarterMedia.map((item) => item.placeholder).join(", ");
         logVerbose(`slack: hydrated thread starter file ${starterPlaceholders} from root message`);
@@ -319,8 +332,21 @@ export async function resolveSlackThreadContextData(params: {
       limit: threadInitialHistoryLimit,
     });
 
+    const enrichedStarter =
+      starter && threadStarterBody && threadStarterBody !== starter.text
+        ? { ...starter, text: threadStarterBody, ts: currentBotRootTs }
+        : null;
+    const threadHistoryWithEnrichedRoot =
+      enrichedStarter && !threadHistory.some((entry) => entry.ts === currentBotRootTs)
+        ? [
+            enrichedStarter,
+            ...(threadHistory.length >= threadInitialHistoryLimit
+              ? threadHistory.slice(1)
+              : threadHistory),
+          ]
+        : threadHistory;
     const threadHistoryWithBotRoot = ensureSlackThreadHistoryHasBotRoot({
-      history: threadHistory,
+      history: threadHistoryWithEnrichedRoot,
       includeBotStarterAsRootContext,
       threadStarter: starter ? { ...starter, ts: currentBotRootTs } : null,
     });
@@ -403,7 +429,11 @@ export async function resolveSlackThreadContextData(params: {
         const msgSenderName = isCurrentBot
           ? "Bot (this assistant)"
           : (msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown"));
-        const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${params.message.channel}]`;
+        const historyBody =
+          historyMsg.ts === currentBotRootTs && threadStarterBody
+            ? threadStarterBody
+            : historyMsg.text;
+        const msgWithId = `${historyBody}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${params.message.channel}]`;
         historyParts.push(
           formatInboundEnvelope({
             channel: "Slack",

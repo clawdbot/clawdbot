@@ -550,6 +550,48 @@ describe("parseFirecrawlScrapePayload", () => {
     expect(result.status).toBe(200);
   });
 
+  it.each([
+    ["metadata numeric 404", { metadata: { statusCode: 404 } }, 404],
+    ["data numeric 500", { statusCode: 500 }, 500],
+    ["metadata numeric-string 404", { metadata: { statusCode: "404" } }, 404],
+  ])("rejects unsuccessful target status from %s", (_name, statusFields, statusCode) => {
+    expect(() =>
+      firecrawlClient.parseFirecrawlScrapePayload({
+        ...baseOpts,
+        payload: {
+          data: {
+            markdown: "failed target content",
+            ...statusFields,
+          },
+        },
+      }),
+    ).toThrow(
+      `Firecrawl fetch failed (${statusCode}): target returned an unsuccessful HTTP status.`,
+    );
+  });
+
+  it.each([
+    ["metadata numeric 201", { metadata: { statusCode: 201 } }, 201],
+    ["data numeric-string 200", { statusCode: "200" }, 200],
+    [
+      "data fallback after unparseable metadata",
+      { statusCode: "201", metadata: { statusCode: "unknown" } },
+      201,
+    ],
+  ])("accepts successful target status from %s", (_name, statusFields, statusCode) => {
+    const result = firecrawlClient.parseFirecrawlScrapePayload({
+      ...baseOpts,
+      payload: {
+        data: {
+          markdown: "successful target content",
+          ...statusFields,
+        },
+      },
+    });
+
+    expect(result.status).toBe(statusCode);
+  });
+
   it("falls back to data.url for finalUrl when metadata.sourceURL is absent", () => {
     const result = firecrawlClient.parseFirecrawlScrapePayload({
       ...baseOpts,
@@ -739,15 +781,13 @@ describe("parseFirecrawlScrapePayload", () => {
     expect(result.warning).toBeUndefined();
   });
 
-  it("ignores non-numeric statusCode values", () => {
-    // Firecrawl may return statusCode as a string in some response shapes.
-    // The check is `typeof ... === "number"`, so strings are treated as absent.
+  it("ignores unparseable statusCode values", () => {
     const result = firecrawlClient.parseFirecrawlScrapePayload({
       ...baseOpts,
       payload: {
         data: {
           markdown: "content",
-          statusCode: "200",
+          statusCode: "not-a-status",
         },
       },
     });

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type RequestListener } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,10 +15,11 @@ const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
 function runResolver(params: {
   request: unknown;
   env?: Record<string, string>;
+  resolverExecutablePath?: string;
   timeoutMs?: number;
 }): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [resolverPath], {
+    const child = spawn(process.execPath, [params.resolverExecutablePath ?? resolverPath], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
@@ -53,13 +54,19 @@ function runResolver(params: {
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
-    child.on("error", reject);
-    child.on("exit", (code) => {
+    child.once("error", (error) => {
       if (timeout) {
         clearTimeout(timeout);
       }
-      resolve({ stdout, stderr, code, timedOut });
+      reject(error);
     });
+    child.once("exit", () => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    });
+    // Process exit ends the watchdog; pipe closure owns the complete JSON response.
+    child.once("close", (code) => resolve({ stdout, stderr, code, timedOut }));
     child.stdin.end(`${JSON.stringify(params.request)}\n`);
   });
 }
@@ -67,9 +74,25 @@ function runResolver(params: {
 const servers: Array<{ close: () => Promise<void> }> = [];
 const tempDirs: string[] = [];
 
+async function writeTimeoutResolver(): Promise<string> {
+  const staged = path.join(path.dirname(resolverPath), `.vault-timeout-${process.pid}.js`);
+  tempDirs.push(staged);
+  const source = readFileSync(resolverPath, "utf8");
+  const stagedSource = source.replace(
+    "const VAULT_FETCH_TIMEOUT_MS = 5000;",
+    "const VAULT_FETCH_TIMEOUT_MS = 500;",
+  );
+  expect(stagedSource).not.toBe(source);
+  await writeFile(staged, stagedSource, "utf8");
+  return staged;
+}
+
 afterEach(async () => {
-  await Promise.all(servers.splice(0).map((server) => server.close()));
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
+  try {
+    await Promise.all(servers.splice(0).map((server) => server.close()));
+  } finally {
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
+  }
 });
 
 async function writeTempFile(name: string, value: string): Promise<string> {
@@ -80,9 +103,33 @@ async function writeTempFile(name: string, value: string): Promise<string> {
   return filePath;
 }
 
+async function startVaultServer(handler: RequestListener): Promise<string> {
+  const server = createServer(handler);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  servers.push({
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        // A failed assertion must also release stalled response sockets.
+        server.closeAllConnections();
+      }),
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("fixture server did not bind to a TCP port");
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
+
 async function startVaultFixture() {
   const requests: Array<{ url?: string; token?: string; namespace?: string }> = [];
-  const server = createServer((request, response) => {
+  const vaultAddr = await startVaultServer((request, response) => {
     requests.push({
       url: request.url,
       token: request.headers["x-vault-token"]?.toString(),
@@ -99,22 +146,9 @@ async function startVaultFixture() {
       }),
     );
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push({
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
   return {
     requests,
-    vaultAddr: `http://127.0.0.1:${address.port}`,
+    vaultAddr,
   };
 }
 
@@ -126,7 +160,7 @@ async function startVaultErrorFixture(
   lookupStatusCode = statusCode,
 ) {
   const requests: string[] = [];
-  const server = createServer((request, response) => {
+  const vaultAddr = await startVaultServer((request, response) => {
     requests.push(request.url ?? "");
     if (request.url === "/v1/auth/token/lookup-self" && lookupSucceeds) {
       response.setHeader("content-type", "application/json");
@@ -142,101 +176,9 @@ async function startVaultErrorFixture(
       }),
     );
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push({
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
   return {
     requests,
-    vaultAddr: `http://127.0.0.1:${address.port}`,
-  };
-}
-
-async function startVaultMixedErrorFixture() {
-  const server = createServer((request, response) => {
-    response.statusCode = request.url?.includes("/providers/openai") ? 403 : 503;
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({ errors: ["not-a-real-sensitive-value"] }));
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push({
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
-  return {
-    vaultAddr: `http://127.0.0.1:${address.port}`,
-  };
-}
-
-async function startVaultStalledBodyFixture() {
-  const server = createServer((_request, response) => {
-    response.setHeader("content-type", "application/json");
-    response.write('{"data":{"data":{"value":"partial');
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push({
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections();
-      }),
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
-  return {
-    vaultAddr: `http://127.0.0.1:${address.port}`,
-  };
-}
-
-async function startVaultOversizedErrorBodyFixture() {
-  const server = createServer((request, response) => {
-    if (request.url === "/v1/auth/token/lookup-self") {
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify({ data: { id: "redacted-fixture-token" } }));
-      return;
-    }
-    response.statusCode = 403;
-    response.setHeader("content-type", "application/json");
-    response.setHeader("content-length", String(64 * 1024 + 1));
-    response.write('{"errors":["partial');
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push({
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections();
-      }),
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
-  return {
-    vaultAddr: `http://127.0.0.1:${address.port}`,
+    vaultAddr,
   };
 }
 
@@ -260,7 +202,7 @@ async function startVaultJwtFixture() {
     namespace?: string;
     body?: unknown;
   }> = [];
-  const server = createServer((request, response) => {
+  const vaultAddr = await startVaultServer((request, response) => {
     void (async () => {
       const body = await readRequestBody(request);
       requests.push({
@@ -298,53 +240,9 @@ async function startVaultJwtFixture() {
       response.end(error instanceof Error ? error.message : String(error));
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push({
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
   return {
     requests,
-    vaultAddr: `http://127.0.0.1:${address.port}`,
-  };
-}
-
-async function startVaultJwtErrorFixture() {
-  const server = createServer((request, response) => {
-    void readRequestBody(request)
-      .then(() => {
-        response.statusCode = 403;
-        response.setHeader("content-type", "application/json");
-        response.end(JSON.stringify({ errors: ["jwt not-a-real-sensitive-jwt denied"] }));
-      })
-      .catch((error: unknown) => {
-        response.statusCode = 500;
-        response.end(error instanceof Error ? error.message : String(error));
-      });
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push({
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
-  return {
-    vaultAddr: `http://127.0.0.1:${address.port}`,
+    vaultAddr,
   };
 }
 
@@ -409,6 +307,38 @@ describe("plugin manifest", () => {
 });
 
 describe("vault SecretRef resolver", () => {
+  it("keeps malformed successful Vault responses scoped per id", async () => {
+    const vaultAddr = await startVaultServer((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end("not-json");
+    });
+    const result = await runResolver({
+      request: {
+        protocolVersion: 1,
+        provider: "vault",
+        ids: ["providers/openai/apiKey", "tts/elevenlabs/apiKey"],
+      },
+      env: {
+        VAULT_ADDR: vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+    });
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toEqual({
+      protocolVersion: 1,
+      values: {},
+      errors: {
+        "providers/openai/apiKey": {
+          message: 'Vault read response for "providers/openai/apiKey" was not valid JSON.',
+        },
+        "tts/elevenlabs/apiKey": {
+          message: 'Vault read response for "tts/elevenlabs/apiKey" was not valid JSON.',
+        },
+      },
+    });
+  });
+
   it("requires Vault auth instead of accepting plaintext inline values", async () => {
     const result = await runResolver({
       request: {
@@ -925,7 +855,11 @@ describe("vault SecretRef resolver", () => {
   );
 
   it("preserves per-id failures when a sibling Vault read has a provider outage", async () => {
-    const fixture = await startVaultMixedErrorFixture();
+    const vaultAddr = await startVaultServer((request, response) => {
+      response.statusCode = request.url?.includes("/providers/openai") ? 403 : 503;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ errors: ["not-a-real-sensitive-value"] }));
+    });
     const result = await runResolver({
       request: {
         protocolVersion: 1,
@@ -933,7 +867,7 @@ describe("vault SecretRef resolver", () => {
         ids: ["providers/openai/apiKey", "tts/elevenlabs/apiKey"],
       },
       env: {
-        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_ADDR: vaultAddr,
         VAULT_TOKEN: "not-a-real-auth-header",
       },
     });
@@ -955,7 +889,18 @@ describe("vault SecretRef resolver", () => {
   });
 
   it("does not echo Vault jwt login response bodies in resolver errors", async () => {
-    const fixture = await startVaultJwtErrorFixture();
+    const vaultAddr = await startVaultServer((request, response) => {
+      void readRequestBody(request)
+        .then(() => {
+          response.statusCode = 403;
+          response.setHeader("content-type", "application/json");
+          response.end(JSON.stringify({ errors: ["jwt not-a-real-sensitive-jwt denied"] }));
+        })
+        .catch((error: unknown) => {
+          response.statusCode = 500;
+          response.end(error instanceof Error ? error.message : String(error));
+        });
+    });
     const jwtFile = await writeTempFile("vault-jwt", "not-a-real-sensitive-jwt\n");
     const result = await runResolver({
       request: {
@@ -964,7 +909,7 @@ describe("vault SecretRef resolver", () => {
         ids: ["providers/openai/apiKey"],
       },
       env: {
-        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_ADDR: vaultAddr,
         OPENCLAW_VAULT_AUTH_METHOD: "jwt",
         OPENCLAW_VAULT_AUTH_ROLE: "openclaw",
         OPENCLAW_VAULT_JWT_FILE: jwtFile,
@@ -985,7 +930,10 @@ describe("vault SecretRef resolver", () => {
   });
 
   it("times out while reading a stalled Vault JSON response body", async () => {
-    const fixture = await startVaultStalledBodyFixture();
+    const vaultAddr = await startVaultServer((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.write('{"data":{"data":{"value":"partial');
+    });
     const result = await runResolver({
       request: {
         protocolVersion: 1,
@@ -993,10 +941,11 @@ describe("vault SecretRef resolver", () => {
         ids: ["providers/openai/apiKey"],
       },
       env: {
-        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_ADDR: vaultAddr,
         VAULT_TOKEN: "not-a-real-auth-header",
       },
-      timeoutMs: 6_500,
+      resolverExecutablePath: await writeTimeoutResolver(),
+      timeoutMs: 2_500,
     });
 
     expect(result).toMatchObject({ code: 1, stderr: "", timedOut: false });
@@ -1012,7 +961,17 @@ describe("vault SecretRef resolver", () => {
   });
 
   it("cancels oversized Vault error bodies before clearing the fetch timeout", async () => {
-    const fixture = await startVaultOversizedErrorBodyFixture();
+    const vaultAddr = await startVaultServer((request, response) => {
+      if (request.url === "/v1/auth/token/lookup-self") {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ data: { id: "redacted-fixture-token" } }));
+        return;
+      }
+      response.statusCode = 403;
+      response.setHeader("content-type", "application/json");
+      response.setHeader("content-length", String(64 * 1024 + 1));
+      response.write('{"errors":["partial');
+    });
     const result = await runResolver({
       request: {
         protocolVersion: 1,
@@ -1020,7 +979,7 @@ describe("vault SecretRef resolver", () => {
         ids: ["providers/openai/apiKey"],
       },
       env: {
-        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_ADDR: vaultAddr,
         VAULT_TOKEN: "not-a-real-auth-header",
       },
       timeoutMs: 6_500,

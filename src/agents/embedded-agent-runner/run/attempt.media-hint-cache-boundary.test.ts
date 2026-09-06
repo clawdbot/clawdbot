@@ -45,8 +45,8 @@ import {
 import {
   prependSystemPromptAddition,
   resolveAttemptMediaTaskSystemPromptAddition,
-} from "./attempt.prompt-helpers.js";
-import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
+} from "./attempt-prompt-helpers.js";
+import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 
 const MEDIA_HINT = "Active image generation task in progress";
 const HOOK = "Static plugin guidance"; // documented static-cacheable hook field, constant per turn

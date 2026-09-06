@@ -1,7 +1,13 @@
 import { consume } from "@lit/context";
-import { initialState, Task } from "@lit/task";
+import { initialState, Task, TaskStatus } from "@lit/task";
+import type {
+  EnvironmentSummary,
+  EnvironmentsListResult,
+  SystemInfoResult,
+} from "@openclaw/gateway-protocol";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/events.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
@@ -9,14 +15,17 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { readPresenceEntries } from "../../app/user-profile.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
 import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { currentConfigObject } from "../../lib/config/index.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   approveDevicePairing,
   approveNodePairingRequest,
@@ -37,6 +46,7 @@ import {
   type InventoryRemovalRequest,
   type DevicesPageDataState,
 } from "../../lib/nodes/index.ts";
+import { presenceConnectivitySignature } from "../../lib/nodes/inventory.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -56,28 +66,11 @@ export type DevicesRouteData = {
 };
 
 const DEVICES_ACTIVE_POLL_INTERVAL_MS = 30_000;
+const SYSTEM_INFO_POLL_INTERVAL_MS = 60_000;
 
 type InventoryRemovalPrompt =
   | { kind: "entry"; entry: InventoryRemovalRequest }
   | { kind: "stale"; entries: InventoryRemovalRequest[] };
-
-function readPresence(value: unknown): PresenceEntry[] | null {
-  const presence =
-    value && typeof value === "object" ? (value as { presence?: unknown }).presence : null;
-  return Array.isArray(presence) ? (presence as PresenceEntry[]) : null;
-}
-
-function presenceConnectivitySignature(entries: PresenceEntry[]): string {
-  const states = new Map<string, "connected" | "offline">();
-  for (const entry of entries) {
-    const id = (entry.deviceId ?? entry.instanceId)?.trim().toLowerCase();
-    if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
-      continue;
-    }
-    states.set(id, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
-  }
-  return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
-}
 
 class DevicesPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -86,8 +79,13 @@ class DevicesPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData?: DevicesRouteData;
 
   @state() presence: PresenceEntry[] = [];
+  @state() private gatewaySystemInfo: SystemInfoResult | null = null;
+  @state() private desktopEnvironments: EnvironmentSummary[] = [];
+  private systemInfoUnavailable = false;
   @state() private pageState = createInitialDevicesState();
   @state() private canPairDevice = false;
+  @state() private canManagePairing = false;
+  @state() private canAdmin = false;
   @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
   @state() private execApprovalsTargetNodeId: string | null = null;
   private pendingConfirmation: AbortController | null = null;
@@ -127,12 +125,55 @@ class DevicesPage extends OpenClawLightDomElement {
       }
     },
   });
+  private readonly systemInfoTask = new Task(this, {
+    args: () =>
+      [this.gateway.gateway, this.canLoadSystemInfo ? this.gateway.client : null] as const,
+    task: ([gateway, client], { signal }) =>
+      gateway && client
+        ? client.request<SystemInfoResult>("system.info", {}, { signal })
+        : initialState,
+    onComplete: (result) => {
+      this.gatewaySystemInfo = result;
+      // Quiet node reloads also fetch stats; a fresh snapshot restarts the periodic deadline.
+      this.systemInfoPolling.stop();
+      this.systemInfoPolling.start();
+    },
+    onError: (error) => {
+      if (isMissingOperatorReadScopeError(error)) {
+        this.gatewaySystemInfo = null;
+        this.systemInfoUnavailable = true;
+        this.systemInfoPolling.stop();
+      }
+    },
+  });
+  private readonly environmentsTask = new Task(this, {
+    args: () =>
+      [this.gateway.gateway, this.canLoadDesktopEnvironments ? this.gateway.client : null] as const,
+    task: ([gateway, client], { signal }) =>
+      gateway && client
+        ? client.request<EnvironmentsListResult>("environments.list", {}, { signal })
+        : initialState,
+    onComplete: (result) => {
+      this.desktopEnvironments = result.environments;
+    },
+    onError: () => {
+      this.desktopEnvironments = [];
+    },
+  });
+  private readonly systemInfoPolling = new PollController(
+    this,
+    SYSTEM_INFO_POLL_INTERVAL_MS,
+    () => this.refreshSystemInfo(),
+    false,
+  );
   private readonly polling = new PollController(
     this,
     DEVICES_ACTIVE_POLL_INTERVAL_MS,
     () => {
-      void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
-      void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+      this.refreshNodeInventory(true);
+      if (this.canManagePairing) {
+        void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+      }
     },
     false,
   );
@@ -148,7 +189,7 @@ class DevicesPage extends OpenClawLightDomElement {
           if (this.gateway.gateway !== gateway || this.context.gateway !== gateway) {
             return;
           }
-          const presence = event.event === "presence" ? readPresence(event.payload) : null;
+          const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
           if (presence) {
             const connectivityChanged =
               presenceConnectivitySignature(presence) !==
@@ -156,15 +197,28 @@ class DevicesPage extends OpenClawLightDomElement {
             void this.presenceTask.run([null, null]);
             this.presence = presence;
             if (connectivityChanged) {
-              void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
-              void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
+              if (this.canManagePairing) {
+                void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+              }
+              this.refreshNodeInventory(true);
             }
           }
-          if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
-            void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+          if (
+            event.event === GATEWAY_EVENT_DEVICE_PAIR_CHANGED ||
+            event.event === "device.pair.requested" ||
+            event.event === "device.pair.resolved"
+          ) {
+            if (this.canManagePairing) {
+              void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+            }
           }
-          if (event.event === "node.pair.requested" || event.event === "node.pair.resolved") {
-            void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
+          if (
+            event.event === "node.pair.requested" ||
+            event.event === "node.pair.resolved" ||
+            event.event === "node.runnerInventory.changed" ||
+            event.event === "node.hostStats"
+          ) {
+            this.refreshNodeInventory(true);
           }
         }),
     );
@@ -185,8 +239,11 @@ class DevicesPage extends OpenClawLightDomElement {
     this.cancelPendingConfirmation();
     this.subscriptions.clear();
     void this.presenceTask.run([null, null]);
+    this.resetInventoryDetails();
     this.presence = [];
     this.canPairDevice = false;
+    this.canManagePairing = false;
+    this.canAdmin = false;
     super.disconnectedCallback();
   }
 
@@ -200,13 +257,21 @@ class DevicesPage extends OpenClawLightDomElement {
     this.pageState.connected = snapshot.phase === "connected";
     this.pageState.requestGeneration = this.gateway.epoch;
     this.syncGatewayState(snapshot);
+    if (!this.canLoadSystemInfo) {
+      void this.systemInfoTask.run([null, null]);
+      this.gatewaySystemInfo = null;
+    }
+    if (!this.canLoadDesktopEnvironments) {
+      void this.environmentsTask.run([null, null]);
+      this.desktopEnvironments = [];
+    }
     if (
       this.routeDataInitialized &&
       snapshot.phase === "connected" &&
       snapshot.client &&
       (change.identityChanged || change.connectionChanged)
     ) {
-      const initialPresence = readPresence(snapshot.hello?.snapshot);
+      const initialPresence = readPresenceEntries(snapshot.hello?.snapshot);
       this.presence = initialPresence ?? [];
       void this.loadPresence();
     }
@@ -214,8 +279,11 @@ class DevicesPage extends OpenClawLightDomElement {
   }
 
   private syncGatewayState(snapshot: ApplicationGatewaySnapshot) {
-    this.canPairDevice =
-      snapshot.phase === "connected" && hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
+    const connected = snapshot.phase === "connected";
+    const auth = snapshot.hello?.auth ?? null;
+    this.canAdmin = connected && hasOperatorAdminAccess(auth);
+    this.canManagePairing = connected && (!auth || hasOperatorPairingAccess(auth));
+    this.canPairDevice = this.canAdmin;
   }
 
   private applyRouteData() {
@@ -227,7 +295,7 @@ class DevicesPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     if (!this.gateway.isRouteDataCurrent(data)) {
       this.resetServerState(snapshot);
-      this.presence = readPresence(snapshot.hello?.snapshot) ?? [];
+      this.presence = readPresenceEntries(snapshot.hello?.snapshot) ?? [];
       void this.loadPresence();
       this.ensureInitialData();
       return;
@@ -238,7 +306,7 @@ class DevicesPage extends OpenClawLightDomElement {
       connected: snapshot.phase === "connected",
       requestGeneration: this.gateway.epoch,
     };
-    const initialPresence = readPresence(snapshot.hello?.snapshot);
+    const initialPresence = readPresenceEntries(snapshot.hello?.snapshot);
     if (initialPresence) {
       this.presence = initialPresence;
     }
@@ -256,6 +324,7 @@ class DevicesPage extends OpenClawLightDomElement {
     this.pageState = next;
     void this.presenceTask.run([null, null]);
     this.presence = [];
+    this.resetInventoryDetails();
   }
 
   private async runPageTask<T>(
@@ -281,16 +350,16 @@ class DevicesPage extends OpenClawLightDomElement {
       return;
     }
     if (!pageState.nodes.length && !pageState.nodesLoading) {
-      void this.runPageTask((current) => loadNodes(current));
+      this.refreshNodeInventory();
     }
-    if (!pageState.devicesList && !pageState.devicesLoading) {
+    if (this.canManagePairing && !pageState.devicesList && !pageState.devicesLoading) {
       void this.runPageTask((current) => loadDevices(current));
     }
     const config = this.context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
       void this.context.runtimeConfig.refresh();
     }
-    if (!pageState.execApprovalsSnapshot && !pageState.execApprovalsLoading) {
+    if (this.canAdmin && !pageState.execApprovalsSnapshot && !pageState.execApprovalsLoading) {
       void this.runPageTask((current) =>
         loadExecApprovals(current, this.resolveExecApprovalsTarget()),
       );
@@ -298,11 +367,55 @@ class DevicesPage extends OpenClawLightDomElement {
   }
 
   private syncPolling() {
+    if (this.canLoadSystemInfo) {
+      this.systemInfoPolling.start();
+    } else {
+      this.systemInfoPolling.stop();
+    }
     if (this.gateway.connected && this.gateway.client) {
       this.polling.start();
       return;
     }
     this.polling.stop();
+  }
+
+  private get canLoadSystemInfo(): boolean {
+    const snapshot = this.gateway.snapshot;
+    return (
+      this.isConnected &&
+      snapshot?.phase === "connected" &&
+      !this.systemInfoUnavailable &&
+      isGatewayMethodAdvertised(snapshot, "system.info") === true
+    );
+  }
+
+  private get canLoadDesktopEnvironments(): boolean {
+    const snapshot = this.gateway.snapshot;
+    return this.isConnected && Boolean(snapshot && isDesktopPanelAvailable(snapshot));
+  }
+
+  private refreshSystemInfo() {
+    if (this.canLoadSystemInfo && this.systemInfoTask.status !== TaskStatus.PENDING) {
+      void this.systemInfoTask.run();
+    }
+  }
+
+  private refreshNodeInventory(quiet = false) {
+    this.refreshSystemInfo();
+    if (this.canLoadDesktopEnvironments && this.environmentsTask.status !== TaskStatus.PENDING) {
+      void this.environmentsTask.run();
+    }
+    void this.runPageTask((pageState) => loadNodes(pageState, { quiet }));
+  }
+
+  private resetInventoryDetails() {
+    // A replacement source or reconnect must retire callbacks before its data can arrive.
+    void this.systemInfoTask.run([null, null]);
+    void this.environmentsTask.run([null, null]);
+    this.systemInfoPolling.stop();
+    this.gatewaySystemInfo = null;
+    this.desktopEnvironments = [];
+    this.systemInfoUnavailable = false;
   }
 
   private loadPresence(): Promise<void> {
@@ -321,7 +434,7 @@ class DevicesPage extends OpenClawLightDomElement {
 
   // Every destructive Devices action confirms here, never through window.confirm: the
   // awaited dialog lets the gateway reconnect or swap clients mid-prompt, so the captured
-  // scope is revalidated before the operation runs against a different server.
+  // scope and current authority are revalidated before the operation runs.
   private async confirmDestructiveAction(
     prompt: Omit<ConfirmDialogOptions, "danger" | "signal">,
     run: (pageState: DevicesPageDataState) => unknown,
@@ -346,14 +459,18 @@ class DevicesPage extends OpenClawLightDomElement {
       controller.signal.aborted ||
       generation !== this.requestGeneration ||
       client !== this.gateway.client ||
-      !this.gateway.connected
+      !this.gateway.connected ||
+      !this.canManagePairing
     ) {
       return;
     }
     await this.runPageTask(run);
   }
 
-  private confirmInventoryRemoval(prompt: InventoryRemovalPrompt) {
+  private confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
+    if (!this.canManagePairing) {
+      return Promise.resolve();
+    }
     if (prompt.kind === "entry") {
       const entry = prompt.entry;
       return this.confirmDestructiveAction(
@@ -382,7 +499,10 @@ class DevicesPage extends OpenClawLightDomElement {
     );
   }
 
-  private confirmPairingReject(target: "device" | "node", requestId: string) {
+  private confirmPairingReject(target: "device" | "node", requestId: string): Promise<void> {
+    if (!this.canManagePairing) {
+      return Promise.resolve();
+    }
     return this.confirmDestructiveAction(
       {
         title: t(
@@ -400,7 +520,10 @@ class DevicesPage extends OpenClawLightDomElement {
     );
   }
 
-  private confirmTokenRevoke(deviceId: string, role: string) {
+  private confirmTokenRevoke(deviceId: string, role: string): Promise<void> {
+    if (!this.canManagePairing) {
+      return Promise.resolve();
+    }
     return this.confirmDestructiveAction(
       {
         title: t("devices.inventory.revokePromptTitle", { role }),
@@ -417,28 +540,48 @@ class DevicesPage extends OpenClawLightDomElement {
     );
   }
 
-  // The rotate response carries the only copy of the new credential, so the reveal is
-  // deliberately outside pendingConfirmation: a reconnect aborts pending confirmations,
-  // and aborting this one would destroy a secret the Gateway cannot reissue.
-  private async revealRotatedToken(deviceId: string, role: string, scopes?: string[]) {
-    const token = await this.runPageTask((pageState) =>
+  // A rotation always ends in a dialog: with the replacement when the Gateway issued it
+  // to this operator, otherwise with what it did instead. The reveal sits deliberately
+  // outside pendingConfirmation, which a reconnect aborts — aborting a shown secret
+  // would destroy the only copy the Gateway can hand out.
+  private async reportRotationOutcome(
+    device: { id: string; name: string },
+    role: string,
+    scopes?: string[],
+  ) {
+    if (!this.canManagePairing) {
+      return;
+    }
+    const outcome = await this.runPageTask((pageState) =>
       rotateDeviceToken(pageState, {
-        deviceId,
+        deviceId: device.id,
         gatewayUrl: this.context.gateway.connection.gatewayUrl,
         role,
         scopes,
       }),
     );
-    if (!token) {
+    if (!outcome) {
       return;
     }
-    await showSecretRevealDialog({
-      title: t("devices.inventory.rotatePromptTitle", { role }),
-      message: t("devices.inventory.rotatePromptBody"),
-      secret: token,
-      acknowledgeLabel: t("devices.inventory.rotateAcknowledge"),
-      dismissHint: t("devices.inventory.rotateDismissHint"),
-    });
+    await (outcome.delivery === "in-band"
+      ? showSecretRevealDialog({
+          title: t("devices.inventory.rotatePromptTitle", { role }),
+          message: t("devices.inventory.rotatePromptBody"),
+          secret: outcome.token,
+          acknowledgeLabel: t("devices.inventory.rotateAcknowledge"),
+          dismissHint: t("devices.inventory.rotateDismissHint"),
+        })
+      : showSecretRevealDialog({
+          // The title carries the announcement and the device, so the body is only the
+          // reassurance. Naming the transient disconnect here would raise an alarm the
+          // very next line has to walk back.
+          title: t("devices.inventory.rotateWithheldTitle", { device: device.name }),
+          status: "success",
+          message: t("devices.inventory.rotateWithheldNext"),
+          callout: t("devices.inventory.rotateWithheldException"),
+          acknowledgeLabel: t("common.close"),
+          note: t("devices.inventory.rotateWithheldNote"),
+        }));
   }
 
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
@@ -460,8 +603,7 @@ class DevicesPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("devices")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("devices")}
-            ${renderDocsLink(DEVICES_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("devices")} ${renderLearnMoreLink(DEVICES_DOCS_URL)}
           </div>
         </div>
       </section>
@@ -471,11 +613,16 @@ class DevicesPage extends OpenClawLightDomElement {
           nodes: devices.nodes,
           presence: this.presence,
           gatewayVersion,
+          basePath: this.context.basePath,
+          gatewaySystemInfo: this.gatewaySystemInfo,
+          desktopEnvironments: this.desktopEnvironments,
           lastError: devices.lastError,
           devicesLoading: devices.devicesLoading,
           devicesError: devices.devicesError,
           devicesList: devices.devicesList,
           canPairDevice: this.canPairDevice,
+          canManagePairing: this.canManagePairing,
+          canAdmin: this.canAdmin,
           configForm: currentConfigObject(config),
           configLoading: config.configLoading,
           configSaving: config.configSaving,
@@ -489,12 +636,22 @@ class DevicesPage extends OpenClawLightDomElement {
           execApprovalsSelectedAgent: devices.execApprovalsSelectedAgent,
           execApprovalsTarget: this.execApprovalsTarget,
           execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
-          onDevicePairSetupOpen: () => void this.context.overlays.openDevicePairSetup(),
-          onDeviceApprove: (requestId) =>
-            void this.runPageTask((pageState) => approveDevicePairing(pageState, requestId)),
+          onDevicePairSetupOpen: () => {
+            if (this.canAdmin) {
+              void this.context.overlays.openDevicePairSetup();
+            }
+          },
+          onDeviceApprove: (requestId) => {
+            if (this.canManagePairing) {
+              void this.runPageTask((pageState) => approveDevicePairing(pageState, requestId));
+            }
+          },
           onDeviceReject: (requestId) => void this.confirmPairingReject("device", requestId),
-          onNodeApprove: (requestId) =>
-            void this.runPageTask((pageState) => approveNodePairingRequest(pageState, requestId)),
+          onNodeApprove: (requestId) => {
+            if (this.canManagePairing) {
+              void this.runPageTask((pageState) => approveNodePairingRequest(pageState, requestId));
+            }
+          },
           onNodeReject: (requestId) => void this.confirmPairingReject("node", requestId),
           onInventoryRemove: (entry) => void this.confirmInventoryRemoval({ kind: "entry", entry }),
           onInventoryCleanup: (entries) => {
@@ -502,16 +659,21 @@ class DevicesPage extends OpenClawLightDomElement {
               void this.confirmInventoryRemoval({ kind: "stale", entries });
             }
           },
-          onDeviceRotate: (deviceId, role, scopes) =>
-            void this.revealRotatedToken(deviceId, role, scopes),
+          onDeviceRotate: (device, role, scopes) =>
+            void this.reportRotationOutcome(device, role, scopes),
           onDeviceRevoke: (deviceId, role) => void this.confirmTokenRevoke(deviceId, role),
           onLoadConfig: () =>
             void this.context.runtimeConfig.refresh({ discardPendingChanges: true }),
           onLoadExecApprovals: () =>
-            void this.runPageTask((pageState) =>
-              loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-            ),
+            this.canAdmin
+              ? void this.runPageTask((pageState) =>
+                  loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
+                )
+              : undefined,
           onBindDefault: (nodeId) => {
+            if (!this.canAdmin) {
+              return;
+            }
             if (nodeId) {
               this.context.runtimeConfig.patchForm(["tools", "exec", "node"], nodeId);
             } else {
@@ -519,6 +681,9 @@ class DevicesPage extends OpenClawLightDomElement {
             }
           },
           onBindAgent: (agentId, nodeId) => {
+            if (!this.canAdmin) {
+              return;
+            }
             const target = this.context.runtimeConfig.agentEntry(agentId, {
               ensure: Boolean(nodeId),
             });
@@ -532,7 +697,11 @@ class DevicesPage extends OpenClawLightDomElement {
               this.context.runtimeConfig.removeFormValue(path);
             }
           },
-          onSaveBindings: () => void this.context.runtimeConfig.save(),
+          onSaveBindings: () => {
+            if (this.canAdmin) {
+              void this.context.runtimeConfig.save();
+            }
+          },
           onExecApprovalsTargetChange: (kind, nodeId) => {
             this.execApprovalsTarget = kind;
             this.execApprovalsTargetNodeId = nodeId;
@@ -547,15 +716,21 @@ class DevicesPage extends OpenClawLightDomElement {
             this.requestUpdate();
           },
           onExecApprovalsPatch: (path, value) =>
-            void this.runPageTask((pageState) =>
-              updateExecApprovalsFormValue(pageState, path, value),
-            ),
+            this.canAdmin
+              ? void this.runPageTask((pageState) =>
+                  updateExecApprovalsFormValue(pageState, path, value),
+                )
+              : undefined,
           onExecApprovalsRemove: (path) =>
-            void this.runPageTask((pageState) => removeExecApprovalsFormValue(pageState, path)),
+            this.canAdmin
+              ? void this.runPageTask((pageState) => removeExecApprovalsFormValue(pageState, path))
+              : undefined,
           onSaveExecApprovals: () =>
-            void this.runPageTask((pageState) =>
-              saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-            ),
+            this.canAdmin
+              ? void this.runPageTask((pageState) =>
+                  saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
+                )
+              : undefined,
         }),
       )}
     `;

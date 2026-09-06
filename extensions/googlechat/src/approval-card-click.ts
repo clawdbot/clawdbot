@@ -87,6 +87,7 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
       approvalKind: consumed.approvalKind,
       decision: consumed.decision,
       channel: "googlechat",
+      accountId: params.target.account.accountId,
       senderId: actor,
     });
     await updateGoogleChatMessage({

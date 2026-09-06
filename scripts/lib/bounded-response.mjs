@@ -21,7 +21,9 @@ export function createBoundedResponseTooLargeError(message) {
   return Object.assign(new Error(message), { code: "ETOOBIG" });
 }
 
-function cancelReaderSoon(reader) {
+// Defer cancellation so timeout/abort rejection wins the pending read.
+// Swallow cleanup rejection so it cannot surface as an unhandled rejection.
+export function cancelResponseReaderSoon(reader) {
   void Promise.resolve()
     .then(() => reader.cancel())
     .catch(() => undefined);
@@ -29,10 +31,19 @@ function cancelReaderSoon(reader) {
 
 function parseContentLengthHeader(headers) {
   const raw = headers.get("content-length");
-  if (!raw || !/^\d+$/u.test(raw)) {
+  if (!raw) {
     return undefined;
   }
-  const parsed = Number(raw);
+  // This is post-framing early rejection, not framing validation.
+  const values = raw.split(",").map((value) => value.trim());
+  if (values.some((value) => !/^\d+$/u.test(value))) {
+    return undefined;
+  }
+  const canonical = values.map((value) => value.replace(/^0+(?=\d)/u, ""));
+  if (canonical.some((value) => value !== canonical[0])) {
+    return undefined;
+  }
+  const parsed = Number(canonical[0]);
   return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
@@ -56,7 +67,7 @@ async function readResponseChunk(reader, label, signal, markCanceled) {
           "Non-Error rejection",
         ),
       );
-      cancelReaderSoon(reader);
+      cancelResponseReaderSoon(reader);
     };
     signal.addEventListener("abort", onAbort, { once: true });
     removeAbortListener = () => signal.removeEventListener("abort", onAbort);
@@ -79,7 +90,7 @@ async function readResponseChunkWithTimeout(reader, label, signal, timeoutPromis
   const timeoutReadPromise = timeoutPromise.catch((error) => {
     if (waitingForRead) {
       markCanceled();
-      cancelReaderSoon(reader);
+      cancelResponseReaderSoon(reader);
     }
     throw toLintErrorObject(error, `${label} response body read timed out`);
   });
@@ -161,7 +172,7 @@ export async function readBoundedResponseText(response, label, maxBytes, options
   return new TextDecoder().decode(bytes);
 }
 
-function toLintErrorObject(value, fallbackMessage) {
+export function toLintErrorObject(value, fallbackMessage) {
   if (value instanceof Error) {
     return value;
   }

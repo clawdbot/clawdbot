@@ -77,7 +77,7 @@ describe("Matrix QA Lab scenario flows", () => {
 
   it("expands every Matrix module call through the shared flow host", () => {
     const bindings = new Set<string>();
-    expect(scenarios).toHaveLength(82);
+    expect(scenarios).toHaveLength(83);
     for (const scenario of scenarios) {
       expect(scenario.execution.kind, scenario.id).toBe("flow");
       if (scenario.execution.kind !== "flow") {
@@ -93,12 +93,11 @@ describe("Matrix QA Lab scenario flows", () => {
       }
       expect(scenario.execution.channel, scenario.id).toBe("matrix");
       expect(scenario.execution.retryCount, scenario.id).toBe(0);
-      expect(scenario.execution.timeoutMs, scenario.id).toBeGreaterThan(0);
       expect(scenario.execution.flow?.steps.at(-1)?.detailsExpr, scenario.id).toBe(
         "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)",
       );
     }
-    expect(bindings.size).toBe(82);
+    expect(bindings.size).toBe(83);
   });
 
   it("prepares the shared canary only for canary-dependent scenarios", () => {
@@ -115,6 +114,24 @@ describe("Matrix QA Lab scenario flows", () => {
         canaryScenarioIds.has(scenario.id),
       );
       expect(readModuleBinding(scenario).callAction.args).toEqual([{ expr: "scenarioContext" }]);
+    }
+  });
+
+  it("leaves whole-flow deadlines unset for provider-budgeted scenarios", () => {
+    const providerBudgetedScenarioIds = new Set([
+      "matrix-e2ee-thread-follow-up",
+      "matrix-inbound-edit-no-duplicate-trigger",
+      "matrix-thread-nested-reply-shape",
+    ]);
+    const providerBudgetedScenarios = scenarios.filter((scenario) =>
+      providerBudgetedScenarioIds.has(scenario.id),
+    );
+
+    expect(providerBudgetedScenarios.map((scenario) => scenario.id).toSorted()).toEqual(
+      [...providerBudgetedScenarioIds].toSorted(),
+    );
+    for (const scenario of providerBudgetedScenarios) {
+      expect(scenario.execution, scenario.id).not.toHaveProperty("timeoutMs");
     }
   });
 

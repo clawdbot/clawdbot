@@ -61,14 +61,23 @@ vi.mock("../agents/model-selection.js", async () => {
   };
 });
 
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 vi.mock("../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: vi.fn(),
 }));
 
-vi.mock("../agents/subagent-announce.js", () => ({
+vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),
+}));
+
+// These turn fixtures create no browser tabs; lifecycle cleanup has its own owner tests.
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));

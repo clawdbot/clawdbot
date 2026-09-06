@@ -26,7 +26,9 @@ const { sendDurableMessageBatch } = vi.hoisted(() => ({
   sendDurableMessageBatch: vi.fn(async () => ({ status: "sent" })),
 }));
 
-vi.mock("../channels/message/runtime.js", () => ({ sendDurableMessageBatch }));
+vi.mock("../channels/message/runtime.js", () => ({
+  sendDurableMessageBatchCore: sendDurableMessageBatch,
+}));
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 let tempDir: string;
@@ -287,6 +289,14 @@ describe("client voice session digest retry", () => {
         retained: 1,
       });
 
+      // The run can register before config arrives; an identical replay must
+      // still re-arm the closed session's digest, not return at binding reuse.
+      registerClientVoiceConsultRun({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        voiceSessionId,
+        runId: "late-run",
+      });
       registerClientVoiceConsultRun({
         agentId: "main",
         sessionKey: "agent:main:main",

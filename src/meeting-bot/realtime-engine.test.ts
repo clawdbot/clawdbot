@@ -134,6 +134,72 @@ async function createEngineFixture(options?: {
 }
 
 describe("meeting realtime engine output ownership", () => {
+  it.each([
+    [{ status: "completed" as const, responseId: "response-1" }, "turn.ended"],
+    [
+      { status: "failed" as const, responseId: "response-1", message: "provider failed" },
+      "turn.ended",
+    ],
+    [
+      {
+        status: "incomplete" as const,
+        responseId: "response-1",
+        reason: "max_output_tokens",
+        message: "provider response incomplete",
+      },
+      "turn.ended",
+    ],
+    [
+      { status: "cancelled" as const, responseId: "response-1", reason: "client_cancelled" },
+      "turn.cancelled",
+    ],
+  ])("finishes each response once and accepts a later response", async (outcome, terminalType) => {
+    const fixture = await createEngineFixture();
+    try {
+      fixture.callbacks.onTranscript?.("user", "first turn", true);
+      fixture.announceOutputResponse("response-1");
+      fixture.sendOutputAudio(Buffer.from([1]), "response-1");
+      await vi.waitFor(() => expect(fixture.writeOutput).toHaveBeenCalledTimes(1));
+      fixture.callbacks.onResponseDone?.(outcome);
+      fixture.callbacks.onEvent?.({
+        direction: "server",
+        responseId: outcome.responseId,
+        type: "response.done",
+      });
+
+      const firstEvents = fixture.handle.getHealth().recentTalkEvents;
+      expect(firstEvents.filter((event) => event.type === terminalType)).toHaveLength(1);
+      expect(firstEvents.filter((event) => event.type === "output.audio.done")).toHaveLength(1);
+      expect(firstEvents.filter((event) => event.type === "session.error")).toHaveLength(
+        outcome.status === "failed" || outcome.status === "incomplete" ? 1 : 0,
+      );
+      expect(fixture.handle.getHealth().bridgeClosed).toBe(false);
+
+      fixture.releaseWrite(0);
+      fixture.callbacks.onTranscript?.("user", "later turn", true);
+      fixture.announceOutputResponse("response-2");
+      fixture.sendOutputAudio(Buffer.from([2]), "response-2");
+      await vi.waitFor(() => expect(fixture.writeOutput).toHaveBeenCalledTimes(2));
+      fixture.callbacks.onResponseDone?.({ status: "completed", responseId: "response-2" });
+      fixture.callbacks.onEvent?.({
+        direction: "server",
+        responseId: "response-2",
+        type: "response.done",
+      });
+
+      const finalEvents = fixture.handle.getHealth().recentTalkEvents;
+      expect(
+        finalEvents.filter(
+          (event) => event.type === "turn.ended" || event.type === "turn.cancelled",
+        ),
+      ).toHaveLength(2);
+      expect(finalEvents.filter((event) => event.type === "output.audio.done")).toHaveLength(2);
+      fixture.releaseWrite(1);
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
   it("rearms continuity reset when the provider creates a fresh session before ready", async () => {
     const fixture = await createEngineFixture();
     try {

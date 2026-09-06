@@ -82,4 +82,19 @@ describe("joinWithRunLivenessDeadline", () => {
     });
     expect(onTimeout).not.toHaveBeenCalled();
   });
+
+  it("runs work without an abort signal and remains bounded", async () => {
+    vi.useFakeTimers();
+    try {
+      const joinWork = vi.fn(() => new Promise<never>(() => {}));
+      const onTimeout = vi.fn();
+      const join = joinWithRunLivenessDeadline({ joinWork, onTimeout });
+      await vi.advanceTimersByTimeAsync(RUN_LIVENESS_JOIN_TIMEOUT_MS);
+      await join;
+      expect(joinWork).toHaveBeenCalledOnce();
+      expect(onTimeout).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

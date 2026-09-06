@@ -1,5 +1,6 @@
 // Openai tests cover speech provider plugin behavior.
 import { createServer } from "node:http";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
@@ -26,7 +27,7 @@ function isSpeechRequestBody(value: unknown): value is {
   speed?: number;
   response_format?: string;
 } {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function parseRequestBody(init: RequestInit | undefined): {

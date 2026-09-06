@@ -10,6 +10,7 @@ import { type AcpRuntimeError, toAcpRuntimeErrorText } from "../../../acp/runtim
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
 
@@ -53,8 +54,8 @@ export type AcpAction =
   | "install"
   | "help";
 
-export type AcpSpawnThreadMode = "auto" | "here" | "off";
-export type AcpSpawnBindMode = "here" | "off";
+type AcpSpawnThreadMode = "auto" | "here" | "off";
+type AcpSpawnBindMode = "here" | "off";
 
 type ParsedSpawnInput = {
   agentId: string;
@@ -83,13 +84,6 @@ type ParsedSetCommandInput = {
 
 const ACP_UNICODE_DASH_PREFIX_RE =
   /^[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]+/;
-
-export function stopWithText(text: string): CommandHandlerResult {
-  return {
-    shouldContinue: false,
-    reply: { text },
-  };
-}
 
 export function resolveAcpAction(tokens: string[]): AcpAction {
   const action = normalizeOptionalLowercaseString(tokens[0]);
@@ -451,7 +445,7 @@ export function resolveAcpHelpText(): string {
     "Notes:",
     "- /acp spawn harness-id is an ACP runtime harness alias (for example codex), not an OpenClaw agents.list id.",
     "- Use --bind here to pin the current conversation to the ACP session without creating a child thread.",
-    "- /focus and /unfocus also work with ACP session keys.",
+    "- /session unbind detaches this conversation without closing its ACP session.",
     "- ACP dispatch of normal thread messages is controlled by acp.dispatch.enabled.",
   ].join("\n");
 }
@@ -466,6 +460,7 @@ export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): str
   const parts = [
     options.runtimeMode ? `runtimeMode=${options.runtimeMode}` : null,
     options.model ? `model=${options.model}` : null,
+    options.thinking ? `thinking=${options.thinking}` : null,
     options.cwd ? `cwd=${options.cwd}` : null,
     options.permissionProfile ? `permissionProfile=${options.permissionProfile}` : null,
     typeof options.timeoutSeconds === "number" ? `timeoutSeconds=${options.timeoutSeconds}` : null,
@@ -524,7 +519,7 @@ export async function withAcpCommandErrorBoundary<T>(params: {
     const result = await params.run();
     return params.onSuccess(result);
   } catch (error) {
-    return stopWithText(
+    return commandReply(
       collectAcpErrorText({
         error,
         fallbackCode: params.fallbackCode,

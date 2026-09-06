@@ -30,21 +30,8 @@ const STATUS_LABEL_KEYS = {
   timed_out: "tasksPage.status.timedOut",
 } as const satisfies Record<TaskStatus, string>;
 
-const STATUS_CHIP_CLASSES = {
-  queued: "chip-warn",
-  running: "chip-warn",
-  completed: "chip-ok",
-  failed: "chip-danger",
-  cancelled: "",
-  timed_out: "chip-danger",
-} as const satisfies Record<TaskStatus, string>;
-
 export function taskStatusLabel(status: TaskStatus): string {
   return t(STATUS_LABEL_KEYS[status]);
-}
-
-export function taskStatusChipClass(status: TaskStatus): string {
-  return STATUS_CHIP_CLASSES[status];
 }
 
 export function taskRuntimeLabel(task: TaskSummary): string {
@@ -161,22 +148,39 @@ export function partitionTasks(tasks: readonly TaskSummary[]): {
   active: TaskSummary[];
   recent: TaskSummary[];
 } {
-  const sorted = sortTasks(tasks);
+  const byId = (left: TaskSummary, right: TaskSummary) =>
+    left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
   return {
-    active: sorted.filter((task) => task.status === "queued" || task.status === "running"),
-    recent: sorted
+    // Creation is immutable, so progress and queued-to-running transitions cannot move active rows.
+    active: tasks
+      .filter((task) => task.status === "queued" || task.status === "running")
+      .toSorted(
+        (left, right) =>
+          taskTimestampMs(left.createdAt) - taskTimestampMs(right.createdAt) || byId(left, right),
+      ),
+    recent: tasks
       .filter((task) => task.status !== "queued" && task.status !== "running")
+      .toSorted(
+        (left, right) =>
+          taskTimestampMs(right.endedAt ?? right.updatedAt ?? right.createdAt) -
+            taskTimestampMs(left.endedAt ?? left.updatedAt ?? left.createdAt) || byId(left, right),
+      )
       .slice(0, 50),
   };
 }
 
-export function normalizeTasksListResult(value: unknown): TaskSummary[] | null {
+export function normalizeTasksListResult(
+  value: unknown,
+): { tasks: TaskSummary[]; nextCursor?: string } | null {
   if (!Value.Check(TasksListResultSchema, value)) {
     return null;
   }
-  return sortTasks(
-    value.tasks.map(normalizeTaskSummary).filter((task): task is TaskSummary => task !== null),
-  );
+  return {
+    tasks: sortTasks(
+      value.tasks.map(normalizeTaskSummary).filter((task): task is TaskSummary => task !== null),
+    ),
+    ...(value.nextCursor !== undefined ? { nextCursor: value.nextCursor } : {}),
+  };
 }
 
 export function normalizeTasksGetResult(value: unknown): TaskSummary | null {

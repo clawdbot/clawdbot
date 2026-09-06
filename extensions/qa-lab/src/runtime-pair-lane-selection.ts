@@ -68,8 +68,9 @@ export function resolveQaRuntimePairLaneScenarioIds(params: {
       ),
     }),
   );
+  const laneCompatibleScenarioSet = new Set(laneCompatibleScenarios);
   const excludedLaneScenarios = compatibleScenarios.filter(
-    (scenario) => !laneCompatibleScenarios.includes(scenario),
+    (scenario) => !laneCompatibleScenarioSet.has(scenario),
   );
   const excludedNonFlowScenarios = params.runtimePair
     ? matchingScenarios.filter((scenario) => scenario.execution.kind !== "flow")

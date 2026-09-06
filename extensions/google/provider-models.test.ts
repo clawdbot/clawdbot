@@ -3,6 +3,7 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { createProviderDynamicModelContext as createContext } from "../test-support/provider-model-test-helpers.js";
 import {
+  isGoogleNativeVideoModelId,
   isGoogleTextGenerationModelId,
   isModernGoogleModel,
   resolveGoogleGeminiForwardCompatModel,
@@ -535,7 +536,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
   });
 
   it.each([
-    ["gemini-3.6-flash", "gemini-3-flash-preview"],
+    ["gemini-3.7-flash", "gemini-3-flash-preview"],
     ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
   ])("resolves future Gemini 3 text family %s from %s metadata", (modelId, templateId) => {
     const model = resolveGoogleGeminiForwardCompatModel({
@@ -578,6 +579,26 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
           }),
         }),
       ).toBeUndefined();
+    }
+  });
+
+  it("classifies only ordinary Gemini generation ids for native video", () => {
+    for (const modelId of [
+      "gemini-2.5-flash",
+      "google/gemini-3.1-pro-preview",
+      "models/gemini-flash-latest",
+    ]) {
+      expect(isGoogleNativeVideoModelId(modelId), modelId).toBe(true);
+    }
+    for (const modelId of [
+      "gemma-4-26b-a4b-it",
+      "tunedModels/gemini-2.5-flash",
+      "gemini-3.1-flash-image",
+      "gemini-2.5-computer-use-preview",
+      "gemini-2.5-flash-tts-preview",
+      "gemini-2.5-flash-live-preview",
+    ]) {
+      expect(isGoogleNativeVideoModelId(modelId), modelId).toBe(false);
     }
   });
 });

@@ -23,13 +23,10 @@ export function resolveOutboundMediaUrls(payload: {
   mediaUrls?: string[];
   mediaUrl?: string;
 }): string[] {
-  if (payload.mediaUrls?.length) {
+  if (payload.mediaUrls?.some((mediaUrl) => mediaUrl.trim())) {
     return payload.mediaUrls;
   }
-  if (payload.mediaUrl) {
-    return [payload.mediaUrl];
-  }
-  return [];
+  return payload.mediaUrl ? [payload.mediaUrl] : [];
 }
 
 /** Count outbound media items after legacy single-media fallback normalization. */

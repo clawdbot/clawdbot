@@ -38,6 +38,18 @@ describe("resolveSlackInstallationIdentity", () => {
     ).toEqual({ kind: "workspace", teamId: "T123" });
   });
 
+  it("uses the Socket Mode app id for a workspace installation when auth.test omits app_id", () => {
+    expect(
+      resolveSlackInstallationIdentity({
+        auth: {
+          team_id: "T123",
+          is_enterprise_install: false,
+        },
+        transportApiAppId: "A123",
+      }),
+    ).toEqual({ kind: "workspace", teamId: "T123", apiAppId: "A123" });
+  });
+
   it("preserves the human workspace name from auth.test", () => {
     expect(
       resolveSlackInstallationIdentity({
@@ -93,16 +105,28 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
       assertEnterpriseSlackPolicyConfig({
         accountId: "org",
         config: {
-          allowFrom: ["U01234567", "slack:W01234567", "user:U12345678"],
-          dm: { groupChannels: ["G01234567", "channel:G12345678"] },
+          allowFrom: [
+            "U01234567",
+            "slack:W01234567",
+            "user:U12345678",
+            "team:T01234567:user:U01234567",
+          ],
+          dm: {
+            groupChannels: ["team:T01234567:channel:G01234567"],
+          },
           mentionPatterns: {
             mode: "allow",
             allowIn: ["team:T01234567:channel:C01234567"],
             denyIn: ["team:T12345678:channel:C12345678"],
           },
           channels: {
-            C01234567: {
-              users: ["U01234567", "slack:W01234567", "user:U12345678"],
+            "team:T01234567:channel:C01234567": {
+              users: [
+                "U01234567",
+                "slack:W01234567",
+                "user:B01234567",
+                "team:T01234567:user:U01234567",
+              ],
               toolsBySender: {
                 U01234567: {},
                 "id:W01234567": {},
@@ -110,9 +134,11 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
                 "*": {},
               },
             },
-            "channel:C12345678": {},
+            "team:T12345678:channel:C12345678": {},
             "*": {},
           },
+          reactionNotifications: "allowlist",
+          reactionAllowlist: ["W01234567", "team:T01234567:user:U01234567"],
         },
       }),
     ).not.toThrow();
@@ -137,6 +163,15 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
         config: { dangerouslyAllowNameMatching: true },
       }),
     ).toThrow(/cannot use dangerouslyAllowNameMatching/);
+  });
+
+  it.each<[string, SlackAccountConfig]>([
+    ["channel ID", { channels: { C01234567: {} } }],
+    ["group DM channel ID", { dm: { groupChannels: ["G01234567"] } }],
+  ])("rejects unscoped Enterprise %s", (_label, config) => {
+    expect(() => assertEnterpriseSlackPolicyConfig({ accountId: "org", config })).toThrow(
+      /Slack Enterprise Grid/,
+    );
   });
 
   it.each<[string, SlackAccountConfig]>([
@@ -191,7 +226,7 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
           accountId: "org",
           config: {
             channels: {
-              C01234567: {
+              "team:T01234567:channel:C01234567": {
                 toolsBySender: {
                   [entry]: { deny: ["exec"] },
                   "*": { allow: ["exec"] },

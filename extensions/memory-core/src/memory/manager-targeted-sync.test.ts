@@ -46,7 +46,11 @@ describe("memory targeted session sync", () => {
       targetArchiveFiles: ["/tmp/targeted-fallback.jsonl"],
       progress: undefined,
     });
-    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    expect(result).toEqual({
+      handled: true,
+      sessionsDirty: true,
+      failure: { error: expect.objectContaining({ message: "embedding backend failed" }) },
+    });
     expect(sessionsDirtyFiles.has("/tmp/targeted-fallback.jsonl")).toBe(true);
     expect(sessionsDirtyFiles.has("/tmp/other-dirty.jsonl")).toBe(true);
   });
@@ -63,6 +67,24 @@ describe("memory targeted session sync", () => {
       sessionsFullRetryDirty: true,
       sessionsDirtyFiles,
       syncArchiveFiles,
+      shouldFallbackOnError: () => false,
+      activateFallbackProvider: async () => false,
+    });
+
+    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    expect(sessionsDirtyFiles.size).toBe(0);
+  });
+
+  it("preserves source reconciliation after targeted cleanup", async () => {
+    const sessionsDirtyFiles = new Set(["/tmp/targeted-reconcile.jsonl"]);
+
+    const result = await runMemoryTargetedSessionSync({
+      hasSessionSource: true,
+      targetArchiveFiles: new Set(["/tmp/targeted-reconcile.jsonl"]),
+      reason: "post-compaction",
+      sessionsReconcileDirty: true,
+      sessionsDirtyFiles,
+      syncArchiveFiles: async () => undefined,
       shouldFallbackOnError: () => false,
       activateFallbackProvider: async () => false,
     });

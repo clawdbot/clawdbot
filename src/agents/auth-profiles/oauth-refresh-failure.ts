@@ -1,4 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeBoundedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 /**
@@ -11,6 +13,7 @@ import type { AuthProfileFailureReason } from "./types.js";
 
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"
+  | "expired"
   | "invalid_grant"
   | "sign_in_again"
   | "invalid_refresh_token"
@@ -18,10 +21,60 @@ export type OAuthRefreshFailureReason =
   | "revoked";
 
 type OAuthRefreshFailure = {
+  errorType?: string;
   provider: string | null;
   profileId?: string;
   reason: OAuthRefreshFailureReason | null;
+  status?: number;
+  summary?: string;
 };
+
+export type OAuthRefreshFailurePresentation = {
+  errorType?: string;
+  reason?: OAuthRefreshFailureReason;
+  status?: number;
+  summary?: string;
+};
+
+const OAUTH_REFRESH_FAILURE_ERROR_TYPE_MAX_CHARS = 100;
+const OAUTH_REFRESH_FAILURE_SUMMARY_MAX_CHARS = 500;
+
+export function readProviderOAuthRefreshFailure(
+  error: unknown,
+): OAuthRefreshFailurePresentation | null {
+  const presentation = asOptionalRecord(asOptionalRecord(error)?.oauthRefreshFailure);
+  if (!presentation) {
+    return null;
+  }
+  const summary = normalizeBoundedOptionalString(
+    presentation.summary,
+    OAUTH_REFRESH_FAILURE_SUMMARY_MAX_CHARS,
+  );
+  const errorType = normalizeBoundedOptionalString(
+    presentation.errorType,
+    OAUTH_REFRESH_FAILURE_ERROR_TYPE_MAX_CHARS,
+  );
+  const reason =
+    typeof presentation.reason === "string"
+      ? classifyOAuthRefreshFailureReason(presentation.reason)
+      : null;
+  const status =
+    typeof presentation.status === "number" &&
+    Number.isInteger(presentation.status) &&
+    presentation.status >= 100 &&
+    presentation.status <= 599
+      ? presentation.status
+      : undefined;
+  if (!summary && !errorType && !reason && !status) {
+    return null;
+  }
+  return {
+    ...(errorType ? { errorType } : {}),
+    ...(reason ? { reason } : {}),
+    ...(status ? { status } : {}),
+    ...(summary ? { summary } : {}),
+  };
+}
 
 type StructuredClaudeCliAuthFailure = {
   provider?: unknown;
@@ -32,16 +85,44 @@ type StructuredClaudeCliAuthFailure = {
 
 /** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
+  readonly errorType?: string;
   readonly provider: string;
   readonly profileId?: string;
   readonly reason: OAuthRefreshFailureReason | null;
+  readonly status?: number;
+  readonly summary?: string;
 
-  constructor(params: { provider: string; profileId?: string; message: string; cause?: unknown }) {
+  constructor(params: {
+    provider: string;
+    profileId?: string;
+    message: string;
+    cause?: unknown;
+    errorType?: string;
+    reason?: OAuthRefreshFailureReason | null;
+    status?: number;
+    summary?: string;
+  }) {
     super(params.message, { cause: params.cause });
+    const inherited =
+      params.cause instanceof OAuthRefreshFailureError
+        ? params.cause
+        : readProviderOAuthRefreshFailure(params.cause);
     this.name = "OAuthRefreshFailureError";
+    this.errorType = normalizeBoundedOptionalString(
+      params.errorType ?? inherited?.errorType,
+      OAUTH_REFRESH_FAILURE_ERROR_TYPE_MAX_CHARS,
+    );
     this.provider = params.provider;
     this.profileId = params.profileId;
-    this.reason = classifyOAuthRefreshFailureReason(params.message);
+    this.reason =
+      params.reason !== undefined
+        ? params.reason
+        : (inherited?.reason ?? classifyOAuthRefreshFailureReason(params.message));
+    this.status = params.status ?? inherited?.status;
+    this.summary = normalizeBoundedOptionalString(
+      params.summary ?? inherited?.summary,
+      OAUTH_REFRESH_FAILURE_SUMMARY_MAX_CHARS,
+    );
   }
 }
 
@@ -147,16 +228,24 @@ export function classifyOAuthRefreshFailureReason(
   if (lower.includes("refresh_token_reused")) {
     return "refresh_token_reused";
   }
+  if (lower.includes("refresh_token_expired")) {
+    return "expired";
+  }
   if (lower.includes("invalid_grant")) {
     return "invalid_grant";
   }
   if (lower.includes("token_invalidated")) {
     return "token_invalidated";
   }
-  if (lower.includes("signing in again") || lower.includes("sign in again")) {
+  if (
+    lower.includes("sign_in_again") ||
+    lower.includes("signing in again") ||
+    lower.includes("sign in again") ||
+    lower.includes("log in again")
+  ) {
     return "sign_in_again";
   }
-  if (lower.includes("invalid refresh token")) {
+  if (lower.includes("invalid_refresh_token") || lower.includes("invalid refresh token")) {
     return "invalid_refresh_token";
   }
   if (lower.includes("expired or revoked") || lower.includes("revoked")) {
@@ -186,6 +275,7 @@ export function classifyOAuthRefreshFailure(message: string): OAuthRefreshFailur
 /** Classify provider/reason from the structured OAuth refresh failure error. */
 export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFailure | null {
   const seen = new Set<object>();
+  let rawFallback: OAuthRefreshFailure | null = null;
   let candidate = err;
   while (candidate && typeof candidate === "object") {
     const claudeCliReason = classifyStructuredClaudeCliOAuthFailureReason(candidate);
@@ -198,18 +288,33 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
     if (candidate instanceof OAuthRefreshFailureError) {
       const profileId = sanitizeOAuthRefreshFailureProfileId(candidate.profileId);
       return {
+        ...(candidate.errorType ? { errorType: candidate.errorType } : {}),
         provider: sanitizeOAuthRefreshFailureProvider(candidate.provider),
         ...(profileId ? { profileId } : {}),
         reason: candidate.reason,
+        ...(candidate.status ? { status: candidate.status } : {}),
+        ...(candidate.summary ? { summary: candidate.summary } : {}),
       };
     }
+    const record = asOptionalRecord(candidate);
+    const rawError = record?.rawError;
+    if (typeof rawError === "string") {
+      const classified = classifyOAuthRefreshFailure(rawError);
+      if (classified) {
+        const rawProfileId = record?.profileId;
+        const profileId = sanitizeOAuthRefreshFailureProfileId(
+          typeof rawProfileId === "string" ? rawProfileId : undefined,
+        );
+        rawFallback ??= { ...classified, ...(profileId ? { profileId } : {}) };
+      }
+    }
     if (seen.has(candidate)) {
-      return null;
+      return rawFallback;
     }
     seen.add(candidate);
     candidate = (candidate as { cause?: unknown }).cause;
   }
-  return null;
+  return rawFallback;
 }
 
 /** Build the login command operators should run after OAuth refresh failure. */

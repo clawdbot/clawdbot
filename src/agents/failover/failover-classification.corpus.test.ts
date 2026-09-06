@@ -5,16 +5,13 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn(() => null),
 }));
 
-// classify.ts resolves this hook through a lazy require. Mocking the runtime
-// directly keeps the corpus independent of plugin loadability.
-vi.mock("../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => () => providerRuntimeMocks,
-}));
+// Keep the classification corpus independent of plugin loading; native source
+// and compiled payload probes cover the real provider boundary.
+vi.mock("../../plugins/provider-failover.js", () => providerRuntimeMocks);
 
 import { resolveReplyFailoverFacts } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import {
   classifyFailoverSignal,
-  classifyProviderSpecificError,
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
@@ -22,15 +19,7 @@ import {
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./classify.js";
-import { authFormatCases } from "./failover-classification.auth-format.cases.js";
-import { billingCases } from "./failover-classification.billing.cases.js";
-import { legacyBillingACases } from "./failover-classification.legacy-billing-a.cases.js";
-import { legacyBillingBCases } from "./failover-classification.legacy-billing-b.cases.js";
-import { legacyProviderMatcherCases } from "./failover-classification.legacy-provider-matchers.cases.js";
-import { overflowServerMiscCases } from "./failover-classification.overflow-server-misc.cases.js";
-import { overflowCases } from "./failover-classification.overflow.cases.js";
-import { rateLimitOverloadCases } from "./failover-classification.rate-limit-overload.cases.js";
-import { structuredMiscCases } from "./failover-classification.structured-misc.cases.js";
+import { failoverClassificationCorpus } from "./failover-classification.corpus.cases.test-support.js";
 import { classifyProviderRequestFacets } from "./request-error-facets.js";
 import type { FailoverSignal } from "./signal.js";
 
@@ -38,18 +27,7 @@ afterEach(() => {
   providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockClear();
 });
 
-const failoverClassificationCorpus = [
-  ...overflowCases,
-  ...billingCases,
-  ...rateLimitOverloadCases,
-  ...overflowServerMiscCases,
-  ...authFormatCases,
-  ...structuredMiscCases,
-  ...legacyBillingACases,
-  ...legacyBillingBCases,
-  ...legacyProviderMatcherCases,
-];
-import { formatRateLimitOrOverloadedErrorCopy } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
 
 function classifyReplyRequest(signal: FailoverSignal) {
   return resolveReplyFailoverFacts(signal, signal.message ?? "").providerRequestError;
@@ -74,13 +52,86 @@ describe("golden failover classification corpus", () => {
 });
 
 describe("cross-layer drift (documents current behavior, see refactor-02)", () => {
+  it.each([503, 521, 529])("classifies body-only HTTP %s failures", (status) => {
+    const signal = {
+      message: "Provider rejected request",
+      details: [`${status} status code (no body)`],
+    };
+    expect(classifyFailoverSignal(signal)).toEqual({
+      kind: "reason",
+      reason: status === 529 ? "overloaded" : "timeout",
+    });
+  });
+
+  it("does not infer permanent model removal from availability prose alone", () => {
+    const message = "The model is not available. Please try again later.";
+    expect(classifyFailoverSignal({ message })).toBeNull();
+    expect(classifyReplyRequest({ message })?.code).not.toBe("provider_model_unavailable");
+  });
+
   it.each([
+    ...[500, 502, 503, 504, 520, 521, 522, 523, 524].map((status) => ({
+      signal: { status, message: "The model is not available. Please try again later." },
+      reason: "timeout",
+    })),
+    {
+      signal: {
+        message:
+          '{"type":"error","error":{"type":"overloaded_error","message":"The model is not available due to high demand."}}',
+      },
+      reason: "overloaded",
+    },
+    {
+      signal: { errorType: "server_error", message: "The model is not available." },
+      reason: "server_error",
+    },
+    {
+      signal: {
+        message: "The model is not available.",
+        details: ['{"error":{"type":"overloaded_error","message":"Overloaded"}}'],
+      },
+      reason: "overloaded",
+    },
+    {
+      signal: {
+        status: 529,
+        message: '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      },
+      reason: "overloaded",
+    },
+    {
+      signal: {
+        status: 500,
+        message:
+          '{"error":{"type":"server_error","message":"An error occurred while processing your request."}}',
+      },
+      reason: "server_error",
+    },
+    {
+      signal: { message: "Selected model is at capacity. Please try a different model." },
+      reason: "overloaded",
+    },
+  ])("keeps outage evidence transient: $signal", ({ signal, reason }) => {
+    expect(classifyFailoverSignal(signal)).toEqual({ kind: "reason", reason });
+    expect(classifyReplyRequest(signal)?.code).not.toBe("provider_model_unavailable");
+  });
+
+  it.each([
+    ["Ollama setup pull", "Failed to download gemma4:e2b: pull stream ended before success"],
+    ["OpenRouter music", "OpenRouter music generation stream ended before completion"],
+    ["MiniMax TTS", "MiniMax music generation stream ended without completion"],
+    ["local SSE reader", "SSE stream ended before next event"],
+    ["OpenCode Go", "opencode-go stream ended without a terminal event"],
+    ["Ollama", "Ollama API stream ended without a final response"],
+  ])("does not classify non-assistant %s lifecycle wording", (_source, message) => {
+    expect(isTimeoutErrorMessage(message)).toBe(false);
+    expect(classifyFailoverSignal({ message })).toBeNull();
+  });
+
+  it("ignores an embedded 429 substring outside a status context", () => {
+    const message = "request id req-4291 failed";
+
     // FIXED(refactor-02): was rate_limit, now null
-    // FOLLOW-UP(refactor-06): reclaim this wording in the canonical overflow table.
-    "input length 14295 tokens exceeds the model limit",
-    // FIXED(refactor-02): was rate_limit, now null
-    "request id req-4291 failed",
-  ])("ignores an embedded 429 substring outside a status context: %s", (message) => {
     expect(isRateLimitErrorMessage(message)).toBe(false);
     expect(classifyFailoverSignal({ message })).toBeNull();
   });
@@ -103,20 +154,19 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     expect(classifyReplyRequest({ message })).toMatchObject({
       code: "provider_internal_error",
       technicalMessage: message,
-      allowTransientHttpRetry: true,
     });
   });
 
-  it("uses rate-limit retry semantics but overloaded user copy", () => {
+  it("renders rate-limit copy from the classified reason", () => {
     const message = "429 Too Many Requests: model overloaded";
 
-    // BUG(refactor-02): retry classification and user-copy precedence are inverted.
+    // FIXED(refactor-02): user copy follows the canonical failover reason.
     expect(classifyFailoverSignal({ message })).toEqual({
       kind: "reason",
       reason: "rate_limit",
     });
-    expect(formatRateLimitOrOverloadedErrorCopy(message)).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
+    expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
     );
   });
 
@@ -216,13 +266,10 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     {
       message: "ThrottlingException: Rate exceeded",
       rateLimit: true,
-      // FIXED(refactor-02): was rate_limit, now null
-      providerSpecific: null,
     },
     {
       message: "throttling disabled for this account",
       rateLimit: true,
-      providerSpecific: null,
     },
   ])("records generic throttling normalization for $message", (row) => {
     // FIXED(refactor-02): generic matching owns throttling; provider-specific duplicates are gone.
@@ -232,8 +279,5 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
       kind: "reason",
       reason: "rate_limit",
     });
-    expect(classifyProviderSpecificError(row.message, { includePluginHooks: false })).toBe(
-      row.providerSpecific,
-    );
   });
 });

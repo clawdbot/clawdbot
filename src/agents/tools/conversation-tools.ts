@@ -17,7 +17,7 @@ import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
   ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
@@ -122,8 +122,8 @@ export function createConversationsListTool(
       requireOwner(options);
       const params = args as Record<string, unknown>;
       const limit = Math.min(readPositiveIntegerParam(params, "limit") ?? 50, 100);
-      const channel = readStringParam(params, "channel");
-      const query = readStringParam(params, "query");
+      const channel = readToolStringParam(params, "channel");
+      const query = readToolStringParam(params, "query");
       const result = await deps.callGateway<ConversationListResult>({
         method: "conversations.list",
         params: {
@@ -149,16 +149,16 @@ export function createConversationsSendTool(
     name: "conversations_send",
     displaySummary: "Send to an exact external conversation.",
     description:
-      "Send directly through a conversationRef from conversations_list. This performs channel delivery; it does not run the local agent in the backing session.",
+      "Send directly through a conversationRef. This performs channel delivery; it does not run the local agent in the backing session.",
     parameters: ConversationsSendSchema,
     outputSchema: ConversationSendResultSchema,
     execute: async (toolCallId, args, signal) => {
       requireOwner(options);
       const params = args as Record<string, unknown>;
       const conversationRef = readConversationRef(
-        readStringParam(params, "conversationRef", { required: true }),
+        readToolStringParam(params, "conversationRef", { required: true }),
       );
-      const message = readStringParam(params, "message", { required: true });
+      const message = readToolStringParam(params, "message", { required: true });
       const operationId = buildConversationOperationId({
         options,
         toolCallId,
@@ -199,9 +199,9 @@ export function createConversationsTurnTool(
       requireOwner(options);
       const params = args as Record<string, unknown>;
       const conversationRef = readConversationRef(
-        readStringParam(params, "conversationRef", { required: true }),
+        readToolStringParam(params, "conversationRef", { required: true }),
       );
-      const message = readStringParam(params, "message", { required: true });
+      const message = readToolStringParam(params, "message", { required: true });
       const timeoutSeconds = readPositiveIntegerParam(params, "timeoutSeconds") ?? 30;
       const timeoutMs = timeoutSeconds * 1_000;
       const agentId = resolveToolAgentId(options);

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ChatAttachment } from "../lib/chat/chat-types.ts";
 import {
@@ -44,6 +44,39 @@ afterEach(() => {
 });
 
 describe("chat attachment route handoff", () => {
+  it("retires deleted-session packages across panes without erasing newer packages or siblings", () => {
+    vi.useFakeTimers();
+    const handoff = createChatAttachmentHandoff();
+    const owner = {} as GatewayBrowserClient;
+    const scopeKey = "agent:main:deleted";
+    const old = storedAttachment("old-deleted", "image/png", false);
+    const fresh = storedAttachment("newer-deleted", "image/png", false);
+    const sibling = storedAttachment("kept-sibling", "image/png", false);
+    try {
+      vi.setSystemTime(100);
+      handoff.prepare({ owner, paneId: "p1", scopeKey, attachments: [old], fallbacks: {} });
+      handoff.prepare({
+        owner,
+        paneId: "p2",
+        scopeKey: "sibling",
+        attachments: [sibling],
+        fallbacks: {},
+      });
+      vi.setSystemTime(300);
+      handoff.prepare({ owner, paneId: "p3", scopeKey, attachments: [fresh], fallbacks: {} });
+      handoff.retireScope(scopeKey, 200);
+      expect(handoff.consume({ owner, paneId: "p1", scopeKey })).toBeNull();
+      expect(getChatAttachmentDataUrl(old)).toBeNull();
+      expect(handoff.consume({ owner, paneId: "p3", scopeKey })?.attachments).toEqual([fresh]);
+      expect(handoff.consume({ owner, paneId: "p2", scopeKey: "sibling" })?.attachments).toEqual([
+        sibling,
+      ]);
+    } finally {
+      handoff.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("transfers every exact staged attachment object once", () => {
     const owner = {} as GatewayBrowserClient;
     const annotation = storedAttachment("annotation", "image/png", true);
@@ -74,36 +107,61 @@ describe("chat attachment route handoff", () => {
     }
   });
 
-  it("releases a reused pane on session or Gateway-owner mismatch", () => {
-    const cases = [
-      { ownerMatches: false, scopeKey: "agent:main:one" },
-      { ownerMatches: true, scopeKey: "agent:main:two" },
-    ];
-    for (const { ownerMatches, scopeKey } of cases) {
-      const handoff = createChatAttachmentHandoff();
-      const expectedOwner = {} as GatewayBrowserClient;
-      const annotation = storedAttachment(
-        `mismatch-${ownerMatches}-${scopeKey}`,
-        "image/png",
-        true,
-      );
-      handoff.prepare({
-        owner: expectedOwner,
-        paneId: "p1",
-        scopeKey: "agent:main:one",
-        attachments: [annotation],
-        fallbacks: {},
-      });
+  it("isolates retained session scopes and releases an exact Gateway-owner mismatch", () => {
+    const handoff = createChatAttachmentHandoff();
+    const expectedOwner = {} as GatewayBrowserClient;
+    const first = storedAttachment("first-scope", "image/png", true);
+    const second = storedAttachment("second-scope", "image/png", true);
+    handoff.prepare({
+      owner: expectedOwner,
+      paneId: "p1",
+      scopeKey: "agent:main:one",
+      attachments: [first],
+      fallbacks: {},
+    });
+    handoff.prepare({
+      owner: expectedOwner,
+      paneId: "p1",
+      scopeKey: "agent:main:two",
+      attachments: [second],
+      fallbacks: {},
+    });
 
-      expect(
-        handoff.consume({
-          owner: ownerMatches ? expectedOwner : ({} as GatewayBrowserClient),
-          paneId: "p1",
-          scopeKey,
-        }),
-      ).toBeNull();
-      expect(getChatAttachmentDataUrl(annotation)).toBeNull();
-    }
+    expect(
+      handoff.consume({
+        owner: {} as GatewayBrowserClient,
+        paneId: "p1",
+        scopeKey: "agent:main:two",
+      }),
+    ).toBeNull();
+    expect(getChatAttachmentDataUrl(second)).toBeNull();
+    expect(
+      handoff.consume({ owner: expectedOwner, paneId: "p1", scopeKey: "agent:main:one" }),
+    ).toEqual({ attachments: [first], fallbacks: {} });
+  });
+
+  it("does not let an empty retained session teardown erase another scope", () => {
+    const handoff = createChatAttachmentHandoff();
+    const owner = {} as GatewayBrowserClient;
+    const annotation = storedAttachment("overlapping-scope", "image/png", true);
+    handoff.prepare({
+      owner,
+      paneId: "p1",
+      scopeKey: "agent:main:one",
+      attachments: [annotation],
+      fallbacks: {},
+    });
+    handoff.prepare({
+      owner,
+      paneId: "p1",
+      scopeKey: "agent:main:two",
+      attachments: [],
+      fallbacks: {},
+    });
+
+    expect(
+      handoff.consume({ owner, paneId: "p1", scopeKey: "agent:main:one" })?.attachments,
+    ).toEqual([annotation]);
   });
 
   it("keeps payloads reused by a replacement prepare", () => {

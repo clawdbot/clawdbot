@@ -65,7 +65,7 @@ describe("legacy channel pairing state migration", () => {
 
     const detected = detectLegacyChannelPairingState({
       sourceDir,
-      configuredAccountIds: { telegram: ["alerts", "ops_bot"] },
+      resolveAccounts: () => ({ accountIds: { telegram: ["alerts", "ops_bot"] } }),
     });
     expect(detected.hasLegacy).toBe(true);
     const result = migrateLegacyChannelPairingState({ detected, env });
@@ -141,7 +141,7 @@ describe("legacy channel pairing state migration", () => {
     const detected = detectLegacyChannelPairingState({
       sourceDir,
       configuredChannelIds: ["custom-channel"],
-      configuredAccountIds: { "custom-channel": ["primary"] },
+      resolveAccounts: () => ({ accountIds: { "custom-channel": ["primary"] } }),
     });
     const result = migrateLegacyChannelPairingState({ detected, env });
 
@@ -174,7 +174,7 @@ describe("legacy channel pairing state migration", () => {
 
     const detected = detectLegacyChannelPairingState({
       sourceDir,
-      configuredAccountIds: { telegram: ["ops/bot", "ops_bot"] },
+      resolveAccounts: () => ({ accountIds: { telegram: ["ops/bot", "ops_bot"] } }),
     });
     const result = migrateLegacyChannelPairingState({ detected, env });
 
@@ -207,7 +207,7 @@ describe("legacy channel pairing state migration", () => {
 
     const detected = detectLegacyChannelPairingState({
       sourceDir,
-      configuredAccountIds: { telegram: ["ambiguousacct", "exactacct"] },
+      resolveAccounts: () => ({ accountIds: { telegram: ["ambiguousacct", "exactacct"] } }),
     });
     const result = migrateLegacyChannelPairingState({ detected, env });
 
@@ -238,7 +238,7 @@ describe("legacy channel pairing state migration", () => {
 
       const detected = detectLegacyChannelPairingState({
         sourceDir,
-        configuredAccountIds: { telegram: [configuredAccountId] },
+        resolveAccounts: () => ({ accountIds: { telegram: [configuredAccountId] } }),
       });
       const result = migrateLegacyChannelPairingState({ detected, env });
 
@@ -260,7 +260,7 @@ describe("legacy channel pairing state migration", () => {
 
     const detected = detectLegacyChannelPairingState({
       sourceDir,
-      configuredAccountIds: { telegram: ["*", "alerts"] },
+      resolveAccounts: () => ({ accountIds: { telegram: ["*", "alerts"] } }),
     });
     const result = migrateLegacyChannelPairingState({ detected, env });
 
@@ -281,7 +281,7 @@ describe("legacy channel pairing state migration", () => {
 
     const detected = detectLegacyChannelPairingState({
       sourceDir,
-      configuredAccountIds: { telegram: ["default"] },
+      resolveAccounts: () => ({ accountIds: { telegram: ["default"] } }),
     });
     const result = migrateLegacyChannelPairingState({ detected, env });
 
@@ -324,7 +324,7 @@ describe("legacy channel pairing state migration", () => {
     const detected = detectLegacyChannelPairingState({
       sourceDir,
       configuredChannelIds: ["telegram-business"],
-      configuredAccountIds: { telegram: ["business"] },
+      resolveAccounts: () => ({ accountIds: { telegram: ["business"] } }),
     });
     const result = migrateLegacyChannelPairingState({ detected, env });
 

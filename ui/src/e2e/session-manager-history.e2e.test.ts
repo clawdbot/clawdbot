@@ -2,13 +2,13 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  activateMenuItem,
+  activateSelfRemovingControl,
   controlUiSessionPath,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
@@ -19,19 +19,16 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
 });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-manager-history",
-);
 
 async function captureUiProof(page: Page, fileName: string) {
   if (!captureProof) {
     return;
   }
-  await mkdir(artifactDir, { recursive: true });
-  await page.screenshot({ fullPage: true, path: path.join(artifactDir, fileName) });
+  await mkdir(path.join(suite.artifactDir, "session-manager-history"), { recursive: true });
+  await page.screenshot({
+    fullPage: true,
+    path: path.join(path.join(suite.artifactDir, "session-manager-history"), fileName),
+  });
 }
 
 suite.define(() => {
@@ -123,7 +120,7 @@ suite.define(() => {
           .filter({ has: page.locator(`.session-label-chip[title="${research.label}"]`) });
         await actionRow.waitFor({ state: "visible", timeout: 10_000 });
         await actionRow.getByRole("button", { name: "Open session menu" }).click();
-        await activateMenuItem(
+        await activateSelfRemovingControl(
           page.locator("openclaw-session-menu").getByRole("menuitem", {
             name: "Archive session",
           }),

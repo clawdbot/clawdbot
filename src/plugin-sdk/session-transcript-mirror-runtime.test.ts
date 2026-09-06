@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   runExclusiveSqliteSessionWrite,
   resolveSqliteTranscriptScope,
@@ -36,7 +36,7 @@ describe("private session transcript mirror runtime", () => {
       sessionKey: "agent:main:indexed-mirror",
       storePath,
     };
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
 
     await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
       expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toEqual({
@@ -176,11 +176,11 @@ describe("private session transcript mirror runtime", () => {
       sessionId: "requested-session",
       sessionKey: "agent:main:requested-session",
     };
-    await upsertSessionEntry(admittedScope, {
+    await upsertSessionEntryCore(admittedScope, {
       sessionId: admittedScope.sessionId,
       updatedAt: 1,
     });
-    await upsertSessionEntry(requestedScope, {
+    await upsertSessionEntryCore(requestedScope, {
       sessionId: requestedScope.sessionId,
       updatedAt: 1,
     });

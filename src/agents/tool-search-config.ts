@@ -22,7 +22,7 @@ function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> 
   return isRecord(toolSearch) ? toolSearch : {};
 }
 
-function readBoolean(value: unknown, fallback: boolean): boolean {
+function resolveBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
@@ -37,7 +37,12 @@ export function isToolSearchCodeModeSupported(): boolean {
   if (toolSearchCodeModeSupportedForTest !== undefined) {
     return toolSearchCodeModeSupportedForTest;
   }
-  return process.allowedNodeEnvironmentFlags.has("--permission");
+  // Electron advertises Node flags but process.execPath remains the host binary,
+  // so the isolated code child cannot be launched as a plain Node process.
+  return (
+    typeof process.versions.electron !== "string" &&
+    process.allowedNodeEnvironmentFlags.has("--permission")
+  );
 }
 
 function resolveMinCodeTimeoutMs(): number {
@@ -57,7 +62,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     Math.min(MAX_TOOL_SEARCH_RESULTS, readInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT)),
   );
   return {
-    enabled: readBoolean(raw.enabled, configured),
+    enabled: resolveBoolean(raw.enabled, configured),
     mode,
     codeTimeoutMs: Math.max(
       resolveMinCodeTimeoutMs(),

@@ -2,8 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
-import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
-import { buildUpdateCommandRunner, DEFAULT_TIMEOUT_MS } from "./update-runner-command.js";
+import { buildUpdateCommandRunner, UPDATE_RUNNER_TIMEOUT_MS } from "./update-runner-command.js";
 import type {
   CommandRunner,
   UpdateInstallSurface,
@@ -60,23 +59,6 @@ export function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   return uniqueStrings(dirs);
 }
 
-export async function resolveGitRoot(
-  runCommand: CommandRunner,
-  candidates: string[],
-  timeoutMs: number,
-): Promise<string | null> {
-  for (const dir of candidates) {
-    const result = await runCommand(["git", "-C", dir, "rev-parse", "--show-toplevel"], {
-      timeoutMs,
-    }).catch(() => null);
-    const root = result?.code === 0 ? result.stdout.trim() : "";
-    if (root) {
-      return root;
-    }
-  }
-  return null;
-}
-
 export async function findPackageRoot(candidates: string[]) {
   for (const dir of candidates) {
     let current = dir;
@@ -109,36 +91,27 @@ export async function looksLikeGitCheckout(root: string): Promise<boolean> {
   }
 }
 
-export async function resolveUpdateInstallSurface(
-  opts: Pick<UpdateRunnerOptions, "cwd" | "argv1" | "timeoutMs" | "runCommand"> = {},
-): Promise<UpdateInstallSurface> {
-  const { runCommand } = await buildUpdateCommandRunner(opts.runCommand);
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const candidates = buildStartDirs(opts);
-  const packageRoot = await findPackageRoot(candidates);
-
-  let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs);
-  if (gitRoot && packageRoot && !updateInstallRootsMatch(gitRoot, packageRoot)) {
-    gitRoot = null;
-  }
-  if (gitRoot && !packageRoot) {
-    return { kind: "missing", mode: "unknown", root: resolveUpdateInstallRoot(gitRoot) };
-  }
-  if (gitRoot && packageRoot) {
-    return { kind: "git", mode: "git", root: gitRoot, packageRoot };
-  }
-  if (!packageRoot) {
+export async function resolveUpdateInstallSurface(opts: {
+  root: string | null;
+  installKind: "git" | "package" | "unknown";
+  timeoutMs?: number;
+  runCommand?: CommandRunner;
+}): Promise<UpdateInstallSurface> {
+  const root = opts.root;
+  if (!root || opts.installKind === "unknown") {
     return { kind: "missing", mode: "unknown" };
   }
-
-  const globalManager = await detectGlobalInstallManagerForRoot(runCommand, packageRoot, timeoutMs);
-  if (globalManager) {
-    return {
-      kind: "global",
-      mode: globalManager,
-      root: packageRoot,
-      packageRoot,
-    };
+  if (opts.installKind === "git") {
+    return { kind: "git", mode: "git", root, packageRoot: root };
   }
-  return { kind: "package-root", mode: "unknown", root: packageRoot, packageRoot };
+  const { runCommand } = await buildUpdateCommandRunner(opts.runCommand);
+  const globalManager = await detectGlobalInstallManagerForRoot(
+    runCommand,
+    root,
+    opts.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
+  );
+  if (globalManager) {
+    return { kind: "global", mode: globalManager, root, packageRoot: root };
+  }
+  return { kind: "package-root", mode: "unknown", root, packageRoot: root };
 }

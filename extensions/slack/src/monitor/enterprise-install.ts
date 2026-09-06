@@ -42,9 +42,12 @@ export type SlackAuthTestIdentity = {
 };
 
 const SLACK_CHANNEL_ID_RE = /^[CDG][A-Z0-9]{8,}$/;
-const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{8,}$/;
+const SLACK_USER_ID_RE = /^[BUW][A-Z0-9]{8,}$/;
 
-function isStableSlackChannelEntry(value: unknown, options?: { allowWildcard?: boolean }): boolean {
+function isWorkspaceScopedSlackChannelEntry(
+  value: unknown,
+  options?: { allowWildcard?: boolean },
+): boolean {
   if (typeof value !== "string") {
     return false;
   }
@@ -52,11 +55,7 @@ function isStableSlackChannelEntry(value: unknown, options?: { allowWildcard?: b
   if (normalized === "*") {
     return options?.allowWildcard === true;
   }
-  const prefixed = /^channel:([CDG][A-Z0-9]{8,})$/.exec(normalized);
-  if (prefixed?.[1]) {
-    return true;
-  }
-  return SLACK_CHANNEL_ID_RE.test(normalized);
+  return isWorkspaceQualifiedSlackTarget(normalized, "channel");
 }
 
 function isStableSlackAllowlistUserEntry(value: unknown): boolean {
@@ -67,7 +66,10 @@ function isStableSlackAllowlistUserEntry(value: unknown): boolean {
   if (normalized === "*") {
     return true;
   }
-  const prefixed = /^(?:slack|user):([UW][A-Z0-9]{8,})$/.exec(normalized);
+  if (isWorkspaceQualifiedSlackTarget(normalized, "user")) {
+    return true;
+  }
+  const prefixed = /^(?:slack|user):([BUW][A-Z0-9]{8,})$/.exec(normalized);
   return Boolean(prefixed?.[1]) || SLACK_USER_ID_RE.test(normalized);
 }
 
@@ -142,7 +144,7 @@ export function assertEnterpriseSlackPolicyConfig(params: {
   assertStableEntries({
     values: config.dm?.groupChannels,
     path: `channels.slack.accounts.${accountId}.dm.groupChannels`,
-    predicate: (value) => isStableSlackChannelEntry(value),
+    predicate: (value) => isWorkspaceScopedSlackChannelEntry(value),
   });
   if (config.reactionNotifications === "allowlist") {
     assertStableEntries({
@@ -152,9 +154,9 @@ export function assertEnterpriseSlackPolicyConfig(params: {
     });
   }
   for (const [channelKey, channel] of Object.entries(config.channels ?? {})) {
-    if (!isStableSlackChannelEntry(channelKey, { allowWildcard: true })) {
+    if (!isWorkspaceScopedSlackChannelEntry(channelKey, { allowWildcard: true })) {
       throw new Error(
-        `Slack Enterprise Grid org installs require stable Slack channel IDs; invalid channels key ${JSON.stringify(channelKey)}`,
+        `Slack Enterprise Grid org installs require stable Slack channel IDs with workspace scope; invalid channels key ${JSON.stringify(channelKey)}`,
       );
     }
     assertStableEntries({
@@ -235,13 +237,14 @@ export function resolveSlackInstallationIdentity(params: {
   const isEnterpriseInstall = auth.is_enterprise_install === true;
   const apiAppId = normalizeOptionalString(auth.app_id);
   const enterpriseId = normalizeOptionalString(auth.enterprise_id);
+  // Slack auth.test does not return app_id for bot tokens. Socket Mode derives it
+  // from the app token; HTTP learns it from the first signed event (provider
+  // onContextIdentity). Durable Agent View markers only persist under this id.
+  const transportApiAppId = normalizeOptionalString(params.transportApiAppId);
   if (isEnterpriseInstall) {
     if (!enterpriseId) {
       throw new Error("Slack org-wide auth.test returned no enterprise_id");
     }
-    // Slack auth.test does not guarantee app_id. Socket Mode can derive it from the
-    // app token; HTTP authenticates the signed event that carries api_app_id.
-    const transportApiAppId = normalizeOptionalString(params.transportApiAppId);
     if (apiAppId && transportApiAppId && apiAppId !== transportApiAppId) {
       throw new Error(
         `Slack token mismatch: bot token app_id=${apiAppId} but transport app_id=${transportApiAppId}`,
@@ -259,11 +262,12 @@ export function resolveSlackInstallationIdentity(params: {
     throw new Error("Slack workspace auth.test returned no team_id");
   }
   const teamName = normalizeOptionalString(auth.team);
+  const workspaceApiAppId = apiAppId ?? transportApiAppId;
   return {
     kind: "workspace",
     teamId,
     ...(teamName ? { teamName } : {}),
-    ...(apiAppId ? { apiAppId } : {}),
+    ...(workspaceApiAppId ? { apiAppId: workspaceApiAppId } : {}),
     ...(enterpriseId ? { enterpriseId } : {}),
   };
 }

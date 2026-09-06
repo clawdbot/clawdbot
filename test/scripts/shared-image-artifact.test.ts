@@ -21,6 +21,11 @@ function imageId(ref: string): string {
   return `sha256:${createHash("sha256").update(ref).digest("hex")}`;
 }
 
+// Docker config IDs are fixture data; the production archive digest stays independently checked.
+const imageIdCases = IMAGE_REFS.flatMap((ref) => [ref, `mismatch:${ref}`])
+  .map((ref) => `    '${ref}') printf '%s' '${imageId(ref)}' ;;`)
+  .join("\n");
+
 function writeExecutable(path: string, contents: string): void {
   writeFileSync(path, contents);
   chmodSync(path, 0o755);
@@ -100,14 +105,17 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 
 image_id() {
-  printf '%s' "$1" | sha256sum | awk '{print "sha256:" $1}'
+  case "$1" in
+${imageIdCases}
+    *) echo "unexpected fixture image ref: $1" >&2; return 2 ;;
+  esac
 }
 
 if [[ "$1" == "image" && "$2" == "inspect" ]]; then
   ref="\${5:?image ref required}"
   id="$(image_id "$ref")"
   if [[ "\${FAKE_DOCKER_FORCE_ID_MISMATCH:-0}" == "1" ]]; then
-    id="sha256:$(printf 'mismatch:%s' "$ref" | sha256sum | awk '{print $1}')"
+    id="$(image_id "mismatch:$ref")"
   fi
   printf '%s\\n' "$id"
   exit 0
@@ -235,6 +243,11 @@ case "$path" in
     count_file="$FAKE_GH_STATE/attempt"
     count="$(( $(cat "$count_file" 2>/dev/null || printf 0) + 1 ))"
     printf '%s\\n' "$count" > "$count_file"
+    if [[ "$count" -le "\${FAKE_GH_ATTEMPT_FAILURES:-0}" ]]; then
+      printf 'partial attempt response\\n'
+      printf '%s\\n' "\${FAKE_GH_ATTEMPT_ERROR:-gh: request failed}" >&2
+      exit 1
+    fi
     printf '{"id":%s,"run_attempt":%s}\\n' \
       "$FAKE_ATTEMPT_RUN_ID" "$FAKE_ARTIFACT_RUN_ATTEMPT"
     ;;
@@ -363,6 +376,69 @@ describe("shared Docker image artifacts", () => {
     }
   });
 
+  it("retries a fresh artifact metadata 404 and then succeeds", () => {
+    const fixture = createFixture();
+    try {
+      const verified = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ARTIFACT_ERROR: "gh: Not Found (HTTP 404)",
+          FAKE_GH_ARTIFACT_FAILURES: "1",
+        },
+      });
+      expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+      expect(verified.stderr).toContain(
+        "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
+      );
+      expect(readFileSync(fixture.sleepLog, "utf8")).toBe("2\n");
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
+      expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("fails after three fresh artifact metadata 404 responses", () => {
+    const fixture = createFixture();
+    try {
+      const failed = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ARTIFACT_ERROR: "gh: Not Found (HTTP 404)",
+          FAKE_GH_ARTIFACT_FAILURES: "3",
+        },
+      });
+      expect(failed.status).not.toBe(0);
+      expect(failed.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
+      expect(readFileSync(fixture.sleepLog, "utf8")).toBe("2\n4\n");
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(3);
+      expect(calls).not.toContain("actions/runs");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("fails immediately when producer run-attempt metadata returns 404", () => {
+    const fixture = createFixture();
+    try {
+      const failed = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ATTEMPT_ERROR: "gh: Not Found (HTTP 404)",
+          FAKE_GH_ATTEMPT_FAILURES: "3",
+        },
+      });
+      expect(failed.status).not.toBe(0);
+      expect(failed.stderr).toContain("GitHub API GET failed after 1 attempt(s)");
+      expect(failed.stderr).not.toContain("retrying");
+      expect(readFileSync(fixture.sleepLog, "utf8")).toBe("");
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(1);
+      expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("recovers on the third attempt and fails cleanly when all attempts are exhausted", () => {
     const recoveredFixture = createFixture();
     try {
@@ -402,7 +478,7 @@ describe("shared Docker image artifacts", () => {
     }
   });
 
-  it("retries explicit rate limiting but not permanent HTTP or credential failures", () => {
+  it("retries explicit rate limiting but fails fast on permanent HTTP and credential errors", () => {
     const rateLimitFixture = createFixture();
     try {
       const rateLimited = verifyUploadedArtifact(rateLimitFixture, {
@@ -417,7 +493,13 @@ describe("shared Docker image artifacts", () => {
       rmSync(rateLimitFixture.root, { force: true, recursive: true });
     }
 
-    for (const error of ["gh: Not Found (HTTP 404)", "gh: Bad credentials (HTTP 500)"]) {
+    for (const error of [
+      "gh: Unauthorized (HTTP 401)",
+      "gh: Forbidden (HTTP 403)",
+      "gh: Unprocessable Entity (HTTP 422)",
+      "gh: Bad credentials (HTTP 500)",
+      "gh: authentication failed (HTTP 500)",
+    ]) {
       const fixture = createFixture();
       try {
         const failed = verifyUploadedArtifact(fixture, {

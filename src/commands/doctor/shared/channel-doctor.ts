@@ -245,6 +245,21 @@ function shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
   );
 }
 
+function appendChannelDoctorMutation(
+  mutations: ChannelDoctorConfigMutation[],
+  currentCfg: OpenClawConfig,
+  mutation: ChannelDoctorConfigMutation | undefined,
+): OpenClawConfig {
+  if (mutation?.changes.length) {
+    mutations.push(mutation);
+    return mutation.config;
+  }
+  if (mutation?.warnings?.length) {
+    mutations.push({ config: currentCfg, changes: [], warnings: mutation.warnings });
+  }
+  return currentCfg;
+}
+
 /** Build cached empty-allowlist hooks backed by channel doctor adapters. */
 export function createChannelDoctorEmptyAllowlistPolicyHooks(
   context: ChannelDoctorLookupContext,
@@ -299,18 +314,11 @@ export function collectChannelDoctorCompatibilityMutations(
   options: { env?: NodeJS.ProcessEnv } = {},
 ): ChannelDoctorConfigMutation[] {
   const channelIds = collectConfiguredChannelIds(cfg);
-  if (channelIds.length === 0) {
-    return [];
-  }
   const mutations: ChannelDoctorConfigMutation[] = [];
   let nextCfg = cfg;
   for (const entry of listChannelDoctorEntries(channelIds, { cfg, env: options.env })) {
     const mutation = entry.doctor.normalizeCompatibilityConfig?.({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
-      continue;
-    }
-    mutations.push(mutation);
-    nextCfg = mutation.config;
+    nextCfg = appendChannelDoctorMutation(mutations, nextCfg, mutation);
   }
   return mutations;
 }
@@ -328,11 +336,7 @@ export async function collectChannelDoctorStaleConfigMutations(
     env: options.env,
   })) {
     const mutation = await entry.doctor.cleanStaleConfig?.({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
-      continue;
-    }
-    mutations.push(mutation);
-    nextCfg = mutation.config;
+    nextCfg = appendChannelDoctorMutation(mutations, nextCfg, mutation);
   }
   return mutations;
 }
@@ -402,14 +406,7 @@ export async function collectChannelDoctorRepairMutations(params: {
       doctorFixCommand: params.doctorFixCommand,
       ...(params.env ? { env: params.env } : {}),
     });
-    if (!mutation || mutation.changes.length === 0) {
-      if (mutation?.warnings?.length) {
-        mutations.push({ config: nextCfg, changes: [], warnings: mutation.warnings });
-      }
-      continue;
-    }
-    mutations.push(mutation);
-    nextCfg = mutation.config;
+    nextCfg = appendChannelDoctorMutation(mutations, nextCfg, mutation);
   }
   return mutations;
 }

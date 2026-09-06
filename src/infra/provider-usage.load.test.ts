@@ -1,7 +1,10 @@
 // Covers provider usage summary loading across auth and plugin paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
+  getProviderUsageAuthWithPluginMock,
   getProviderUsageSnapshotWithPluginMock,
   resetProviderUsageSnapshotWithPluginMock,
 } from "./provider-usage-plugin-runtime.test-mocks.js";
@@ -12,10 +15,11 @@ import {
   type ProviderUsageAuth,
   usageNow,
 } from "./provider-usage.test-support.js";
-import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
+import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types.js";
 
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 const googleGeminiCliProvider = "google-gemini-cli" as unknown as ProviderAuth["provider"];
+const resolveProviderUsageAuthWithPluginMock = getProviderUsageAuthWithPluginMock();
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
 
 describe("provider-usage.load", () => {
@@ -210,6 +214,112 @@ describe("provider-usage.load", () => {
         provider: "openai",
         displayName: "Codex",
         windows: [{ label: "3h", usedPercent: 12 }],
+      },
+    ]);
+  });
+
+  it("returns live siblings at the deadline while retaining the unfinished provider", async () => {
+    vi.useFakeTimers();
+    const scope = new AsyncWorkScope();
+    const heldSnapshot = createDeferredCore<ProviderUsageSnapshot>();
+    const lateSnapshot: ProviderUsageSnapshot = {
+      provider: "anthropic",
+      displayName: "Claude",
+      windows: [{ label: "5h", usedPercent: 20 }],
+    };
+    let summaryPromise: Promise<UsageSummary> | undefined;
+    let draining: Promise<void> | undefined;
+    try {
+      resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) => {
+        if (provider === "anthropic") {
+          return await heldSnapshot.promise;
+        }
+        return {
+          provider,
+          displayName: "Codex",
+          windows: [{ label: "3h", usedPercent: 12 }],
+        };
+      });
+      summaryPromise = scope.track(() =>
+        loadProviderUsageSummary({
+          auth: [
+            { provider: "anthropic", token: "token-a" },
+            { provider: "openai", token: "token-codex" },
+          ],
+          config: {},
+          env: {},
+          timeoutMs: 5_000,
+        }),
+      );
+      let settled = false;
+      void summaryPromise.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      const settledAtDeadline = settled;
+      if (!settledAtDeadline) {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      const summary = await summaryPromise;
+
+      expect(settledAtDeadline).toBe(true);
+      expect(summary.providers).toEqual([
+        { provider: "anthropic", displayName: "Claude", windows: [], error: "Timeout" },
+        {
+          provider: "openai",
+          displayName: "Codex",
+          windows: [{ label: "3h", usedPercent: 12 }],
+        },
+      ]);
+      let drained = false;
+      draining = scope.drain().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(false);
+      heldSnapshot.resolve(lateSnapshot);
+      await draining;
+      expect(drained).toBe(true);
+      expect(summary.providers[0]?.error).toBe("Timeout");
+    } finally {
+      heldSnapshot.resolve(lateSnapshot);
+      await Promise.allSettled([
+        summaryPromise,
+        ...resolveProviderUsageSnapshotWithPluginMock.mock.results.map((result) => result.value),
+      ]);
+      await (draining ?? scope.drain());
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps successful provider usage when a sibling auth hook rejects", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockImplementation(async ({ provider }) => {
+      if (provider === "anthropic") {
+        throw new Error("auth failed");
+      }
+      return { token: `${provider}-token` };
+    });
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) => ({
+      provider,
+      displayName: provider,
+      windows: [{ label: "5h", usedPercent: 12 }],
+    }));
+
+    const summary = await loadProviderUsageSummary({
+      providers: ["anthropic", "openai"],
+      config: {},
+      // Credential sources keep both providers past the plugin-auth gate so the
+      // sibling-isolation behavior under test is actually exercised.
+      env: { ANTHROPIC_API_KEY: "sk-ant-test", OPENAI_API_KEY: "sk-openai-test" },
+    });
+
+    expect(summary.providers).toEqual([
+      { provider: "anthropic", displayName: "Claude", windows: [], error: "auth failed" },
+      {
+        provider: "openai",
+        displayName: "openai",
+        windows: [{ label: "5h", usedPercent: 12 }],
       },
     ]);
   });

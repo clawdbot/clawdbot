@@ -44,10 +44,7 @@
       "groupId": "arcee",
       "groupLabel": "Arcee AI",
       "groupHint": "Direct API or OpenRouter",
-      "optionKey": "openrouterApiKey",
-      "cliFlag": "--openrouter-api-key",
-      "cliOption": "--openrouter-api-key <key>",
-      "cliDescription": "OpenRouter API key for Arcee AI models"
+      "optionKey": "openrouterApiKey"
     }
   ],
   "configSchema": {

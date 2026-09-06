@@ -126,7 +126,7 @@ describe("plugin SDK surface report", () => {
 
   it("accepts exact deprecated export budget overrides by public entrypoint", () => {
     const budgetConfig = readPluginSdkSurfaceBudgets({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 2 }),
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 3 }),
     });
 
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).not.toContain(
@@ -185,7 +185,7 @@ describe("plugin SDK surface report", () => {
     });
 
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
-      "public deprecated exports in core 2 > 1",
+      "public deprecated exports in core 3 > 1",
     );
   });
 });

@@ -10,6 +10,7 @@ export function canResolveScheduledConfiguredMcpCreatorAuthority(params: {
   usesSupervisionConnection: boolean;
   preservesNativeModel: boolean;
   senderIsOwner?: boolean;
+  hasFreshCreatorAuthority?: boolean;
   senderId?: string | null;
   inputProvenance?: unknown;
   trustedInternalHandoff?: unknown;
@@ -25,7 +26,7 @@ export function canResolveScheduledConfiguredMcpCreatorAuthority(params: {
     !isIncognitoSessionKey(params.sessionKey) &&
     !params.usesSupervisionConnection &&
     !params.preservesNativeModel &&
-    params.senderIsOwner === true &&
+    (params.senderIsOwner === true || params.hasFreshCreatorAuthority === true) &&
     !params.senderId &&
     params.inputProvenance === undefined &&
     params.trustedInternalHandoff === undefined &&

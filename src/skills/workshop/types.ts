@@ -62,11 +62,15 @@ export type SkillProposalOrigin = {
   messageId?: string;
 };
 
+export type SkillWorkshopPreparedPatch = {
+  skillFile: string;
+  contentHash: string;
+  oldString: string;
+};
+
 /** Run-scoped budget shared by every workshop tool instance created across runner retries. */
 export type SkillWorkshopProposalMutationBudget = {
   remaining: number;
-  /** Distinct proposal records successfully mutated by this run. */
-  completed?: number;
   /** Successful persisted mutation calls, including repeated revisions. */
   successfulMutations?: number;
   /** Failed or incompletely checkpointed reservations in the current model run. */
@@ -75,6 +79,8 @@ export type SkillWorkshopProposalMutationBudget = {
   mutatedProposalIds?: Set<string>;
   /** Content hash per live skill read this run; autonomous updates require a matching receipt. */
   readSkillHashes?: Map<string, string>;
+  /** Single-use exact-span patch authority prepared from authoritative live content. */
+  preparedSkillPatches?: Map<string, SkillWorkshopPreparedPatch>;
 };
 
 export type SkillWorkshopProposalReviewProgress = {
@@ -86,13 +92,21 @@ export type SkillWorkshopProposalReviewProgress = {
 /** Shared completion latch for proposal-only reviewers that require a durable final checkpoint. */
 export type SkillWorkshopProposalReviewCompletion = {
   activeMutations?: Set<Promise<void>>;
-  completed: boolean;
   complete: () => Promise<void>;
-  phase?: "open" | "completing" | "completed";
+  phase: "open" | "completing" | "completed";
   recordProgress?: (progress: SkillWorkshopProposalReviewProgress) => Promise<void>;
 };
 
+/** Exact proposal revision an operator reviewed before requesting an agent-authored revision. */
+export type SkillWorkshopProposalRevisionConstraint = {
+  readonly agentId: string;
+  readonly workspaceDir: string;
+  readonly proposalId: string;
+  readonly expectedRevisionHash: string;
+};
+
 export type SkillWorkshopRunOptions = {
+  libraryAuthoring?: import("../library/authoring.js").SkillLibraryAuthoringCapability;
   env?: NodeJS.ProcessEnv;
   proposalOnly?: boolean;
   updateProposals?: boolean;
@@ -100,6 +114,7 @@ export type SkillWorkshopRunOptions = {
   origin?: SkillProposalOrigin;
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
+  proposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
 export type SkillProposalScan = {
@@ -128,6 +143,10 @@ export type SkillProposalSupportFile = {
   targetContentHash?: string;
 };
 
+export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & { content: string };
+
+export type SkillProposalDraftFile = "PROPOSAL.md" | `generations/${string}/PROPOSAL.md`;
+
 export type SkillProposalRecord = {
   schema: typeof SKILL_WORKSHOP_SCHEMA;
   id: string;
@@ -146,7 +165,7 @@ export type SkillProposalRecord = {
   /** Durable mutation counts keyed by run id for bounded interrupted-run recovery. */
   originRunMutationCounts?: Record<string, number>;
   proposedVersion: string;
-  draftFile: "PROPOSAL.md";
+  draftFile: SkillProposalDraftFile;
   draftHash: string;
   supportFiles?: SkillProposalSupportFile[];
   target: SkillProposalTarget;
@@ -172,8 +191,8 @@ export type SkillProposalManifestEntry = {
   createdAt: string;
   updatedAt: string;
   scanState: SkillProposalScannerState;
-  /** The proposal remains bound to an earlier workspace for this agent. */
-  workspaceMismatch?: true;
+  /** The durable proposal body is unavailable; metadata remains inspectable in list output. */
+  degradedState?: "draft-missing";
 };
 
 export type SkillProposalManifest = {
@@ -207,7 +226,7 @@ export type SkillProposalCreateInput = {
   workspaceDir: string;
   agentId?: string;
   eventActor?: SkillProposalEventActor;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   name: string;
   description: string;
@@ -224,7 +243,7 @@ export type SkillProposalUpdateInput = {
   workspaceDir: string;
   agentId?: string;
   eventActor?: SkillProposalEventActor;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   skillName: string;
   description?: string;
@@ -249,7 +268,7 @@ export type SkillProposalReviseInput = {
   workspaceDir: string;
   agentId?: string;
   eventActor?: SkillProposalEventActor;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
   expectedRevisionHash?: string;
@@ -266,7 +285,7 @@ export type SkillProposalActionInput = {
   workspaceDir: string;
   agentId?: string;
   eventActor?: SkillProposalEventActor;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
   expectedRevisionHash?: string;
@@ -278,6 +297,7 @@ export type SkillProposalEvaluateInput = {
   workspaceDir: string;
   agentId?: string;
   eventActor?: SkillProposalEventActor;
+  config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
   expectedRevisionHash?: string;
@@ -286,8 +306,8 @@ export type SkillProposalEvaluateInput = {
 };
 
 export type SkillProposalEventsListInput = {
-  workspaceDir?: string;
   agentId?: string;
+  config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId?: string;
   afterSequence?: number;
@@ -303,7 +323,7 @@ export type SkillProposalReadResult = {
   record: SkillProposalRecord;
   revisionHash: string;
   content: string;
-  supportFiles?: SkillProposalSupportFileInput[];
+  supportFiles?: PreparedSkillProposalSupportFile[];
 };
 
 export type SkillProposalApplyResult = {

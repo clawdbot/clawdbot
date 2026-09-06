@@ -1,9 +1,11 @@
 // Coordinates queue-media filesystem staging with durable SQLite ownership.
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   deleteDeliveryQueueEntry,
   expireStagingAndLoadDeliveryQueueEntries,
   upsertDeliveryQueueEntry,
+  upsertDeliveryQueueEntryInDatabase,
   type DeliveryQueueEntryState,
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
@@ -32,10 +34,11 @@ function entryPayloads(entry: OutboundMediaEntry): ReplyPayload[] {
   );
 }
 
-function createDeliveryQueueMediaRetention(
+export function createDeliveryQueueMediaRetention(
   artifacts: readonly string[],
   entryKind: "outbound-media-stage" | "outbound-media-recovery-lease",
   stateDir?: string,
+  database?: OpenClawStateDatabase,
 ): string {
   const id = generateSecureUuid();
   const entry: MediaStageEntry = {
@@ -44,49 +47,27 @@ function createDeliveryQueueMediaRetention(
     retryCount: 0,
     artifacts: [...artifacts],
   };
-  const inserted = upsertDeliveryQueueEntry({
+  const insert = {
     queueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
     entry,
     metadata: { entryKind },
-    stateDir,
     insertOnly: true,
-  });
+  };
+  const inserted = database
+    ? upsertDeliveryQueueEntryInDatabase(insert, database)
+    : upsertDeliveryQueueEntry({ ...insert, stateDir });
   if (!inserted) {
     throw new Error(`Delivery queue media stage already exists: ${id}`);
   }
   return id;
 }
 
-/** Register planned artifacts before any file becomes visible to the sweeper. */
-export function createDeliveryQueueMediaStage(
-  artifacts: readonly string[],
-  stateDir?: string,
-): string {
-  return createDeliveryQueueMediaRetention(artifacts, "outbound-media-stage", stateDir);
-}
-
-/** Keep queue-owned artifacts visible to GC while a recovered send is active. */
-export function createDeliveryQueueMediaRecoveryLease(
-  artifacts: readonly string[],
-  stateDir?: string,
-): string {
-  return createDeliveryQueueMediaRetention(artifacts, "outbound-media-recovery-lease", stateDir);
-}
-
-/** Cancel a stage that will never publish an outbound queue row. */
-export function cancelDeliveryQueueMediaStage(id: string | undefined, stateDir?: string): void {
+/** Release a stage or recovery lease after its owner settles. */
+export function cancelDeliveryQueueMediaRetention(id: string | undefined, stateDir?: string): void {
   if (!id) {
     return;
   }
   deleteDeliveryQueueEntry(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, id, stateDir);
-}
-
-/** Release an active recovery lease after its adapter attempt settles. */
-export function cancelDeliveryQueueMediaRecoveryLease(
-  id: string | undefined,
-  stateDir?: string,
-): void {
-  cancelDeliveryQueueMediaStage(id, stateDir);
 }
 
 /**

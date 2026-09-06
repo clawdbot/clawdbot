@@ -1,10 +1,7 @@
 import { isWssUrl } from "@openclaw/net-policy/url-protocol";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { GatewayTlsConfig } from "../config/types.gateway.js";
+import { requireTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
-
-type GatewayTlsRuntimeLoader = (config: GatewayTlsConfig | undefined) => Promise<GatewayTlsRuntime>;
+import { inspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 
 /** Resolve the certificate pin for one already-selected Gateway target. */
 export async function resolveGatewayConnectionTlsFingerprint(params: {
@@ -12,9 +9,10 @@ export async function resolveGatewayConnectionTlsFingerprint(params: {
   url: string;
   urlSource: string;
   explicitTlsFingerprint?: string;
-  loadGatewayTlsRuntime: GatewayTlsRuntimeLoader;
 }): Promise<string | undefined> {
-  const explicitTlsFingerprint = normalizeOptionalString(params.explicitTlsFingerprint);
+  const explicitTlsFingerprint = params.explicitTlsFingerprint
+    ? requireTlsFingerprint(params.explicitTlsFingerprint)
+    : undefined;
   if (explicitTlsFingerprint) {
     return explicitTlsFingerprint;
   }
@@ -25,7 +23,9 @@ export async function resolveGatewayConnectionTlsFingerprint(params: {
     params.config.gateway?.mode === "remote" &&
     (params.urlSource === "config gateway.remote.url" ||
       params.urlSource === "env OPENCLAW_GATEWAY_URL")
-      ? normalizeOptionalString(params.config.gateway.remote?.tlsFingerprint)
+      ? params.config.gateway.remote?.tlsFingerprint
+        ? requireTlsFingerprint(params.config.gateway.remote.tlsFingerprint)
+        : undefined
       : undefined;
   if (remoteTlsFingerprint) {
     return remoteTlsFingerprint;
@@ -40,6 +40,6 @@ export async function resolveGatewayConnectionTlsFingerprint(params: {
   if (!usesConfiguredLocalGateway || params.config.gateway?.tls?.enabled !== true) {
     return undefined;
   }
-  const tlsRuntime = await params.loadGatewayTlsRuntime(params.config.gateway.tls);
-  return tlsRuntime.enabled ? tlsRuntime.fingerprintSha256 : undefined;
+  const certificate = await inspectGatewayTlsCertificate(params.config.gateway.tls);
+  return certificate.ok ? certificate.value.fingerprintSha256 : undefined;
 }

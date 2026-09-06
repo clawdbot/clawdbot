@@ -43,7 +43,7 @@ import {
   matchCommandPrefix,
 } from "./command-gates.js";
 import {
-  persistSessionEntry,
+  persistCommandSession,
   sessionEntryPersistenceConflictReply,
 } from "./commands-session-store.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
@@ -205,7 +205,7 @@ async function handleTtsChatAction(
     return { shouldContinue: false, reply: ttsUsage() };
   }
 
-  if (!(await persistSessionEntry({ ...params, touchedFields: ["ttsAuto"] }))) {
+  if (!(await persistCommandSession({ ...params, touchedFields: ["ttsAuto"] }))) {
     return sessionEntryPersistenceConflictReply();
   }
   return stopWithText(replyText);
@@ -257,7 +257,7 @@ async function handleTtsLatestAction(
   params.sessionEntry.lastTtsReadLatestHash = hash;
   params.sessionEntry.lastTtsReadLatestAt = Date.now();
   if (
-    !(await persistSessionEntry({
+    !(await persistCommandSession({
       ...params,
       touchedFields: ["lastTtsReadLatestHash", "lastTtsReadLatestAt"],
     }))

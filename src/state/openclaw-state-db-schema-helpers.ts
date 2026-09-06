@@ -2,8 +2,17 @@
 import type { DatabaseSync } from "node:sqlite";
 
 export function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
+  return tableHasColumns(db, tableName, [columnName]);
+}
+
+export function tableHasColumns(
+  db: DatabaseSync,
+  tableName: string,
+  columnNames: readonly string[],
+): boolean {
   const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: unknown }>;
-  return rows.some((row) => row.name === columnName);
+  const existing = new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+  return columnNames.every((columnName) => existing.has(columnName));
 }
 
 export function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {

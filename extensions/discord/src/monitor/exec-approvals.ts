@@ -32,6 +32,7 @@ type ExecApprovalButtonContext = {
     approvalId: string,
     approvalKind: PendingApprovalView["approvalKind"],
     decision: ExecApprovalDecision,
+    senderId: string,
   ) => Promise<ExecApprovalResolveResult>;
 };
 
@@ -141,6 +142,7 @@ class ExecApprovalButton extends Button {
       parsed.approvalId,
       parsed.approvalKind,
       parsed.action,
+      userId,
     );
     if (!result.ok) {
       try {
@@ -197,7 +199,7 @@ export function createDiscordExecApprovalButtonContext(params: {
         accountId: params.accountId,
         configOverride: params.config,
       }),
-    resolveApproval: async (approvalId, approvalKind, decision) => {
+    resolveApproval: async (approvalId, approvalKind, decision, senderId) => {
       try {
         const resolution = await resolveApprovalOverGateway({
           cfg: params.cfg,
@@ -205,7 +207,8 @@ export function createDiscordExecApprovalButtonContext(params: {
           approvalKind,
           decision,
           channel: "discord",
-          senderId: params.accountId,
+          accountId: params.accountId,
+          senderId,
           gatewayUrl: params.gatewayUrl,
         });
         return { ok: true, resolution };

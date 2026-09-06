@@ -1,8 +1,12 @@
 /** Identity and execution metadata for heartbeat tasks migrated into cron. */
 import { createHash } from "node:crypto";
+import { HEARTBEAT_TASK_DECLARATION_PREFIX } from "./system-owned-declaration.js";
 import type { CronJob } from "./types.js";
 
-const HEARTBEAT_TASK_DECLARATION_PREFIX = "heartbeat-task:";
+/** Whether a declaration key belongs to the doctor-owned heartbeat-task namespace. */
+function isHeartbeatTaskDeclarationKey(declarationKey: string | undefined): boolean {
+  return declarationKey?.startsWith(HEARTBEAT_TASK_DECLARATION_PREFIX) === true;
+}
 
 /** Stable declaration identity; duplicate names add their deterministic occurrence ordinal. */
 export function heartbeatTaskDeclarationKey(
@@ -27,7 +31,7 @@ export function isHeartbeatTaskCronJob(job: CronJob): job is CronJob & {
   sessionTarget: "main";
 } {
   return (
-    job.declarationKey?.startsWith(HEARTBEAT_TASK_DECLARATION_PREFIX) === true &&
+    isHeartbeatTaskDeclarationKey(job.declarationKey) &&
     job.payload.kind === "systemEvent" &&
     job.sessionTarget === "main"
   );

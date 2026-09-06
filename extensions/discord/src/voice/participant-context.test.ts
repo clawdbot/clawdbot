@@ -42,11 +42,14 @@ describe("countDiscordVoiceHumanParticipants", () => {
           },
           {
             user_id: "owner",
-            member: { user: { id: "owner", bot: false } },
+            member: { user: { id: "owner" } },
           },
           {
             user_id: "helper-bot",
             member: { user: { id: "helper-bot", bot: true } },
+          },
+          {
+            user_id: "unknown-member",
           },
         ] as never,
         botUserId: "agent",

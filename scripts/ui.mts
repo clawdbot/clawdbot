@@ -1,29 +1,106 @@
 #!/usr/bin/env node
 // Routes UI package commands through the repo's Node/pnpm wrappers.
-import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
+import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
+import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
+const requireFromUi = createRequire(path.join(uiDir, "package.json"));
 
 const WINDOWS_CMD_EXE_EXTENSIONS = new Set([".cmd", ".bat"]);
 const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
 
+type UiBuildEnvironmentSources = {
+  env?: NodeJS.ProcessEnv;
+  now?: () => Date;
+  readBuildInfo?: () => unknown;
+  readGitCommit?: () => string | null;
+  readPackageVersion?: () => string | null;
+};
+
+function readCurrentGitCommit(): string | null {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function readCurrentPackageVersion(): string | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+      version?: unknown;
+    };
+    return typeof parsed.version === "string" && parsed.version.trim()
+      ? parsed.version.trim()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readExistingBuildInfo(): unknown {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(repoRoot, "dist/build-info.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Reuse a matching runtime identity for a standalone rebuild of the bundled UI. */
+export function resolveUiBuildEnvironment(
+  sources: UiBuildEnvironmentSources = {},
+): NodeJS.ProcessEnv {
+  const env = sources.env ?? process.env;
+  const buildEnv = resolveBuildIdentityEnvironment({
+    commitLabel: "Control UI build commit",
+    env,
+    now: sources.now,
+    readGitCommit: sources.readGitCommit ?? readCurrentGitCommit,
+  });
+  if (env.OPENCLAW_BUILD_TIMESTAMP?.trim() || env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim()) {
+    return buildEnv;
+  }
+
+  const existing = normalizeControlUiBuildInfo((sources.readBuildInfo ?? readExistingBuildInfo)());
+  const version = (sources.readPackageVersion ?? readCurrentPackageVersion)();
+  const release = env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim() === "1";
+  if (
+    existing.buildId === "dev" ||
+    !existing.builtAt ||
+    existing.commit !== buildEnv.GIT_COMMIT ||
+    existing.version !== version ||
+    existing.release !== release
+  ) {
+    return buildEnv;
+  }
+  return {
+    ...buildEnv,
+    OPENCLAW_BUILD_TIMESTAMP: existing.builtAt,
+    OPENCLAW_CONTROL_UI_BUILD_ID: existing.buildId,
+  };
+}
+
 type UiSpawnCall = {
   args: string[];
   command: string;
-  options: SpawnOptions & {
+  options: {
     cwd: string;
     env: NodeJS.ProcessEnv;
     shell: boolean;
     stdio: "inherit";
+    windowsVerbatimArguments?: boolean;
   };
 };
 
@@ -137,10 +214,11 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
     return;
   }
 
-  let forwardedSignal: NodeJS.Signals | null = null;
+  const forwardedSignals = ["SIGTERM", "SIGHUP"] as const;
+  let forwardedSignal: (typeof forwardedSignals)[number] | null = null;
   let forwardedSignalPids: number[] = [];
-  let forceKillTimer: NodeJS.Timeout | null = null;
-  let forwardedSignalDrainTimer: NodeJS.Timeout | null = null;
+  let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
+  let forwardedSignalDrainTimer: ReturnType<typeof setInterval> | null = null;
   const clearForwardedSignalTimers = () => {
     if (forceKillTimer) {
       clearTimeout(forceKillTimer);
@@ -166,7 +244,6 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
   // Keep UI dev children in the foreground process group for native TTY
   // resize/job-control behavior. Forward wrapper shutdown signals to the
   // captured child tree instead of using a detached process group.
-  const forwardedSignals: NodeJS.Signals[] = ["SIGTERM", "SIGHUP"];
   const signalHandlers = new Map(
     forwardedSignals.map((signal) => [
       signal,
@@ -275,14 +352,6 @@ function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals, pids: nu
   }
 }
 
-function run(cmd: string, args: string[]): void {
-  runSpawnCall(resolveSpawnCall(cmd, args), cmd);
-}
-
-function runPnpm(args: string[], envOverride?: NodeJS.ProcessEnv): void {
-  runSpawnCall(resolvePnpmSpawnCall(args, envOverride), "pnpm");
-}
-
 function runSpawnCallSync(spawnCall: UiSpawnCall, label: string): void {
   const { command, args: spawnArgs, options } = spawnCall;
   let result;
@@ -302,19 +371,14 @@ function runSpawnCallSync(spawnCall: UiSpawnCall, label: string): void {
   }
 }
 
-function runPnpmSync(args: string[], envOverride?: NodeJS.ProcessEnv): void {
-  runSpawnCallSync(resolvePnpmSpawnCall(args, envOverride), "pnpm");
-}
-
 function depsInstalled(kind: "build" | "test"): boolean {
   try {
-    const require = createRequire(path.join(uiDir, "package.json"));
-    require.resolve("vite");
-    require.resolve("dompurify");
+    requireFromUi.resolve("vite");
+    requireFromUi.resolve("dompurify");
     if (kind === "test") {
-      require.resolve("vitest");
-      require.resolve("@vitest/browser-playwright");
-      require.resolve("playwright");
+      requireFromUi.resolve("vitest");
+      requireFromUi.resolve("@vitest/browser-playwright");
+      requireFromUi.resolve("playwright");
     }
     return true;
   } catch {
@@ -322,27 +386,20 @@ function depsInstalled(kind: "build" | "test"): boolean {
   }
 }
 
-function resolveScriptAction(action: string): "dev" | "build" | "test" | null {
-  if (action === "install") {
-    return null;
-  }
+function resolveScriptAction(action: string): [tool: "vite" | "vitest", ...args: string[]] | null {
   if (action === "dev") {
-    return "dev";
+    return ["vite"];
   }
   if (action === "build") {
-    return "build";
+    return ["vite", "build"];
   }
   if (action === "test") {
-    return "test";
+    return ["vitest", "run", "--config", "vitest.config.ts"];
   }
   return null;
 }
 
-export function assertUiBuildOutputRoot(params: { rootDir?: string; fs?: typeof fs } = {}): void {
-  assertRealOutputRoot(path.join(params.rootDir ?? repoRoot, "dist"), { fs: params.fs ?? fs });
-}
-
-function main(argv: string[] = process.argv.slice(2)): void {
+export function runUiCli(argv: string[] = process.argv.slice(2)): void {
   const [action, ...rest] = argv;
   if (!action) {
     usage();
@@ -355,29 +412,58 @@ function main(argv: string[] = process.argv.slice(2)): void {
     process.exit(2);
   }
   if (action === "build") {
-    assertUiBuildOutputRoot();
-  }
-
-  if (process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" && action === "build") {
-    run(process.execPath, [path.join(repoRoot, "node_modules/vite/bin/vite.js"), "build", ...rest]);
-    return;
+    assertRealOutputRoot(path.join(repoRoot, "dist"));
+    assertRealOutputRoot(path.join(repoRoot, "dist/control-ui"));
   }
 
   if (action === "install") {
-    runPnpm(["install", ...rest]);
+    runSpawnCall(resolvePnpmSpawnCall(["install", ...rest]), "pnpm");
     return;
   }
   if (!script) {
     return;
   }
 
-  if (!depsInstalled(action === "test" ? "test" : "build")) {
-    const installEnv = process.env;
-    const installArgs = ["install"];
-    runPnpmSync(installArgs, installEnv);
+  const noPnpmBuild = action === "build" && process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1";
+  if (!noPnpmBuild && !depsInstalled(action === "test" ? "test" : "build")) {
+    runSpawnCallSync(resolvePnpmSpawnCall(["install"]), "pnpm");
   }
 
-  runPnpm(["run", script, ...rest]);
+  const [tool, ...args] = script;
+  const env = action === "build" ? resolveUiBuildEnvironment() : process.env;
+  const toolCall = resolveSpawnCall(
+    process.execPath,
+    [resolveNodePackageBin(tool, requireFromUi), ...args, ...rest],
+    env,
+  );
+  if (action === "build") {
+    runSpawnCallSync(toolCall, "Control UI build");
+    if (rest.some((arg) => arg === "--help" || arg === "-h")) {
+      return;
+    }
+    for (const [validator, ...validatorArgs] of [
+      ["check-control-ui-precompressed-assets.mts"],
+      ["check-control-ui-performance.mts", "--report-only"],
+    ] as const) {
+      runSpawnCallSync(
+        resolveSpawnCall(
+          process.execPath,
+          [
+            "--import",
+            new URL("./tsx.mjs", import.meta.url).href,
+            path.join(here, validator),
+            ...validatorArgs,
+          ],
+          env,
+          { cwd: repoRoot },
+        ),
+        validator,
+      );
+    }
+    return;
+  }
+
+  runSpawnCall(toolCall, tool);
 }
 
 function resolveDirectExecutionPath(
@@ -408,5 +494,5 @@ export function isDirectScriptExecution(
 const isDirectExecution = isDirectScriptExecution();
 
 if (isDirectExecution) {
-  main();
+  runUiCli();
 }

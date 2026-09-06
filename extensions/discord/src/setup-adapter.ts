@@ -25,6 +25,7 @@ export const discordSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use DISCORD_BOT_TOKEN" },
+      envVars: ["DISCORD_BOT_TOKEN"],
     },
   },
   legacyAdapter: discordSetupAdapter,

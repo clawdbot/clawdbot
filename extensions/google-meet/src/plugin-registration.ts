@@ -5,7 +5,10 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord as asParamRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isGoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
 import {
   resolveGoogleMeetGatewayOperationTimeoutMs,
@@ -15,6 +18,8 @@ import {
 } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
+
+export { asParamRecord };
 
 export const loadGoogleMeetPluginHelpers = createLazyRuntimeModule(
   () => import("./plugin-helpers.js"),
@@ -43,10 +48,6 @@ type LoadGoogleMeetNodeInvokePolicy = (
 
 const loadGoogleMeetNodeInvokePolicy: LoadGoogleMeetNodeInvokePolicy = async (config) =>
   (await loadGoogleMeetNodeInvokePolicyModule()).createGoogleMeetChromeNodeInvokePolicy(config);
-
-export function asParamRecord(params: unknown): Record<string, unknown> {
-  return isRecord(params) ? params : {};
-}
 
 export function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
   return value === "chrome" || value === "chrome-node" || value === "twilio" ? value : undefined;
@@ -281,5 +282,4 @@ export const testing = {
     googleMeetToolDeps.platform = next ?? (() => process.platform);
   },
   isGoogleMeetAgentToolActionUnsupportedOnHost,
-  resolveGoogleMeetGatewayOperationTimeoutMs,
 };

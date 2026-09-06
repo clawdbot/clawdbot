@@ -1,5 +1,6 @@
 // find tool tests cover custom search operation wiring and result-limit
 // normalization for session file discovery.
+import path from "node:path";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { createFindToolDefinition, type FindOperations } from "./find.js";
@@ -23,6 +24,72 @@ function execute(tool: ReturnType<typeof createFindToolDefinition>, limit: numbe
 }
 
 describe("find tool", () => {
+  const workspace = path.resolve(path.sep, "find-fixture");
+  it.each([
+    {
+      name: "absolute result",
+      search: workspace,
+      found: path.join(workspace, "alpha.txt"),
+      expected: "alpha.txt",
+    },
+    {
+      name: "trailing search separator",
+      search: `${workspace}${path.sep}`,
+      found: path.join(workspace, "alpha.txt"),
+      expected: "alpha.txt",
+    },
+    {
+      name: "root search",
+      search: path.parse(workspace).root,
+      found: path.join(path.parse(workspace).root, "alpha.txt"),
+      expected: "alpha.txt",
+    },
+    { name: "relative result", search: workspace, found: "alpha.txt", expected: "alpha.txt" },
+    { name: "self-directory absolute", search: workspace, found: workspace, expected: "." },
+    {
+      name: "self-directory with separator",
+      search: workspace,
+      found: `${workspace}${path.sep}`,
+      expected: "./",
+    },
+    { name: "self-directory relative", search: workspace, found: ".", expected: "." },
+    {
+      name: "prefix sibling",
+      search: workspace,
+      found: path.join(`${workspace}-other`, "alpha.txt"),
+      expected: "../find-fixture-other/alpha.txt",
+    },
+    {
+      name: "filename whitespace",
+      search: workspace,
+      found: path.join(workspace, "report.txt "),
+      expected: "report.txt ",
+    },
+    {
+      name: "absolute directory marker",
+      search: `${workspace}${path.sep}`,
+      found: `${path.join(workspace, "folder")}${path.sep}`,
+      expected: "folder/",
+    },
+    {
+      name: "relative directory marker",
+      search: workspace,
+      found: `folder${path.sep}`,
+      expected: "folder/",
+    },
+  ])("preserves $name from custom operations", async ({ search, found, expected }) => {
+    const tool = createFindToolDefinition(workspace, { operations: operations([found]) });
+    const result = await tool.execute(
+      "paths",
+      { pattern: "*", path: search },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(textContent(result)).toBe(expected);
+    expect(result.details).toBeUndefined();
+  });
+
   it("rejects fractional limits", async () => {
     const tool = createFindToolDefinition("/workspace", { operations: operations([]) });
 

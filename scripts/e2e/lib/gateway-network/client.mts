@@ -1,7 +1,6 @@
 // WebSocket client helpers for gateway network E2E scenarios.
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
-import { request as httpRequest } from "node:http";
 import { pathToFileURL } from "node:url";
 import { WebSocket } from "ws";
 import { isRecord } from "../../../lib/record-shared.mjs";
@@ -33,6 +32,7 @@ type GatewayPayload = Record<string, unknown> & {
   defaultAgentId?: string;
   durationMs?: number;
   expiresAtMs?: number;
+  features?: Record<string, unknown>;
   ok?: boolean;
   ready?: boolean;
   resumed?: boolean;
@@ -58,7 +58,13 @@ type GatewayRequestContext = {
   token: string;
   url: string;
 };
-type GatewayClientOptions = { statePath?: string; timeoutMs?: number; token: string; url: string };
+type GatewayClientOptions = {
+  capabilitiesPath?: string;
+  statePath?: string;
+  timeoutMs?: number;
+  token: string;
+  url: string;
+};
 type GatewayFetchDeps = { fetchImpl?: typeof fetch };
 type GatewayNetworkDeps = {
   delay?: (ms: number) => Promise<void>;
@@ -95,6 +101,7 @@ function hasGatewayHealthSummaryPayload(
   }
   const { payload } = response;
   return (
+    response.ok === true &&
     payload.ok === true &&
     typeof payload.ts === "number" &&
     typeof payload.durationMs === "number" &&
@@ -105,6 +112,28 @@ function hasGatewayHealthSummaryPayload(
     Array.isArray(payload.channelOrder) &&
     isRecord(payload.sessions)
   );
+}
+
+const SUSPENSION_METHODS = [
+  "gateway.suspend.prepare",
+  "gateway.suspend.status",
+  "gateway.suspend.resume",
+] as const;
+
+function classifySuspensionCapability(connectResponse: GatewayFrame) {
+  const features = connectResponse.payload?.features;
+  const methods = isRecord(features) ? features.methods : undefined;
+  if (!Array.isArray(methods) || methods.some((method) => typeof method !== "string")) {
+    throw new Error("connect hello suspension methods are malformed");
+  }
+  const availableCount = SUSPENSION_METHODS.filter((method) => methods.includes(method)).length;
+  if (availableCount === 0) {
+    return "unsupported" as const;
+  }
+  if (availableCount === SUSPENSION_METHODS.length) {
+    return "supported" as const;
+  }
+  throw new Error("connect hello contains partial suspension methods");
 }
 
 function httpUrl(url: string, pathname = "/") {
@@ -156,47 +185,6 @@ async function readProbe(
   const signal = deadlineSignal(deadline);
   const response = await fetchImpl(httpUrl(url, pathname), { signal });
   return await readJson<GatewayProbeResponse["body"]>(response, pathname, signal);
-}
-
-async function requestUpgradeRejection(
-  url: string,
-  timeoutMs: number,
-): Promise<{ body: string; status: number | undefined }> {
-  const target = new URL(httpUrl(url));
-  return await new Promise<{ body: string; status: number | undefined }>((resolve, reject) => {
-    const request = httpRequest(
-      {
-        hostname: target.hostname,
-        port: target.port,
-        path: target.pathname,
-        headers: {
-          Connection: "Upgrade",
-          Upgrade: "websocket",
-          "Sec-WebSocket-Key": Buffer.from("gateway-net-e2e!").toString("base64"),
-          "Sec-WebSocket-Version": "13",
-        },
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        response.on("end", () => {
-          resolve({
-            status: response.statusCode,
-            body: Buffer.concat(chunks).toString("utf8"),
-          });
-        });
-      },
-    );
-    request.on("upgrade", (response, socket) => {
-      socket.destroy();
-      reject(new Error(`expected rejected websocket upgrade, received ${response.statusCode}`));
-    });
-    request.on("error", reject);
-    request.setTimeout(timeoutMs, () => {
-      request.destroy(new Error("websocket upgrade rejection timeout"));
-    });
-    request.end();
-  });
 }
 
 function emitPhase(phase: string, startedAt: number) {
@@ -321,6 +309,78 @@ function assertAdminSuccess(response: GatewayAdminResponse, message: string) {
   return assertRpcSuccess(response.body, message);
 }
 
+async function verifyPreparedSuspensionSocket(
+  options: GatewayClientOptions & { deadline: number; suspensionId: string },
+) {
+  const { deadline, suspensionId, token, url } = options;
+  const ws = await openSocket(url, remainingDeadlineMs(deadline));
+  try {
+    let requestIndex = 0;
+    const request = async (method: string, params: Record<string, unknown> = {}) => {
+      const id = `s${++requestIndex}`;
+      ws.send(JSON.stringify({ type: "req", id, method, params }));
+      return (await onceFrame(
+        ws,
+        (frame) => frame?.type === "res" && frame?.id === id,
+        remainingDeadlineMs(deadline),
+      )) as GatewayFrame;
+    };
+    const protocolVersion = await readProtocolVersion();
+    assertRpcSuccess(
+      await request("connect", {
+        minProtocol: protocolVersion,
+        maxProtocol: protocolVersion,
+        client: {
+          id: "cli",
+          displayName: "docker-net-e2e",
+          version: "dev",
+          platform: process.platform,
+          mode: "cli",
+        },
+        caps: [],
+        auth: { token },
+        role: "operator",
+        scopes: ["operator.admin"],
+      }),
+      "prepared suspension connect",
+    );
+    const initialStatus = assertRpcSuccess(
+      await request("gateway.suspend.status", { suspensionId }),
+      "prepared suspension status",
+    );
+    assert.equal(initialStatus?.status, "ready", "prepared suspension must remain ready");
+    assertGatewaySuspendingError(await request("health"));
+    const wrongResume = await request("gateway.suspend.resume", {
+      suspensionId: `${suspensionId}-wrong`,
+    });
+    assert.equal(wrongResume.ok, false, "wrong suspension id must fail");
+    assert.equal(wrongResume.error?.code, "INVALID_REQUEST", "wrong suspension id must be invalid");
+    const statusAfterMismatch = assertRpcSuccess(
+      await request("gateway.suspend.status", { suspensionId }),
+      "status after wrong resume",
+    );
+    assert.equal(statusAfterMismatch?.status, "ready", "wrong resume must preserve the lease");
+    const resumed = assertRpcSuccess(
+      await request("gateway.suspend.resume", { suspensionId }),
+      "resume first lease",
+    );
+    assert.deepEqual(
+      { status: resumed?.status, resumed: resumed?.resumed },
+      { status: "running", resumed: true },
+      "first resume must release the lease",
+    );
+    const repeatedResume = assertRpcSuccess(
+      await request("gateway.suspend.resume", { suspensionId }),
+      "repeat first resume",
+    );
+    assert.equal(repeatedResume?.resumed, false, "repeat resume must be idempotent");
+    const recoveredHealth = await request("health");
+    assert(hasGatewayHealthSummaryPayload(recoveredHealth), "health must return its full summary");
+  } finally {
+    ws.close();
+  }
+}
+
 export async function runGatewaySuspensionPreRestartClient(
   {
     statePath,
@@ -354,43 +414,12 @@ export async function runGatewaySuspensionPreRestartClient(
   assert.equal(blockedAdminHealth.status, 503, "Admin health must return HTTP 503");
   assertGatewaySuspendingError(blockedAdminHealth.body);
 
-  const upgrade = await requestUpgradeRejection(url, remainingDeadlineMs(requestContext.deadline));
-  assert.equal(upgrade.status, 503, "new websocket upgrade must return HTTP 503");
-  assert.equal(
-    upgrade.body,
-    "Gateway websocket admission closed",
-    "new websocket upgrade must return the canonical admission body",
-  );
-
-  const wrongResume = await rpc("gateway.suspend.resume", {
-    suspensionId: `${firstLease.suspensionId}-wrong`,
+  await verifyPreparedSuspensionSocket({
+    deadline: requestContext.deadline,
+    suspensionId: firstLease.suspensionId,
+    token,
+    url,
   });
-  assert.equal(wrongResume.status, 400, "wrong suspension id must return HTTP 400");
-  assert.equal(
-    wrongResume.body?.error?.code,
-    "INVALID_REQUEST",
-    "wrong suspension id must return INVALID_REQUEST",
-  );
-  const statusAfterMismatch = assertAdminSuccess(
-    await rpc("gateway.suspend.status", { suspensionId: firstLease.suspensionId }),
-    "status after wrong resume",
-  );
-  assert.equal(statusAfterMismatch?.status, "ready", "wrong resume must preserve the lease");
-
-  const resumed = assertAdminSuccess(
-    await rpc("gateway.suspend.resume", { suspensionId: firstLease.suspensionId }),
-    "resume first lease",
-  );
-  assert.deepEqual(
-    { status: resumed?.status, resumed: resumed?.resumed },
-    { status: "running", resumed: true },
-    "first resume must release the lease",
-  );
-  const repeatedResume = assertAdminSuccess(
-    await rpc("gateway.suspend.resume", { suspensionId: firstLease.suspensionId }),
-    "repeat first resume",
-  );
-  assert.equal(repeatedResume?.resumed, false, "repeat resume must be idempotent");
 
   assertHealthyProbes(
     await readProbe(requestContext, "/healthz"),
@@ -503,7 +532,12 @@ async function readProtocolVersion() {
 }
 
 export async function runGatewayNetworkClient(
-  { token, url, timeoutMs = readGatewayNetworkClientConnectTimeoutMs() }: GatewayClientOptions,
+  {
+    capabilitiesPath,
+    token,
+    url,
+    timeoutMs = readGatewayNetworkClientConnectTimeoutMs(),
+  }: GatewayClientOptions,
   deps: GatewayNetworkDeps = {},
 ) {
   const deadline = Date.now() + timeoutMs;
@@ -550,6 +584,13 @@ export async function runGatewayNetworkClient(
           throw lastError;
         }
       } else {
+        let suspension: "supported" | "unsupported" | undefined;
+        let capabilityError: Error | undefined;
+        try {
+          suspension = classifySuspensionCapability(connectRes);
+        } catch (error) {
+          capabilityError = error instanceof Error ? error : new Error(String(error));
+        }
         ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
         const healthRes = await onceFrameImpl(
           ws,
@@ -560,8 +601,16 @@ export async function runGatewayNetworkClient(
           if (!hasGatewayHealthSummaryPayload(healthRes)) {
             throw new Error("health failed: missing health summary payload");
           }
+          if (capabilityError) {
+            throw capabilityError;
+          }
+          assert(suspension, "connect hello suspension capability must be classified");
+          const capabilities = { suspension };
+          if (capabilitiesPath) {
+            await writeFile(capabilitiesPath, JSON.stringify(capabilities));
+          }
           stdout("ok");
-          return;
+          return capabilities;
         }
 
         throw responseError("health", healthRes);
@@ -592,7 +641,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   const mode = process.env.GW_MODE ?? "network";
   if (mode === "network") {
-    await runGatewayNetworkClient({ token, url });
+    await runGatewayNetworkClient({
+      capabilitiesPath: process.env.GW_CAPABILITIES_PATH,
+      token,
+      url,
+    });
   } else {
     const statePath = process.env.GW_STATE_PATH;
     if (!statePath) {

@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { SessionManager, type SessionMessageEntry } from "./session-manager.js";
 
@@ -20,7 +20,7 @@ describe("SessionManager stale-parent rebase", () => {
       sessionKey: "agent:main:stale-active-parent",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const base = await appendTranscriptMessage(target, {
       eventId: "base",
       message: { role: "user", content: "base", timestamp: 1 },
@@ -70,7 +70,7 @@ describe("SessionManager stale-parent rebase", () => {
       sessionKey: "agent:main:deliberate-manager-branch",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const base = await appendTranscriptMessage(target, {
       eventId: "branch-base",
       message: { role: "user", content: "base", timestamp: 1 },
@@ -101,7 +101,7 @@ describe("SessionManager stale-parent rebase", () => {
       sessionKey: "agent:main:unrelated-explicit-parent",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const firstRoot = await appendTranscriptMessage(target, {
       eventId: "first-root",
       message: { role: "user", content: "first", timestamp: 1 },

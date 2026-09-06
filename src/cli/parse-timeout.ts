@@ -1,5 +1,5 @@
 // Shared CLI timeout parsers for millisecond flags and config-backed fallbacks.
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 
 /** Parse a positive millisecond timeout, returning undefined for absent or invalid input. */
 export function parseTimeoutMs(raw: unknown): number | undefined {

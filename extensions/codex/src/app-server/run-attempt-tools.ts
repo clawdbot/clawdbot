@@ -1,6 +1,7 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
+import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 import { sanitizeCodexToolResponse } from "./tool-progress-normalization.js";
 
@@ -49,7 +50,7 @@ type CodexDynamicToolExecutionIdentity = Pick<
 >;
 
 export function createCodexDynamicToolExecutionRegistry() {
-  const executions = new Map<string, Promise<CodexDynamicToolCallResponse>>();
+  const executions = new Map<string, Promise<CodexDynamicToolRuntimeResponse>>();
   const keyFor = (call: CodexDynamicToolExecutionIdentity) =>
     JSON.stringify([call.threadId, call.turnId, call.callId]);
 
@@ -59,7 +60,7 @@ export function createCodexDynamicToolExecutionRegistry() {
     },
     claim(
       call: CodexDynamicToolExecutionIdentity,
-      start: () => Promise<CodexDynamicToolCallResponse>,
+      start: () => Promise<CodexDynamicToolRuntimeResponse>,
     ) {
       const existing = executions.get(keyFor(call));
       if (existing) {

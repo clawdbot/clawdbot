@@ -231,6 +231,7 @@ describe("waitForQaTransportOutboundSequence", () => {
       state.addOutboundMessage({
         accountId: "default",
         to: "dm:alice",
+        isError: true,
         text: "⚠️ agent failed before reply: provider rejected this request",
       });
 
@@ -266,6 +267,7 @@ describe("waitForQaTransportOutboundSequence", () => {
     state.addOutboundMessage({
       accountId: "default",
       to: "dm:alice",
+      isError: true,
       text: "⚠️ agent failed before reply: stale failure",
     });
     const sinceCursor = state.getSnapshot().cursor;
@@ -273,6 +275,7 @@ describe("waitForQaTransportOutboundSequence", () => {
     state.addOutboundMessage({
       accountId: "other",
       to: "dm:alice",
+      isError: true,
       text: "⚠️ agent failed before reply: foreign account failure",
     });
     const inbound = state.addInboundMessage({

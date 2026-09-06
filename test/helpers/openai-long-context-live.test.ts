@@ -118,7 +118,7 @@ describe("OpenAI long-context live settings", () => {
       contextWindow: 48_000,
       contextTokens: 48_000,
       maxTokens: 8_192,
-      compactThreshold: 32_000,
+      compactThreshold: 1_000,
     });
     const full = resolveOpenAILongContextLiveSettings(
       {

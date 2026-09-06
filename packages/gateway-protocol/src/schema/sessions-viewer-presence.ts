@@ -1,13 +1,14 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { ChatSendSessionKeyString } from "./primitives.js";
+import { ChatSendSessionKeyString, NonEmptyString } from "./primitives.js";
 
 /** Maximum sessions one connection may declare as concurrently visible. */
 export const SESSION_VIEWER_PRESENCE_MAX_KEYS = 32;
 
 /** Replaces the sessions this connection is currently rendering. */
 export const SessionsViewerPresenceSetParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
   sessionKeys: Type.Array(ChatSendSessionKeyString, {
     maxItems: SESSION_VIEWER_PRESENCE_MAX_KEYS,
   }),

@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ZodIssue } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { INCLUDE_KEY } from "../config/includes.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -24,7 +25,7 @@ function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssu
 }
 
 /** Formats a parsed config issue path into a user-facing dotted path. */
-export function formatConfigPath(parts: Array<string | number>): string {
+export function formatConfigKeyPath(parts: Array<string | number>): string {
   if (parts.length === 0) {
     return "<root>";
   }
@@ -122,7 +123,7 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
         continue;
       }
       delete record[key];
-      removed.push(formatConfigPath([...issuePath, key]));
+      removed.push(formatConfigKeyPath([...issuePath, key]));
     }
   }
 
@@ -195,14 +196,12 @@ function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
     return [];
   }
   const warnings: string[] = [];
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    if (!agent || !isImplicitFallbackClobber(agent.model)) {
+  for (const agent of listAgentEntries(cfg)) {
+    if (!isImplicitFallbackClobber(agent.model)) {
       continue;
     }
-    const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
     const primary = resolvePrimaryStringValue(agent.model);
-    const location = `agents.list[${index}].model (id=${id})`;
+    const location = `agents.entries.${agent.id}.model`;
     const modelStr =
       typeof agent.model === "string" ? `"${agent.model}"` : `{ primary: "${primary}" }`;
     const shape =
@@ -268,6 +267,23 @@ export function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
       '- gateway.auth.mode is "trusted-proxy" but mcp.apps.sandboxOrigin is not set.',
       "  Dashboard widgets and MCP apps render from a separate sandbox listener (gateway port + 1). If your proxy or tunnel does not also route that port, widget frames cannot load.",
       "  Check: either route the sandbox port through your proxy, or set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener (see the MCP Apps section of docs/cli/mcp.md).",
+    ].join("\n"),
+    "Doctor warnings",
+  );
+}
+
+/** Warns when per-requester MCP OAuth cannot build a public callback URL. */
+export function noteMcpOriginWarning(cfg: OpenClawConfig): void {
+  const hasPerRequesterOAuth = Object.values(cfg.mcp?.servers ?? {}).some(
+    (server) => server.oauth?.identity === "per-requester",
+  );
+  if (!hasPerRequesterOAuth || cfg.gateway?.publicOrigin) {
+    return;
+  }
+  note(
+    [
+      '- An MCP server uses oauth.identity "per-requester", but gateway.publicOrigin is not set.',
+      "  Set gateway.publicOrigin to the externally reachable Gateway origin so senders can complete MCP sign-in.",
     ].join("\n"),
     "Doctor warnings",
   );

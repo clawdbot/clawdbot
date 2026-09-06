@@ -10,8 +10,6 @@ This file adds channel-specific rules on top of `src/channels/AGENTS.md`.
   imports into `extensions/**`.
 - When a helper needs a bundled plugin public/test surface, go through
   `src/test-utils/bundled-plugin-public-surface.ts`.
-- Prefer `loadBundledPluginTestApiSync(...)` for eager access to exported test
-  helpers.
 - Prefer `resolveRelativeBundledPluginPublicModuleId(...)` when a test needs a
   module id for dynamic import or mocking.
 - If `vi.mock(...)` hoisting would evaluate the module id too early, use

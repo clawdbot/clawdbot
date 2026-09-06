@@ -1,6 +1,7 @@
 import { listNativeCommandSpecsForConfig as listRealNativeCommandSpecsForConfig } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
+import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
@@ -53,11 +54,22 @@ function createResolverHarness(
       })),
     ],
   );
-  const getPluginCommandSpecs = vi.fn(() => options.pluginCommandSpecs ?? []);
+  setActivePluginRegistry(createTestRegistry());
+  for (const spec of options.pluginCommandSpecs ?? []) {
+    expect(
+      registerPluginCommand(`test-${spec.name}`, {
+        name: spec.name,
+        description: spec.description,
+        descriptionLocalizations: spec.descriptionLocalizations,
+        acceptsArgs: spec.acceptsArgs,
+        channels: ["discord"],
+        handler: async () => ({ text: "ok" }),
+      }),
+    ).toEqual({ ok: true });
+  }
 
   return {
     error,
-    getPluginCommandSpecs,
     listNativeCommandSpecsForConfig,
     listSkillCommandsForAgents,
     log,
@@ -71,7 +83,6 @@ function createResolverHarness(
         maxDiscordCommands: options.maxDiscordCommands ?? 3,
         listSkillCommandsForAgents,
         listNativeCommandSpecsForConfig,
-        getPluginCommandSpecs,
       }),
   };
 }
@@ -109,15 +120,13 @@ describe("resolveDiscordProviderCommandSpecs", () => {
       "skill-only",
       "plugin-unique",
     ]);
-    expect(resolved.commandSpecs[2]).toEqual({
+    expect(resolved.commandSpecs[2]).toMatchObject({
       name: "skill-only",
       description: "Plugin skill alias",
       descriptionLocalizations: { de: "Plugin-Fertigkeitsalias" },
       acceptsArgs: false,
     });
     expect(harness.error).not.toHaveBeenCalled();
-    expect(harness.getPluginCommandSpecs).toHaveBeenCalledOnce();
-    expect(harness.getPluginCommandSpecs).toHaveBeenCalledWith("discord", { config: cfg });
     expect(harness.listNativeCommandSpecsForConfig).toHaveBeenCalledTimes(2);
     expect(harness.log).toHaveBeenCalledOnce();
     expect(harness.log).toHaveBeenCalledWith(
@@ -151,8 +160,6 @@ describe("resolveDiscordProviderCommandSpecs", () => {
         'discord: plugin command "/built-in" duplicates an existing native command. Skipping.',
       ),
     );
-    expect(harness.getPluginCommandSpecs).toHaveBeenCalledOnce();
-    expect(harness.getPluginCommandSpecs).toHaveBeenCalledWith("discord", { config: cfg });
     expect(harness.listNativeCommandSpecsForConfig).toHaveBeenCalledTimes(2);
   });
 
@@ -191,7 +198,6 @@ describe("resolveDiscordProviderCommandSpecs", () => {
     expect(harness.error).toHaveBeenCalledWith(
       danger('discord: plugin command "/vc" duplicates an existing native command. Skipping.'),
     );
-    expect(harness.getPluginCommandSpecs).toHaveBeenCalledOnce();
   });
 
   it("keeps a skill named vc from shadowing or duplicating voice", async () => {
@@ -247,7 +253,6 @@ describe("resolveDiscordProviderCommandSpecs", () => {
       voiceEnabled: false,
       maxDiscordCommands: uniqueCount,
       listSkillCommandsForAgents: vi.fn(() => [voiceSkill]),
-      getPluginCommandSpecs: vi.fn(() => []),
     });
 
     expect(resolved.skillCommands).toEqual([voiceSkill]);

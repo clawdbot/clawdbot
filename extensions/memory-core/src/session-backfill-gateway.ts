@@ -60,7 +60,7 @@ function assertOnlyKeys(params: Record<string, unknown>, allowed: ReadonlySet<st
   }
 }
 
-function readOptionalString(params: Record<string, unknown>, key: "from" | "to") {
+function readOptionalSessionBoundary(params: Record<string, unknown>, key: "from" | "to") {
   const raw = params[key];
   if (raw !== undefined && typeof raw !== "string") {
     throw new Error(`${key} must be a string.`);
@@ -74,8 +74,8 @@ function readGatewayParams(value: unknown): SessionBackfillGatewayParams {
   const agentId = normalizeAgentId(readStringParam(params, "agentId", { required: true }));
   const selection = normalizeSessionBackfillSelection(
     {
-      from: readOptionalString(params, "from"),
-      to: readOptionalString(params, "to"),
+      from: readOptionalSessionBoundary(params, "from"),
+      to: readOptionalSessionBoundary(params, "to"),
       limitDays: readPositiveIntegerParam(params, "limitDays"),
     },
     { from: "from", to: "to", limitDays: "limitDays" },
@@ -98,12 +98,14 @@ function resolveExecutionContext(api: OpenClawPluginApi, agentId: string) {
     throw new InvalidSessionBackfillRequestError(`Unknown agent id "${agentId}".`);
   }
   const workspaceDir = api.runtime.agent.resolveAgentWorkspaceDir(config, agentId);
+  const pluginConfig = resolvePluginConfigObject(config, "memory-core");
   const remConfig = resolveMemoryRemDreamingConfig({
     cfg: config,
-    pluginConfig: resolvePluginConfigObject(config, "memory-core"),
+    pluginConfig,
   });
   return {
     workspaceDir,
+    ...(pluginConfig ? { pluginConfig } : {}),
     ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
   };
 }

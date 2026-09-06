@@ -6,8 +6,8 @@ import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import { resolveOpenAIClientBaseUrl } from "../transports/openai-transport-shared.js";
 import type {
-  CacheRetention,
   Context,
   Model,
   OpenAIResponsesCompat,
@@ -18,7 +18,10 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
-import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import {
+  clampOpenAIPromptCacheKey,
+  resolveOpenAIResponsesCacheParams,
+} from "./openai-prompt-cache.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
   applyCommonResponsesParams,
@@ -41,29 +44,6 @@ function getCompat(model: Model<"openai-responses">): ResolvedOpenAIResponsesCom
     sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
     supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
   };
-}
-
-function getPromptCacheRetention(
-  compat: ResolvedOpenAIResponsesCompat,
-  cacheRetention: CacheRetention,
-): "24h" | undefined {
-  return cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined;
-}
-
-function formatOpenAIResponsesError(error: unknown): string {
-  if (error instanceof Error) {
-    const status = (error as Error & { status?: unknown }).status;
-    const statusCode = typeof status === "number" ? status : undefined;
-    if (statusCode !== undefined) {
-      return `OpenAI API error (${statusCode}): ${error.message}`;
-    }
-    return error.message;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
 }
 
 // OpenAI Responses-specific options
@@ -108,7 +88,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
       applyServiceTierPricing: (usage, serviceTier) =>
         applyResponsesServiceTierPricing(usage, serviceTier, model),
     },
-    formatError: formatOpenAIResponsesError,
   });
 
   return stream;
@@ -177,11 +156,15 @@ function createClient(
         }
       : headers;
 
+  const baseUrl = isCloudflareProvider(model.provider)
+    ? resolveCloudflareBaseUrl(model)
+    : model.baseUrl;
   return new OpenAI({
     apiKey,
-    baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
+    baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    maxRetries: 0,
     // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
     fetch: getAiTransportHost().buildModelFetch(model),
   });
@@ -210,7 +193,7 @@ function buildParams(
       cacheRetention === "none"
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-    prompt_cache_retention: getPromptCacheRetention(compat, cacheRetention),
+    ...resolveOpenAIResponsesCacheParams(model, cacheRetention, compat.supportsLongCacheRetention),
     store: false,
   };
 

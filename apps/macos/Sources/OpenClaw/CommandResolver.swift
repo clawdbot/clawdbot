@@ -47,19 +47,25 @@ enum CommandResolver {
         return ["/bin/sh", "-c", script]
     }
 
-    static func projectRoot() -> URL {
-        if let stored = AppDefaults.standard.string(forKey: projectRootDefaultsKey),
+    static func projectRoot(
+        defaults: UserDefaults = AppDefaults.standard,
+        profile: AppProfile = .current,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL
+    {
+        if let stored = defaults.string(forKey: projectRootDefaultsKey),
            let url = expandPath(stored),
            FileManager().fileExists(atPath: url.path)
         {
             return url
         }
-        let fallback = FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Projects/openclaw")
+        if profile.isActive {
+            return profile.stateDirectoryURL(homeDirectory: homeDirectory)
+        }
+        let fallback = homeDirectory.appendingPathComponent("Projects/openclaw")
         if FileManager().fileExists(atPath: fallback.path) {
             return fallback
         }
-        return FileManager().homeDirectoryForCurrentUser
+        return homeDirectory
     }
 
     static func setProjectRoot(_ path: String) {
@@ -97,15 +103,26 @@ enum CommandResolver {
         home: URL,
         current: [String],
         projectRoot: URL,
-        validatedExecutable: String? = nil) -> [String]
+        validatedExecutable: String? = nil,
+        profile: AppProfile = .current) -> [String]
     {
         var preferredPaths: [String] = []
-        let managedPaths = self.openclawManagedPaths(home: home)
+        let managedPaths = self.openclawManagedPaths(home: home, profile: profile)
+        // Other profiles' managed trees must not leak in via stale validation or the
+        // inherited shell PATH (the CLI installer adds ~/.openclaw/bin to shell profiles).
+        let activeManagedBase = profile.stateDirectoryURL(homeDirectory: home).path
+        func isForeignManaged(_ path: String) -> Bool {
+            guard path.hasPrefix(home.path + "/") else { return false }
+            let name = path.dropFirst(home.path.count + 1)
+                .split(separator: "/").first.map(String.init) ?? ""
+            return self.isManagedDirectoryName(name)
+                && home.appendingPathComponent(name).path != activeManagedBase
+        }
         if let validatedExecutable {
             let validatedBin = URL(fileURLWithPath: validatedExecutable).deletingLastPathComponent().path
             if managedPaths.contains(validatedBin) {
                 preferredPaths.append(contentsOf: managedPaths)
-            } else {
+            } else if !isForeignManaged(validatedBin) {
                 preferredPaths.append(validatedBin)
             }
         }
@@ -124,7 +141,8 @@ enum CommandResolver {
         var seen = Set<String>()
         let fallbackPaths = self.nodeManagerBinPaths(home: home) + externalPaths + managedPaths
         // Preserve order while stripping duplicates so PATH lookups remain deterministic.
-        return (preferredPaths + fallbackPaths + current).filter { seen.insert($0).inserted }
+        return (preferredPaths + fallbackPaths + current)
+            .filter { !isForeignManaged($0) && seen.insert($0).inserted }
     }
 
     static func validatedOpenClawExecutable(
@@ -144,10 +162,13 @@ enum CommandResolver {
             expected: requiredVersion) ? executable : nil
     }
 
-    private static func openclawManagedPaths(home: URL) -> [String] {
-        let bases = [
-            home.appendingPathComponent(".openclaw"),
-        ]
+    /// Exactly the AppProfile.stateDirectoryURL namespace; ~/.openclaw2 is not managed.
+    private static func isManagedDirectoryName(_ name: String) -> Bool {
+        name == ".openclaw" || name.hasPrefix(".openclaw-")
+    }
+
+    private static func openclawManagedPaths(home: URL, profile: AppProfile) -> [String] {
+        let bases = [profile.stateDirectoryURL(homeDirectory: home)]
         var paths: [String] = []
         for base in bases {
             let bin = base.appendingPathComponent("bin")
@@ -199,26 +220,17 @@ enum CommandResolver {
             return []
         }
 
-        func parseVersion(_ name: String) -> [Int] {
-            let trimmed = name.hasPrefix("v") ? String(name.dropFirst()) : name
-            return trimmed.split(separator: ".").compactMap { Int($0) }
-        }
-
-        let sorted = entries.sorted { a, b in
-            let va = parseVersion(a)
-            let vb = parseVersion(b)
-            let maxCount = max(va.count, vb.count)
-            for i in 0..<maxCount {
-                let ai = i < va.count ? va[i] : 0
-                let bi = i < vb.count ? vb[i] : 0
-                if ai != bi { return ai > bi }
-            }
-            // If identical numerically, keep stable ordering.
-            return a > b
+        let sorted = entries.compactMap { entry -> (name: String, version: RuntimeVersion)? in
+            guard let version = RuntimeVersion.from(string: entry),
+                  RuntimeLocator.isSupportedNodeVersion(version)
+            else { return nil }
+            return (entry, version)
+        }.sorted { first, second in
+            first.version == second.version ? first.name > second.name : first.version > second.version
         }
 
         var paths: [String] = []
-        for entry in sorted {
+        for (entry, _) in sorted {
             let binDir = base.appendingPathComponent(entry).appendingPathComponent(suffix)
             let node = binDir.appendingPathComponent("node")
             if FileManager().isExecutableFile(atPath: node.path) {
@@ -259,14 +271,22 @@ enum CommandResolver {
         #endif
     }
 
-    static func projectNodeHostWorkerLaunch(
+    static func nodeHostWorkerLaunch(
+        bundle: Bundle = .main,
         projectRoot: URL? = nil,
-        searchPaths: [String]? = nil) async throws -> MacNodeHostWorkerLaunch?
+        searchPaths: [String]? = nil) async throws -> MacNodeHostWorkerLaunch
     {
+        // Packaging and optimization are independent: even DEBUG apps must use
+        // their signed payload, including after relocation or checkout removal.
+        if bundle.bundleURL.pathExtension == "app" {
+            return try BundledNodeWorker.launch(bundle: bundle)
+        }
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
         let sourceRunner = root.appendingPathComponent("scripts/run-node.mjs")
-        guard FileManager().isReadableFile(atPath: sourceRunner.path) else { return nil }
+        guard FileManager().isReadableFile(atPath: sourceRunner.path) else {
+            throw MacNodeHostWorker.WorkerError.unavailable(reason: "Development worker source runner is missing")
+        }
         switch await self.runtimeResolution(searchPaths: searchPaths) {
         case let .success(runtime):
             return MacNodeHostWorkerLaunch(
@@ -277,7 +297,7 @@ enum CommandResolver {
             throw error
         }
         #else
-        return nil
+        throw MacNodeHostWorker.WorkerError.unavailable(reason: "The node worker requires a packaged OpenClaw.app")
         #endif
     }
 
@@ -700,10 +720,4 @@ enum CommandResolver {
         args.append(contentsOf: remoteCommand)
         return args
     }
-
-    #if SWIFT_PACKAGE
-    static func _testNodeManagerBinPaths(home: URL) -> [String] {
-        self.nodeManagerBinPaths(home: home)
-    }
-    #endif
 }

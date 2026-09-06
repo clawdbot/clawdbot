@@ -8,6 +8,7 @@ import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalProviderCatalogEntries,
 } from "./official-external-plugin-catalog.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type ProviderAuthChoiceMetadata = {
@@ -31,6 +32,7 @@ export type ProviderAuthChoiceMetadata = {
   cliOption?: string;
   cliDescription?: string;
   appGuidedSecret?: boolean;
+  personalAccount?: boolean;
   appGuidedActionLabel?: string;
   appGuidedDiscovery?: boolean;
   appGuidedAuth?: "oauth" | "device-code";
@@ -57,6 +59,7 @@ type ManifestProviderAuthChoiceParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
   includeUntrustedWorkspacePlugins?: boolean;
   includeWorkspacePlugins?: boolean;
 };
@@ -114,6 +117,7 @@ function toProviderAuthChoiceCandidate(params: {
     ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
     ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
     ...(choice.appGuidedSecret ? { appGuidedSecret: true } : {}),
+    ...(choice.personalAccount ? { personalAccount: true } : {}),
     ...(choice.appGuidedActionLabel ? { appGuidedActionLabel: choice.appGuidedActionLabel } : {}),
     ...(choice.appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
     ...(choice.appGuidedAuth ? { appGuidedAuth: choice.appGuidedAuth } : {}),
@@ -193,18 +197,16 @@ function stripChoiceOrigin(choice: ProviderAuthChoiceCandidate): ProviderAuthCho
   return metadata;
 }
 
-function resolveManifestProviderAuthChoiceCandidates(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  includeUntrustedWorkspacePlugins?: boolean;
-  includeWorkspacePlugins?: boolean;
-}): ProviderAuthChoiceCandidate[] {
-  const metadataSnapshot = loadManifestMetadataSnapshot({
-    config: params?.config ?? {},
-    workspaceDir: params?.workspaceDir,
-    env: params?.env ?? process.env,
-  });
+function resolveManifestProviderAuthChoiceCandidates(
+  params?: ManifestProviderAuthChoiceParams,
+): ProviderAuthChoiceCandidate[] {
+  const metadataSnapshot =
+    params?.metadataSnapshot ??
+    loadManifestMetadataSnapshot({
+      config: params?.config ?? {},
+      workspaceDir: params?.workspaceDir,
+      env: params?.env ?? process.env,
+    });
   const registry = metadataSnapshot.manifestRegistry;
   const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
   return registry.plugins.flatMap((plugin) => {

@@ -22,7 +22,8 @@ vi.mock("../../commands/configure.commands.js", () => ({
   configureCommandFromSectionsArg: mocks.configureCommandFromSectionsArgMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -60,7 +61,7 @@ describe("registerConfigureCommand", () => {
 
     await runCli(["configure"]);
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: configure failed");
+    expect(runtime.error).toHaveBeenCalledWith("configure failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

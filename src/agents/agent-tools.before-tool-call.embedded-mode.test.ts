@@ -4,9 +4,11 @@
  * plugin hook decisions.
  */
 
+import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
@@ -18,8 +20,16 @@ import type { HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
-import { resolveBeforeToolCallApprovalOutcome } from "./agent-tools.before-tool-call.approval.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { proposeUpdateSkill } from "../skills/workshop/service.js";
+import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  resolveBeforeToolCallApprovalOutcome,
+  resolveSkillWorkshopApprovalForFinalParams,
+} from "./agent-tools.before-tool-call.approval.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
@@ -82,7 +92,7 @@ function requireBeforeToolCall(
 }
 
 describe("runBeforeToolCallHook — embedded mode approvals", () => {
-  let hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeToolCall">;
+  let hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeToolCall" | "runSkillProposalChanged">;
   let runBeforeToolCallMock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>;
 
   beforeEach(() => {
@@ -91,6 +101,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     hookRunner = {
       hasHooks: vi.fn<HookRunner["hasHooks"]>().mockReturnValue(true),
       runBeforeToolCall: runBeforeToolCallMock,
+      runSkillProposalChanged: vi.fn<HookRunner["runSkillProposalChanged"]>(),
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as HookRunner);
     mockCallGatewayTool.mockReset();
@@ -103,6 +114,77 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     setEmbeddedMode(false);
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetGlobalHookRunner();
+  });
+
+  it.each(["request", "waitDecision"])(
+    "cancels the gateway approval %s transport when the owning tool lifetime ends",
+    async (phase) => {
+      const controller = new AbortController();
+      const parked = createDeferredCore();
+      const pending = createDeferredCore<Record<string, unknown>>();
+      let transportCancelled = false;
+      mockCallGatewayTool.mockImplementation(async (method, _options, _request, extra) => {
+        if (method !== `plugin.approval.${phase}`) {
+          return { id: "generation-approval", status: "accepted" };
+        }
+        const signal = extra?.signal;
+        const abort = () => {
+          transportCancelled = true;
+          pending.reject(signal?.reason);
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        parked.resolve();
+        try {
+          return await pending.promise;
+        } finally {
+          signal?.removeEventListener("abort", abort);
+        }
+      });
+      const outcome = resolveBeforeToolCallApprovalOutcome({
+        result: {
+          requireApproval: {
+            pluginId: "mcp-policy",
+            title: "MCP write",
+            description: "Approve remote mutation",
+          },
+        },
+        toolName: "mcp_write",
+        baseParams: {},
+        signal: controller.signal,
+      });
+      try {
+        await parked.promise;
+        controller.abort(new Error("Permission change"));
+        expect(transportCancelled).toBe(true);
+        await expect(outcome).resolves.toMatchObject({ blocked: true });
+      } finally {
+        pending.reject(controller.signal.reason);
+        await outcome;
+      }
+    },
+  );
+
+  it("carries the host receipt fence beside the execution identity token", async () => {
+    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-receipt-fence");
+    const receiptAuthority = vi.fn(() => true);
+    runBeforeToolCallMock.mockResolvedValue({});
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:session",
+        operationalRunInstance: { instanceId: "instance-receipt", runId: "run-receipt-fence" },
+        executionIdentityToken,
+        receiptAuthority,
+      },
+      () => runBeforeToolCallHook({ toolName: "exec", params: { command: "true" } }),
+    );
+
+    const call = requireBeforeToolCall(runBeforeToolCallMock, "receipt-fenced hook invocation");
+    expect(call[2]?.token).toBe(executionIdentityToken);
+    expect(call[2]?.assertAuthority).toEqual(expect.any(Function));
+    expect(call[2]?.assertAuthority()).toBe(true);
+    expect(receiptAuthority).toHaveBeenCalledOnce();
   });
 
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
@@ -144,7 +226,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         agentId: undefined,
         allowedDecisions: undefined,
         description: "Test approval request",
-        pluginId: "test-plugin",
         sessionKey: undefined,
         severity: "info",
         timeoutMs: 120_000,
@@ -211,6 +292,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         pluginId: "test-plugin",
         title: "Needs approval",
         description: "Test approval request",
+        scope: { kind: "external-post", target: "git‮hub", visibility: "public" },
         severity: "info",
         timeoutBehavior: "allow",
         onResolution,
@@ -226,6 +308,11 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     await vi.waitFor(() => {
       expect(broker.listPending()).toHaveLength(1);
+    });
+    expect(broker.listPending()[0]?.request.scope).toEqual({
+      kind: "external-post",
+      target: "git\\u{202E}hub",
+      visibility: "public",
     });
 
     broker.stop(new Error("local TUI stopped"));
@@ -436,7 +523,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(result.blocked).toBe(true);
     const approvalCall = requireApprovalRequestCall("non-embedded approval request");
     expect(approvalCall.timeoutParams.timeoutMs).toBe(15_000);
-    expect(approvalCall.request.pluginId).toBe("test-plugin");
+    expect(approvalCall.request.pluginId).toBeUndefined();
     expect(approvalCall.request.title).toBe("Needs approval");
     expect(approvalCall.request.description).toBe("Test approval request");
     expect(approvalCall.request.severity).toBe("info");
@@ -523,7 +610,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     const approvalCall = requireApprovalRequestCall("trusted policy approval request");
     expect(approvalCall.timeoutParams.timeoutMs).toBe(130_000);
-    expect(approvalCall.request.pluginId).toBe("trusted-policy");
+    expect(approvalCall.request.pluginId).toBeUndefined();
     expect(approvalCall.request.title).toBe("Policy approval");
     expect(approvalCall.request.description).toBe("Policy requested approval");
     expect(approvalCall.request.toolName).toBe("exec");
@@ -565,9 +652,9 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     const approvalCall = requireApprovalRequestCall("skill_workshop approval request");
     expect(approvalCall.request.pluginId).toBeUndefined();
-    expect(approvalCall.request.title).toBe("Apply workspace skill proposal");
+    expect(approvalCall.request.title).toBe("Apply Skill Workshop proposal");
     expect(approvalCall.request.description).toBe(
-      "Apply a pending workspace skill proposal into live workspace skills.",
+      "Apply a pending proposal inside your agent's Workshop directory.",
     );
     expect(approvalCall.request.severity).toBe("warning");
     expect(approvalCall.request.allowedDecisions).toEqual(["allow-once", "deny"]);
@@ -611,11 +698,109 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       const adjustedApprovalCall = requireApprovalRequestCall(
         "skill_workshop adjusted approval request",
       );
-      expect(adjustedApprovalCall.request.title).toBe("Apply workspace skill proposal");
+      expect(adjustedApprovalCall.request.title).toBe("Apply Skill Workshop proposal");
       expect(adjustedApprovalCall.request.toolName).toBe("skill_workshop");
       expect(adjustedApprovalCall.request.toolCallId).toBe("call-skill-hook-apply");
       expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("does not expose another agent's proposal metadata in final approval", async () => {
+    const testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-agent-approval-scope-",
+    });
+    try {
+      const config = {
+        skills: { workshop: { approvalPolicy: "pending" as const } },
+      };
+      const skillsRoot = resolveWorkshopSkillsDir(config, "agent-a", testState.env);
+      const skillDir = `${skillsRoot}/agent-a-private-procedure`;
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        `${skillDir}/SKILL.md`,
+        "---\nname: agent-a-private-procedure\ndescription: Agent A private description\n---\n\n# Agent A private body\n",
+        "utf8",
+      );
+      const proposal = await proposeUpdateSkill({
+        config,
+        agentId: "agent-a",
+        workspaceDir: testState.workspaceDir,
+        env: testState.env,
+        skillName: "agent-a-private-procedure",
+        description: "Agent A private description",
+        content: "# Agent A private body\n",
+      });
+      mockCallGatewayTool.mockResolvedValueOnce({
+        id: "agent-b-approval",
+        decision: PluginApprovalResolutions.ALLOW_ONCE,
+      });
+
+      const result = await resolveSkillWorkshopApprovalForFinalParams({
+        toolName: "skill_workshop",
+        params: { action: "apply", proposal_id: proposal.record.id },
+        toolCallId: "call-agent-b-apply",
+        ctx: {
+          agentId: "agent-b",
+          workspaceDir: testState.workspaceDir,
+          config,
+        },
+      });
+
+      expect(result).toMatchObject({
+        blocked: false,
+        approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
+      });
+      const approvalCall = requireApprovalRequestCall(
+        "agent-b final skill_workshop approval request",
+      );
+      expect(approvalCall.request.description).toBe(
+        "Apply a pending proposal inside your agent's Workshop directory.",
+      );
+      expect(approvalCall.request.description).not.toContain("Agent A private");
+    } finally {
+      await testState.cleanup();
+    }
+  });
+
+  it("requires approval before skill_workshop restores a collection", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "skill-workshop-restore-approval",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: { action: "restore_collection" },
+      toolCallId: "call-skill-restore",
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        config: {
+          skills: {
+            workshop: {
+              approvalPolicy: "pending",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      blocked: false,
+      params: { action: "restore_collection" },
+      approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+    const approvalCall = requireApprovalRequestCall("skill_workshop restore approval request");
+    expect(approvalCall.request).toMatchObject({
+      title: "Restore previous skill collection",
+      description:
+        "Replace current Workshop-generated skills with the previous collection backup. Later Workshop changes may be removed.",
+      severity: "warning",
+      toolName: "skill_workshop",
+      toolCallId: "call-skill-restore",
+    });
+    expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns an actionable pending outcome when skill_workshop approval expires", async () => {

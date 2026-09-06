@@ -31,6 +31,13 @@ signals, not just runner noise.
   tests. Use explicit mock factories, one-time imports, and reset only the
   state the test mutates.
 
+## Run Authority
+
+- Prepare one admitted run context after runtime selection. Retries and fallbacks reuse that exact context; they do not mint replacement authority.
+- The lifecycle owner closes admission in `finally`. Terminal, error, cancellation, and unsupported recovery paths must all release it.
+- Harness host capabilities capture the exact admitted authority. Gate tool binding, preparation, execution, hooks, and approvals, and revalidate after awaited work before an allowed result crosses the action boundary.
+- Retained tools, preparers, callbacks, and approval handles must fail after close, replacement, release, abort, claim loss, or lifecycle rotation.
+
 ## Verification
 
 - For agent performance changes, record seconds and RSS before/after in the

@@ -1,5 +1,7 @@
 // Proxy capture runtime tests cover session creation and capture lifecycle.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { Headers as UndiciHeaders } from "undici";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import type { DebugProxySettings } from "./env.js";
@@ -103,6 +105,83 @@ describe("debug proxy runtime", () => {
     calls.length = 0;
     resetSecretRedactionRegistryForTest();
     fetchTarget.fetch = async () => new Response("{}", { status: 200 });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["initialization", () => initializeDebugProxyCapture("test", undefined, deps)],
+    ["finalization", () => finalizeDebugProxyCapture(undefined, deps)],
+    [
+      "HTTP exchange",
+      () =>
+        captureHttpExchange(
+          { url: "https://example.test", method: "GET", response: new Response(null) },
+          undefined,
+          deps,
+        ),
+    ],
+    [
+      "WebSocket frame",
+      () =>
+        captureWsEvent(
+          {
+            url: "wss://example.test",
+            direction: "outbound",
+            kind: "ws-frame",
+            flowId: "disabled-capture",
+            payload: "{}",
+          },
+          undefined,
+          deps,
+        ),
+    ],
+  ] as const)("does not discover capture paths for disabled %s", (_name, capture) => {
+    // Exercise production path discovery rather than the test-only state-dir shortcut.
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", undefined);
+    const existsSync = vi.spyOn(fs, "existsSync");
+    const originalFetch = fetchTarget.fetch;
+
+    capture();
+
+    expect(existsSync).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    expect(events).toEqual([]);
+    expect(fetchTarget.fetch).toBe(originalFetch);
+  });
+
+  it("observes environment changes while explicit capture settings remain authoritative", () => {
+    const frame = {
+      url: "wss://example.test",
+      direction: "outbound",
+      kind: "ws-frame",
+      flowId: "capture-toggle",
+      payload: "{}",
+    } as const;
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", "ambient-capture");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
+    captureWsEvent(frame, undefined, deps);
+    expect(events).toEqual([]);
+
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+    captureWsEvent(frame, undefined, deps);
+    expect(events.map((event) => event.sessionId)).toEqual(["ambient-capture"]);
+    captureWsEvent(frame, { ...settings, enabled: false }, deps);
+    expect(events).toHaveLength(1);
+
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
+    captureWsEvent(frame, undefined, deps);
+    expect(events).toHaveLength(1);
+    captureWsEvent(frame, settings, deps);
+    expect(events.map((event) => event.sessionId)).toEqual([
+      "ambient-capture",
+      "runtime-test-session",
+    ]);
   });
 
   it("captures ambient global fetch calls when debug proxy mode is enabled", async () => {
@@ -300,39 +379,49 @@ describe("debug proxy runtime", () => {
     expect(events[0]?.dataText).not.toContain(secret);
   });
 
-  it("redacts registered values from HTTP payloads and metadata", async () => {
-    const secret = 'http-"capture\\secret\nline';
-    const contentTypeSecret = "http-content-type-secret";
-    registerSecretValueForRedaction(secret);
-    registerSecretValueForRedaction(contentTypeSecret);
+  it.each([
+    ["record", undefined],
+    ["global Headers", Headers],
+    ["Undici Headers", UndiciHeaders],
+  ] as const)(
+    "redacts registered values from HTTP payloads and metadata with %s",
+    async (_name, HeadersConstructor) => {
+      const secret = 'http-"capture\\secret\nline';
+      const contentTypeSecret = "http-content-type-secret";
+      registerSecretValueForRedaction(secret);
+      registerSecretValueForRedaction(contentTypeSecret);
+      const requestHeaders = { "content-type": `application/json; token=${contentTypeSecret}` };
 
-    captureHttpExchange(
-      {
-        url: "https://api.example.test/v1/messages",
-        method: "POST",
-        requestHeaders: { "content-type": `application/json; token=${contentTypeSecret}` },
-        requestBody: JSON.stringify({ credential: secret }),
-        response: new Response(JSON.stringify({ echoedCredential: secret }), {
-          status: 200,
-          headers: { "content-type": `application/json; token=${contentTypeSecret}` },
-        }),
-        meta: { credential: secret },
-      },
-      settings,
-      deps,
-    );
-    await waitForResponseSettled();
+      captureHttpExchange(
+        {
+          url: "https://api.example.test/v1/messages",
+          method: "POST",
+          requestHeaders: HeadersConstructor
+            ? new HeadersConstructor(requestHeaders)
+            : requestHeaders,
+          requestBody: JSON.stringify({ credential: secret }),
+          response: new Response(JSON.stringify({ echoedCredential: secret }), {
+            status: 200,
+            headers: { "content-type": `application/json; token=${contentTypeSecret}` },
+          }),
+          meta: { credential: secret },
+        },
+        settings,
+        deps,
+      );
+      await waitForResponseSettled();
 
-    const request = events.find((event) => event.kind === "request");
-    const response = events.find((event) => event.kind === "response");
-    expect(request?.dataText).toContain('"credential":"[REDACTED]"');
-    expect(request?.metaJson).toContain('"credential":"[REDACTED]"');
-    expect(request?.contentType).toBe("application/json; token=[REDACTED]");
-    expect(response?.dataText).toContain('"echoedCredential":"[REDACTED]"');
-    expect(response?.metaJson).toContain('"credential":"[REDACTED]"');
-    expect(response?.contentType).toBe("application/json; token=[REDACTED]");
-    expect(JSON.stringify(events)).not.toContain(secret);
-  });
+      const request = events.find((event) => event.kind === "request");
+      const response = events.find((event) => event.kind === "response");
+      expect(request?.dataText).toContain('"credential":"[REDACTED]"');
+      expect(request?.metaJson).toContain('"credential":"[REDACTED]"');
+      expect(request?.contentType).toBe("application/json; token=[REDACTED]");
+      expect(response?.dataText).toContain('"echoedCredential":"[REDACTED]"');
+      expect(response?.metaJson).toContain('"credential":"[REDACTED]"');
+      expect(response?.contentType).toBe("application/json; token=[REDACTED]");
+      expect(JSON.stringify(events)).not.toContain(secret);
+    },
+  );
 
   it("redacts registered values from failed global-fetch capture events", async () => {
     const secret = "capture-failure/secret";
@@ -651,34 +740,45 @@ describe("debug proxy runtime", () => {
     expect(events.some((event) => event.kind === "error")).toBe(false);
   });
 
-  it("records metadata-only for non-cloneable Response-like objects", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
-    // Some seams hand capture a Response-like object that cannot be cloned. It
-    // must still be observable (status/headers) via the shared metadata path,
-    // tagged bodyCapture: "unavailable" (distinct from the "too-large" cap path).
-    const secret = "metadata-only-content-type-secret";
-    registerSecretValueForRedaction(secret);
-    const headers = new Headers({ "content-type": `application/json; token=${secret}` });
-    captureHttpExchange(
-      {
-        url: "https://api.openai.com/v1/uncloneable",
-        method: "GET",
-        response: { status: 503, headers } as unknown as Response,
-      },
-      settings,
-      deps,
-    );
-    await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
+  it.each([
+    ["global", Headers],
+    ["Undici", UndiciHeaders],
+  ] as const)(
+    "records metadata-only for non-cloneable Response-like objects with %s Headers",
+    async (_name, HeadersConstructor) => {
+      initializeDebugProxyCapture("test", settings, deps);
+      // Some seams hand capture a Response-like object that cannot be cloned. It
+      // must still be observable (status/headers) via the shared metadata path,
+      // tagged bodyCapture: "unavailable" (distinct from the "too-large" cap path).
+      const secret = "metadata-only-content-type-secret";
+      registerSecretValueForRedaction(secret);
+      const headers = new HeadersConstructor({
+        "content-type": `application/json; token=${secret}`,
+      });
+      captureHttpExchange(
+        {
+          url: "https://api.openai.com/v1/uncloneable",
+          method: "GET",
+          response: { status: 503, headers } as unknown as Response,
+        },
+        settings,
+        deps,
+      );
+      await waitForResponseSettled();
+      finalizeDebugProxyCapture(settings, deps);
 
-    const response = events.find((event) => event.kind === "response");
-    expect(response).toBeDefined();
-    expect(response?.status).toBe(503);
-    expect(response?.contentType).toBe("application/json; token=[REDACTED]");
-    expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "unavailable" });
-    expect(response).not.toHaveProperty("dataText");
-    expect(events.some((event) => event.kind === "error")).toBe(false);
-  });
+      const response = events.find((event) => event.kind === "response");
+      expect(response).toBeDefined();
+      expect(response?.status).toBe(503);
+      expect(response?.contentType).toBe("application/json; token=[REDACTED]");
+      expect(JSON.parse(String(response?.headersJson))).toStrictEqual({
+        "content-type": "application/json; token=[REDACTED]",
+      });
+      expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "unavailable" });
+      expect(response).not.toHaveProperty("dataText");
+      expect(events.some((event) => event.kind === "error")).toBe(false);
+    },
+  );
 
   it("records Response-like status metadata when the Headers API is absent", async () => {
     initializeDebugProxyCapture("test", settings, deps);

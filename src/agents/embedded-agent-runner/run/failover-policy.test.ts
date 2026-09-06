@@ -65,7 +65,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -82,7 +81,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -99,7 +97,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -112,29 +109,30 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("surfaces max-turn prompt failures without profile rotation or model fallback", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "prompt",
-        aborted: false,
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverCode: "cli_max_turns",
-        failoverFailure: true,
-        failoverReason: "unknown",
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "surface_error",
-      reason: "unknown",
-    });
-  });
+  it.each(["cli_max_turns", "cli_turn_stopped"])(
+    "surfaces recorded terminal-stop prompt failures without profile rotation or model fallback (%s)",
+    (failoverCode) => {
+      expect(
+        resolveRunFailoverDecision({
+          stage: "prompt",
+          externalAbort: false,
+          fallbackConfigured: true,
+          failoverCode,
+          failoverFailure: true,
+          failoverReason: "unknown",
+          profileRotated: false,
+        }),
+      ).toEqual({
+        action: "surface_error",
+        reason: "unknown",
+      });
+    },
+  );
 
   it("surfaces prompt run-budget timeouts instead of model fallback (#60388)", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: true,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -153,7 +151,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: true,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -171,7 +168,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -189,7 +185,6 @@ describe("resolveRunFailoverDecision", () => {
       resolveRunFailoverDecision({
         stage: "prompt",
         allowFormatRetry: true,
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -318,7 +313,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: true,
         externalAbort: true,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -612,7 +606,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -630,7 +623,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -649,7 +641,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: false,
         failoverFailure: true,
@@ -746,5 +737,15 @@ describe("mergeRetryFailoverReason", () => {
         timedOut: true,
       }),
     ).toBe("timeout");
+  });
+
+  it("preserves a previous concrete reason over a later coarse timeout", () => {
+    expect(
+      mergeRetryFailoverReason({
+        previous: "server_error",
+        failoverReason: null,
+        timedOut: true,
+      }),
+    ).toBe("server_error");
   });
 });

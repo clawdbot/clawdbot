@@ -382,6 +382,7 @@ export const clickClackSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use CLICKCLACK_BOT_TOKEN" },
+      envVars: ["CLICKCLACK_BOT_TOKEN"],
     },
   },
   legacyAdapter: clickClackSetupAdapter,

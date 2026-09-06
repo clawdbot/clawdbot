@@ -3,17 +3,19 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveRuntimeServiceCommit, resolveRuntimeServiceVersion } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
-import { resolveCommitHash } from "./git-commit.js";
+import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
   deleteRestartSentinelRowSync,
   readRestartSentinelRowSync,
+  readRestartSentinelSnapshotSync,
   readUpdateInstallReceiptRowSync,
   writeRestartSentinelRowIfRevisionSync,
   writeRestartSentinelRowSync,
@@ -29,7 +31,7 @@ export type {
   RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
 
-export type SuccessfulGitUpdateReceipt = {
+export type VerifiedGitUpdateReceipt = {
   root: string;
   sha: string;
   upstreamRef?: string;
@@ -58,6 +60,44 @@ export async function writeRestartSentinel(
   );
 }
 
+/** Publish an outcome only while its producer and the captured notification are unchanged. */
+export async function writeRestartSentinelIfUnchanged(params: {
+  payload: RestartSentinelPayload;
+  expectedRevision: number | null;
+  isCurrent: () => boolean;
+}): Promise<RestartSentinel | null> {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const current = readRestartSentinelSnapshotSync(db);
+      if (current.state.kind === "invalid" || !params.isCurrent()) {
+        return null;
+      }
+      return current.revision === params.expectedRevision
+        ? writeRestartSentinelRowSync(db, params.payload)
+        : null;
+    },
+    {},
+    { operationLabel: "restart-sentinel.write-if-unchanged" },
+  );
+}
+
+export async function readRestartSentinelSnapshot(): Promise<{
+  sentinel: RestartSentinel | null;
+  revision: number | null;
+}> {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const snapshot = readRestartSentinelSnapshotSync(db);
+      return {
+        sentinel: snapshot.state.kind === "valid" ? snapshot.state.sentinel : null,
+        revision: snapshot.revision,
+      };
+    },
+    {},
+    { operationLabel: "restart-sentinel.read-snapshot" },
+  );
+}
+
 function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
   return structuredClone(payload);
 }
@@ -82,21 +122,10 @@ async function rewriteRestartSentinel(
   );
 }
 
-function commitsMatch(expected: string, actual: string): boolean {
-  const normalizedExpected = expected.trim().toLowerCase();
-  const normalizedActual = actual.trim().toLowerCase();
-  return (
-    normalizedExpected.length >= 7 &&
-    normalizedActual.length >= 7 &&
-    (normalizedExpected.startsWith(normalizedActual) ||
-      normalizedActual.startsWith(normalizedExpected))
-  );
-}
-
 export async function finalizeUpdateRestartSentinelRunningVersion(
   version = resolveRuntimeServiceVersion(process.env),
   env: NodeJS.ProcessEnv = process.env,
-  commit = resolveCommitHash({ env, moduleUrl: import.meta.url }),
+  commit = resolveRuntimeServiceCommit(),
   runningRoot?: string | null,
 ): Promise<RestartSentinel | null> {
   const snapshot = await readRestartSentinel(env);
@@ -144,12 +173,15 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
       const expectedSha = typeof after.sha === "string" ? after.sha.trim() : "";
       const actualSha = commit?.trim() ?? "";
       const verifiesGitRevision =
-        stats.mode !== "git" || (expectedSha.length > 0 && commitsMatch(expectedSha, actualSha));
+        stats.mode !== "git" ||
+        (expectedSha.length > 0 && gitCommitPrefixesMatch(expectedSha, actualSha));
       const verifiesInstallRoot =
         expectedRoot !== null && actualRoot !== null && expectedRoot === actualRoot;
       const changedInstall =
         stats.mode !== "git" ||
-        (beforeSha.length > 0 && expectedSha.length > 0 && !commitsMatch(beforeSha, expectedSha));
+        (beforeSha.length > 0 &&
+          expectedSha.length > 0 &&
+          !gitCommitPrefixesMatch(beforeSha, expectedSha));
       if (payload.status === "ok" && expectedRoot && !verifiesInstallRoot) {
         payload.status = "error";
         stats.reason = actualRoot ? "restart-root-mismatch" : "restart-root-unavailable";
@@ -175,7 +207,10 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
       if (!finalized) {
         return null;
       }
-      if (payload.status === "ok" && verifiesInstallRoot && verifiesGitRevision && changedInstall) {
+      // This receipt records the install fact proven by the running process. Post-install
+      // failures such as managed-service-handoff-failed keep the sentinel in error without
+      // erasing the upstream fallback for campaign-managed detached installs (#121634).
+      if (stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall) {
         writeUpdateInstallReceiptRowSync(db, payload);
       }
       return changed ? finalized : null;
@@ -252,6 +287,29 @@ export async function readRestartSentinel(
   }
 }
 
+/** Read the restart sentinel without creating or mutating shared state. */
+export async function readRestartSentinelReadOnly(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RestartSentinel | null> {
+  try {
+    const current = withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => readRestartSentinelRowSync(db),
+      { env },
+    );
+    if (!current || current.kind === "missing") {
+      return null;
+    }
+    if (current.kind === "invalid") {
+      sentinelLog.warn("Ignoring invalid typed restart sentinel row");
+      return null;
+    }
+    return current.sentinel;
+  } catch (err) {
+    sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
+    return null;
+  }
+}
+
 async function readUpdateInstallReceiptPayload(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinelPayload | null> {
@@ -264,12 +322,13 @@ async function readUpdateInstallReceiptPayload(
   }
 }
 
-function normalizeSuccessfulGitUpdateReceipt(
+function normalizeVerifiedGitUpdateReceipt(
   payload: RestartSentinelPayload | null,
-): SuccessfulGitUpdateReceipt | null {
+): VerifiedGitUpdateReceipt | null {
+  // Receipt rows are only written after the running install verifies root and revision.
+  // An error status records a post-install failure, not an untrusted install.
   if (
     payload?.kind !== "update" ||
-    payload.status !== "ok" ||
     payload.stats?.mode !== "git" ||
     !isPlainRecord(payload.stats.after)
   ) {
@@ -292,10 +351,10 @@ function normalizeSuccessfulGitUpdateReceipt(
   };
 }
 
-export async function readSuccessfulGitUpdateReceipt(
+export async function readVerifiedGitUpdateReceipt(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<SuccessfulGitUpdateReceipt | null> {
-  return normalizeSuccessfulGitUpdateReceipt(await readUpdateInstallReceiptPayload(env));
+): Promise<VerifiedGitUpdateReceipt | null> {
+  return normalizeVerifiedGitUpdateReceipt(await readUpdateInstallReceiptPayload(env));
 }
 
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {

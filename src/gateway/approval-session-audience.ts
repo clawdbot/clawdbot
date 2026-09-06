@@ -1,5 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { buildLatestSubagentRunReadIndex } from "../agents/subagent-registry-read.js";
+import { buildLatestSubagentRunReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";

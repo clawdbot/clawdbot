@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
@@ -19,8 +20,7 @@ async function runMemoryRecallScenario(recallReply?: string) {
       fs: { rm: async () => undefined },
       path,
       formatMemoryDreamingDay: () => "2026-08-05",
-      normalizeLowercaseStringOrEmpty: (value: unknown) =>
-        typeof value === "string" ? value.trim().toLowerCase() : "",
+      normalizeLowercaseStringOrEmpty,
       runAgentPrompt: async (_env: unknown, params: { message: string }) => {
         turnCount += 1;
         state.addInboundMessage({

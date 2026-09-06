@@ -11,7 +11,7 @@ import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { SANDBOX_STATE_DIR } from "./constants.js";
 import { hashTextSha256 } from "./hash.js";
-import type { SandboxConfig } from "./types.js";
+import type { SandboxConfig, SandboxIsolationSubject } from "./types.js";
 import { resolveMaterializedSandboxSkillsWorkspaceDir } from "./workspace-mounts.js";
 
 const WORKSPACE_SCOPE_SUFFIX_RE = /:workspace:[a-f0-9]{32}$/i;
@@ -62,19 +62,35 @@ function resolveSandboxScopeKey(
   scope: "session" | "agent" | "shared",
   sessionKey: string,
   workspaceDir: string,
+  agentId?: string,
+  isolationSubject?: SandboxIsolationSubject,
 ) {
   const trimmed = sessionKey.trim() || "main";
-  if (scope === "shared") {
+  if (scope === "shared" && !isolationSubject) {
     return "shared";
   }
   // Co-hosted workspaces may reuse agent and session keys, but must never
   // converge on one runtime, registry entry, or materialized skills workspace.
   const workspaceSuffix = `:workspace:${hashTextSha256(resolveUserPath(workspaceDir)).slice(0, 32)}`;
+  if (isolationSubject) {
+    const resolvedAgentId = agentId
+      ? normalizeAgentId(agentId)
+      : resolveAgentIdFromSessionKey(trimmed);
+    // Preserve existing profile paths. Other creators cannot adopt a profile's resources,
+    // even when their raw IDs collide; their canonical session owns a separate namespace.
+    const subject =
+      isolationSubject.kind === "profile"
+        ? `principal:${hashTextSha256(isolationSubject.profileId).slice(0, 32)}`
+        : `required-session:${hashTextSha256(isolationSubject.sessionKey).slice(0, 32)}`;
+    return `agent:${resolvedAgentId}:${subject}${workspaceSuffix}`;
+  }
   if (scope === "session") {
     return `${trimmed}${workspaceSuffix}`;
   }
-  const agentId = resolveAgentIdFromSessionKey(trimmed);
-  return `agent:${agentId}${workspaceSuffix}`;
+  const resolvedAgentId = agentId
+    ? normalizeAgentId(agentId)
+    : resolveAgentIdFromSessionKey(trimmed);
+  return `agent:${resolvedAgentId}${workspaceSuffix}`;
 }
 
 /** Extracts the agent id represented by a sandbox scope key, when one exists. */
@@ -94,6 +110,8 @@ export function resolveSandboxAgentId(scopeKey: string): string | undefined {
 export function resolveSandboxWorkspaceLayoutPaths(params: {
   cfg: Pick<SandboxConfig, "scope" | "workspaceAccess" | "workspaceRoot">;
   rawSessionKey: string;
+  agentId?: string;
+  isolationSubject?: SandboxIsolationSubject;
   workspaceDir?: string;
 }) {
   const agentWorkspaceDir = resolveUserPath(
@@ -104,9 +122,11 @@ export function resolveSandboxWorkspaceLayoutPaths(params: {
     params.cfg.scope,
     params.rawSessionKey,
     agentWorkspaceDir,
+    params.agentId,
+    params.isolationSubject,
   );
   const sandboxWorkspaceDir =
-    params.cfg.scope === "shared"
+    params.cfg.scope === "shared" && !params.isolationSubject
       ? workspaceRoot
       : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const workspaceDir =

@@ -1,24 +1,26 @@
-// Runs oxlint with local heavy-check policy, sparse-checkout filtering, and
+// Runs oxlint with local resource policy, sparse-checkout filtering, and
 // plugin package-boundary artifact preparation when needed.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
-  acquireLocalHeavyCheckLockSync,
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
+import {
   applyLocalOxlintPolicy,
-  resolveLocalHeavyCheckEnv,
+  resolveLocalCheckEnv,
   resolveRepoToolBinPath,
-  shouldAcquireLocalHeavyCheckLockForOxlint,
-} from "./lib/local-heavy-check-runtime.mts";
+} from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
-const PREPARE_EXTENSION_BOUNDARY_ARGS = [
-  "--import",
-  "tsx",
+const PREPARE_EXTENSION_BOUNDARY_ARGS = distArtifactEntryArgs(
   path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
-];
+  ["--mode=package-boundary"],
+);
 const OXLINT_PREPARE_SKIP_FLAGS = new Set([
   "--help",
   "-h",
@@ -43,13 +45,34 @@ const OXLINT_VALUE_FLAGS = new Set([
   "--tsconfig",
   "--warn",
 ]);
+const OXLINT_BOUNDARY_FREE_TS_CONFIGS = new Set([
+  "config/tsconfig/oxlint.core.json",
+  "config/tsconfig/oxlint.scripts.json",
+  "test/tsconfig/tsconfig.test.root.json",
+]);
 const OPENCLAW_FOCUSED_CONFIG_FLAG = "--openclaw-focused-config";
 
 /**
  * Returns whether oxlint args need package-boundary declaration artifacts first.
  */
 export function shouldPrepareExtensionPackageBoundaryArtifacts(args: string[]) {
-  return !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg));
+  if (args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg))) {
+    return false;
+  }
+
+  const tsconfigs = args.flatMap((arg, index) => {
+    if (arg === "--tsconfig") {
+      const value = args[index + 1];
+      return value === undefined ? [] : [value];
+    }
+    return arg.startsWith("--tsconfig=") ? [arg.slice("--tsconfig=".length)] : [];
+  });
+  // Core, script, and root-test lint resolve sources through the root tsconfig;
+  // generated plugin package declarations are only an extension-lint input.
+  return (
+    tsconfigs.length === 0 ||
+    tsconfigs.some((tsconfig) => !OXLINT_BOUNDARY_FREE_TS_CONFIGS.has(tsconfig))
+  );
 }
 
 /**
@@ -207,40 +230,28 @@ function resolveOxlintToolchainEnv(
 }
 
 async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) {
-  const releaseArtifactsLock = acquireLocalHeavyCheckLockSync({
-    cwd: process.cwd(),
+  const status = await runManagedCommand({
+    bin: process.execPath,
+    args: PREPARE_EXTENSION_BOUNDARY_ARGS,
     env,
-    toolName: "extension-package-boundary-artifacts",
-    lockName: "extension-package-boundary-artifacts",
+    requireProcessTreeExit: process.platform !== "win32",
   });
 
-  try {
-    const status = await runManagedCommand({
-      bin: process.execPath,
-      args: PREPARE_EXTENSION_BOUNDARY_ARGS,
-      env,
-    });
-
-    if (status !== 0) {
-      throw new Error(
-        `prepare-extension-package-boundary-artifacts failed with exit code ${status}`,
-      );
-    }
-  } finally {
-    releaseArtifactsLock();
+  if (status !== 0) {
+    throw new Error(`prepare-extension-package-boundary-artifacts failed with exit code ${status}`);
   }
 }
 
 /**
  * Applies wrapper policy and runs oxlint with the final argument list.
  */
-async function main(
+async function runOxlint(
   argv: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
-) {
+): Promise<number> {
   const focusedConfig = argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG);
   const oxlintArgs = argv.filter((arg) => arg !== OPENCLAW_FOCUSED_CONFIG_FLAG);
-  const localEnv = resolveLocalHeavyCheckEnv(runtimeEnv);
+  const localEnv = resolveLocalCheckEnv(runtimeEnv);
   // Focused configs are syntax-only guards; keep wrapper process handling
   // without the broad type-aware policy or package artifact preparation.
   const { args: policyArgs, env } = focusedConfig
@@ -265,43 +276,32 @@ async function main(
     console.error(
       `[oxlint] sparse checkout is missing tracked config(s); skipping oxlint: ${sparseTargets.skippedConfigs.join(", ")}`,
     );
-    return;
+    return 0;
   }
   if (sparseTargets.hadExplicitTargets && sparseTargets.remainingExplicitTargets === 0) {
     console.error("[oxlint] no present sparse-checkout targets remain; skipping oxlint.");
-    return;
+    return 0;
   }
 
-  const releaseLock =
-    env.OPENCLAW_OXLINT_SKIP_LOCK === "1" || focusedConfig
-      ? () => {}
-      : shouldAcquireLocalHeavyCheckLockForOxlint(finalArgs, {
-            cwd: process.cwd(),
-            env,
-          })
-        ? acquireLocalHeavyCheckLockSync({
-            cwd: process.cwd(),
-            env,
-            toolName: "oxlint",
-          })
-        : () => {};
-
-  try {
-    if (needsArtifactPreparation) {
-      await prepareExtensionPackageBoundaryArtifacts(env);
-    }
-
-    const status = await runManagedCommand({
-      bin: oxlintPath,
-      args: finalArgs,
-      env: resolveOxlintToolchainEnv(oxlintPath, env),
-    });
-    process.exitCode = status;
-  } finally {
-    releaseLock();
+  if (needsArtifactPreparation) {
+    // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
+    await prepareExtensionPackageBoundaryArtifacts(localEnv);
   }
+  return await runManagedCommand({
+    bin: oxlintPath,
+    args: finalArgs,
+    env: resolveOxlintToolchainEnv(oxlintPath, env),
+    requireProcessTreeExit: process.platform !== "win32",
+  });
 }
 
-if (import.meta.main) {
-  await main();
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  const argv = process.argv.slice(2);
+  // Skip-prepare callers still consume shared declarations. Source-only lint
+  // remains independent; sharded lint inherits its parent's owner.
+  process.exitCode =
+    !argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG) &&
+    shouldPrepareExtensionPackageBoundaryArtifacts(argv)
+      ? await withDistArtifactOwnership(process.cwd(), () => runOxlint(argv))
+      : await runOxlint(argv);
 }

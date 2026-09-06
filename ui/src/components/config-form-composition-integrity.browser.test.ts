@@ -37,26 +37,103 @@ describe("config form composition integrity", () => {
     expect(unsupportedUnion.unsupportedPaths).toEqual(["mixed"]);
   });
 
-  it("keeps literal and typed unions in Raw mode", () => {
+  it("renders finite boolean unions while keeping open typed unions in Raw mode", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
       properties: {
         retention: {
           anyOf: [{ type: "string" }, { const: false }],
         },
+        guarded: {
+          anyOf: [{ type: "boolean", not: { const: true } }, { const: "auto" }],
+        },
+        nullableBoolean: {
+          anyOf: [{ type: ["boolean", "null"] }, { const: "auto" }],
+        },
+        ambiguousBooleanLabel: {
+          anyOf: [{ type: "boolean" }, { const: "true" }],
+        },
+        overlappingOneOf: {
+          oneOf: [{ type: "boolean" }, { const: true }],
+        },
+        overlappingAnyOf: {
+          anyOf: [{ type: "boolean" }, { const: true }],
+        },
         mode: {
-          oneOf: [{ type: "boolean" }, { enum: ["auto", "manual"] }],
+          title: "Native Commands",
+          default: "auto",
+          anyOf: [{ type: "boolean" }, { type: "string", const: "auto" }],
+        },
+        plainMode: {
+          title: "Plain Mode",
+          enum: ["auto", "manual"],
+        },
+        disjointOneOf: {
+          oneOf: [{ type: "boolean" }, { const: "auto" }],
         },
       },
     });
 
-    expect(analysis.unsupportedPaths).toEqual(["retention", "mode"]);
+    expect(analysis.unsupportedPaths).toEqual([
+      "retention",
+      "guarded",
+      "nullableBoolean",
+      "ambiguousBooleanLabel",
+      "overlappingOneOf",
+    ]);
     expect(analysis.schema?.properties?.retention).toMatchObject({
       anyOf: [{ type: "string" }, { const: false }],
     });
     expect(analysis.schema?.properties?.mode).toMatchObject({
-      oneOf: [{ type: "boolean" }, { enum: ["auto", "manual"] }],
+      enum: [true, false, "auto"],
+      default: "auto",
     });
+    expect(analysis.schema?.properties?.overlappingOneOf).toMatchObject({
+      oneOf: [{ type: "boolean" }, { const: true }],
+    });
+    expect(analysis.schema?.properties?.overlappingAnyOf).toMatchObject({
+      enum: [true, false],
+    });
+    expect(analysis.schema?.properties?.disjointOneOf).toMatchObject({
+      enum: [true, false, "auto"],
+    });
+
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { retention: "30d", mode: "auto", plainMode: "auto" },
+        showAdvanced: true,
+        onShowAdvanced: () => {},
+        onPatch,
+      }),
+      container,
+    );
+
+    const modeControl = [
+      ...container.querySelectorAll<HTMLElement & { value: string }>(
+        "wa-radio-group.settings-segmented",
+      ),
+    ].find((group) => group.querySelector("[slot='label']")?.textContent === "Native Commands");
+    expect(modeControl).not.toBeNull();
+    const modeOptions = [...(modeControl?.querySelectorAll("wa-radio") ?? [])];
+    // Web Awesome radios take their accessible names from their visible default-slot text.
+    expect(modeOptions.map((option) => option.textContent?.trim())).toEqual(["On", "Off", "Auto"]);
+    expect(modeOptions.map((option) => option.getAttribute("value"))).toEqual(["0", "1", "2"]);
+    const plainModeControl = [...container.querySelectorAll("wa-radio-group")].find(
+      (group) => group.querySelector("[slot='label']")?.textContent === "Plain Mode",
+    );
+    expect(
+      [...(plainModeControl?.querySelectorAll("wa-radio") ?? [])].map((option) =>
+        option.textContent?.trim(),
+      ),
+    ).toEqual(["auto", "manual"]);
+    modeControl!.value = "1";
+    modeControl!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["mode"], false);
   });
 
   it("marks required-only object branches as form-unsafe", () => {

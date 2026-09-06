@@ -616,6 +616,47 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("keeps subagent thinking, tools, and messages out of the parent lane", () => {
+    // Claude Code 2.1.234 capture: an Agent (Explore) subagent runs in the
+    // background; its assistant/user records carry parent_tool_use_id.
+    const thinking: string[] = [];
+    const toolStarts: string[] = [];
+    const toolResults: string[] = [];
+    const assistantMessages: unknown[] = [];
+    let text = "";
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: (delta) => {
+        text = delta.text;
+      },
+      onThinkingDelta: (delta) => thinking.push(delta.delta),
+      onToolUseStart: (delta) => toolStarts.push(delta.name),
+      onToolResult: (delta) => toolResults.push(delta.toolCallId),
+      onAssistantMessage: (message) => assistantMessages.push(message),
+    });
+
+    parser.push(readFileSync("test/fixtures/cli/claude-2.1-subagent-forwarding.jsonl", "utf8"));
+    parser.finish();
+
+    expect(toolStarts).toEqual(["Agent"]);
+    expect(toolResults).toEqual(["toolu_01Vbp51dKsXzRPji7mxf92vG"]);
+    expect(thinking.join("")).not.toContain("The Glob tool returned no files found");
+    expect(thinking.join("")).toContain("The agent has completed");
+    expect(assistantMessages).toHaveLength(6);
+    expect(text).toBe(
+      "Agent is running. I'll let you know the count when it finishes.\n\nThere are **7 .d.ts files** in the ./package directory.",
+    );
+    expect(parser.getOutput()?.text).toBe(
+      "Agent is running. I'll let you know the count when it finishes.\nThere are **7 .d.ts files** in the ./package directory.",
+    );
+  });
+
   it.each([
     {
       name: "resets per-index thinking state on a new message within the same turn (tool round-trip)",

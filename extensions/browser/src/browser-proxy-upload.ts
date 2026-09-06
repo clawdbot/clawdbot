@@ -7,6 +7,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   assertBrowserProxyFileBytesWithinLimits,
   assertBrowserProxyFileCountWithinLimit,
@@ -16,7 +18,6 @@ import {
   type BrowserProxyUploadV1,
 } from "./browser-proxy-envelope.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingUploadPaths } from "./browser/paths.js";
-import { asRecord } from "./record-shared.js";
 
 const logger = createSubsystemLogger("browser");
 const BROWSER_PROXY_UPLOAD_ROOT_NAME = ".proxy-uploads";
@@ -73,7 +74,7 @@ export function isBrowserProxyUploadRequest(params: {
   if (!isFileChooserRequest(params.method, params.path)) {
     return false;
   }
-  const body = asRecord(params.body);
+  const body = asNullableRecord(params.body);
   return Boolean(body && Array.isArray(body.paths) && body.paths.length > 0);
 }
 
@@ -125,7 +126,7 @@ export async function prepareBrowserProxyUploadRequest(params: {
   if (!isFileChooserRequest(params.method, params.path)) {
     return { body: params.body };
   }
-  const body = asRecord(params.body);
+  const body = asNullableRecord(params.body);
   if (!body) {
     return { body: params.body };
   }
@@ -150,20 +151,6 @@ export async function prepareBrowserProxyUploadRequest(params: {
   return { body: bodyWithoutPaths, upload };
 }
 
-function truncateUtf8(value: string, maxBytes: number): string {
-  let result = "";
-  let bytes = 0;
-  for (const character of value) {
-    const nextBytes = Buffer.byteLength(character, "utf8");
-    if (bytes + nextBytes > maxBytes) {
-      break;
-    }
-    result += character;
-    bytes += nextBytes;
-  }
-  return result;
-}
-
 function sanitizeUploadName(name: string): string {
   const basename = path.posix.basename(name.replaceAll("\\", "/"));
   const cleaned = Array.from(basename, (character) => {
@@ -177,7 +164,7 @@ function sanitizeUploadName(name: string): string {
     .replace(/[. ]+$/u, "");
   const portable = WINDOWS_RESERVED_NAME.test(cleaned) ? `_${cleaned}` : cleaned;
   const safe = portable && portable !== "." && portable !== ".." ? portable : "upload";
-  return truncateUtf8(safe, MAX_STAGED_NAME_BYTES) || "upload";
+  return truncateUtf8Prefix(safe, MAX_STAGED_NAME_BYTES) || "upload";
 }
 
 function decodedBase64Size(value: string): number {
@@ -497,7 +484,7 @@ export async function stageBrowserProxyUploadRequest(params: {
   if (!isFileChooserRequest(params.method, params.path)) {
     throw new Error("INVALID_REQUEST: browser proxy upload requires the file chooser route");
   }
-  const body = asRecord(params.body);
+  const body = asNullableRecord(params.body);
   if (!body || Object.hasOwn(body, "paths")) {
     throw new Error("INVALID_REQUEST: browser proxy upload body must omit paths");
   }

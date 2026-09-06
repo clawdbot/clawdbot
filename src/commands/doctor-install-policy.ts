@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -33,7 +34,7 @@ async function collectInstallPolicyHealthLines(
 
   const lines: string[] = [`- Install policy enabled for: ${formatTargets(validation)}`];
   for (const issue of validation.issues) {
-    lines.push(`- ${issue.severity.toUpperCase()}: ${issue.message}`);
+    lines.push(`- ${issue.severity.toUpperCase()}: ${sanitizeTerminalText(issue.message)}`);
   }
   if (validation.issues.some((issue) => issue.severity === "error")) {
     lines.push("- Installs and updates for covered targets will fail closed until this is fixed.");
@@ -55,21 +56,30 @@ async function collectInstallPolicyHealthLines(
       logger: {},
       sourcePath: probeDir,
     });
+    if (result?.warning) {
+      lines.push(`- Deep probe returned a warning: ${sanitizeTerminalText(result.warning.reason)}`);
+      lines.push(
+        "- Covered installs require explicit acknowledgement when this warning is returned.",
+      );
+      return lines;
+    }
     if (!result?.blocked) {
       lines.push("- Deep probe allowed the synthetic install request.");
       return lines;
     }
     if (result.blocked.code === "security_scan_blocked") {
       lines.push(
-        `- Deep probe reached the policy command and the policy blocked the synthetic request: ${result.blocked.reason}`,
+        `- Deep probe reached the policy command and the policy blocked the synthetic request: ${sanitizeTerminalText(result.blocked.reason)}`,
       );
       return lines;
     }
-    lines.push(`- ERROR: Deep probe failed closed: ${result.blocked.reason}`);
+    lines.push(`- ERROR: Deep probe failed closed: ${sanitizeTerminalText(result.blocked.reason)}`);
     lines.push("- Installs and updates for covered targets will fail closed until this is fixed.");
     return lines;
   } catch (err) {
-    lines.push(`- ERROR: Deep probe could not run: ${formatErrorMessage(err)}`);
+    lines.push(
+      `- ERROR: Deep probe could not run: ${sanitizeTerminalText(formatErrorMessage(err))}`,
+    );
     lines.push("- Installs and updates for covered targets will fail closed until this is fixed.");
     return lines;
   } finally {

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { fsHandlers } from "./fs.js";
 
@@ -34,6 +35,35 @@ function workspaceContext(workspace: string) {
 }
 
 describe("fs.listDir", () => {
+  it.each(["operator.admin", "operator.write"])(
+    "reopens the exact returned directory path with %s",
+    async (scope) => {
+      const root = fsSync.realpathSync(tempDirs.make("openclaw-fs-path-identity-"));
+      await fs.mkdir(path.join(root, "Project", "ordinary-child"), { recursive: true });
+      await fs.mkdir(path.join(root, "Project ", "spaced-child"), { recursive: true });
+      const context = workspaceContext(root);
+      const client = { connect: { scopes: [scope] } };
+      const [listed, initial] = expectDefined(
+        await call({ path: root }, context, client),
+        "parent directory listing",
+      );
+      expect(listed).toBe(true);
+      const selected = expectDefined(
+        (initial as FsListDirResult).entries.find((entry) => entry.name === "Project "),
+        "directory with a trailing space",
+      );
+      const [opened, result] = expectDefined(
+        await call({ path: selected.path }, context, client),
+        "selected directory listing",
+      );
+      expect(opened).toBe(true);
+      expect(result).toMatchObject({
+        path: selected.path,
+        entries: [{ name: "spaced-child", path: path.join(selected.path, "spaced-child") }],
+      });
+    },
+  );
+
   it("lists only directories, visible before hidden, in byte order", async () => {
     const root = tempDirs.make("openclaw-fs-listdir-");
     await fs.mkdir(path.join(root, "zeta"));
@@ -101,12 +131,16 @@ describe("fs.listDir", () => {
 
   it("reports missing directories as request errors", async () => {
     const root = tempDirs.make("openclaw-fs-listdir-");
+    const missing = path.join(root, "does-not-exist");
     const [ok, , error] = expectDefined(
-      await call({ path: path.join(root, "does-not-exist") }),
-      'await call({ path: path.join(root, "does-not-exist") }) test invariant',
+      await call({ path: missing }),
+      "missing directory response",
     );
     expect(ok).toBe(false);
-    expect((error as { message?: string })?.message).toContain("ENOENT");
+    const message = (error as { message?: string })?.message ?? "";
+    expect(message).toContain(`ENOENT: no such file or directory, scandir '${missing}'`);
+    expect(message).toMatch(/ \| ENOENT$/u);
+    expect(message).not.toMatch(/^Error:/u);
   });
 
   it("allows write-scoped browsing inside a configured workspace", async () => {
@@ -174,7 +208,10 @@ describe("fs.listDir", () => {
     );
 
     expect(ok).toBe(false);
-    expect(error).toMatchObject({ message: expect.stringContaining("ENOENT") });
+    const message = (error as { message?: string })?.message ?? "";
+    expect(message).toContain(`ENOENT: no such file or directory, scandir '${missing}'`);
+    expect(message).toMatch(/ \| ENOENT$/u);
+    expect(message).not.toMatch(/^Error:/u);
   });
 
   it("routes node listings through the connected node capability", async () => {

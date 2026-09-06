@@ -1,9 +1,11 @@
 /** Tests normalized agent run terminal outcomes and sticky timeout/cancel behavior. */
 import { describe, expect, it } from "vitest";
+import { extractAgentRunTerminalError } from "./agent-run-result.js";
 import {
   buildAgentRunTerminalOutcome,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
+  isDefinitiveRunLifecycle,
   isStickyAgentRunTerminalOutcome,
   mergeAgentRunAttemptTerminal,
   mergeAgentRunTerminalOutcome,
@@ -26,6 +28,35 @@ describe("agent run terminal outcome", () => {
     ["failed", "failure"],
   ] as const)("classifies %s as %s", (reason, classification) => {
     expect(classifyAgentRunTerminalOutcome({ reason })).toBe(classification);
+  });
+
+  it.each([
+    { label: "retryable provider failure", data: { error: "provider failed" }, definitive: false },
+    {
+      label: "settled execution failure",
+      data: { error: "preparation failed", executionSettled: true },
+      definitive: true,
+    },
+    {
+      label: "unsettled execution failure",
+      data: { error: "provider failed", executionSettled: false },
+      definitive: false,
+    },
+    {
+      label: "exhausted provider failure",
+      data: { error: "provider failed", fallbackExhaustedFailure: true },
+      definitive: true,
+    },
+    { label: "blocked run", data: { livenessState: "blocked" }, definitive: true },
+    { label: "abandoned run", data: { livenessState: "abandoned" }, definitive: true },
+    { label: "explicit cancellation", data: { aborted: true }, definitive: true },
+    { label: "provider timeout", data: { timeoutPhase: "provider" }, definitive: true },
+  ])("recognizes whether $label is a definitive lifecycle error", ({ data, definitive }) => {
+    expect(isDefinitiveRunLifecycle({ phase: "error", data })).toBe(definitive);
+  });
+
+  it.each(["start", "finishing"])("does not settle the %s lifecycle phase", (phase) => {
+    expect(isDefinitiveRunLifecycle({ phase, data: { executionSettled: true } })).toBe(false);
   });
 
   it("normalizes lifecycle signals with timeout, cancellation, failure precedence", () => {
@@ -719,5 +750,56 @@ describe("agent run attempt terminal", () => {
       source: "prompt",
       timeoutObservation: "compaction",
     });
+  });
+});
+
+describe("agent run terminal error projection", () => {
+  it.each([
+    { name: "normal stop", meta: { stopReason: "stop" } },
+    { name: "completed turn", meta: { stopReason: "completed" } },
+    {
+      name: "yielded turn",
+      meta: { livenessState: "paused", yielded: true, stopReason: "end_turn" },
+    },
+  ])("accepts a healthy $name", ({ meta }) => {
+    expect(
+      extractAgentRunTerminalError({
+        meta: { ...meta, finalAssistantVisibleText: "Done." },
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "CLI timeout",
+      meta: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider" as const,
+        providerStarted: true,
+      },
+      expected: "Inference timed out.",
+    },
+    {
+      name: "CLI abort",
+      meta: { aborted: true, stopReason: "aborted", providerStarted: true },
+      expected: "agent run aborted",
+    },
+  ])("rejects a partial $name even without an error payload", ({ meta, expected }) => {
+    expect(
+      extractAgentRunTerminalError({
+        payloads: [{ text: "I'll start checking." }],
+        meta: { ...meta, finalAssistantVisibleText: "I'll start checking." },
+      }),
+    ).toBe(expected);
+  });
+
+  it("preserves the owner error before a secondary payload diagnostic", () => {
+    expect(
+      extractAgentRunTerminalError({
+        payloads: [{ text: "Secondary failure", isError: true }],
+        meta: { error: { kind: "incomplete_turn", message: "The owner failed." } },
+      }),
+    ).toBe("The owner failed.");
   });
 });

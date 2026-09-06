@@ -23,6 +23,7 @@ type ColdPluginFixtureOptions = {
   channelId?: string;
   authChoiceId?: string;
   runtimeMessage?: string;
+  setupEntrySource?: string;
   manifest?: Record<string, unknown>;
 };
 
@@ -40,7 +41,10 @@ export function createColdPluginFixture(options: ColdPluginFixtureOptions): Cold
         name: options.packageName ?? "@example/openclaw-cold-control-plane",
         version: options.packageVersion ?? "1.0.0",
         ...options.packageJson,
-        openclaw: { extensions: ["./index.cjs"] },
+        openclaw: {
+          extensions: ["./index.cjs"],
+          ...(options.setupEntrySource !== undefined ? { setupEntry: "./setup-entry.cjs" } : {}),
+        },
       },
       null,
       2,
@@ -87,6 +91,13 @@ export function createColdPluginFixture(options: ColdPluginFixtureOptions): Cold
     `require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded", "utf8");\nthrow new Error(${JSON.stringify(options.runtimeMessage ?? "runtime entry should not load for cold plugin metadata discovery")});\n`,
     "utf8",
   );
+  if (options.setupEntrySource !== undefined) {
+    fs.writeFileSync(
+      path.join(options.rootDir, "setup-entry.cjs"),
+      options.setupEntrySource,
+      "utf8",
+    );
+  }
   return {
     authChoiceId,
     channelId,

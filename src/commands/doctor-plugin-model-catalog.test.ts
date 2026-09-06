@@ -190,6 +190,43 @@ describe("doctor generated plugin model catalog migration", () => {
     expect(fs.existsSync(workerPath)).toBe(false);
   });
 
+  it("discovers every explicit-roster agent without requiring a legacy default", async () => {
+    const mainDir = createAgentDir();
+    const helperDir = createAgentDir();
+    const thirdDir = createAgentDir();
+    const mainContents = generatedCatalog("openai", "main-explicit-provider-test-key");
+    const helperContents = generatedCatalog("anthropic", "helper-explicit-provider-test-key");
+    writeLegacyCatalog(mainDir, "openai", mainContents);
+    writeLegacyCatalog(helperDir, "anthropic", helperContents);
+    const params = {
+      ...migrationParams([], true),
+      agentDirs: undefined,
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: {
+            main: { agentDir: mainDir },
+            helper: { agentDir: helperDir },
+            third: { agentDir: thirdDir },
+          },
+        },
+      } satisfies OpenClawConfig,
+    };
+
+    await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
+      detected: 2,
+      migrated: 2,
+      warnings: [],
+    });
+    expect(listPersistedPluginModelCatalogs(mainDir)).toEqual([
+      { pluginId: "openai", contents: mainContents },
+    ]);
+    expect(listPersistedPluginModelCatalogs(helperDir)).toEqual([
+      { pluginId: "anthropic", contents: helperContents },
+    ]);
+  });
+
   it("preserves legacy credentials and does not create SQLite when repair is declined", async () => {
     const agentDir = createAgentDir();
     const contents = generatedCatalog("zai");

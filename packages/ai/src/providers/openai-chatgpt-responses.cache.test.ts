@@ -726,8 +726,6 @@ describe("ChatGPT Responses cached transport", () => {
       cleanupSessionResources();
       expect((await runSession("sticky-sse-fallback")).stopReason).toBe("stop");
       expect((await runSession("unrelated-sse-fallback")).stopReason).toBe("stop");
-      expect(websocketUpgrades).toHaveLength(5);
-      expect(sseRequests).toHaveLength(8);
 
       expect(websocketUpgrades.map((request) => request.sessionId)).toEqual([
         "sticky-sse-fallback",

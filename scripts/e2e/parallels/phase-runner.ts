@@ -28,6 +28,8 @@ export class PhaseRunner {
   private logTail = "";
   private currentLogPath: string | undefined;
   private deadlineMs = 0;
+  private runDir: string;
+  private logTailMaxBytes: number;
   private timings: Array<{
     durationMs: number;
     logPath: string;
@@ -36,10 +38,10 @@ export class PhaseRunner {
     timeoutSeconds: number;
   }> = [];
 
-  constructor(
-    private runDir: string,
-    private logTailMaxBytes = PHASE_LOG_TAIL_MAX_BYTES,
-  ) {}
+  constructor(runDir: string, logTailMaxBytes = PHASE_LOG_TAIL_MAX_BYTES) {
+    this.runDir = runDir;
+    this.logTailMaxBytes = logTailMaxBytes;
+  }
 
   async phase(name: string, timeoutSeconds: number, fn: () => Promise<void> | void): Promise<void> {
     const logPath = path.join(this.runDir, `${name}.log`);

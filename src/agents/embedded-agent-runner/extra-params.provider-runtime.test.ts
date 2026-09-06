@@ -120,7 +120,7 @@ describe("extra-params: provider runtime handoff", () => {
     },
   );
 
-  it("keeps provider-ready max stable through provider hooks and cache lookup", () => {
+  it("passes provider-ready max through preparation and stream wrapping", () => {
     const prepareProviderExtraParams = vi.fn(({ context }) => context.extraParams);
     const resolveProviderExtraParamsForTransport = vi.fn(() => undefined);
     const wrapProviderStreamFn = vi.fn(({ context }) => context.streamFn);
@@ -144,9 +144,9 @@ describe("extra-params: provider runtime handoff", () => {
       thinkingLevel: "max",
     });
 
-    expect(first).toBe(repeated);
-    expect(prepareProviderExtraParams).toHaveBeenCalledTimes(1);
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
+    expect(first).toEqual(repeated);
+    expect(prepareProviderExtraParams).toHaveBeenCalledTimes(2);
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(2);
     expect(prepareProviderExtraParams).toHaveBeenCalledWith(
       expect.objectContaining({ context: expect.objectContaining({ thinkingLevel: "max" }) }),
     );
@@ -172,7 +172,7 @@ describe("extra-params: provider runtime handoff", () => {
     });
   });
 
-  it("keeps unsupported upstream transport values out of OpenClaw runtime hooks", () => {
+  it("supports cached WebSockets and filters unknown upstream transport values", () => {
     // Upstream transports can name modes OpenClaw does not own; unresolved values
     // must be filtered before plugin runtime hooks receive them.
     const settingsManager = {
@@ -185,6 +185,12 @@ describe("extra-params: provider runtime handoff", () => {
         settingsManager,
         effectiveExtraParams: { transport: "websocket-cached" },
       }),
+    ).toBe("websocket-cached");
+    expect(
+      resolveAgentTransportOverride({
+        settingsManager,
+        effectiveExtraParams: { transport: "webtransport" },
+      }),
     ).toBeUndefined();
     expect(
       resolveExplicitSettingsTransport({
@@ -194,7 +200,7 @@ describe("extra-params: provider runtime handoff", () => {
         },
         sessionTransport: "websocket-cached",
       }),
-    ).toBeUndefined();
+    ).toBe("websocket-cached");
   });
 
   it("passes thinking-off intent through the provider runtime wrapper seam", () => {

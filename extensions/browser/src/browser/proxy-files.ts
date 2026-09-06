@@ -5,6 +5,7 @@
  * proxied result paths to local saved media paths.
  */
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertBrowserProxyFileCountWithinLimit,
   assertBrowserProxyFileBytesWithinLimits,
@@ -13,6 +14,53 @@ import {
   visitBrowserProxyFilePaths,
 } from "../browser-proxy-envelope.js";
 import { saveMediaBuffer } from "../media/store.js";
+
+const INVALID_BROWSER_PROXY_FILE_ENVELOPE = "browser proxy returned an invalid file envelope";
+
+function invalidBrowserProxyFileEnvelope(): never {
+  throw new Error(INVALID_BROWSER_PROXY_FILE_ENVELOPE);
+}
+
+function collectBrowserProxyResultPaths(result: unknown): Set<string> {
+  const paths = new Set<string>();
+  visitBrowserProxyFilePaths(result, (filePath) => {
+    paths.add(filePath);
+    assertBrowserProxyFileCountWithinLimit(paths.size);
+  });
+  return paths;
+}
+
+function validateBrowserProxyFiles(result: unknown, files: unknown): BrowserProxyFile[] {
+  const referencedPaths = collectBrowserProxyResultPaths(result);
+  const candidates = files === undefined ? [] : files;
+  if (!Array.isArray(candidates)) {
+    return invalidBrowserProxyFileEnvelope();
+  }
+  assertBrowserProxyFileCountWithinLimit(candidates.length);
+  const validated: BrowserProxyFile[] = [];
+  for (const value of candidates) {
+    const file = asNullableRecord(value);
+    if (
+      !file ||
+      typeof file.path !== "string" ||
+      !file.path.trim() ||
+      typeof file.base64 !== "string" ||
+      (file.mimeType !== undefined && typeof file.mimeType !== "string") ||
+      !referencedPaths.delete(file.path)
+    ) {
+      return invalidBrowserProxyFileEnvelope();
+    }
+    validated.push({
+      path: file.path,
+      base64: file.base64,
+      ...(file.mimeType === undefined ? {} : { mimeType: file.mimeType }),
+    });
+  }
+  if (referencedPaths.size > 0) {
+    return invalidBrowserProxyFileEnvelope();
+  }
+  return validated;
+}
 
 function decodeBrowserProxyFileBase64(file: BrowserProxyFile, totalBytes: number): Buffer {
   const estimatedBytes = estimateBase64DecodedBytes(file.base64);
@@ -27,15 +75,15 @@ function decodeBrowserProxyFileBase64(file: BrowserProxyFile, totalBytes: number
   return buffer;
 }
 
-/** Persist proxy-returned files and return a remote-path to local-path map. */
-export async function persistBrowserProxyFiles(files: BrowserProxyFile[] | undefined) {
-  if (!files || files.length === 0) {
-    return new Map<string, string>();
+/** Validate, persist, and rewrite every route-owned file in a node result. */
+export async function persistBrowserProxyResultFiles(result: unknown, files: unknown) {
+  const validatedFiles = validateBrowserProxyFiles(result, files);
+  if (validatedFiles.length === 0) {
+    return result;
   }
-  assertBrowserProxyFileCountWithinLimit(files.length);
   const decoded: Array<{ file: BrowserProxyFile; buffer: Buffer }> = [];
   let totalBytes = 0;
-  for (const file of files) {
+  for (const file of validatedFiles) {
     const buffer = decodeBrowserProxyFileBase64(file, totalBytes);
     totalBytes += buffer.byteLength;
     decoded.push({ file, buffer });
@@ -51,10 +99,6 @@ export async function persistBrowserProxyFiles(files: BrowserProxyFile[] | undef
     );
     mapping.set(file.path, saved.path);
   }
-  return mapping;
-}
-
-/** Rewrite every supported result path that points at a persisted proxy file. */
-export function applyBrowserProxyPaths(result: unknown, mapping: Map<string, string>) {
   visitBrowserProxyFilePaths(result, (filePath) => mapping.get(filePath));
+  return result;
 }

@@ -1,6 +1,11 @@
 // Feishu plugin module implements monitor.comment behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { asBoolean as readBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asBoolean as readBoolean,
+  isRecord,
+  normalizeOptionalString as normalizeString,
+  readStringValue as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort, waitForAbortableDelay } from "./async.js";
@@ -8,12 +13,9 @@ import { createFeishuClient } from "./client.js";
 import {
   encodeQuery,
   extractReplyText,
-  isRecord,
-  normalizeString,
   parseCommentContentElements,
   type ParsedCommentContent,
   type ParsedCommentLinkedDocument,
-  readString,
 } from "./comment-shared.js";
 import { normalizeCommentFileType, type CommentFileType } from "./comment-target.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -1149,22 +1151,22 @@ function buildDriveCommentSurfacePrompt(params: {
     "Your final text reply will be posted to the current comment thread automatically.",
     "Use the thread timeline above as the main context for follow-up requests.",
     "Do not use another comment card or document-session output as the main reference.",
-    "If you need comment thread context, use feishu_drive.list_comments or feishu_drive.list_comment_replies.",
+    "If you need comment thread context, use the available Feishu drive comment-list actions.",
     "If you modify the document, post a user-visible follow-up in the comment thread.",
-    "Use feishu_drive.reply_comment or feishu_drive.add_comment for that follow-up.",
+    "Use an available Feishu drive reply-comment or add-comment action for that follow-up.",
     "Whole-document comments do not support direct replies.",
-    "For whole-document comments, use feishu_drive.add_comment.",
+    "For whole-document comments, use the Feishu drive add-comment action when available.",
     'Only treat URLs listed under "Referenced documents from current user comment" as structured Feishu document references.',
     "URLs that appear only in comment text are plain links unless you verify them.",
     "If the user asks about a linked Feishu document or wiki page, treat that linked document as the read target.",
     "If the user asks you to use a linked document as guidance, treat the linked document as the reference source and the current commented document as the edit target.",
     "If a referenced document resolves to the same file_token and file_type as the current commented document, treat it as the current document.",
-    "If the user asks you to modify document content, you must use feishu_doc to make the change.",
+    "If the user asks you to modify document content, you must use an available Feishu document tool to make the change.",
     'Do not reply with only "done", "I\'ll handle it", or a restated plan without calling tools.',
     "If the comment quotes document content, treat the quoted content as the main anchor.",
     'For requests like "insert xxx below this content", locate the quoted content first, then edit the document.',
     'For requests like "summarize the content below", "explain this section", or "continue writing from here", use the quoted content as the main target.',
-    "If the quote is not enough, use feishu_doc.read or feishu_doc.list_blocks to read nearby context.",
+    "If the quote is not enough, use available Feishu document read or list-blocks actions to read nearby context.",
     "Do not guess document content from the comment alone.",
     "Do not give a vague answer before reading enough context.",
     "Unless the user asks for the whole document, handle only the local content around the quoted anchor.",
@@ -1189,7 +1191,7 @@ function buildDriveCommentSurfacePrompt(params: {
     "Do not describe tool use.",
     'Do not start with phrases like "I will", "I’ll first", "I need to", "The user wants", or "I have updated".',
     "Output only the final user-facing reply.",
-    "If you already sent the user-visible reply with feishu_drive.reply_comment or feishu_drive.add_comment, output exactly NO_REPLY.",
+    "If you already sent the user-visible reply with a Feishu drive comment action, output exactly NO_REPLY.",
     "If no user-visible reply is needed, output exactly NO_REPLY.",
     "Be concise.",
     "Do not omit requested content.",

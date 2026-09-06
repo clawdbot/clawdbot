@@ -2,10 +2,6 @@ import "./session-suspension.js";
 
 type SessionSuspensionTestApi = {
   resetSessionSuspensionStateForTest(): void;
-  seedClearedLaneResumeForTest(
-    laneId: string,
-    cleared: { resumeConcurrency: number; resumeAtMs: number },
-  ): void;
 };
 
 function getTestApi(): SessionSuspensionTestApi {
@@ -20,11 +16,4 @@ function getTestApi(): SessionSuspensionTestApi {
 
 export function resetSessionSuspensionStateForTest(): void {
   getTestApi().resetSessionSuspensionStateForTest();
-}
-
-export function seedClearedLaneResumeForTest(
-  laneId: string,
-  cleared: { resumeConcurrency: number; resumeAtMs: number },
-): void {
-  getTestApi().seedClearedLaneResumeForTest(laneId, cleared);
 }

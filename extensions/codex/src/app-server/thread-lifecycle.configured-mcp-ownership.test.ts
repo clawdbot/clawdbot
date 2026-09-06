@@ -19,6 +19,7 @@ import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecyc
 import {
   createAppServerOptions,
   createParams,
+  resetThreadLifecycleTestFixtures,
   startOrResumeThread,
   threadStartResult,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -48,6 +49,10 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     sharedClientMocks.retainByInstanceId = undefined;
     tempDir = tempDirs.make("openclaw-configured-mcp-ownership-");
     resetCodexTestBindingStore();
+  });
+
+  afterEach(() => {
+    resetThreadLifecycleTestFixtures();
   });
 
   it.each([

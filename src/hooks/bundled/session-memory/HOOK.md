@@ -55,7 +55,10 @@ With `llmSlug: true`, the configured model can generate descriptive slugs based 
 
 ## Requirements
 
-- **Config**: `workspace.dir` must be set (automatically configured during setup)
+- A resolved agent workspace. Configure it with `agents.defaults.workspace` or
+  `agents.entries.<id>.workspace` when the default is unsuitable. The descriptor's
+  `workspace.dir` requirement is an internal eligibility marker, not an
+  `openclaw.json` key to add.
 
 When `llmSlug` is enabled, the hook uses your configured LLM provider to generate slugs, so it works with any provider (Anthropic, OpenAI, etc.).
 
@@ -106,7 +109,7 @@ To disable this hook:
 openclaw hooks disable session-memory
 ```
 
-Or remove it from your config:
+Or explicitly disable its config entry, then restart the Gateway:
 
 ```json
 {

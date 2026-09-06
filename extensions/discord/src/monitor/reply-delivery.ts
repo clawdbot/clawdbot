@@ -229,13 +229,18 @@ export async function deliverDiscordReply(params: {
   mediaLocalRoots?: readonly string[];
   allowedMentions?: DiscordAllowedMentions;
   kind: "tool" | "block" | "final";
+  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+  onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 }) {
   void params.runtime;
 
   const delivery = resolveDiscordDeliveryOptions(params);
   const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, {
     kind: params.kind,
-  }).map(formatDiscordReasoningPayload);
+  })
+    .map(formatDiscordReasoningPayload)
+    .map((payload) => params.bindPendingFinalDelivery?.(payload) ?? payload);
   if (payloads.length === 0) {
     return {
       visibleReplySent: false,
@@ -254,6 +259,8 @@ export async function deliverDiscordReply(params: {
     formatting: delivery.formatting,
     threadId: delivery.threadId,
     identity: delivery.identity,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.assertPlatformSendAuthorized,
     deps: createDiscordDeliveryDeps({
       cfg: params.cfg,
       token: params.token,

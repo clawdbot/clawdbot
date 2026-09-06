@@ -4,6 +4,80 @@ import { describe, expect, it } from "vitest";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
 
 describe("tool schema hints", () => {
+  it.each([
+    { schema: { type: "number" }, input: "number" },
+    { schema: { type: "integer" }, input: "number /* integer */" },
+    {
+      schema: { type: "number", minimum: -1.5, maximum: 0 },
+      input: "number /* >= -1.5, <= 0 */",
+    },
+    {
+      schema: { type: "number", exclusiveMinimum: -0.5, exclusiveMaximum: 3.5 },
+      input: "number /* > -0.5, < 3.5 */",
+    },
+    {
+      schema: {
+        type: "integer",
+        minimum: 0,
+        maximum: 10,
+        exclusiveMinimum: 1,
+        exclusiveMaximum: 9,
+      },
+      input: "number /* integer, >= 0, <= 10, > 1, < 9 */",
+    },
+  ])(
+    "preserves numeric input constraints without changing output hints: $input",
+    ({ schema, input }) => {
+      expect(compactToolInputHint(schema)).toBe(input);
+      expect(compactToolOutputHint(schema)).toBe("number");
+    },
+  );
+
+  it.each([
+    { exclusiveMinimum: true },
+    { exclusiveMaximum: false },
+    { minimum: "1" },
+    { maximum: Number.POSITIVE_INFINITY },
+    { minimum: Number.NEGATIVE_INFINITY },
+    { exclusiveMinimum: Number.NaN },
+  ])("defers malformed numeric bounds instead of inventing constraints: %j", (bounds) => {
+    expect(compactToolInputHint({ type: "number", ...bounds })).toBe("unknown");
+  });
+
+  it("keeps nested nullable numeric constraints scoped to input hints", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        values: { type: "array", items: { type: "number", minimum: 0, nullable: true } },
+      },
+      required: ["values"],
+      additionalProperties: false,
+    };
+
+    expect(compactToolInputHint(schema)).toBe("{ values: Array<number /* >= 0 */ | null> }");
+    expect(compactToolOutputHint(schema)).toBe("{ values: Array<number | null> }");
+  });
+
+  it("charges complete numeric annotations to the existing input budget", () => {
+    const schema = Type.Object(
+      Object.fromEntries(
+        Array.from({ length: 12 }, (_, index) => [
+          `field_${String(index).padStart(2, "0")}`,
+          Type.Integer({ minimum: 0, maximum: 100, description: "Description stays deferred." }),
+        ]),
+      ),
+      { additionalProperties: false },
+    );
+    const input = compactToolInputHint(schema);
+
+    expect(input).toContain("field_00: number /* integer, >= 0, <= 100 */");
+    expect(input).toContain("...");
+    expect(input).not.toContain("Description stays deferred.");
+    expect(input.length).toBeLessThanOrEqual(300);
+    expect(compactToolOutputHint(schema)).toContain("field_11: number");
+    expect(compactToolOutputHint(schema)).not.toContain("/*");
+  });
+
   it("renders nested declared outputs as compact TypeScript shapes", () => {
     const outputSchema = Type.Array(
       Type.Object(
@@ -72,6 +146,21 @@ describe("tool schema hints", () => {
     expect(compactToolOutputHint(nine)).toBeUndefined();
   });
 
+  it("renders five structural union variants and rejects six", () => {
+    const variant = (index: number) =>
+      Type.Object(
+        { kind: Type.Literal(`variant-${index}`), value: Type.Number() },
+        { additionalProperties: false },
+      );
+    const five = Type.Union(Array.from({ length: 5 }, (_unused, index) => variant(index)));
+    const six = Type.Union(Array.from({ length: 6 }, (_unused, index) => variant(index)));
+
+    expect(compactToolOutputHint(five)).toBe(
+      '{ kind: "variant-0"; value: number } | { kind: "variant-1"; value: number } | { kind: "variant-2"; value: number } | { kind: "variant-3"; value: number } | { kind: "variant-4"; value: number }',
+    );
+    expect(compactToolOutputHint(six)).toBeUndefined();
+  });
+
   it("keeps input hints small while allowing larger exact output contracts", () => {
     const schema = Type.Object(
       Object.fromEntries(
@@ -87,7 +176,6 @@ describe("tool schema hints", () => {
     const outputHint = compactToolOutputHint(schema);
 
     expect(inputHint).toBe("unknown");
-    expect(inputHint.length).toBeLessThanOrEqual(300);
     expect(outputHint).toBeDefined();
     expect(outputHint!.length).toBeGreaterThan(300);
     expect(outputHint!.length).toBeLessThanOrEqual(600);

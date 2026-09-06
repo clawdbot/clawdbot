@@ -8,12 +8,12 @@ describe("session transcript reader boundary guard", () => {
   it("ratchets only the files migrated by the transcript reader slice", () => {
     expect(migratedSessionTranscriptReaderFiles).toEqual(
       new Set([
-        "src/agents/main-session-restart-recovery-store.ts",
-        "src/agents/subagent-announce-output.test.ts",
-        "src/agents/subagent-announce-output.ts",
-        "src/agents/subagent-announce.runtime.ts",
-        "src/agents/subagent-registry-restart-recovery.test.ts",
-        "src/agents/subagent-registry-restart-recovery.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-store.ts",
+        "src/agents/subagents/announce/subagent-announce-output.test.ts",
+        "src/agents/subagents/announce/subagent-announce-output.ts",
+        "src/agents/subagents/announce/subagent-announce.runtime.ts",
+        "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
+        "src/agents/subagents/registry/subagent-registry-restart-recovery.ts",
         "src/agents/tools/embedded-gateway-stub.runtime.ts",
         "src/agents/tools/embedded-gateway-stub.test.ts",
         "src/agents/tools/embedded-gateway-stub.ts",

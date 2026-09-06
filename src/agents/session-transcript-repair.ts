@@ -1,9 +1,11 @@
 import type { AgentMessage } from "@openclaw/agent-core";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 /**
  * Transcript repair helpers for tool-call replay.
  *
  * Normalizes raw tool-call blocks and synthesizes missing tool results without rewriting trusted local payloads.
  */
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   hasNonEmptyString as hasNonEmptyStringField,
   normalizeLowercaseStringOrEmpty,
@@ -74,12 +76,7 @@ function hasPartialJson(
 }
 
 function isCompleteJsonObject(value: string): boolean {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
-  } catch {
-    return false;
-  }
+  return safeParseJsonRecord(value) !== undefined;
 }
 
 function isFinalizedOpenAIResponsesToolCall(
@@ -213,25 +210,7 @@ type ToolUseResultPairingOptions = {
   preserveUnframedToolResults?: boolean;
 };
 
-export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
-  let touched = false;
-  const out: AgentMessage[] = [];
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "toolResult") {
-      out.push(msg);
-      continue;
-    }
-    if (!("details" in msg)) {
-      out.push(msg);
-      continue;
-    }
-    const sanitized = { ...(msg as object) } as { details?: unknown };
-    delete sanitized.details;
-    touched = true;
-    out.push(sanitized as unknown as AgentMessage);
-  }
-  return touched ? out : messages;
-}
+export { stripToolResultDetails } from "../shared/model-context-message.js";
 
 function collectFollowingToolResults(
   messages: AgentMessage[],
@@ -406,7 +385,7 @@ function repairToolCallInputs(
         changed = true;
         continue;
       }
-      const nextMessage = { ...msg, content: nextContent };
+      const nextMessage = replaceCompactionReplayOwnerContent(msg, nextContent);
       for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
         priorToolCallIds.add(toolCall.id);
       }
@@ -415,7 +394,7 @@ function repairToolCallInputs(
     }
 
     if (messageChanged) {
-      const nextMessage = { ...msg, content: nextContent };
+      const nextMessage = replaceCompactionReplayOwnerContent(msg, nextContent);
       for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
         priorToolCallIds.add(toolCall.id);
       }
@@ -450,9 +429,21 @@ export function sanitizeToolUseResultPairing(
   return repairToolUseResultPairing(messages, options).messages;
 }
 
+export function sanitizeToolUseResultPairingForModel(
+  messages: AgentMessage[],
+  isOpenAIResponsesApi: boolean,
+): AgentMessage[] {
+  return sanitizeToolUseResultPairing(messages, {
+    erroredAssistantResultPolicy: "drop",
+    // Match upstream Codex history normalization for OpenAI Responses.
+    ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
+  });
+}
+
 type ToolUseRepairReport = {
   messages: AgentMessage[];
   added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
+  discarded: AgentMessage[];
   droppedDuplicateCount: number;
   droppedOrphanCount: number;
   moved: boolean;
@@ -481,17 +472,22 @@ export function repairToolUseResultPairing(
   const { frames } = pairing;
   const droppedDuplicateCount = pairing.droppedDuplicateCount;
   let droppedOrphanCount = pairing.droppedOrphanCount;
+  const discarded: Array<{ message: AgentMessage; index: number }> = pairing.droppedResults.map(
+    ({ message, index }) => ({ message, index }),
+  );
 
   const out: AgentMessage[] = [];
   let cursor = 0;
   const pushUnframedRange = (endIndex: number) => {
     for (; cursor < endIndex; cursor += 1) {
+      const sourceIndex = cursor;
       const message = messages[cursor];
       if (!message || typeof message !== "object") {
         continue;
       }
       if (message.role === "toolResult" && !preserveUnframed) {
         droppedOrphanCount += 1;
+        discarded.push({ message, index: sourceIndex });
         continue;
       }
       out.push(message);
@@ -521,6 +517,15 @@ export function repairToolUseResultPairing(
         added.push(missing);
         out.push(missing);
       }
+    } else {
+      for (const occurrence of frame.occurrences) {
+        if (occurrence.sourceResult) {
+          discarded.push({
+            message: occurrence.sourceResult,
+            index: occurrence.sourceResultIndex ?? messages.indexOf(occurrence.sourceResult),
+          });
+        }
+      }
     }
     out.push(...frame.remainder);
   }
@@ -528,9 +533,11 @@ export function repairToolUseResultPairing(
 
   const changed =
     out.length !== messages.length || out.some((message, index) => message !== messages[index]);
+  discarded.sort((left, right) => left.index - right.index);
   return {
     messages: changed ? out : messages,
     added,
+    discarded: discarded.map(({ message }) => message),
     droppedDuplicateCount,
     droppedOrphanCount,
     moved: changed,

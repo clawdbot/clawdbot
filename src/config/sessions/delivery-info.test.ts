@@ -47,7 +47,7 @@ vi.mock("../io.js", () => ({
 }));
 
 vi.mock("./paths.js", () => ({
-  resolveStorePath: (_store?: string, opts?: { agentId?: string }) =>
+  resolveSessionStorePathCore: (_store?: string, opts?: { agentId?: string }) =>
     opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
 }));
 
@@ -217,6 +217,23 @@ describe("extractDeliveryInfo", () => {
       },
       threadId: undefined,
     });
+  });
+
+  it("keeps qualified global main delivery in its owner's store", () => {
+    storeState.stores["/tmp/sessions.json"] = {
+      global: buildEntry({ channel: "telegram", to: "telegram:ops", accountId: "ops" }),
+    };
+    const deliveryContext = { channel: "telegram", to: "telegram:worker", accountId: "worker" };
+    storeState.stores["/tmp/worker-sessions.json"] = { global: buildEntry(deliveryContext) };
+
+    expect(
+      extractDeliveryInfo("agent:worker:main", {
+        cfg: {
+          session: { scope: "global" },
+          agents: { ownership: "explicit", entries: { ops: {}, worker: {} } },
+        },
+      }),
+    ).toEqual({ deliveryContext, threadId: undefined });
   });
 
   it("continues across per-agent stores until it finds a routable deliveryContext", () => {

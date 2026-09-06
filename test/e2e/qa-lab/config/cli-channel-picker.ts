@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { stripAnsiSequences } from "../../../../packages/terminal-core/src/ansi.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "../runtime/script-evidence.js";
 
 const SCENARIO_ID = "cli-channel-picker";
@@ -17,10 +18,6 @@ type ProducerOptions = {
   repoRoot: string;
   timeoutMs: number;
 };
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function sanitizePickerTranscript(transcript: string) {
   return stripAnsiSequences(transcript).replaceAll(

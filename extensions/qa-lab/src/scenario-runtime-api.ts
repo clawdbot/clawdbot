@@ -60,6 +60,7 @@ export type QaScenarioRuntimeDeps = {
   readEffectiveTools: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
   readRawQaSessionStore: QaScenarioRuntimeFunction;
+  seedQaSessionEntries: QaScenarioRuntimeFunction;
   seedQaSessionTranscript: QaScenarioRuntimeFunction;
   readGatewayLogs: QaScenarioRuntimeFunction;
   markGatewayLogCursor: QaScenarioRuntimeFunction;
@@ -67,6 +68,7 @@ export type QaScenarioRuntimeDeps = {
   assertNoGatewayLogSentinels: QaScenarioRuntimeFunction;
   readSessionTranscriptSummary: QaScenarioRuntimeFunction;
   runQaCli: QaScenarioRuntimeFunction;
+  inspectQaExecutionIdentityStorage: QaScenarioRuntimeFunction;
   extractMediaPathFromText: QaScenarioRuntimeFunction;
   resolveGeneratedImagePath: QaScenarioRuntimeFunction;
   startAgentRun: QaScenarioRuntimeFunction;

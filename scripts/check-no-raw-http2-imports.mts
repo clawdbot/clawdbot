@@ -1,51 +1,9 @@
 // Rejects raw Node http2 imports in source and extension code.
 import fs from "node:fs";
 import path from "node:path";
+import { collectFilesSync, isCodeFile, toPosixPath } from "./check-file-utils.ts";
+
 const SOURCE_ROOTS = ["src", "extensions"];
-const DEFAULT_SKIPPED_DIR_NAMES = new Set(["node_modules", "dist", "coverage", ".generated"]);
-
-function isCodeFile(filePath: string) {
-  if (filePath.endsWith(".d.ts")) {
-    return false;
-  }
-  return /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(filePath);
-}
-
-function collectFilesSync(rootDir: string, includeFile: (filePath: string) => boolean) {
-  const files: string[] = [];
-  const stack = [rootDir];
-
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    let entries;
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        if (!DEFAULT_SKIPPED_DIR_NAMES.has(entry.name)) {
-          stack.push(fullPath);
-        }
-        continue;
-      }
-      if (entry.isFile() && includeFile(fullPath)) {
-        files.push(fullPath);
-      }
-    }
-  }
-
-  return files;
-}
-
-function toPosixPath(filePath: string) {
-  return filePath.replaceAll("\\", "/");
-}
 
 const FORBIDDEN_HTTP2_MODULES = new Set(["node:http2", "http2"]);
 const ALLOWED_PRODUCTION_FILES = new Set(["src/infra/push-apns-http2.ts"]);
@@ -94,7 +52,7 @@ function collectHttp2ImportOffenders(filePath: string) {
 
 function collectSourceFiles() {
   return SOURCE_ROOTS.flatMap((root) =>
-    collectFilesSync(path.join(process.cwd(), root), isCodeFile),
+    collectFilesSync(path.join(process.cwd(), root), { includeFile: isCodeFile }),
   );
 }
 

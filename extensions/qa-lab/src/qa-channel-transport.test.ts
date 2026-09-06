@@ -195,6 +195,7 @@ describe("qa channel transport", () => {
     state.addOutboundMessage({
       accountId: "other",
       to: "dm:alice",
+      isError: true,
       text: "⚠️ agent failed before reply: foreign account failure",
     });
     const expected = state.addOutboundMessage({
@@ -239,6 +240,7 @@ describe("qa channel transport", () => {
         state.addOutboundMessage({
           accountId: "other",
           to: "dm:alice",
+          isError: true,
           text: "⚠️ agent failed before reply: foreign account failure",
         });
         return "owned condition completed";
@@ -281,6 +283,7 @@ describe("qa channel transport", () => {
             await transport.state.addOutboundMessage({
               accountId: "default",
               to: "dm:qa-operator",
+              isError: true,
               text: "⚠️ agent failed before reply: synthetic failure for wait helper",
             });
           }
@@ -298,6 +301,7 @@ describe("qa channel transport", () => {
     await transport.state.addOutboundMessage({
       accountId: "default",
       to: "dm:qa-operator",
+      isError: true,
       text: "⚠️ agent failed before reply: stale failure should not leak",
     });
 

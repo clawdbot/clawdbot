@@ -1,10 +1,13 @@
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 // Matrix plugin module implements outbound behavior.
 import {
   createMessageReceiptFromOutboundResults,
   createReplyToFanout,
+  resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import {
+  renderPresentationForDelivery,
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -13,31 +16,41 @@ import {
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 import type { MatrixExtraContentFields } from "./matrix/send/types.js";
-import {
-  chunkTextForOutbound,
-  resolveOutboundSendDep,
-  type ChannelOutboundAdapter,
-} from "./runtime-api.js";
 
 const MATRIX_OPENCLAW_PRESENTATION_KEY = "com.openclaw.presentation" as const;
 const MATRIX_OPENCLAW_PRESENTATION_TYPE = "message.presentation" as const;
 const MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT = "---";
 
+const MATRIX_PRESENTATION_CAPABILITIES = {
+  supported: true,
+  buttons: true,
+  selects: true,
+  context: true,
+  divider: true,
+  limits: {
+    text: {
+      markdownDialect: "markdown",
+      supportsEdit: true,
+    },
+  },
+} satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
+
 type MatrixChannelData = {
   extraContent?: MatrixExtraContentFields;
 };
 
-function toRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+function toMatrixOutboundResult<T extends { roomId: string }>(result: T) {
+  const { roomId, ...delivery } = result;
+  return { ...delivery, target: { kind: "room" as const, id: roomId } };
 }
 
 function resolveMatrixChannelData(payload: ReplyPayload): MatrixChannelData {
-  const raw = toRecord(payload.channelData)?.matrix;
-  return (toRecord(raw) as MatrixChannelData | undefined) ?? {};
+  const raw = asOptionalRecord(payload.channelData)?.matrix;
+  return (asOptionalRecord(raw) as MatrixChannelData | undefined) ?? {};
 }
 
 function buildMatrixPresentationContent(presentation: MessagePresentation) {
@@ -51,8 +64,8 @@ function buildMatrixPresentationContent(presentation: MessagePresentation) {
 function resolveMatrixPresentationContent(
   payload: ReplyPayload,
 ): Record<string, unknown> | undefined {
-  const extraContent = toRecord(resolveMatrixChannelData(payload).extraContent);
-  const presentation = toRecord(extraContent?.[MATRIX_OPENCLAW_PRESENTATION_KEY]);
+  const extraContent = asOptionalRecord(resolveMatrixChannelData(payload).extraContent);
+  const presentation = asOptionalRecord(extraContent?.[MATRIX_OPENCLAW_PRESENTATION_KEY]);
   if (
     !presentation ||
     presentation.version !== 1 ||
@@ -88,6 +101,17 @@ function renderMatrixPresentationPayload(params: {
   };
 }
 
+export function prepareMatrixReplyPayload(payload: ReplyPayload): Promise<ReplyPayload> {
+  return renderPresentationForDelivery(
+    {
+      presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
+      renderPresentation: (prepared) =>
+        renderMatrixPresentationPayload({ payload: prepared, presentation: prepared.presentation }),
+    },
+    payload,
+  );
+}
+
 function resolveMatrixPayloadText(payload: ReplyPayload): string {
   const text = payload.text ?? "";
   if (text.trim() || !resolveMatrixPresentationContent(payload)) {
@@ -96,7 +120,10 @@ function resolveMatrixPayloadText(payload: ReplyPayload): string {
   return MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT;
 }
 
-function resolveMatrixExtraContent(payload: ReplyPayload): MatrixExtraContentFields | undefined {
+/** Matrix event fields a reply carries beyond its body, currently its presentation. */
+export function resolveMatrixExtraContent(
+  payload: ReplyPayload,
+): MatrixExtraContentFields | undefined {
   const presentation = resolveMatrixPresentationContent(payload);
   return presentation ? { [MATRIX_OPENCLAW_PRESENTATION_KEY]: presentation } : undefined;
 }
@@ -108,7 +135,7 @@ function resolveMatrixDeliveryProgress(
 ) {
   return onDeliveryResult
     ? async (result: Awaited<ReturnType<typeof sendMessageMatrix>>) => {
-        await onDeliveryResult(attachChannelToResult("matrix", result));
+        await onDeliveryResult(attachChannelToResult("matrix", toMatrixOutboundResult(result)));
       }
     : undefined;
 }
@@ -118,19 +145,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  presentationCapabilities: {
-    supported: true,
-    buttons: true,
-    selects: true,
-    context: true,
-    divider: true,
-    limits: {
-      text: {
-        markdownDialect: "markdown",
-        supportsEdit: true,
-      },
-    },
-  },
+  presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
   renderPresentation: ({ payload, presentation }) =>
     renderMatrixPresentationPayload({ payload, presentation }),
   sendPayload: async ({
@@ -193,12 +208,15 @@ export const matrixOutbound: ChannelOutboundAdapter = {
         // One payload owns one receipt; keep every attachment and its original reply metadata.
         const receipt = createMessageReceiptFromOutboundResults({ results: sentResults });
         receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
-        return attachChannelToResult("matrix", {
-          ...lastResult,
-          primaryMessageId: receipt.primaryPlatformMessageId,
-          receipt,
-          content: sentResults.map((result) => result.content).join("\n"),
-        });
+        return attachChannelToResult(
+          "matrix",
+          toMatrixOutboundResult({
+            ...lastResult,
+            primaryMessageId: receipt.primaryPlatformMessageId,
+            receipt,
+            content: sentResults.map((result) => result.content).join("\n"),
+          }),
+        );
       }
     }
     const result = await send(to, payloadText, {
@@ -217,7 +235,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       extraContent: resolveMatrixExtraContent(payload),
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return attachChannelToResult("matrix", result);
+    return attachChannelToResult("matrix", toMatrixOutboundResult(result));
   },
   sendText: async ({
     cfg,
@@ -250,7 +268,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return attachChannelToResult("matrix", result);
+    return attachChannelToResult("matrix", toMatrixOutboundResult(result));
   },
   sendMedia: async ({
     cfg,
@@ -291,7 +309,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return attachChannelToResult("matrix", result);
+    return attachChannelToResult("matrix", toMatrixOutboundResult(result));
   },
   sendPoll: async ({ cfg, to, poll, threadId, accountId }) => {
     const resolvedThreadId = threadId !== undefined && threadId !== null ? threadId : undefined;

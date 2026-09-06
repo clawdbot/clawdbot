@@ -3,7 +3,33 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
+import type { UpdateProgress } from "./update-confirmation.ts";
+
+/** Drives the dialog the way the shell does: one live lifecycle stream. */
+function createProgressStream(
+  initial: UpdateProgress = { run: null, busy: false, connected: true, failure: null },
+) {
+  let emit: ((progress: UpdateProgress) => void) | null = null;
+  let stopped = false;
+  return {
+    get stopped() {
+      return stopped;
+    },
+    watchUpdateProgress: (listener: (progress: UpdateProgress) => void) => {
+      emit = listener;
+      listener(initial);
+      return () => {
+        stopped = true;
+      };
+    },
+    async push(progress: UpdateProgress) {
+      emit?.(progress);
+      await Promise.resolve();
+    },
+  };
+}
 
 const UPDATE_AVAILABLE: UpdateAvailable = {
   channel: "stable",
@@ -39,10 +65,14 @@ function startUpdate(
     updateAvailable?: UpdateAvailable | null;
     updateSchedule?: UpdateScheduleState | null;
     viaNativeApp?: boolean;
+    watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
   } = {},
 ) {
   const startGatewayUpdate = vi.fn();
   const settled = confirmAndStartUpdateRuntime({
+    ...(overrides.watchUpdateProgress
+      ? { watchUpdateProgress: overrides.watchUpdateProgress }
+      : {}),
     startGatewayUpdate: overrides.startGatewayUpdate ?? startGatewayUpdate,
     updateAvailable:
       overrides.updateAvailable === undefined ? UPDATE_AVAILABLE : overrides.updateAvailable,
@@ -58,6 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  document.body.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
   document.body.replaceChildren();
   restoreDialogPolyfill();
   if (originalWebkit) {
@@ -65,58 +96,6 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(window, "webkit");
   }
-});
-
-it("states the target, restart impact, and both versions without starting the update", async () => {
-  const postMessage = installNativeBridge();
-  const { settled, startGatewayUpdate } = startUpdate();
-  const { modal, dialog } = await getRenderedModalDialog(document.body);
-
-  expect(dialog.getAttribute("aria-label")).toBe("Update Gateway");
-  expect(modal.textContent).toContain(
-    "Installs the available update on the connected Gateway and restarts it.",
-  );
-  expect(modal.textContent).toContain("this Control UI disconnects until the Gateway is back");
-  expect(modal.textContent).toContain("Installed v1.0.0 · Available v2.0.0");
-  // The confirm action names the operation; a generic "Yes" would not.
-  expect(findButton("Update and restart")).toBeInstanceOf(HTMLButtonElement);
-  expect(findButton("Cancel").hasAttribute("autofocus")).toBe(true);
-  expect(startGatewayUpdate).not.toHaveBeenCalled();
-  expect(postMessage).not.toHaveBeenCalled();
-
-  findButton("Cancel").click();
-  await settled;
-});
-
-it.each([
-  { dismiss: () => findButton("Cancel").click(), name: "Cancel" },
-  {
-    dismiss: () => {
-      const modal = document.body.querySelector("openclaw-modal-dialog");
-      modal?.dispatchEvent(new CustomEvent("modal-cancel", { bubbles: true, composed: true }));
-    },
-    name: "Escape or modal dismissal",
-  },
-])("sends nothing when the operator chooses $name", async ({ dismiss }) => {
-  const postMessage = installNativeBridge();
-  const { settled, startGatewayUpdate } = startUpdate({ viaNativeApp: true });
-  await getRenderedModalDialog(document.body);
-
-  dismiss();
-  await settled;
-
-  expect(startGatewayUpdate).not.toHaveBeenCalled();
-  expect(postMessage).not.toHaveBeenCalled();
-});
-
-it("starts exactly one Gateway update after an explicit confirmation", async () => {
-  const { settled, startGatewayUpdate } = startUpdate();
-  await getRenderedModalDialog(document.body);
-
-  findButton("Update and restart").click();
-  await settled;
-
-  expect(startGatewayUpdate).toHaveBeenCalledOnce();
 });
 
 it("hands a confirmed update to the Mac app instead of the Gateway", async () => {
@@ -159,6 +138,22 @@ it("shows the git target when no package version is available", async () => {
   await settled;
 });
 
+it("states a git distance once instead of labelling it as an available version", async () => {
+  const { settled } = startUpdate({
+    updateAvailable: { channel: "dev", currentVersion: "2026.8.1", latestVersion: "2026.8.1" },
+    updateSchedule: {
+      target: { commitsBehind: 246, kind: "git" },
+    } as unknown as UpdateScheduleState,
+  });
+  const { modal } = await getRenderedModalDialog(document.body);
+
+  expect(modal.textContent).toContain("Installed v2026.8.1 · 246 commits behind");
+  expect(modal.textContent).not.toContain("Available 246");
+
+  findButton("Cancel").click();
+  await settled;
+});
+
 it("keeps a repeated request from stacking a second confirmation or update", async () => {
   const first = startUpdate();
   const second = startUpdate();
@@ -171,4 +166,263 @@ it("keeps a repeated request from stacking a second confirmation or update", asy
   findButton("Update and restart").click();
   await first.settled;
   expect(first.startGatewayUpdate).toHaveBeenCalledOnce();
+});
+
+it("keeps the dialog open and narrates the install, the disconnect, and the failure", async () => {
+  const stream = createProgressStream();
+  const { settled, startGatewayUpdate } = startUpdate({
+    watchUpdateProgress: stream.watchUpdateProgress,
+  });
+  const { modal } = await getRenderedModalDialog(document.body);
+
+  findButton("Update and restart").click();
+  await Promise.resolve();
+  expect(startGatewayUpdate).toHaveBeenCalledOnce();
+  const updating = findButton("Updating…");
+  expect(updating.disabled).toBe(true);
+  expect(modal.textContent).toContain("Installing the update on the Gateway");
+
+  // The Gateway goes away mid-install; the dialog is mounted outside the shell
+  // precisely so it can keep reporting through the disconnect.
+  await stream.push({ run: null, busy: true, connected: false, failure: null });
+  expect(modal.textContent).toContain("The Gateway disconnected during the update");
+  expect(modal.textContent).toContain("openclaw triage");
+  expect(modal.textContent).toContain("on the Gateway host");
+  expect(modal.textContent).toContain("local coding agent");
+  expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+
+  await stream.push({
+    run: null,
+    busy: false,
+    connected: true,
+    failure: "The update failed at install: ENOSPC: no space left on device, write.",
+  });
+  expect(modal.textContent).toContain("ENOSPC: no space left on device");
+  findButton("Close").click();
+  await settled;
+  expect(stream.stopped).toBe(true);
+});
+
+it("keeps the server success report visible across restart until the operator closes it", async () => {
+  const stream = createProgressStream();
+  const { settled } = startUpdate({ watchUpdateProgress: stream.watchUpdateProgress });
+  await getRenderedModalDialog(document.body);
+  findButton("Update and restart").click();
+  const restarting = createUpdateRunFixture({ phase: "restarting" });
+  await stream.push({ run: restarting, busy: true, connected: false, failure: null });
+  const view = document.body.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+    "openclaw-update-run-view",
+  )!;
+  await view.updateComplete;
+  expect(view.textContent).toContain("Gateway restarting…");
+  await stream.push({
+    run: createUpdateRunFixture({
+      phase: "finished",
+      status: "succeeded",
+      after: { version: "2026.9.2" },
+      finishedAtMs: 10,
+    }),
+    busy: false,
+    connected: true,
+    failure: null,
+  });
+  await view.updateComplete;
+  expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+  expect(view.querySelector(".update-run-view__report")?.textContent).toContain(
+    "OpenClaw updated to 2026.9.2",
+  );
+  findButton("Close").click();
+  await settled;
+  expect(stream.stopped).toBe(true);
+});
+
+it("opens a saved run without starting another update and acknowledges its report on close", async () => {
+  const onAcknowledge = vi.fn();
+  const startGatewayUpdate = vi.fn();
+  const settled = confirmAndStartUpdateRuntime({
+    existingRun: createUpdateRunFixture({
+      phase: "finished",
+      status: "succeeded",
+      finishedAtMs: 10,
+    }),
+    startGatewayUpdate,
+    onAcknowledge,
+    updateAvailable: null,
+    updateSchedule: null,
+    viaNativeApp: false,
+  });
+  await getRenderedModalDialog(document.body);
+  expect(document.body.querySelector("openclaw-update-run-view")).not.toBeNull();
+  expect(startGatewayUpdate).not.toHaveBeenCalled();
+  findButton("Close").click();
+  await settled;
+  expect(onAcknowledge).toHaveBeenCalledOnce();
+});
+
+it.each(["existing", "started"] as const)(
+  "clears a %s run report when its scoped row is retired",
+  async (entry) => {
+    const run = createUpdateRunFixture(
+      entry === "existing" ? { phase: "finished", status: "succeeded", finishedAtMs: 10 } : {},
+    );
+    const progress: UpdateProgress = {
+      run,
+      busy: run.status === "running",
+      connected: true,
+      failure: null,
+    };
+    const stream = createProgressStream(entry === "existing" ? progress : undefined);
+    const onAcknowledge = vi.fn();
+    const settled = confirmAndStartUpdateRuntime({
+      ...(entry === "existing" ? { existingRun: run } : {}),
+      onAcknowledge,
+      startGatewayUpdate: vi.fn(),
+      watchUpdateProgress: stream.watchUpdateProgress,
+      updateAvailable: UPDATE_AVAILABLE,
+      updateSchedule: null,
+      viaNativeApp: false,
+    });
+    await getRenderedModalDialog(document.body);
+    if (entry === "started") {
+      findButton("Update and restart").click();
+      await stream.push(progress);
+    }
+    expect(document.body.querySelector("openclaw-update-run-view")).not.toBeNull();
+
+    await stream.push({ run: null, busy: false, connected: false, failure: null });
+
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(document.body.classList.contains("update-dialog-open")).toBe(false);
+    expect(stream.stopped).toBe(true);
+    expect(onAcknowledge).not.toHaveBeenCalled();
+    await settled;
+  },
+);
+
+it("unsubscribes when the initial snapshot retires a saved run before subscription returns", async () => {
+  const stopWatching = vi.fn();
+  const settled = confirmAndStartUpdateRuntime({
+    existingRun: createUpdateRunFixture({
+      phase: "finished",
+      status: "succeeded",
+      finishedAtMs: 10,
+    }),
+    startGatewayUpdate: vi.fn(),
+    watchUpdateProgress: (listener) => {
+      listener({ run: null, busy: false, connected: true, failure: null });
+      return stopWatching;
+    },
+    updateAvailable: null,
+    updateSchedule: null,
+    viaNativeApp: false,
+  });
+
+  expect(stopWatching).toHaveBeenCalledOnce();
+  expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  expect(document.body.classList.contains("update-dialog-open")).toBe(false);
+  await settled;
+});
+
+it("keeps the failure visible until the operator explicitly opens its review action", async () => {
+  const stream = createProgressStream();
+  const onReviewUpdate = vi.fn();
+  const settled = confirmAndStartUpdateRuntime({
+    startGatewayUpdate: vi.fn(),
+    watchUpdateProgress: stream.watchUpdateProgress,
+    onReviewUpdate,
+    updateAvailable: UPDATE_AVAILABLE,
+    updateSchedule: null,
+    viaNativeApp: false,
+  });
+  await getRenderedModalDialog(document.body);
+  findButton("Update and restart").click();
+  await stream.push({
+    run: null,
+    busy: false,
+    connected: true,
+    failure: "Read the recorded cause before retrying.",
+  });
+  expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+    "Read the recorded cause",
+  );
+  expect(onReviewUpdate).not.toHaveBeenCalled();
+  findButton("Review update").click();
+  await settled;
+  expect(onReviewUpdate).toHaveBeenCalledOnce();
+  expect(stream.stopped).toBe(true);
+});
+
+/**
+ * Retry after a failure: the shell keeps the previous attempt's banner until an
+ * accepted run clears it, and producers replay the current snapshot as their
+ * subscribe-time emit. `accepted: false` models `overlays.runUpdate` refusing
+ * the request (disconnected, already running, no admin), which leaves the
+ * banner in place.
+ */
+function createRetryStream(options: { accepted: boolean }) {
+  let progress: UpdateProgress = {
+    run: null,
+    busy: false,
+    connected: true,
+    failure: "The update failed at install: ENOSPC: no space left on device, write.",
+  };
+  let emit: ((next: UpdateProgress) => void) | null = null;
+  return {
+    startGatewayUpdate: () => {
+      if (!options.accepted) {
+        return;
+      }
+      progress = { run: null, busy: true, connected: true, failure: null };
+      emit?.(progress);
+    },
+    watchUpdateProgress: (listener: (next: UpdateProgress) => void) => {
+      emit = listener;
+      listener(progress);
+      return () => {};
+    },
+  };
+}
+
+it("reports a refused retry as unanswered rather than as the old failure", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const stream = createRetryStream({ accepted: false });
+    const { settled } = startUpdate({
+      startGatewayUpdate: stream.startGatewayUpdate,
+      watchUpdateProgress: stream.watchUpdateProgress,
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+
+    findButton("Update and restart").click();
+    await Promise.resolve();
+    // The refused request must not inherit the previous error as its outcome.
+    expect(modal.textContent).not.toContain("ENOSPC");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(modal.textContent).toContain("The update request went unanswered");
+    findButton("Close").click();
+    await settled;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("reports a request the Gateway never accepted instead of spinning forever", async () => {
+  // Auto-advancing keeps the modal's own animation frames running while the
+  // grace deadline is fast-forwarded.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const stream = createProgressStream();
+    const { settled } = startUpdate({ watchUpdateProgress: stream.watchUpdateProgress });
+    const { modal } = await getRenderedModalDialog(document.body);
+
+    findButton("Update and restart").click();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(modal.textContent).toContain("The update request went unanswered");
+    findButton("Close").click();
+    await settled;
+  } finally {
+    vi.useRealTimers();
+  }
 });

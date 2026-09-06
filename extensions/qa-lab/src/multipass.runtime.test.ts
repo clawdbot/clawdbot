@@ -191,10 +191,10 @@ describe("qa multipass runtime", () => {
       outputDirName: "multipass-selection-test",
       runtimePair: ["openclaw", "codex"],
       channelDriverSelection: {
-        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
         channel: "telegram",
         channelDriver: "crabline",
-        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+        providerReadinessArtifactPath: "crabline-provider-readiness.json",
       },
       enabledPluginIds: ["browser", "memory-core", "browser"],
     });

@@ -1,4 +1,8 @@
-import type { ChatAttachment, ChatComposerMemoryFallback } from "../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatComposerMemoryFallback,
+  HumanMention,
+} from "../lib/chat/chat-types.ts";
 import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-store.ts";
 import type { ApplicationChatAttachmentHandoff } from "./context.ts";
 
@@ -8,9 +12,13 @@ const MAX_PENDING_CHAT_ATTACHMENT_ENTRIES = 32;
 
 type PendingChatAttachmentHandoff = {
   owner: NonNullable<Parameters<ApplicationChatAttachmentHandoff["prepare"]>[0]["owner"]>;
+  paneId: string;
   scopeKey: string;
   attachments: ChatAttachment[];
   fallbacks: Record<string, ChatComposerMemoryFallback>;
+  message: string;
+  mentions?: readonly HumanMention[];
+  preparedAt: number;
 };
 
 export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff {
@@ -37,19 +45,21 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
     }
     release(handoffAttachments(handoff).filter((attachment) => !retainedIds.has(attachment.id)));
   };
-  const take = (paneId: string) => {
-    const handoff = pending.get(paneId);
+  const entryKey = (paneId: string, scopeKey: string) => JSON.stringify([paneId, scopeKey]);
+  const take = (key: string) => {
+    const handoff = pending.get(key);
     if (handoff) {
-      pending.delete(paneId);
+      pending.delete(key);
     }
     return handoff;
   };
 
   return {
-    prepare: ({ owner, paneId, scopeKey, attachments, fallbacks }) => {
-      const previous = take(paneId);
+    prepare: ({ owner, paneId, scopeKey, attachments, fallbacks, message = "", mentions }) => {
+      const key = entryKey(paneId, scopeKey);
+      const previous = take(key);
       const fallbackEntries = Object.entries(fallbacks);
-      if (attachments.length === 0 && fallbackEntries.length === 0) {
+      if (!message && attachments.length === 0 && fallbackEntries.length === 0) {
         releaseHandoff(previous);
         return;
       }
@@ -67,37 +77,61 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
         }
         return;
       }
-      pending.set(paneId, {
+      pending.set(key, {
         owner,
+        preparedAt: Date.now(),
+        paneId,
         scopeKey,
         attachments: [...attachments],
+        message,
+        ...(mentions?.length ? { mentions: mentions.map((mention) => ({ ...mention })) } : {}),
         fallbacks: Object.fromEntries(
-          fallbackEntries.map(([key, fallback]) => [
-            key,
+          fallbackEntries.map(([fallbackKey, fallback]) => [
+            fallbackKey,
             { ...fallback, attachments: [...fallback.attachments] },
           ]),
         ),
       });
       // Route handoffs normally consume immediately. Bounds make abandoned
       // split panes release their packages instead of leaking for the tab lifetime.
-      for (const oldestPaneId of pending.keys()) {
+      for (const oldestKey of pending.keys()) {
         if (pending.size <= MAX_PENDING_CHAT_ATTACHMENT_ENTRIES) {
           break;
         }
-        releaseHandoff(take(oldestPaneId));
+        releaseHandoff(take(oldestKey));
       }
     },
     consume: ({ owner, paneId, scopeKey }) => {
-      const match = take(paneId);
-      // Reusing a pane id with another session or Gateway is terminal for the
-      // old owner; keeping it would allow a later remount to recover stale evidence.
-      if (match?.owner === owner && match.scopeKey === scopeKey) {
-        return { attachments: match.attachments, fallbacks: match.fallbacks };
+      const match = take(entryKey(paneId, scopeKey));
+      // A Gateway mismatch is terminal for this exact presentation. Other
+      // retained session scopes under the same logical pane remain independent.
+      if (match?.owner === owner) {
+        return {
+          attachments: match.attachments,
+          fallbacks: match.fallbacks,
+          ...(match.message ? { message: match.message } : {}),
+          ...(match.mentions ? { mentions: match.mentions } : {}),
+        };
       }
       releaseHandoff(match);
       return null;
     },
-    clearPane: (paneId) => releaseHandoff(take(paneId)),
+    retireScope: (scopeKey, beforeRevision) => {
+      // Optimistic navigation may unmount the pane before deletion confirms.
+      // Retire that package without touching a later edit or another session.
+      for (const [key, handoff] of pending) {
+        if (handoff.scopeKey === scopeKey && handoff.preparedAt < beforeRevision) {
+          releaseHandoff(take(key));
+        }
+      }
+    },
+    clearPane: (paneId) => {
+      for (const [key, handoff] of pending) {
+        if (handoff.paneId === paneId) {
+          releaseHandoff(take(key));
+        }
+      }
+    },
     dispose: () => {
       disposed = true;
       for (const handoff of pending.values()) {

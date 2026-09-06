@@ -22,14 +22,14 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
+import { dispatchLowLevelChannelReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
+import { dispatchReplyWithBufferedBlockDispatcherCore } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   createAckReactionHandle,
@@ -60,10 +60,10 @@ import {
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
-import { resolveStorePath } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import {
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
   recordInboundSessionMeta,
   updateSessionLastRoute,
 } from "../../config/sessions/session-accessor.js";
@@ -80,10 +80,19 @@ import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-r
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
 import type { PluginRuntime } from "./types.js";
 
-export function createRuntimeChannel(): PluginRuntime["channel"] {
+export function createRuntimeChannel(options?: {
+  dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+}): PluginRuntime["channel"] {
+  const dispatchInbound: typeof dispatchRoutedChannelTurn = (params) =>
+    dispatchRoutedChannelTurn({
+      ...params,
+      ...(options?.dispatchReplyFromConfig
+        ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
+        : {}),
+    });
   const sessionRuntime = {
-    resolveStorePath,
-    readSessionUpdatedAt,
+    resolveStorePath: resolveSessionStorePathCore,
+    readSessionUpdatedAt: readSessionUpdatedAtCore,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
     recordSessionMetaFromInbound: recordInboundSessionMeta,
@@ -105,11 +114,12 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       convertMarkdownTables,
     },
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher,
+      dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
-      dispatchReplyFromConfig,
+      dispatchReplyFromConfig:
+        options?.dispatchReplyFromConfig ?? dispatchLowLevelChannelReplyFromConfig,
       withReplyDispatcher,
       settleReplyDispatcher,
       finalizeInboundContext,
@@ -188,7 +198,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       buildContext: buildChannelInboundEventContext,
       run: runChannelTurn,
       runPreparedReply: runPreparedChannelTurn,
-      dispatch: dispatchRoutedChannelTurn,
+      dispatch: dispatchInbound,
       dispatchReply: dispatchAssembledChannelTurn,
     },
     threadBindings: {

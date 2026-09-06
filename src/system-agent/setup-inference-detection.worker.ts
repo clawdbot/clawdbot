@@ -1,10 +1,5 @@
-import { parentPort } from "node:worker_threads";
-import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
-import {
-  detectSetupInference,
-  listManualSetupInferenceOptions,
-  type SetupInferenceDetection,
-} from "./setup-inference.js";
+import { parentPort, workerData } from "node:worker_threads";
+import { detectSetupInference } from "./setup-inference-detect.js";
 
 if (!parentPort) {
   throw new Error("setup inference detection worker requires a parent port");
@@ -13,18 +8,14 @@ if (!parentPort) {
 const port = parentPort;
 
 try {
-  const manual = await listManualSetupInferenceOptions();
-  const partial: SetupInferenceDetection = {
-    candidates: [],
-    unavailableCandidates: [],
-    recommendedInstalls: listRecommendedToolInstalls(),
-    ...manual,
-  };
-  port.postMessage({
-    type: "partial",
-    detection: partial,
-  });
-  const detection = await detectSetupInference();
+  const agentId =
+    workerData && typeof workerData === "object" && typeof workerData.agentId === "string"
+      ? workerData.agentId
+      : undefined;
+  const detection = await detectSetupInference(
+    { onPartial: (partial) => port.postMessage({ type: "partial", detection: partial }) },
+    agentId,
+  );
   port.postMessage({ type: "result", detection });
 } catch (error) {
   port.postMessage({

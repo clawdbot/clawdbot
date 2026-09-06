@@ -9,12 +9,8 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../../src/infra/diagnostic-trace-context.js";
-import {
-  getChildLogger,
-  resetLogger,
-  setLoggerOverride,
-  testApi,
-} from "../../../../src/logging/logger.js";
+import { getChildLogger, resetLogger, setLoggerOverride } from "../../../../src/logging/logger.js";
+import { testApi } from "../../../../src/logging/logger.test-support.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 function artifactBase(argv: readonly string[]): string {

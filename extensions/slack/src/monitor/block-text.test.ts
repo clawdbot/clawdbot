@@ -48,7 +48,7 @@ describe("resolveSlackBlocksText data visualizations", () => {
     ]);
 
     expect(resolved).toEqual({
-      text: "Ask &lt;@U123&gt;\nDeploy\nHealthy\nRun workflow\nChoose owner",
+      text: "Ask <@U123>\nDeploy\nHealthy\nRun workflow\nChoose owner",
       hasRichText: true,
       hasNativeData: false,
     });

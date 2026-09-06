@@ -1,7 +1,7 @@
 // Resolves exec and plugin approvals through the gateway client.
 import type {
+  ApprovalChannelReviewer,
   ApprovalDecision,
-  ApprovalKind,
   ApprovalResolveParams,
   ApprovalResolveResult,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -12,12 +12,14 @@ import { withOperatorApprovalsGatewayClient } from "../gateway/operator-approval
 import { isApprovalNotFoundError } from "./approval-errors.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalMethod } from "./approval-gateway-runtime-methods.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 type ResolveApprovalOverGatewayBaseParams = {
   cfg: OpenClawConfig;
   approvalId: string;
   decision: ApprovalDecision;
   channel?: string;
+  accountId?: string | null;
   senderId?: string | null;
   gatewayUrl?: string;
   clientDisplayName?: string;
@@ -33,7 +35,7 @@ type ApprovalGatewayRuntime = {
 
 type CanonicalResolveApprovalOverGatewayParams = ResolveApprovalOverGatewayBaseParams & {
   /** Explicit owner required by the canonical approval resolver. */
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   gatewayRuntime?: ApprovalGatewayRuntime;
   allowPluginFallback?: never;
   resolveMethod?: never;
@@ -54,7 +56,7 @@ type LegacyResolveApprovalOverGatewayParams = ResolveApprovalOverGatewayBasePara
    * Explicit legacy owner. Omission retains the shipped id-based routing contract.
    * @deprecated Pass approvalKind so resolution uses the canonical approval service.
    */
-  resolveMethod?: "exec" | "plugin";
+  resolveMethod?: ChannelApprovalKind;
 };
 
 type ResolveApprovalOverGatewayParams =
@@ -77,7 +79,10 @@ export async function resolveApprovalOverGateway(
 ): Promise<ApprovalResolveResult | void> {
   const approvalKind = (params as { approvalKind?: unknown }).approvalKind;
   const resolveMethod = (params as { resolveMethod?: unknown }).resolveMethod;
-  const canonicalKind = approvalKind === "exec" || approvalKind === "plugin" ? approvalKind : null;
+  const canonicalKind =
+    approvalKind === "exec" || approvalKind === "plugin" || approvalKind === "system-agent"
+      ? approvalKind
+      : null;
   const legacyMethod =
     resolveMethod === "exec" || resolveMethod === "plugin" ? resolveMethod : null;
   const hasCanonicalKind = canonicalKind !== null;
@@ -106,14 +111,23 @@ export async function resolveApprovalOverGateway(
   if (typeof approvalId !== "string" || !isWellFormedApprovalId(approvalId)) {
     throw new Error("approval resolution requires an approval id");
   }
-  const senderId = params.senderId?.trim() || "unknown";
+  const senderId = params.senderId?.trim();
   const channel = params.channel?.trim();
+  const accountId = params.accountId?.trim();
+  const hasReviewerIdentity = Boolean(channel || accountId || senderId);
+  if (hasReviewerIdentity && (!channel || !accountId || !senderId)) {
+    throw new Error("channel approval resolution requires channel, account, and sender identity");
+  }
+  const reviewer: ApprovalChannelReviewer | undefined =
+    channel && accountId && senderId ? { channel, accountId, senderId } : undefined;
   // Channel manifests own operator-facing labels; using their generated metadata
   // keeps approval clients aligned without importing plugin runtime or hardcoding ids.
   const channelLabel = channel ? (findChatChannelLabel(channel) ?? channel) : undefined;
   const clientDisplayName =
     params.clientDisplayName ??
-    (channelLabel ? `${channelLabel} approval (${senderId})` : `Approval (${senderId})`);
+    (channelLabel
+      ? `${channelLabel} approval (${senderId ?? "unknown"})`
+      : `Approval (${senderId ?? "unknown"})`);
 
   const canonicalGatewayRuntime = (params as CanonicalResolveApprovalOverGatewayParams)
     .gatewayRuntime;
@@ -124,6 +138,7 @@ export async function resolveApprovalOverGateway(
         id: approvalId,
         kind: canonicalKind,
         decision: params.decision,
+        ...(reviewer ? { reviewer } : {}),
       },
       { clientDisplayName },
     );
@@ -140,6 +155,7 @@ export async function resolveApprovalOverGateway(
         id: approvalId,
         kind: canonicalKind,
         decision: params.decision,
+        ...(reviewer ? { reviewer } : {}),
       };
       return await gatewayClient.request<ApprovalResolveResult>("approval.resolve", resolveParams);
     }
@@ -150,6 +166,7 @@ export async function resolveApprovalOverGateway(
       await gatewayClient.request(method, {
         id: approvalId,
         decision: params.decision,
+        ...(reviewer ? { reviewer } : {}),
       });
     };
     if (legacyMethod === "plugin" || (!legacyMethod && approvalId.startsWith("plugin:"))) {

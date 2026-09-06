@@ -6,35 +6,65 @@ import {
   configureFakeWebSockets,
   FakeWebSocket,
 } from "./background.test-support.js";
-import type { PageCaptureResult, RuntimeMessageListener } from "./background.test-support.js";
+import type { RuntimeMessageListener } from "./background.test-support.js";
 import { computeRelayAuthProof } from "./modules/relay-auth-v2-crypto.js";
+import type { BrowserTabSnapshot } from "./modules/tab-eligibility.js";
+import { relayTestKey } from "./relay-key.test-support.js";
 
-export const RELAY_SECRET = "a".repeat(64);
-export const REPLACEMENT_RELAY_SECRET = "b".repeat(64);
+export const TEST_RELAY_KEY = relayTestKey(1);
+export const REPLACEMENT_TEST_RELAY_KEY = relayTestKey(2);
 const PAIRING_CONFIG_KEYS = ["relayUrl", "token", "pairingStatus"];
+const RETIRED_CUSTODY_BLOCKED_KEY = "retiredCopilotCustodyBlockedV1";
+const backgroundCleanups = new Set<() => Promise<void>>();
+
+function waitForBackgroundState<T>(assertion: () => T | Promise<T>): Promise<T> {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
+export async function cleanupBackgroundHarnesses(): Promise<void> {
+  await Promise.all([...backgroundCleanups].map(async (cleanup) => await cleanup()));
+}
+
+export type RetiredStorageFailureStage =
+  | "marker_set"
+  | "session_remove"
+  | "retired_local_remove"
+  | "marker_remove";
 
 export async function loadBackground({
   deferTabAccessInitialization = false,
+  deferRetiredStatePreparation = false,
   deferSocketClose = false,
-  onConsentChanged,
+  inheritedDebuggerTabIds = [],
+  nativeMessage,
   rejectStorageRemove = false,
+  retiredStorageFailureStage,
   relayNegotiatedProtocol,
   sessionConfig,
   storedConfig,
   initialTabs = [],
+  emitTabEvents = false,
+  fileAccessAllowed = false,
 }: {
   deferTabAccessInitialization?: boolean;
+  deferRetiredStatePreparation?: boolean;
   deferSocketClose?: boolean;
-  onConsentChanged?: () => Promise<void>;
+  inheritedDebuggerTabIds?: number[];
+  nativeMessage?: (request: unknown) => Promise<unknown>;
   rejectStorageRemove?: boolean;
+  retiredStorageFailureStage?: RetiredStorageFailureStage;
   relayNegotiatedProtocol?: string;
   sessionConfig?: Record<string, unknown>;
   storedConfig?: Record<string, unknown>;
   initialTabs?: Array<Record<string, unknown> & { id: number }>;
+  emitTabEvents?: boolean;
+  fileAccessAllowed?: boolean;
 } = {}) {
   const sockets: FakeWebSocket[] = [];
   let alarmListener: ((alarm: { name: string }) => void) | undefined;
+  let installedListener: (() => void) | undefined;
   let messageListener: RuntimeMessageListener | undefined;
+  let startupListener: (() => void) | undefined;
   let debuggerDetachListener:
     | ((source: { tabId?: number }, reason: "target_closed" | "canceled_by_user") => void)
     | undefined;
@@ -43,24 +73,33 @@ export async function loadBackground({
     | undefined;
   let tabsRemovedListener: ((tabId: number) => void) | undefined;
   let tabsReplacedListener: ((addedTabId: number, removedTabId: number) => void) | undefined;
-  let tabGroupUpdatedListener: (() => void) | undefined;
-  let tabGroupRemovedListener: (() => void) | undefined;
-  let tabsUpdatedListener: ((tabId: number, changeInfo: { groupId?: number }) => void) | undefined;
+  let tabGroupUpdatedListener: ((group?: { id: number; title?: string }) => void) | undefined;
+  let tabGroupRemovedListener: ((group?: { id: number; title?: string }) => void) | undefined;
+  let tabsUpdatedListener:
+    | ((tabId: number, changeInfo: Partial<BrowserTabSnapshot>, tab?: BrowserTabSnapshot) => void)
+    | undefined;
   let nextStorageGet: Promise<void> | null = null;
   let nextStorageRemove: Promise<void> | null = null;
   let nextStorageSet: Promise<void> | null = null;
   let nextSessionStorageSet: Promise<void> | null = null;
+  let currentRetiredStorageFailureStage = retiredStorageFailureStage;
   let releaseTabAccessInitialization = () => {};
+  let releaseRetiredStatePreparation = () => {};
   const tabAccessInitialization = deferTabAccessInitialization
     ? new Promise<void>((resolve) => {
         releaseTabAccessInitialization = resolve;
+      })
+    : Promise.resolve();
+  const retiredStatePreparation = deferRetiredStatePreparation
+    ? new Promise<void>((resolve) => {
+        releaseRetiredStatePreparation = resolve;
       })
     : Promise.resolve();
   const sharedTabIds = new Set<number>([1]);
   const storageValues: Record<string, unknown> = {
     ...(storedConfig ?? {
       relayUrl: "ws://127.0.0.1:18797/extension",
-      token: RELAY_SECRET,
+      token: TEST_RELAY_KEY,
       authVersion: 2,
       accessMode: "selected",
       groupColor: "orange",
@@ -80,7 +119,11 @@ export async function loadBackground({
   const clearAlarm = vi.fn(async () => true);
   const setBadgeText = vi.fn(async () => undefined);
   const setBadgeBackgroundColor = vi.fn(async () => undefined);
-  const storageGet = vi.fn(async (keys: string[]) => {
+  const storageGet = vi.fn(async (requestedKeys: string[] | string) => {
+    const keys = Array.isArray(requestedKeys) ? requestedKeys : [requestedKeys];
+    if (keys.includes("copilotSessionRegistryV1")) {
+      await retiredStatePreparation;
+    }
     const pending = nextStorageGet;
     nextStorageGet = null;
     await pending;
@@ -94,14 +137,31 @@ export async function loadBackground({
     const pending = nextStorageSet;
     nextStorageSet = null;
     await pending;
+    if (
+      currentRetiredStorageFailureStage === "marker_set" &&
+      values[RETIRED_CUSTODY_BLOCKED_KEY] === true
+    ) {
+      throw new Error("Could not persist retired recovery block.");
+    }
     Object.assign(storageValues, values);
   });
   const storageRemove = vi.fn(async (keys: string[]) => {
     const pending = nextStorageRemove;
     nextStorageRemove = null;
     await pending;
-    if (rejectStorageRemove) {
+    if (
+      rejectStorageRemove &&
+      !keys.some((key) => key.startsWith("copilot") || key === RETIRED_CUSTODY_BLOCKED_KEY)
+    ) {
       throw new Error("Could not clear invalid browser pairing.");
+    }
+    const retiredStage = keys.includes(RETIRED_CUSTODY_BLOCKED_KEY)
+      ? "marker_remove"
+      : keys.some((key) => key.startsWith("copilot"))
+        ? "retired_local_remove"
+        : null;
+    if (retiredStage && currentRetiredStorageFailureStage === retiredStage) {
+      throw new Error("Could not discard retired recovery state.");
     }
     for (const key of keys) {
       delete storageValues[key];
@@ -113,14 +173,26 @@ export async function loadBackground({
     await pending;
     Object.assign(sessionStorageValues, values);
   });
+  const sendNativeMessage = vi.fn(async (_host: string, request: unknown) => {
+    if (nativeMessage) {
+      return await nativeMessage(request);
+    }
+    throw new Error("Specified native messaging host not found.");
+  });
+  const debuggerGetTargetInfo = vi.fn(async (source: { tabId: number }) => ({
+    targetInfo: { targetId: `tab-${source.tabId}` },
+  }));
+  const debuggerSendCommand = vi.fn(
+    async (
+      _source: { tabId: number; sessionId?: string },
+      _method: string,
+      _params?: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> => ({}),
+  );
+  let runtimeLastError: { message?: string } | undefined;
   const chromeMock = {
+    extension: { isAllowedFileSchemeAccess: vi.fn(async () => fileAccessAllowed) },
     action: { setBadgeText, setBadgeBackgroundColor },
-    commands: { onCommand: { addListener } },
-    contextMenus: {
-      create: vi.fn(),
-      removeAll: vi.fn(async () => undefined),
-      onClicked: { addListener },
-    },
     alarms: {
       create: createAlarm,
       clear: clearAlarm,
@@ -156,23 +228,86 @@ export async function loadBackground({
           },
         ),
       },
-      attach: vi.fn(async () => undefined),
-      detach: vi.fn(async (_source: { tabId: number }) => undefined),
+      attach: vi.fn(async (_source: { tabId: number }, _version: string) => undefined),
+      detach: vi.fn(async (_source: { tabId?: number; targetId?: string }) => undefined),
       getTargets: vi.fn(
-        async (): Promise<Array<{ id?: string; tabId?: number; attached?: boolean }>> => [],
+        async (): Promise<Array<{ id?: string; tabId?: number; attached?: boolean }>> =>
+          inheritedDebuggerTabIds.map((tabId) => ({ id: `tab-${tabId}`, tabId, attached: true })),
       ),
-      sendCommand: vi.fn(async () => ({})),
+      sendCommand: (
+        source: { tabId: number; sessionId?: string },
+        method: string,
+        params?: Record<string, unknown>,
+      ) =>
+        method === "Target.getTargetInfo"
+          ? debuggerGetTargetInfo(source)
+          : debuggerSendCommand(source, method, params),
     },
     runtime: {
+      get lastError() {
+        return runtimeLastError;
+      },
+      connectNative: vi.fn((host: string) => {
+        let disconnected = false;
+        let nativeMessageListener: ((response: unknown) => void) | undefined;
+        let disconnectListener: (() => void) | undefined;
+        const disconnect = () => {
+          if (disconnected) {
+            return;
+          }
+          disconnected = true;
+          disconnectListener?.();
+        };
+        return {
+          disconnect,
+          onDisconnect: {
+            addListener: (listener: () => void) => {
+              disconnectListener = listener;
+            },
+          },
+          onMessage: {
+            addListener: (listener: (response: unknown) => void) => {
+              nativeMessageListener = listener;
+            },
+          },
+          postMessage: (request: unknown) => {
+            void sendNativeMessage(host, request).then(
+              (response) => {
+                if (!disconnected) {
+                  nativeMessageListener?.(response);
+                }
+              },
+              (error: unknown) => {
+                if (!disconnected) {
+                  runtimeLastError = {
+                    message: error instanceof Error ? error.message : String(error),
+                  };
+                  disconnect();
+                  runtimeLastError = undefined;
+                }
+              },
+            );
+          },
+        };
+      }),
       getManifest: vi.fn(() => ({ version: "1.0.0" })),
+      openOptionsPage: vi.fn(async () => undefined),
       onConnect: { addListener },
       onMessage: {
         addListener: vi.fn((listener: RuntimeMessageListener) => {
           messageListener = listener;
         }),
       },
-      onStartup: { addListener },
-      onInstalled: { addListener },
+      onStartup: {
+        addListener: vi.fn((listener: () => void) => {
+          startupListener = listener;
+        }),
+      },
+      onInstalled: {
+        addListener: vi.fn((listener: () => void) => {
+          installedListener = listener;
+        }),
+      },
     },
     storage: {
       local: { get: storageGet, set: storageSet, remove: storageRemove },
@@ -187,14 +322,17 @@ export async function loadBackground({
         }),
         set: sessionStorageSet,
         remove: vi.fn(async (keys: string[]) => {
+          if (
+            currentRetiredStorageFailureStage === "session_remove" &&
+            keys.some((key) => key.startsWith("copilot"))
+          ) {
+            throw new Error("Could not discard retired recovery state.");
+          }
           for (const key of keys) {
             delete sessionStorageValues[key];
           }
         }),
       },
-    },
-    scripting: {
-      executeScript: vi.fn(async (): Promise<Array<{ result: PageCaptureResult }>> => []),
     },
     tabGroups: {
       query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
@@ -203,14 +341,18 @@ export async function loadBackground({
         title: groupId === 7 ? "OpenClaw" : "Other",
         windowId: 1,
       })),
-      update: vi.fn(async () => undefined),
+      update: vi.fn(async (id: number, properties: { title: string; color?: string }) => {
+        if (emitTabEvents) {
+          tabGroupUpdatedListener?.({ id, ...properties });
+        }
+      }),
       onUpdated: {
-        addListener: vi.fn((listener: () => void) => {
+        addListener: vi.fn((listener: typeof tabGroupUpdatedListener) => {
           tabGroupUpdatedListener = listener;
         }),
       },
       onRemoved: {
-        addListener: vi.fn((listener: () => void) => {
+        addListener: vi.fn((listener: typeof tabGroupRemovedListener) => {
           tabGroupRemovedListener = listener;
         }),
       },
@@ -233,6 +375,13 @@ export async function loadBackground({
       group: vi.fn(async ({ tabIds }: { tabIds: number[] }) => {
         for (const tabId of tabIds) {
           sharedTabIds.add(tabId);
+          if (emitTabEvents) {
+            tabsUpdatedListener?.(
+              tabId,
+              { groupId: 7 },
+              { ...tabsById.get(tabId), id: tabId, groupId: 7 },
+            );
+          }
         }
         return 7;
       }),
@@ -249,6 +398,9 @@ export async function loadBackground({
       }),
       remove: vi.fn(async (tabId: number) => {
         tabsById.delete(tabId);
+        if (emitTabEvents) {
+          tabsRemovedListener?.(tabId);
+        }
       }),
       update: vi.fn(async () => undefined),
       onRemoved: {
@@ -262,11 +414,9 @@ export async function loadBackground({
         }),
       },
       onUpdated: {
-        addListener: vi.fn(
-          (listener: (tabId: number, changeInfo: { groupId?: number }) => void) => {
-            tabsUpdatedListener = listener;
-          },
-        ),
+        addListener: vi.fn((listener: typeof tabsUpdatedListener) => {
+          tabsUpdatedListener = listener;
+        }),
       },
     },
     windows: { update: vi.fn(async () => undefined) },
@@ -276,51 +426,61 @@ export async function loadBackground({
   vi.stubGlobal("navigator", { userAgent: "Chromium/125.0.0.0" });
   vi.stubGlobal("WebSocket", FakeWebSocket);
 
-  if (onConsentChanged) {
-    const copilotModule = await import("./modules/copilot-background.js");
-    const createCopilotController = copilotModule.createCopilotController;
-    vi.spyOn(copilotModule, "createCopilotController").mockImplementation((options) => ({
-      ...createCopilotController(options),
-      onConsentChanged,
-    }));
-  }
-
   const backgroundModulePath = "./background.js";
   await import(backgroundModulePath);
-  await vi.waitFor(() => {
-    const pairingReads = storageGet.mock.calls.filter(([keys]) =>
-      PAIRING_CONFIG_KEYS.every((key) => keys.includes(key)),
-    );
-    expect(pairingReads.length).toBeGreaterThanOrEqual(2);
-  });
-  if (!deferTabAccessInitialization) {
-    for (let attempt = 0; attempt < 20 && sockets.length === 0; attempt += 1) {
+  if (!deferRetiredStatePreparation) {
+    await waitForBackgroundState(() => {
+      const pairingReads = storageGet.mock.calls.filter(([keys]) =>
+        PAIRING_CONFIG_KEYS.every((key) => keys.includes(key)),
+      );
+      expect(pairingReads.length).toBeGreaterThanOrEqual(1);
+    });
+  }
+  if (!deferTabAccessInitialization && !deferRetiredStatePreparation) {
+    await waitForBackgroundState(() => {
       const pairingWasCleared = storageRemove.mock.calls.some(([keys]) =>
         keys.includes("relayUrl"),
       );
-      if (pairingWasCleared) {
-        break;
-      }
-      await Promise.resolve();
-    }
-    const pairingWasCleared = storageRemove.mock.calls.some(([keys]) => keys.includes("relayUrl"));
-    expect(sockets.length > 0 || pairingWasCleared).toBe(true);
+      expect(
+        sockets.length > 0 ||
+          pairingWasCleared ||
+          sendNativeMessage.mock.calls.length > 0 ||
+          Object.hasOwn(storageValues, "copilotSessionRegistryV1") ||
+          Object.hasOwn(storageValues, RETIRED_CUSTODY_BLOCKED_KEY) ||
+          storageValues.nativeBootstrapDisabled === true,
+      ).toBe(true);
+    });
   }
 
-  if (!alarmListener || !messageListener || !tabsUpdatedListener || !tabsReplacedListener) {
+  if (
+    !alarmListener ||
+    !installedListener ||
+    !messageListener ||
+    !startupListener ||
+    !tabsUpdatedListener ||
+    !tabsReplacedListener
+  ) {
     throw new Error("expected background worker lifecycle listeners");
   }
+  const lifecycleMessageListener = messageListener;
+  const cleanup = async () => {
+    backgroundCleanups.delete(cleanup);
+    await new Promise<void>((resolve) => {
+      lifecycleMessageListener({ type: "unpair" }, {}, () => resolve());
+    });
+  };
+  backgroundCleanups.add(cleanup);
   return {
     alarmListener,
     clearAlarm,
     createAlarm,
-    executeScript: chromeMock.scripting.executeScript,
     debuggerAttach: chromeMock.debugger.attach,
     debuggerDetach: chromeMock.debugger.detach,
     debuggerDetachListener,
     debuggerEventListener,
     debuggerGetTargets: chromeMock.debugger.getTargets,
-    debuggerSendCommand: chromeMock.debugger.sendCommand,
+    debuggerSendCommand,
+    debuggerGetTargetInfo,
     deferNextStorageGet: () => {
       let release = () => {};
       nextStorageGet = new Promise<void>((resolve) => {
@@ -352,8 +512,11 @@ export async function loadBackground({
     get gatewaySockets() {
       return sockets.filter((socket) => !socket.protocols.includes("openclaw-extension-relay.v2"));
     },
+    installedListener,
     messageListener,
+    sendNativeMessage,
     releaseTabAccessInitialization,
+    releaseRetiredStatePreparation,
     get relaySockets() {
       return sockets.filter((socket) => socket.protocols.includes("openclaw-extension-relay.v2"));
     },
@@ -361,7 +524,7 @@ export async function loadBackground({
       if (socket.readyState !== FakeWebSocket.OPEN) {
         socket.open();
       }
-      await vi.waitFor(() => expect(socket.send).toHaveBeenCalled());
+      await waitForBackgroundState(() => expect(socket.send).toHaveBeenCalled());
       const helloRaw = socket.send.mock.calls.find(
         ([raw]) => JSON.parse(raw).type === "auth.hello",
       )?.[0];
@@ -390,7 +553,7 @@ export async function loadBackground({
         ...fields,
         serverProof: await computeRelayAuthProof(String(storageValues.token), "server", fields),
       });
-      await vi.waitFor(() => {
+      await waitForBackgroundState(() => {
         expect(
           socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "auth.response"),
         ).toBe(true);
@@ -413,7 +576,7 @@ export async function loadBackground({
           response.clientProof,
         ),
       });
-      await vi.waitFor(() => {
+      await waitForBackgroundState(() => {
         expect(socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "hello")).toBe(true);
       });
     },
@@ -422,11 +585,17 @@ export async function loadBackground({
     storageRemove,
     storageSet,
     storageValues,
+    setRetiredStorageFailureStage: (stage?: RetiredStorageFailureStage) => {
+      currentRetiredStorageFailureStage = stage;
+    },
+    startupListener,
     sessionStorageValues,
     sessionStorageSet,
     shareTab: (tabId: number) => sharedTabIds.add(tabId),
     unshareTab: (tabId: number) => sharedTabIds.delete(tabId),
     tabGroupsQuery: chromeMock.tabGroups.query,
+    tabGroupsGet: chromeMock.tabGroups.get,
+    tabGroupsUpdate: chromeMock.tabGroups.update,
     tabGroupUpdatedListener,
     tabGroupRemovedListener,
     tabsCreate: chromeMock.tabs.create,
@@ -440,6 +609,20 @@ export async function loadBackground({
     tabsRemovedListener,
     tabsReplacedListener,
     windowsUpdate: chromeMock.windows.update,
+    updateTab: (tabId: number, change: Partial<BrowserTabSnapshot>, notify = true) => {
+      const tab = { ...tabsById.get(tabId), ...change, id: tabId };
+      tabsById.set(tabId, tab);
+      if (typeof change.groupId === "number") {
+        if (change.groupId === 7) {
+          sharedTabIds.add(tabId);
+        } else {
+          sharedTabIds.delete(tabId);
+        }
+      }
+      if (notify) {
+        tabsUpdatedListener?.(tabId, change, { ...tab, groupId: sharedTabIds.has(tabId) ? 7 : -1 });
+      }
+    },
   };
 }
 
@@ -452,4 +635,31 @@ export async function sendRuntimeMessage(
       resolve(response as Record<string, unknown>);
     });
   });
+}
+
+export async function loadRelayCommandHarness(accessMode: "all" | "selected") {
+  const harness = await loadBackground({
+    emitTabEvents: true,
+    storedConfig: {
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      token: TEST_RELAY_KEY,
+      authVersion: 2,
+      accessMode,
+    },
+    initialTabs: [{ id: 100, url: "about:blank", groupId: 7 }],
+  });
+  const socket = harness.relaySockets[0]!;
+  await harness.authenticate(socket);
+  let seq = 0;
+  const frames = () => socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+  const command = async (message: Record<string, unknown>) => {
+    const id = ++seq;
+    socket.receive({ ...message, seq: id });
+    return await waitForBackgroundState(() => {
+      const response = frames().find((frame) => frame.seq === id);
+      expect(response).toBeDefined();
+      return response;
+    });
+  };
+  return { ...harness, socket, frames, command };
 }

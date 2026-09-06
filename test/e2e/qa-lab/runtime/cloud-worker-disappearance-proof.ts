@@ -8,9 +8,10 @@ import {
   createStaticSshWorkerProvider,
   QA_EVIDENCE_FILENAME,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
   type QaEvidenceSummaryJson,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createWorkerSessionPlacementStore } from "../../../../src/gateway/worker-environments/placement-store.js";
@@ -18,6 +19,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../../../src/state/openclaw-state-db.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "cloud-worker-disappearance";
@@ -25,13 +27,14 @@ const VERDICT_FILE = "cloud-worker-disappearance-verdict.json";
 const BUNDLE_HASH = "a".repeat(64);
 const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
 const ENVIRONMENT_ID = "qa-static-worker-loss";
+const INDEPENDENT_ENVIRONMENT_ID = "qa-static-worker-independent";
 const INDEPENDENT_REASON = "independent session failure";
 
 type ProducerOptions = { artifactBase: string; repoRoot: string };
-type Gateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type Gateway = QaGatewayChild;
 type SessionIdentity = { agentId: string; sessionId: string; sessionKey: string };
 
-function asRecord(value: unknown, label: string): Record<string, unknown> {
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} was not an object`);
   }
@@ -74,13 +77,13 @@ async function createQaSession(
   senderId: string,
   marker: string,
 ): Promise<SessionIdentity> {
-  const beforePayload = asRecord(
+  const beforePayload = requireRecord(
     await gateway.call("sessions.list", { limit: 100 }),
     "sessions.list before inbound",
   );
   const beforeIds = new Set(
     (Array.isArray(beforePayload.sessions) ? beforePayload.sessions : []).flatMap((entry) => {
-      const row = asRecord(entry, "session row");
+      const row = requireRecord(entry, "session row");
       return typeof row.sessionId === "string" ? [row.sessionId] : [];
     }),
   );
@@ -92,9 +95,12 @@ async function createQaSession(
     text: `Reply exactly: ${marker}`,
   });
   await waitForOutbound(state, cursor, marker);
-  const payload = asRecord(await gateway.call("sessions.list", { limit: 100 }), "sessions.list");
+  const payload = requireRecord(
+    await gateway.call("sessions.list", { limit: 100 }),
+    "sessions.list",
+  );
   const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
-  const rows = sessions.map((entry) => asRecord(entry, "session row"));
+  const rows = sessions.map((entry) => requireRecord(entry, "session row"));
   const session =
     rows.find((entry) => typeof entry.sessionId === "string" && !beforeIds.has(entry.sessionId)) ??
     rows.find((entry) =>
@@ -190,7 +196,7 @@ function seedUnknownWorkerState(
       from: "requested",
       to: "provisioning",
       expectedGeneration: other.generation,
-      patch: { environmentId: ENVIRONMENT_ID },
+      patch: { environmentId: INDEPENDENT_ENVIRONMENT_ID },
     });
     store.fail({
       sessionId: isolated.sessionId,
@@ -203,12 +209,12 @@ function seedUnknownWorkerState(
 }
 
 async function describePlacement(gateway: Gateway, session: SessionIdentity) {
-  const payload = asRecord(
+  const payload = requireRecord(
     await gateway.call("sessions.describe", { key: session.sessionKey }),
     "sessions.describe",
   );
-  const row = asRecord(payload.session, "described session");
-  return asRecord(row.placement, "session placement");
+  const row = requireRecord(payload.session, "described session");
+  return requireRecord(row.placement, "session placement");
 }
 
 async function waitForFailedPlacement(gateway: Gateway, session: SessionIdentity) {
@@ -228,13 +234,16 @@ async function waitForFailedPlacement(gateway: Gateway, session: SessionIdentity
 
 async function runProof(options: ProducerOptions) {
   const state = createQaBusState();
-  const bus = await startQaBusServer({ state });
-  const mock = await startQaMockOpenAiServer();
-  const transport = createQaChannelTransport(state);
+  let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
+  let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
   let gateway: Gateway | undefined;
   let verdict: Record<string, unknown> | undefined;
   let proofError: unknown;
   try {
+    bus = await startQaBusServer({ state });
+    mock = await startQaMockOpenAiServer();
+    const transport = createQaChannelTransport(state);
     const inspection = await createStaticSshWorkerProvider().inspect({
       leaseId: "static-ssh:",
       profile: { settings: {} },
@@ -242,7 +251,7 @@ async function runProof(options: ProducerOptions) {
     if (inspection.status !== "unknown") {
       throw new Error(`static-ssh disappearance fixture returned ${inspection.status}`);
     }
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -277,12 +286,18 @@ async function runProof(options: ProducerOptions) {
     });
     const first = await waitForFailedPlacement(gateway, lost);
     const independent = await waitForFailedPlacement(gateway, isolated);
+    if (
+      first.environmentId !== ENVIRONMENT_ID ||
+      independent.environmentId !== INDEPENDENT_ENVIRONMENT_ID
+    ) {
+      throw new Error("session placements did not retain their distinct environment identities");
+    }
     const firstReason = String(first.terminalReason ?? "");
     if (!firstReason.startsWith("cloud worker disappeared:") || firstReason.length > 1_024) {
       throw new Error(`unexpected disappearance reason: ${firstReason}`);
     }
     if (independent.terminalReason !== INDEPENDENT_REASON || firstReason === INDEPENDENT_REASON) {
-      throw new Error("sessions sharing an environment leaked terminal reasons");
+      throw new Error("independent session placements leaked terminal reasons");
     }
     const terminalAtMs = first.terminalAtMs;
     const isolatedTerminalAtMs = independent.terminalAtMs;
@@ -301,15 +316,17 @@ async function runProof(options: ProducerOptions) {
       }
     }
 
-    const environmentPayload = asRecord(
+    const environmentPayload = requireRecord(
       await gateway.call("environments.list", {}),
       "environments.list",
     );
     const environments = Array.isArray(environmentPayload.environments)
-      ? environmentPayload.environments.map((entry) => asRecord(entry, "environment"))
+      ? environmentPayload.environments.map((entry) => requireRecord(entry, "environment"))
       : [];
     const environment = environments.find((entry) => entry.id === ENVIRONMENT_ID);
-    const worker = environment ? asRecord(environment.worker, "worker environment") : undefined;
+    const worker = environment
+      ? requireRecord(environment.worker, "worker environment")
+      : undefined;
     if (worker?.state !== "orphaned" || typeof worker.error !== "string") {
       throw new Error("environment-level orphaned diagnostic was not preserved");
     }
@@ -322,15 +339,19 @@ async function runProof(options: ProducerOptions) {
       gatewayReplacementCount: 3,
       disappearance: {
         sessionId: lost.sessionId,
+        environmentId: ENVIRONMENT_ID,
         terminalReason: firstReason,
         terminalAtMs,
         durableAcrossRestarts: true,
       },
       isolation: {
-        sharedEnvironmentId: ENVIRONMENT_ID,
+        environmentId: INDEPENDENT_ENVIRONMENT_ID,
         otherSessionId: isolated.sessionId,
         otherTerminalReason: independent.terminalReason,
+        otherTerminalAtMs: isolatedTerminalAtMs,
+        distinctEnvironments: true,
         reasonsDistinct: true,
+        durableAcrossRestarts: true,
       },
       environment: { state: worker.state, error: worker.error },
     };
@@ -342,21 +363,22 @@ async function runProof(options: ProducerOptions) {
     );
   } catch (error) {
     proofError = error;
-  }
-  const cleanup = await Promise.allSettled([
-    gateway?.stop() ?? Promise.resolve(),
-    bus.stop(),
-    mock.stop(),
-  ]);
-  const cleanupFailures = cleanup.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (cleanupFailures.length > 0) {
-    proofError = new AggregateError(
-      proofError ? [proofError, ...cleanupFailures] : cleanupFailures,
-      "cloud worker disappearance cleanup failed",
-      proofError ? { cause: proofError } : undefined,
+  } finally {
+    const cleanup = await Promise.allSettled([
+      stopQaGatewayFixture(gatewayOwner),
+      bus?.stop() ?? Promise.resolve(),
+      mock?.stop() ?? Promise.resolve(),
+    ]);
+    const cleanupFailures = cleanup.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
     );
+    if (cleanupFailures.length > 0) {
+      proofError = new AggregateError(
+        proofError ? [proofError, ...cleanupFailures] : cleanupFailures,
+        "cloud worker disappearance cleanup failed",
+        proofError ? { cause: proofError } : undefined,
+      );
+    }
   }
   if (proofError) {
     throw proofError;

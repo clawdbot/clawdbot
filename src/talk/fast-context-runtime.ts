@@ -10,10 +10,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
-import {
-  authorizeActiveMemorySearchHits,
-  getActiveMemorySearchManager,
-} from "../plugins/memory-runtime.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import type { RealtimeVoiceAgentConsultResult } from "./agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "./agent-consult-tool.js";
@@ -109,9 +105,11 @@ async function lookupFastContext(params: {
   config: RealtimeVoiceFastContextConfig;
   query: string;
 }): Promise<FastContextLookupResult> {
+  const { authorizeActiveMemorySearchHits, getActiveMemorySearchManagerCore } =
+    await import("../plugins/memory-runtime.js");
   // The memory runtime owns whether memory/session search is active for this
   // agent. Talk only consumes the current manager when it is already available.
-  const memory = await getActiveMemorySearchManager({
+  const memory = await getActiveMemorySearchManagerCore({
     cfg: params.cfg,
     agentId: params.agentId,
   });

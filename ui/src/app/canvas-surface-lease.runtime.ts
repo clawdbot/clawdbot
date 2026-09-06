@@ -1,5 +1,6 @@
 // Loaded after hello so capability renewal does not inflate the startup chunk.
 import { resolveSafeTimeoutDelayMs } from "@openclaw/gateway-client/browser";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const RENEWAL_LEAD_MS = 15_000;
 const MIN_RENEWAL_DELAY_MS = 1_000;
@@ -162,10 +163,10 @@ function parseCanvasSurfaceRefresh(value: unknown): CanvasSurfaceRefresh | undef
     return undefined;
   }
   const urls = response.pluginSurfaceUrls;
-  if (!urls || typeof urls !== "object" || Array.isArray(urls)) {
+  if (!isRecord(urls)) {
     return undefined;
   }
-  const canvasUrl = (urls as Record<string, unknown>).canvas;
+  const canvasUrl = urls.canvas;
   if (typeof canvasUrl !== "string" || !canvasUrl.trim()) {
     return undefined;
   }

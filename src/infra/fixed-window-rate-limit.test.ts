@@ -1,6 +1,6 @@
 // Covers fixed-window rate limiter boundaries.
 import { describe, expect, it } from "vitest";
-import { createFixedWindowRateLimiter } from "./fixed-window-rate-limit.js";
+import { createFixedWindowBudget } from "./fixed-window-rate-limit.js";
 
 function expectConsumeResult(
   result: { allowed: boolean; remaining: number; retryAfterMs: number },
@@ -14,7 +14,7 @@ function expectConsumeResult(
 describe("fixed-window rate limiter", () => {
   it("blocks after max requests until window reset", () => {
     let nowMs = 1_000;
-    const limiter = createFixedWindowRateLimiter({
+    const limiter = createFixedWindowBudget({
       maxRequests: 2,
       windowMs: 1_000,
       now: () => nowMs,
@@ -30,7 +30,7 @@ describe("fixed-window rate limiter", () => {
 
   it("clamps maxRequests and windowMs to at least one", () => {
     let nowMs = 100;
-    const limiter = createFixedWindowRateLimiter({
+    const limiter = createFixedWindowBudget({
       maxRequests: 0.2,
       windowMs: 0.4,
       now: () => nowMs,
@@ -45,7 +45,7 @@ describe("fixed-window rate limiter", () => {
 
   it("falls back to minimums for non-finite required values", () => {
     let nowMs = 100;
-    const limiter = createFixedWindowRateLimiter({
+    const limiter = createFixedWindowBudget({
       maxRequests: Number.NaN,
       windowMs: Number.POSITIVE_INFINITY,
       now: () => nowMs,
@@ -60,7 +60,7 @@ describe("fixed-window rate limiter", () => {
 
   it("reports the remaining retry window after later blocked attempts", () => {
     let nowMs = 1_000;
-    const limiter = createFixedWindowRateLimiter({
+    const limiter = createFixedWindowBudget({
       maxRequests: 1,
       windowMs: 1_000,
       now: () => nowMs,
@@ -73,7 +73,7 @@ describe("fixed-window rate limiter", () => {
   });
 
   it("supports explicit reset", () => {
-    const limiter = createFixedWindowRateLimiter({
+    const limiter = createFixedWindowBudget({
       maxRequests: 1,
       windowMs: 10_000,
     });

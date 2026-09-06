@@ -12,7 +12,7 @@ export function resolveLocalMediaPath(source: string): string | undefined {
   if (!trimmed || isPassThroughRemoteMediaSource(trimmed) || DATA_URL_RE.test(trimmed)) {
     return undefined;
   }
-  if (/^file:\/\//iu.test(trimmed)) {
+  if (/^file:/iu.test(trimmed)) {
     try {
       return safeFileURLToPath(trimmed);
     } catch {

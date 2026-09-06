@@ -36,13 +36,37 @@ function normalizeDeclarationImportSpecifier(repoRoot: string, value: string): s
   return relative.split(path.sep).join(path.posix.sep);
 }
 
+function isRepoOwnedImportSpecifier(value: string): boolean {
+  return (
+    value.startsWith("./") ||
+    value.startsWith("../") ||
+    /^(?:apps|extensions|packages|scripts|src|test|ui)\//u.test(value)
+  );
+}
+
 /** Strip machine-local absolute paths from declaration text before hashing baseline output. */
 export function normalizePluginSdkApiDeclarationText(repoRoot: string, value: string): string {
-  return value.replaceAll(
+  const repoOwnedSpecifiers = new Set<string>();
+  const normalized = value.replaceAll(
     /import\("([^"]+)"((?:\s*,[^)]*)?)\)/g,
     (match, specifier: string, suffix: string) => {
-      const normalized = normalizeDeclarationImportSpecifier(repoRoot, specifier);
-      return normalized === specifier ? match : `import("${normalized}"${suffix})`;
+      const normalizedSpecifier = normalizeDeclarationImportSpecifier(repoRoot, specifier);
+      if (normalizedSpecifier !== specifier || isRepoOwnedImportSpecifier(normalizedSpecifier)) {
+        repoOwnedSpecifiers.add(normalizedSpecifier);
+      }
+      return normalizedSpecifier === specifier
+        ? match
+        : `import("${normalizedSpecifier}"${suffix})`;
     },
+  );
+  const withoutRepoQualifiers = normalized.replaceAll(
+    /import\("([^"]+)"((?:\s*,[^)]*)?)\)((?:\.[A-Za-z_$][\w$]*)+)/g,
+    (match, specifier: string, _suffix: string, qualifier: string) =>
+      repoOwnedSpecifiers.has(specifier) ? qualifier.slice(1) : match,
+  );
+  return withoutRepoQualifiers.replaceAll(
+    /import\("([^"]+)"((?:\s*,[^)]*)?)\)/g,
+    (match, specifier: string, suffix: string) =>
+      repoOwnedSpecifiers.has(specifier) ? `import("<repo>"${suffix})` : match,
   );
 }

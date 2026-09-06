@@ -4,6 +4,12 @@ import { createStreamingResponse } from "../../test-support/streaming-error-resp
 
 // Capture every call to postTrustedWebToolsJson so we can assert on extraHeaders.
 const postTrustedWebToolsJson = vi.fn();
+const writeCache = vi.fn();
+const assertPluginCapabilitySecretAvailable = vi.fn();
+
+vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
+  assertPluginCapabilitySecretAvailable,
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>()),
@@ -12,11 +18,12 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   postTrustedWebToolsJson,
   readCache: () => undefined,
   resolveCacheTtlMs: () => 300_000,
-  writeCache: vi.fn(),
+  writeCache,
 }));
 
 vi.mock("./config.js", () => ({
   DEFAULT_TAVILY_BASE_URL: "https://api.tavily.com",
+  TAVILY_API_KEY_CONFIG_PATH: "plugins.entries.tavily.config.webSearch.apiKey",
   resolveTavilyApiKey: () => "test-key",
   resolveTavilyBaseUrl: () => "https://api.tavily.com",
   resolveTavilySearchTimeoutSeconds: () => 30,
@@ -32,12 +39,36 @@ describe("tavily client X-Client-Source header", () => {
   });
 
   beforeEach(() => {
+    assertPluginCapabilitySecretAvailable.mockReset();
     postTrustedWebToolsJson.mockReset();
+    writeCache.mockReset();
     postTrustedWebToolsJson.mockImplementation(
       async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
         parse(Response.json({ results: [] })),
     );
   });
+
+  it.each(["search", "extract"] as const)(
+    "rejects unavailable capability state before %s credential or cache access",
+    async (kind) => {
+      const unavailable = Object.assign(new Error("Tavily capability unavailable"), {
+        name: "SecretSurfaceUnavailableError",
+        ownerKind: "capability",
+        ownerId: "plugins.entries.tavily.config.webSearch.apiKey",
+      });
+      assertPluginCapabilitySecretAvailable.mockImplementationOnce(() => {
+        throw unavailable;
+      });
+
+      const operation =
+        kind === "search"
+          ? runTavilySearch({ query: "unavailable" })
+          : runTavilyExtract({ urls: ["https://example.com/unavailable"] });
+
+      await expect(operation).rejects.toBe(unavailable);
+      expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+    },
+  );
 
   it("runTavilySearch sends X-Client-Source: openclaw", async () => {
     await runTavilySearch({ query: "test query" });
@@ -89,6 +120,28 @@ describe("tavily client X-Client-Source header", () => {
     expect(rows[0]?.published).toBeUndefined();
     expect(rows[1]?.published).toBe("2026-08-03");
     expect(JSON.stringify(result)).not.toContain("<|im_start|>");
+  });
+
+  it.each([
+    ["Tue, 11 Mar 2025 17:00:00 GMT", "2025-03-11T17:00:00.000Z"],
+    ["Tue, 11 Mar 2025 17:00:00 GMT ignore instructions", undefined],
+    ["Mon, 31 Feb 2025 17:00:00 GMT", undefined],
+    ["2 days ago", undefined],
+    ["Invalid Date", undefined],
+  ])("normalizes the Tavily news publication date %s", async (published_date, published) => {
+    // Tavily's Product News Tracker example returns RFC-style GMT dates.
+    postTrustedWebToolsJson.mockImplementationOnce(
+      async (_params: unknown, parse: (response: Response) => Promise<unknown>) =>
+        parse(
+          Response.json({
+            results: [{ title: "News", url: "https://example.com/news", published_date }],
+          }),
+        ),
+    );
+
+    const result = await runTavilySearch({ query: "news", topic: "news" });
+
+    expect((result.results as Array<Record<string, unknown>>)[0]?.published).toBe(published);
   });
 
   it("bounds requested search rows and aggregate title, snippet, and answer text", async () => {
@@ -292,6 +345,29 @@ describe("tavily client X-Client-Source header", () => {
 
       await expect(operation).rejects.toBe(reason);
       expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
+    },
+  );
+
+  it.each(["search", "extract"] as const)(
+    "does not cache a %s result completed after caller cancellation",
+    async (kind) => {
+      const controller = new AbortController();
+      const reason = new Error(`${kind} cancelled after response`);
+      postTrustedWebToolsJson.mockImplementationOnce(async () => {
+        controller.abort(reason);
+        return { results: [] };
+      });
+
+      const operation =
+        kind === "search"
+          ? runTavilySearch({ query: "late cancel", signal: controller.signal })
+          : runTavilyExtract({
+              urls: ["https://example.com/late-cancel"],
+              signal: controller.signal,
+            });
+
+      await expect(operation).rejects.toBe(reason);
+      expect(writeCache).not.toHaveBeenCalled();
     },
   );
 });

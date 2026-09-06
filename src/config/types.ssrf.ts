@@ -8,4 +8,6 @@ export type SsrFPolicyConfig = {
   allowIpv6UniqueLocalRange?: boolean;
   /** Explicitly allowed exact hostnames or IP literals. */
   allowedHostnames?: string[];
+  /** Deny exact hosts or wildcard subdomains; "*.example.com" excludes the apex. Overrides allows. */
+  blockedHostnames?: string[];
 };

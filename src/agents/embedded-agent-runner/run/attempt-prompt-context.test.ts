@@ -8,6 +8,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 const hoisted = vi.hoisted(() => ({
   info: vi.fn(),
   promptPressureKeys: new Set<string>(),
+  reconcileToolResultPromptProjectionState: vi.fn(),
   resolveLiveToolResultAggregateMaxChars: vi.fn(() => 200),
   resolveLiveToolResultMaxChars: vi.fn(() => 100),
   truncateOversizedToolResultsInMessages: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("../logger.js", () => ({
 vi.mock("../tool-result-truncation.js", () => ({
   resolveLiveToolResultAggregateMaxChars: hoisted.resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars: hoisted.resolveLiveToolResultMaxChars,
+  reconcileToolResultPromptProjectionState: hoisted.reconcileToolResultPromptProjectionState,
   toolResultWarningDedupe: {
     promptPressure: {
       check: (key: string) => {
@@ -48,7 +50,8 @@ const projectionState: ToolResultPromptProjectionState = {
   replacements: new Map(),
   frozen: new Set(),
   ambiguousBaseKeys: new Set(),
-  sourceTextByKey: new Map(),
+  restoredCacheTtl: new Map(),
+  sourceHashByKey: new Map(),
 };
 
 function createAttempt(overrides?: Partial<EmbeddedRunAttemptParams>) {
@@ -115,6 +118,7 @@ function createInput(options?: {
 beforeEach(() => {
   vi.clearAllMocks();
   hoisted.promptPressureKeys.clear();
+  hoisted.reconcileToolResultPromptProjectionState.mockReset();
   hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
     messages: inputMessages,
     truncatedCount: 0,
@@ -125,6 +129,40 @@ beforeEach(() => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
+  it("carries next-turn runtime context as the delimited body only", () => {
+    const fixture = createInput();
+    const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toBe(
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nConversation info: channel=telegram\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    );
+  });
+  it.each(["Please recall my preference.", "Current time: noon. Please recall my preference."])(
+    "preserves active-memory hook context at the model boundary: %s",
+    (prompt) => {
+      const memory = "Context:\n<active_memory_plugin>\nsaved preference\n</active_memory_plugin>";
+      const modelPrompt = `${memory}\n\n${prompt}`;
+      const fixture = createInput({
+        prompt: createPrompt({
+          effectivePrompt: modelPrompt,
+          promptBeforePromptBuildHooks: prompt,
+          promptBuildPrependContext: memory,
+          hasPromptBuildContext: true,
+          effectiveTranscriptPrompt: prompt,
+          transcriptPromptForRuntimeSplit: prompt,
+          promptForRuntimeContextSplit: prompt,
+          promptForModelBeforeRuntimeContextSplit: modelPrompt,
+          promptForRuntimeContextBeforeAnnotation: prompt,
+        }),
+      });
+
+      const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+      expect(result.promptForSession).toBe(prompt);
+      expect(result.llmBoundaryPromptForPrecheck).toBe(modelPrompt);
+      expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain("saved preference");
+    },
+  );
+
   it("keeps the transcript prompt bare while carrying inbound context to hooks", () => {
     const fixture = createInput();
 
@@ -152,6 +190,10 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     });
     expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
     expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
+    expect(hoisted.reconcileToolResultPromptProjectionState).toHaveBeenCalledWith(
+      messages,
+      projectionState,
+    );
     const clonedProjectionState = hoisted.truncateOversizedToolResultsInMessages.mock.calls[0]?.[4];
     expect(clonedProjectionState).not.toBe(projectionState);
   });
@@ -170,6 +212,14 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
     expect(result.llmBoundaryPromptForPrecheck).toContain('"name":"Alice"');
     expect(result.llmBoundaryPromptForPrecheck).toContain("Visible request");
+  });
+
+  it("does not reconcile session projection state for raw probes", () => {
+    const fixture = createInput();
+
+    prepareEmbeddedAttemptPromptContext({ ...fixture.input, isRawModelRun: true });
+
+    expect(hoisted.reconcileToolResultPromptProjectionState).not.toHaveBeenCalled();
   });
 
   it("injects the latest heartbeat outcome only as hidden runtime context", () => {
@@ -225,7 +275,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.warn).not.toHaveBeenCalled();
   });
 
-  it("moves runtime-only context into the active system prompt", () => {
+  it("moves runtime-only context into the active system prompt with its preface", () => {
     const fixture = createInput({
       attempt: createAttempt({
         currentInboundContext: { text: "Room event metadata" },
@@ -242,6 +292,9 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
     const result = prepareEmbeddedAttemptPromptContext(fixture.input);
 
+    expect(result.promptSubmission.runtimeSystemContext).toBe(
+      "OpenClaw runtime event.\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime room event\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    );
     expect(result.promptSubmission.runtimeOnly).toBe(true);
     expect(result.promptForSession).toContain("Room event metadata");
     expect(result.runtimeContextMessageForCurrentTurn).toBeUndefined();

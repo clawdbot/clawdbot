@@ -1,6 +1,12 @@
 /** Resolves the effective reply route from current context and persisted session route. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  stripOutboundTargetKindPrefix,
+  stripTargetProviderPrefix,
+} from "../../infra/outbound/channel-target-prefix.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -18,8 +24,10 @@ type EffectiveReplyRouteContext = Pick<
   | "Surface"
   | "OriginatingChannel"
   | "OriginatingTo"
+  | "MessageThreadId"
   | "AccountId"
   | "InputProvenance"
+  | "InternalTurnSource"
   | "ChatType"
 >;
 
@@ -27,7 +35,7 @@ type EffectiveReplyRouteContext = Pick<
 type EffectiveReplyRouteEntry = Pick<SessionEntry, "delivery" | "chatType">;
 
 /** Effective channel target selected for source reply delivery. */
-type EffectiveReplyRoute = {
+export type EffectiveReplyRoute = {
   channel?: string;
   to?: string;
   accountId?: string;
@@ -36,9 +44,27 @@ type EffectiveReplyRoute = {
   inheritedExternalRoute?: boolean;
 };
 
-/** Returns true for synthetic providers that should not define a user channel route. */
-export function isSystemEventProvider(provider?: string): boolean {
-  return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
+/** Normalizes an external target without collapsing provider-owned topic suffixes. */
+export function normalizeEffectiveReplyTarget(
+  raw: string | undefined,
+  channel: string | null | undefined,
+  threadId?: string | number,
+): string | undefined {
+  let target = normalizeOptionalString(raw);
+  if (target && channel && threadId != null) {
+    // The channel owns whether a separate thread is part of its conversation ID.
+    // Use the same identity for stored-context matching and group policy lookup.
+    target =
+      getLoadedChannelPluginForRead(channel)?.threading?.resolveCurrentChannelId?.({
+        to: target,
+        threadId,
+      }) ?? target;
+  }
+  return target
+    ? normalizeOptionalString(
+        stripOutboundTargetKindPrefix(stripTargetProviderPrefix(target, channel ?? "")),
+      )
+    : undefined;
 }
 
 function isSessionsSendInterSessionHandoff(inputProvenance: InputProvenance | undefined): boolean {
@@ -103,11 +129,12 @@ export function resolveEffectiveReplyRoute(params: {
       inheritedExternalRoute: true,
     };
   }
-  if (!isSystemEventProvider(params.ctx.Provider)) {
+  if (params.ctx.InternalTurnSource === undefined) {
     return {
       channel: params.ctx.OriginatingChannel,
       to: params.ctx.OriginatingTo,
       accountId: params.ctx.AccountId,
+      ...(params.ctx.MessageThreadId !== undefined ? { threadId: params.ctx.MessageThreadId } : {}),
       ...(liveChatType ? { chatType: liveChatType } : {}),
     };
   }
@@ -125,6 +152,7 @@ export function resolveEffectiveReplyRoute(params: {
     accountId:
       params.ctx.AccountId ??
       (canInheritPersistedTuple ? persistedDeliveryContext?.accountId : undefined),
+    ...(params.ctx.MessageThreadId !== undefined ? { threadId: params.ctx.MessageThreadId } : {}),
     ...(chatType ? { chatType } : {}),
   };
 }

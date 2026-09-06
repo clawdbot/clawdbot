@@ -12,11 +12,15 @@ import type {
 } from "../../plugins/agent-tool-result-middleware-types.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import {
-  hasMessagingDeliveryReceipt,
+  hasPluginMessagingDeliveryId,
   isDeliveredMessagingToolResult,
 } from "../embedded-agent-message-tool-source-reply.js";
-import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
+import {
+  isMessagingToolSendAction,
+  isPluginNativeMessagingTool,
+} from "../embedded-agent-messaging.js";
 import { isToolResultError } from "../tool-result-error.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -369,16 +373,23 @@ function buildDeliveredMessagingFailureFallback(
   event: AgentToolResultMiddlewareEvent,
   result: OpenClawAgentToolResult,
 ): OpenClawAgentToolResult | undefined {
+  const deliveryFact = readEmbeddedMessageDeliveryFact(
+    isRecord(result.details) ? result.details.messageDelivery : undefined,
+  );
+  const delivered = deliveryFact
+    ? deliveryFact.status === "settled"
+    : isPluginNativeMessagingTool(event.toolName) &&
+      isDeliveredMessagingToolResult({
+        toolName: event.toolName,
+        args: event.args,
+        result,
+      }) &&
+      hasPluginMessagingDeliveryId(result);
   if (
     event.isError === true ||
     isToolResultError(result) ||
     !isMessagingToolSendAction(event.toolName, event.args) ||
-    !isDeliveredMessagingToolResult({
-      toolName: event.toolName,
-      args: event.args,
-      result,
-    }) ||
-    !hasMessagingDeliveryReceipt(result)
+    !delivered
   ) {
     return undefined;
   }

@@ -97,6 +97,56 @@ describe("registerMessageThreadCommands", () => {
     expect(remappedCall?.[1]).not.toHaveProperty("threadName");
   });
 
+  it.each([
+    {
+      description: "infers the action owner from a registered channel-prefixed target",
+      channel: undefined,
+      target: "topic-chat:room-1",
+      action: "topic-create",
+    },
+    {
+      description: "prefers an explicit channel over a conflicting target prefix",
+      channel: "plain-chat",
+      target: "topic-chat:room-1",
+      action: "thread-create",
+    },
+    {
+      description: "keeps prefixed channels without an action remap unchanged",
+      channel: undefined,
+      target: "plain-chat:room-1",
+      action: "thread-create",
+    },
+    {
+      description: "keeps an explicit action owner over a conflicting target prefix",
+      channel: "topic-chat",
+      target: "plain-chat:room-1",
+      action: "topic-create",
+    },
+  ])("$description", async ({ action, channel, target }) => {
+    const message = new Command().exitOverride();
+    registerMessageThreadCommands(message, createHelpers(runMessageAction));
+
+    await message.parseAsync(
+      [
+        "thread",
+        "create",
+        ...(channel ? ["--channel", channel] : []),
+        "--target",
+        target,
+        "--thread-name",
+        "Build Updates",
+      ],
+      { from: "user" },
+    );
+
+    const call = firstMessageActionCall(runMessageAction);
+    expect(call?.[0]).toBe(action);
+    expect(call?.[1]?.channel).toBe(channel);
+    expect(call?.[1]?.target).toBe(target);
+    expect(call?.[1]?.[action === "topic-create" ? "name" : "threadName"]).toBe("Build Updates");
+    expect(call?.[1]).not.toHaveProperty(action === "topic-create" ? "threadName" : "name");
+  });
+
   it("keeps default thread create params when the channel does not remap the action", async () => {
     const message = new Command().exitOverride();
     registerMessageThreadCommands(message, createHelpers(runMessageAction));

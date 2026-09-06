@@ -21,10 +21,11 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Google Meet tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin, { testing as googleMeetPluginTesting } from "./index.js";
+import plugin from "./index.js";
 import { findGoogleMeetCalendarEvent, listGoogleMeetCalendarEvents } from "./src/calendar.js";
 import { resolveGoogleMeetConfig, type GoogleMeetConfig } from "./src/config.js";
 import { normalizeMeetUrl } from "./src/meet-url.js";
@@ -60,6 +61,7 @@ import {
   normalizeDialInNumber,
   prefixDtmfWait,
 } from "./src/transports/twilio.js";
+import { testing as googleMeetPluginTesting } from "./test-api.js";
 
 type GoogleMeetManifestConfigSchema = JsonSchemaObject & {
   properties?: Record<string, JsonSchemaObject & { properties?: Record<string, unknown> }>;
@@ -571,10 +573,6 @@ function requireConfigProperty(
     throw new Error(`Expected Google Meet config schema property ${key}`);
   }
   return value as Record<string, unknown>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 type MockSessionEntry = {
@@ -5555,8 +5553,8 @@ describe("google-meet plugin", () => {
         tab: { targetId: "created-meet-tab-b", openedByPlugin: false },
         browser: { inCall: true, micMuted: true },
       });
-    const leaveChromeMeetOnNode = vi
-      .spyOn(chromeTransport, "leaveChromeMeetOnNode")
+    const leaveChromeMeet = vi
+      .spyOn(chromeTransport, "leaveChromeMeet")
       .mockResolvedValue({ left: true, note: "left created tab" });
     try {
       const runtime = meetRuntime(
@@ -5588,16 +5586,18 @@ describe("google-meet plugin", () => {
       });
       await runtime.leave(joinedA.session.id);
       await runtime.leave(joinedB.session.id);
-      expect(leaveChromeMeetOnNode).toHaveBeenNthCalledWith(1, {
+      expect(leaveChromeMeet).toHaveBeenNthCalledWith(1, {
         runtime: expect.any(Object),
+        transport: "chrome-node",
         nodeId: "meet-node",
         config: expect.any(Object),
         meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/drf-ihtb-pad",
         tab: { targetId: "created-meet-tab-a", openedByPlugin: true },
       });
-      expect(leaveChromeMeetOnNode).toHaveBeenNthCalledWith(2, {
+      expect(leaveChromeMeet).toHaveBeenNthCalledWith(2, {
         runtime: expect.any(Object),
+        transport: "chrome-node",
         nodeId: "meet-node",
         config: expect.any(Object),
         meetingSessionId: expect.any(String),
@@ -5605,7 +5605,7 @@ describe("google-meet plugin", () => {
         tab: { targetId: "created-meet-tab-b", openedByPlugin: true },
       });
     } finally {
-      leaveChromeMeetOnNode.mockRestore();
+      leaveChromeMeet.mockRestore();
       launchChromeMeetOnNode.mockRestore();
       createMeet.mockRestore();
     }

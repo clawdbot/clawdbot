@@ -2,8 +2,8 @@ import {
   candidateOlderThanCursor,
   type SkillHistoryScanCandidate,
 } from "./history-scan-candidates.js";
-import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./history-scan-review-outcome.js";
 import type { SkillHistoryScanDirection } from "./history-scan-state.js";
+import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./review-outcome.js";
 import type { SkillWorkshopProposalReviewProgress } from "./types.js";
 
 export function resolveSkillHistoryScanHasMore(params: {

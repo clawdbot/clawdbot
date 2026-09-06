@@ -11,6 +11,7 @@ import {
   type QaEvidenceSummaryJson,
   type QaSeedScenarioWithSource,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "../runtime/script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts";
@@ -47,7 +48,7 @@ export type TuiPtyProducerOptions = {
 };
 
 type VitestAssertionResult = {
-  fullName?: unknown;
+  ancestorTitles?: unknown;
   status?: unknown;
   title?: unknown;
 };
@@ -88,10 +89,6 @@ type ProducerDependencies = {
 type ProofMatrixCase = TuiPtyCase & {
   matchedAssertions: string[];
 };
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function readOptionValue(argv: readonly string[], index: number, option: string) {
   const value = argv[index + 1];
@@ -319,10 +316,15 @@ async function runProducerCommand(
 }
 
 function assertionName(assertion: VitestAssertionResult) {
-  if (typeof assertion.fullName === "string") {
-    return assertion.fullName;
+  // Native JSON fullName uses spaces; reproduce the v5 CLI's title-chain matching.
+  if (
+    typeof assertion.title === "string" &&
+    Array.isArray(assertion.ancestorTitles) &&
+    assertion.ancestorTitles.every((title) => typeof title === "string")
+  ) {
+    return [...assertion.ancestorTitles, assertion.title].join(" > ");
   }
-  return typeof assertion.title === "string" ? assertion.title : undefined;
+  return undefined;
 }
 
 async function canonicalizeReportedTestPath(repoRoot: string, reportedPath: string) {

@@ -16,6 +16,7 @@ type SocketFactoryHarness = {
 
 function createSocketFactoryHarness(options?: {
   initialFailures?: number;
+  onClose?: () => void;
   onConnectError?: (error: Error) => void;
   retryFactoryError?: (error: Error) => boolean;
   rethrowFactoryError?: (error: Error) => boolean;
@@ -41,6 +42,7 @@ function createSocketFactoryHarness(options?: {
     buildConnectPlan: () => ({}),
     buildConnectParams: (plan) => plan,
     resolveClose: () => ({ retry: true, notify: true }),
+    onClose: options?.onClose,
     onConnectError,
     handshake: { mode: "require-challenge", timeoutMs: 100 },
     reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
@@ -166,6 +168,43 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     client.stop();
   });
 
+  it("does not schedule a retry over a socket restarted by a close callback", async () => {
+    vi.useFakeTimers();
+    let recoveredRequest: Promise<{ healthy: boolean }> | undefined;
+    const { client, createSocket } = createSocketFactoryHarness({
+      onClose: () => {
+        client.start();
+        recoveredRequest = client.request("sessions.list", {}, { timeoutMs: null });
+      },
+    });
+
+    client.start();
+    createSocket.mock.calls[0]?.[0].close(1012, "service restart");
+
+    expect(createSocket).toHaveBeenCalledTimes(2);
+    expect(client.connected).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(createSocket).toHaveBeenCalledTimes(2);
+
+    const replacementSocket = createSocket.mock.results[1]?.value as GatewayProtocolSocket;
+    const requestFrame = vi.mocked(replacementSocket.send).mock.calls[0]?.[0];
+    expect(requestFrame).toBeDefined();
+    createSocket.mock.calls[1]?.[0].message(
+      JSON.stringify({
+        type: "res",
+        id: JSON.parse(requestFrame ?? "{}").id,
+        ok: true,
+        payload: { healthy: true },
+      }),
+    );
+    await expect(recoveredRequest).resolves.toEqual({ healthy: true });
+    expect(client.hasPendingRequests).toBe(false);
+
+    client.stop();
+  });
+
   it("keeps socket factory failures terminal unless a transport explicitly opts in", async () => {
     vi.useFakeTimers();
     const { client, createSocket, onConnectError } = createSocketFactoryHarness({
@@ -209,6 +248,69 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     expect(vi.getTimerCount()).toBe(0);
     client.stop();
   });
+
+  it.each([true, false])(
+    "contains a terminal asynchronous reconnect failure (rethrow: %s)",
+    async (rethrow) => {
+      vi.useFakeTimers();
+      let socketAttempts = 0;
+      let disconnect: ((code: number, reason: string) => void) | undefined;
+      const onConnectError = vi.fn<(error: Error) => void>();
+      const onCallbackError = vi.fn<(label: string, error: unknown) => void>();
+      const onReconnectStopped = vi.fn<(error: Error) => void>();
+      const client = new GatewayProtocolClient<Record<string, never>>({
+        createSocket: (handlers) => {
+          socketAttempts += 1;
+          if (socketAttempts > 1) {
+            throw new Error("loopback proxy policy rejected");
+          }
+          let open = true;
+          disconnect = (code, reason) => {
+            open = false;
+            handlers.close(code, reason);
+          };
+          return {
+            isOpen: () => open,
+            send: vi.fn(),
+            close: (code, reason) => disconnect?.(code ?? 1000, reason ?? ""),
+          };
+        },
+        createRequestId: () => "request-1",
+        buildConnectPlan: () => ({}),
+        buildConnectParams: (plan) => plan,
+        resolveClose: () => ({ retry: true, notify: true }),
+        onConnectError,
+        onCallbackError,
+        onReconnectStopped,
+        shouldRetrySocketFactoryError: () => rethrow,
+        rethrowSocketFactoryError: () => rethrow,
+        handshake: { mode: "require-challenge", timeoutMs: 100 },
+        reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
+      });
+      client.start();
+      disconnect?.(1012, "service restart");
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(socketAttempts).toBe(2);
+      expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "loopback proxy policy rejected" }),
+      );
+      if (rethrow) {
+        expect(onCallbackError).toHaveBeenCalledExactlyOnceWith(
+          "reconnect",
+          expect.objectContaining({ message: "loopback proxy policy rejected" }),
+        );
+      } else {
+        expect(onCallbackError).not.toHaveBeenCalled();
+      }
+      expect(onReconnectStopped).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "loopback proxy policy rejected" }),
+      );
+      expect(vi.getTimerCount()).toBe(0);
+      client.stop();
+    },
+  );
 });
 
 describe("GatewayClient socket factory recovery", () => {
@@ -219,7 +321,7 @@ describe("GatewayClient socket factory recovery", () => {
     });
     const client = new GatewayClient({
       url: "WSS://gateway.example:18789",
-      tlsFingerprint: "deadbeef",
+      tlsFingerprint: "ab".repeat(32),
       onConnectError,
       hostDeps: { beforeConnect },
     });
@@ -278,6 +380,12 @@ describe("GatewayClient socket factory recovery", () => {
       tlsFingerprint: "deadbeef",
       expectedMessage: "gateway tls fingerprint requires wss:// gateway url",
     },
+    {
+      label: "invalid TLS fingerprint",
+      url: "wss://gateway.example:18789",
+      tlsFingerprint: "deadbeef",
+      expectedMessage: "gateway tls fingerprint must be a SHA-256 fingerprint",
+    },
   ])("does not retry $label", async ({ url, tlsFingerprint, expectedMessage }) => {
     vi.useFakeTimers();
     const onConnectError = vi.fn<(error: Error) => void>();
@@ -289,7 +397,7 @@ describe("GatewayClient socket factory recovery", () => {
       hostDeps: { beforeConnect },
     });
 
-    expect(() => client.start()).not.toThrow();
+    client.start();
     expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ message: expect.stringContaining(expectedMessage) }),
     );

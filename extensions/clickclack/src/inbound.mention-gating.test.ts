@@ -572,11 +572,18 @@ describe("ClickClack inbound mention gating", () => {
         }),
         config: {
           agents: {
+            ownership: "explicit",
             entries: {
               research: { groupChat: { mentionPatterns: ["@research"] } },
               "service-bot": { groupChat: { mentionPatterns: ["@service"] } },
             },
           },
+          bindings: [
+            {
+              agentId: "service-bot",
+              match: { channel: "clickclack", accountId: "default" },
+            },
+          ],
           channels: {
             clickclack: {
               enabled: true,

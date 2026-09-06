@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/feishu",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).",
   "repository": {
     "type": "git",
@@ -8,11 +8,11 @@
   },
   "type": "module",
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "1.71.1",
+    "@larksuiteoapi/node-sdk": "1.73.0",
     "mdast-util-from-markdown": "2.0.3",
     "mdast-util-gfm-table": "2.0.0",
     "micromark-extension-gfm-table": "2.1.1",
-    "typebox": "1.3.6",
+    "typebox": "1.3.18",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -20,7 +20,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.9.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -42,7 +42,9 @@
             "FEISHU_VERIFICATION_TOKEN",
             "FEISHU_ENCRYPT_KEY"
           ]
-        }
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasConfiguredFeishuChannelState"
       },
       "label": "Feishu",
       "selectionLabel": "Feishu/Lark (飞书)",
@@ -64,10 +66,11 @@
       "minHostVersion": ">=2026.5.29"
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.9.1"
     },
     "build": {
-      "openclawVersion": "2026.8.1"
+      "bundledDist": false,
+      "openclawVersion": "2026.9.1"
     },
     "release": {
       "publishToClawHub": true,

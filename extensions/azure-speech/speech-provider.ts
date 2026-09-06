@@ -2,7 +2,6 @@
  * Azure Speech provider descriptor. It reads config/env defaults, parses speech
  * directives, lists voices, and calls the Azure TTS runtime helper.
  */
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -10,12 +9,12 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumber,
-  asObject,
-  resolveSpeechProviderApiKey,
-  trimToUndefined,
-} from "openclaw/plugin-sdk/speech-core";
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   azureSpeechTTS,
   DEFAULT_AZURE_SPEECH_AUDIO_FORMAT,
@@ -68,12 +67,12 @@ function readAzureSpeechEnvEndpoint(): string | undefined {
 function resolveAzureSpeechConfigRecord(
   rawConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const providers = asObject(rawConfig.providers);
+  const providers = asOptionalRecord(rawConfig.providers);
   return (
-    asObject(providers?.["azure-speech"]) ??
-    asObject(providers?.azure) ??
-    asObject(rawConfig["azure-speech"]) ??
-    asObject(rawConfig.azure)
+    asOptionalRecord(providers?.["azure-speech"]) ??
+    asOptionalRecord(providers?.azure) ??
+    asOptionalRecord(rawConfig["azure-speech"]) ??
+    asOptionalRecord(rawConfig.azure)
   );
 }
 
@@ -274,6 +273,8 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       const outputFormat =
         overrides.outputFormat ??
         (req.target === "voice-note" ? config.voiceNoteOutputFormat : config.outputFormat);
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       const audioBuffer = await azureSpeechTTS({
         text: req.text,
         apiKey,
@@ -301,6 +302,8 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         throw new Error("Azure Speech API key missing");
       }
       const sampleRate = 8_000;
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       const audioBuffer = await azureSpeechTTS({
         text: req.text,
         apiKey,

@@ -1,16 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { readCodexCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import {
+  readCodexCliCredentialsCached,
+  resolveOpenAICodexAuthIdentity,
+} from "openclaw/plugin-sdk/provider-auth";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "openclaw/plugin-sdk/realtime-voice";
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
+import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import {
   createOpenAIQuicksilverBrowserSessionBroker,
   OPENAI_QUICKSILVER_OFFER_PATH,
-  resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
 import {
   buildOpenAIQuicksilverSession,
@@ -19,6 +22,7 @@ import {
   type OpenAIQuicksilverAuth,
 } from "./realtime-quicksilver-wire.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
+import { OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL } from "./realtime-voice-session-policy.js";
 
 const LIVE_ENABLED =
   process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_GPT_LIVE === "1";
@@ -168,7 +172,7 @@ async function resolveLiveOAuthProfile(): Promise<
   Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined
 > {
   try {
-    const profile = await resolveOpenAIChatGptSubscriptionAuth({});
+    const profile = await resolveOpenAIChatGptSubscriptionAuth({}, openAIRealtimeHost);
     if (profile) {
       return profile;
     }
@@ -184,7 +188,7 @@ async function resolveLiveOAuthProfile(): Promise<
     return undefined;
   }
   const accountId =
-    credential.accountId ?? resolveCodexAuthIdentity({ accessToken: credential.access }).accountId;
+    credential.accountId ?? resolveOpenAICodexAuthIdentity({ access: credential.access }).accountId;
   return accountId ? { type: "oauth", token: credential.access, accountId } : undefined;
 }
 
@@ -218,16 +222,19 @@ describeLive("GPT-Live Platform WebSocket", () => {
         skip("No OpenAI Platform API key is available");
         return;
       }
-      const bridge = new OpenAIQuicksilverVoiceBridge({
-        providerConfig: {},
-        model: "gpt-live-1-codex",
-        voice: "marin",
-        instructions: "Keep this transport verification session silent.",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
-        resolveAuth: async () => ({ type: "api-key", token: apiKey }),
-        onAudio: () => {},
-        onClearAudio: () => {},
-      });
+      const bridge = new OpenAIQuicksilverVoiceBridge(
+        {
+          providerConfig: {},
+          model: "gpt-live-1-codex",
+          voice: "spruce",
+          instructions: "Keep this transport verification session silent.",
+          audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+          resolveAuth: async () => ({ type: "api-key", token: apiKey }),
+          onAudio: () => {},
+          onClearAudio: () => {},
+        },
+        openAIRealtimeHost,
+      );
       try {
         await bridge.connect();
         expect(bridge.isConnected()).toBe(true);
@@ -449,16 +456,19 @@ describeLive("OpenAI OAuth WebRTC", () => {
           sessionId: randomUUID(),
           threadId: randomUUID(),
         };
-        const call = await createOpenAIQuicksilverCall({
-          auth,
-          requestIds,
-          sdp: offerSdp,
-          session: buildOpenAIQuicksilverSession({
-            model: "gpt-live-1-codex",
-            instructions: "Keep this transport verification session silent.",
-            voice: "marin",
-          }),
-        });
+        const call = await createOpenAIQuicksilverCall(
+          {
+            auth,
+            requestIds,
+            sdp: offerSdp,
+            session: buildOpenAIQuicksilverSession({
+              model: "gpt-live-1-codex",
+              instructions: "Keep this transport verification session silent.",
+              voice: "spruce",
+            }),
+          },
+          openAIRealtimeHost,
+        );
 
         if (call.kind !== "gpt-live") {
           throw new Error("GPT-Live call unexpectedly used the GA realtime wire shape");
@@ -470,7 +480,7 @@ describeLive("OpenAI OAuth WebRTC", () => {
 
         const started = await waitForSidebandSessionStarted({
           url: call.sidebandUrl,
-          headers: openAIQuicksilverAuthHeaders(auth, requestIds),
+          headers: openAIQuicksilverAuthHeaders(auth, requestIds, openAIRealtimeHost),
         });
         sideband = started.socket;
         expect(started.sessionId).toBe(call.callId);
@@ -524,7 +534,30 @@ describeLive("OpenAI OAuth WebRTC", () => {
         for (const model of ["gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"]) {
           try {
             const reservation = await realtime.broker.createBrowserSession(
-              { providerConfig: {}, model, voice: "marin" },
+              {
+                providerConfig: {},
+                model,
+                voice: "marin",
+                gaSession: {
+                  type: "realtime",
+                  model,
+                  instructions: "Keep this transport verification session silent.",
+                  audio: {
+                    input: {
+                      noise_reduction: { type: "near_field" },
+                      turn_detection: {
+                        type: "server_vad",
+                        create_response: true,
+                        interrupt_response: true,
+                      },
+                      transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
+                    },
+                    output: { voice: "marin" },
+                  },
+                  tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
+                  tool_choice: "auto",
+                },
+              },
               auth,
             );
             if (reservation.transport !== "webrtc") {

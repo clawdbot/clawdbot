@@ -29,6 +29,7 @@ type AgentInternalEvent = {
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  modelRouteChange?: string;
   attachments?: unknown[];
   mediaUrls?: string[];
   replyInstruction?: string;
@@ -98,6 +99,15 @@ describe("AgentParamsSchema", () => {
     expect(Value.Check(AgentParamsSchema, params)).toBe(true);
   });
 
+  it("accepts a producer model-route fact on internal completion events", () => {
+    const params = makeAgentParamsWithInternalEvent({
+      ...musicCompletionEvent,
+      modelRouteChange: "Model route changed: requested/model → actual/model.",
+    });
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(true);
+  });
+
   it("keeps task completion internal events strict", () => {
     const params = makeAgentParamsWithInternalEvent({
       ...musicCompletionEvent,
@@ -150,6 +160,23 @@ describe("MessageActionParamsSchema", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("validates closed reply routing facts", () => {
+    for (const reply of [
+      { replyToId: "message-1", source: "explicit" },
+      { replyToId: "message-1", source: "implicit", mode: "first" },
+      { replyToId: "message-1", source: "implicit", mode: "all" },
+    ]) {
+      expect(Value.Check(MessageActionParamsSchema, { ...baseParams, reply })).toBe(true);
+    }
+    for (const reply of [
+      { replyToId: "message-1", source: "explicit", mode: "off" },
+      { replyToId: "message-1", source: "implicit" },
+      { replyToId: "message-1", source: "implicit", mode: "batched" },
+    ]) {
+      expect(Value.Check(MessageActionParamsSchema, { ...baseParams, reply })).toBe(false);
+    }
   });
 });
 

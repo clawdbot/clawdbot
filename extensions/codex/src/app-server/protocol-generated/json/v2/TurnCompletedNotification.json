@@ -1,17 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "properties": {
-    "threadId": {
-      "type": "string"
-    },
-    "turn": {
-      "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/Turn"
-    }
-  },
-  "required": [
-    "threadId",
-    "turn"
-  ],
+  "properties": {"threadId":{"type":"string"},"turn":{"$ref":"./CodexAppServerProtocolDefinitions.json#/definitions/Turn"}},
+  "required": ["threadId","turn"],
   "title": "TurnCompletedNotification",
   "type": "object"
 }

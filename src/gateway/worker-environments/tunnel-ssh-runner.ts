@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
 import {
   runCommandWithTimeout,
   type CommandOptions,
@@ -16,6 +17,7 @@ const STDERR_LIMIT = 4_096;
 type WorkerSshProcessExit = {
   code: number | null;
   signal: NodeJS.Signals | null;
+  stderrTail?: string;
 };
 
 export type WorkerSshProcess = {
@@ -30,8 +32,13 @@ export type WorkerSshRunner = {
 };
 
 export function workerSshProcessError(stderr: string): Error {
-  const detail = redactSensitiveText(stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim();
+  const detail = workerSshStderrTail(stderr);
   return new Error(detail ? `Worker SSH tunnel failed: ${detail}` : "Worker SSH tunnel failed");
+}
+
+function workerSshStderrTail(stderr: string): string | undefined {
+  const redacted = redactSensitiveText(stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim();
+  return redacted ? sliceUtf16Safe(redacted, -STDERR_LIMIT) : undefined;
 }
 
 /** Production runner that treats the remote post-forward marker as connection readiness. */
@@ -49,9 +56,11 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
+      const releaseOutput = releaseChildProcessOutputAfterExit(child);
       let closed = false;
       let exitedSettled = false;
       let readySettled = false;
+      let childExited = false;
       let resolveReady!: () => void;
       let rejectReady!: (error: Error) => void;
       let resolveExited!: (exit: WorkerSshProcessExit) => void;
@@ -79,12 +88,14 @@ export function createWorkerSshRunner(): WorkerSshRunner {
           return;
         }
         exitedSettled = true;
-        resolveExited(exit);
+        releaseOutput();
+        const stderrTail = workerSshStderrTail(stderr);
+        resolveExited({ ...exit, ...(stderrTail ? { stderrTail } : {}) });
       };
       child.stdout.setEncoding("utf8");
       child.stdout.on("error", () => {});
       child.stdout.on("data", (chunk: string) => {
-        if (readySettled) {
+        if (readySettled || childExited) {
           return;
         }
         stdout = sliceUtf16Safe(`${stdout}${chunk}`, -STDERR_LIMIT);
@@ -108,19 +119,11 @@ export function createWorkerSshRunner(): WorkerSshRunner {
           settleExited({ code: null, signal: null });
         }
       });
-      // "exit" fires before "close", and "close" can be delayed indefinitely while a
-      // descendant holds a piped stdio descriptor; settle on the real exit so connected
-      // tunnels awaiting `exited` observe termination without depending on stream closure.
-      let exitEventResult: WorkerSshProcessExit | undefined;
-      child.once("exit", (code, signal) => {
-        exitEventResult = { code, signal };
-        settleReadyError();
-        settleExited(exitEventResult);
-        // Release our pipe ends so a descendant holding the other side cannot pin local
-        // descriptors across retries; this also lets "close" fire promptly.
+      // Fence readiness at real exit, but retain diagnostics until stdio closes.
+      // The shared output owner bounds draining if descendants retain the pipes.
+      child.once("exit", () => {
+        childExited = true;
         child.stdin.destroy();
-        child.stdout.destroy();
-        child.stderr.destroy();
       });
       child.once("close", (code, signal) => {
         closed = true;

@@ -4,15 +4,18 @@ import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setFalVideoFetchGuardForTesting } from "./test-support.js";
 import { buildFalVideoGenerationProvider } from "./video-generation-provider.js";
 
-function createMockRequestConfig() {
-  return {} as ReturnType<typeof providerHttp.resolveProviderHttpRequestConfig>["requestConfig"];
-}
-describe("fal video generation provider", () => {
-  const fetchGuardMock = vi.fn();
+const { fetchGuardMock } = vi.hoisted(() => ({
+  fetchGuardMock: vi.fn(),
+}));
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: fetchGuardMock,
+}));
+
+describe("fal video generation provider", () => {
   function mockFalProviderRuntime() {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-key",
@@ -27,10 +30,8 @@ describe("fal video generation provider", () => {
         "Content-Type": "application/json",
       }),
       dispatcherPolicy: undefined,
-      requestConfig: createMockRequestConfig(),
     });
     vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
-    setFalVideoFetchGuardForTesting(fetchGuardMock as never);
   }
 
   function releasedJson(value: unknown) {
@@ -109,7 +110,6 @@ describe("fal video generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     fetchGuardMock.mockReset();
-    setFalVideoFetchGuardForTesting(null);
   });
 
   it("declares explicit mode capabilities", () => {
@@ -230,6 +230,56 @@ describe("fal video generation provider", () => {
         fileName: "video-1.mp4",
       },
     ]);
+  });
+
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", body: "" },
+  ])("rejects a successful $name response as generated video", async ({ contentType, body }) => {
+    mockFalProviderRuntime();
+    mockCompletedFalVideoJob({
+      requestId: "req-123",
+      statusUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
+      responseUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
+      videoUrl: "https://fal.run/files/video.mp4",
+      bytes: body,
+      contentType,
+    });
+
+    const provider = buildFalVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "fal",
+        model: "fal-ai/minimax/video-01-live",
+        prompt: "invalid download",
+        cfg: {},
+      }),
+    ).rejects.toThrow("fal generated video download: malformed video response");
+  });
+
+  it("rejects malformed generated video downloads instead of returning URL-only videos", async () => {
+    mockFalProviderRuntime();
+    mockCompletedFalVideoJob({
+      requestId: "req-123",
+      statusUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
+      responseUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
+      videoUrl: "https://fal.run/files/video.mp4",
+      bytes: '{"error":"denied"}',
+      contentType: "application/json",
+    });
+
+    const provider = buildFalVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "fal",
+        model: "fal-ai/minimax/video-01-live",
+        prompt: "invalid download under a tiny media cap",
+        // The same cap that turns oversized downloads into URL-only videos above.
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("fal generated video download: malformed video response");
   });
 
   it("wraps malformed successful fal submit responses", async () => {

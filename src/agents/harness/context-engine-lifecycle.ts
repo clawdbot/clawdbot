@@ -23,7 +23,7 @@ import { runContextEngineMaintenance } from "../embedded-agent-runner/context-en
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
-} from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+} from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 
@@ -164,6 +164,8 @@ export async function assembleHarnessContextEngine(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
+  appendOnlyRuntimeContext?: boolean;
   messages: AgentMessage[];
   tokenBudget?: number;
   availableTools?: Set<string>;
@@ -188,7 +190,13 @@ export async function assembleHarnessContextEngine(params: {
     return undefined;
   }
   const contextEngine = params.contextEngine;
-  const messages = stripRuntimeContextCustomMessages(params.messages);
+  // Append-only replay policies keep persisted carriers in the assembled window;
+  // dropping one here would change the prefix bound to later thinking signatures.
+  const messages = (
+    params.appendOnlyRuntimeContext
+      ? params.messages
+      : stripRuntimeContextCustomMessages(params.messages)
+  ).slice();
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
   const assemble = () =>
@@ -211,9 +219,9 @@ export async function assembleHarnessContextEngine(params: {
         ? await assemble()
         : await runWithPreparedMemoryPromptSection(
             {
-              availableTools: new Set(params.availableTools),
+              availableTools: params.availableTools ?? new Set(),
               citationsMode: params.citationsMode,
-              agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+              agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
               agentSessionKey: params.sessionKey,
               sandboxed: params.sandboxed,
             },

@@ -11,12 +11,12 @@ sidebarTitle: "Image generation"
 The `image_generate` tool creates and edits images through your configured
 providers. In chat sessions it runs asynchronously: OpenClaw records a
 background task, returns the task id immediately, and wakes the agent when
-the provider finishes. The completion agent follows the session's normal
-visible-reply mode: automatic final reply delivery when configured, or
-`message(action="send")` when the session requires the message tool. If the
-requester session is inactive or its active wake fails, OpenClaw sends an
-idempotent direct fallback with the generated images so the result is not
-lost.
+the provider finishes. The task record stays silent, while the completion
+agent follows the session's current visible-reply contract with a short
+user-facing caption and every structured generated attachment. If generation
+fails, the agent returns a concise visible failure instead. If the requester
+session is inactive or its active wake fails, OpenClaw sends an idempotent
+direct fallback with the generated images so the result is not lost.
 
 <Note>
 The tool only appears when at least one image-generation provider is
@@ -60,8 +60,8 @@ or sign in with OpenAI ChatGPT/Codex OAuth.
 
     The agent calls `image_generate` automatically. No tool allow-listing
     needed - it is enabled by default when a provider is available. The tool
-    returns a background task id, then the completion agent sends the
-    generated attachment through the `message` tool when it is ready.
+    returns a background task id, then the completion agent replies with every
+    generated attachment when it is ready.
 
   </Step>
 </Steps>
@@ -229,12 +229,13 @@ translation.
 
 ### Provider selection order
 
-OpenClaw tries providers in this order:
+For `image_generate`, OpenClaw tries providers in this order:
 
-1. **`model` parameter** from the tool call (if the agent specifies one).
+1. **`model` parameter** from the tool call. When set, only this model is tried.
 2. **`agents.defaults.mediaModels.image.primary`** from config.
 3. **`agents.defaults.mediaModels.image.fallbacks`** in order.
-4. **Auto-detection** - auth-backed provider defaults only:
+4. **Auto-detection** - only when neither a primary nor fallback model is
+   configured, using configured provider defaults:
    - current default provider first;
    - remaining registered image-generation providers in provider-id order.
 
@@ -247,10 +248,10 @@ from each attempt.
     A per-call `model` override tries only that provider/model and does
     not continue to configured primary/fallback or auto-detected providers.
   </Accordion>
-  <Accordion title="Auto-detection is auth-aware">
-    A provider default only enters the candidate list when OpenClaw can
-    actually authenticate that provider. Automatic fallback across authenticated
-    providers is always enabled; a per-call `model` remains authoritative.
+  <Accordion title="Auto-detection uses configured providers">
+    Auto-detection considers provider defaults whose readiness or auth checks pass.
+    Explicit image model configuration limits fallback to the configured list;
+    OpenClaw does not append auto-detected providers.
   </Accordion>
   <Accordion title="Timeouts">
     Set `agents.defaults.mediaModels.image.timeoutMs` for slow image
@@ -399,8 +400,10 @@ and ComfyUI support 1.
   </Accordion>
   <Accordion title="OpenRouter image models">
     OpenRouter image generation uses the same `OPENROUTER_API_KEY` and
-    routes through OpenRouter's chat completions image API. Select
-    OpenRouter image models with the `openrouter/` prefix:
+    routes canonical requests through OpenRouter's dedicated `/api/v1/images`
+    endpoint. Configured custom OpenRouter base URLs retain the existing
+    chat-completions image route for proxy compatibility. Select OpenRouter
+    image models with the `openrouter/` prefix:
 
     ```json5
     {

@@ -2,13 +2,20 @@
 import type { Model, StreamFn } from "@openclaw/llm-core";
 import {
   type AgentCoreCompletionRuntimeDeps,
+  consumeAgentCoreStream,
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import { projectSessionEntryMessage } from "../session/session.js";
-import type { BranchSummaryResult, SessionTreeEntry } from "../types.js";
-import { BranchSummaryError, err, ok, type Result } from "../types.js";
+import {
+  type BranchSummaryResult,
+  type SessionTreeEntry,
+  BranchSummaryError,
+  err,
+  ok,
+  type Result,
+} from "../types.js";
 import { estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.js";
 import {
   computeFileLists,
@@ -124,18 +131,18 @@ export function prepareBranchEntries(
       // preserve older branch context better than dropping the whole prefix.
       if (entry.type === "compaction" || entry.type === "branch_summary") {
         if (totalTokens < tokenBudget * 0.9) {
-          messages.unshift(message);
+          messages.push(message);
           totalTokens += tokens;
         }
       }
       break;
     }
 
-    messages.unshift(message);
+    messages.push(message);
     totalTokens += tokens;
   }
 
-  return { messages, fileOps, totalTokens };
+  return { messages: messages.toReversed(), fileOps, totalTokens };
 }
 
 const BRANCH_SUMMARY_PREAMBLE = `The user explored a different conversation branch before returning here.
@@ -226,8 +233,10 @@ export async function generateBranchSummary(
   const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
   const streamOptions = { apiKey, headers, signal, maxTokens: maxSummaryOutputTokens };
   const response = options.streamFn
-    ? await (await options.streamFn(model, context, streamOptions)).result()
+    ? await consumeAgentCoreStream(options.streamFn(model, context, streamOptions))
     : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);
+  // Usage belongs to the completed provider request even when its summary is invalid.
+  options.runtime?.internalUsageSink?.(response.usage);
   if (response.stopReason === "aborted") {
     return err(
       new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"),

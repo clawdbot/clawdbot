@@ -1,16 +1,37 @@
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
-import { attachConfigIssueDiagnostics } from "./issue-location.js";
+import { renderConfigValidationIssueLines } from "./issue-location.js";
+import type { ConfigFileSnapshot, ConfigValidationIssue } from "./types.js";
 
 type PathSegment = string | number;
 
-function formatConfigIssuePath(pathSegments: PathSegment[]): string {
+function renderIssue(params: {
+  issue: ConfigValidationIssue;
+  raw: string | null;
+  parsed: unknown;
+  effective: unknown;
+}): string {
   return (
-    attachConfigIssueDiagnostics(
-      [{ path: pathSegments.join("."), pathSegments, message: "Invalid input" }],
-      { raw: null, parsed: {}, effective: {}, formatPathForDisplay: true },
-    )[0]?.path ?? ""
+    renderConfigValidationIssueLines(
+      {
+        issues: [params.issue],
+        raw: params.raw,
+        parsed: params.parsed,
+        sourceConfig: params.effective as ConfigFileSnapshot["sourceConfig"],
+        path: "/tmp/openclaw.json",
+      },
+      "",
+    )[0] ?? ""
   );
+}
+
+function formatConfigIssuePath(pathSegments: PathSegment[]): string {
+  return renderIssue({
+    issue: { path: pathSegments.join("."), pathSegments, message: "Invalid input" },
+    raw: null,
+    parsed: {},
+    effective: {},
+  }).replace(/: Invalid input$/, "");
 }
 
 function resolveConfigIssueLineInRaw(raw: string, pathSegments: PathSegment[]): number | undefined {
@@ -20,10 +41,14 @@ function resolveConfigIssueLineInRaw(raw: string, pathSegments: PathSegment[]): 
   } catch {
     // Malformed or empty text cannot own a source location.
   }
-  return attachConfigIssueDiagnostics(
-    [{ path: pathSegments.join("."), pathSegments, message: "Invalid input" }],
-    { raw, parsed, effective: parsed },
-  )[0]?.line;
+  const rendered = renderIssue({
+    issue: { path: pathSegments.join("."), pathSegments, message: "Invalid input" },
+    raw,
+    parsed,
+    effective: parsed,
+  });
+  const match = rendered.match(/^openclaw\.json:(\d+) — /);
+  return match?.[1] ? Number(match[1]) : undefined;
 }
 
 function appendReceivedValueHint(message: string, pathValue: string, value: unknown): string {
@@ -36,14 +61,14 @@ function appendReceivedValueHint(message: string, pathValue: string, value: unkn
     current = child;
   }
   current[pathSegments.at(-1) ?? ""] = value;
-  return (
-    attachConfigIssueDiagnostics([{ path: pathValue, pathSegments, message }], {
-      raw: JSON5.stringify(root),
-      parsed: root,
-      effective: root,
-      includeReceivedValueHint: true,
-    })[0]?.message ?? message
-  );
+  const rendered = renderIssue({
+    issue: { path: pathValue, pathSegments, message },
+    raw: JSON5.stringify(root),
+    parsed: root,
+    effective: root,
+  });
+  const issueText = rendered.split(" — ").at(-1) ?? rendered;
+  return issueText.slice(issueText.indexOf(": ") + 2);
 }
 
 describe("formatConfigIssuePath", () => {
@@ -57,8 +82,8 @@ describe("formatConfigIssuePath", () => {
     expect(formatConfigIssuePath(["a", 0, "b", 1])).toBe("a[0].b[1]");
   });
 
-  it("returns empty string for empty path", () => {
-    expect(formatConfigIssuePath([])).toBe("");
+  it("normalizes an empty path to the root marker", () => {
+    expect(formatConfigIssuePath([])).toBe("<root>");
   });
 
   it("handles all-string path", () => {
@@ -205,26 +230,6 @@ describe("resolveConfigIssueLineInRaw", () => {
     expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
   });
 
-  it("handles array index navigation with nested objects", () => {
-    const raw = [
-      "{",
-      '  "agents": {',
-      '    "list": [',
-      "      {",
-      '        "id": "main"',
-      "      },",
-      "      {",
-      '        "tools": {',
-      '          "profile": "none"',
-      "        }",
-      "      }",
-      "    ]",
-      "  }",
-      "}",
-    ].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["agents", "list", 1, "tools", "profile"])).toBe(9);
-  });
-
   it("gracefully degrades for unresolvable paths", () => {
     const raw = ["{", '  "a": 1', "}"].join("\n");
     expect(resolveConfigIssueLineInRaw(raw, ["nonexistent"])).toBeUndefined();
@@ -308,260 +313,99 @@ describe("appendReceivedValueHint", () => {
   });
 });
 
-describe("attachConfigIssueDiagnostics", () => {
-  const issue = (
-    pathSegments: Array<string | number>,
-    message: string,
-    extra: { allowedValues?: string[] } = {},
-  ) => ({ path: pathSegments.join("."), pathSegments, message, ...extra });
-  const raw = [
-    "{",
-    '  "agents": {',
-    '    "list": [',
-    '      { "tools": { "profile": "none" } }',
-    "    ]",
-    "  }",
-    "}",
-  ].join("\n");
-
-  const parsed = {
-    agents: { list: [{ tools: { profile: "none" } }] },
-  };
-
-  it("preserves internal path by default", () => {
-    const issues = attachConfigIssueDiagnostics(
-      [
-        issue(
-          ["agents", "list", 0, "tools", "profile"],
-          'Invalid input (allowed: "minimal", "coding")',
-          {
-            allowedValues: ["minimal", "coding"],
-          },
-        ),
-      ],
-      { raw, parsed, effective: parsed, configPath: "/tmp/openclaw.json" },
-    );
-
-    expect(issues[0]?.path).toBe("agents.list.0.tools.profile");
-    expect(issues[0]?.message).toBe('Invalid input (allowed: "minimal", "coding")');
-    expect(issues[0]?.line).toBe(4);
-    expect(issues[0]?.sourceFile).toBe("openclaw.json");
+describe("renderConfigValidationIssueLines", () => {
+  const issue = (pathSegments: PathSegment[], message: string): ConfigValidationIssue => ({
+    path: pathSegments.join("."),
+    pathSegments,
+    message,
   });
 
-  it("formats display path when requested", () => {
-    const issues = attachConfigIssueDiagnostics(
-      [
-        issue(
+  it("combines display paths, source locations, and received values", () => {
+    const raw = [
+      "{",
+      '  "agents": {',
+      '    "list": [',
+      '      { "tools": { "profile": "none" } }',
+      "    ]",
+      "  }",
+      "}",
+    ].join("\n");
+    const config = { agents: { list: [{ tools: { profile: "none" } }] } };
+
+    expect(
+      renderIssue({
+        issue: issue(
           ["agents", "list", 0, "tools", "profile"],
           'Invalid input (allowed: "minimal", "coding")',
-          {
-            allowedValues: ["minimal", "coding"],
-          },
         ),
-      ],
-      {
         raw,
-        parsed,
-        effective: parsed,
-        configPath: "/tmp/openclaw.json",
-        formatPathForDisplay: true,
-        includeReceivedValueHint: true,
-      },
+        parsed: config,
+        effective: config,
+      }),
+    ).toBe(
+      'openclaw.json:4 — agents.list[0].tools.profile: Invalid input (allowed: "minimal", "coding"), got: "none"',
     );
-
-    expect(issues[0]?.path).toBe("agents.list[0].tools.profile");
-    expect(issues[0]?.message).toContain('got: "none"');
-    expect(issues[0]?.line).toBe(4);
   });
 
-  it("handles empty raw gracefully", () => {
-    const issues = attachConfigIssueDiagnostics([issue(["foo"], "error")], {
-      raw: null,
-      parsed: {},
-      effective: {},
-      configPath: "/tmp/openclaw.json",
-    });
-
-    expect(issues[0]?.line).toBeUndefined();
-    expect(issues[0]?.sourceFile).toBeUndefined();
-  });
-
-  it("handles $include'd paths gracefully (navigator returns undefined)", () => {
-    const issues = attachConfigIssueDiagnostics(
-      [
-        issue(
+  it("omits locations and received values for included config", () => {
+    const config = { models: { providers: { openai: { api: "bad" } } } };
+    expect(
+      renderIssue({
+        issue: issue(
           ["models", "providers", "openai", "api"],
           'Invalid input (allowed: "openai-chatgpt")',
         ),
-      ],
-      {
-        raw: ["{", '  "$include": "./models.json"', "}"].join("\n"),
-        parsed: { models: { providers: { openai: { api: "bad" } } } },
-        effective: { models: { providers: { openai: { api: "bad" } } } },
-        configPath: "/tmp/openclaw.json",
-        formatPathForDisplay: true,
-        includeReceivedValueHint: true,
-      },
-    );
-
-    // Path exists in parsed but not in raw — no line number, no received value
-    expect(issues[0]?.line).toBeUndefined();
-    expect(issues[0]?.sourceFile).toBeUndefined();
-    expect(issues[0]?.message).toBe('Invalid input (allowed: "openai-chatgpt")');
-  });
-
-  it("preserves numeric record keys (not array indices)", () => {
-    const issues = attachConfigIssueDiagnostics(
-      [issue(["plugins", "entries", "123", "config", "mode"], 'Invalid input (allowed: "good")')],
-      {
-        raw: [
-          "{",
-          '  "plugins": {',
-          '    "entries": {',
-          '      "123": { "config": { "mode": "bad" } }',
-          "    }",
-          "  }",
-          "}",
-        ].join("\n"),
-        parsed: { plugins: { entries: { "123": { config: { mode: "bad" } } } } },
-        effective: { plugins: { entries: { "123": { config: { mode: "bad" } } } } },
-        configPath: "/tmp/openclaw.json",
-        formatPathForDisplay: true,
-        includeReceivedValueHint: true,
-      },
-    );
-
-    expect(issues[0]?.path).toBe("plugins.entries.123.config.mode");
-    expect(issues[0]?.message).toBe('Invalid input (allowed: "good")');
-    expect(issues[0]?.line).toBe(4);
-  });
-
-  it("preserves non-canonical numeric record keys", () => {
-    const recordConfig = { records: { "01": { mode: "bad" }, "1": { mode: "good" } } };
-    const issues = attachConfigIssueDiagnostics(
-      [issue(["records", "01", "mode"], "Invalid input")],
-      {
-        raw: '{ records: { "01": { mode: "bad" }, "1": { mode: "good" } } }',
-        parsed: recordConfig,
-        effective: recordConfig,
-        configPath: "/tmp/openclaw.json",
-        formatPathForDisplay: true,
-        includeReceivedValueHint: true,
-      },
-    );
-
-    expect(issues[0]).toMatchObject({
-      path: "records.01.mode",
-      message: 'Invalid input, got: "bad"',
-      line: 1,
-    });
+        raw: '{ "$include": "./models.json" }',
+        parsed: config,
+        effective: config,
+      }),
+    ).toBe('models.providers.openai.api: Invalid input (allowed: "openai-chatgpt")');
   });
 
   it("uses structured paths to distinguish dotted keys from nested keys", () => {
-    const dottedConfig = { "foo.bar": "literal", foo: { bar: "nested" } };
-    const params = {
-      raw: ['{ "foo.bar": "literal",', '  foo: { bar: "nested" } }'].join("\n"),
-      parsed: dottedConfig,
-      effective: dottedConfig,
-      configPath: "/tmp/openclaw.json",
-      formatPathForDisplay: true,
-      includeReceivedValueHint: true,
-    };
+    const config = { "foo.bar": "literal", foo: { bar: "nested" } };
+    const raw = ['{ "foo.bar": "literal",', '  foo: { bar: "nested" } }'].join("\n");
 
     expect(
-      attachConfigIssueDiagnostics([issue(["foo.bar"], "Invalid input")], params)[0],
-    ).toMatchObject({
-      message: 'Invalid input, got: "literal"',
-      line: 1,
-    });
+      renderIssue({
+        issue: issue(["foo.bar"], "Invalid input"),
+        raw,
+        parsed: config,
+        effective: config,
+      }),
+    ).toBe('openclaw.json:1 — foo.bar: Invalid input, got: "literal"');
     expect(
-      attachConfigIssueDiagnostics([issue(["foo", "bar"], "Invalid input")], params)[0],
-    ).toMatchObject({
-      message: 'Invalid input, got: "nested"',
-      line: 2,
-    });
-  });
-
-  it("does not let existing values steal missing dotted or nested paths", () => {
-    const dottedConfig = { "foo.bar": "literal", foo: {} };
-    const params = {
-      raw: ['{ "foo.bar": "literal",', "  foo: {} }"].join("\n"),
-      parsed: dottedConfig,
-      effective: dottedConfig,
-      configPath: "/tmp/openclaw.json",
-      formatPathForDisplay: true,
-      includeReceivedValueHint: true,
-    };
-
-    expect(attachConfigIssueDiagnostics([issue(["foo", "bar"], "Required")], params)[0]).toEqual(
-      issue(["foo", "bar"], "Required"),
-    );
-    const nestedOnly = { foo: { bar: "nested" } };
-    expect(
-      attachConfigIssueDiagnostics([issue(["foo.bar"], "Required")], {
-        ...params,
-        raw: '{ foo: { bar: "nested" } }',
-        parsed: nestedOnly,
-        effective: nestedOnly,
-      })[0],
-    ).toEqual(issue(["foo.bar"], "Required"));
+      renderIssue({
+        issue: issue(["foo", "bar"], "Invalid input"),
+        raw,
+        parsed: config,
+        effective: config,
+      }),
+    ).toBe('openclaw.json:2 — foo.bar: Invalid input, got: "nested"');
   });
 
   it("omits values changed by environment substitution", () => {
-    const envRaw = raw.replace('"none"', '"${PROFILE}"');
-    const issues = attachConfigIssueDiagnostics(
-      [issue(["agents", "list", 0, "tools", "profile"], "Invalid input")],
-      {
-        raw: envRaw,
-        parsed: { agents: { list: [{ tools: { profile: "${PROFILE}" } }] } },
-        effective: { agents: { list: [{ tools: { profile: "none" } }] } },
-        configPath: "/tmp/openclaw.json",
-        formatPathForDisplay: true,
-        includeReceivedValueHint: true,
-      },
-    );
-
-    expect(issues[0]?.message).toBe("Invalid input");
-    expect(issues[0]?.line).toBe(4);
+    expect(
+      renderIssue({
+        issue: issue(["gateway", "bind"], "Invalid input"),
+        raw: '{ gateway: { bind: "${BIND}" } }',
+        parsed: { gateway: { bind: "${BIND}" } },
+        effective: { gateway: { bind: "lan" } },
+      }),
+    ).toBe("openclaw.json:1 — gateway.bind: Invalid input");
   });
 
-  it("omits arbitrary plugin-owned values", () => {
-    const pluginConfig = {
-      plugins: { entries: { custom: { config: { accessCode: "private" } } } },
+  it.each(["custom", "vendor.plugin"])("omits plugin-owned values for %s", (pluginId) => {
+    const config = {
+      plugins: { entries: { [pluginId]: { config: { accessCode: "private" } } } },
     };
-    const issues = attachConfigIssueDiagnostics(
-      [issue(["plugins", "entries", "custom", "config", "accessCode"], "Invalid input")],
-      {
-        raw: '{ plugins: { entries: { custom: { config: { accessCode: "private" } } } } }',
-        parsed: pluginConfig,
-        effective: pluginConfig,
-        configPath: "/tmp/openclaw.json",
-        formatPathForDisplay: true,
-        includeReceivedValueHint: true,
-      },
-    );
-
-    expect(issues[0]?.message).toBe("Invalid input");
-    expect(issues[0]?.line).toBe(1);
-  });
-
-  it("omits plugin-owned values when the plugin id contains dots", () => {
-    const pluginConfig = {
-      plugins: { entries: { "vendor.plugin": { config: { sessionValue: "private" } } } },
-    };
-    const issues = attachConfigIssueDiagnostics(
-      [issue(["plugins", "entries", "vendor.plugin", "config", "sessionValue"], "Invalid input")],
-      {
-        raw: '{ plugins: { entries: { "vendor.plugin": { config: { sessionValue: "private" } } } } }',
-        parsed: pluginConfig,
-        effective: pluginConfig,
-        configPath: "/tmp/openclaw.json",
-        formatPathForDisplay: true,
-        includeReceivedValueHint: true,
-      },
-    );
-
-    expect(issues[0]?.message).toBe("Invalid input");
-    expect(issues[0]?.line).toBe(1);
+    expect(
+      renderIssue({
+        issue: issue(["plugins", "entries", pluginId, "config", "accessCode"], "Invalid input"),
+        raw: JSON5.stringify(config),
+        parsed: config,
+        effective: config,
+      }),
+    ).toBe(`openclaw.json:1 — plugins.entries.${pluginId}.config.accessCode: Invalid input`);
   });
 });

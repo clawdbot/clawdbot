@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
-import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
+import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 
 describe("cleanupEmbeddedAttemptResources", () => {
   afterEach(() => {
@@ -77,6 +77,9 @@ describe("cleanupEmbeddedAttemptResources", () => {
     await cleanupPromise;
 
     expect(order).toEqual(["flush", "dispose"]);
+    expect(log.warn).toHaveBeenCalledWith(
+      `embedded abort settle timed out: runId=run-1 sessionId=session-1 timeoutMs=${abortSettleTimeoutMs}`,
+    );
   });
 
   it("disposes the session before runtime teardown can hang", async () => {

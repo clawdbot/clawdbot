@@ -7,7 +7,10 @@ import {
   warn,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket, { type ClientOptions, type RawData } from "ws";
 import type { SlackSendIdentity } from "../send.js";
@@ -292,16 +295,16 @@ export function parseRelayFrame(data: RawData): unknown {
 function extractRelaySlackMessageEvent(
   frame: unknown,
 ): { deliveryId: string; message: SlackMessageEvent; route: SlackRelayRoute } | undefined {
-  const record = asRecord(frame);
+  const record = asOptionalRecord(frame);
   if (!record || record.type !== "slack_event") {
     return undefined;
   }
   const deliveryId = stringValue(record.delivery_id);
-  const routeRecord = asRecord(record.route);
+  const routeRecord = asOptionalRecord(record.route);
   const routeKind = stringValue(routeRecord?.kind);
   const routeKey = stringValue(routeRecord?.key);
-  const payload = asRecord(record.payload);
-  const event = asRecord(payload?.event);
+  const payload = asOptionalRecord(record.payload);
+  const event = asOptionalRecord(payload?.event);
   if (event?.type !== "message" || typeof event.channel !== "string") {
     return undefined;
   }
@@ -321,7 +324,7 @@ function extractRelaySlackMessageEvent(
 function extractRelayHello(
   frame: unknown,
 ): { identity: SlackRelayIdentity | undefined } | undefined {
-  const record = asRecord(frame);
+  const record = asOptionalRecord(frame);
   if (!record || record.type !== "hello") {
     return undefined;
   }
@@ -331,7 +334,8 @@ function extractRelayHello(
 }
 
 function extractRelayIdentity(record: Record<string, unknown>): SlackRelayIdentity | undefined {
-  const identityRecord = asRecord(record.slack_identity) ?? asRecord(record.slackIdentity);
+  const identityRecord =
+    asOptionalRecord(record.slack_identity) ?? asOptionalRecord(record.slackIdentity);
   if (!identityRecord) {
     return undefined;
   }
@@ -376,12 +380,6 @@ function formatRelayClose(code: number, reason: Buffer): string {
   return text
     ? `Slack relay websocket closed (${code} ${text})`
     : `Slack relay websocket closed (${code})`;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

@@ -9,7 +9,7 @@ import fs from "node:fs/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { AssistantMessage, Message, Tool } from "../../llm/types.js";
-import { extractAssistantText } from "../embedded-agent-utils.js";
+import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 import {
   assertAgainstBaseline,
   type BaselineFindings,
@@ -111,13 +111,13 @@ function extractFirstToolCall(message: AssistantMessage) {
 
 function normalizeCacheUsage(usage: AssistantMessage["usage"] | undefined): CacheUsage {
   const value = usage as Record<string, unknown> | null | undefined;
-  const readNumber = (key: keyof CacheUsage): number | undefined =>
+  const readUsageNumber = (key: keyof CacheUsage): number | undefined =>
     typeof value?.[key] === "number" ? value[key] : undefined;
   return {
-    input: readNumber("input"),
-    output: readNumber("output"),
-    cacheRead: readNumber("cacheRead"),
-    cacheWrite: readNumber("cacheWrite"),
+    input: readUsageNumber("input"),
+    output: readUsageNumber("output"),
+    cacheRead: readUsageNumber("cacheRead"),
+    cacheWrite: readUsageNumber("cacheWrite"),
   };
 }
 
@@ -159,7 +159,7 @@ async function runToolOnlyTurn(params: {
   );
 
   let toolCall = extractFirstToolCall(response);
-  let text = extractAssistantText(response);
+  let text = extractEmbeddedAssistantText(response);
   for (let attempt = 0; attempt < 2 && (!toolCall || text.length > 0); attempt += 1) {
     prompt = `Return only a tool call for \`${params.tool.name}\` with {}. No text.`;
     response = await completeSimpleWithLiveTimeout(
@@ -174,7 +174,7 @@ async function runToolOnlyTurn(params: {
       timeoutMs,
     );
     toolCall = extractFirstToolCall(response);
-    text = extractAssistantText(response);
+    text = extractEmbeddedAssistantText(response);
   }
 
   assert(toolCall, `expected tool call for ${params.tool.name}`);
@@ -226,7 +226,7 @@ async function completeCacheProbe(params: {
       `${params.providerTag} cache lane ${params.suffix}`,
       timeoutMs,
     );
-    const text = extractAssistantText(response);
+    const text = extractEmbeddedAssistantText(response);
     const usage = normalizeCacheUsage(response.usage);
     if (
       shouldAcceptEmptyCacheProbe({
@@ -547,7 +547,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
       provider: "openai",
       api: "openai-responses",
       envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-      preferredModelIds: ["gpt-4.1", "gpt-5.2", "gpt-5.4-mini", "gpt-5.4", "gpt-5.5"],
+      preferredModelIds: ["gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
     },
     regressions,
     summary,
@@ -558,7 +558,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
       provider: "anthropic",
       api: "anthropic-messages",
       envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
-      preferredModelIds: ["claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-3-5"],
+      preferredModelIds: ["claude-sonnet-5", "claude-haiku-4-5"],
     },
     regressions,
     summary,
