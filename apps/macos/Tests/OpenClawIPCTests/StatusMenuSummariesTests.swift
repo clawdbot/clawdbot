@@ -276,7 +276,8 @@ private final class UsageGatewayFixture {
                     let count = min(cronJobCount, limit)
                     responseFacts["total"] = String(cronJobCount)
                     responseFacts["returnedJobs"] = String(count)
-                    let jobs = (0..<count).map { index in
+                    // GRDB also overloads joined; these interpolations must remain JSON strings.
+                    let jobs = (0..<count).map { index -> String in
                         let id = String(format: "job-%03d", index)
                         return #"""
                         {"id":"\#(id)","name":"Automation \#(index)","enabled":true,
