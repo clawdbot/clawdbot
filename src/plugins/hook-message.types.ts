@@ -219,3 +219,24 @@ export type PluginHookMessageSentEvent = {
   parentSpanId?: string;
   error?: string;
 };
+
+/** An authorized provider feedback control, not an ordinary emoji reaction. */
+export type PluginHookMessageFeedbackEvent = {
+  /** Exact provider response message being rated, not the feedback update ID. */
+  messageId: string;
+  value: "positive" | "negative";
+  /** Receipt time in Unix milliseconds. */
+  timestamp: number;
+  senderId: string;
+  /** Provider-supplied display name and comment remain untrusted content. */
+  senderName?: string;
+  comment?: string;
+  /** Feedback update identity; consumers use this for replay deduplication. */
+  providerUpdate: PluginHookProviderUpdate;
+};
+
+export type PluginHookMessageFeedbackContext = PluginHookMessageContext & {
+  agentId: string;
+  sessionKey: string;
+  conversationId: string;
+};

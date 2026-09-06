@@ -6,6 +6,12 @@ import {
   resolveSessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { fireAndForgetHook } from "../hooks/fire-and-forget.js";
+import type {
+  PluginHookMessageFeedbackContext,
+  PluginHookMessageFeedbackEvent,
+} from "../plugins/hook-message.types.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { buildHostChannelInboundEventContext } from "./inbound-event/context.js";
 import { createChannelInboundEnvelopeBuilder } from "./inbound-event/envelope.js";
 import { dispatchRoutedChannelTurn } from "./turn/lifecycle.js";
@@ -15,12 +21,65 @@ const MAX_RESPONSE_CHARS = 500;
 const MAX_COOLDOWN_ENTRIES = 500;
 const lastReflectionBySession = new Map<string, number>();
 
-export async function recordChannelFeedbackEvent(params: {
+/** Existing transcript feedback vocabulary plus typed provider identity. */
+export type ChannelFeedbackEvent = Omit<PluginHookMessageFeedbackEvent, "timestamp"> & {
+  type: "custom";
+  event: "feedback";
+  ts: number;
+  agentId: string;
+  sessionKey: string;
+  conversationId: string;
+};
+
+type RecordChannelFeedbackParams = {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-  event: Parameters<typeof appendTranscriptEvent>[1];
-}): Promise<boolean> {
+} & (
+  | { event: Parameters<typeof appendTranscriptEvent>[1]; context?: undefined }
+  | {
+      event: ChannelFeedbackEvent;
+      context: Pick<PluginHookMessageFeedbackContext, "channelId" | "accountId">;
+    }
+);
+
+export async function recordChannelFeedbackEvent(
+  params: RecordChannelFeedbackParams,
+): Promise<boolean> {
+  // The caller owns channel authorization. Observe the accepted provider fact
+  // independently of transcript availability; listeners cannot alter the invoke.
+  if (
+    params.context &&
+    params.event.agentId === params.agentId &&
+    params.event.sessionKey === params.sessionKey
+  ) {
+    const event = params.event;
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("message_feedback")) {
+      fireAndForgetHook(
+        hookRunner.runMessageFeedback(
+          {
+            messageId: event.messageId,
+            value: event.value,
+            timestamp: event.ts,
+            senderId: event.senderId,
+            senderName: event.senderName,
+            comment: event.comment,
+            providerUpdate: event.providerUpdate,
+          },
+          {
+            ...params.context,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            conversationId: event.conversationId,
+            messageId: event.messageId,
+            senderId: event.senderId,
+          },
+        ),
+        "message_feedback hook failed",
+      );
+    }
+  }
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.agentId,
   });

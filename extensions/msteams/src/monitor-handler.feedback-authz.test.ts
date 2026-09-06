@@ -1,3 +1,4 @@
+import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 // Msteams tests cover monitor handler.feedback authz plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -60,6 +61,7 @@ function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): Plugin
         resolveAgentRoute: ({ peer }: { peer: { kind: string; id: string } }) => ({
           sessionKey: `msteams:${peer.kind}:${peer.id}`,
           agentId: "default",
+          accountId: "default",
         }),
       },
       session: {
@@ -172,6 +174,7 @@ describe("msteams feedback invoke authz", () => {
           cfg: expect.any(Object),
           agentId: "default",
           sessionKey: "msteams:direct:owner-aad",
+          context: { channelId: "msteams", accountId: "default" },
           event: {
             type: "custom",
             event: "feedback",
@@ -182,6 +185,9 @@ describe("msteams feedback invoke authz", () => {
             sessionKey: "msteams:direct:owner-aad",
             agentId: "default",
             conversationId: "a:personal-chat",
+            senderId: "owner-aad",
+            senderName: "Owner",
+            providerUpdate: { id: "invoke-like", kind: "message/submitAction" },
           },
         });
       },
@@ -279,5 +285,77 @@ describe("msteams feedback invoke authz", () => {
 
     expect(channelInboundMockState.recordChannelFeedbackEvent).not.toHaveBeenCalled();
     expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
+  });
+
+  it("keeps feedback without an exact response target transcript-only", async () => {
+    const deps = createDeps({
+      cfg: { channels: { msteams: { dmPolicy: "allowlist", allowFrom: ["owner-aad"] } } },
+    });
+    const context = createFeedbackInvokeContext({
+      reaction: "like",
+      conversationId: "personal-chat",
+      conversationType: "personal",
+      senderId: "owner-aad",
+    });
+    delete (context.activity.value as { replyToId?: string }).replyToId;
+    await runMSTeamsFeedbackInvokeHandler(context, deps);
+    expect(channelInboundMockState.recordChannelFeedbackEvent).toHaveBeenCalledExactlyOnceWith({
+      cfg: deps.cfg,
+      agentId: "default",
+      sessionKey: "msteams:direct:owner-aad",
+      event: expect.objectContaining({ messageId: "unknown" }),
+    });
+  });
+
+  it("records team-bound feedback with the answering route", async () => {
+    const cfg = {
+      bindings: [{ agentId: "team-seat", match: { channel: "msteams", teamId: "team-1" } }],
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["owner-aad"],
+          teams: { "team-1": { channels: { "19:channel@thread.tacv2": { enabled: true } } } },
+        },
+      },
+    } as OpenClawConfig;
+    const deps = createDeps({ cfg });
+    const runtime = createRuntimeStub(vi.fn(async () => []));
+    runtime.channel.routing.resolveAgentRoute = resolveAgentRoute;
+    setMSTeamsRuntime(runtime);
+    const normalRoute = resolveAgentRoute({
+      cfg,
+      channel: "msteams",
+      teamId: "team-1",
+      peer: { kind: "channel", id: "19:channel@thread.tacv2" },
+    });
+    expect(normalRoute.agentId).toBe("team-seat");
+    const { sessionKey } = resolveThreadSessionKeys({
+      baseSessionKey: normalRoute.sessionKey,
+      parentSessionKey: normalRoute.sessionKey,
+      threadId: "thread-root",
+    });
+    await runMSTeamsFeedbackInvokeHandler(
+      createFeedbackInvokeContext({
+        reaction: "like",
+        conversationId: "19:channel@thread.tacv2;messageid=thread-root",
+        conversationType: "channel",
+        senderId: "owner-aad",
+        teamId: "team-1",
+      }),
+      deps,
+    );
+    expect(channelInboundMockState.recordChannelFeedbackEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        sessionKey,
+        agentId: normalRoute.agentId,
+        context: { channelId: "msteams", accountId: normalRoute.accountId },
+        event: expect.objectContaining({
+          conversationId: "19:channel@thread.tacv2",
+          messageId: "bot-msg-1",
+          value: "positive",
+          providerUpdate: { id: "invoke-like", kind: "message/submitAction" },
+        }),
+      }),
+    );
   });
 });

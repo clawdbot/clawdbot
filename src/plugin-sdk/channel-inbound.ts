@@ -125,6 +125,7 @@ export {
   DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS,
   recordChannelFeedbackEvent,
   runChannelFeedbackReflection,
+  type ChannelFeedbackEvent,
   type ChannelFeedbackReflectionResult,
 } from "../channels/feedback-reflection.js";
 export {

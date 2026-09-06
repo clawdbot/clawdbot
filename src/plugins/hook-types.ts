@@ -27,6 +27,8 @@ import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookMessageContext,
+  PluginHookMessageFeedbackContext,
+  PluginHookMessageFeedbackEvent,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
@@ -72,6 +74,8 @@ export type {
   PluginHookLocation,
   PluginHookMediaFact,
   PluginHookMessageContext,
+  PluginHookMessageFeedbackContext,
+  PluginHookMessageFeedbackEvent,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
@@ -116,6 +120,7 @@ export type PluginHookName =
   | "message_sending"
   | "reply_payload_sending"
   | "message_sent"
+  | "message_feedback"
   | "before_tool_call"
   | "after_tool_call"
   | "tool_result_persist"
@@ -160,6 +165,7 @@ const PLUGIN_HOOK_NAMES = [
   "message_sending",
   "reply_payload_sending",
   "message_sent",
+  "message_feedback",
   "before_tool_call",
   "after_tool_call",
   "tool_result_persist",
@@ -1286,6 +1292,10 @@ export type PluginHookHandlerMap = {
   message_sent: (
     event: PluginHookMessageSentEvent,
     ctx: PluginHookMessageContext,
+  ) => Promise<void> | void;
+  message_feedback: (
+    event: PluginHookMessageFeedbackEvent,
+    ctx: PluginHookMessageFeedbackContext,
   ) => Promise<void> | void;
   before_tool_call: (
     event: PluginHookBeforeToolCallEvent,

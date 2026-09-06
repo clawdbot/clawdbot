@@ -311,6 +311,7 @@ contracts above; a modifying hook is not an observation hook.
 | `message_sending`           | Modify / gate | Rewrite outbound content or cancel delivery                                |
 | `reply_payload_sending`     | Modify / gate | Mutate or cancel normalized reply payloads before delivery                 |
 | `message_sent`              | Observe       | Observe outbound delivery success or failure                               |
+| `message_feedback`          | Observe       | Observe authorized feedback controls targeting an exact provider response  |
 | `before_dispatch`           | Claim         | Handle an inbound message before the normal model dispatch                 |
 | `reply_dispatch`            | Claim         | Own reply generation and dispatch instead of the default model path        |
 
@@ -1074,6 +1075,36 @@ Use message hooks for channel-level routing and delivery policy:
   (including `presentation`, `delivery`, media refs, and text) or return
   `{ cancel: true }`.
 - `message_sent`: observe final success or failure.
+- `message_feedback`: observe an authorized AI-feedback control, not an emoji
+  reaction. Register with `api.on("message_feedback", handler)`, not an internal
+  `message:feedback` hook.
+
+`message_feedback` reuses `recordChannelFeedbackEvent` from
+`openclaw/plugin-sdk/channel-inbound`. A channel opts in by supplying `context`
+(`channelId`, optional `accountId`) and a typed `ChannelFeedbackEvent` with the
+existing transcript fields plus `senderId`,
+optional `senderName`, and `providerUpdate`. Legacy callers without `context`
+retain transcript-only behavior. The separate `channel-feedback` SDK subpath
+contains acknowledgement/status reactions, not user-rating ingestion.
+
+The hook event has `messageId` (the exact response being rated), `value`
+(`positive` or `negative`), `timestamp` (receipt time in Unix milliseconds),
+`senderId`, optional `senderName` and `comment`, and `providerUpdate`
+(`id` identifies the feedback update; `kind` identifies the provider update
+type). Its context reuses the message context and requires `agentId`,
+`sessionKey`, and `conversationId`. No run or trace identity is inferred from
+the current session; correlate against the exact outbound response receipt.
+
+Teams emits this notification only after feedback authorization and routing,
+when the invoke, response, conversation, and sender identifiers are present.
+The existing transcript write and negative-feedback reflection remain intact.
+The notification is independent of transcript availability, cannot modify or
+reject feedback, and does not delay the provider acknowledgement. Handlers run
+in parallel with a two-second default wait budget; errors are logged, not
+returned to Teams. This is best-effort observation, not durable or exactly-once
+delivery. Consumers needing retries must persist and deduplicate provider
+updates. Provider fields, names, and comments remain untrusted content; channel
+authorization does not turn them into instructions.
 
 For audio-only TTS replies, `content` may contain the hidden spoken
 transcript even when the channel payload has no visible text/caption.

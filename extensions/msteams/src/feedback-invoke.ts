@@ -67,8 +67,9 @@ export async function runMSTeamsFeedbackInvokeHandler(
   let userComment: string | undefined;
   if (value.actionValue?.feedback) {
     try {
-      const parsed = JSON.parse(value.actionValue.feedback) as { feedbackText?: string };
-      userComment = parsed.feedbackText || undefined;
+      const parsed = JSON.parse(value.actionValue.feedback) as { feedbackText?: unknown };
+      userComment =
+        typeof parsed.feedbackText === "string" ? parsed.feedbackText || undefined : undefined;
     } catch {
       // Best effort — feedback text is optional
     }
@@ -91,6 +92,7 @@ export async function runMSTeamsFeedbackInvokeHandler(
   const route = core.channel.routing.resolveAgentRoute({
     cfg: deps.cfg,
     channel: "msteams",
+    teamId: activity.channelData?.team?.id,
     peer: {
       kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
       id: isDirectMessage ? senderId : conversationId,
@@ -131,11 +133,26 @@ export async function runMSTeamsFeedbackInvokeHandler(
   });
 
   try {
+    // Only notify integrations when the provider supplied exact correlation.
+    // Preserve the existing transcript-only path for incomplete legacy events.
+    const hasExactReferences = [activity.id, conversationId, messageId, senderId].every(
+      (id) => typeof id === "string" && Boolean(id.trim()) && id !== "unknown",
+    );
     await recordChannelFeedbackEvent({
       cfg: deps.cfg,
       agentId: route.agentId,
       sessionKey: route.sessionKey,
-      event: feedbackEvent,
+      ...(hasExactReferences
+        ? {
+            context: { channelId: "msteams", accountId: route.accountId },
+            event: {
+              ...feedbackEvent,
+              senderId,
+              senderName: activity.from?.name,
+              providerUpdate: { id: activity.id!, kind: "message/submitAction" },
+            },
+          }
+        : { event: feedbackEvent }),
     });
   } catch {
     // Best effort

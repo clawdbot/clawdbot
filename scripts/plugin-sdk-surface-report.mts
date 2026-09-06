@@ -357,7 +357,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: provider-owned local-service reconciliation context.
       // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
       // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
-      4445,
+      // +3: typed feedback event, message-hook event, and message-hook context contracts.
+      4448,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
