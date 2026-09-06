@@ -43,12 +43,14 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       prompt: "create an automation",
       cronCreatorAuthorityCapability: forgedCapability,
       pinnedWidgetAuthoring: true,
+      assertSourceCurrent: () => {},
     } as unknown as AgentCommandIngressOpts;
 
     expect(sanitizePublicAgentCommandIngressOpts(opts)).toMatchObject({
       prompt: "create an automation",
       cronCreatorAuthorityCapability: undefined,
       pinnedWidgetAuthoring: undefined,
+      assertSourceCurrent: undefined,
     });
   });
 });

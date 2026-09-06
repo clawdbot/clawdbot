@@ -394,6 +394,11 @@ If no MCP servers are enabled, OpenClaw still injects a strict config when a bac
 
 Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end so stdio children and Streamable HTTP/SSE streams do not outlive the run.
 
+A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
+exceeds its deadline, OpenClaw refuses replacement, including from a later run.
+Check the cleanup error and the backend's remaining processes before retrying.
+Command output and process exit alone do not confirm that descendants stopped.
+
 For `claude-cli`, the installed Claude Code process uses its current native
 login. OpenClaw uses a non-secret route marker and never reads, persists,
 refreshes, selects, or forwards the native tokens.

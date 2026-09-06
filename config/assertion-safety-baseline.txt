@@ -279,7 +279,7 @@ extensions/cua-computer/src/driver-client.ts	15
 extensions/cua-computer/src/driver-result.ts	9
 extensions/cua-computer/src/mcp-driver-client.ts	5
 extensions/cua-computer/src/window-actions.ts	3
-extensions/deepinfra/provider-models.ts	3
+extensions/deepinfra/provider-models.ts	2
 extensions/deepinfra/video-generation-provider.ts	2
 extensions/deepseek/provider-policy-api.ts	4
 extensions/device-pair/index.ts	6
@@ -521,7 +521,6 @@ extensions/google/index.ts	1
 extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/onboard.ts	3
-extensions/google/provider-catalog.ts	2
 extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	6
 extensions/google/transport-stream.ts	15
@@ -864,7 +863,7 @@ extensions/nostr/src/nostr-profile-http.ts	1
 extensions/nostr/src/nostr-profile-import.ts	1
 extensions/nostr/src/setup-surface.ts	2
 extensions/nostr/src/types.ts	3
-extensions/nvidia/provider-catalog.ts	3
+extensions/nvidia/provider-catalog.ts	2
 extensions/oc-path/src/oc-path/find.ts	13
 extensions/oc-path/src/oc-path/jsonc/parse.ts	1
 extensions/oc-path/src/oc-path/universal.ts	4
@@ -1520,9 +1519,8 @@ packages/gateway-client/src/gateway-origin-scope.ts	1
 packages/gateway-client/src/pending-request.ts	2
 packages/gateway-client/src/protocol-client.ts	1
 packages/gateway-client/src/scope-upgrade.ts	4
-packages/gateway-protocol/src/clawhub-trust-error-details.ts	1
 packages/gateway-protocol/src/client-info.ts	4
-packages/gateway-protocol/src/connect-error-details.ts	12
+packages/gateway-protocol/src/connect-error-details.ts	9
 packages/gateway-protocol/src/gateway-error-details.ts	1
 packages/gateway-protocol/src/protocol-validator.ts	3
 packages/gateway-protocol/src/schema/audit-activity.ts	1
@@ -2749,7 +2747,7 @@ src/gateway/channel-health-monitor.ts	6
 src/gateway/channel-thaw-restart.ts	1
 src/gateway/chat-attachments.ts	4
 src/gateway/chat-display-projection.canvas.ts	14
-src/gateway/chat-display-projection.core.ts	6
+src/gateway/chat-display-projection.core.ts	5
 src/gateway/chat-display-projection.helpers.ts	10
 src/gateway/chat-display-projection.history.ts	1
 src/gateway/chat-display-projection.sanitize.ts	15
