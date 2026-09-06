@@ -49,7 +49,6 @@ export class SearchableSelectList implements Component, Focusable {
 
   onSelect?: (item: SearchableSelectItem) => void;
   onCancel?: () => void;
-  onSelectionChange?: (item: SearchableSelectItem) => void;
 
   private static readonly DESCRIPTION_LAYOUT_MIN_WIDTH = 40;
   private static readonly DESCRIPTION_MIN_WIDTH = 12;
@@ -85,7 +84,6 @@ export class SearchableSelectList implements Component, Focusable {
 
     // Reset selection when filter changes
     this.selectedIndex = 0;
-    this.notifySelectionChange();
   }
 
   /**
@@ -201,10 +199,6 @@ export class SearchableSelectList implements Component, Focusable {
       parts = nextParts;
     }
     return parts.map((part) => part.text).join("");
-  }
-
-  setSelectedIndex(index: number) {
-    this.selectedIndex = Math.max(0, Math.min(index, this.filteredItems.length - 1));
   }
 
   invalidate() {
@@ -352,13 +346,11 @@ export class SearchableSelectList implements Component, Focusable {
     // Navigation keys
     if (matchesKey(keyData, "up") || matchesKey(keyData, "ctrl+p")) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-      this.notifySelectionChange();
       return;
     }
 
     if (matchesKey(keyData, "down") || matchesKey(keyData, "ctrl+n")) {
       this.selectedIndex = Math.min(this.filteredItems.length - 1, this.selectedIndex + 1);
-      this.notifySelectionChange();
       return;
     }
 
@@ -379,13 +371,6 @@ export class SearchableSelectList implements Component, Focusable {
       // Only current-query patterns are reusable; retaining older edits grows without bound.
       this.highlightPatterns = undefined;
       this.updateFilter();
-    }
-  }
-
-  private notifySelectionChange() {
-    const item = this.filteredItems[this.selectedIndex];
-    if (item && this.onSelectionChange) {
-      this.onSelectionChange(item);
     }
   }
 
