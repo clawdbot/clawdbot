@@ -153,6 +153,59 @@ export function clearFollowupDrainCallback(key: string): void {
   FOLLOWUP_RUN_CALLBACKS.delete(key);
 }
 
+export function cancelQueuedFollowupRun(
+  key: string,
+  lifecycle: NonNullable<FollowupRun["turnAdoptionLifecycle"]>,
+): void {
+  const queue = FOLLOWUP_QUEUES.get(key);
+  if (!queue) {
+    return;
+  }
+  const sources = [
+    ...new Set([
+      ...queue.items,
+      ...queue.summarySources,
+      ...queue.summaryElisions.flatMap((entry) => entry.sources),
+    ]),
+  ].filter((source) => source.turnAdoptionLifecycle === lifecycle);
+  const queuedSources = sources.filter((source) => queue.items.includes(source));
+  removeQueuedItemsByRef(queue.items, queuedSources);
+  consumeQueueSummaryDelivery(queue, { sources, droppedCount: 0 }, false);
+
+  const releaseEmptyQueue = () => {
+    if (
+      !queue.draining &&
+      queue.items.length === 0 &&
+      queue.inFlight.size === 0 &&
+      queue.droppedCount === 0 &&
+      FOLLOWUP_QUEUES.get(key) === queue
+    ) {
+      FOLLOWUP_QUEUES.delete(key);
+      clearFollowupDrainCallback(key);
+    }
+  };
+  const runFollowup = FOLLOWUP_RUN_CALLBACKS.get(key);
+  if (runFollowup) {
+    for (const source of queuedSources) {
+      if (queue.inFlight.has(source)) {
+        continue;
+      }
+      queue.inFlight.add(source);
+      void (async () => {
+        try {
+          await runFollowup(source);
+        } catch (error) {
+          defaultRuntime.error?.(`followup queue abort cleanup failed: ${String(error)}`);
+        } finally {
+          queue.inFlight.delete(source);
+          releaseEmptyQueue();
+        }
+      })();
+    }
+  }
+  releaseEmptyQueue();
+}
+
 /** Restart the drain for `key` if it is currently idle, using the stored callback. */
 export function kickFollowupDrainIfIdle(key: string): void {
   const cb = FOLLOWUP_RUN_CALLBACKS.get(key);

@@ -2765,6 +2765,13 @@ describe("followup queue collect routing", () => {
     const controller = new AbortController();
     const onComplete = vi.fn();
 
+    const runFollowup = async (run: FollowupRun) => {
+      if (run.abortSignal?.aborted) {
+        cleaned.push(run);
+        return;
+      }
+      calls.push(run);
+    };
     enqueueFollowupRun(key, createRun({ prompt: "dropped" }), settings);
     enqueueFollowupRun(
       key,
@@ -2774,16 +2781,13 @@ describe("followup queue collect routing", () => {
         turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
       },
       settings,
+      "message-id",
+      runFollowup,
+      false,
     );
     controller.abort();
 
-    scheduleFollowupDrain(key, async (run) => {
-      if (run.abortSignal?.aborted) {
-        cleaned.push(run);
-        return;
-      }
-      calls.push(run);
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await new Promise((resolve) => {
       setTimeout(resolve, 10);
     });
@@ -3000,7 +3004,7 @@ describe("followup queue collect routing", () => {
     enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
     controller.abort();
 
-    expect(onComplete).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledTimes(1);
 
     await drainRecordedQueue(key, runFollowup, done);
 

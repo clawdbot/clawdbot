@@ -1,6 +1,7 @@
 // Enqueues follow-up reply runs and schedules queue drains.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../../channels/chat-type.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
@@ -11,6 +12,7 @@ import {
   shouldSkipQueueItem,
 } from "../../../utils/queue-helpers.js";
 import {
+  cancelQueuedFollowupRun,
   clearFollowupDrainCallback,
   createOverflowSummaryRetrySource,
   kickFollowupDrainIfIdle,
@@ -30,6 +32,7 @@ import {
   trimSummaryElisionsToCap,
 } from "./state.js";
 import {
+  bindQueuedFollowupAbort,
   completeFollowupRunLifecycle,
   isFollowupRunAborted,
   markFollowupRunEnqueued,
@@ -117,9 +120,22 @@ function appendQueueItem(params: {
   if (params.runFollowup) {
     rememberFollowupDrainCallback(params.key, params.runFollowup);
   }
+  // A stalled predecessor must not delay abandonment or block the durable retry.
+  // Parked steering retains its own cancellation and input-custody owner.
+  if (!params.run.steerPending) {
+    bindQueueAbort(params.key, params.run);
+  }
   if (params.restartIfIdle && !params.queue.draining) {
     kickFollowupDrainIfIdle(params.key);
   }
+}
+
+function bindQueueAbort(key: string, run: FollowupRun): void {
+  bindQueuedFollowupAbort(run, (lifecycle) => {
+    cancelQueuedFollowupRun(key, lifecycle);
+    reapplyDeferredOverflow(key);
+    kickFollowupDrainIfIdle(key);
+  });
 }
 
 export function enqueueFollowupRun(
@@ -311,6 +327,7 @@ function settleParkedSteerAcceptance(key: string, run: FollowupRun, accepted: bo
   if (!accepted) {
     delete run.steerPending;
     reapplyDeferredOverflow(key);
+    bindQueueAbort(key, run);
     kickFollowupDrainIfIdle(key);
   }
   return true;
@@ -409,7 +426,19 @@ export function parkSteerCandidate(
   );
   return {
     async admit() {
-      const predecessorAccepted = (await run.steerPending?.predecessor) ?? true;
+      let predecessorAccepted: boolean;
+      try {
+        // Queue replacement rebinds queueAbortSignal; the upstream owner is stable.
+        predecessorAccepted = await racePromiseWithAbortSignal(
+          run.steerPending?.predecessor ?? Promise.resolve(true),
+          run.abortSignal,
+        );
+      } catch (error) {
+        if (run.abortSignal?.aborted) {
+          return "cancelled";
+        }
+        throw error;
+      }
       if (isFollowupRunAborted(run) || !isParkedFollowupRunOwned(key, run)) {
         return "cancelled";
       }

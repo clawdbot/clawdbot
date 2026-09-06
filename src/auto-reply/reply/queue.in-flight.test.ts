@@ -6,6 +6,7 @@ import {
   enqueueFollowupRun,
   FollowupRunDeferredError,
   getFollowupQueueDepth,
+  parkSteerCandidate,
   scheduleFollowupDrain,
 } from "./queue.js";
 import { createQueueTestRun as createRun } from "./queue.test-helpers.js";
@@ -34,6 +35,66 @@ describe("followup queue in-flight ownership", () => {
     debounceMs: 0,
     cap: 1,
     dropPolicy,
+  });
+
+  it("drains accepted siblings after a cancelled parked steer is consumed", async () => {
+    const key = createKey("cancelled-steer");
+    const settings = createSettings("new");
+    const controller = new AbortController();
+    const delivered: string[] = [];
+    const runFollowup = async (run: FollowupRun) => {
+      if (!run.abortSignal?.aborted) {
+        delivered.push(run.prompt);
+      }
+    };
+    const steer = createRun({ prompt: "cancelled steer" });
+    steer.abortSignal = controller.signal;
+    steer.turnAdoptionLifecycle = { onAdopted: async () => {} };
+    const parked = parkSteerCandidate(key, steer, settings, runFollowup);
+    expect(parked).toBeDefined();
+    expect(enqueueFollowupRun(key, createRun({ prompt: "ordinary sibling" }), settings)).toBe(true);
+    scheduleFollowupDrain(key, runFollowup);
+    await vi.waitFor(() => expect(getExistingFollowupQueue(key)?.draining).toBe(false));
+
+    controller.abort();
+    parked?.consume();
+
+    await vi.waitFor(() => expect(delivered).toEqual(["ordinary sibling"]));
+    await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+  });
+
+  it("cancels a parked admission while its predecessor is still undecided", async () => {
+    const key = createKey("cancelled-steer-wait");
+    const settings = createSettings("new");
+    const runFollowup = async () => {};
+    const first = parkSteerCandidate(key, createRun({ prompt: "first" }), settings, runFollowup);
+    const controller = new AbortController();
+    const secondRun = createRun({ prompt: "second" });
+    secondRun.abortSignal = controller.signal;
+    secondRun.turnAdoptionLifecycle = { onAdopted: async () => {} };
+    const second = parkSteerCandidate(key, secondRun, settings, runFollowup);
+    if (!first || !second) {
+      throw new Error("expected both steer reservations");
+    }
+    const admission = second.admit();
+    let settled = false;
+    const completion = admission.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    try {
+      controller.abort();
+      await vi.waitFor(() => expect(settled).toBe(true));
+      await expect(admission).resolves.toBe("cancelled");
+    } finally {
+      first.consume();
+      second.consume();
+      await completion;
+    }
   });
 
   it.each(["old", "summarize"] as const)(
@@ -251,61 +312,74 @@ describe("followup queue in-flight ownership", () => {
     expect(groupCompletions.map((complete) => complete.mock.calls.length)).toEqual([1, 1]);
   });
 
-  it("moves pending overflow state without replaying an active summary delivery", async () => {
-    const key = createKey("summary-recovery");
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
-    const activeEntered = createDeferred();
-    const releaseZombie = createDeferred();
-    const calls: string[] = [];
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run.prompt);
-      if (calls.length === 1) {
-        activeEntered.resolve();
-        await releaseZombie.promise;
+  it.each([false, true])(
+    "moves pending overflow state without replaying active delivery (abort pending: %s)",
+    async (abortPending) => {
+      const key = createKey("summary-recovery");
+      const settings: QueueSettings = {
+        mode: "followup",
+        debounceMs: 0,
+        cap: 1,
+        dropPolicy: "summarize",
+      };
+      const activeEntered = createDeferred();
+      const releaseZombie = createDeferred();
+      const calls: string[] = [];
+      const pendingAbort = new AbortController();
+      const pendingAbandoned = vi.fn();
+      const pending = createRun({ prompt: "summary-pending" });
+      pending.abortSignal = pendingAbort.signal;
+      pending.turnAdoptionLifecycle = { onAdopted: async () => {}, onAbandoned: pendingAbandoned };
+      const runFollowup = async (run: FollowupRun) => {
+        calls.push(run.prompt);
+        if (calls.length === 1) {
+          activeEntered.resolve();
+          await releaseZombie.promise;
+        }
+      };
+
+      try {
+        enqueueFollowupRun(
+          key,
+          createRun({ prompt: "summary-active" }),
+          settings,
+          "none",
+          undefined,
+          false,
+        );
+        enqueueFollowupRun(key, pending, settings, "none", undefined, false);
+        scheduleFollowupDrain(key, runFollowup);
+        await activeEntered.promise;
+        enqueueFollowupRun(
+          key,
+          createRun({ prompt: "item-pending" }),
+          settings,
+          "none",
+          runFollowup,
+        );
+
+        const retire = prepareStaleFollowupDrainRetirement(key);
+        expect(retire).toBeTypeOf("function");
+        retire?.();
+        if (abortPending) {
+          pendingAbort.abort();
+          expect(pendingAbandoned).toHaveBeenCalledOnce();
+        }
+        await vi.waitFor(() => expect(calls).toHaveLength(abortPending ? 2 : 3));
+
+        expect(calls[0]).toContain("summary-active");
+        if (!abortPending) {
+          expect(calls[1]).toContain("summary-pending");
+        }
+        expect(calls.at(-1)).toBe("item-pending");
+        releaseZombie.resolve();
+        await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+        expect(calls).toHaveLength(abortPending ? 2 : 3);
+      } finally {
+        releaseZombie.resolve();
       }
-    };
-
-    try {
-      enqueueFollowupRun(
-        key,
-        createRun({ prompt: "summary-active" }),
-        settings,
-        "none",
-        undefined,
-        false,
-      );
-      enqueueFollowupRun(
-        key,
-        createRun({ prompt: "summary-pending" }),
-        settings,
-        "none",
-        undefined,
-        false,
-      );
-      scheduleFollowupDrain(key, runFollowup);
-      await activeEntered.promise;
-      enqueueFollowupRun(key, createRun({ prompt: "item-pending" }), settings, "none", runFollowup);
-
-      const retire = prepareStaleFollowupDrainRetirement(key);
-      expect(retire).toBeTypeOf("function");
-      retire?.();
-      await vi.waitFor(() => expect(calls).toHaveLength(3));
-
-      expect(calls[0]).toContain("summary-active");
-      expect(calls[1]).toContain("summary-pending");
-      expect(calls[2]).toBe("item-pending");
-      releaseZombie.resolve();
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-      expect(calls).toHaveLength(3);
-    } finally {
-      releaseZombie.resolve();
-    }
-  });
+    },
+  );
 
   it("rejects stale retirement after the same source enters a new drain generation", async () => {
     const key = createKey("generation-recovery");

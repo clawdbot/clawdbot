@@ -294,8 +294,40 @@ const admittingTurnAdoptionLifecycles = new WeakMap<TurnAdoptionLifecycle, Promi
 const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
+const queuedAbortCleanups = new WeakMap<TurnAdoptionLifecycle, () => void>();
 
 type FollowupLifecycleRun = Pick<FollowupRun, "steerPending" | "turnAdoptionLifecycle">;
+
+function clearQueuedAbort(lifecycle: TurnAdoptionLifecycle): void {
+  queuedAbortCleanups.get(lifecycle)?.();
+  queuedAbortCleanups.delete(lifecycle);
+}
+
+export function bindQueuedFollowupAbort(
+  run: FollowupRun,
+  removeFromQueue: (lifecycle: TurnAdoptionLifecycle) => void,
+): void {
+  const lifecycle = run.turnAdoptionLifecycle;
+  const signal = run.abortSignal;
+  if (
+    !lifecycle ||
+    !signal ||
+    admittedTurnAdoptionLifecycles.has(lifecycle) ||
+    completedTurnAdoptionLifecycles.has(lifecycle)
+  ) {
+    return;
+  }
+  clearQueuedAbort(lifecycle);
+  const onAbort = () => {
+    removeFromQueue(lifecycle);
+    completeFollowupRunLifecycle(run);
+  };
+  queuedAbortCleanups.set(lifecycle, () => signal.removeEventListener("abort", onAbort));
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) {
+    onAbort();
+  }
+}
 
 export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
   const lifecycle = run.turnAdoptionLifecycle;
@@ -335,6 +367,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
     if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
       await lifecycle.onAdopted();
       admittedTurnAdoptionLifecycles.add(lifecycle);
+      clearQueuedAbort(lifecycle);
     }
   });
 
@@ -352,6 +385,10 @@ export function completeFollowupRunLifecycle(
 ): void {
   run.steerPending?.settle(false);
   const lifecycle = run.turnAdoptionLifecycle;
+
+  if (lifecycle) {
+    clearQueuedAbort(lifecycle);
+  }
 
   const finish = () => {
     if (!lifecycle || completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {

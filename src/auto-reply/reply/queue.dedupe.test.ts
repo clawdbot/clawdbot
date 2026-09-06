@@ -465,56 +465,70 @@ describe("followup queue deduplication", () => {
     clearSessionQueues([key]);
   });
 
-  it("allows re-enqueueing a message compacted into a summary elision before teardown", () => {
-    const key = `test-dedup-elision-retry-${Date.now()}`;
-    const summarizeSettings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
-    const onAbandoned = vi.fn();
-    const first = createRun({
-      prompt: "first",
-      messageId: "m1",
-      originatingChannel: "line",
-      originatingTo: "group:G1",
-    });
-    first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
-    expect(enqueueFollowupRun(key, first, summarizeSettings)).toBe(true);
+  it.each(["teardown", "abort"] as const)(
+    "readmits a message compacted into a summary elision after %s",
+    (action) => {
+      const key = `test-dedup-elision-retry-${Date.now()}`;
+      const summarizeSettings: QueueSettings = {
+        mode: "collect",
+        debounceMs: 0,
+        cap: 1,
+        dropPolicy: "summarize",
+      };
+      const onAbandoned = vi.fn();
+      const controller = new AbortController();
+      const first = createRun({
+        prompt: "first",
+        messageId: "m1",
+        originatingChannel: "line",
+        originatingTo: "group:G1",
+      });
+      first.abortSignal = controller.signal;
+      first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
+      expect(enqueueFollowupRun(key, first, summarizeSettings)).toBe(true);
 
-    // Overflow the cap twice: the first enqueue drops `first` into the summary
-    // sources, the second compacts it into a summary elision. Compaction clones
-    // the run (createOverflowSummaryRetrySource), so from here on completion
-    // sees the clone, not the originally recorded run object.
-    for (const [prompt, messageId] of [
-      ["second", "m2"],
-      ["third", "m3"],
-    ] as const) {
-      expect(
-        enqueueFollowupRun(
-          key,
-          createRun({ prompt, messageId, originatingChannel: "line", originatingTo: "group:G1" }),
-          summarizeSettings,
-        ),
-      ).toBe(true);
-    }
+      // Overflow the cap twice: the first enqueue drops `first` into the summary
+      // sources, the second compacts it into a summary elision. Compaction clones
+      // the run (createOverflowSummaryRetrySource), so from here on completion
+      // sees the clone, not the originally recorded run object.
+      for (const [prompt, messageId] of [
+        ["second", "m2"],
+        ["third", "m3"],
+      ] as const) {
+        expect(
+          enqueueFollowupRun(
+            key,
+            createRun({ prompt, messageId, originatingChannel: "line", originatingTo: "group:G1" }),
+            summarizeSettings,
+          ),
+        ).toBe(true);
+      }
 
-    // Teardown abandons the elided run via its clone; the ingress retry for the
-    // original message id must still be re-admittable.
-    clearSessionQueues([key]);
-    expect(onAbandoned).toHaveBeenCalledTimes(1);
+      // Teardown abandons the elided run via its clone; the ingress retry for the
+      // original message id must still be re-admittable.
+      if (action === "abort") {
+        controller.abort();
+        expect(getExistingFollowupQueue(key)?.items.map((run) => run.prompt)).toEqual(["third"]);
+        expect(getExistingFollowupQueue(key)?.summarySources.map((run) => run.prompt)).toEqual([
+          "second",
+        ]);
+        expect(getExistingFollowupQueue(key)?.droppedCount).toBe(1);
+      } else {
+        clearSessionQueues([key]);
+      }
+      expect(onAbandoned).toHaveBeenCalledTimes(1);
 
-    const retry = createRun({
-      prompt: "first",
-      messageId: "m1",
-      originatingChannel: "line",
-      originatingTo: "group:G1",
-    });
-    retry.turnAdoptionLifecycle = { onAdopted: () => {} };
-    expect(enqueueFollowupRun(key, retry, summarizeSettings)).toBe(true);
-    clearSessionQueues([key]);
-  });
+      const retry = createRun({
+        prompt: "first",
+        messageId: "m1",
+        originatingChannel: "line",
+        originatingTo: "group:G1",
+      });
+      retry.turnAdoptionLifecycle = { onAdopted: () => {} };
+      expect(enqueueFollowupRun(key, retry, summarizeSettings)).toBe(true);
+      clearSessionQueues([key]);
+    },
+  );
 
   it("does not let a stale abandoned lifecycle release a newer same-id owner", async () => {
     vi.useFakeTimers();
@@ -593,7 +607,7 @@ describe("followup queue deduplication", () => {
     expect(enqueueFollowupRun(key, redelivery, collectSettings)).toBe(false);
   });
 
-  it.each(["abandoned", "adopted", "adopting", "consumed"] as const)(
+  it.each(["abandoned", "aborted", "adopted", "adopting", "consumed"] as const)(
     "preserves inbound retry eligibility after the %s disposition",
     async (disposition) => {
       const key = `test-dedup-inbound-release-${Date.now()}`;
@@ -608,7 +622,9 @@ describe("followup queue deduplication", () => {
         MessageSid: "stalled-1",
       };
       const onAbandoned = vi.fn();
+      const onSettled = vi.fn();
       const pendingAdoption = createDeferred();
+      const sourceAbort = new AbortController();
 
       const run = createRun({
         prompt: "stalled message",
@@ -616,9 +632,11 @@ describe("followup queue deduplication", () => {
         originatingChannel: "whatsapp",
         originatingTo: "whatsapp:+15550200",
       });
+      run.abortSignal = sourceAbort.signal;
       run.turnAdoptionLifecycle = {
         onAdopted: () => (disposition === "adopting" ? pendingAdoption.promise : undefined),
         onAbandoned,
+        onSettled,
       };
       const claim = claimInboundDedupe(ctx, { owner: run.turnAdoptionLifecycle });
       expect(claim.status).toBe("claimed");
@@ -631,21 +649,41 @@ describe("followup queue deduplication", () => {
 
       if (disposition === "adopted") {
         await admitFollowupRunLifecycle(run);
+        sourceAbort.abort();
+        expect(onSettled).not.toHaveBeenCalled();
       }
       const admission = disposition === "adopting" ? admitFollowupRunLifecycle(run) : undefined;
-      completeFollowupRunLifecycle(run, disposition === "consumed" ? "consumed" : undefined);
+      if (disposition === "aborted") {
+        sourceAbort.abort();
+      } else {
+        completeFollowupRunLifecycle(run, disposition === "consumed" ? "consumed" : undefined);
+      }
       if (admission) {
         expect(claimInboundDedupe(ctx).status).toBe("duplicate");
         expect(onAbandoned).not.toHaveBeenCalled();
         pendingAdoption.resolve();
         await admission;
       }
-      expect(onAbandoned).toHaveBeenCalledTimes(disposition === "abandoned" ? 1 : 0);
+      const retryable = disposition === "abandoned" || disposition === "aborted";
+      expect(onAbandoned).toHaveBeenCalledTimes(retryable ? 1 : 0);
+      expect(onSettled).toHaveBeenCalledOnce();
+      if (disposition === "aborted") {
+        expect(
+          enqueueFollowupRun(
+            key,
+            createRun({
+              prompt: "retry",
+              messageId: "stalled-1",
+              originatingChannel: "whatsapp",
+              originatingTo: "whatsapp:+15550200",
+            }),
+            collectSettings,
+          ),
+        ).toBe(true);
+      }
       clearSessionQueues([key]);
 
-      expect(claimInboundDedupe(ctx).status).toBe(
-        disposition === "abandoned" ? "claimed" : "duplicate",
-      );
+      expect(claimInboundDedupe(ctx).status).toBe(retryable ? "claimed" : "duplicate");
     },
   );
 
