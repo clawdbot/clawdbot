@@ -237,19 +237,32 @@ describe("progress draft plan lifecycle", () => {
     },
   );
 
-  it.each(["partial", "block", "progress"] as const)(
-    "does not report a card cleared without deletion support in %s mode",
-    async (mode) => {
+  it.each(
+    (["partial", "block", "progress"] as const).flatMap((mode) =>
+      [undefined, false, "Custom progress"].map((label) => ({ mode, label })),
+    ),
+  )(
+    "replaces a plan without deletion support in $mode mode with label $label",
+    async ({ mode, label }) => {
+      const update = vi.fn();
       const progress = createChannelProgressDraftCompositor({
-        entry: { streaming: { mode, progress: { label: false } } },
+        entry: { streaming: { mode, progress: { label } } },
         mode,
         active: true,
         seed: "preview",
-        update: vi.fn(),
+        update,
       });
 
+      await progress.pushPlanProgress([]);
+      expect(update).not.toHaveBeenCalled();
       await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }]);
-      expect(await progress.pushPlanProgress([])).toBe(false);
+      expect(await progress.pushPlanProgress([])).toBe(label !== false);
+      if (label !== false) {
+        expect(update.mock.lastCall?.[0]).toBe(label ?? "Working");
+      }
+      await progress.pushPlanProgress([{ step: "Verify", status: "in_progress" }]);
+      expect(update.mock.lastCall?.[0]).toContain("▸ Verify");
+      expect(update.mock.lastCall?.[0]).not.toContain("Patch");
     },
   );
 

@@ -336,7 +336,8 @@ export function createChannelProgressDraftCompositor(params: {
       return await publish();
     }
     if (!params.deleteCurrent) {
-      return false;
+      // Transports without deletion replace an existing preview with its neutral label.
+      return lastRenderedText ? await publish() : false;
     }
     await params.deleteCurrent();
     lastRenderedText = "";

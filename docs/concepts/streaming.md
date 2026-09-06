@@ -373,8 +373,11 @@ Supported surfaces:
 `partial`, `block`, and `progress` previews where plan updates are enabled.
 Visible steps follow the channel's line limits. Clearing a card removes its
 checklist and status while preserving other activity; an otherwise empty draft
-is deleted. Failed or blocked writes leave the previous plan in place. Active previews
-retain a safe failure notice.
+is deleted where the channel supports deletion. Microsoft Teams replaces a cleared
+interim preview with its progress label. With `streaming.progress.label: false`,
+Teams retains the interim preview until the next update or final reply. Failed or
+blocked writes leave the previous plan in place. Active previews retain a safe
+failure notice.
 
 Progress-mode drafts (`streaming.progress.*`) have these per-channel settings:
 
