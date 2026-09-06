@@ -401,6 +401,7 @@ function runCiChangedScopeFixture(changedPaths: string[]): Record<string, string
 function runCiManifestFixture(options: {
   bundledPlanner: boolean;
   nodeTestShards?: Record<string, unknown>[];
+  nodeTestGroupsCodec?: boolean;
   changedPlannerSource?: string | null;
   changedPaths?: string[] | null;
   changedCoreTestSupport?: boolean;
@@ -437,11 +438,13 @@ function runCiManifestFixture(options: {
     const scriptsDir = path.join(root, "scripts", "lib");
     mkdirSync(scriptsDir, { recursive: true });
     // The manifest packs grouped Node rows through the target's codec and the
-    // shard runner unpacks them; fixtures ship the real module.
-    writeFileSync(
-      path.join(scriptsDir, "ci-node-test-groups-codec.mts"),
-      readFileSync("scripts/lib/ci-node-test-groups-codec.mts"),
-    );
+    // shard runner unpacks them; targets that predate the codec omit it.
+    if (options.nodeTestGroupsCodec ?? true) {
+      writeFileSync(
+        path.join(scriptsDir, "ci-node-test-groups-codec.mts"),
+        readFileSync("scripts/lib/ci-node-test-groups-codec.mts"),
+      );
+    }
     writeFileSync(
       path.join(scriptsDir, "ci-node-test-plan.mts"),
       options.nodeTestShards
@@ -14137,6 +14140,42 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         plan.kind === "group" ? plan.plan : plan,
       ),
     ).toEqual(groups);
+  });
+
+  it("plans codec-free manual targets and requires the codec only for grouped rows", () => {
+    // An ordinary manual target predating the codec emits an ungrouped plan and
+    // must never load the module.
+    const ungrouped = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      nodeTestGroupsCodec: false,
+    });
+    expect(ungrouped.status, ungrouped.output).toBe(0);
+    expect(ungrouped.outputs.frozen_target).toBe("true");
+    expect(ungrouped.outputs.compatibility_target).toBe("false");
+    const rows = JSON.parse(
+      expectDefined(ungrouped.outputs.checks_node_core_nondist_matrix, "manual target matrix"),
+    ).include;
+    expect(rows).toEqual([expect.objectContaining({ check_name: "bundled-node-plan" })]);
+    expect(rows[0]).not.toHaveProperty("groups_gzip_base64");
+
+    const grouped = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      nodeTestGroupsCodec: false,
+      nodeTestShards: [
+        {
+          checkName: "checks-node-compact-small-1",
+          groups: [{ configs: ["test/vitest/vitest.infra.config.ts"], shard_name: "core-a" }],
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          shardName: "compact-small-1",
+        },
+      ],
+    });
+    expect(grouped.status, grouped.output).not.toBe(0);
+    expect(grouped.output).toContain("scripts/lib/ci-node-test-groups-codec.mts");
+    expect(grouped.outputs.checks_node_core_nondist_matrix).toBeUndefined();
   });
 
   it("fails and retries quiet Node test shard stalls quickly", () => {

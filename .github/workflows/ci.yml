@@ -1280,16 +1280,6 @@ jobs:
                     task: "contracts-plugins",
                   },
                 ];
-          const nodeTestGroupsCodec = await importTargetPlan("./scripts/lib/ci-node-test-groups-codec.mts");
-          // Grouped rows list every striped test file; packing keeps the combined
-          // job outputs under GitHub's 1 MiB UTF-16 cap. Frozen targets predate
-          // the codec and only emit ungrouped rows.
-          const encodeNodeTestGroups = (groups) => {
-            if (typeof nodeTestGroupsCodec.encodeNodeTestGroups !== "function") {
-              throw new Error("CI target emits grouped Node test rows without scripts/lib/ci-node-test-groups-codec.mts");
-            }
-            return nodeTestGroupsCodec.encodeNodeTestGroups(groups);
-          };
           const createMatrix = (include) => ({ include });
           // Share setup without combining the target planner's process envelopes.
           const createContractMatrix = (shards, task) => createMatrix(
@@ -1595,6 +1585,18 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
+          // Grouped rows list every striped test file; packing keeps the combined
+          // job outputs under GitHub's 1 MiB UTF-16 cap. Ungrouped plans, including
+          // manual targets that predate the codec, never load it.
+          const nodeTestGroupsCodec = rawNodeTestShards.some((shard) => shard.groups)
+            ? await importTargetPlan("./scripts/lib/ci-node-test-groups-codec.mts")
+            : {};
+          const encodeNodeTestGroups = (groups) => {
+            if (typeof nodeTestGroupsCodec.encodeNodeTestGroups !== "function") {
+              throw new Error("CI target emits grouped Node test rows without scripts/lib/ci-node-test-groups-codec.mts");
+            }
+            return nodeTestGroupsCodec.encodeNodeTestGroups(groups);
+          };
           const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
           const knownToolingConfigs = new Set([
             goToolingConfig,
