@@ -147,6 +147,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     cwd: root,
     outDir,
     clean: false,
+    logLevel: config.logLevel,
     plugins: config.plugins,
   });
   for (const name of Object.keys(entry)) {

@@ -4,7 +4,7 @@ import type { UserConfig } from "tsdown";
 import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
 
 /** The installed CLI and invocation compiler seal the same typed lease owner. */
-export function createManagedHandoffBuildConfig(): UserConfig {
+export function createManagedHandoffBuildConfig() {
   const entry = managedHandoffRuntimeEntrypoint;
   return {
     entry: {
@@ -24,5 +24,5 @@ export function createManagedHandoffBuildConfig(): UserConfig {
     outputOptions: { codeSplitting: false },
     shims: true,
     sourcemap: false,
-  };
+  } satisfies UserConfig;
 }
