@@ -486,9 +486,7 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                             props.onRequestLogout({
                               cardId: card.id,
                               label: identity,
-                              targets: [
-                                { provider: logoutProvider, profileIds: [profile.profileId] },
-                              ],
+                              target: { provider: logoutProvider, profileIds: [profile.profileId] },
                             })}
                         >
                           ${logoutIcon}

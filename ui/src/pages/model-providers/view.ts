@@ -87,7 +87,7 @@ type ModelProvidersViewProps = {
   onProbe: (cardId: string, providers: string[]) => void;
   onRequestLogout: (pending: ModelProviderPendingLogout) => void;
   onCancelLogout: () => void;
-  onLogout: (cardId: string, targets: ModelProviderLogoutTarget[]) => void;
+  onLogout: (cardId: string, target: ModelProviderLogoutTarget) => void;
   onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onAddProviderToggle: () => void;
   onAddProviderIdChange: (provider: string) => void;
@@ -374,7 +374,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
                     type="button"
                     class="btn danger"
                     ?disabled=${logoutBusy || mutationDisabled}
-                    @click=${() => props.onLogout(card.id, pendingLogout.targets)}
+                    @click=${() => props.onLogout(card.id, pendingLogout.target)}
                   >
                     ${
                       logoutBusy

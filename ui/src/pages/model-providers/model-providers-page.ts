@@ -688,7 +688,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.pendingLogout = pending;
       },
       onCancelLogout: () => this.clearPendingLogout(),
-      onLogout: (cardId, providers) => void this.profileActions.logout(cardId, providers),
+      onLogout: (cardId, target) => void this.profileActions.logout(cardId, target),
       onProfileOrderChange: (cardId, provider, profileIds) =>
         this.profileActions.setOrder(cardId, provider, profileIds),
       onAddProviderToggle: () => {

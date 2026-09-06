@@ -600,7 +600,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.messages.add).toBeUndefined();
   });
 
-  it("stops queued agent-scoped logouts after the selected agent changes", async () => {
+  it("ignores logout completion after switching away from and back to the selected agent", async () => {
     const { agentSelection, context, notifySelection, request } = createHarness("main");
     const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
     const page = appendPage(context);
@@ -609,10 +609,10 @@ describe("ModelProvidersPage agent scope", () => {
     const firstLogout = deferred<unknown>();
     request.mockImplementationOnce(async () => firstLogout.promise);
 
-    const loggingOut = page.profileActions.logout("openai", [
-      { provider: "openai", profileIds: ["openai:first"] },
-      { provider: "alias", profileIds: ["openai:second"] },
-    ]);
+    const loggingOut = page.profileActions.logout("openai", {
+      provider: "openai",
+      profileIds: ["openai:first"],
+    });
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("models.authLogout", {
         provider: "openai",
@@ -792,7 +792,7 @@ describe("ModelProvidersPage agent scope", () => {
     ).toBe(false);
   });
 
-  it("stops queued agent-scoped logouts when route data changes the selected agent", async () => {
+  it("ignores logout completion when route data changes the selected agent", async () => {
     const { agentSelection, context, request, snapshot } = createHarness("main");
     const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
     const page = appendPage(context);
@@ -801,10 +801,10 @@ describe("ModelProvidersPage agent scope", () => {
     const firstLogout = deferred<unknown>();
     request.mockImplementationOnce(async () => firstLogout.promise);
 
-    const loggingOut = page.profileActions.logout("openai", [
-      { provider: "openai", profileIds: ["openai:first"] },
-      { provider: "alias", profileIds: ["openai:second"] },
-    ]);
+    const loggingOut = page.profileActions.logout("openai", {
+      provider: "openai",
+      profileIds: ["openai:first"],
+    });
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     const defaultsDraft: DefaultModelSelection = {
       primary: "openai/gpt-5",
@@ -820,7 +820,7 @@ describe("ModelProvidersPage agent scope", () => {
     page.pendingLogout = {
       cardId: "openai",
       label: "OpenAI",
-      targets: [{ provider: "openai", profileIds: ["openai:first"] }],
+      target: { provider: "openai", profileIds: ["openai:first"] },
     };
     page.messages = { openai: { kind: "error", text: "Previous agent failure" } };
     page.probeResults = {

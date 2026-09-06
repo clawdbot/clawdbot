@@ -62,7 +62,7 @@ export class ModelProviderProfileActionsController {
     }
   }
 
-  async logout(cardId: string, targets: ModelProviderLogoutTarget[]): Promise<void> {
+  async logout(cardId: string, target: ModelProviderLogoutTarget): Promise<void> {
     const client = this.options.getClient();
     const key = `logout:${cardId}`;
     if (!client || !this.options.canMutate() || this.options.isBusy(key)) {
@@ -76,19 +76,14 @@ export class ModelProviderProfileActionsController {
     this.options.setBusy(key, true);
     this.options.clearMessage(cardId);
     try {
-      let firstError: unknown;
-      for (const target of targets) {
-        // OAuth profiles are agent-owned; stop undispatched targets after any
-        // scope change, including a switch away from and back to this agent.
-        if (!isCurrentScope()) {
-          return;
-        }
-        try {
-          await client.request("models.authLogout", { ...target, agentId });
-        } catch (error) {
-          firstError ??= error;
-        }
+      let logoutError: unknown;
+      try {
+        await client.request("models.authLogout", { ...target, agentId });
+      } catch (error) {
+        logoutError = error;
       }
+      // A logout can change credentials before reporting failure. Refresh either
+      // outcome, but never update a different agent or a newer visit to this agent.
       if (!isCurrentScope()) {
         return;
       }
@@ -96,8 +91,8 @@ export class ModelProviderProfileActionsController {
       if (!isCurrentScope()) {
         return;
       }
-      if (firstError) {
-        this.options.setError(cardId, firstError);
+      if (logoutError) {
+        this.options.setError(cardId, logoutError);
         return;
       }
       this.options.clearPendingLogout(cardId);

@@ -43,7 +43,7 @@ export type ModelProviderLogoutTarget = {
 export type ModelProviderPendingLogout = {
   cardId: string;
   label: string;
-  targets: ModelProviderLogoutTarget[];
+  target: ModelProviderLogoutTarget;
 };
 
 export type ModelProviderProfileOrderLock = NonNullable<
