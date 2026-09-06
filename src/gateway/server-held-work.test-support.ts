@@ -1,32 +1,21 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, onTestFinished, vi } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
 
 /** Observe the exact work owner; connection scopes also join server-side transport release. */
 export async function observeHeldGatewayWorkDrain(getSignal?: () => AbortSignal | undefined) {
   const connections = new Set<symbol>();
-  const entered = createDeferredCore();
   let connectionSignal: AbortSignal | undefined;
-  let draining = false;
-  let drained = false;
-  const ready = () => {
-    if (draining && connections.size === 0) {
-      entered.resolve();
-    }
-  };
-  // oxlint-disable-next-line typescript/unbound-method -- Capture the native method before spying; every invocation binds its actual scope with .call(this).
-  const drain = AsyncWorkScope.prototype.drain;
+  // A passive spy retains the native method's actual receiver and returned promise.
   const observation = vi.spyOn(AsyncWorkScope.prototype, "drain");
-  observation.mockImplementation(async function (this: AsyncWorkScope) {
-    if (this.signal !== (getSignal ? getSignal() : connectionSignal)) {
-      return await drain.call(this);
-    }
-    draining = true;
-    ready();
-    await drain.call(this);
-    drained = true;
-  });
+  const drainIndex = () => {
+    const signal = getSignal ? getSignal() : connectionSignal;
+    return signal
+      ? observation.mock.contexts.findIndex(
+          (scope) => scope instanceof AsyncWorkScope && scope.signal === signal,
+        )
+      : -1;
+  };
   onTestFinished(() => observation.mockRestore());
 
   if (!getSignal) {
@@ -47,7 +36,6 @@ export async function observeHeldGatewayWorkDrain(getSignal?: () => AbortSignal 
             return () => {
               release();
               connections.delete(key);
-              ready();
             };
           });
         onTestFinished(() => registration.mockRestore());
@@ -57,9 +45,29 @@ export async function observeHeldGatewayWorkDrain(getSignal?: () => AbortSignal 
   }
 
   return async (closing: Promise<unknown>) => {
-    await Promise.race([entered.promise, closing]);
-    await nextTurn();
-    expect(draining, "Gateway close must enter the held work owner").toBe(true);
-    expect(drained, "Gateway work drain must remain pending while work is held").toBe(false);
+    let closed = false;
+    void closing.then(
+      () => {
+        closed = true;
+      },
+      () => {
+        closed = true;
+      },
+    );
+    while (drainIndex() < 0 || connections.size > 0) {
+      await nextTurn();
+      if (closed) {
+        break;
+      }
+    }
+    // Join the transport-release turn before checking the selected native promise.
+    await Promise.race([closing, nextTurn()]);
+    const index = drainIndex();
+    expect(index, "Gateway close must enter the held work owner").toBeGreaterThanOrEqual(0);
+    expect(closed, "Gateway close must remain pending while work is held").toBe(false);
+    expect(
+      observation.mock.settledResults[index]?.type,
+      "Gateway work drain must remain pending while work is held",
+    ).toBe("incomplete");
   };
 }
