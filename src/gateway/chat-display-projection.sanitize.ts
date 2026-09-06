@@ -20,6 +20,7 @@ import {
   isProjectedSessionsSendForwardedMessage,
   shouldPreserveAssistantControlReplyText,
   stripAssistantMediaDirectivesForDisplay,
+  stripPrivateToolCallContextForDisplay,
   takeAssistantManagedMediaUrlsForDisplay,
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
@@ -171,7 +172,7 @@ export function sanitizeChatHistoryContentBlock(
     return { block, changed: false, truncated: false };
   }
   const entry = { ...(block as Record<string, unknown>) };
-  let changed = false;
+  let changed = stripPrivateToolCallContextForDisplay(entry);
   // Display-cap truncation is a fact consumers need (to fetch the full row), so
   // it is tracked apart from `changed`, which also covers metadata stripping.
   let truncated = false;

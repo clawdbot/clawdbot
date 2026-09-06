@@ -11,7 +11,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
-import { splitCommandParts } from "./command-line.js";
+import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import { resolveAcpxPluginConfig } from "./config.js";
 
 const execFileAsync = promisify(execFile);
@@ -27,10 +27,6 @@ beforeEach(async () => {
     prefix: "openclaw-acpx-codex-auth-",
   });
 });
-
-function quoteArg(value: string): string {
-  return JSON.stringify(value);
-}
 
 function restoreEnv(name: keyof typeof previousEnv): void {
   const value = previousEnv[name];
@@ -62,14 +58,18 @@ function generatedClaudePaths(stateDir: string): {
   };
 }
 
-function expectCodexWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(quoteArg(process.execPath));
-  expect(command).toContain(quoteArg(wrapperPath));
+function expectCodexWrapperCommand(
+  command: AcpxAgentCommand | undefined,
+  wrapperPath: string,
+): void {
+  expect(command).toEqual(expect.arrayContaining([process.execPath, wrapperPath]));
 }
 
-function expectClaudeWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(quoteArg(process.execPath));
-  expect(command).toContain(quoteArg(wrapperPath));
+function expectClaudeWrapperCommand(
+  command: AcpxAgentCommand | undefined,
+  wrapperPath: string,
+): void {
+  expect(command).toEqual(expect.arrayContaining([process.execPath, wrapperPath]));
 }
 
 afterEach(async () => {
@@ -117,16 +117,14 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
 
     expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
     expect(resolved.agents.codex).not.toContain("npx @zed-industries/codex-acp@0.12.0");
-    expect(resolved.agents.codex).not.toContain(quoteArg("-c"));
-    expect(resolved.agents.codex).toContain(quoteArg(OPENCLAW_CODEX_CONFIG_ARG));
+    expect(resolved.agents.codex).not.toContain("-c");
+    expect(resolved.agents.codex).toContain(OPENCLAW_CODEX_CONFIG_ARG);
     expect(resolved.agents.codex).toContain(
-      quoteArg(
-        JSON.stringify({
-          model: "gpt-5.4",
-          model_reasoning_effort: "high",
-          mcp_servers: { "foo.bar": { command: "node", args: ["server.js"] } },
-        }),
-      ),
+      JSON.stringify({
+        model: "gpt-5.4",
+        model_reasoning_effort: "high",
+        mcp_servers: { "foo.bar": { command: "node", args: ["server.js"] } },
+      }),
     );
     const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
     expect(isolatedConfig).toContain('[mcp_servers."foo.bar"]');
@@ -293,8 +291,8 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
     });
 
     expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
-    expect(resolved.agents.codex).not.toContain(quoteArg("-c"));
-    expect(resolved.agents.codex).toContain(quoteArg(JSON.stringify({ model: "gpt-5.4" })));
+    expect(resolved.agents.codex).not.toContain("-c");
+    expect(resolved.agents.codex).toContain(JSON.stringify({ model: "gpt-5.4" }));
   });
 
   it("normalizes an explicitly configured Claude ACP npx command to the local wrapper", async () => {

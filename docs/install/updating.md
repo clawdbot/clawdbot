@@ -19,11 +19,25 @@ backup.
 
 ## Recommended: `openclaw update`
 
-Detects your install type (npm, pnpm, Bun, or git), fetches the latest version, runs `openclaw doctor`, and restarts a managed Gateway service.
+Detects your install type (npm, pnpm, Bun, or git), validates the candidate while
+the old Gateway serves, then activates and verifies the update.
 
 ```bash
 openclaw update
 ```
+
+An already-installed package version or Git target SHA finishes as
+`skipped` / `already-current` without stopping or restarting the Gateway.
+An explicit `--channel` choice still becomes the saved update channel.
+For targets that support candidate validation, Doctor lint, config and plugin planning, and a
+canary boot on copied state finish before the service stops. The first activation
+window contains the swap, required migrations, and service start. Plugin packages
+download and sync while the core Gateway serves. A changed plugin snapshot then
+requires a second measured activation window for full Doctor migrations under
+exclusive maintenance, restart, and verification. Unchanged plugins do not run
+another full Doctor pass. The final report records downtime and verification
+results. See
+[Validation and activation](/cli/update#validation-and-activation) for the checks.
 
 Switch channels or target a specific version:
 
@@ -38,9 +52,8 @@ openclaw update --dry-run   # preview without applying
 `--dry-run` to preview planned actions, `--json` for structured results, or
 `openclaw update status --json` to inspect channel and availability state.
 
-`--channel beta` prefers the beta npm dist-tag, but falls back to stable/latest
-when the beta tag is missing or its version is older than the latest stable
-release. Use `--tag beta` for a one-off package update pinned to the raw npm
+`--channel beta` selects the newest version by semantic version order from the
+beta and latest npm dist-tags. Use `--tag beta` for a one-off package update pinned to the raw npm
 beta dist-tag instead.
 
 A saved `update.channel` remains the channel for future updates, automatic
@@ -73,25 +86,27 @@ OpenClaw cannot safely distinguish an old automatic pin from a user pin. For npm
 installs, run `openclaw plugins update @openclaw/name` once on the extended-stable
 channel to opt that plugin back into exact-core tracking.
 
-`--channel dev` gives a persistent moving GitHub `main` checkout. Package
+`--channel dev` gives a persistent moving GitHub `main` checkout for npm-owned
+package installs and existing Git checkouts. Package
 installs reject the `--tag main` shorthand because the workspace checkout is
 not a self-contained package artifact. Use `openclaw update --channel dev` to
 switch to the supported checkout and build flow. Other explicit package specs
 keep their package-manager behavior.
 
-After a beta core update, eligible official npm plugins follow the exact installed
-beta version, including one-off `--tag` updates from a stable installation.
-For managed plugins, a missing beta release is a warning, not a failure: the
-core update can still succeed while a plugin falls back to its recorded
-default/latest release.
+Managed npm plugins on the beta channel use the same newest-of-beta/latest
+selection, including official plugins such as `@openclaw/codex`. An older beta
+tag cannot hold a plugin behind the current stable release. Startup repair
+leaves already-current packages in place so a no-op refresh does not require
+another restart.
 
 See [Release channels](/install/development-channels) for channel semantics.
 
 ### From chat
 
 The OpenClaw owner can say "update" (the agent uses the `gateway` action
-`update.run`) or send `/update`. Update runs can send these notices in that
-chat as the Gateway observes the recorded milestones:
+`update.run`) or send `/update`. The candidate validates while the old Gateway
+serves, and an already-current update does not restart it. Update runs can send
+these notices in that chat as the Gateway observes the recorded milestones:
 
 1. An acknowledgement when the update is accepted.
 2. `⏳ Restarting the gateway now (v<from> → v<to>)…` when activation is recorded before the Gateway stops.
@@ -145,21 +160,22 @@ and protected or unknown artifacts remain. It is not a substitute for a
 [pre-update backup](#before-updating-create-a-verified-backup). See
 [Update cleanup](/cli/update#update-cleanup) for eligibility, JSON output, and
 resuming interrupted deletion.
+Private package, command-shim, and Git runtime backups remain owned by the update
+transaction and are outside this migration cleanup. An interrupted entry in update
+history does not block cleanup of otherwise eligible migration archives.
 
 ## Switch between npm and git installs
 
 Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
 
-If a CLI update fails after installing a verified replacement, recovery uses the
-newly installed CLI to restart the Gateway it stopped, preserving the managed
-service definition. A failure preparing the staging directory, before package
-hooks can run, can recover the verified original installation. Package-manager
-and lifecycle commands can change configuration or state even in a temporary
-prefix. After they start, a rejected staged candidate or a fully restored package
-and launcher no longer authorizes automatic restart. Only complete candidate
-verification, including the required nonblocking Doctor result, permits activation.
-This deliberately limits automatic recovery after hooks; file rollback does not
-roll back state. Incomplete file rollback retains its backups for inspection.
+Candidate validation failures leave the old Gateway serving. After activation,
+package recovery can restore the retained previous package only when the shared
+and affected per-agent database schema versions and configuration content are
+unchanged. The restored
+Gateway must pass the same runtime checks before recovery is reported as
+complete. A schema migration prevents automatic package rollback; replacing
+code cannot undo migrated state. Incomplete file rollback retains its backups
+for inspection. See [Automatic rollback](/install/updating#automatic-schema-neutral-rollback).
 If an older target does not support preserving the service definition, automatic
 recovery stops and reports the error without retrying with weaker options. Repair
 the reported failure, rerun `openclaw update`, and check `openclaw gateway status --deep`.
@@ -196,10 +212,19 @@ installs. Extended-stable is rejected on a git checkout without mutating or
 converting it. If the gateway is already installed, `openclaw update` refreshes
 the service metadata and restarts it unless you pass `--no-restart`.
 
-Dev updates build the complete runtime, including plugins and the Control UI,
-without generating TypeScript declarations. Preflight still validates the
-candidate, and the final checkout is rebuilt after checkout or rebase. Ordinary
-`pnpm build` and package builds continue to generate declarations.
+Automatic package-to-Git conversion currently requires an npm-owned package
+symlink. A pnpm- or Bun-owned install rejects `--channel dev` before stopping
+the Gateway; use the [Git installer](/install/installer) when changing that
+installation's owner. Normal package-to-package updates keep using pnpm or Bun.
+
+Git updates build the complete runtime, including plugins and the Control UI,
+in a temporary candidate worktree. Dev updates preserve local commits by
+rebasing the candidate before its build. The updater publishes that prepared
+runtime during activation instead of repeating the build while stopped.
+Candidate installs and nested build commands use a private pnpm virtual store,
+so preparing an update cannot prune dependencies used by the serving Gateway.
+The candidate's temporary workspace settings are restored before checking for
+source changes; the live checkout's workspace settings are preserved.
 
 For package installs with a managed Gateway service, `openclaw update` targets
 the package root used by that service. If the shell `openclaw` command comes
@@ -385,6 +410,10 @@ bun add -g --trust openclaw@latest
 
 `--trust` allows OpenClaw's lifecycle scripts. The canonical `openclaw update`
 path applies the same OpenClaw-only Bun trust when it owns the install.
+On Windows, the staged updater rejects Bun installs before stopping the Gateway
+because it cannot relocate Bun's binary launchers. Run
+`bun add -g --trust openclaw@<resolved-target-version>` manually, then
+`openclaw gateway restart`; verify with `openclaw update status`.
 
 ### Package lifecycle and operator state
 
@@ -519,11 +548,13 @@ automatic installation, handoff, restart, stable delay/jitter, or beta polling.
 
 Package-manager updates requested through the live Gateway control-plane
 (`update.run`) do not replace the package tree inside the running Gateway
-process. On managed service installs, the Gateway starts a detached handoff,
-exits, and lets the normal `openclaw update --yes --json` CLI path stop the
-service, replace the package, refresh service metadata, restart, verify the
-Gateway version and reachability, and recover an installed-but-unloaded macOS
-LaunchAgent when possible. If the Gateway cannot make that handoff safely,
+process. On managed service installs, the Gateway starts a detached handoff
+that runs the normal `openclaw update --yes --json` CLI path. The old Gateway
+keeps serving through candidate validation; the helper parks it only for
+activation. The CLI swaps the package, applies required migrations, refreshes
+service metadata, starts and verifies the Gateway, and recovers an
+installed-but-unloaded macOS LaunchAgent when possible. If the Gateway cannot
+make that handoff safely,
 `update.run` reports a safe shell command instead of running the package
 manager in-process.
 
@@ -578,6 +609,9 @@ only when the connected remote Gateway is at least as new as the app.
 
 ## After updating
 
+Successful managed `openclaw update` runs already restart and verify the Gateway.
+Use these steps after a manual installation or when checking a reported problem.
+
 <Steps>
 
 ### Run doctor
@@ -614,8 +648,52 @@ Rollback has two layers:
 2. Restore pre-update state only when the older code cannot use a migrated
    config or database.
 
-Start with a code-only rollback. Restoring state discards changes made after
-the backup.
+For manual recovery, start with a code-only rollback only after checking that
+the older release can read the current state. Restoring state discards changes
+made after the backup.
+
+### Automatic schema-neutral rollback
+
+If a newly activated package fails verification, `openclaw update` compares the
+shared and affected per-agent SQLite `user_version` values with their
+pre-activation values and checks that configuration content is unchanged.
+When both checks pass and the retained previous package was verified before the
+update, it stops the candidate and restores the previous generation: package,
+command shim, service definition, and config writer stamp. Owned, writable
+service metadata is refreshed; protected service definitions are preserved.
+The CLI verifies the restarted previous Gateway's service health, version/build
+identity, plugins, channels, and `/readyz` again.
+
+The candidate may have advanced the config writer stamp without changing config
+content. Rollback restores that stamp and uses the existing intentional-recovery
+allowance only for its service commands, so the older-binary guard does not block
+recovery. The allowance is never saved in config or the service environment.
+
+Successful recovery leaves the previous Gateway running and finishes the run as
+`rolled-back`, with `after.version` set to the previous version and downtime
+measured from service stop through verified recovery. The headline is
+`↩️ OpenClaw update rolled back to <previous>: <reason>`, retaining the original
+verification failure. The command still exits nonzero; recovery does not turn a
+rejected candidate into a successful update.
+
+The bounded inference check is advisory:
+`inference: unavailable` by itself does not trigger rollback.
+
+If configuration content or a schema version changed, rollback is refused with
+`state-migrated-no-rollback`. A reachable candidate remains running so it can be
+diagnosed; an unreachable candidate remains stopped. Preserve the current state
+and use `openclaw triage` or the printed repair command before considering an
+older version.
+Automatic rollback restores code, not a full state snapshot.
+The candidate's temporary migration-rehearsal snapshots are removed after
+validation and do not replace your backup.
+If the schema comparison cannot be completed, automatic rollback is refused
+(`rollback-state-unverified`). The freshly installed candidate owns final
+verification and reporting after migration,
+preserving the same run ID and recorded activation steps.
+
+For pnpm and Bun, changes to sibling global packages after staging refuse automatic rollback (`rollback-project-changed`) without restoring the shared project; keep a reachable candidate installed, otherwise keep the Gateway stopped and follow the report’s repair command.
+A refusal before the live swap restarts the unchanged Gateway and preserves the sibling changes.
 
 ### Before updating: create a verified backup
 
@@ -672,11 +750,16 @@ This allows later Gateway restarts without an older-binary override. Older targe
 that lack this finalization behavior can still refuse service activation because
 the configuration records a newer writer; follow the reported recovery guidance.
 
+Targets that predate the migration-continuation worker record runtime validation
+as unavailable and use the current updater's existing finalization path. A present
+worker that reports no schema contract still fails before activation. Database
+schema incompatibility still refuses the downgrade before activation. These older
+targets do not support automatic schema-neutral rollback.
+
 Package updates stage and verify the candidate before activation. If the
 filesystem swap or command-shim replacement fails, OpenClaw restores the old
-package automatically. After a successful swap, a later Gateway health failure
-reports the previous version and manual rollback instructions instead of
-automatically replacing the package again.
+package automatically. A later Gateway verification failure follows the
+[automatic schema-neutral rollback rule](/install/updating#automatic-schema-neutral-rollback).
 
 If the CLI update path is unavailable, use the same package manager and install
 scope that own the current Gateway:
@@ -722,11 +805,13 @@ git checkout --detach <known-good-tag-or-commit>
 
 To return to latest: `git checkout main && git pull`.
 
-Before candidate Doctor starts, the updater can return a Git checkout to its
-previous branch and SHA after dependency, build, or UI build failure, then verify
-its rebuilt runtime. Once Doctor starts, failures retain the candidate: switching
-code back cannot undo configuration or database migrations. Inspect the failed
-checks before selecting an older commit, and verify that it supports your state.
+Candidate dependency, build, and validation failures leave the live checkout
+and serving Gateway unchanged. Before live migrations begin, activation
+failures can restore the previous branch, SHA, and retained built runtime.
+After live migrations begin, failures retain the candidate for diagnosis:
+switching code back cannot undo configuration or database migrations. Inspect
+the failed checks before selecting an older commit, and verify that it supports
+your state.
 
 ### Downgrading across the session SQLite migration
 
@@ -796,7 +881,9 @@ alone, use `openclaw triage --non-interactive`; add `--update-result <path>` to
 include a saved update-failure artifact. See [Triage](/cli/triage) for command
 formatting and installation targeting.
 
-Keep an unverified Gateway stopped and preserve migrated state during repair.
+Keep a stopped, unverified Gateway stopped and preserve migrated state during
+repair. A reachable candidate retained after a schema migration can continue
+serving while you diagnose it.
 The failed update retains its nonzero exit code even if the agent repairs it.
 
 - For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.

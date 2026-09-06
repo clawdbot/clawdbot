@@ -9,7 +9,9 @@ import {
   readNestedToolActivity,
   nestedToolActivityContent,
 } from "../sessions/nested-tool-activity.js";
+import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { formatProviderRefusalText } from "../shared/assistant-error-format.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
@@ -43,7 +45,7 @@ type ChatDisplayProjectionOptions = {
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   stripEnvelope?: boolean;
   turnBoundaryPending?: boolean;
-  streamErrorFallbackPending?: boolean;
+  assistantErrorPending?: boolean;
 };
 
 /** Keep profile display reads local to one history page or event projection operation. */
@@ -109,8 +111,8 @@ function projectCurrentUserProfileAvatars(
 type ChatDisplayProjectionResult = {
   messages: Array<Record<string, unknown>>;
   turnBoundaryPending: boolean;
-  streamErrorFallbackPending: boolean;
-  streamErrorFallbackRepaired: boolean;
+  assistantErrorPending: boolean;
+  assistantErrorRecoveryObserved: boolean;
 };
 
 const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
@@ -227,21 +229,51 @@ function hasVisibleAssistantDisplayContent(message: Record<string, unknown>): bo
   if (hasAssistantDisplayableNonTextContent(sanitized)) {
     return true;
   }
-  const text = extractAssistantTextForSilentCheck(sanitized);
-  return Boolean(text?.trim()) && !isSuppressedControlReplyText(text ?? "");
+  return hasVisibleAssistantReplyText(sanitized);
 }
 
-function projectRepairedStreamErrorFallbackMessages(
+function hasVisibleAssistantReplyText(message: Record<string, unknown>): boolean {
+  const texts = Array.isArray(message.content)
+    ? message.content.flatMap((block) => {
+        const entry = asOptionalRecord(block);
+        return isAssistantTextContentType(entry?.type) ? [entry?.text] : [];
+      })
+    : [message.content];
+  return [...texts, message.text].some((text) => {
+    if (typeof text !== "string") {
+      return false;
+    }
+    const visible = text.trim();
+    return (
+      visible.length > 0 &&
+      visible !== STREAM_ERROR_FALLBACK_TEXT &&
+      !isSuppressedControlReplyText(visible)
+    );
+  });
+}
+
+export function isPendingAssistantError(value: unknown): boolean {
+  const message = asOptionalRecord(value);
+  return (
+    message?.role === "assistant" &&
+    message.stopReason === "error" &&
+    (isPureStreamErrorFallbackAssistantMessage(message) ||
+      (Boolean(readSessionTranscriptRunId(message)) &&
+        !hasAssistantDisplayableNonTextContent(message) &&
+        !hasVisibleAssistantDisplayContent(message)))
+  );
+}
+
+function projectRecoveredAssistantErrors(
   messages: Array<Record<string, unknown>>,
   initialPending = false,
 ): {
   messages: Array<Record<string, unknown>>;
   pending: boolean;
-  repaired: boolean;
+  recoveryObserved: boolean;
 } {
-  let pending = initialPending;
-  let repaired = false;
-  let changed = false;
+  let unseenPending = initialPending;
+  let recoveryObserved = false;
   let pendingIndexes: number[] = [];
   const repairedIndexes = new Set<number>();
   for (let index = 0; index < messages.length; index++) {
@@ -250,32 +282,48 @@ function projectRepairedStreamErrorFallbackMessages(
       continue;
     }
     if (message.role === "user") {
-      pending = false;
+      unseenPending = false;
       pendingIndexes = [];
       continue;
     }
-    if (isPureStreamErrorFallbackAssistantMessage(message)) {
-      pending = true;
+    if (isPendingAssistantError(message)) {
       pendingIndexes.push(index);
       continue;
     }
-    if (!pending || !hasVisibleAssistantDisplayContent(message)) {
+    if (
+      (!unseenPending && pendingIndexes.length === 0) ||
+      !hasVisibleAssistantDisplayContent(message)
+    ) {
       continue;
     }
-    repaired = true;
-    pending = false;
-    if (pendingIndexes.length > 0) {
-      changed = true;
-      for (const pendingIndex of pendingIndexes) {
-        repairedIndexes.add(pendingIndex);
+    // An incremental reader carries only a pending bit. It must reload raw
+    // history before deciding which previously emitted failures were recovered.
+    recoveryObserved ||= unseenPending;
+    unseenPending = false;
+    const completedRunId =
+      (message.stopReason === "stop" || message.stopReason === "length") &&
+      !isTranscriptOnlyOpenClawAssistantMessage(message)
+        ? readSessionTranscriptRunId(message)
+        : undefined;
+    pendingIndexes = pendingIndexes.filter((pendingIndex) => {
+      const failedRunId = readSessionTranscriptRunId(messages[pendingIndex]);
+      // Unattributed legacy stream sentinels retain their existing turn-local
+      // repair. Runtime attempt failures require completion of the exact run.
+      if (failedRunId && failedRunId !== completedRunId) {
+        return true;
       }
-      pendingIndexes = [];
-    }
+      repairedIndexes.add(pendingIndex);
+      recoveryObserved = true;
+      return false;
+    });
   }
   return {
-    messages: changed ? messages.filter((_, index) => !repairedIndexes.has(index)) : messages,
-    pending,
-    repaired,
+    messages:
+      repairedIndexes.size > 0
+        ? messages.filter((_, index) => !repairedIndexes.has(index))
+        : messages,
+    pending: unseenPending || pendingIndexes.length > 0,
+    recoveryObserved,
   };
 }
 
@@ -294,28 +342,7 @@ function projectEmptyAssistantErrorMessages(
     }
     const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER)
       .message as Record<string, unknown>;
-    const visibleTexts: string[] = [];
-    if (typeof sanitized.content === "string") {
-      visibleTexts.push(sanitized.content);
-    } else if (Array.isArray(sanitized.content)) {
-      for (const block of sanitized.content) {
-        if (!block || typeof block !== "object" || Array.isArray(block)) {
-          continue;
-        }
-        const entry = block as { type?: unknown; text?: unknown };
-        if (isAssistantTextContentType(entry.type) && typeof entry.text === "string") {
-          visibleTexts.push(entry.text);
-        }
-      }
-    }
-    if (typeof sanitized.text === "string") {
-      visibleTexts.push(sanitized.text);
-    }
-    const nonEmptyVisibleTexts = visibleTexts.map((text) => text.trim()).filter(Boolean);
-    const hasVisibleReplyText = nonEmptyVisibleTexts.some(
-      (text) => text !== STREAM_ERROR_FALLBACK_TEXT && !isSuppressedControlReplyText(text),
-    );
-    if (!shouldDropAssistantHistoryMessage(sanitized) && hasVisibleReplyText) {
+    if (!shouldDropAssistantHistoryMessage(sanitized) && hasVisibleAssistantReplyText(sanitized)) {
       changed = true;
       return sanitizeAssistantErrorDisplayMessage(message);
     }
@@ -367,11 +394,11 @@ export function projectChatDisplayMessagesWithState(
       ? projectedActivity
       : stripEnvelopeFromMessages(projectedActivity);
   const mirrored = mirrorMessageToolVisibleReplies(source);
-  const repairedStreamErrors = projectRepairedStreamErrorFallbackMessages(
+  const recoveredErrors = projectRecoveredAssistantErrors(
     toProjectedMessages(mirrored),
-    options?.streamErrorFallbackPending,
+    options?.assistantErrorPending,
   );
-  const projectedErrors = projectEmptyAssistantErrorMessages(repairedStreamErrors.messages);
+  const projectedErrors = projectEmptyAssistantErrorMessages(recoveredErrors.messages);
   const filtered = filterVisibleProjectedHistoryMessages(
     projectSessionsSendInterSessionMessages(
       toProjectedMessages(
@@ -392,8 +419,8 @@ export function projectChatDisplayMessagesWithState(
       options?.resolveCurrentUserProfileDisplay,
     ),
     turnBoundaryPending: filtered.turnBoundaryPending,
-    streamErrorFallbackPending: repairedStreamErrors.pending,
-    streamErrorFallbackRepaired: repairedStreamErrors.repaired,
+    assistantErrorPending: recoveredErrors.pending,
+    assistantErrorRecoveryObserved: recoveredErrors.recoveryObserved,
   };
 }
 

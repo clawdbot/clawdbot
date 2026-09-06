@@ -29,12 +29,13 @@ const HTML_VOID_TAGS = new Set([
 ]);
 
 const READABILITY_MODULE = "@mozilla/readability";
-const LINKEDOM_MODULE = "linkedom";
+// The public worker bundle avoids per-module DOM loading; sanitized HTML excludes canvas.
+const LINKEDOM_MODULE = "linkedom/worker";
 
 const loadReadabilityDeps = createLazyRuntimeModule(() =>
   Promise.all([
     import(READABILITY_MODULE) as Promise<typeof import("@mozilla/readability")>,
-    import(LINKEDOM_MODULE) as Promise<typeof import("linkedom")>,
+    import(LINKEDOM_MODULE) as Promise<typeof import("linkedom/worker")>,
   ]),
 );
 

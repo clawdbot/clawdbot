@@ -2,6 +2,36 @@ import { describe, expect, it } from "vitest";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 
 describe("buildEmbeddedAttemptToolRunContext", () => {
+  it("projects originating capabilities without copying execution or session ownership", () => {
+    const input = {
+      clientCaps: ["inline-widgets"],
+      pinnedWidgetAuthoring: true,
+      toolBindings: { browser: { kind: "tab", tabId: 7 } },
+      memberRoleIds: ["maintainer-role"],
+      approvalReviewerDeviceId: "reviewer-device",
+      taskSuggestionDeliveryMode: "gateway" as const,
+      chatId: "native-conversation",
+      sessionKey: "agent:main:dashboard:current",
+      sessionId: "source-session",
+      runId: "source-run",
+      onYield: () => undefined,
+    };
+    const context = buildEmbeddedAttemptToolRunContext(input);
+
+    expect(context).toMatchObject({
+      clientCaps: ["inline-widgets"],
+      pinnedWidgetAuthoring: true,
+      toolBindings: input.toolBindings,
+      memberRoleIds: ["maintainer-role"],
+      approvalReviewerDeviceId: "reviewer-device",
+      taskSuggestionDeliveryMode: "gateway",
+      nativeChannelId: "native-conversation",
+    });
+    for (const ownedField of ["sessionKey", "sessionId", "runId", "onYield"]) {
+      expect(context).not.toHaveProperty(ownedField);
+    }
+  });
+
   it("carries runtime toolsAllow into coding tool construction", () => {
     const context = buildEmbeddedAttemptToolRunContext({
       trigger: "manual",

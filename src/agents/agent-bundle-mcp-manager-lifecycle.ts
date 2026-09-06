@@ -16,6 +16,7 @@ import type {
   SessionMcpConfigReload,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
+import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 // Gateway shutdown preparation and CLI command imports load this before turns.
 // The process-owned sweep must not retain its first requesting turn.
@@ -41,6 +42,7 @@ type SessionMcpRuntimeManagerStore = {
   advertisedScopedCatalogBySessionId: Map<string, AdvertisedScopedCatalogEntry>;
   runtimeWorkChains: Map<string, Promise<unknown>>;
   disposalInFlight?: Promise<void>;
+  pendingDisposals: Map<string, Set<Promise<void>>>;
   createRuntime: CreateSessionMcpRuntime;
   now: () => number;
   idleSweepIntervalMs: number;
@@ -94,6 +96,7 @@ export function createSessionMcpRuntimeManagerStore(
      * Entries are removed when their chain drains.
      */
     runtimeWorkChains: new Map(),
+    pendingDisposals: new Map(),
     createRuntime: opts.createRuntime ?? createSessionMcpRuntime,
     now: opts.now ?? Date.now,
     idleSweepIntervalMs: opts.idleSweepIntervalMs ?? SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
@@ -126,6 +129,41 @@ function scopedCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
 }
 
 export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntimeManagerStore) {
+  const disposeRuntime = async (runtime: SessionMcpRuntime) => {
+    try {
+      await runtime.dispose();
+      if (!runtime.joinCleanup) {
+        throw new Error("MCP runtime does not expose cleanup ownership");
+      }
+      await runtime.joinCleanup();
+    } catch (error) {
+      recordAgentCleanupFailure();
+      throw error;
+    }
+  };
+  const trackDisposal = (runtimeKeys: string[], close: () => Promise<void>): Promise<void> => {
+    const disposal = Promise.resolve()
+      .then(close)
+      .catch((error: unknown) => {
+        recordAgentCleanupFailure();
+        throw error;
+      })
+      .finally(() => {
+        for (const runtimeKey of runtimeKeys) {
+          const pending = store.pendingDisposals.get(runtimeKey);
+          pending?.delete(disposal);
+          if (pending?.size === 0) {
+            store.pendingDisposals.delete(runtimeKey);
+          }
+        }
+      });
+    for (const runtimeKey of runtimeKeys) {
+      const pending = store.pendingDisposals.get(runtimeKey) ?? new Set<Promise<void>>();
+      store.pendingDisposals.set(runtimeKey, pending);
+      pending.add(disposal);
+    }
+    return disposal;
+  };
   const forgetSessionKeysForSessionId = (sessionId: string) => {
     for (const [sessionKey, mappedSessionId] of store.sessionIdBySessionKey.entries()) {
       if (mappedSessionId === sessionId) {
@@ -184,7 +222,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
 
   const sweepIdleRuntimes = async (): Promise<number> => {
     const nowMs = store.now();
-    const expired: SessionMcpRuntime[] = [];
+    const expired: Array<{ runtimeKey: string; runtime: SessionMcpRuntime }> = [];
     for (const [runtimeKey, runtime] of store.runtimesBySessionId.entries()) {
       if ((runtime.activeLeases ?? 0) > 0) {
         continue;
@@ -199,16 +237,20 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
       }
       store.runtimesBySessionId.delete(runtimeKey);
       store.connectionMetaByRuntimeKey.delete(runtimeKey);
-      expired.push(runtime);
+      expired.push({ runtimeKey, runtime });
     }
-    const touchedSessionIds = new Set(expired.map((runtime) => runtime.sessionId));
+    const touchedSessionIds = new Set(expired.map(({ runtime }) => runtime.sessionId));
     for (const sessionId of touchedSessionIds) {
       if (runtimeKeysForSessionId(sessionId).length === 0) {
         store.deferredRetirementSessionIds.delete(sessionId);
         forgetSessionKeysForSessionId(sessionId);
       }
     }
-    await Promise.allSettled(expired.map((runtime) => runtime.dispose()));
+    await Promise.allSettled(
+      expired.map(({ runtimeKey, runtime }) =>
+        trackDisposal([runtimeKey], () => disposeRuntime(runtime)),
+      ),
+    );
     return expired.length;
   };
 
@@ -254,7 +296,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
         }
         store.runtimesBySessionId.delete(runtimeKey);
         store.connectionMetaByRuntimeKey.delete(runtimeKey);
-        await current.dispose();
+        await Promise.allSettled([trackDisposal([runtimeKey], () => disposeRuntime(current))]);
       });
     }
   };
@@ -295,7 +337,9 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     const runtime = store.runtimesBySessionId.get(runtimeKey);
     store.runtimesBySessionId.delete(runtimeKey);
     store.connectionMetaByRuntimeKey.delete(runtimeKey);
-    await runtime?.dispose();
+    if (runtime) {
+      await disposeRuntime(runtime);
+    }
   };
 
   const disposeManagedRuntimes = (
@@ -305,12 +349,27 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     const runtimeKeys = [
       ...new Set(
         sessionId === undefined
-          ? [...store.runtimesBySessionId.keys(), ...store.runtimeWorkChains.keys()]
-          : [sessionId, ...runtimeKeysForSessionId(sessionId)],
+          ? [
+              ...store.runtimesBySessionId.keys(),
+              ...store.runtimeWorkChains.keys(),
+              ...store.pendingDisposals.keys(),
+            ]
+          : [
+              sessionId,
+              ...runtimeKeysForSessionId(sessionId),
+              ...[...store.pendingDisposals.keys()].filter(
+                (key) => parseRuntimeCacheSessionId(key) === sessionId,
+              ),
+            ],
       ),
     ];
+    // Capture before queuing: the previous owner may unpublish and settle before
+    // this caller enters the runtime-key chain, but its receipt still belongs here.
+    const previousDisposals = new Set(
+      runtimeKeys.flatMap((key) => [...(store.pendingDisposals.get(key) ?? [])]),
+    );
     const priorDisposal = store.disposalInFlight;
-    const disposal = runExclusiveOnRuntimeKeys(runtimeKeys, async () => {
+    const queued = runExclusiveOnRuntimeKeys(runtimeKeys, async () => {
       await priorDisposal;
       // Clear bookkeeping after admitted acquisitions finish, before successors run.
       if (sessionId === undefined) {
@@ -328,8 +387,16 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
         store.advertisedScopedCatalogBySessionId.delete(sessionId);
         forgetSessionKeysForSessionId(sessionId);
       }
-      await Promise.allSettled(runtimeKeys.map(disposeRuntimeKeyNow));
+      const outcomes = await Promise.allSettled([
+        ...previousDisposals,
+        ...runtimeKeys.map(disposeRuntimeKeyNow),
+      ]);
+      const failed = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failed) {
+        throw failed.reason;
+      }
     });
+    const disposal = trackDisposal(runtimeKeys, () => queued).catch(() => undefined);
     if (sessionId === undefined) {
       // New session keys also wait for a global teardown already in progress.
       store.disposalInFlight = disposal;

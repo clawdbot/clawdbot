@@ -27,6 +27,7 @@ const RETAINED_STEP_NAMES = [
   "notice:ack",
   "notice:activating",
   "notice:verifying",
+  "previous generation restoration",
 ];
 const JSON_FIELDS = [
   "origin",
@@ -64,7 +65,7 @@ function isRetainedStep(item: unknown): boolean {
   return isRecord(item) && RETAINED_STEP_NAMES.some((name) => name === item.step);
 }
 
-/** Phase history and notice custody survive diagnostic eviction, so final delivery stays eligible. */
+/** Phase history, notice custody, and restoration proof survive diagnostic eviction. */
 function boundedJson(input: unknown): string {
   let value = input;
   let json = JSON.stringify(value);
@@ -74,8 +75,8 @@ function boundedJson(input: unknown): string {
       if (disposable >= 0) {
         value = value.toSpliced(disposable, 1);
       } else {
-        // Phase history and notice custody fit; discard optional diagnostics
-        // before losing the identities that keep final delivery eligible.
+        // Reserved identities and timestamps fit; discard optional diagnostics
+        // before losing phase history, notice custody, or restoration proof.
         value = value.map((item) => (isRecord(item) ? { ...item, detail: undefined } : item));
       }
     } else if (isRecord(value)) {
@@ -417,9 +418,16 @@ export function recordUpdateRunVerification(
           ? { pluginErrors: verification.pluginErrors.slice(-32) }
           : {}),
       };
+      if (record.status === "running" && verification.serviceRunning === false) {
+        record.confirmedAtMs = null;
+      }
       if (
         record.verification.serviceRunning &&
         record.verification.versionMatch &&
+        record.verification.settled === true &&
+        record.verification.readyz === true &&
+        record.verification.channelsReady === true &&
+        record.verification.pluginErrors?.length === 0 &&
         record.confirmedAtMs === null
       ) {
         record.confirmedAtMs = Date.now();

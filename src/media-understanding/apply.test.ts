@@ -1593,6 +1593,7 @@ describe("applyMediaUnderstanding", () => {
       outcome: "no-attachment",
       attachments: [],
       attachmentDispositions: {},
+      attachmentProcessing: {},
     });
   });
 
@@ -2163,6 +2164,26 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expectPolicyRejectedFileApplied({ ctx, result, mime: "application/pdf" });
+  });
+
+  it("keeps cached attachment bytes intact when a PDF extractor mutates its input", async () => {
+    const original = Buffer.from("%PDF-1.7\nfixture");
+    const mediaPath = await createTempMediaFile({ fileName: "mutable.pdf", content: original });
+    const { MediaAttachmentCache } = await import("./attachments.cache.js");
+    const pdf = await import("../media/pdf-extract.js");
+    const getBuffer = vi.spyOn(MediaAttachmentCache.prototype, "getBuffer");
+    const extract = vi.spyOn(pdf, "extractPdfContent").mockImplementation(async ({ buffer }) => {
+      buffer.fill(0);
+      return { text: "extracted PDF", images: [] };
+    });
+    try {
+      const { ctx } = await applyWithDisabledMedia({ body: "<media:file>", mediaPath });
+      expect(ctx.Body).toContain("extracted PDF");
+      expect((await getBuffer.mock.results[0]?.value)?.buffer).toEqual(original);
+    } finally {
+      extract.mockRestore();
+      getBuffer.mockRestore();
+    }
   });
 
   it("respects configured allowedMimes for text-like attachments", async () => {
