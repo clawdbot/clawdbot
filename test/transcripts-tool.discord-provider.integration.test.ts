@@ -98,6 +98,7 @@ describe("transcripts tool with the registered Discord provider", () => {
     registerManager({
       accountId: "account-a",
       manager: {
+        hasRealtimeCapture: () => false,
         startTranscriptsCapture: accountAJoin,
         stopTranscriptsCapture: accountALeave,
         watchChannelOccupancy: () => () => {},
@@ -107,6 +108,7 @@ describe("transcripts tool with the registered Discord provider", () => {
     registerManager({
       accountId: "account-b",
       manager: {
+        hasRealtimeCapture: () => false,
         startTranscriptsCapture: accountBJoin,
         stopTranscriptsCapture: accountBLeave,
         watchChannelOccupancy: () => () => {},
@@ -231,6 +233,7 @@ describe("transcripts tool with the registered Discord provider", () => {
     registerManager({
       accountId: "account-a",
       manager: {
+        hasRealtimeCapture: () => false,
         startTranscriptsCapture: join,
         stopTranscriptsCapture: async () => {},
         watchChannelOccupancy: () => () => {},
