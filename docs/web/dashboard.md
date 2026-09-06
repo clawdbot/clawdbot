@@ -124,6 +124,49 @@ Non-goals for v1:
 - In the dashboard settings, paste the token or password into the auth field, then connect.
 - The UI language picker lives in **Settings → Appearance → Language**.
 
+## Widget sandbox behind proxies and tunnels
+
+When the Control UI is served behind a reverse proxy or tunnel, Apps/Widgets may fail with:
+
+> Widget authorization failed after repeated refresh attempts. If the gateway runs behind a reverse proxy or tunnel that does not route the widget sandbox port, set `mcp.apps.sandboxOrigin` to a dedicated public origin routed to the sandbox listener.
+
+### What the sandbox listener is
+
+OpenClaw starts a second HTTP(S) listener on the Gateway port plus one (default: `18790`) when an admitted HTML widget needs sandbox isolation. This listener serves only a static, contentless shim at `/mcp-app-sandbox`. It never serves the Control UI, authenticated Gateway routes, or user data. `mcp.apps.enabled` is not required for dashboard widgets.
+
+Configure the port with `mcp.apps.sandboxPort`.
+
+### Trust model
+
+The sandbox origin is intentionally unauthenticated. Widget content is delivered from the authenticated Control UI origin via short-lived HMAC view tickets and `postMessage`. Origin isolation is the security boundary: the sandbox is safe to expose publicly because it cannot read or write authenticated Gateway data on its own.
+
+### Worked example: tunneled deployment
+
+If you expose the Control UI through a tunnel (e.g., Cloudflare Tunnel), add a second public hostname that routes only to the sandbox listener:
+
+```json5
+{
+  mcp: {
+    apps: {
+      sandboxOrigin: "https://mcp-apps.example.com",
+      sandboxPort: 18790,
+    },
+  },
+}
+```
+
+> `mcp.apps.enabled` is only required for MCP Apps. Dashboard widgets can use the sandbox listener with just `sandboxOrigin` and `sandboxPort`.
+
+Then configure your tunnel/proxy to route `https://mcp-apps.example.com` to `127.0.0.1:18790`.
+
+### Important caveats
+
+- The sandbox origin **must differ** from the Control UI origin.
+- Do **not** put the sandbox origin behind an interactive auth wall (e.g., Cloudflare Access, Basic Auth). An interstitial login cannot complete inside a cross-origin iframe, and widget rendering will break.
+- Do not host other authenticated or sensitive content on the sandbox origin.
+
+For CLI reference, see [`mcp.apps.sandboxOrigin`](/cli/mcp#mcp-apps).
+
 ## Related
 
 - [Control UI](/web/control-ui)
