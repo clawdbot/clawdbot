@@ -297,6 +297,28 @@ struct DeviceAuthStoreTests {
     }
 
     @Test(.stateDirectoryIsolated)
+    func `retiring Gateway authority clears its roles without touching sibling devices or Gateways`() {
+        let rows: [(device: String, gateway: String?, role: String)] = [
+            ("selected-device", "selected-gateway", "operator"),
+            ("selected-device", "selected-gateway", "node"),
+            ("other-device", "selected-gateway", "operator"),
+            ("selected-device", "other-gateway", "operator"),
+            ("selected-device", nil, "operator"),
+        ]
+        for row in rows {
+            #expect(DeviceAuthStore.storeTokenPersisted(
+                deviceId: row.device, role: row.role, token: "synthetic", gatewayID: row.gateway))
+        }
+        #expect(DeviceAuthStore.clearGatewayTokensPersisted(
+            deviceId: "selected-device", gatewayID: "selected-gateway"))
+        for row in rows {
+            let removed = row.device == "selected-device" && row.gateway == "selected-gateway"
+            #expect((DeviceAuthStore.loadToken(
+                deviceId: row.device, role: row.role, gatewayID: row.gateway) == nil) == removed)
+        }
+    }
+
+    @Test(.stateDirectoryIsolated)
     func `clear all removes only the selected profile identity rows`() {
         let primary = DeviceIdentityStore.loadOrCreate(profile: .primary)
         let node = DeviceIdentityStore.loadOrCreate(profile: .node)
@@ -391,11 +413,12 @@ struct DeviceAuthStoreTests {
             deviceId: "versioned-device",
             role: "node",
             token: "must-not-persist"))
+        #expect(!DeviceAuthStore.clearGatewayTokensPersisted(
+            deviceId: "versioned-device", gatewayID: "selected-gateway"))
         #expect(try Self.scalarInt(
             databaseURL,
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'device_auth_tokens'") == 0)
     }
-
 }
 
 extension DeviceAuthStoreTests {

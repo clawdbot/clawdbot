@@ -70,7 +70,11 @@ When an otherwise literal one-segment rest could be mistaken for a short id,
 the builder inserts `~key` before it, for example
 `agent:main:release-deadbeef` becomes
 `/chat/main/~key/release-deadbeef`. The marker forces literal interpretation
-and appears only when the unescaped form would be ambiguous.
+when a reference could otherwise be ambiguous. Builders also use it for the
+ordinary key `agent:research:global`, producing `/chat/research/~key/global`
+to distinguish it from the raw `global` home-session key, which uses
+`/chat/research`. Existing `/chat/research/global` literal links still resolve
+to `agent:research:global`.
 
 The reserved single-segment literal rest names are `main`, `global`, `boot`,
 and `sessions`. Exactly one segment after the agent id is literal when it is
@@ -147,6 +151,48 @@ identify the native source. Opening the same source under different agents
 keeps their panes and drafts separate, including in split view. Continuing a
 thread navigates to the adopted OpenClaw session link. The same catalog query
 also works under `/dashboard/<agentId>`.
+
+## Social previews
+
+Use **Copy → Preview link** in a session's menu to share a link with an OpenClaw
+social card. It opens a small public landing page; **Open dashboard** or
+**Open session** then takes the recipient to the normal authenticated view.
+**Copy → Session link** still copies the direct link.
+
+For example, `/share/dashboard/main/deploy-monitor-6db92d48` previews
+`/dashboard/main/deploy-monitor-6db92d48`. A configured Control UI base path
+prefixes both paths. The preview serves Open Graph metadata and a 1200 × 630 PNG
+at `/share/card.png`, without requiring JavaScript or a Gateway connection.
+
+The card shows generic OpenClaw branding, not the session's title, messages,
+dashboard widgets, or screenshots. Preview requests never look up session state,
+so the page does not reveal whether the target exists. The link itself still
+contains the session route and, for catalog sessions, the catalog routing fields.
+Treat those URLs as information you are choosing to share.
+
+### Behind a login proxy
+
+Link crawlers cannot sign in to your proxy. Allow anonymous `GET` and `HEAD`
+requests **only** to the Control UI's `/share/*` namespace (for example,
+`/openclaw/share/*` for a `/openclaw` base path). Keep the dashboard, WebSocket,
+bootstrap, API, and other routes protected. Do not grant crawlers authenticated
+access based on their User-Agent.
+
+For Cloudflare Access, use a separate application matching that public path with
+a Bypass policy; keep the existing authenticated application for the rest of the
+host. See [Cloudflare's application path rules](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/).
+This is an operator deployment step; OpenClaw does not change proxy policies.
+
+Set the existing `gateway.publicOrigin` to your external HTTP(S) origin when TLS
+terminates at the proxy, so the image and canonical URLs use the public HTTPS
+address. Without it, previews use the request's Host and direct connection
+protocol; forwarded headers are not trusted for public preview URLs.
+
+Verify both the preview URL and its `/share/card.png` return `200` without
+cookies, then check that opening the dashboard still requires login. If a chat
+app shows the login page or no image, check for proxy redirects on both preview
+requests. Ordinary dashboard URLs remain protected and do not gain crawler
+access from this feature.
 
 ## Person activity URLs
 

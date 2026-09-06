@@ -11,7 +11,7 @@ import { logWarn } from "../../logger.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
-  assertInsideWorkspace,
+  assertInsideSkillsRoot,
   assertWorkspaceSkillSupportPathSetIsFileOnly,
   MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
   normalizeWorkspaceSkillSupportPath,
@@ -26,6 +26,7 @@ import {
 import { hashSkillProposalContent } from "./proposal-hash.js";
 import { reconcileInterruptedSkillProposalApply } from "./reconcile-transition.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
+import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import {
   assertProposalId,
   MAX_PROPOSAL_SUPPORT_FILES,
@@ -44,6 +45,7 @@ import {
   ensureSkillWorkshopSchema,
   openSkillWorkshopStore,
   type SkillProposalRow,
+  type SkillWorkshopDirectoryStoreOptions,
   type SkillWorkshopDatabase,
   type SkillWorkshopStoreOptions,
 } from "./store-sqlite-schema.js";
@@ -77,15 +79,13 @@ export { withSkillProposalTargetLock };
 
 type SkillProposalLookupScope = {
   agentId?: string;
-  workspaceDir?: string;
 };
 
 type SkillProposalReadOptions = {
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   reconcile?: boolean;
 };
 
-/** Creates a stable proposal id from skill name, date, and random suffix. */
 export function createSkillProposalId(name: string, now = new Date()): string {
   const normalized = normalizeSkillIndexName(name) || "skill";
   const date = now.toISOString().slice(0, 10).replaceAll("-", "");
@@ -143,7 +143,12 @@ export function prepareSkillProposalSupportFiles(
   return files;
 }
 
-export function resolveSkillProposalTarget(params: { workspaceDir: string; skillName: string }): {
+export function resolveSkillProposalTarget(params: {
+  skillName: string;
+  config: OpenClawConfig;
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+}): {
   skillKey: string;
   skillDir: string;
   skillFile: string;
@@ -152,27 +157,16 @@ export function resolveSkillProposalTarget(params: { workspaceDir: string; skill
   if (!skillKey) {
     throw new Error("Skill name must contain at least one letter or number.");
   }
-  const skillDir = path.resolve(params.workspaceDir, "skills", skillKey);
+  const skillsRoot = resolveWorkshopSkillsDir(params.config, params.agentId, params.env);
+  const skillDir = path.resolve(skillsRoot, skillKey);
   const skillFile = path.join(skillDir, "SKILL.md");
-  assertInsideWorkspace(params.workspaceDir, skillDir, "skill directory");
-  assertInsideWorkspace(params.workspaceDir, skillFile, "skill file");
+  assertInsideSkillsRoot(skillsRoot, skillDir, "skill directory");
+  assertInsideSkillsRoot(skillsRoot, skillFile, "skill file");
   return { skillKey, skillDir, skillFile };
 }
 
 function isStoredProposalVisible(row: SkillProposalRow, scope: SkillProposalLookupScope): boolean {
-  if (!scope.agentId) {
-    return scope.workspaceDir
-      ? path.resolve(row.workspace_dir) === path.resolve(scope.workspaceDir)
-      : true;
-  }
-  if (row.owner_agent_id === scope.agentId) {
-    return true;
-  }
-  return (
-    row.owner_agent_id === null &&
-    scope.workspaceDir !== undefined &&
-    path.resolve(row.workspace_dir) === path.resolve(scope.workspaceDir)
-  );
+  return row.owner_agent_id !== null && (!scope.agentId || row.owner_agent_id === scope.agentId);
 }
 
 export class SkillProposalDraftMissingError extends Error {
@@ -186,18 +180,27 @@ export class SkillProposalDraftMissingError extends Error {
 
 export async function readSkillProposal(
   proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-  scope: SkillProposalLookupScope = {},
-  readOptions: SkillProposalReadOptions = {},
+  options: SkillWorkshopDirectoryStoreOptions,
+  scope: SkillProposalLookupScope,
+  readOptions: SkillProposalReadOptions,
 ): Promise<SkillProposalReadResult | null> {
   let stored = readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
   }
+  const scopedOptions = {
+    ...options,
+    config: readOptions.config,
+    ...(scope.agentId
+      ? { agentId: scope.agentId }
+      : stored.row.owner_agent_id
+        ? { agentId: stored.row.owner_agent_id }
+        : {}),
+  };
   if (readOptions.reconcile === false) {
     return await readSkillProposalBundle(stored.record, options);
   }
-  if (await reconcileInterruptedApply(proposalId, options, readOptions.config)) {
+  if (await reconcileInterruptedApply(proposalId, scopedOptions)) {
     stored = readStoredProposal(proposalId, options);
     if (!stored || !isStoredProposalVisible(stored.row, scope)) {
       return null;
@@ -211,22 +214,31 @@ export async function readSkillProposal(
         ? await readSkillProposalBundle(current.record, options)
         : null;
     },
-    options,
+    scopedOptions,
   );
 }
 
 export async function readSkillProposalRecord(
   proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-  scope: SkillProposalLookupScope = {},
-  readOptions: SkillProposalReadOptions = {},
+  options: SkillWorkshopDirectoryStoreOptions,
+  scope: SkillProposalLookupScope,
+  readOptions: SkillProposalReadOptions,
 ): Promise<SkillProposalRecord | null> {
   let stored = readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
   }
+  const scopedOptions = {
+    ...options,
+    config: readOptions.config,
+    ...(scope.agentId
+      ? { agentId: scope.agentId }
+      : stored.row.owner_agent_id
+        ? { agentId: stored.row.owner_agent_id }
+        : {}),
+  };
   if (readOptions.reconcile !== false) {
-    await reconcileInterruptedApply(proposalId, options, readOptions.config);
+    await reconcileInterruptedApply(proposalId, scopedOptions);
   }
   stored = readStoredProposal(proposalId, options);
   return stored && isStoredProposalVisible(stored.row, scope) ? stored.record : null;
@@ -236,8 +248,7 @@ export async function writeSkillProposal(params: {
   record: SkillProposalRecord;
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
-  workspaceDir: string;
-  ownerAgentId?: string;
+  ownerAgentId: string;
   maxPending: number;
   event: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
@@ -266,7 +277,7 @@ export async function writeSkillProposal(params: {
           kysely
             .selectFrom("skill_workshop_proposals")
             .select((eb) => eb.fn.countAll<number>().as("count"))
-            .where("workspace_dir", "=", path.resolve(params.workspaceDir))
+            .where("owner_agent_id", "=", params.ownerAgentId)
             .where("status", "in", ["pending", "quarantined"]),
         );
         if ((count?.count ?? 0) >= params.maxPending) {
@@ -274,8 +285,7 @@ export async function writeSkillProposal(params: {
         }
         insertProposal(db, {
           record: params.record,
-          ownerAgentId: params.ownerAgentId ?? params.record.origin?.agentId ?? null,
-          workspaceDir: params.workspaceDir,
+          ownerAgentId: params.ownerAgentId,
         });
         return appendSkillProposalEvent(db, params.event);
       },
@@ -357,6 +367,7 @@ export async function replaceSkillProposalDraft(params: {
 
 export async function updateSkillProposalRecord(params: {
   record: SkillProposalRecord;
+  ownerAgentId?: string;
   store?: SkillWorkshopStoreOptions;
   invalidateRollback?: boolean;
   event?: NewSkillProposalEvent;
@@ -384,7 +395,7 @@ export async function updateSkillProposalRecord(params: {
             .where("proposal_id", "=", params.record.id),
         );
       }
-      updateProposal(db, current, params.record);
+      updateProposal(db, current, params.record, params.ownerAgentId);
       return params.event ? appendSkillProposalEvent(db, params.event) : undefined;
     },
     databaseOptions(params.store),
@@ -399,21 +410,9 @@ function listStoredProposals(
   const { database, kysely } = openSkillWorkshopStore(options);
   let query = kysely.selectFrom("skill_workshop_proposals").selectAll();
   if (scope.agentId) {
-    query = query.where((eb) =>
-      eb.or([
-        eb("owner_agent_id", "=", scope.agentId!),
-        ...(scope.workspaceDir
-          ? [
-              eb.and([
-                eb("owner_agent_id", "is", null),
-                eb("workspace_dir", "=", path.resolve(scope.workspaceDir)),
-              ]),
-            ]
-          : []),
-      ]),
-    );
-  } else if (scope.workspaceDir) {
-    query = query.where("workspace_dir", "=", path.resolve(scope.workspaceDir));
+    query = query.where("owner_agent_id", "=", scope.agentId);
+  } else {
+    query = query.where("owner_agent_id", "is not", null);
   }
   return executeSqliteQuerySync(
     database.db,
@@ -425,17 +424,26 @@ function listStoredProposals(
 }
 
 export async function readSkillProposalManifest(
-  options: SkillWorkshopStoreOptions = {},
+  options: SkillWorkshopDirectoryStoreOptions,
   scope: SkillProposalLookupScope = {},
 ): Promise<SkillProposalManifest> {
   const before = listStoredProposals(options, scope);
   await Promise.all(
     before
       .filter(({ record }) => record.status === "pending")
-      .map(({ record }) => reconcileInterruptedApply(record.id, options)),
+      .map(({ record, row }) =>
+        reconcileInterruptedApply(record.id, {
+          ...options,
+          ...(scope.agentId
+            ? { agentId: scope.agentId }
+            : row.owner_agent_id
+              ? { agentId: row.owner_agent_id }
+              : {}),
+        }),
+      ),
   );
-  const proposals = listStoredProposals(options, scope).map(({ record, row }) =>
-    manifestEntryFromRecord(record, row.workspace_dir, scope.workspaceDir),
+  const proposals = listStoredProposals(options, scope).map(({ record }) =>
+    manifestEntryFromRecord(record),
   );
   return {
     schema: SKILL_WORKSHOP_MANIFEST_SCHEMA,
@@ -446,11 +454,10 @@ export async function readSkillProposalManifest(
 
 async function reconcileInterruptedApply(
   proposalId: string,
-  options: SkillWorkshopStoreOptions,
-  config?: OpenClawConfig,
+  options: SkillWorkshopDirectoryStoreOptions,
 ): Promise<boolean> {
   const stored = readStoredProposal(proposalId, options);
-  if (!stored || stored.record.status !== "pending") {
+  if (!stored || stored.record.status !== "pending" || !options.agentId) {
     return false;
   }
   // Avoid acquiring the target lock on ordinary reads. Apply and revise reread
@@ -473,8 +480,7 @@ async function reconcileInterruptedApply(
     record: stored.record,
     expectedRecordJson: stored.row.record_json,
     draftContent,
-    workspaceDir: stored.row.workspace_dir,
-    ...(config ? { config } : {}),
+    skillsRoot: resolveWorkshopSkillsDir(options.config, options.agentId, options.env),
     store: options,
   });
 }
@@ -503,7 +509,7 @@ async function readProposalSupportFiles(
   return out;
 }
 
-async function readSkillProposalBundle(
+export async function readSkillProposalBundle(
   record: SkillProposalRecord,
   options: SkillWorkshopStoreOptions,
 ): Promise<SkillProposalReadResult> {
@@ -533,8 +539,7 @@ async function readSkillProposalBundle(
 export function importLegacySkillProposal(params: {
   record: SkillProposalRecord;
   rollback?: SkillProposalRollback;
-  ownerAgentId?: string;
-  workspaceDir: string;
+  ownerAgentId: string;
   store?: SkillWorkshopStoreOptions;
 }): "imported" | "already-imported" {
   assertProposalId(params.record.id);
@@ -561,8 +566,7 @@ export function importLegacySkillProposal(params: {
       } else {
         insertProposal(db, {
           record: params.record,
-          ownerAgentId: params.ownerAgentId ?? params.record.origin?.agentId ?? null,
-          workspaceDir: params.workspaceDir,
+          ownerAgentId: params.ownerAgentId,
         });
       }
       if (params.rollback) {
@@ -591,14 +595,7 @@ export function importLegacySkillProposal(params: {
   );
 }
 
-function manifestEntryFromRecord(
-  record: SkillProposalRecord,
-  boundWorkspaceDir: string,
-  currentWorkspaceDir?: string,
-): SkillProposalManifestEntry {
-  const workspaceMismatch =
-    currentWorkspaceDir !== undefined &&
-    path.resolve(boundWorkspaceDir) !== path.resolve(currentWorkspaceDir);
+function manifestEntryFromRecord(record: SkillProposalRecord): SkillProposalManifestEntry {
   return {
     id: record.id,
     kind: record.kind,
@@ -610,6 +607,5 @@ function manifestEntryFromRecord(
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     scanState: record.scan.state,
-    ...(workspaceMismatch ? { workspaceMismatch: true } : {}),
   };
 }

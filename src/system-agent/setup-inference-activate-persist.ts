@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import {
   attachRuntimeConfigWriteApplication,
@@ -37,21 +36,19 @@ import {
   rollbackManualAuthProfiles,
   applyManualAuthConfig,
   type ManualAuthPersistenceReceipt,
-  runSetupInferenceTest,
 } from "./setup-inference-persist.js";
 import {
   projectSetupTargetModelMetadata,
   resolveSetupAgentRuntimeId,
   type SetupInferenceTestPlan,
 } from "./setup-inference-plan-helpers.js";
+import { runSetupInferenceTest } from "./setup-inference-test.js";
 import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
 import type { SystemAgentOwnerPluginArtifactSnapshot } from "./verified-inference.js";
 
 type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectInferenceRoute>>;
 
 export type SetupInferenceActivationPersistenceState = {
-  committedConfig: OpenClawConfig | undefined;
-  autoLocalModelLeanApplied: boolean;
   codexInstallOwnership: "unknown" | "owned" | "unowned";
   gatewayRestartRequired: boolean;
 };
@@ -105,7 +102,6 @@ export async function persistActivatedSetupInference(input: {
     state,
     revalidateOwner,
   } = input;
-  let committedConfig: OpenClawConfig | undefined;
   let { codexInstallOwnership } = state;
   const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
   const projectRoute = (config: OpenClawConfig) =>
@@ -149,22 +145,10 @@ export async function persistActivatedSetupInference(input: {
       }
       next = enabledCodex.config;
     }
-    next = applyAutoLocalModelLean({
-      config: next,
-      providerId: testPlan.provider,
-      modelRef: plan.modelRef,
-    }).config;
     next = selectModel ? selectModel(next) : next;
-    if (!pendingCodexInstall) {
-      return next;
-    }
-    return {
-      ...next,
-      plugins: {
-        ...next.plugins,
-        installs: { codex: pendingCodexInstall },
-      },
-    };
+    return pendingCodexInstall
+      ? { ...next, plugins: { ...next.plugins, installs: { codex: pendingCodexInstall } } }
+      : next;
   };
   // Pending install records are probe-only discovery input. The config
   // writer moves them into the installed-plugin index before committing,
@@ -299,11 +283,6 @@ export async function persistActivatedSetupInference(input: {
             "The authored target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
           );
         }
-        const autoLocalModelLean = applyAutoLocalModelLean({
-          config: current,
-          providerId: testPlan.provider,
-          modelRef: plan.modelRef,
-        });
         const nextConfig = stageCandidate(current, "source");
         const nextRouteProjection = await projectRoute(nextConfig);
         const nextResolvedRoute = await resolveRoute(nextConfig);
@@ -328,11 +307,9 @@ export async function persistActivatedSetupInference(input: {
         throwIfSetupInferenceCancelled(params);
         params.onCommitStarted?.(current);
         commitMayHaveStarted = true;
-        state.autoLocalModelLeanApplied = autoLocalModelLean.enabled;
         return { nextConfig };
       },
     });
-    committedConfig = committed.nextConfig;
     state.gatewayRestartRequired = committed.followUp.requiresRestart;
     if (pendingCodexInstall) {
       codexInstallOwnership = "owned";
@@ -385,14 +362,12 @@ export async function persistActivatedSetupInference(input: {
       }
       throw error;
     }
-    committedConfig = reconciledSnapshot?.sourceConfig ?? reconciledRuntime;
     state.gatewayRestartRequired = pendingCodexInstall !== undefined;
     setupInferenceLog.warn(
       "Inference activation committed successfully despite a post-write cleanup error.",
     );
   }
 
-  state.committedConfig = committedConfig;
   state.codexInstallOwnership = codexInstallOwnership;
   return undefined;
 }

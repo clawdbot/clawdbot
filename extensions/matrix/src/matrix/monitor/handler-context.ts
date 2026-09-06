@@ -14,6 +14,7 @@ import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
+import { resolveMatrixReplyToEventId } from "../relations.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixAllowListMatch } from "./allowlist.js";
@@ -25,7 +26,7 @@ import type { HistoryEntry } from "./room-history.js";
 import type { resolveMatrixInboundRoute } from "./route.js";
 import type { PluginRuntime, RuntimeEnv } from "./runtime-api.js";
 import { createMatrixThreadContextResolver } from "./thread-context.js";
-import { resolveMatrixReplyToEventId, resolveMatrixThreadRouting } from "./threads.js";
+import { resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
 type MatrixInboundRoute = ReturnType<typeof resolveMatrixInboundRoute>["route"];

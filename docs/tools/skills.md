@@ -36,15 +36,16 @@ the same skill name appears in multiple places, the highest source wins.
 [Personal library skills](#personal-skills-on-a-shared-gateway) are selected by
 identity and revision rather than discovered by scanning every user's files.
 
-| Priority    | Source                 | Path                                     |
-| ----------- | ---------------------- | ---------------------------------------- |
-| 1 — highest | Workspace skills       | `<workspace>/skills`                     |
-| 2           | Project agent skills   | `<workspace>/.agents/skills`             |
-| 3           | Personal agent skills  | `~/.agents/skills` (default state only)  |
-| 4           | Managed / local skills | `<state-dir>/skills`                     |
-| 5           | Bundled skills         | shipped with the install                 |
-| 5           | Custodian skills       | shipped; configured Custodian agent only |
-| 6 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills  |
+| Priority    | Source                 | Path                                                 |
+| ----------- | ---------------------- | ---------------------------------------------------- |
+| 1 — highest | Workspace skills       | `<workspace>/skills`                                 |
+| 2           | Project agent skills   | `<workspace>/.agents/skills`                         |
+| 3           | Personal agent skills  | `~/.agents/skills` (default state only)              |
+| 4           | Managed / local skills | `<state-dir>/skills`                                 |
+| 5           | Workshop skills        | `<state-dir>/agents/<agentId>/agent/workshop-skills` |
+| 6           | Bundled skills         | shipped with the install                             |
+| 6           | Custodian skills       | shipped; configured Custodian agent only             |
+| 7 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills              |
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 `SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
@@ -53,6 +54,9 @@ Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 <workspace>/skills/research/SKILL.md          ✓ found as "research"
 <workspace>/skills/personal/research/SKILL.md ✓ also found as "research"
 ```
+
+During grouped discovery, finding `SKILL.md` ends traversal below that directory.
+Invalid skill files are reported and skipped; valid siblings can still load.
 
 The folder path is for organization only. The skill's name and slash command
 come from the `name` frontmatter field (or the directory name when `name` is
@@ -76,7 +80,8 @@ apply). They appear in the normal agent skill list while the node is connected
 and disappear when it disconnects. A local or Gateway skill keeps its name on
 collision; the node skill receives a deterministic node-prefixed name.
 Node-hosted v1 requires the directory name to match the skill's `name`
-frontmatter field.
+frontmatter field. The published name, description, and instructions come from
+the same captured file content.
 
 The skill entry includes the node locator. Its files, relative references, and
 binaries live on the node, so load and execute it with
@@ -88,13 +93,17 @@ files. See [Nodes](/nodes#node-hosted-skills) for pairing and off-switches.
 In multi-agent setups, each agent has its own workspace. Use the path that
 matches your desired visibility:
 
-| Scope          | Path                         | Visible to                     |
-| -------------- | ---------------------------- | ------------------------------ |
-| Per-agent      | `<workspace>/skills`         | Only that agent                |
-| Project-agent  | `<workspace>/.agents/skills` | Only that workspace's agent    |
-| Personal-agent | `~/.agents/skills`           | Agents using the default state |
-| Shared managed | `<state-dir>/skills`         | All agents using that state    |
-| Extra dirs     | `skills.load.extraDirs`      | All agents using that config   |
+| Scope          | Path                                                 | Visible to                     |
+| -------------- | ---------------------------------------------------- | ------------------------------ |
+| Per-agent      | `<workspace>/skills`                                 | Only that agent                |
+| Project-agent  | `<workspace>/.agents/skills`                         | Only that workspace's agent    |
+| Personal-agent | `~/.agents/skills`                                   | Agents using the default state |
+| Shared managed | `<state-dir>/skills`                                 | All agents using that state    |
+| Workshop       | `<state-dir>/agents/<agentId>/agent/workshop-skills` | Only that agent                |
+| Extra dirs     | `skills.load.extraDirs`                              | All agents using that config   |
+
+Workshop skills learned by one agent are not shared with another agent. Publish
+a skill to the managed library when it must be available to multiple agents.
 
 When `OPENCLAW_STATE_DIR` points somewhere other than the default
 `~/.openclaw`, session skill indexes exclude home-scoped personal or
@@ -269,9 +278,11 @@ skill from model-initiated selection.
 ## Skill Workshop
 
 [Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent
-and your active skill files. When the agent spots reusable work, it drafts a
-proposal instead of writing directly to `SKILL.md`. You review and approve
-before anything changes.
+and its `<state-dir>/agents/<agentId>/agent/workshop-skills` directory. When the agent spots
+reusable work, it drafts a proposal instead of writing directly to `SKILL.md`.
+The scheduled weekly collection review is the scoped exception: its normal
+isolated turn may edit `SKILL.md` files directly inside the Workshop directory.
+Operators edit skills outside that directory through their owning tools or files.
 
 ```bash
 openclaw skills workshop list
@@ -309,6 +320,9 @@ publish and sync.
     directory by default. Add `--global` to install into the shared
     `~/.openclaw/skills` directory, visible to all local agents unless agent
     allowlists narrow it.
+
+    Skill Workshop does not install into either location. Generated skills live
+    in the selected agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`.
 
     Git and local installs expect `SKILL.md` at the source root. The slug comes
     from `SKILL.md` frontmatter `name` when valid, then falls back to the
@@ -353,8 +367,8 @@ publish and sync.
     Workspace, project-agent, and extra-dir skill discovery only accepts skill
     roots whose resolved realpath stays inside the configured root, unless
     `skills.load.allowSymlinkTargets` explicitly trusts a target root.
-    Skill Workshop writes through those trusted targets only when
-    `skills.workshop.allowSymlinkTargetWrites` is enabled.
+    Skill Workshop rejects symlinked skills that resolve outside
+    `<state-dir>/agents/<agentId>/agent/workshop-skills`.
     Managed `~/.openclaw/skills` and personal `~/.agents/skills` may contain
     symlinked skill folders, but every `SKILL.md` realpath must still stay
     inside its resolved skill directory.
@@ -713,8 +727,7 @@ aligned.
     for intentional symlinked layouts where a skill
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/Projects/manager/skills`.
-    Enable `skills.workshop.allowSymlinkTargetWrites` only when Skill Workshop
-    should also apply proposals through those trusted symlinked paths.
+    Skill Workshop does not use these configured symlink targets.
 
   </Accordion>
   <Accordion title="Remote macOS nodes (Linux gateway)">
@@ -744,13 +757,19 @@ prompt. The cost is deterministic and scales linearly per skill:
 
 If the rendered block would exceed the configured prompt budget
 (`skills.limits.maxSkillsPromptChars`), OpenClaw first preserves as many skill
-identities (name, location, and version) as the description-free compact format
+identities (name and location) as the description-free compact format
 can fit. It then uses any remaining budget for shortened descriptions. If no
 description budget remains, descriptions are omitted. The prompt includes a
 note pointing at `openclaw skills check` whenever compact formatting or list
 truncation is required.
 
 Keep descriptions short and descriptive to minimize prompt overhead.
+
+For small context windows, the OpenClaw embedded runtime further shortens the
+descriptions in the already-admitted catalog. It retains every admitted name,
+location, and loading note, even when these exceed the description budget.
+Full skill instructions and saved snapshots are unchanged; Code Mode can still
+read every admitted skill. Native harnesses retain their own prompt policy.
 
 ## Related
 

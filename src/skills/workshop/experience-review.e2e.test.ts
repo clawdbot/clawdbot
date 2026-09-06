@@ -2,13 +2,20 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import { text as readText } from "node:stream/consumers";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../../test/helpers/openai-responses-sse.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveAgentRunSessionTarget } from "../../agents/run-session-target.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../agents/runtime-plugins.js";
 import { sanitizeToolUseResultPairingForModel } from "../../agents/session-transcript-repair.js";
+import { SessionManager } from "../../agents/sessions/index.js";
+import {
+  makeAgentAssistantMessage,
+  makeAgentUserMessage,
+} from "../../agents/test-helpers/agent-message-fixtures.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -18,7 +25,9 @@ import {
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { readSkillReviewOutcomes } from "./collection-review-state.js";
 import { assertExperienceReviewDecision } from "./experience-review-decision.test-support.js";
+import { readExperienceReviewMessageText } from "./experience-review-message-text.test-support.js";
 import { observeExperienceReview } from "./experience-review-observation.test-support.js";
+import { createSkillExperienceReviewScheduler } from "./experience-review-scheduler.js";
 import { runSkillExperienceReview } from "./experience-review.js";
 import {
   createExperienceReviewCandidate,
@@ -48,15 +57,22 @@ const createArgs = {
 };
 type Request = {
   model?: string;
-  input?: Array<{ type?: string; name?: string; call_id?: string; output?: unknown }>;
+  input?: Array<{
+    type?: string;
+    name?: string;
+    call_id?: string;
+    output?: unknown;
+    arguments?: string;
+    content?: Array<{ text?: string }>;
+  }>;
   tools?: Array<{ name?: string }>;
 };
 type Scenario = "proposed" | "nothing" | "interrupted" | "rejected" | "failed";
 
-beforeAll(async () => {
+beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "home", prefix: "workshop-owner-contract-" });
 });
-afterAll(async () => {
+afterEach(async () => {
   await state.cleanup();
   await tempDirs.cleanup();
 });
@@ -96,6 +112,154 @@ function writeToolCall(response: ServerResponse, args: Record<string, unknown>):
 }
 
 describe("Workshop experience review through the real provider and tool owners", () => {
+  it("reviews the completed deep turn when shallow work finishes before the idle window", async () => {
+    const requests: Request[] = [];
+    const handlerErrors: unknown[] = [];
+    await withServer(
+      (request, response) => {
+        void (async () => {
+          if (request.method !== "POST" || request.url !== "/v1/responses") {
+            response.writeHead(404).end();
+            return;
+          }
+          requests.push(JSON.parse(await readText(request)) as Request);
+          writeOpenAiResponsesText(response, {
+            text: "NO_REPLY",
+            messageId: "msg_workshop_delayed_review",
+            responseId: "resp_workshop_delayed_review",
+          });
+        })().catch((error: unknown) => {
+          handlerErrors.push(error);
+          response.writeHead(400).end();
+        });
+      },
+      async (baseUrl) => {
+        const workspaceDir = await tempDirs.make("workshop-delayed-evidence-");
+        const messages = positiveMessages();
+        const replay = sanitizeToolUseResultPairingForModel(messages, true);
+        const candidate = await createExperienceReviewCandidate("delayed-evidence", messages, {
+          workspaceDir,
+          modelId,
+          baseUrl: `${baseUrl}/v1`,
+          apiKey: "test-token-placeholder",
+        });
+        const target = await resolveAgentRunSessionTarget({
+          agentId: "main",
+          config: candidate.config,
+          sessionId: candidate.source.sessionId,
+          sessionKey: candidate.source.sessionKey,
+          missingSessionKey: "resolve-existing",
+        });
+        loadAgentRuntimePluginRegistryHandle({ config: candidate.config, workspaceDir });
+        const reviewFinished = createDeferred();
+        const idleCallbacks: Array<() => void> = [];
+        const scheduler = createSkillExperienceReviewScheduler({
+          isSystemActive: () => false,
+          setTimer: (callback, delayMs) => {
+            const timer = setTimeout(callback, delayMs);
+            idleCallbacks.push(() => {
+              clearTimeout(timer);
+              callback();
+            });
+            return timer;
+          },
+          runReview: async (pending) => {
+            try {
+              await runSkillExperienceReview(pending, {
+                getCurrentConfig: () => candidate.config,
+              });
+              reviewFinished.resolve();
+            } catch (error) {
+              reviewFinished.reject(error);
+            }
+          },
+        });
+        const ctx = {
+          ...candidate.ctx,
+          sessionKey: candidate.source.sessionKey,
+          skillWorkshopAvailable: true,
+          modelIterations: 10,
+        };
+        const laterMessages = [
+          makeAgentUserMessage({ content: "What is two plus two?" }),
+          makeAgentAssistantMessage({
+            model: modelId,
+            content: [{ type: "text", text: "Two plus two is four." }],
+          }),
+        ];
+        try {
+          const source = candidate.source;
+          scheduler.schedule({
+            event: { messages, success: true },
+            ctx,
+            config: candidate.config,
+            source,
+          });
+          for (const message of laterMessages) {
+            SessionManager.appendMessageToTranscript(target, message, {
+              config: candidate.config,
+            });
+          }
+          scheduler.schedule({
+            event: { messages: laterMessages, success: true },
+            ctx: { ...ctx, runId: "later-shallow-turn", modelIterations: 1 },
+            config: candidate.config,
+            source,
+          });
+          const database = openOpenClawAgentDatabase({ agentId: "main" });
+          const readSourceTranscript = () =>
+            database.db
+              .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+              .all(target.sessionId);
+          const sourceBeforeReview = readSourceTranscript();
+          const releaseIdle = idleCallbacks.at(-1);
+          if (!releaseIdle) {
+            throw new Error("The completed deep turn did not schedule a review.");
+          }
+          releaseIdle();
+          await reviewFinished.promise;
+
+          expect(handlerErrors).toEqual([]);
+          expect(requests).toHaveLength(1);
+          const input = requests[0]!.input ?? [];
+          const evidenceText = input
+            .flatMap((item) => [
+              ...(typeof item.output === "string" ? [item.output] : []),
+              ...(item.content?.flatMap((part) => (part.text ? [part.text] : [])) ?? []),
+            ])
+            .join("\n");
+          for (const message of laterMessages) {
+            expect(evidenceText).not.toContain(readExperienceReviewMessageText(message.content));
+          }
+          for (const message of messages) {
+            const text = readExperienceReviewMessageText(message.content);
+            if (text) {
+              expect(evidenceText).toContain(text);
+            }
+          }
+          expect(
+            input
+              .filter((item) => item.type === "function_call")
+              .map((item) => ({ name: item.name, arguments: item.arguments })),
+          ).toEqual(
+            replay.flatMap((message) =>
+              message.role === "assistant"
+                ? message.content.flatMap((part) =>
+                    part.type === "toolCall"
+                      ? [{ name: part.name, arguments: JSON.stringify(part.arguments) }]
+                      : [],
+                  )
+                : [],
+            ),
+          );
+          expect(readSourceTranscript()).toEqual(sourceBeforeReview);
+        } finally {
+          scheduler.clear();
+        }
+      },
+    );
+  }, 120_000);
+
   it.each<Scenario>(["proposed", "nothing", "interrupted", "rejected", "failed"])(
     "records %s without replacing the review runner, catalog, or proposal service",
     async (scenario) => {
@@ -147,14 +311,14 @@ describe("Workshop experience review through the real provider and tool owners",
             turnAborted: scenario === "interrupted",
           });
           // Load the real provider plugin before entering the review lane, as the live proof does.
-          loadAgentRuntimePluginRegistryHandle({ config: candidate.config ?? {}, workspaceDir });
+          loadAgentRuntimePluginRegistryHandle({ config: candidate.config, workspaceDir });
           const outcomesBefore = new Set(Object.keys(readSkillReviewOutcomes().experienceReviews));
           const database = openOpenClawAgentDatabase({ agentId: "main" });
           const foregroundFingerprint = () => {
             const hash = createHash("sha256");
             for (const row of database.db
               .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
-              .iterate(candidate.ctx.sessionId!)) {
+              .iterate(candidate.source.sessionId)) {
               hash.update(String(row.event_json));
             }
             return hash.digest("hex");
@@ -169,16 +333,19 @@ describe("Workshop experience review through the real provider and tool owners",
             }
             return originalParse(text, reviver);
           });
-          const run = observeExperienceReview(() =>
-            runSkillExperienceReview(candidate, {
-              getCurrentConfig: () => candidate.config ?? {},
-            }),
-          );
           let observation: Awaited<ReturnType<typeof observeExperienceReview>> | undefined;
+          const failedReview = scenario === "failed" || scenario === "rejected";
           try {
-            if (scenario === "failed") {
+            const run = observeExperienceReview(() =>
+              runSkillExperienceReview(candidate, {
+                getCurrentConfig: () => candidate.config,
+              }),
+            );
+            if (failedReview) {
               await expect(run).rejects.toThrow(
-                "provider rejected the request schema or tool payload",
+                scenario === "failed"
+                  ? "provider rejected the request schema or tool payload"
+                  : "Skill Workshop failed",
               );
             } else {
               observation = await run;
@@ -209,8 +376,15 @@ describe("Workshop experience review through the real provider and tool owners",
               ),
           );
 
-          const { proposals } = await listSkillProposals({ workspaceDir });
-          const progress = await getSkillProposalRunProgress({ workspaceDir, runId });
+          const { proposals } = await listSkillProposals({
+            config: candidate.config,
+            agentId: "main",
+          });
+          const progress = await getSkillProposalRunProgress({
+            config: candidate.config,
+            agentId: "main",
+            runId,
+          });
           const outcomes = Object.entries(readSkillReviewOutcomes().experienceReviews).filter(
             ([key]) => !outcomesBefore.has(key),
           );
@@ -221,7 +395,10 @@ describe("Workshop experience review through the real provider and tool owners",
             const proposal = proposals[0]!;
             expect(proposal.status).toBe("pending");
             expect(progress).toMatchObject({ mutationCount: 1, proposalIds: [proposal.id] });
-            const stored = await inspectSkillProposal(proposal.id, { workspaceDir });
+            const stored = await inspectSkillProposal(proposal.id, {
+              config: candidate.config,
+              agentId: "main",
+            });
             expect(stored?.record).toMatchObject({ autonomousCapture: true, origin: { runId } });
             expect(stored?.content).toContain(proposalBody);
             await expect(fs.stat(stored!.record.target.skillFile)).rejects.toMatchObject({
@@ -237,7 +414,7 @@ describe("Workshop experience review through the real provider and tool owners",
             expect(proposals).toEqual([]);
             expect(progress.mutationCount).toBe(0);
             expect(outcome).toMatchObject({
-              outcome: scenario === "failed" ? "failed" : "nothing",
+              outcome: failedReview ? "failed" : "nothing",
             });
             if (scenario === "rejected") {
               const toolOutput = requests[1]?.input?.find(
@@ -247,23 +424,18 @@ describe("Workshop experience review through the real provider and tool owners",
               expect(toolOutput?.output).toContain("required");
             }
           }
-          if (scenario !== "failed") {
+          if (!failedReview) {
             expect(outcome?.usage?.outputTokens).toBeGreaterThan(0);
             expect(observation).toBeDefined();
-            const decision = () =>
-              assertExperienceReviewDecision({
-                observation: observation!,
-                messages: replay,
-                progress,
-                proposals,
-                outcome,
-                startedAt,
-              });
-            if (scenario === "rejected") {
-              expect(decision).toThrow();
-            } else {
-              expect(decision()).toBe(scenario === "proposed" ? "proposed" : "abstained");
-            }
+            const decision = assertExperienceReviewDecision({
+              observation: observation!,
+              messages: replay,
+              progress,
+              proposals,
+              outcome,
+              startedAt,
+            });
+            expect(decision).toBe(scenario === "proposed" ? "proposed" : "abstained");
           }
         },
       );

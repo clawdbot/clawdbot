@@ -276,11 +276,8 @@ function receiptFromRow(row: CronRunReceiptRow): CronRunReceipt {
 }
 
 function currentJob(database: DatabaseSync, storeKey: string, jobId: string): CronJob | undefined {
-  const rows = loadCronRows(database, storeKey);
-  if (rows.length === 0) {
-    return undefined;
-  }
-  return loadedCronStoreFromRows(rows).store.jobs.find((job) => job.id === jobId);
+  const rows = loadCronRows(database, storeKey, new Set([jobId]));
+  return loadedCronStoreFromRows(rows).store.jobs[0];
 }
 
 function sameOwner(left: CronRunReceiptRow, right: CronRunReceiptOwnerObservation): boolean {

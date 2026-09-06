@@ -30,7 +30,6 @@ jobs:
       github.event.workflow_run.event == 'workflow_dispatch' &&
       github.event.workflow_run.name == 'Linux App Release Request' &&
       github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_sha == github.workflow_sha &&
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-22.04
     timeout-minutes: 10
@@ -48,8 +47,16 @@ jobs:
         id: request
         env:
           REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
+          # Reject stale requests visibly before selected code runs; a job-level
+          # SHA gate would silently skip the whole release when main advances.
+          if [[ "$REQUEST_HEAD_SHA" != "$WORKFLOW_SHA" ]]; then
+            echo "::error::Main advanced after this Linux release request. Dispatch a new Linux App Release Request from main with the same inputs." >&2
+            exit 1
+          fi
           pattern='^Linux App Release Request \[(v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?)\] desktop=(true|false)$'
           if [[ ! "${REQUEST_TITLE}" =~ ${pattern} ]]; then
             echo "Release request title does not match the trusted request contract"

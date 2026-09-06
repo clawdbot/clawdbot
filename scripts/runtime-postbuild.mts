@@ -15,7 +15,6 @@ import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
-  listStaticExtensionAssetOutputs,
 } from "./lib/static-extension-assets.mts";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
@@ -48,14 +47,11 @@ const LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK = [
   "",
 ].join("\n");
 
-/** @internal Shared repository-script contract. */
-export { listStaticExtensionAssetOutputs };
-
 const ROOT = resolveRepoRoot(import.meta.url);
-const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;
+const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.m?js$/u;
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
-  /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.js)\1/gu;
+  /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.m?js)\1/gu;
 const OFFICIAL_CHANNEL_CATALOG_OUTPUT = "dist/channel-catalog.json";
 const EXPORT_HTML_SOURCE_DIR = "src/auto-reply/reply/export-html";
 const EXPORT_HTML_OUTPUT_DIR = "dist/export-html";
@@ -192,26 +188,18 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
   aliasFileName: PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName,
   sourceIncludes: LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS,
 }));
-/** Compatibility chunks kept for live gateways loading old CLI exit modules. */
+/** Compatibility chunks for old updater and CLI exit modules after package replacement. */
 const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
-  // v2026.8.2 and the exact d413210 build load these after replacing dist/.
-  // Remove only after both source artifacts fall outside the supported upgrade window.
-  {
-    dest: "dist/shared-Y6bNiw2w.js",
+  // v2026.8.2, the exact d413210 build, and v2026.9.1 load these after replacing dist/.
+  // Remove only after the source artifacts fall outside the supported upgrade window.
+  ...["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js", "shared-DFJEouXv.js"].map((fileName) => ({
+    dest: `dist/${fileName}`,
     contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
-  },
-  {
-    dest: "dist/shared-DTaQo6Hi.js",
-    contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
-  },
-  {
-    dest: "dist/memory-state-CcqRgDZU.js",
+  })),
+  ...["memory-state-CcqRgDZU.js", "memory-state-DwGdReW4.js"].map((fileName) => ({
+    dest: `dist/${fileName}`,
     contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
-  },
-  {
-    dest: "dist/memory-state-DwGdReW4.js",
-    contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
-  },
+  })),
 ];
 
 /**
@@ -548,7 +536,7 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
   }
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".js")) {
+    if (!entry.isFile() || !/\.m?js$/u.test(entry.name)) {
       continue;
     }
     if (ROOT_STABLE_RUNTIME_ALIAS_PATTERN.test(entry.name)) {
@@ -588,7 +576,10 @@ function resolveRootRuntimeCandidateByMarkers(
     return null;
   }
   const aliasBaseFileName = aliasFileName.replace(/\.js$/u, "");
-  const hashedPattern = new RegExp(`^${escapeRegExp(aliasBaseFileName)}-[A-Za-z0-9_-]+\\.js$`, "u");
+  const hashedPattern = new RegExp(
+    `^${escapeRegExp(aliasBaseFileName)}-[A-Za-z0-9_-]+\\.m?js$`,
+    "u",
+  );
   let entries;
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });

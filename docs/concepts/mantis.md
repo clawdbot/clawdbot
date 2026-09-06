@@ -22,7 +22,7 @@ WhatsApp and Matrix are unimplemented.
 - QA Lab (`extensions/qa-lab/src/live-transports/*`): live transport harness, driver/SUT bots, report/evidence writers.
 - Crabbox (`openclaw/crabbox`): warmed Linux machines, leases, VNC, `crabbox media preview`.
 - GitHub Actions (`.github/workflows/mantis-*.yml`): remote entrypoints, artifact retention.
-- ClawSweeper: parses maintainer PR commands, dispatches workflows, posts the final PR comment.
+- ClawSweeper: independently reviews proof and owns review/readiness policy. Mantis workflow dispatch and evidence publication are separate from ordinary review publication; a Mantis result does not itself grant readiness or merge permission.
 
 ## CLI commands
 
@@ -200,20 +200,32 @@ in.
 
 ## Evidence manifest
 
-Every scenario that publishes to a PR writes `mantis-evidence.json` next to
-its report:
+The publisher requires schema version 2 of `mantis-evidence.json` next to
+the report. Each included lane must declare `expectationMet`; the publisher
+downgrades a claimed pass when a lane's expectation was not met. For example:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "discord-status-reactions",
   "title": "Mantis Discord Status Reactions QA",
   "summary": "Human-readable top summary for the PR comment.",
   "scenario": "discord-status-reactions-tool-only",
   "comparison": {
-    "baseline": { "sha": "...", "status": "fail", "expected": "queued-only" },
-    "candidate": { "sha": "...", "status": "pass", "expected": "queued -> thinking -> done" },
-    "pass": true
+    "baseline": {
+      "sha": "<baseline-sha>",
+      "status": "fail",
+      "expected": "queued-only",
+      "expectationMet": true
+    },
+    "candidate": {
+      "sha": "<candidate-sha>",
+      "status": "pass",
+      "expected": "queued -> thinking -> done",
+      "expectationMet": true
+    },
+    "pass": true,
+    "outcome": "pass"
   },
   "artifacts": [
     {
@@ -228,6 +240,18 @@ its report:
   ]
 }
 ```
+
+This manifest is a presentation contract, not an authenticated proof receipt.
+It does not independently establish repository/PR ownership, current-head
+freshness, execution authority, or the truth of an assertion. A video, process
+exit code, or declared expectation alone is not sufficient behavioral proof.
+Review the underlying observations and execution provenance before relying on
+the result. Infrastructure failures and missing observations are inconclusive,
+not evidence that the baseline reproduced the bug.
+
+The local `qa mantis run` producer still emits schema version 1, which the
+publisher rejects. Do not relabel that output as version 2 without deriving
+its lane expectations from observations; the workflow producers emit version 2.
 
 Artifact `path` is relative to the manifest's directory; `targetPath` is
 relative to the configured R2/S3 artifact prefix. `scripts/mantis/publish-pr-evidence.mjs`
@@ -290,11 +314,39 @@ before running with secret-bearing credentials.
 
 The scenario workflows remain available through manual Actions dispatch.
 
-ClawSweeper can also dispatch a scenario directly:
+Do not rely on the former `@clawsweeper mantis ...` example as a dedicated
+dispatch command. ClawSweeper's current command parser routes an unrecognized
+mention to general assistance, not a typed Mantis dispatch. Use the manual
+Actions entrypoints above; a future command integration must reuse the command
+authorization and dispatch owners rather than infer execution authority from
+review prose.
 
-```text
-@clawsweeper mantis discord discord-status-reactions-tool-only
-```
+### Telegram proof is a separate QA entrypoint
+
+Telegram is not an option in `mantis-scenario.yml` or `qa mantis run`.
+`pnpm openclaw qa telegram` uses the QA Lab Telegram adapter and the repository
+skill at `.agents/skills/telegram-e2e-userbot/SKILL.md`. The skill also supports
+focused real-user recordings through its own runner.
+
+The skill uses TDLib against Telegram's Test Server, with an exclusively leased
+Convex QA credential, a fresh Gateway, and an independent user observer.
+Prerequisites include a dependency-ready exact-ref runtime, the pinned TDLib
+setup, authenticated broker access, and distinct unused Gateway/provider ports.
+Its doctor acquires a lease and contacts Telegram: it is a live operation, not
+an offline readiness check. Do not run it without authorization for test-account
+activity.
+
+The recorder can observe messages, edits, deletions, reactions, and typing.
+Judge events after the recorded stimulus from the selected SUT, correlate
+message IDs and expected provider requests, and verify cleanup. The QA adapter's
+current driver exposes a narrower message/edit stream; choose the entrypoint
+whose observations actually cover the claim. A generic successful reply does
+not prove formatting, reaction, lifecycle, or threading behavior.
+
+Read the skill and its feature verification map before a Telegram exercise.
+The credential lease is not a scenario sandbox: custom command actions can use
+the leased test identity. Keep credential handling and execution in an explicitly
+authorized, isolated worker, never an ordinary read-only review.
 
 ## Machines and secrets
 

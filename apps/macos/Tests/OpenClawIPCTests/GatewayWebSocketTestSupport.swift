@@ -284,6 +284,9 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     {
         let queued = self.lock.withLock { () -> ReceiveResult? in
             self.callbackReceiveCount += 1
+            guard self._state != .canceling, self._state != .completed else {
+                return .failure(URLError(.cancelled))
+            }
             guard !self.pendingInboundFrames.isEmpty else {
                 self.pendingReceiveHandler = completionHandler
                 return nil
@@ -309,6 +312,7 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
 
     private func emitInbound(_ result: ReceiveResult) {
         let handler = self.lock.withLock { () -> (@Sendable (ReceiveResult) -> Void)? in
+            guard self._state != .canceling, self._state != .completed else { return nil }
             guard let handler = self.pendingReceiveHandler else {
                 // Preserve wire order while the channel handles a result and has not
                 // registered its next one-shot receive callback.

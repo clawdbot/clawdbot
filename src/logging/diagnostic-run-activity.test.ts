@@ -43,6 +43,46 @@ afterEach(() => {
 });
 
 describe("core model owner generations", () => {
+  it("keeps the newest run's clocks when an earlier work key is rearmed", async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-09-04T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const ref = { sessionId: "rearmed-session", sessionKey: "agent:main:rearmed" };
+    const earlier = { ...ref, runId: "earlier-run", workKey: "first" };
+    const later = { ...ref, runId: "later-run", workKey: "second" };
+    const earlierOwner = createDiagnosticEmbeddedRunOwner(earlier);
+    const laterOwner = createDiagnosticEmbeddedRunOwner(later);
+    startDiagnosticRunActivityTracking();
+    markDiagnosticEmbeddedRunStarted({ ...earlier, owner: earlierOwner });
+    markDiagnosticEmbeddedRunStarted({ ...later, owner: laterOwner });
+    markDiagnosticEmbeddedRunStarted({ ...earlier, owner: earlierOwner });
+    markDiagnosticArgumentChurnObservation({ ...ref, runId: earlier.runId, active: true });
+    for (const callId of ["request-1", "request-2"]) {
+      emitCoreModelRequestStartedDiagnosticEvent(
+        { ...ref, runId: earlier.runId, callId, provider: "core", model: "request-model" },
+        earlierOwner.generation,
+      );
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticSessionActivitySnapshot(ref, startedAt + 30_000)).toMatchObject({
+      activeWorkKind: "model_call",
+      lastProgressReason: "tool_loop:argument_churn",
+      lastProgressAgeMs: 30_000,
+      repeatedRequestNoProgressAgeMs: 30_000,
+    });
+
+    closeDiagnosticEmbeddedRunOwner(earlierOwner);
+    expect(getDiagnosticSessionActivitySnapshot(ref, startedAt + 30_000)).toMatchObject({
+      activeWorkKind: "embedded_run",
+      hasActiveEmbeddedRun: true,
+      lastProgressReason: "embedded_run:ended",
+      repeatedRequestNoProgressAgeMs: undefined,
+    });
+    closeDiagnosticEmbeddedRunOwner(laterOwner);
+  });
+
   it("keeps exact-call recovery policy intact across forged terminals and run completion", async () => {
     const ref = { sessionId: "core-owner-session", sessionKey: "agent:main:core-owner" };
     const runId = "core-owner-run";

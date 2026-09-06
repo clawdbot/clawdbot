@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
   client,
@@ -38,6 +39,32 @@ function createAutomaticUpdateHarness(request: RequestFn) {
 }
 
 describe("application update campaign overlays", () => {
+  it.each(["succeeded", "failed", "skipped"] as const)(
+    "retires only the applying campaign owned by a %s run",
+    async (status) => {
+      const run = updateRunFixture({
+        status,
+        phase: "finished",
+        origin: { campaignId: AUTO_UPDATE_SCHEDULE.campaign.id },
+      });
+      const harness = createAutomaticUpdateHarness(async () => ({ lastRun: run }));
+      const overlays = createApplicationOverlays(harness.gateway);
+      try {
+        await flushMicrotasks();
+        harness.emitEvent("update.available", {
+          schedule: {
+            ...AUTO_UPDATE_SCHEDULE,
+            campaign: { ...AUTO_UPDATE_SCHEDULE.campaign, state: "applying" },
+          },
+        });
+        expect(overlays.snapshot.updateRun).toEqual(run);
+        expect(overlays.snapshot.updateRunning).toBe(false);
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
+
   it("owns the running interlock while an automatic campaign applies", async () => {
     const request = vi.fn<RequestFn>(async () => ({}));
     const harness = createAutomaticUpdateHarness(request);
@@ -136,7 +163,7 @@ describe("application update campaign overlays", () => {
         if (source === "campaign poll") {
           await vi.advanceTimersByTimeAsync(5_000);
         }
-        expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(1);
+        expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
         harness.emitEvent("update.available", {
           schedule: {
             ...AUTO_UPDATE_SCHEDULE,
@@ -181,7 +208,7 @@ describe("application update campaign overlays", () => {
       const overlays = createApplicationOverlays(harness.gateway);
       try {
         await vi.advanceTimersByTimeAsync(5_000);
-        expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(1);
+        expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
         if (boundary === "campaign ended") {
           harness.emitEvent("update.available", {
             schedule: { channel: "stable", autoEnabled: true },
@@ -195,7 +222,7 @@ describe("application update campaign overlays", () => {
         await flushMicrotasks();
         await vi.advanceTimersByTimeAsync(10_000);
 
-        expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(1);
+        expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
       } finally {
         updateStatus.resolve({});
         overlays.dispose();
@@ -251,12 +278,14 @@ describe("application update campaign overlays", () => {
                 stats: { reason: "retained-admin-only-attempt" },
               },
             })
-          : updateStatus.promise;
+          : statusReads === 2
+            ? updateStatus.promise
+            : Promise.resolve({});
       });
       const harness = createAutomaticUpdateHarness(request);
       const overlays = createApplicationOverlays(harness.gateway);
       try {
-        await overlays.refreshUpdateStatus();
+        await flushMicrotasks();
         expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("retained-admin-only-attempt");
         const refresh = overlays.refreshUpdateStatus();
         harness.update({
@@ -443,26 +472,29 @@ describe("application update campaign overlays", () => {
 
   it("polls update.status only for administrators with an active campaign", async () => {
     vi.useFakeTimers();
+    let statusReads = 0;
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(
         method === "update.status"
-          ? {
-              sentinel: {
-                kind: "update",
-                status: "error",
-                stats: { reason: "build-failed" },
-              },
-              updateAvailable: {
-                currentVersion: "1.0.0",
-                latestVersion: "2.0.0",
-                channel: "stable",
-              },
-              schedule: {
-                channel: "stable",
-                autoEnabled: true,
-                target: { kind: "package", version: "2.0.0" },
-              },
-            }
+          ? ++statusReads === 1
+            ? { schedule: AUTO_UPDATE_SCHEDULE }
+            : {
+                sentinel: {
+                  kind: "update",
+                  status: "error",
+                  stats: { reason: "build-failed" },
+                },
+                updateAvailable: {
+                  currentVersion: "1.0.0",
+                  latestVersion: "2.0.0",
+                  channel: "stable",
+                },
+                schedule: {
+                  channel: "stable",
+                  autoEnabled: true,
+                  target: { kind: "package", version: "2.0.0" },
+                },
+              }
           : {},
       ),
     );
@@ -494,13 +526,13 @@ describe("application update campaign overlays", () => {
       harness.update({ sessionKey: "agent:main:active" });
       await vi.advanceTimersByTimeAsync(1_000);
       await flushMicrotasks();
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(1);
+      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
       expect(overlays.snapshot.updateSchedule?.campaign).toBeUndefined();
       expect(overlays.snapshot.updateStatusBanner?.text).toContain("build-failed");
 
       await vi.advanceTimersByTimeAsync(10_000);
       await flushMicrotasks();
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(1);
+      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
 
       harness.update({
         hello: {
@@ -522,7 +554,7 @@ describe("application update campaign overlays", () => {
       });
       await vi.advanceTimersByTimeAsync(10_000);
       await flushMicrotasks();
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(1);
+      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
       expect(overlays.snapshot.updateCampaignStatusHydrated).toBe(false);
       expect(overlays.snapshot.updateSchedule?.campaign?.id).toBe("campaign-2");
     } finally {
@@ -559,7 +591,7 @@ describe("application update campaign overlays", () => {
 
     expect(overlays.snapshot.updateCampaignStatusHydrated).toBe(false);
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
     expect(overlays.snapshot.updateCampaignStatusHydrated).toBe(false);
 
     updateStatus.resolve({
@@ -745,7 +777,11 @@ describe("application update campaign overlays", () => {
       resolveUpdateRun = resolve;
     });
     const request = vi.fn<RequestFn>((method) =>
-      method === "update.run" ? updateRun : Promise.resolve({ ok: true }),
+      method === "update.run"
+        ? updateRun
+        : Promise.resolve(
+            method === "update.runs.get" ? { run: updateRunFixture() } : { ok: true },
+          ),
     );
     const harness = createGatewayHarness(client(request));
     harness.update({
@@ -773,9 +809,9 @@ describe("application update campaign overlays", () => {
     expect(overlays.snapshot.updateRunning).toBe(true);
     await expect(overlays.holdUpdate()).resolves.toBe(false);
 
-    resolveUpdateRun({ ok: true, result: { status: "ok" } });
+    resolveUpdateRun({ ok: true, runId: updateRunFixture().runId });
     await running;
-    expect(overlays.snapshot.updateRunning).toBe(false);
+    expect(overlays.snapshot.updateRunning).toBe(true);
     await expect(overlays.holdUpdate()).resolves.toBe(false);
     expect(request.mock.calls.filter(([method]) => method === "update.hold")).toHaveLength(0);
     overlays.dispose();

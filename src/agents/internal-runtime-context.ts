@@ -318,7 +318,41 @@ function isUserMessage(message: unknown): boolean {
   );
 }
 
-/** Keeps only current-turn runtime context positioned immediately before the active user. */
+type RuntimeContextPromptOwner = { user?: unknown; transcriptUser?: unknown; release: () => void };
+const retainedRuntimeContextMessages = new WeakMap<object, RuntimeContextPromptOwner>();
+
+/** Prompt submission owns retention through streaming, steering, and retry, then releases it. */
+export function retainRuntimeContextMessageForPrompt(message: object): RuntimeContextPromptOwner {
+  const owner: RuntimeContextPromptOwner = {
+    release: () => {
+      retainedRuntimeContextMessages.delete(message);
+    },
+  };
+  retainedRuntimeContextMessages.set(message, owner);
+  return owner;
+}
+
+function isRetainedRuntimeContextMessage(message: unknown): boolean {
+  return (
+    typeof message === "object" && message !== null && retainedRuntimeContextMessages.has(message)
+  );
+}
+
+/** Steering extends this prompt; it does not retire its original user's context. */
+export function resolveRuntimeContextPromptOwner(messages: readonly unknown[]) {
+  const carrierIndex = messages.findIndex(isRetainedRuntimeContextMessage);
+  const carrier = messages[carrierIndex];
+  if (typeof carrier !== "object" || carrier === null) {
+    return undefined;
+  }
+  const userIndex = messages.findIndex(
+    (message, index) => index > carrierIndex && isUserMessage(message),
+  );
+  const owner = retainedRuntimeContextMessages.get(carrier);
+  return owner ? { owner, userIndex } : undefined;
+}
+
+/** Keeps the live prompt's context and unretained context immediately before the active user. */
 export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T[] {
   if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
     return messages;
@@ -338,48 +372,37 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
     if (!isOpenClawRuntimeContextCustomMessage(message)) {
       return true;
     }
-    return currentRuntimeContextIndexes.has(index);
+    return currentRuntimeContextIndexes.has(index) || isRetainedRuntimeContextMessage(message);
   });
 }
 
 /**
- * Moves current-turn runtime-context carrier messages to the absolute tail of
- * the request (after the active user turn and any tool-call scaffolding).
- *
- * Prompt-cache rationale: a per-turn carrier that is stripped on replay makes
- * the next request diverge at the carrier's slot. Placed BEFORE the active user
- * turn, that slot precedes everything that gets reused, so the whole tail
- * (user turn + tool loop) re-bills every turn. Placed at the ABSOLUTE tail, the
- * divergence lands exactly where the next turn's new bytes (the assistant reply)
- * begin anyway, so the request is an append-only prefix-extension through the
- * active user turn — only the trailing carrier is ever re-billed.
- *
- * Runs after {@link stripHistoricalRuntimeContextCustomMessages}, so only the
- * current-turn carrier(s) remain. When there is no active user turn to anchor
- * after, messages are returned unchanged.
+ * Place prompt context after its own user's tool scaffolding, before a later
+ * steering user. Full-resend providers keep their cacheable tool prefix, while
+ * steering appends without relocating context already sent in the active request.
+ * Runs after historical context stripping; already-placed carriers stay put.
  */
 export function relocateCurrentRuntimeContextCarrierToTail<T>(messages: T[]): T[] {
-  const lastIndex = messages.length - 1;
-  if (lastIndex < 0 || !messages.some(isOpenClawRuntimeContextCustomMessage)) {
+  const carrierIndex = messages.findIndex(isOpenClawRuntimeContextCustomMessage);
+  const userIndex = messages.findIndex(
+    (message, index) => index > carrierIndex && isUserMessage(message),
+  );
+  if (carrierIndex < 0 || userIndex < 0) {
     return messages;
   }
-  // Already tail-placed (a contiguous carrier run ends the array): no-op so the
-  // serialized bytes stay stable across re-attempts of the same request.
-  let firstNonCarrierFromEnd = lastIndex;
-  while (
-    firstNonCarrierFromEnd >= 0 &&
-    isOpenClawRuntimeContextCustomMessage(messages[firstNonCarrierFromEnd])
-  ) {
-    firstNonCarrierFromEnd -= 1;
-  }
-  const rest = messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
-  // No active user turn to anchor after — leave placement to the strip pass.
-  if (!rest.some(isUserMessage)) {
-    return messages;
-  }
-  if (firstNonCarrierFromEnd === rest.length - 1) {
-    return messages;
-  }
+  const nextUserIndex = messages.findIndex(
+    (message, index) => index > userIndex && isUserMessage(message),
+  );
+  const boundary = nextUserIndex < 0 ? messages.length : nextUserIndex;
+  const prefix = messages
+    .slice(0, boundary)
+    .filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
   const carriers = messages.filter(isOpenClawRuntimeContextCustomMessage);
-  return [...rest, ...carriers];
+  return [
+    ...prefix,
+    ...carriers,
+    ...messages
+      .slice(boundary)
+      .filter((message) => !isOpenClawRuntimeContextCustomMessage(message)),
+  ];
 }

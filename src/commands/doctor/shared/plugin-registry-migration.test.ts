@@ -509,7 +509,7 @@ describe("doctor plugin registry migration", () => {
     expect(requirePlugin(persisted, "demo").pluginId).toBe("demo");
   });
 
-  it("seeds first-run install records from shipped plugins.installs config", async () => {
+  it("indexes records already imported from shipped config", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -517,18 +517,14 @@ describe("doctor plugin registry migration", () => {
     const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [createCandidate(pluginDir, "demo", "global", { installOwner: "demo" })],
+      installRecords: {
+        demo: { source: "npm", spec: "demo@1.0.0", installPath: pluginDir },
+      },
       readConfig: async () => ({
         plugins: {
           entries: {
             demo: {
               enabled: true,
-            },
-          },
-          installs: {
-            demo: {
-              source: "npm",
-              spec: "demo@1.0.0",
-              installPath: pluginDir,
             },
           },
         },
@@ -557,25 +553,21 @@ describe("doctor plugin registry migration", () => {
     expectSha256(requirePlugin(persisted, "demo").installRecordHash);
   });
 
-  it("preserves shipped install records when the plugin manifest cannot be discovered", async () => {
+  it("preserves imported records when the plugin manifest cannot be discovered", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "missing");
 
     const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [],
+      installRecords: {
+        missing: { source: "npm", spec: "missing-plugin@1.0.0", installPath: pluginDir },
+      },
       readConfig: async () => ({
         plugins: {
           entries: {
             missing: {
               enabled: true,
-            },
-          },
-          installs: {
-            missing: {
-              source: "npm",
-              spec: "missing-plugin@1.0.0",
-              installPath: pluginDir,
             },
           },
         },

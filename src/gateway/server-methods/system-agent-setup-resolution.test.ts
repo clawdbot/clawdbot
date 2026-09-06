@@ -7,9 +7,13 @@ import type {
   WizardNextResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WizardNextResultSchema } from "../../../packages/gateway-protocol/src/schema/wizard.js";
+import { createRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildPluginCapabilityConsentReview } from "../../plugins/capability-summary.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { SetupInferenceActivationIndeterminateError } from "../../system-agent/setup-inference-core.js";
+import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import { createPluginCapabilityConsentPrompter } from "../../wizard/plugin-capability-consent.js";
 import { WizardSession } from "../../wizard/session.js";
 import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
@@ -369,15 +373,191 @@ describe("openclaw.setup provider resolution", () => {
       expect(wizardSessions.has("auth-session-1")).toBe(false);
     },
   );
-  it.each(["failed", "cancelled"] as const)(
-    "does not report verified activation for %s provider auth",
+  it.each([
+    "auth",
+    "rate_limit",
+    "billing",
+    "timeout",
+    "format",
+    "unavailable",
+    "unknown",
+  ] as const)(
+    "publishes a finalized %s probe rejection after capability consent",
+    async (status) => {
+      const { wizardSessions, context } = makeContext();
+      const sessionId = "rejected-probe";
+      const finalizationStarted = createDeferredCore();
+      const finishFinalization = createDeferredCore();
+      const review = buildPluginCapabilityConsentReview({
+        pluginId: "test-runtime",
+        manifest: { name: "Test runtime" },
+        config: {},
+        record: { source: "npm", spec: "@example/runtime@1.0.0", integrity: "sha512-fixture" },
+      });
+      setupInferenceMocks.activateSetupInference.mockImplementationOnce(
+        async (params: ActivateSetupInferenceParams) => {
+          const prompter = expectDefined(params.prompter, "activation prompter");
+          const acknowledgment = await createPluginCapabilityConsentPrompter(prompter)(review);
+          expect(acknowledgment).toBeDefined();
+          await params.beforePersistentEffect?.();
+          const progress = prompter.progress("Testing your AI connection…");
+          try {
+            return {
+              ok: false,
+              status,
+              error: "Probe rejected [redacted]",
+              disposition: "rejected-before-promotion",
+            };
+          } finally {
+            finalizationStarted.resolve();
+            await finishFinalization.promise;
+            progress.stop();
+          }
+        },
+      );
+      const { calls, respond } = makeRespond();
+      await systemAgentHandler("openclaw.setup.activate.start")({
+        params: { sessionId, kind: "codex-cli", modelRef: "example/model" },
+        respond,
+        context,
+      } as never);
+      expect(calls[0]).toMatchObject({
+        ok: true,
+        payload: { sessionId, done: false, status: "running" },
+      });
+      const session = expectDefined(wizardSessions.get(sessionId), "activation wizard session");
+      try {
+        const reviewStep = await callWizardNext(context, { sessionId });
+        expect(reviewStep.step).toMatchObject({ type: "note", title: "Plugin capabilities" });
+        const confirmation = await callWizardNext(context, {
+          sessionId,
+          answer: { stepId: expectDefined(reviewStep.step, "capability review").id },
+        });
+        expect(confirmation.step).toMatchObject({ type: "confirm" });
+        const progress = await callWizardNext(context, {
+          sessionId,
+          answer: {
+            stepId: expectDefined(confirmation.step, "capability consent").id,
+            value: true,
+          },
+        });
+        await finalizationStarted.promise;
+        expect(progress).toMatchObject({
+          done: false,
+          status: "running",
+          step: { type: "progress" },
+        });
+        for (const frame of [calls[0]?.payload, reviewStep, confirmation, progress]) {
+          expect(frame).not.toHaveProperty("activationRejection");
+          expect(frame).not.toHaveProperty("modelActivation");
+        }
+        expect(session.isSettled()).toBe(false);
+        const published = vi.fn();
+        const terminal = callWizardNext(context, { sessionId });
+        const observed = terminal.then(published, published);
+        try {
+          await Promise.resolve();
+          expect(published).not.toHaveBeenCalled();
+          expect(wizardSessions.has(sessionId)).toBe(true);
+        } finally {
+          finishFinalization.resolve();
+          await observed;
+        }
+        const done = await terminal;
+        expect(done).toEqual({
+          done: true,
+          status: "error",
+          error: "Error: Probe rejected [redacted]",
+          activationRejection: { disposition: "rejected-before-promotion", status },
+        });
+        expect(done).not.toHaveProperty("modelActivation");
+        expect(session.isSettled()).toBe(true);
+        expect(wizardSessions.has(sessionId)).toBe(false);
+      } finally {
+        finishFinalization.resolve();
+        session.cancel();
+        await whenAdmittedWizardSessionSettled(session);
+      }
+    },
+  );
+
+  it("returns finalized rejection instead of buffered progress on the first wizard.next", async () => {
+    const { wizardSessions, context } = makeContext();
+    const sessionId = "buffered-probe-rejection";
+    setupInferenceMocks.activateSetupInference.mockImplementationOnce(
+      async (params: ActivateSetupInferenceParams) => {
+        const progress = expectDefined(params.prompter, "activation prompter").progress(
+          "Testing your AI connection…",
+        );
+        progress.update("Finishing AI setup…");
+        progress.stop();
+        return {
+          ok: false,
+          status: "auth",
+          error: "Provider rejected sign-in",
+          disposition: "rejected-before-promotion",
+        };
+      },
+    );
+    await systemAgentHandler("openclaw.setup.activate.start")({
+      params: { sessionId, kind: "codex-cli", modelRef: "example/model" },
+      respond: () => undefined,
+      context,
+    } as never);
+    const session = expectDefined(wizardSessions.get(sessionId), "activation wizard session");
+    await whenAdmittedWizardSessionSettled(session);
+
+    const done = await callWizardNext(context, { sessionId });
+    expect(done).toEqual({
+      done: true,
+      status: "error",
+      error: "Error: Provider rejected sign-in",
+      activationRejection: { disposition: "rejected-before-promotion", status: "auth" },
+    });
+    expect(done).not.toHaveProperty("step");
+    expect(done).not.toHaveProperty("modelActivation");
+    expect(wizardSessions.has(sessionId)).toBe(false);
+  });
+
+  it.each([
+    "failed",
+    "rejected",
+    "persistence-unknown",
+    "thrown",
+    "retention-indeterminate",
+    "application-error",
+    "cancelled",
+  ] as const)(
+    "reports only proven rejection without verified activation for %s provider auth",
     async (outcome) => {
       const { wizardSessions, context } = makeContext();
       const sessionId = "unverified-auth";
-      setupInferenceMocks.activateSetupInference.mockImplementationOnce(async (params) => {
-        await params.prompter.confirm({ message: "Continue sign-in?" });
-        return { ok: false, status: "auth", error: "Provider rejected sign-in" };
-      });
+      setupInferenceMocks.activateSetupInference.mockImplementationOnce(
+        async (params: ActivateSetupInferenceParams) => {
+          await expectDefined(params.prompter, "auth prompter").confirm({
+            message: "Continue sign-in?",
+          });
+          if (outcome === "thrown") {
+            throw new Error("401 Provider rejected sign-in");
+          }
+          if (outcome === "retention-indeterminate") {
+            throw new SetupInferenceActivationIndeterminateError("Could not retain Codex safely");
+          }
+          if (outcome === "application-error") {
+            params.onCommitStarted?.(config);
+            const application = createRuntimeConfigWriteApplication();
+            expectDefined(application.claim(), "application claim").settle("failed");
+            params.onRuntimeApplication?.(application);
+            return { ok: true, modelRef: "example/model", latencyMs: 1, lines: [] };
+          }
+          return {
+            ok: false,
+            status: outcome === "persistence-unknown" ? "unknown" : "auth",
+            error: "Provider rejected sign-in",
+            ...(outcome === "rejected" ? { disposition: "rejected-before-promotion" } : {}),
+          };
+        },
+      );
       await systemAgentHandler("openclaw.setup.auth.start")({
         params: { sessionId, authChoice: "github-copilot" },
         respond: () => undefined,
@@ -401,6 +581,9 @@ describe("openclaw.setup provider resolution", () => {
           error: undefined,
         });
         await whenAdmittedWizardSessionSettled(session);
+        const cancelled = await session.next();
+        expect(cancelled).not.toHaveProperty("activationRejection");
+        expect(cancelled).not.toHaveProperty("modelActivation");
       } else {
         const done = await callWizardNext(context, {
           sessionId,
@@ -409,8 +592,23 @@ describe("openclaw.setup provider resolution", () => {
         expect(done).toEqual({
           done: true,
           status: "error",
-          error: "Error: Provider rejected sign-in",
+          error:
+            outcome === "application-error"
+              ? expect.stringContaining("AI access was saved, but the Gateway could not apply it")
+              : outcome === "retention-indeterminate"
+                ? "SetupInferenceActivationIndeterminateError: Could not retain Codex safely"
+                : outcome === "thrown"
+                  ? "Error: 401 Provider rejected sign-in"
+                  : "Error: Provider rejected sign-in",
+          ...(outcome === "rejected"
+            ? { activationRejection: { disposition: "rejected-before-promotion", status: "auth" } }
+            : {}),
         });
+        expect(done).not.toHaveProperty("modelActivation");
+        if (outcome !== "rejected") {
+          expect(done).not.toHaveProperty("activationRejection");
+        }
+        expect(session.isSettled()).toBe(true);
       }
       expect(wizardSessions.has(sessionId)).toBe(false);
     },

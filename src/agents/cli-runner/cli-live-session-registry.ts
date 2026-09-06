@@ -4,6 +4,7 @@ import type {
   CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
 } from "../../plugins/cli-backend.types.js";
+import { runCliCleanup } from "./cleanup.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError } from "./exit-error.js";
 import { buildCliLiveSessionFingerprint } from "./live-session-fingerprint.js";
@@ -23,6 +24,7 @@ type CliLiveSessionOwner = {
 
 type CliLiveSessionRecord = {
   handle: CliBackendLiveSessionHandle;
+  owner: PreparedCliRunContext["preparedBackend"];
   approvalGrants: Set<string>;
   cleanup?: () => Promise<void>;
   cleanupPromise?: Promise<void>;
@@ -34,6 +36,8 @@ type CliLiveSessionRecord = {
 };
 
 const liveSessions = new Map<string, CliLiveSessionRecord>();
+const retiredSessionCleanup = new Map<string, Promise<void>>();
+const retiringSessionHandles = new WeakSet<CliBackendLiveSessionHandle>();
 
 function buildCliLiveRegistryKey(owner: CliLiveSessionOwner): string {
   return `${owner.backendId}:${buildCliLiveOwnerKey(owner)}`;
@@ -85,14 +89,66 @@ export async function closeCliLiveSession(
   context: PreparedCliRunContext,
   reason: CliBackendLiveSessionCloseReason,
 ): Promise<void> {
-  const record = liveSessions.get(buildCliLiveSessionKey(context));
-  if (!record) {
-    return;
+  await runCliCleanup(context.params, "cli-live-session-close", async () => {
+    await context.preparedBackend.closeLiveSession?.(reason);
+  });
+}
+
+/** Explicit fresh/fork execution owns replacement of the current idle process. */
+export async function restartCliLiveSession(
+  context: PreparedCliRunContext,
+  signal = context.params.abortSignal,
+): Promise<void> {
+  const assertActive = createCliRunCurrentAssertion(context.params, signal);
+  assertActive();
+  const key = buildCliLiveSessionKey(context);
+  const record = liveSessions.get(key);
+  const pendingCleanup = retiredSessionCleanup.get(key);
+  await runCliCleanup(
+    context.params,
+    "cli-live-session-close",
+    async () => {
+      assertActive();
+      await context.preparedBackend.closeLiveSession?.("restart");
+      await pendingCleanup;
+    },
+    "required",
+  );
+  if (record) {
+    await runCliCleanup(
+      context.params,
+      "cli-live-session-restart",
+      () => {
+        // One-shot cleanup schedules this callback; fence the actual close.
+        assertActive();
+        return closeRecord(record, "restart");
+      },
+      "required",
+    );
   }
-  // close removes its registry record synchronously; retain the private record
-  // until its original child exits and process-owned artifacts finish cleanup.
-  record.handle.close(reason);
+  assertActive();
+}
+
+async function closeRecord(
+  record: CliLiveSessionRecord,
+  reason: CliBackendLiveSessionCloseReason,
+): Promise<void> {
+  if (!record.cleanupPromise) {
+    record.handle.close(reason);
+  }
   await (record.cleanupPromise ?? record.handle.waitForExit());
+}
+
+function retainCleanup(context: PreparedCliRunContext, record: CliLiveSessionRecord): void {
+  const owner = context.preparedBackend;
+  record.owner = owner;
+  owner.closeLiveSession = async (reason) => {
+    // Natural removal retains this exact cleanup promise. A later turn may
+    // borrow the live process, but the old turn cannot close that successor.
+    if (record.owner === owner || record.cleanupPromise) {
+      await closeRecord(record, reason);
+    }
+  };
 }
 
 function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {
@@ -127,6 +183,7 @@ export function acceptsCliLiveSession(context: PreparedCliRunContext): boolean {
 export function createCliLiveSessionCapability(params: {
   context: PreparedCliRunContext;
   argv: readonly string[];
+  argv0?: string;
   env: Record<string, string>;
   captureKey?: string;
   beginCapture: (captureKey: string | undefined) => void;
@@ -138,6 +195,7 @@ export function createCliLiveSessionCapability(params: {
   const fingerprint = buildCliLiveSessionFingerprint({
     context: params.context,
     argv: params.argv,
+    argv0: params.argv0,
     env: params.env,
   });
   const grant = params.context.preparedBackend.mcpClientGrantCapture;
@@ -187,6 +245,9 @@ export function createCliLiveSessionCapability(params: {
     },
     register: (handle) => {
       assertActive();
+      if (retiredSessionCleanup.has(ownerKey)) {
+        throw new Error("Previous CLI live session cleanup has not settled.");
+      }
       if (params.requiredGeneration) {
         throw requiredSessionError("cli_live_session_changed");
       }
@@ -195,6 +256,7 @@ export function createCliLiveSessionCapability(params: {
         !handle.generation.trim() ||
         liveSessions.has(ownerKey) ||
         // Owner keys stay private; one process handle must never cross owners.
+        retiringSessionHandles.has(handle) ||
         Array.from(liveSessions.values()).some((record) => record.handle === handle)
       ) {
         throw new Error("CLI live session registration does not match its admitted owner.");
@@ -203,6 +265,7 @@ export function createCliLiveSessionCapability(params: {
       const cleanup = params.claimResources?.();
       const record: CliLiveSessionRecord = {
         handle,
+        owner: params.context.preparedBackend,
         approvalGrants: new Set(),
         ...(cleanup ? { cleanup } : {}),
         ...(grant && params.captureKey
@@ -216,6 +279,7 @@ export function createCliLiveSessionCapability(params: {
           : {}),
       };
       liveSessions.set(ownerKey, record);
+      retainCleanup(params.context, record);
       cliBackendLog.info(
         `cli live session start: provider=${params.context.backendResolved.id} model=${params.context.normalizedModel} activeSessions=${liveSessions.size}`,
       );
@@ -232,6 +296,7 @@ export function createCliLiveSessionCapability(params: {
         requireRegisteredRecord(handle);
         params.beginCapture(record.capture.key);
       }
+      retainCleanup(params.context, record);
     },
     remove: (handle) => {
       const record = liveSessions.get(ownerKey);
@@ -241,13 +306,22 @@ export function createCliLiveSessionCapability(params: {
       record.capture?.revoke();
       liveSessions.delete(ownerKey);
       record.approvalGrants.clear();
-      if (record.cleanup) {
-        // Native runtime artifacts remain process-owned until its child exits.
-        record.cleanupPromise = handle.waitForExit().then(record.cleanup);
-        void record.cleanupPromise.catch((error: unknown) => {
-          cliBackendLog.warn(`cli live session cleanup failed: ${String(error)}`);
+      retiringSessionHandles.add(handle);
+      // Native runtime artifacts remain process-owned until its child exits.
+      record.cleanupPromise = Promise.resolve()
+        .then(() => handle.waitForExit())
+        .then(() => record.cleanup?.())
+        .then(() => {
+          retiringSessionHandles.delete(handle);
+          if (retiredSessionCleanup.get(ownerKey) === record.cleanupPromise) {
+            retiredSessionCleanup.delete(ownerKey);
+          }
         });
-      }
+      // A fresh prepared context must still join the retired owner after a timeout.
+      retiredSessionCleanup.set(ownerKey, record.cleanupPromise);
+      void record.cleanupPromise.catch((error: unknown) => {
+        cliBackendLog.warn(`cli live session cleanup failed: ${String(error)}`);
+      });
     },
   });
 }

@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -64,11 +66,12 @@ async function screenshot(page: Page, fileName: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(artifactDir, fileName),
-  });
+  await writeFile(
+    path.join(artifactDir, fileName),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+      page.getByRole("button", { name: "Full body", exact: true }),
+    ]),
+  );
 }
 
 describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", () => {
@@ -121,6 +124,7 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
         "skills.proposals.list": {
           proposals: [latest, previous],
           schema: "openclaw.skill-workshop.proposals-manifest.v1",
+          installedSkills: [],
           updatedAt: latest.updatedAt,
         },
       },
@@ -130,7 +134,7 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
       const response = await page.goto(`${server.baseUrl}skills/workshop`);
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("skills.proposals.list");
-      await page.locator("#skill-workshop-mode-tab-board").click();
+      await page.locator("#skill-workshop-mode-tab-history").click();
       await page.locator(".sw-lifecycle-tab", { hasText: "Applied" }).click();
 
       const changes = page.getByRole("button", { name: "Changes", exact: true });
@@ -194,6 +198,7 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
         "skills.proposals.list": {
           proposals: [latest, previous],
           schema: "openclaw.skill-workshop.proposals-manifest.v1",
+          installedSkills: [],
           updatedAt: latest.updatedAt,
         },
       },
@@ -203,7 +208,7 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
       const response = await page.goto(`${server.baseUrl}skills/workshop`);
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("skills.proposals.list");
-      await page.locator("#skill-workshop-mode-tab-board").click();
+      await page.locator("#skill-workshop-mode-tab-history").click();
       await page.locator(".sw-lifecycle-tab", { hasText: "Applied" }).click();
 
       const notice = page.locator(".sw-diff__notice");

@@ -141,6 +141,8 @@ describe("method scope resolution", () => {
     ["talk.session.steer", ["operator.talk"]],
     ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
+    ["update.runs.get", ["operator.admin"]],
+    ["update.runs.list", ["operator.admin"]],
     ["update.hold", ["operator.admin"]],
     ["secrets.store.list", ["operator.admin"]],
     ["secrets.store.set", ["operator.admin"]],

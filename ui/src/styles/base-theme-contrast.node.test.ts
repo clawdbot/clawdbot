@@ -13,9 +13,8 @@ const stylesDir = path.dirname(fileURLToPath(import.meta.url));
  * anyone noticing (issue #107299 measured `--muted` at 3.1–3.5:1 on dark
  * surfaces). Hex tokens are cheap to audit mechanically, so every
  * text-on-surface pairing a theme can produce is asserted here at >= 4.5:1
- * (AA, normal-size text). Non-hex values (rgba tints, color-mix) are skipped:
- * their contrast depends on a compositing surface and is audited in the
- * base.css comments instead.
+ * (AA, normal-size text). Text and surface tokens must resolve to opaque colors;
+ * translucent component paint is composited in the surface-specific cases below.
  */
 
 const TEXT_TOKENS = [
@@ -437,20 +436,14 @@ describe("Control UI theme contrast", () => {
     const failures: string[] = [];
     for (const [themeName, tokens] of themes) {
       for (const textToken of TEXT_TOKENS) {
-        const foreground = tokens.get(textToken);
-        if (!foreground?.startsWith("#")) {
-          continue;
-        }
+        const foreground = resolveOpaqueColor(`var(${textToken})`, tokens);
         for (const surfaceToken of SURFACE_TOKENS) {
-          const background = tokens.get(surfaceToken);
-          if (!background?.startsWith("#")) {
-            continue;
-          }
-          const ratio = contrastRatio(parseHex(foreground), parseHex(background));
+          const background = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
+          const ratio = contrastRatio(foreground, background);
           const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
           if (ratio < floor) {
             failures.push(
-              `${themeName}: ${textToken} ${foreground} on ${surfaceToken} ${background} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
+              `${themeName}: ${textToken} rgb(${foreground.join(", ")}) on ${surfaceToken} rgb(${background.join(", ")}) = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
             );
           }
         }

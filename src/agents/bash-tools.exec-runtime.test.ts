@@ -16,6 +16,7 @@ import {
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import {
   getFinishedSession,
   acknowledgeNotifyOnExit,
@@ -83,14 +84,16 @@ afterEach(() => {
 
 async function runExecWithExit(params: {
   exit: RunExit;
-  stdout?: string;
+  stdout?: string | string[];
   timeoutSec?: number | null;
   usePty?: boolean;
 }) {
   supervisorMock.spawn.mockImplementationOnce(
     async (input: { onStdout?: (chunk: string) => void }) => {
       if (params.stdout) {
-        input.onStdout?.(params.stdout);
+        for (const chunk of typeof params.stdout === "string" ? [params.stdout] : params.stdout) {
+          input.onStdout?.(chunk);
+        }
       }
       return {
         runId: "run-exit",
@@ -176,6 +179,9 @@ function requireSystemEventCall(): [string, Record<string, unknown>] {
 describe("runExecProcess cursor tracking", () => {
   it.each([
     { raw: "hello world", expected: "unknown" },
+    { raw: ["\x1b[?1l\x1b", "[?1", "h"], expected: "application" },
+    { raw: ["\x1b[?1h\x1b[?", "1", "l"], expected: "normal" },
+    { raw: ["\x1b]0;\x1b[?1h", "\x07"], expected: "unknown" },
     { raw: "\x1b[?1h", expected: "application" },
     { raw: "\x1b[?1h\x1b[?1l", expected: "normal" },
     { raw: "\x1b[?1l\x1b[?1h", expected: "application" },
@@ -200,6 +206,51 @@ describe("runExecProcess cursor tracking", () => {
 });
 
 describe("sandbox exec preparation failures", () => {
+  it.each(["preparation", "supervisor"] as const)(
+    "rechecks the admitting repair authority after deferred %s work",
+    async (boundary) => {
+      let current = true;
+      const controller = new AbortController();
+      const budget = createAgentToolExecutionBudget({
+        signal: controller.signal,
+        abort: (error) => controller.abort(error),
+        isCurrent: () => current,
+      });
+      const childEffect = vi.fn();
+      supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
+        await Promise.resolve();
+        current = false;
+        input.assertCurrent?.();
+        childEffect();
+        return runtimeManagedRun(input);
+      });
+      await expect(
+        budget.run(() =>
+          runExecProcess({
+            command: "echo forbidden",
+            workdir: "/tmp",
+            env: {},
+            usePty: false,
+            warnings: [],
+            maxOutput: 1000,
+            pendingMaxOutput: 1000,
+            notifyOnExit: false,
+            timeoutSec: null,
+            beforeSpawn: async () => {
+              await Promise.resolve();
+              if (boundary === "preparation") {
+                current = false;
+              }
+              return undefined;
+            },
+          }),
+        ),
+      ).rejects.toThrow("execution scope is no longer active");
+      expect(childEffect).not.toHaveBeenCalled();
+      expect(supervisorMock.spawn).toHaveBeenCalledTimes(boundary === "preparation" ? 0 : 1);
+    },
+  );
+
   it.each([
     { mode: "child", usePty: false, cancelCheck: 1, expectedSpawns: 0 },
     { mode: "PTY", usePty: true, cancelCheck: 1, expectedSpawns: 0 },
@@ -239,6 +290,77 @@ describe("sandbox exec preparation failures", () => {
 
       expect(supervisorMock.spawn.mock.calls.length).toBe(expectedSpawns);
       expect(checks).toBe(cancelCheck);
+    },
+  );
+
+  it.each([
+    { mode: "child", usePty: false, loseAt: 1, authority: "revoked", spawns: 0 },
+    { mode: "PTY", usePty: true, loseAt: 1, authority: "replaced", spawns: 0 },
+    { mode: "PTY fallback", usePty: true, loseAt: 2, authority: "revoked", spawns: 1 },
+    { mode: "child construction", usePty: false, loseAt: -1, authority: "revoked", spawns: 1 },
+    { mode: "PTY construction", usePty: true, loseAt: -1, authority: "revoked", spawns: 1 },
+    { mode: "child control", usePty: false, loseAt: 0, authority: "active", spawns: 1 },
+    { mode: "PTY fallback control", usePty: true, loseAt: 0, authority: "active", spawns: 2 },
+  ])(
+    "checks $authority source authority before $mode admission without polling",
+    async ({ usePty, loseAt, authority, spawns }) => {
+      const originalClaim = {};
+      let currentClaim: object | undefined = originalClaim;
+      let checks = 0;
+      const generation = new AbortController();
+      const warnings: string[] = [];
+      supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
+        // The real supervisor preserves this callback across queued construction.
+        await Promise.resolve();
+        if (loseAt === -1) {
+          currentClaim = undefined;
+        }
+        input.assertCurrent?.();
+        if (input.mode === "pty") {
+          throw new Error("PTY unavailable");
+        }
+        return runtimeManagedRun(input);
+      });
+      const pending = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:source-exec-authority",
+          receiptAuthority: () => currentClaim === originalClaim,
+        },
+        () =>
+          runExecProcess({
+            command: "source-authority-command",
+            workdir: process.cwd(),
+            env: {},
+            usePty,
+            warnings,
+            maxOutput: 1000,
+            pendingMaxOutput: 1000,
+            notifyOnExit: false,
+            timeoutSec: null,
+            startupSignal: generation.signal,
+            beforeSpawn: async () => {
+              if (++checks === loseAt) {
+                currentClaim = authority === "replaced" ? {} : undefined;
+              }
+              return undefined;
+            },
+          }),
+      );
+      if (authority === "active") {
+        const handle = await pending;
+        await expect(handle.promise).resolves.toMatchObject({ status: "completed" });
+      } else {
+        await expect(pending).rejects.toThrow("authority is no longer active");
+      }
+      expect(generation.signal.aborted).toBe(false);
+      expect(supervisorMock.spawn).toHaveBeenCalledTimes(spawns);
+      expect(warnings).toEqual(
+        usePty && loseAt !== -1 && spawns > 0
+          ? [expect.stringContaining("retrying without PTY")]
+          : [],
+      );
+      expect(listRunningSessions()).toHaveLength(0);
     },
   );
 

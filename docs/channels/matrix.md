@@ -578,6 +578,8 @@ Explicit conversation bindings always win over `sessionScope`; bound rooms and t
 
 `dm.threadReplies` overrides this for DMs only - for example, keep room threads isolated while keeping DMs flat.
 
+Selecting a reply target inside a thread preserves both the thread and the selected message. Ordinary threaded messages can carry reply metadata for older clients; OpenClaw does not treat that compatibility fallback as a quoted message in the agent's context.
+
 ### Thread inheritance and slash commands
 
 - Inbound threaded messages include the thread root message as extra agent context.

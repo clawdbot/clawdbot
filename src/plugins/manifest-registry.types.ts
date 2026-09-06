@@ -37,6 +37,7 @@ import type {
 } from "./package-manifest.types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginTrust } from "./plugin-trust.js";
 import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 export type PluginManifestContractListKey =
@@ -83,6 +84,8 @@ export type PluginManifestRecord = {
   channels: string[];
   providers: string[];
   providerDiscoverySource?: string;
+  /** Undefined is undeclared; null retains a rejected declaration without enabling full-entry fallback. */
+  capabilityCatalogSource?: string | null;
   modelSupport?: PluginManifestModelSupport;
   modelCatalog?: PluginManifestModelCatalog;
   modelPricing?: PluginManifestModelPricing;
@@ -109,6 +112,7 @@ export type PluginManifestRecord = {
   packageChannel?: PluginPackageChannel;
   packageInstall?: PluginPackageInstall;
   trustedOfficialInstall?: boolean;
+  trust?: PluginTrust;
   qaRunners?: PluginManifestQaRunner[];
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
@@ -126,6 +130,7 @@ export type PluginManifestRecord = {
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
   contracts?: PluginManifestContracts;
+  transcriptSources?: PluginManifest["transcriptSources"];
   mediaUnderstandingProviderMetadata?: Record<
     string,
     PluginManifestMediaUnderstandingProviderMetadata

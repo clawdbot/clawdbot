@@ -81,6 +81,27 @@ Do not write `type: "aws-sdk"` into the credential store; stored credentials are
 - A stored profile for that provider that is omitted from the explicit order is not silently tried later. Probe output reports it with `reasonCode: excluded_by_auth_order` and the detail `Excluded by auth.order for this provider.`
 - A valid session user pin is an explicit per-session exception: OpenClaw tries that profile first even when it is omitted from the provider order, then uses the ordered same-provider profiles as retry candidates. A cooldown or disabled window applies only to the affected profile; it does not suppress its eligible siblings.
 
+Prepared agent requests use their selected plugin metadata, configuration, workspace, and environment for auth profile eligibility, ordering, and environment credential evidence. An empty selected plugin set remains authoritative; another request’s plugin aliases cannot add profiles or change the credential owner.
+
+## Model catalog discovery
+
+Stored-profile selection for model discovery follows the canonical auth order and
+eligibility rules. A cooldown limited to one model does not suppress account-wide
+catalog discovery. Configured subscription modes remain attached to direct
+credentials, and successful OAuth preparation supplies the resolved current token
+to its catalog consumer rather than the captured store's older token.
+
+When every eligible OAuth candidate fails preparation, discovery reports
+`unavailable` with the attempted profile identities instead of treating the
+provider as unconfigured. Compatible prior inventory remains available. A usable
+fallback credential still supplies its own catalog result.
+
+API-key-oriented and full-auth catalog callbacks retain their existing source
+priorities. Plugins must keep credential bytes and their authentication mode from
+the same selection. Catalog failure and recovery preserve the
+[model inventory contract](/concepts/models#selection-source-and-fallback-strictness);
+they do not change message-execution profile rotation or session pins.
+
 ## Probe target resolution
 
 - Probe targets can come from auth profiles, environment credentials, or `models.json` (result `source`: `profile`, `env`, `models.json`).

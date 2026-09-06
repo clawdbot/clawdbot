@@ -32,7 +32,7 @@ import {
   CodeModeHeadlessTimeoutError,
 } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { optionalStringEnum } from "./schema/typebox.js";
+import { executionTitleSchema, optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import {
@@ -192,6 +192,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     label: "exec",
     description: createCodeModeExecDescription(ctx, undefined, config),
     parameters: Type.Object({
+      title: executionTitleSchema(),
       // `command` stays runtime-only for hook compatibility. Requiring the sole
       // model-facing field prevents schema-valid empty calls from constrained models.
       code: Type.String({

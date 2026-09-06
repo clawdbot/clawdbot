@@ -118,14 +118,27 @@ describe("harness runtime plugins", () => {
     expect(pluginRegistry.agentHarnesses).toHaveLength(1);
   });
 
-  it("carries the missing Codex owner reason and remediation into the turn guard", async () => {
+  it.each([
+    { name: "runtime override", selection: { agentHarnessRuntimeOverride: "codex" } },
+    { name: "session pin", selection: { agentHarnessId: "codex" } },
+    {
+      name: "model policy",
+      selection: {
+        config: {
+          agents: {
+            defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+          },
+        },
+      },
+    },
+  ])("keeps a missing explicit Codex $name fatal with remediation", async ({ selection }) => {
     const pluginRegistry = createEmptyPluginRegistry();
     attachPreparedPluginFacts(pluginRegistry, {}, makeRegistry([]));
 
     const error = await ensureSelectedAgentHarnessPlugin({
       provider: "openai",
       modelId: "gpt-5.5",
-      agentHarnessRuntimeOverride: "codex",
+      ...selection,
       workspaceDir: "/tmp/workspace",
       pluginRegistry,
     }).catch((cause: unknown) => cause);

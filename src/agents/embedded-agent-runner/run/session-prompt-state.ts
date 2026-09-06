@@ -16,8 +16,8 @@ import {
   prepareInitialSessionWriter,
 } from "./session-bootstrap.js";
 
-const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
-  "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
+const CONTINUATION_PROMPT =
+  "Continue the current task from the existing transcript, preserving completed work. If an action was interrupted, inspect its state before deciding whether to retry it. Do not restart the task or repeat completed actions.";
 
 type ActivePrompt = {
   override?: string;
@@ -231,8 +231,8 @@ export function createEmbeddedRunSessionPromptState(input: {
     },
     continueFromCurrentTranscript: (options?: { includeToolFailureInstruction?: boolean }) => {
       const prompt = options?.includeToolFailureInstruction
-        ? `${MID_TURN_PRECHECK_CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
-        : MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+        ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
+        : CONTINUATION_PROMPT;
       activateInternalPrompt(prompt);
     },
     onUserMessagePersisted,
@@ -244,7 +244,7 @@ export function createEmbeddedRunSessionPromptState(input: {
       if (activePrompt.internal) {
         suppressNextUserMessagePersistence = activePrompt.persisted;
       } else if (activePrompt.persisted) {
-        activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT);
+        activateInternalPrompt(CONTINUATION_PROMPT);
       }
     },
   };

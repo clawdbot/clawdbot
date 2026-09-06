@@ -1820,6 +1820,14 @@
     "target": "llama-server"
   },
   {
+    "source": "llmman",
+    "target": "llmman"
+  },
+  {
+    "source": "llmman (local models)",
+    "target": "llmman（本地模型）"
+  },
+  {
     "source": "llama.cpp (managed or existing server)",
     "target": "llama.cpp（托管或现有服务器）"
   },

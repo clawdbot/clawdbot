@@ -6,24 +6,172 @@ import Testing
 @testable import OpenClawChatUI
 
 struct IOSGatewayChatTransportTests {
-    private actor RequestRecorder {
-        private var requests: [OpenClawChatGatewayRequest] = []
+    private actor ProgressRequestRecorder {
+        var params: [Data] = []
 
-        func record(_ request: OpenClawChatGatewayRequest) -> Data {
-            self.requests.append(request)
-            if request.method == "sessions.create" {
-                return Data(#"{"key":"forked"}"#.utf8)
+        func append(_ data: Data) {
+            self.params.append(data)
+        }
+
+        func snapshot() -> [Data] {
+            self.params
+        }
+    }
+
+    @Test(arguments: [false, true, nil] as [Bool?])
+    func `progress requests negotiate owner scope on the connected server`(supportsOwner: Bool?) async throws {
+        let recorder = ProgressRequestRecorder()
+        let socketSession = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                let data: Data = switch message {
+                case let .data(value): value
+                case let .string(value): Data(value.utf8)
+                @unknown default: throw URLError(.cannotParseResponse)
+                }
+                let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                let id = try #require(frame["id"] as? String)
+                var payload = "{}"
+                if frame["method"] as? String == "progressCard.get" {
+                    let params = try #require(frame["params"] as? [String: Any])
+                    try await recorder.append(JSONSerialization.data(withJSONObject: params))
+                    // A released server's closed schema rejects the extra owner field.
+                    #expect(supportsOwner == true || params["agentId"] == nil)
+                    let owner = params["agentId"] as? String ??
+                        OpenClawChatSessionKey.agentID(from: params["sessionKey"] as? String) ?? "main"
+                    payload = #"{"card":{"sessionKey":"agent:\#(owner):global","revision":1,"updatedAt":10,"markdown":"\#(owner)","steps":[]}}"#
+                }
+                socket
+                    .emitReceiveSuccess(.data(Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#
+                            .utf8)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                let hello = GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect",
+                    methods: ["progressCard.get"],
+                    capabilities: supportsOwner == true ? ["progress-card-agent-scope-v1"] : [])
+                guard supportsOwner == nil else { return .data(hello) }
+                var frame = try #require(JSONSerialization.jsonObject(with: hello) as? [String: Any])
+                var payload = try #require(frame["payload"] as? [String: Any])
+                var features = try #require(payload["features"] as? [String: Any])
+                features.removeValue(forKey: "capabilities")
+                payload["features"] = features
+                frame["payload"] = payload
+                return try .data(JSONSerialization.data(withJSONObject: frame))
+            })
+        })
+        let gateway = GatewayNodeSession()
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://progress-transport-test.invalid")),
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: socketSession),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            let transport = IOSGatewayChatTransport(gateway: gateway, globalAgentId: "main")
+            let ordinary = try await transport.fetchProgressCard(
+                sessionKey: "agent:research:global",
+                agentID: "research")
+            #expect(ordinary?.markdown == "research")
+            if supportsOwner == true {
+                let global = try await transport.fetchProgressCard(sessionKey: "global", agentID: "research")
+                #expect(global?.markdown == "research")
+            } else {
+                do {
+                    _ = try await transport.fetchProgressCard(sessionKey: "global", agentID: "research")
+                    Issue.record("Unadvertised owner-scoped progress must not dispatch")
+                } catch let error as NSError {
+                    #expect(error.localizedDescription == OpenClawChatTransportUpgradeMessage.progressCardAgentScope)
+                }
             }
-            return Data(#"{"entry":{}}"#.utf8)
+            let params = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: String])
+            }
+            #expect(params == (supportsOwner == true ? [
+                ["sessionKey": "agent:research:global"],
+                ["sessionKey": "global", "agentId": "research"],
+            ] : [["sessionKey": "agent:research:global"]]))
+            await gateway.disconnect()
+        } catch {
+            await gateway.disconnect()
+            throw error
         }
+    }
 
-        func record(_ request: OpenClawChatGatewayRequest, response: Data) -> Data {
+    private struct RecordedRequest: Decodable, Sendable {
+        let id: String
+        let method: String
+        let params: [String: AnyCodable]
+    }
+
+    private actor RequestRecorder {
+        private var requests: [RecordedRequest] = []
+
+        func record(_ data: Data) throws -> RecordedRequest {
+            let request = try JSONDecoder().decode(RecordedRequest.self, from: data)
             self.requests.append(request)
-            return response
+            return request
         }
 
-        func all() -> [OpenClawChatGatewayRequest] {
+        func all() -> [RecordedRequest] {
             self.requests
+        }
+    }
+
+    private func withSessionTransport(
+        unreadAckAdvertisement: Bool? = true,
+        _ run: (IOSGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
+    {
+        let recorder = RequestRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                let data: Data = switch message {
+                case let .data(value): value
+                case let .string(value): Data(value.utf8)
+                @unknown default: throw URLError(.cannotParseResponse)
+                }
+                let request = try await recorder.record(data)
+                let payload = request.method == "sessions.create" ? #"{"key":"forked"}"# : #"{"entry":{}}"#
+                socket.emitReceiveSuccess(.data(Data(
+                    #"{"type":"res","id":"\#(request.id)","ok":true,"payload":\#(payload)}"#.utf8)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                let hello = GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect",
+                    methods: ["sessions.patch", "sessions.delete", "sessions.create"],
+                    capabilities: unreadAckAdvertisement == true ? ["session-unread-ack-contract"] : [])
+                guard unreadAckAdvertisement == nil else { return .data(hello) }
+                var frame = try #require(JSONSerialization.jsonObject(with: hello) as? [String: Any])
+                var payload = try #require(frame["payload"] as? [String: Any])
+                var features = try #require(payload["features"] as? [String: Any])
+                features.removeValue(forKey: "capabilities")
+                payload["features"] = features
+                frame["payload"] = payload
+                return try .data(JSONSerialization.data(withJSONObject: frame))
+            })
+        })
+        let gateway = GatewayNodeSession()
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://session-transport-test.invalid")),
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            try await run(IOSGatewayChatTransport(gateway: gateway, globalAgentId: " Reviewer "), recorder)
+            await gateway.disconnect()
+        } catch {
+            await gateway.disconnect()
+            throw error
         }
     }
 
@@ -249,176 +397,186 @@ struct IOSGatewayChatTransportTests {
     }
 
     @Test func `session mutations dispatch normalized selected agent targets`() async throws {
-        let recorder = RequestRecorder()
-        let transport = IOSGatewayChatTransport(
-            gateway: GatewayNodeSession(),
-            globalAgentId: " Reviewer ",
-            sessionMutationRequest: { request in
-                await recorder.record(request)
-            })
+        try await self.withSessionTransport { transport, recorder in
+            for key in ["Matrix:Channel:Room", "global", "agent:ops:main"] {
+                try await transport.patchSession(key: key, pinned: true)
+                try await transport.deleteSession(key: key)
+                _ = try await transport.forkSession(parentKey: key, fromLastCompleted: false)
+            }
 
-        for key in ["Matrix:Channel:Room", "global", "agent:ops:main"] {
-            try await transport.patchSession(key: key, pinned: true)
-            try await transport.deleteSession(key: key)
-            _ = try await transport.forkSession(parentKey: key, fromLastCompleted: false)
-        }
+            let requests = await recorder.all()
+            #expect(requests.map(\.method) == Array(
+                repeating: ["sessions.patch", "sessions.delete", "sessions.create"],
+                count: 3).flatMap(\.self))
 
-        let requests = await recorder.all()
-        #expect(requests.map(\.method) == Array(
-            repeating: ["sessions.patch", "sessions.delete", "sessions.create"],
-            count: 3).flatMap(\.self))
-        #expect(requests.map(\.timeoutMs) == Array(
-            repeating: [15000, 600_000, 15000],
-            count: 3).flatMap(\.self))
+            for (offset, expectedKey, expectedMutationAgentID, expectedForkAgentID) in [
+                (0, "agent:reviewer:Matrix:Channel:Room", nil, "reviewer"),
+                (3, "global", "reviewer", "reviewer"),
+                (6, "agent:ops:main", nil, "ops"),
+            ] as [(Int, String, String?, String?)] {
+                let patch = requests[offset].params
+                #expect(patch["key"]?.value as? String == expectedKey)
+                #expect(patch["agentId"]?.value as? String == expectedMutationAgentID)
+                #expect(patch["pinned"]?.value as? Bool == true)
 
-        for (offset, expectedKey, expectedMutationAgentID, expectedForkAgentID) in [
-            (0, "agent:reviewer:Matrix:Channel:Room", nil, "reviewer"),
-            (3, "global", "reviewer", "reviewer"),
-            (6, "agent:ops:main", nil, "ops"),
-        ] as [(Int, String, String?, String?)] {
-            let patch = requests[offset].params
-            #expect(patch["key"]?.value as? String == expectedKey)
-            #expect(patch["agentId"]?.value as? String == expectedMutationAgentID)
-            #expect(patch["pinned"]?.value as? Bool == true)
+                let delete = requests[offset + 1].params
+                #expect(delete["key"]?.value as? String == expectedKey)
+                #expect(delete["agentId"]?.value as? String == expectedMutationAgentID)
+                #expect(delete["deleteTranscript"]?.value as? Bool == true)
 
-            let delete = requests[offset + 1].params
-            #expect(delete["key"]?.value as? String == expectedKey)
-            #expect(delete["agentId"]?.value as? String == expectedMutationAgentID)
-            #expect(delete["deleteTranscript"]?.value as? Bool == true)
-
-            let fork = requests[offset + 2].params
-            #expect(fork["parentSessionKey"]?.value as? String == expectedKey)
-            #expect(fork["agentId"]?.value as? String == expectedForkAgentID)
-            #expect(fork["fork"]?.value as? Bool == true)
+                let fork = requests[offset + 2].params
+                #expect(fork["parentSessionKey"]?.value as? String == expectedKey)
+                #expect(fork["agentId"]?.value as? String == expectedForkAgentID)
+                #expect(fork["fork"]?.value as? Bool == true)
+            }
         }
     }
 
     @Test func `archive and restore carry the observed session identity`() async throws {
-        let recorder = RequestRecorder()
-        let transport = IOSGatewayChatTransport(
-            gateway: GatewayNodeSession(),
-            globalAgentId: " Reviewer ",
-            sessionMutationRequest: { request in
-                await recorder.record(request)
-            })
+        try await self.withSessionTransport { transport, recorder in
+            try await transport.patchSession(
+                key: "global",
+                expectedSessionID: " session-a ",
+                archived: true)
+            try await transport.patchSession(
+                key: "global",
+                expectedSessionID: "session-a",
+                archived: false)
 
-        try await transport.patchSession(
-            key: "global",
-            expectedSessionID: " session-a ",
-            archived: true)
-        try await transport.patchSession(
-            key: "global",
-            expectedSessionID: "session-a",
-            archived: false)
-
-        let requests = await recorder.all()
-        #expect(requests.map(\.method) == ["sessions.patch", "sessions.patch"])
-        #expect(requests.map(\.timeoutMs) == [600_000, 15000])
-        #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
-        #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
-        #expect(requests.allSatisfy { $0.params["expectedSessionId"]?.value as? String == "session-a" })
-        #expect(requests[0].params["archived"]?.value as? Bool == true)
-        #expect(requests[1].params["archived"]?.value as? Bool == false)
+            let requests = await recorder.all()
+            #expect(requests.map(\.method) == ["sessions.patch", "sessions.patch"])
+            #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
+            #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
+            #expect(requests.allSatisfy { $0.params["expectedSessionId"]?.value as? String == "session-a" })
+            #expect(requests[0].params["archived"]?.value as? Bool == true)
+            #expect(requests[1].params["archived"]?.value as? Bool == false)
+        }
     }
 
     @Test func `thinking changes dispatch through selected agent session target`() async throws {
-        let recorder = RequestRecorder()
-        let transport = IOSGatewayChatTransport(
-            gateway: GatewayNodeSession(),
-            globalAgentId: " Reviewer ",
-            sessionMutationRequest: { request in
-                await recorder.record(request)
-            })
+        try await self.withSessionTransport { transport, recorder in
+            try await transport.setSessionThinking(sessionKey: "global", thinkingLevel: "high")
 
-        try await transport.setSessionThinking(sessionKey: "global", thinkingLevel: "high")
-
-        let request = try #require(await recorder.all().first)
-        #expect(request.method == "sessions.patch")
-        #expect(request.params["key"]?.value as? String == "global")
-        #expect(request.params["agentId"]?.value as? String == "reviewer")
-        #expect(request.params["thinkingLevel"]?.value as? String == "high")
+            let request = try #require(await recorder.all().first)
+            #expect(request.method == "sessions.patch")
+            #expect(request.params["key"]?.value as? String == "global")
+            #expect(request.params["agentId"]?.value as? String == "reviewer")
+            #expect(request.params["thinkingLevel"]?.value as? String == "high")
+        }
     }
 
     @Test func `advanced session creation forwards agent worktree and base ref`() async throws {
-        let recorder = RequestRecorder()
-        let transport = IOSGatewayChatTransport(
-            gateway: GatewayNodeSession(),
-            globalAgentId: " Reviewer ",
-            sessionMutationRequest: { request in
-                await recorder.record(request)
-            })
+        try await self.withSessionTransport { transport, recorder in
+            let created = try await transport.createSession(
+                key: "agent:builder:ios-new",
+                label: "Build",
+                agentID: " Builder ",
+                parentSessionKey: "agent:builder:main",
+                worktree: true,
+                worktreeBaseRef: " origin/release ")
 
-        let created = try await transport.createSession(
-            key: "agent:builder:ios-new",
-            label: "Build",
-            agentID: " Builder ",
-            parentSessionKey: "agent:builder:main",
-            worktree: true,
-            worktreeBaseRef: " origin/release ")
-
-        #expect(created.key == "forked")
-        let request = try #require(await recorder.all().first)
-        #expect(request.method == "sessions.create")
-        #expect(request.params["key"]?.value as? String == "agent:builder:ios-new")
-        #expect(request.params["label"]?.value as? String == "Build")
-        #expect(request.params["agentId"]?.value as? String == "builder")
-        #expect(request.params["parentSessionKey"]?.value as? String == "agent:builder:main")
-        #expect(request.params["worktree"]?.value as? Bool == true)
-        #expect(request.params["worktreeBaseRef"]?.value as? String == "origin/release")
+            #expect(created.key == "forked")
+            let request = try #require(await recorder.all().first)
+            #expect(request.method == "sessions.create")
+            #expect(request.params["key"]?.value as? String == "agent:builder:ios-new")
+            #expect(request.params["label"]?.value as? String == "Build")
+            #expect(request.params["agentId"]?.value as? String == "builder")
+            #expect(request.params["parentSessionKey"]?.value as? String == "agent:builder:main")
+            #expect(request.params["worktree"]?.value as? Bool == true)
+            #expect(request.params["worktreeBaseRef"]?.value as? String == "origin/release")
+        }
     }
 
     @Test func `verbosity patches preserve set and clear values`() async throws {
-        let recorder = RequestRecorder()
-        let transport = IOSGatewayChatTransport(
-            gateway: GatewayNodeSession(),
-            globalAgentId: " Reviewer ",
-            sessionMutationRequest: { request in
-                await recorder.record(request)
-            })
+        try await self.withSessionTransport { transport, recorder in
+            _ = try await transport.patchSessionSettings(
+                sessionKey: "global",
+                agentID: nil,
+                patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some("full")))
+            _ = try await transport.patchSessionSettings(
+                sessionKey: "global",
+                agentID: nil,
+                patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some(nil)))
 
-        _ = try await transport.patchSessionSettings(
-            sessionKey: "global",
-            agentID: nil,
-            patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some("full")))
-        _ = try await transport.patchSessionSettings(
-            sessionKey: "global",
-            agentID: nil,
-            patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some(nil)))
-
-        let requests = await recorder.all()
-        #expect(requests.count == 2)
-        #expect(requests.allSatisfy { $0.method == "sessions.patch" })
-        #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
-        #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
-        #expect(requests[0].params["verboseLevel"]?.value as? String == "full")
-        #expect(requests[1].params["verboseLevel"]?.value is NSNull)
-        #expect(requests.allSatisfy { $0.params["model"] == nil })
-        #expect(requests.allSatisfy { $0.params["thinkingLevel"] == nil })
+            let requests = await recorder.all()
+            #expect(requests.count == 2)
+            #expect(requests.allSatisfy { $0.method == "sessions.patch" })
+            #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
+            #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
+            #expect(requests[0].params["verboseLevel"]?.value as? String == "full")
+            #expect(requests[1].params["verboseLevel"]?.value is NSNull)
+            #expect(requests.allSatisfy { $0.params["model"] == nil })
+            #expect(requests.allSatisfy { $0.params["thinkingLevel"] == nil })
+        }
     }
 
     @Test func `fast mode patches preserve boolean and explicit null`() async throws {
-        let recorder = RequestRecorder()
-        let transport = IOSGatewayChatTransport(
-            gateway: GatewayNodeSession(),
-            globalAgentId: " Reviewer ",
-            sessionMutationRequest: { request in
-                await recorder.record(request)
-            })
+        try await self.withSessionTransport { transport, recorder in
+            _ = try await transport.patchSessionSettings(
+                sessionKey: "global",
+                agentID: nil,
+                patch: OpenClawChatSessionSettingsPatch(fastMode: .some(.on)))
+            _ = try await transport.patchSessionSettings(
+                sessionKey: "global",
+                agentID: nil,
+                patch: OpenClawChatSessionSettingsPatch(fastMode: .some(nil)))
 
-        _ = try await transport.patchSessionSettings(
-            sessionKey: "global",
-            agentID: nil,
-            patch: OpenClawChatSessionSettingsPatch(fastMode: .some(.on)))
-        _ = try await transport.patchSessionSettings(
-            sessionKey: "global",
-            agentID: nil,
-            patch: OpenClawChatSessionSettingsPatch(fastMode: .some(nil)))
+            let requests = await recorder.all()
+            #expect(requests.count == 2)
+            #expect(requests[0].params["fastMode"]?.value as? Bool == true)
+            #expect(requests[1].params["fastMode"]?.value is NSNull)
+            #expect(requests.allSatisfy { $0.params["verboseLevel"] == nil })
+        }
+    }
 
-        let requests = await recorder.all()
-        #expect(requests.count == 2)
-        #expect(requests[0].params["fastMode"]?.value as? Bool == true)
-        #expect(requests[1].params["fastMode"]?.value is NSNull)
-        #expect(requests.allSatisfy { $0.params["verboseLevel"] == nil })
+    @Test(arguments: [true, false, nil] as [Bool?])
+    func `session mutation leases preserve advertised and omitted read capabilities`(
+        unreadAckAdvertisement: Bool?) async throws
+    {
+        try await self.withSessionTransport(unreadAckAdvertisement: unreadAckAdvertisement) { transport, recorder in
+            let lease = try #require(await transport.acquireSessionMutationRouteLease())
+            try await lease.patchSession(
+                key: "global",
+                label: nil,
+                category: nil,
+                pinned: true,
+                archived: nil,
+                unread: nil)
+            try await lease.patchSession(
+                key: "global",
+                label: nil,
+                category: nil,
+                pinned: nil,
+                archived: nil,
+                unread: true)
+            for marker in [nil, .some(nil), .some(1234.5)] as [Double??] {
+                try await lease.patchSession(
+                    key: "global",
+                    expectedMarkedUnreadAt: marker,
+                    label: nil,
+                    category: nil,
+                    pinned: nil,
+                    archived: nil,
+                    unread: false)
+            }
+
+            let requests = await recorder.all()
+            try #require(requests.count == 5)
+            #expect(requests.allSatisfy { $0.method == "sessions.patch" })
+            #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
+            #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
+            #expect(requests[0].params["pinned"]?.value as? Bool == true)
+            #expect(requests[0].params["unread"] == nil)
+            #expect(requests[1].params["unread"]?.value as? Bool == true)
+            if unreadAckAdvertisement == true {
+                #expect(requests[2].params["expectedMarkedUnreadAt"] == nil)
+                #expect(requests[3].params["expectedMarkedUnreadAt"]?.value is NSNull)
+                #expect(requests[4].params["expectedMarkedUnreadAt"]?.value as? Double == 1234.5)
+            } else {
+                #expect(requests.allSatisfy { $0.params["expectedMarkedUnreadAt"] == nil })
+            }
+            #expect(requests.dropFirst(2).allSatisfy { $0.params["unread"]?.value as? Bool == false })
+        }
     }
 
     @Test func `requests fail fast when gateway not connected`() async {

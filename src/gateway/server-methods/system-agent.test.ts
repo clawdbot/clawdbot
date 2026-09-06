@@ -13,6 +13,7 @@ import {
 import { createRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -573,7 +574,6 @@ describe("openclaw.chat", () => {
       verifiedInference: requireVerifiedInferenceFixture(),
       deps: requireVerifiedInferenceDeps(),
       runAgentTurn: async () => ({ text: "Everything is healthy." }),
-      planWithAssistant: async () => null,
     });
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
 
@@ -626,7 +626,6 @@ describe("openclaw.chat", () => {
         verifiedInference: requireVerifiedInferenceFixture(),
         deps: requireVerifiedInferenceDeps(),
         runAgentTurn: async () => null,
-        planWithAssistant: async () => null,
       },
       { wizardDependencies: { runChannelSetupWizard: runSensitiveChannelSetup } },
     );
@@ -675,9 +674,10 @@ describe("openclaw.chat", () => {
     const engine = new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
       runAgentTurn: async () => {
-        throw new Error("workspace owner openclaw is missing from the roster");
+        throw new SystemAgentInferenceUnavailableError("agent-turn", [
+          new Error("workspace owner openclaw is missing from the roster"),
+        ]);
       },
-      planWithAssistant: async () => null,
       deps: requireVerifiedInferenceDeps(),
     });
     const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();

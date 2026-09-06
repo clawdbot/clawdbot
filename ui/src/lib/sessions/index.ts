@@ -16,6 +16,7 @@ import {
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
+import { createSessionGitHubPublication } from "./session-github-publication.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import {
   isUiGlobalSessionKey,
@@ -102,6 +103,11 @@ export function createSessionCapability(
     sectionOrder: [],
   };
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
+  const githubPublication = createSessionGitHubPublication({
+    connection,
+    snapshot: () => gateway.snapshot,
+    deletionState: (row) => deletions.deletionState(row.key, row.agentId, row.sessionId),
+  });
   const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const pullRequestEpochs = new Map<string, object>();
@@ -159,6 +165,7 @@ export function createSessionCapability(
       publishedErrorSource = errorSource ?? "operation";
     }
     state = next;
+    githubPublication.observeRows(next.result?.sessions ?? [], next.agentId);
     for (const listener of listeners) {
       listener(state);
     }
@@ -216,6 +223,7 @@ export function createSessionCapability(
     reconcileList: (result, revision, agentId) =>
       deletions.reconcileList(result, revision, agentId),
     onCanonicalList(result, requestRevision, agentId, observed) {
+      githubPublication.observeRows(observed?.sessions ?? result?.sessions ?? [], agentId);
       mutations.settlePrepared(result);
       for (const row of observed?.sessions ?? []) {
         settleThinkingLevelClaim(row, requestRevision, agentId);
@@ -298,8 +306,7 @@ export function createSessionCapability(
     if (!normalizedKey || (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch)) {
       return;
     }
-    const previous = pullRequestSummaries.get(normalizedKey);
-    if (previous === summary) {
+    if (pullRequestSummaries.get(normalizedKey) === summary) {
       return;
     }
     if (summary) {
@@ -334,6 +341,9 @@ export function createSessionCapability(
     const result = decorateRows(
       reconcileSessionHistory(state.result, row, defaults, historyOptions, preserveCanonicalRow),
     );
+    if (row && !preserveCanonicalRow) {
+      githubPublication.observeRows([row], historyAgentId);
+    }
     const agentId = options?.resultAgentId?.trim()
       ? normalizeAgentId(options.resultAgentId)
       : state.agentId;
@@ -372,6 +382,7 @@ export function createSessionCapability(
       const reconciled: SessionChangedResult = { applied: false, result: previous };
       return { eventInfo: null, reconciled, claimChanged: false };
     }
+    githubPublication.observeEvent(payload);
     const selectedSessionKey = gateway.snapshot.sessionKey?.trim();
     const archivesSelectedSession =
       eventInfo?.archived === true &&
@@ -483,6 +494,7 @@ export function createSessionCapability(
     const selfUserId = next.selfUser?.id.trim() || null;
     const connectionChanged = connection.transition(next);
     connectionClient = next.client;
+    githubPublication.observeRows([]);
     if (connectionChanged) {
       if (previousClient !== next.client) {
         deletions.clear();
@@ -640,6 +652,7 @@ export function createSessionCapability(
     get canonicalListRevision() {
       return canonicalListRevision;
     },
+    githubPublication,
     captureConnectionScope: () => connection.capture(),
     isConnectionScopeCurrent: (scope) => connection.isCurrent(scope),
     list: roster.list,
@@ -707,6 +720,7 @@ export function createSessionCapability(
       return () => listeners.delete(listener);
     },
     dispose() {
+      githubPublication.clear();
       roster.dispose();
       operations.dispose();
       connection.dispose();

@@ -19,6 +19,7 @@ import { createApplicationContextProvider } from "../test-helpers/application-co
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import "./control-ui-contributions.ts";
+import "./control-ui-view.runtime.ts";
 
 type ContributionsElement = LitElement & {
   kind: "header" | "composer";
@@ -50,7 +51,7 @@ it("opens customization once and retains reload state across close and reopen", 
     errors: diagnostics,
     canReload: true,
     registrations: () => [replacement],
-    selectedReplacement: () => selected,
+    selectedReplacement: (surface: string) => (surface === "composer" ? selected : undefined),
     selectReplacement: vi.fn((_surface: string, key: string | null) => {
       selected = key ? replacement : undefined;
       listeners.forEach((listener) => listener());

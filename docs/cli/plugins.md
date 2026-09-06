@@ -113,6 +113,11 @@ restart the Gateway and reload the browser. See
 writes an archive containing compiled code and UI with no install scripts or
 runtime package dependencies. `--json` returns its absolute path, SHA-256 digest,
 and exact `plugin_activate_artifact` request. The output file must not exist.
+The default filename is `<plugin-id>.tgz` in the project root, with `/` replaced
+by `__` for scoped ids (for example, `@author__tools.tgz`). Use `--out` to choose
+another path. Packing follows the package's runtime entry selection, including
+`runtimeExtensions`, and bundles a declared setup entry separately. Source/runtime
+entry paths are rewritten to the compiled files included in the archive.
 See [Feature plugins](/plugins/feature-plugins) for activation approval, reload,
 view lifecycle, and recovery.
 
@@ -459,6 +464,8 @@ openclaw plugins uninstall <id> --force
 
 `uninstall` removes plugin settings from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. It leaves only an exact `enabled: false` entry for each removed plugin id. This marker records the explicit uninstall choice so remaining model, provider, or channel selections do not automatically reinstall the package during startup repair. Reinstalling does not silently re-enable it; enabling the plugin again replaces the marker. For a package with multiple child entries, any child id resolves to the package owner; uninstall removes every sibling's policy and slot/channel references, the one package install record, and the managed directory once. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
 
+Matching load-path references are removed before package files so symlink aliases cannot leave invalid config; if file removal fails, the plugin stays disabled and tracked so you can retry uninstall.
+
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
 If a tracked package has no discovered plugin entries, uninstall can remove its exact install record and same-owner policy, including owner-keyed channel config that no other discovered plugin claims. This recovery is allowed only when no other install record shares its package path and no discovered plugin matches its id or recorded paths. Unrelated policy remains unchanged. Registry refresh rebuilds discovery metadata; it does not remove these orphan install records.
@@ -555,6 +562,19 @@ The `--json` flag outputs a machine-readable report suitable for scripting and a
 
 Global discovery diagnostics go to stderr, including with `--json`. This explains partial inventory when workspace discovery has no selected system owner, even when no plugins are found. Plugin-specific diagnostics stay in each report. Policy fields use the same case-insensitive plugin ID matching as runtime configuration; the reported plugin ID retains its declared spelling.
 </Note>
+
+SDK import failures appear in the existing plugin error output and Doctor's
+plugin diagnostics. The diagnostic names the plugin, imported
+`openclaw/plugin-sdk/*` seam, running core version, and build version when known.
+For an official plugin, run `openclaw plugins update <id>` and restart the Gateway.
+If the error identifies a nested SDK, the plugin bundles an incompatible
+OpenClaw SDK; update the plugin or contact its author.
+
+JSON diagnostics may include `code: "sdk-incompatible"` and an optional
+`sdkCompatibility` object with `seam`, `coreVersion`, `builtWithOpenClawVersion`
+(when known), and `nestedSdk`. Existing diagnostics without these fields remain
+valid. Model errors point to runtime inspection without including raw loader
+errors.
 
 ## Doctor
 

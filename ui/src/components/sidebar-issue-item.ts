@@ -193,6 +193,11 @@ export function renderSidebarUpdateSurface(params: {
     .updateSchedule=${snapshot.updateSchedule}
     .heldUpdateCampaignId=${snapshot.heldUpdateCampaignId}
     .updateBusy=${snapshot.updateRunning || snapshot.updateReconciliationPending}
+    .updateRun=${snapshot.updateRun}
+    .updateRunAcknowledged=${snapshot.updateRunAcknowledged}
+    .connected=${gateway.phase === "connected"}
+    .onAcknowledge=${() => context.overlays.acknowledgeUpdateRun()}
+    .onCheckStatus=${() => context.overlays.refreshUpdateStatus()}
     .statusBanner=${snapshot.updateStatusBanner}
     .watchUpdateProgress=${params.watchUpdateProgress}
     .canUpdate=${canCallGatewayMethod(gateway, "update.run", "operator.admin")}
@@ -201,7 +206,11 @@ export function renderSidebarUpdateSurface(params: {
     .refreshRequired=${false}
     .onHoldUpdate=${() => context.overlays.holdUpdate()}
     .onReviewUpdate=${params.onNavigate}
-    .onDismiss=${params.onDismiss}
+    .onDismiss=${
+      snapshot.updateRun && snapshot.updateRun.status !== "running"
+        ? () => context.overlays.acknowledgeUpdateRun()
+        : params.onDismiss
+    }
   ></openclaw-sidebar-update-card>`;
 }
 

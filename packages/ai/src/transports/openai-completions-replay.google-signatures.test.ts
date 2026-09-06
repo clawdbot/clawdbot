@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
@@ -23,14 +24,7 @@ function geminiToolReplayContext(
     api: options.sourceApi ?? model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "toolUse",
     timestamp: 1,
     content: [

@@ -50,7 +50,7 @@ private actor DashboardWindowOwnershipEndpointGate {
 }
 
 actor DashboardWindowOwnershipPresentationGate {
-    private var requested = false
+    private var requested = AsyncTestGate()
     private var released = false
     private var requestCount = 0
     private var continuations: [CheckedContinuation<Void, Never>] = []
@@ -60,13 +60,14 @@ actor DashboardWindowOwnershipPresentationGate {
     }
 
     func hold() {
-        self.requested = false
+        // Reset between request cycles, after prior observers have returned.
+        self.requested = AsyncTestGate()
         self.released = false
     }
 
     @discardableResult
     func waitForRelease() async -> Int {
-        self.requested = true
+        self.requested.open()
         self.requestCount += 1
         let request = self.requestCount
         if !self.released {
@@ -78,9 +79,7 @@ actor DashboardWindowOwnershipPresentationGate {
     }
 
     func waitUntilRequested() async {
-        while !self.requested {
-            await Task.yield()
-        }
+        await self.requested.wait()
     }
 
     func numberOfRequests() -> Int {

@@ -1,10 +1,12 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { agentHandlers } from "../server-methods/agent.js";
 import type { DedupeEntry } from "../server-shared.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
+import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 
 function waitThroughGateway(
   params: { runId: string; timeoutMs: number },
@@ -153,6 +155,46 @@ describe("agent.wait gateway dedupe observations", () => {
     };
     expect(first.respond).toHaveBeenCalledWith(true, expected);
     expect(second.respond).toHaveBeenCalledWith(true, expected);
+  });
+
+  it("retires only its scope's observer without ending the shared run", async () => {
+    const runId = "run-scope-observers";
+    const dedupe = new Map<string, DedupeEntry>();
+    const first = new AsyncWorkScope();
+    const second = new AsyncWorkScope();
+    let firstSettled = false;
+    let secondSettled = false;
+    const firstWait = first
+      .track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }))
+      .then((result) => {
+        firstSettled = true;
+        return result;
+      });
+    const secondWait = second
+      .track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }))
+      .then((result) => {
+        secondSettled = true;
+        return result;
+      });
+    try {
+      first.beginClose();
+      await nextTurn();
+      expect(firstSettled).toBe(true);
+      expect(secondSettled).toBe(false);
+      expect(await firstWait).toBeNull();
+      completeRun(dedupe, runId);
+      await expect(secondWait).resolves.toMatchObject({ status: "ok", endedAt: 200 });
+      await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+        status: "ok",
+        endedAt: 200,
+      });
+    } finally {
+      // The old owner has no shutdown observer: release it without waiting ten minutes.
+      if (!firstSettled || !secondSettled) {
+        completeRun(dedupe, runId);
+      }
+      await Promise.all([firstWait, secondWait, first.drain(), second.drain()]);
+    }
   });
 
   it.each(

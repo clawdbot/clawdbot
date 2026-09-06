@@ -368,6 +368,16 @@ export class SidebarAttentionStoreController implements StoreController {
   }
 
   dismiss(dismissal: SidebarAttentionDismissal): void {
+    const run = this.sources.overlays.snapshot.updateRun;
+    if (
+      dismissal.kind === "updateAvailable" &&
+      run &&
+      run.status !== "running" &&
+      dismissal.signature === JSON.stringify(["run", run.runId])
+    ) {
+      this.sources.overlays.acknowledgeUpdateRun();
+      return;
+    }
     if (this.dismissedScope) {
       this.dismissed = dismissSidebarAttention(this.dismissedScope, dismissal);
       this.onChange();

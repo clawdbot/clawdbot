@@ -4,7 +4,7 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
-// Native mounts must be defined before activation can publish their registrations.
+// Native views and contributions must be defined before activation can publish registrations.
 import "./control-ui-view.runtime.ts";
 
 function assetUrl(path: string, prefix: string): string {

@@ -59,6 +59,12 @@ suite.define(() => {
           await header.locator(".workspace-icon").waitFor();
 
           const geometry = await header.evaluate((root) => {
+            const main = root
+              .closest("openclaw-chat-pane")
+              ?.querySelector('[data-region="main"]:not([hidden])');
+            if (!main) {
+              throw new Error("Task header requires visible main content");
+            }
             const centerY = (selector: string) => {
               const node = root.querySelector(selector);
               if (!node) {
@@ -87,9 +93,7 @@ suite.define(() => {
                 ...root.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep"),
               ].map((node) => getComputedStyle(node).display),
               headerBottom: root.getBoundingClientRect().bottom,
-              contentTop: root.parentElement
-                ?.querySelector(".sidebar-region")
-                ?.getBoundingClientRect().top,
+              contentTop: main.getBoundingClientRect().top,
             };
           });
 

@@ -3,6 +3,69 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  cloudWorkersPage: {
+    intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
+    sectionTitle: "Profiles",
+    sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
+    empty: "No cloud worker profiles are configured.",
+    addProfile: "Add profile",
+    editProfile: "Edit profile",
+    editAction: "Edit",
+    deleteTitle: "Delete cloud worker profile",
+    deleteConfirm: "Delete profile {profile}? New cloud sessions cannot use it after restart.",
+    advertised: "Advertised",
+    restartRequired: "Restart required",
+    adminRequired: "Administrator access is required to manage cloud worker profiles.",
+    catalogFailed: "Could not load advertised profiles: {error}. Check the gateway and retry.",
+    providerFact: "Provider: {provider}",
+    backendFact: "Crabbox backend: {backend}",
+    classFact: "Class: {value}",
+    ttlFact: "Max lifetime: {value}",
+    idleFact: "Idle stop: {value}",
+    desktopFact: "Desktop: {value}",
+    providerList: "View supported backends",
+    fields: {
+      profileId: "Profile ID",
+      profileIdHelp: "Use letters, numbers, hyphens, or underscores.",
+      backend: "Crabbox backend",
+      backendHelp: "The backend passed to Crabbox, such as AWS or Hetzner.",
+      backendPlaceholder: "hetzner",
+      machineClass: "Machine class",
+      machineClassHelp:
+        "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
+      ttl: "Max lifetime",
+      ttlHelp: "Use a positive Go duration such as 8h or 90m.",
+      ttlPlaceholder: "8h",
+      idleTimeout: "Idle stop",
+      idleTimeoutHelp: "Stop an unused worker after this positive Go duration.",
+      idleTimeoutPlaceholder: "45m",
+      setup: "Setup command",
+      setupHelp: "Optional idempotent shell command run before OpenClaw is installed.",
+      setupPlaceholder: "command -v node || install-node",
+      desktop: "Desktop",
+      desktopHelp:
+        "Warm a direct or coordinator-backed AWS worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
+      binary: "Crabbox binary",
+      binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
+      binaryPlaceholder: "/usr/local/bin/crabbox",
+      actions: "Save profile",
+      actionsHelp: "Saving updates the config; the gateway must restart before using it.",
+    },
+    errors: {
+      title: "Profile needs attention",
+      profileId:
+        "Use a profile ID that starts with a letter or number and contains only letters, numbers, hyphens, or underscores.",
+      profileExists: "Choose another profile ID; this one already exists.",
+      profileMissing: "This profile changed or was removed. Reload the page and try again.",
+      backend: "Enter a Crabbox backend, such as aws or hetzner.",
+      machineClass: "Enter a machine class of 1 to 128 characters.",
+      ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
+      idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
+      binary: "Enter an absolute Crabbox binary path or leave the field empty.",
+      saveFailed: "The profile was not saved. Reload the config and try again.",
+      deleteFailed: "The profile was not deleted. Reload the config and try again.",
+    },
+  },
   modelProviders: {
     title: "Configured providers",
     configureModels: "Configure Models",
@@ -204,6 +267,20 @@ const enSettings = {
       recoveryActions: "Recovery",
       checkStatus: "Check status",
       retryUpdate: "Retry update",
+      reportFailure: "Report update failure",
+      reportOwnerRequired:
+        "Reporting requires a connected Gateway owner with administrator access.",
+      reportResult: "Failure report",
+      reportSubmitting: "Submitting report…",
+      reportCreated: "GitHub issue created",
+      reportFallback: "GitHub CLI submission was unavailable. Use the prefilled issue link.",
+      reportPending: "GitHub issue submission may have completed. Do not submit this report again.",
+      reportRetryable: "No GitHub issue submission was started. This report can be retried.",
+      reportDuplicate: "This update attempt was already reported.",
+      reportError: "The report could not be prepared or submitted.",
+      openIssue: "Open GitHub issue",
+      openPrefilledIssue: "Open prefilled issue",
+      savedReport: "Saved report",
       troubleshoot: "Troubleshoot updates",
       cliFallback: "CLI fallback",
       showCliFallback: "Show terminal commands",
@@ -217,6 +294,9 @@ const enSettings = {
       permissionsIntro: "macOS access for notifications, capture, voice, and device context.",
       app: "App",
       showDockIcon: "Show Dock icon",
+      iconStyle: "Dock icon",
+      iconStyleHint:
+        "Original uses your Mac’s icon style. Other designs follow light/dark mode while OpenClaw runs.",
       showDockIconHint:
         "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
       iconAnimations: "Icon animations",
@@ -246,6 +326,19 @@ const enSettings = {
       peekabooBridgeHint:
         "Allow signed tools to drive UI automation via Peekaboo Bridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
       browser: "Browser",
+      chromeExtension: "Chrome extension",
+      chromeExtensionSetup: "Set up Chrome on this Mac",
+      chromeExtensionHint:
+        "Prepare the OpenClaw extension on this Mac, then approve it in Chrome. This does not install on a remote Gateway.",
+      chromeExtensionPreparing: "Preparing Chrome…",
+      chromeExtensionPending:
+        "Native host registered and installation requested. Open Chrome and approve OpenClaw; restart Chrome if the request has not appeared. Use the Store link if you previously removed it.",
+      chromeExtensionStoreRequired:
+        "Native host registered. Add OpenClaw from the Chrome Web Store to finish setup.",
+      chromeExtensionInstalled:
+        "Native host registered and extension found. Open the extension to check its connection; installation alone does not verify a connection.",
+      chromeExtensionFailed:
+        "Setup could not finish. Install the OpenClaw CLI on this Mac and run openclaw browser extension install for details.",
       browserImport: "Browser logins",
       browserImportHint:
         "Copy cookies from a Chrome-family profile into an isolated managed profile.",
@@ -621,6 +714,7 @@ export const registerSettingsEnglish = Object.assign(
   () => {
     en.modelProviders = enSettings.modelProviders;
     // Extend the shared objects: eager save/update copy and existing readers survive.
+    en.cloudWorkersPage = enSettings.cloudWorkersPage;
     Object.assign(en.configPage, enSettings.configPage);
     Object.assign(en.configView, enSettings.configView);
     Object.assign(en.updates, enSettings.updates);

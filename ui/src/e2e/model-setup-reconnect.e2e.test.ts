@@ -5,7 +5,10 @@ import { beforeEach, expect, it } from "vitest";
 import { ConnectParamsSchema } from "../../../packages/gateway-protocol/src/schema.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI model setup same-client reconnect",
@@ -49,152 +52,146 @@ suite.define(() => {
   it.each(["reconnect", "reopen"])(
     "retains manual first-run activation through restart during config refresh (%s)",
     async (restart) => {
-      await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { height: 900, width: 1280 },
-        },
-        async ({ page, context }) => {
-          const modelRef = "openai/gpt-5.6-luna";
-          const pendingVerification = {
-            ok: false,
-            status: "unavailable",
-            error: "Gateway settings are saved but not active yet. Retry after the restart.",
-          };
-          const gateway = await installMockGateway(page, {
-            featureMethods: [
-              "chat.metadata",
-              "chat.startup",
-              "openclaw.setup.detect",
-              "openclaw.setup.activate.start",
-              "wizard.next",
-              "openclaw.setup.verify",
-              "openclaw.chat",
-            ],
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
+        const modelRef = "openai/gpt-5.6-luna";
+        const pendingVerification = {
+          ok: false,
+          status: "unavailable",
+          error: "Gateway settings are saved but not active yet. Retry after the restart.",
+        };
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "openclaw.setup.detect",
+            "openclaw.setup.activate.start",
+            "wizard.next",
+            "openclaw.setup.verify",
+            "openclaw.chat",
+          ],
+          methodResponses: {
+            "openclaw.chat": onboardingWelcome,
+            "openclaw.setup.detect": {
+              ...detection(modelRef),
+              configuredModel: undefined,
+              setupComplete: false,
+              manualProviders: [{ id: "openai", label: "OpenAI" }],
+            },
+            "openclaw.setup.activate.start": {
+              sessionId: "activation-session",
+              done: false,
+              status: "running",
+            },
+            "wizard.next": {
+              done: true,
+              status: "error",
+              error: "401: invalid test API key",
+              activationRejection: { disposition: "rejected-before-promotion", status: "auth" },
+            },
+            "openclaw.setup.verify": pendingVerification,
+          },
+        });
+
+        await page.goto(
+          `${suite.server.baseUrl}settings/model-setup?firstRun=1#bootstrapToken=e2e-first-grant&bootstrapProfile=owner`,
+        );
+        const firstConnect = connectParams((await gateway.waitForRequest("connect")).params);
+        expect(firstConnect.auth).toMatchObject({ bootstrapToken: "e2e-first-grant" });
+        const apiKey = page.locator('.model-setup__manual input[type="password"]');
+        await apiKey.fill("invalid-test-key");
+        await page.getByRole("button", { name: "Connect & verify" }).click();
+        await page.getByText("401: invalid test API key").waitFor();
+        expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+        expect(await gateway.getRequests("openclaw.setup.verify")).toHaveLength(0);
+
+        await page
+          .locator("openclaw-modal-dialog")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        await gateway.setMethodResponse("wizard.next", {
+          done: true,
+          status: "done",
+          modelActivation: { modelRef, gatewayRestartRequired: true },
+        });
+        const initialRefreshes = (await gateway.getRequests("config.get")).length;
+        await gateway.deferNext("config.get");
+        await apiKey.fill("accepted-test-key");
+        await page.getByRole("button", { name: "Connect & verify" }).click();
+        // The activation response has arrived, but its refresh has not. A
+        // restart here must retain the confirmed model without reactivating it.
+        await expect
+          .poll(async () => (await gateway.getRequests("config.get")).length)
+          .toBeGreaterThan(initialRefreshes);
+        await gateway.setMethodResponse("openclaw.setup.detect", detection(modelRef));
+        let destination = page;
+        let reconnectedGateway = gateway;
+        if (restart === "reopen") {
+          await page.close();
+          destination = await context.newPage();
+          reconnectedGateway = await installMockGateway(destination, {
+            featureMethods: ["openclaw.setup.detect", "openclaw.setup.verify", "openclaw.chat"],
             methodResponses: {
               "openclaw.chat": onboardingWelcome,
-              "openclaw.setup.detect": {
-                ...detection(modelRef),
-                configuredModel: undefined,
-                setupComplete: false,
-                manualProviders: [{ id: "openai", label: "OpenAI" }],
-              },
-              "openclaw.setup.activate.start": {
-                sessionId: "activation-session",
-                done: false,
-                status: "running",
-              },
-              "wizard.next": {
-                done: true,
-                status: "error",
-                error: "401: invalid test API key",
-              },
+              "openclaw.setup.detect": detection(modelRef),
               "openclaw.setup.verify": pendingVerification,
             },
           });
-
-          await page.goto(
-            `${suite.server.baseUrl}settings/model-setup?firstRun=1#bootstrapToken=e2e-first-grant&bootstrapProfile=owner`,
+          await destination.goto(
+            `${suite.server.baseUrl}#bootstrapToken=e2e-next-grant&bootstrapProfile=owner`,
           );
-          const firstConnect = connectParams((await gateway.waitForRequest("connect")).params);
-          expect(firstConnect.auth).toMatchObject({ bootstrapToken: "e2e-first-grant" });
-          const apiKey = page.locator('.model-setup__manual input[type="password"]');
-          await apiKey.fill("invalid-test-key");
-          await page.getByRole("button", { name: "Connect & verify" }).click();
-          await page.getByText("401: invalid test API key").waitFor();
-          expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
-          expect(await gateway.getRequests("openclaw.setup.verify")).toHaveLength(0);
-
-          await page
-            .locator("openclaw-modal-dialog")
-            .getByRole("button", { name: "Close", exact: true })
-            .click();
-          await gateway.setMethodResponse("wizard.next", {
-            done: true,
-            status: "done",
-            modelActivation: { modelRef, gatewayRestartRequired: true },
+          const reopened = connectParams(
+            (await reconnectedGateway.waitForRequest("connect")).params,
+          );
+          expect(reopened.auth).toMatchObject({ bootstrapToken: "e2e-next-grant" });
+          expect(reopened.device).toMatchObject({
+            id: firstConnect.device?.id,
           });
-          const initialRefreshes = (await gateway.getRequests("config.get")).length;
-          await gateway.deferNext("config.get");
-          await apiKey.fill("accepted-test-key");
-          await page.getByRole("button", { name: "Connect & verify" }).click();
-          // The activation response has arrived, but its refresh has not. A
-          // restart here must retain the confirmed model without reactivating it.
-          await expect
-            .poll(async () => (await gateway.getRequests("config.get")).length)
-            .toBeGreaterThan(initialRefreshes);
-          await gateway.setMethodResponse("openclaw.setup.detect", detection(modelRef));
-          let destination = page;
-          let reconnectedGateway = gateway;
-          if (restart === "reopen") {
-            await page.close();
-            destination = await context.newPage();
-            reconnectedGateway = await installMockGateway(destination, {
-              featureMethods: ["openclaw.setup.detect", "openclaw.setup.verify", "openclaw.chat"],
-              methodResponses: {
-                "openclaw.chat": onboardingWelcome,
-                "openclaw.setup.detect": detection(modelRef),
-                "openclaw.setup.verify": pendingVerification,
-              },
-            });
-            await destination.goto(
-              `${suite.server.baseUrl}#bootstrapToken=e2e-next-grant&bootstrapProfile=owner`,
-            );
-            const reopened = connectParams(
-              (await reconnectedGateway.waitForRequest("connect")).params,
-            );
-            expect(reopened.auth).toMatchObject({ bootstrapToken: "e2e-next-grant" });
-            expect(reopened.device).toMatchObject({
-              id: firstConnect.device?.id,
-            });
-          } else {
-            await gateway.closeLatest(1012, "first-run activation restart");
-          }
-          await reconnectedGateway.waitForRequest("openclaw.setup.verify");
-          await destination.getByText(pendingVerification.error, { exact: false }).waitFor();
-          expect(new URL(destination.url()).pathname).toBe("/settings/model-setup");
-          expect(await reconnectedGateway.getRequests("openclaw.chat")).toHaveLength(0);
-          if (captureUiProofEnabled) {
-            await destination.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, `manual-first-run-${restart}-pending.png`),
-            });
-          }
-          await reconnectedGateway.setMethodResponse("openclaw.setup.verify", {
-            ok: true,
-            modelRef,
-            latencyMs: 31,
+        } else {
+          await gateway.closeLatest(1012, "first-run activation restart");
+        }
+        await reconnectedGateway.waitForRequest("openclaw.setup.verify");
+        await destination.getByText(pendingVerification.error, { exact: false }).waitFor();
+        expect(new URL(destination.url()).pathname).toBe("/settings/model-setup");
+        expect(await reconnectedGateway.getRequests("openclaw.chat")).toHaveLength(0);
+        if (captureUiProofEnabled) {
+          await destination.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, `manual-first-run-${restart}-pending.png`),
           });
-          await destination.getByRole("button", { name: "Verify & use selected model" }).click();
-          await expect.poll(() => new URL(destination.url()).pathname).toBe("/custodian");
-          if (restart === "reconnect") {
-            expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(2);
-            const connections = await gateway.getRequests("connect");
-            expect(connectParams(connections.at(-1)?.params).auth).toMatchObject({
-              deviceToken: "e2e-device-token",
-            });
-            expect(connectParams(connections.at(-1)?.params).auth).not.toHaveProperty(
-              "bootstrapToken",
-            );
-          } else {
-            expect(
-              await reconnectedGateway.getRequests("openclaw.setup.activate.start"),
-            ).toHaveLength(0);
-          }
-          await destination.getByText(onboardingWelcome.reply, { exact: true }).waitFor();
-          const welcomeRequest = await reconnectedGateway.waitForRequest("openclaw.chat");
-          expect(welcomeRequest.params).toMatchObject({ welcomeVariant: "onboarding" });
-          if (captureUiProofEnabled) {
-            await destination.locator(".custodian__header--minimal").waitFor();
-            await destination.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, `manual-first-run-${restart}-fixed.png`),
-            });
-          }
-          expect(new URL(destination.url()).searchParams.get("onboarding")).toBe("1");
-        },
-      );
+        }
+        await reconnectedGateway.setMethodResponse("openclaw.setup.verify", {
+          ok: true,
+          modelRef,
+          latencyMs: 31,
+        });
+        await destination.getByRole("button", { name: "Verify & use selected model" }).click();
+        await expect.poll(() => new URL(destination.url()).pathname).toBe("/custodian");
+        if (restart === "reconnect") {
+          expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(2);
+          const connections = await gateway.getRequests("connect");
+          expect(connectParams(connections.at(-1)?.params).auth).toMatchObject({
+            deviceToken: "e2e-device-token",
+          });
+          expect(connectParams(connections.at(-1)?.params).auth).not.toHaveProperty(
+            "bootstrapToken",
+          );
+        } else {
+          expect(
+            await reconnectedGateway.getRequests("openclaw.setup.activate.start"),
+          ).toHaveLength(0);
+        }
+        await destination.getByText(onboardingWelcome.reply, { exact: true }).waitFor();
+        const welcomeRequest = await reconnectedGateway.waitForRequest("openclaw.chat");
+        expect(welcomeRequest.params).toMatchObject({ welcomeVariant: "onboarding" });
+        if (captureUiProofEnabled) {
+          await destination.locator(".custodian__header--minimal").waitFor();
+          await destination.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, `manual-first-run-${restart}-fixed.png`),
+          });
+        }
+        expect(new URL(destination.url()).searchParams.get("onboarding")).toBe("1");
+      });
     },
   );
 
@@ -310,51 +307,44 @@ suite.define(() => {
   );
 
   it("re-detects once and replaces stale visible model state after reconnect", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const pageErrors: string[] = [];
-        page.on("pageerror", (error) => pageErrors.push(String(error)));
-        const gateway = await installMockGateway(page, {
-          featureMethods: ["openclaw.setup.detect"],
-          methodResponses: { "openclaw.setup.detect": detection("provider/original-model") },
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(String(error)));
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["openclaw.setup.detect"],
+        methodResponses: { "openclaw.setup.detect": detection("provider/original-model") },
+      });
+
+      const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+      expect(response?.status()).toBe(200);
+      await page.getByText("original-model", { exact: true }).waitFor();
+      const initialDetections = (await gateway.getRequests("openclaw.setup.detect")).length;
+      const initialConnections = (await gateway.getRequests("connect")).length;
+      await gateway.setMethodResponse(
+        "openclaw.setup.detect",
+        detection("provider/reconnected-model"),
+      );
+      await gateway.deferNext("connect");
+      await gateway.closeLatest(1012, "model setup reconnect proof");
+      await expect
+        .poll(async () => page.getByText("original-model", { exact: true }).count())
+        .toBe(0);
+      await expect
+        .poll(async () => (await gateway.getRequests("connect")).length)
+        .toBeGreaterThan(initialConnections);
+      await gateway.resolveDeferred("connect");
+      await expect
+        .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
+        .toBe(initialDetections + 1);
+      await page.getByText("reconnected-model", { exact: true }).waitFor();
+      expect(pageErrors).toEqual([]);
+
+      if (captureUiProofEnabled) {
+        await page.locator("openclaw-model-setup-page").screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "00-reconnected-model-visible.png"),
         });
-
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
-        expect(response?.status()).toBe(200);
-        await page.getByText("original-model", { exact: true }).waitFor();
-        const initialDetections = (await gateway.getRequests("openclaw.setup.detect")).length;
-        const initialConnections = (await gateway.getRequests("connect")).length;
-        await gateway.setMethodResponse(
-          "openclaw.setup.detect",
-          detection("provider/reconnected-model"),
-        );
-        await gateway.deferNext("connect");
-        await gateway.closeLatest(1012, "model setup reconnect proof");
-        await expect
-          .poll(async () => page.getByText("original-model", { exact: true }).count())
-          .toBe(0);
-        await expect
-          .poll(async () => (await gateway.getRequests("connect")).length)
-          .toBeGreaterThan(initialConnections);
-        await gateway.resolveDeferred("connect");
-        await expect
-          .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
-          .toBe(initialDetections + 1);
-        await page.getByText("reconnected-model", { exact: true }).waitFor();
-        expect(pageErrors).toEqual([]);
-
-        if (captureUiProofEnabled) {
-          await page.locator("openclaw-model-setup-page").screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "00-reconnected-model-visible.png"),
-          });
-        }
-      },
-    );
+      }
+    });
   });
 });

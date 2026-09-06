@@ -194,13 +194,6 @@ export type CronServiceDeps = {
   resolveHeartbeatTimeoutMs?: (
     opts: HeartbeatWakeRequest & { agentId: string },
   ) => number | undefined;
-  runSkillCollectionReview?: (params: {
-    agentId: string;
-    abortSignal?: AbortSignal;
-  }) => Promise<
-    | { status: "ok" | "skipped"; summary: string }
-    | { status: "error"; summary: string; error: string }
-  >;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
    * { status:"skipped", reason:"requests-in-flight" } before falling back to

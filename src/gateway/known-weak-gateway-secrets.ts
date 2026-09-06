@@ -1,6 +1,6 @@
 // Gateway known-weak credential guard.
 // Rejects published placeholder auth values before the gateway starts.
-import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 
 const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
   "change-me-to-a-long-random-token",
@@ -25,17 +25,24 @@ const KNOWN_WEAK_GATEWAY_PASSWORDS: ReadonlySet<string> = new Set(
   KNOWN_WEAK_GATEWAY_PASSWORD_PLACEHOLDERS,
 );
 
-export function assertGatewayAuthNotKnownWeak(auth: ResolvedGatewayAuth): void {
+/** Known non-secret values left by blank input or JavaScript string coercion. */
+export function isInvalidGatewayToken(value: unknown): boolean {
+  return typeof value === "string" && ["", "undefined", "null"].includes(value.trim());
+}
+
+export function assertGatewayAuthNotKnownWeak(auth: ResolvedGatewayAuth, rawToken?: unknown): void {
   if (auth.mode === "token") {
     // Token/password checks stay separate because auth mode is exclusive and
     // error text should name the credential the operator must rotate.
-    const token = auth.token?.trim() ?? "";
-    if (token && KNOWN_WEAK_GATEWAY_TOKENS.has(token)) {
+    const token = auth.token ?? rawToken;
+    if (
+      isInvalidGatewayToken(token) ||
+      (typeof token === "string" && KNOWN_WEAK_GATEWAY_TOKENS.has(token.trim()))
+    ) {
       throw new Error(
-        "Invalid config: gateway auth token is set to a published example placeholder " +
-          "from docs or .env.example. Generate a real secret (e.g. `openssl rand -hex 32`) " +
-          "and set OPENCLAW_GATEWAY_TOKEN or gateway.auth.token before starting " +
-          "the gateway.",
+        "Invalid config: gateway auth token is blank, a published example placeholder, or the literal string undefined/null. " +
+          "Generate a real secret (for example, `openssl rand -hex 32`) and update gateway.auth.token or its external source. " +
+          "For blank or undefined/null inline tokens, `openclaw doctor --fix --generate-gateway-token` can generate one.",
       );
     }
     return;
