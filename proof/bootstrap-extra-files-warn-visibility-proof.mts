@@ -47,6 +47,8 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { prepareEmbeddedAttemptBootstrap } from "../src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.js";
+import type { EmbeddedAttemptSetup } from "../src/agents/embedded-agent-runner/run/attempt-setup.js";
+import { createEmbeddedRunStageTracker } from "../src/agents/embedded-agent-runner/run/attempt-stage-timing.js";
 import type { EmbeddedRunAttemptParams } from "../src/agents/embedded-agent-runner/run/types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import bootstrapExtraFilesHook from "../src/hooks/bundled/bootstrap-extra-files/handler.js";
@@ -250,15 +252,24 @@ async function runRealBootstrapPrepare(params: {
       isCanonicalWorkspace: true,
       bootstrapPromptWarningSignaturesSeen: [],
     } as unknown as EmbeddedRunAttemptParams;
-    await prepareEmbeddedAttemptBootstrap({
-      attempt,
+    // prepareEmbeddedAttemptBootstrap reads workspace identity, the session agent
+    // id, and prepStages.mark("bootstrap-context") through a REQUIRED nested
+    // `setup` object (EmbeddedAttemptSetup). Mirror the unit test's
+    // createAttemptSetupFixture semantics inline — a real stage tracker for the
+    // mark wiring plus the workspace/agent fields the bootstrap path reads — so
+    // the harness stays standalone and dependency-light instead of importing the
+    // src/ test-support fixture.
+    const setup = {
       effectiveWorkspace: params.workspace,
       resolvedWorkspace: params.workspace,
+      sessionAgentId: "proof-agent",
+      prepStages: createEmbeddedRunStageTracker(),
+    } as unknown as EmbeddedAttemptSetup;
+    await prepareEmbeddedAttemptBootstrap({
+      attempt,
+      setup,
       hasReadTool: true,
       isRawModelRun: false,
-      markStage: () => {},
-      sessionAgentId: "proof-agent",
-      sessionLabel: "agent:main:main",
     });
   } finally {
     unregisterInternalHook("agent:bootstrap", handler);
