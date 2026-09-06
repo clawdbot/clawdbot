@@ -82,9 +82,7 @@ function isolatedConfig(
   // Copy effective config, never its include graph or ambient shell overrides.
   delete copied.env;
   delete copied.diagnostics;
-  if (copied.session) {
-    delete copied.session.store;
-  }
+  delete copied.session?.store;
   copied.logging = { ...copied.logging, file: path.join(stateDir, "canary.log") };
   copied.gateway = {
     ...copied.gateway,
@@ -124,6 +122,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
   };
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-canary-"));
   const sourceEnv = params.env ?? process.env;
+  const configPath = path.join(tempDir, "openclaw.json");
+  const workspaceDir = path.join(tempDir, "workspace");
   const copiedAgentDir = (directory: string | undefined) =>
     directory?.trim()
       ? resolveUpdateCandidateStatePath(
@@ -145,8 +145,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
     XDG_STATE_HOME: path.join(tempDir, "state"),
     OPENCLAW_HOME: tempDir,
     OPENCLAW_STATE_DIR: tempDir,
-    OPENCLAW_CONFIG_PATH: path.join(tempDir, "openclaw.json"),
-    OPENCLAW_WORKSPACE_DIR: path.join(tempDir, "workspace"),
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_WORKSPACE_DIR: workspaceDir,
     OPENCLAW_AGENT_DIR: copiedAgentDir(sourceEnv.OPENCLAW_AGENT_DIR),
     PI_CODING_AGENT_DIR: copiedAgentDir(sourceEnv.PI_CODING_AGENT_DIR),
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
@@ -237,26 +237,25 @@ export async function prepareUpdateCandidateRehearsal(params: {
       isolatedConfig(params.config, path.resolve(params.stateDir), tempDir, port, sourceEnv),
     );
     const baseline: Record<string, unknown> = JSON.parse(serialized);
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, serialized, { mode: 0o600 });
-    await fs.mkdir(env.OPENCLAW_WORKSPACE_DIR!, { recursive: true, mode: 0o700 });
+    await fs.writeFile(configPath, serialized, { mode: 0o600 });
+    await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
     return {
       sourceConfig: params.config,
       sourceConfigHash: params.sourceConfigHash,
       stateDir: tempDir,
-      configPath: env.OPENCLAW_CONFIG_PATH!,
-      workspaceDir: env.OPENCLAW_WORKSPACE_DIR!,
+      configPath,
+      workspaceDir,
       env,
       port,
       changedConfigKeys: async () => {
-        const current: unknown = JSON5.parse(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8"));
+        const current: unknown = JSON5.parse(await fs.readFile(configPath, "utf8"));
         if (!isRecord(current)) {
           throw new Error("Rehearsal config is not an object.");
         }
         // Compare against the same live config projection: private paths, the
         // canary token and disabled background services are isolation, not repairs.
-        const before = baseline;
-        return [...new Set([...Object.keys(before), ...Object.keys(current)])]
-          .filter((key) => !isDeepStrictEqual(before[key], current[key]))
+        return [...new Set([...Object.keys(baseline), ...Object.keys(current)])]
+          .filter((key) => !isDeepStrictEqual(baseline[key], current[key]))
           .toSorted();
       },
       cleanup: () => fs.rm(tempDir, { recursive: true, force: true }),

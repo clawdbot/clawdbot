@@ -494,7 +494,6 @@ export async function executeQueuedContextEngineCompaction(input: {
           }
           if (
             result.ok &&
-            result.compacted &&
             canContinue() &&
             hookRunner?.hasHooks?.("after_compaction") &&
             hookRunner.runAfterCompaction
@@ -507,7 +506,7 @@ export async function executeQueuedContextEngineCompaction(input: {
               await hookRunner.runAfterCompaction(
                 {
                   messageCount: -1,
-                  compactedCount: -1,
+                  compactedCount: result.compacted ? -1 : 0,
                   tokenCount: result.result?.tokensAfter,
                   sessionFile: postCompactionSessionFile,
                   ...(postCompactionSessionId !== params.sessionId

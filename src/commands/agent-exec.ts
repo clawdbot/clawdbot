@@ -225,7 +225,6 @@ export async function agentExecCommand(
     isCurrent: deps.isCurrent,
   });
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-  let processScopeKey: string | undefined;
   let cleanupProcessScope: (() => Promise<void>) | undefined;
   let commandResult: AgentExecCommandResult;
   const runtimeCleanup = createAgentCleanupScope();
@@ -354,7 +353,7 @@ export async function agentExecCommand(
     runtimePaths = await import("../config/paths.js");
     const storedAuthStateDir = runtimePaths.resolveStateDir();
     // Capture cleanup before a child can finish or lose its native owner.
-    processScopeKey =
+    const processScopeKey =
       deps.timeoutMs !== undefined || deps.maxToolCalls !== undefined
         ? `agent:${execAgentId}:agent-exec:${sessionId}`
         : undefined;

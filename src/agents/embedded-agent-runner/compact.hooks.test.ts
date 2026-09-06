@@ -4056,8 +4056,11 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     ).rejects.toThrow("cannot override the active session agent");
   });
 
-  it("fires before_compaction with sentinel -1 and after_compaction on success", async () => {
+  it.each([true, false])("pairs successful engine hooks (compacted=%s)", async (compacted) => {
     hookRunner.hasHooks.mockReturnValue(true);
+    if (!compacted) {
+      contextEngineCompactMock.mockResolvedValueOnce({ ok: true, compacted: false });
+    }
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
@@ -4066,7 +4069,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
+    expect(result.compacted).toBe(compacted);
     expect(result.compactionKind).toBe("context-engine");
 
     expect(mockCallArg(hookRunner.runBeforeCompaction)).toEqual({
@@ -4077,10 +4080,11 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       sessionKey: TEST_SESSION_KEY,
       messageProvider: "telegram",
     });
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(1);
     expect(mockCallArg(hookRunner.runAfterCompaction)).toEqual({
       messageCount: -1,
-      compactedCount: -1,
-      tokenCount: 50,
+      compactedCount: compacted ? -1 : 0,
+      tokenCount: compacted ? 50 : undefined,
       sessionFile: TEST_SESSION_KEY,
     });
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
