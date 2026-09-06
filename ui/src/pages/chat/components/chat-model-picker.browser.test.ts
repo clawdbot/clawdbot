@@ -60,7 +60,9 @@ describe("renderChatModelPicker cooldown selection (real browser)", () => {
       // Real browser click — native hit-testing and event dispatch, not a
       // synthetic jsdom MouseEvent.
       button?.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
 
       expect(onModelSelect).toHaveBeenCalledWith(
         "ollama-t440/qwen2.5-coder:14b",
@@ -98,7 +100,9 @@ describe("renderChatModelPicker cooldown selection (real browser)", () => {
       expect(button?.disabled).toBe(true);
 
       button?.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
 
       expect(onModelSelect).not.toHaveBeenCalled();
     } finally {
