@@ -6,6 +6,7 @@ import {
 } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { analyzeConfigSchema } from "../../components/config-form.ts";
+import { renderSettingsPage } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -16,6 +17,7 @@ import type {
 import { renderPluginCatalogDetail, type PluginCatalogDetailTab } from "./catalog-detail.ts";
 import { renderPluginCatalogResults } from "./catalog-results.ts";
 import { renderPluginConsentDialog } from "./consent-dialog.ts";
+import type { InstallWizardController } from "./install-wizard-controller.ts";
 import {
   installRequestForDiscoveryDetail,
   type PluginInstallWizardState,
@@ -35,19 +37,23 @@ import {
   type PluginSettingsTab,
 } from "./settings-view.ts";
 
+type CatalogDetailState = {
+  id: string;
+  result: PluginDiscoveryDetailResult | null;
+  error: string | null;
+};
+
+type InstalledDetailState = {
+  pluginId: string;
+  inspection: PluginsInspectResult | null;
+  error: string | null;
+};
+
 type PluginsPageViewActions = {
   selectHubTab: (tab: PluginsHubTab) => void;
   closeCatalogDetail: () => void;
   retryCatalogDetail: () => void;
   selectCatalogDetailTab: (tab: PluginCatalogDetailTab) => void;
-  openInstallWizard: (result: PluginDiscoveryDetailResult) => void;
-  closeInstallWizard: () => void;
-  beginInstallWizard: () => void;
-  continueInstallPolicyWarning: () => void;
-  retryInstallWizard: () => void;
-  saveInstallWizardConfiguration: () => void;
-  manageInstalledWizardPlugin: () => void;
-  cancelConsent: () => void;
   setInventoryExpanded: (expanded: boolean) => void;
   setInventorySearchOpen: (open: boolean) => void;
   setQuery: (query: string) => void;
@@ -78,18 +84,11 @@ export type PluginsPageViewModel = {
   inventorySearchOpen: boolean;
   busy: Record<string, boolean>;
   messages: Record<string, PluginRowMessage>;
-  detail: {
-    pluginId: string;
-    inspection: PluginsInspectResult | null;
-    error: string | null;
-  } | null;
+  detail: InstalledDetailState | null;
   iconUrls: Record<string, string>;
+  catalogIconUrls: Record<string, string>;
   pageNotice: PluginRowMessage | null;
-  catalogDetail: {
-    id: string;
-    result: PluginDiscoveryDetailResult | null;
-    error: string | null;
-  } | null;
+  catalogDetail: CatalogDetailState | null;
   catalogDetailTab: PluginCatalogDetailTab;
   installWizard: PluginInstallWizardState | null;
   mutationBlockedReason: string | null;
@@ -97,12 +96,21 @@ export type PluginsPageViewModel = {
   canEditConfig: boolean;
   discovery: PluginDiscoveryController;
   consentController: PluginsConsentController;
+  installWizardController: InstallWizardController;
   actions: PluginsPageViewActions;
 };
 
 export function renderPluginsPage(model: PluginsPageViewModel) {
-  const { actions, catalogDetail, consentController, context, detail, discovery, installWizard } =
-    model;
+  const {
+    actions,
+    catalogDetail,
+    consentController,
+    context,
+    detail,
+    discovery,
+    installWizard,
+    installWizardController,
+  } = model;
   const configState = context.runtimeConfig.state;
   const configAnalysis = analyzeConfigSchema(configState.configSchema);
   const installWizardConfigSchema = installWizard?.pluginId
@@ -142,7 +150,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
 
   return html`
     ${
-      model.surface === "discovery"
+      model.surface === "discovery" && !catalogDetail
         ? renderPluginsHubHeader({ active: "plugins", onSelect: actions.selectHubTab })
         : nothing
     }
@@ -173,70 +181,67 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         ),
                       installBlockedReason: model.mutationBlockedReason,
                       onInstall: () => {
-                        if (catalogDetail.result) actions.openInstallWizard(catalogDetail.result);
+                        if (catalogDetail.result) {
+                          installWizardController.open(catalogDetail.result);
+                        }
                       },
+                      iconUrls: model.catalogIconUrls,
                     })
-                  : html`${renderInstalledPlugins({
-                      connected: model.connected,
-                      loading: model.loading,
-                      result: model.result,
-                      error: model.error,
-                      expanded: model.inventoryExpanded,
-                      searchOpen: model.inventorySearchOpen,
-                      query: model.query,
-                      busy: model.busy,
-                      iconUrls: model.iconUrls,
-                      attributions: discovery.attributions,
-                      canMutate: model.canMutate,
-                      mutationBlockedReason: model.mutationBlockedReason,
-                      consent: consentController.consent,
-                      consentInspection: consentController.inspection,
-                      consentInspectionLoading: consentController.inspectionLoading,
-                      consentInspectionError: consentController.inspectionError,
-                      onExpandedChange: actions.setInventoryExpanded,
-                      onSearchOpenChange: actions.setInventorySearchOpen,
-                      onQueryChange: actions.setQuery,
-                      onRefresh: actions.refreshCatalog,
-                      settingsHref: (pluginId) =>
-                        `${pathForPluginSettings(pluginId, context.basePath)}?from=plugins`,
-                      onOpenSettings: (pluginId) =>
-                        actions.openPluginSettings(pluginId ?? null, true),
-                      onIconError: actions.handlePluginIconError,
-                      onCancelConsent: () => consentController.close(),
-                      onConfirmConsent: () => consentController.confirm(),
-                      onRetryConsentInspection: () => void consentController.inspect(),
-                    })}${renderPluginCatalogResults({
-                      connected: model.connected,
-                      loading: discovery.loading,
-                      paging: discovery.paging,
-                      pageNumber: discovery.pageNumber,
-                      canGoPrevious: discovery.canGoPrevious,
-                      canGoNext: discovery.canGoNext,
-                      result: discovery.result,
-                      error: discovery.error,
-                      remoteError: discovery.remoteError,
-                      categories: discovery.categories,
-                      categoriesError: discovery.categoriesError,
-                      featured: discovery.featured,
-                      featuredLoading: discovery.featuredLoading,
-                      featuredError: discovery.featuredError,
-                      intent: discovery.intent,
-                      category: discovery.category,
-                      query: discovery.query,
-                      entryHref: (id) => pathForPluginCatalogEntry(id, context.basePath),
-                      onIntentChange: (intent) => discovery.selectIntent(intent),
-                      onCategoryChange: (category) => discovery.selectCategory(category),
-                      onQueryChange: (query) => discovery.updateQuery(query),
-                      onOpenEntry: (id) =>
-                        context.navigate("plugins", {
-                          pathname: pathForPluginCatalogEntry(id, context.basePath),
-                        }),
-                      onPreviousPage: () => void discovery.previousPage(),
-                      onNextPage: () => void discovery.nextPage(),
-                      onRetry: () => void discovery.refresh(),
-                      onRetryCategories: () => void discovery.refreshCategories(),
-                      onRetryFeatured: () => void discovery.refreshFeatured(),
-                    })}`
+                  : renderSettingsPage(
+                      html`${renderInstalledPlugins({
+                        connected: model.connected,
+                        loading: model.loading,
+                        result: model.result,
+                        error: model.error,
+                        expanded: model.inventoryExpanded,
+                        searchOpen: model.inventorySearchOpen,
+                        query: model.query,
+                        iconUrls: model.iconUrls,
+                        attributions: discovery.attributions,
+                        onExpandedChange: actions.setInventoryExpanded,
+                        onSearchOpenChange: actions.setInventorySearchOpen,
+                        onQueryChange: actions.setQuery,
+                        onRefresh: actions.refreshCatalog,
+                        settingsHref: (pluginId) =>
+                          `${pathForPluginSettings(pluginId, context.basePath)}?from=plugins`,
+                        onOpenSettings: (pluginId) =>
+                          actions.openPluginSettings(pluginId ?? null, true),
+                        onIconError: actions.handlePluginIconError,
+                      })}${renderPluginCatalogResults({
+                        connected: model.connected,
+                        loading: discovery.loading,
+                        paging: discovery.paging,
+                        pageNumber: discovery.pageNumber,
+                        canGoPrevious: discovery.canGoPrevious,
+                        canGoNext: discovery.canGoNext,
+                        result: discovery.result,
+                        error: discovery.error,
+                        remoteError: discovery.remoteError,
+                        categories: discovery.categories,
+                        categoriesError: discovery.categoriesError,
+                        featured: discovery.featured,
+                        featuredLoading: discovery.featuredLoading,
+                        featuredError: discovery.featuredError,
+                        intent: discovery.intent,
+                        category: discovery.category,
+                        query: discovery.query,
+                        iconUrls: model.catalogIconUrls,
+                        entryHref: (id) => pathForPluginCatalogEntry(id, context.basePath),
+                        onIntentChange: (intent) => discovery.selectIntent(intent),
+                        onCategoryChange: (category) => discovery.selectCategory(category),
+                        onQueryChange: (query) => discovery.updateQuery(query),
+                        onOpenEntry: (id) =>
+                          context.navigate("plugins", {
+                            pathname: pathForPluginCatalogEntry(id, context.basePath),
+                          }),
+                        onPreviousPage: () => void discovery.previousPage(),
+                        onNextPage: () => void discovery.nextPage(),
+                        onRetry: () => void discovery.refresh(),
+                        onRetryCategories: () => void discovery.refreshCategories(),
+                        onRetryFeatured: () => void discovery.refreshFeatured(),
+                      })}`,
+                      { wide: true, carapace: true },
+                    )
               }</wa-tab-panel
             >`
           : detailPluginId
@@ -279,14 +284,14 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
             configBusy: configState.configLoading || configState.configSaving,
             configError: configState.lastError,
             canEditConfig: model.canEditConfig,
-            onClose: actions.closeInstallWizard,
-            onInstall: actions.beginInstallWizard,
-            onContinuePolicyWarning: actions.continueInstallPolicyWarning,
-            onRetry: actions.retryInstallWizard,
+            onClose: () => installWizardController.close(),
+            onInstall: () => installWizardController.begin(),
+            onContinuePolicyWarning: () => installWizardController.continuePolicyWarning(),
+            onRetry: () => installWizardController.retry(),
             onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
             onConfigRemove: (path) => context.runtimeConfig.removeFormValue(path),
-            onSaveConfiguration: actions.saveInstallWizardConfiguration,
-            onManage: actions.manageInstalledWizardPlugin,
+            onSaveConfiguration: () => void installWizardController.saveConfiguration(),
+            onManage: () => installWizardController.manage(),
           })
         : nothing
     }
@@ -303,7 +308,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
             canMutate: model.canMutate,
             mutationBlockedReason: model.mutationBlockedReason,
             busy: Object.values(model.busy).some(Boolean),
-            onCancel: actions.cancelConsent,
+            onCancel: () => installWizardController.cancelConsent(),
             onConfirm: () => consentController.confirm(),
             onRetry: () => void consentController.inspect(),
           })

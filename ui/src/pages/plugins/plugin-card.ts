@@ -28,7 +28,7 @@ export function renderPluginAuthor(
   return options.linked
     ? html`<a
         class="plugin-card-author plugin-card-author--linked"
-        href=${`https://clawhub.ai/user/${encodeURIComponent(handle)}`}
+        href=${`https://clawhub.ai/${encodeURIComponent(handle)}`}
         target="_blank"
         rel="noopener noreferrer"
         >${label}</a

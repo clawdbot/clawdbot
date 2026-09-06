@@ -664,6 +664,17 @@ suite.define(() => {
         await page.locator('[data-plugin-id="workboard"]').waitFor();
         expect(await gateway.getRequests("plugins.list")).toHaveLength(catalogRequests + 1);
 
+        await gateway.setMethodResponse("plugins.list", failure("Catalog refresh unavailable"));
+        const refreshedCatalogRequests = (await gateway.getRequests("plugins.list")).length;
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await expect
+          .poll(async () => (await gateway.getRequests("plugins.list")).length)
+          .toBeGreaterThan(refreshedCatalogRequests);
+        await page.getByRole("alert").filter({ hasText: "Catalog refresh unavailable" }).waitFor();
+        await page.locator('[data-plugin-id="workboard"]').waitFor();
+        await gateway.setMethodResponse("plugins.list", inventory);
+
         await page.locator('[data-plugin-id="workboard"]').click();
         const inspectionError = page
           .getByRole("alert")

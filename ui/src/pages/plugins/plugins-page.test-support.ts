@@ -309,12 +309,13 @@ export function createContext(
 export async function mountPage(
   context: ApplicationContext,
   routeData?: PluginsRouteData,
+  surface: TestPluginsPage["surface"] = routeData?.location.pathname.includes("/settings/plugins")
+    ? "settings"
+    : "discovery",
 ): Promise<{ page: TestPluginsPage; provider: ApplicationContextProvider }> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-plugins-page") as unknown as TestPluginsPage;
-  page.surface = routeData?.location.pathname.includes("/settings/plugins")
-    ? "settings"
-    : "discovery";
+  page.surface = surface;
   page.routeData = routeData;
   provider.append(page);
   document.body.append(provider);

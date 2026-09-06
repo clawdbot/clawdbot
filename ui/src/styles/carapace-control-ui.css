@@ -215,6 +215,18 @@
   line-height: normal;
 }
 
+.settings-page.oc-app-surface .btn.oc-action.oc-action-primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.settings-page.oc-app-surface .btn.oc-action.oc-action-primary:hover:not(:disabled) {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
 .settings-page.oc-app-surface .btn.btn--sm.oc-action {
   padding: 6px 10px;
   font-size: var(--oc-font-size-xs);

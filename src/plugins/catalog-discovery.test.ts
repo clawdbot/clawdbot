@@ -90,7 +90,8 @@ describe("plugin discovery identity and local join", () => {
         diagnostics: [],
         mutationAllowed: true,
       },
-      includeLocalOnly: true,
+      published: [],
+      includeBundledOnly: true,
     });
 
     expect(items).toHaveLength(1);
@@ -98,36 +99,36 @@ describe("plugin discovery identity and local join", () => {
     expect(items[0]?.local.state).toBe("enabled");
   });
 
-  it("places eligible local-only entries before remote results in All and category views", () => {
-    const localOnly = {
+  it("places unpublished bundled entries before ClawHub results only when requested", () => {
+    const bundledOnly = {
       id: "calendar-local",
       name: "Calendar Local",
       description: "Coordinate a local calendar.",
       packageName: "@openclaw/calendar-local",
-      origin: "official",
+      origin: "bundled",
       installed: false,
       enabled: false,
       state: "not-installed" as const,
       category: "tool",
       install: { source: "official" as const, pluginId: "calendar-local" },
     };
-    const local = { plugins: [localOnly], diagnostics: [], mutationAllowed: true };
+    const local = { plugins: [bundledOnly], diagnostics: [], mutationAllowed: true };
 
     const all = joinClawHubPluginCatalog({
       remote: [remote],
       local,
-      includeLocalOnly: true,
       intent: "all",
     });
     const tools = joinClawHubPluginCatalog({
       remote: [],
       local,
-      includeLocalOnly: true,
-      intent: "all",
+      includeBundledOnly: true,
+      published: [remote],
+      intent: "bundled",
       category: "tools",
     });
 
-    expect(all.map((item) => item.catalog.name)).toEqual(["Calendar Local", "Memory Plus"]);
+    expect(all.map((item) => item.catalog.name)).toEqual(["Memory Plus"]);
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({
       catalog: { categories: ["tools"], official: false },
@@ -143,28 +144,77 @@ describe("plugin discovery identity and local join", () => {
     });
   });
 
-  it("filters local-only entries for search and excludes them from ranked intents and later pages", () => {
+  it("uses the complete publication set so a later ClawHub page cannot become a bundled result", () => {
+    const expedia = {
+      ...remote,
+      packageName: "@expediagroup/expedia-openclaw",
+      displayName: "Expedia Travel",
+      runtimeId: "expedia-travel",
+    };
+    const local = {
+      plugins: [
+        {
+          id: "expedia-travel",
+          packageName: expedia.packageName,
+          name: "Expedia Travel",
+          origin: "official",
+          installed: false,
+          enabled: false,
+          state: "not-installed" as const,
+        },
+        {
+          id: "private-bundle",
+          packageName: "@openclaw/private-bundle",
+          name: "Private Bundle",
+          origin: "bundled",
+          installed: false,
+          enabled: false,
+          state: "not-installed" as const,
+        },
+      ],
+      diagnostics: [],
+      mutationAllowed: true,
+    };
+
+    const items = joinClawHubPluginCatalog({
+      remote: [],
+      published: [expedia],
+      local,
+      includeBundledOnly: true,
+      intent: "bundled",
+    });
+
+    expect(items.map((item) => item.catalog.name)).toEqual(["Private Bundle"]);
+  });
+
+  it("filters bundled entries for unified search and keeps them ahead of ClawHub results", () => {
     const local = {
       plugins: [
         {
           id: "calendar-local",
-          name: "Calendar Local",
+          name: "Memory Calendar",
           description: "Coordinate a local calendar.",
           installed: false,
           enabled: false,
           state: "not-installed" as const,
           category: "tool",
+          origin: "bundled",
           install: { source: "official" as const, pluginId: "calendar-local" },
         },
       ],
       diagnostics: [],
       mutationAllowed: true,
     };
-    const common = { remote: [], local, includeLocalOnly: true } as const;
+    const common = {
+      remote: [remote],
+      published: [remote],
+      local,
+      includeBundledOnly: true,
+    } as const;
 
-    expect(joinClawHubPluginCatalog({ ...common, query: "calendar" })).toHaveLength(1);
-    expect(joinClawHubPluginCatalog({ ...common, query: "unrelated" })).toHaveLength(0);
-    expect(joinClawHubPluginCatalog({ ...common, intent: "trending" })).toHaveLength(0);
-    expect(joinClawHubPluginCatalog({ ...common, cursor: "next-page" })).toHaveLength(0);
+    expect(
+      joinClawHubPluginCatalog({ ...common, query: "memory" }).map((item) => item.catalog.name),
+    ).toEqual(["Memory Calendar", "Memory Plus"]);
+    expect(joinClawHubPluginCatalog({ ...common, remote: [], query: "unrelated" })).toHaveLength(0);
   });
 });

@@ -18,6 +18,7 @@ const managementMocks = vi.hoisted(() => ({
 }));
 const searchMock = vi.hoisted(() => vi.fn());
 const catalogMocks = vi.hoisted(() => ({
+  allOfficial: vi.fn(),
   browse: vi.fn(),
   categories: vi.fn(),
   detail: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock("../../plugins/catalog-search.js", () => ({
 }));
 
 vi.mock("../../infra/clawhub-plugin-catalog.js", () => ({
+  fetchAllOfficialClawHubPlugins: (...args: unknown[]) => catalogMocks.allOfficial(...args),
   fetchClawHubPluginCatalog: (...args: unknown[]) => catalogMocks.browse(...args),
   fetchClawHubPluginCategories: (...args: unknown[]) => catalogMocks.categories(...args),
   fetchClawHubPluginDetail: (...args: unknown[]) => catalogMocks.detail(...args),
@@ -110,6 +112,8 @@ describe("plugin management Gateway handlers", () => {
     managementMocks.uninstall.mockReset();
     searchMock.mockReset();
     catalogMocks.browse.mockReset();
+    catalogMocks.allOfficial.mockReset();
+    catalogMocks.allOfficial.mockResolvedValue([]);
     catalogMocks.categories.mockReset();
     catalogMocks.detail.mockReset();
   });
@@ -483,7 +487,7 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it("keeps local-only discovery available when ClawHub browse fails", async () => {
+  it("does not misclassify local catalog entries when ordinary ClawHub browse fails", async () => {
     catalogMocks.browse.mockRejectedValue(new Error("service unavailable"));
     managementMocks.list.mockResolvedValue({
       plugins: [workboard],
@@ -497,9 +501,148 @@ describe("plugin management Gateway handlers", () => {
       ok: true,
       error: undefined,
       response: {
-        items: [{ catalog: { name: "Workboard" }, local: { pluginId: "workboard" } }],
-        remoteError: "ClawHub is unavailable: service unavailable. Local plugins remain available.",
+        items: [],
+        remoteError: "ClawHub is unavailable: service unavailable.",
       },
+    });
+  });
+
+  it("keeps ClawHub search results when bundled publication verification fails", async () => {
+    catalogMocks.allOfficial.mockRejectedValue(new Error("official catalog unavailable"));
+    catalogMocks.browse.mockResolvedValue({
+      items: [
+        {
+          packageName: "@alice/memory-plus",
+          displayName: "Memory Plus",
+          family: "code-plugin",
+          isOfficial: false,
+          categories: ["memory"],
+        },
+      ],
+    });
+    managementMocks.list.mockResolvedValue({
+      plugins: [
+        {
+          id: "memory-bundle",
+          name: "Memory Bundle",
+          origin: "bundled",
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+        },
+      ],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+
+    const result = await callHandler("plugins.catalog.browse", { query: "memory" });
+
+    expect(result.response).toMatchObject({
+      items: [{ catalog: { name: "Memory Plus", publishedToClawHub: true } }],
+      remoteError:
+        "ClawHub is unavailable: official catalog unavailable. Bundled publication status could not be verified.",
+    });
+  });
+
+  it("unifies All search with unpublished bundled results before ClawHub matches", async () => {
+    const remote = {
+      packageName: "@alice/memory-plus",
+      displayName: "Memory Plus",
+      family: "code-plugin" as const,
+      isOfficial: false,
+      categories: ["memory"],
+      runtimeId: "memory-plus",
+    };
+    const published = { ...remote, packageName: "@openclaw/published" };
+    catalogMocks.allOfficial.mockResolvedValue([published]);
+    catalogMocks.browse.mockResolvedValue({ items: [remote] });
+    managementMocks.list.mockResolvedValue({
+      plugins: [
+        {
+          id: "memory-bundle",
+          name: "Memory Bundle",
+          packageName: "@openclaw/memory-bundle",
+          origin: "bundled",
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+        },
+      ],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+
+    const result = await callHandler("plugins.catalog.browse", {
+      query: "memory",
+      intent: "all",
+      pageSize: 25,
+    });
+
+    expect(catalogMocks.browse).toHaveBeenCalledWith({
+      query: "memory",
+      intent: "all",
+      category: undefined,
+      cursor: undefined,
+      limit: 25,
+    });
+    expect(result.response).toMatchObject({
+      items: [
+        { catalog: { name: "Memory Bundle", publishedToClawHub: false } },
+        { catalog: { name: "Memory Plus", publishedToClawHub: true } },
+      ],
+    });
+  });
+
+  it("keeps queried Bundled requests limited to unpublished bundled plugins", async () => {
+    catalogMocks.allOfficial.mockResolvedValue([]);
+    managementMocks.list.mockResolvedValue({
+      plugins: [
+        {
+          id: "memory-bundle",
+          name: "Memory Bundle",
+          packageName: "@openclaw/memory-bundle",
+          origin: "bundled",
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+        },
+      ],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+
+    const result = await callHandler("plugins.catalog.browse", {
+      query: "memory",
+      intent: "bundled",
+      pageSize: 25,
+    });
+
+    expect(catalogMocks.browse).not.toHaveBeenCalled();
+    expect(result.response).toMatchObject({
+      items: [{ catalog: { name: "Memory Bundle", publishedToClawHub: false } }],
+    });
+  });
+
+  it("preserves the Official filter for direct search requests", async () => {
+    catalogMocks.browse.mockResolvedValue({ items: [] });
+    managementMocks.list.mockResolvedValue({
+      plugins: [],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+
+    await callHandler("plugins.catalog.browse", {
+      query: "memory",
+      intent: "official",
+      pageSize: 25,
+    });
+
+    expect(catalogMocks.browse).toHaveBeenCalledWith({
+      query: "memory",
+      intent: "official",
+      category: undefined,
+      cursor: undefined,
+      limit: 25,
     });
   });
 

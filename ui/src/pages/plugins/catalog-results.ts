@@ -2,7 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
-import { renderSettingsLoadingSkeleton, renderSettingsPage } from "../../components/settings-ui.ts";
+import { renderSettingsLoadingSkeleton } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -18,7 +18,7 @@ import {
   renderPluginOfficialBadge,
 } from "./plugin-card.ts";
 
-export type PluginDiscoveryIntent = "all" | "trending" | "official";
+export type PluginDiscoveryIntent = "all" | "bundled" | "trending" | "official";
 
 export type PluginCatalogResultsProps = {
   connected: boolean;
@@ -38,6 +38,7 @@ export type PluginCatalogResultsProps = {
   intent: PluginDiscoveryIntent;
   category: string | null;
   query: string;
+  iconUrls: Readonly<Record<string, string>>;
   entryHref: (id: string) => string;
   onIntentChange: (intent: PluginDiscoveryIntent) => void;
   onCategoryChange: (category: string | null) => void;
@@ -67,6 +68,14 @@ const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
 
 function categoryIcon(icon: string | undefined): TemplateResult {
   return (icon && CATEGORY_ICONS[icon]) || icons.box;
+}
+
+function renderCatalogIcon(
+  plugin: PluginDiscoveryEntry,
+  props: PluginCatalogResultsProps,
+): TemplateResult {
+  const blobUrl = plugin.catalog.imageUrl ? props.iconUrls[plugin.catalog.imageUrl] : undefined;
+  return blobUrl ? html`<img src=${blobUrl} alt="" />` : categoryIcon(plugin.catalog.icon);
 }
 
 export function formatCompactCount(value: number): string {
@@ -100,14 +109,7 @@ function renderDownloadCount(
 
 function renderPopularity(plugin: PluginDiscoveryEntry): TemplateResult | typeof nothing {
   if (plugin.catalog.publishedToClawHub === false && plugin.catalog.downloads === undefined) {
-    const label = t("pluginsPage.localPopularityUnavailable");
-    return html`<span
-      class="plugin-download-count plugin-download-count--unavailable"
-      title=${label}
-    >
-      <span aria-hidden="true">${icons.info}</span>
-      <span class="sr-only">${label}</span>
-    </span>`;
+    return html`<span class="plugin-download-count plugin-download-count--unavailable">—</span>`;
   }
   return renderDownloadCount(plugin.catalog.downloads, { compact: true });
 }
@@ -134,7 +136,7 @@ function renderFeaturedCard(
     ></a>
     <div class="installed-plugins-card__head">
       <span class="installed-plugins-card__art plugin-featured-card__art" aria-hidden="true">
-        ${categoryIcon(plugin.catalog.icon)}
+        ${renderCatalogIcon(plugin, props)}
       </span>
       ${renderPluginCardIdentity({
         name: plugin.catalog.name,
@@ -151,46 +153,43 @@ function renderFeaturedCard(
 }
 
 function renderFeatured(props: PluginCatalogResultsProps): TemplateResult {
-  return renderSettingsPage(
-    html`<section class="plugin-featured" aria-labelledby="plugin-featured-title">
-      <header class="plugin-catalog-results__header">
-        <div>
-          <h2 id="plugin-featured-title">${t("pluginsPage.featuredTitle")}</h2>
-        </div>
-      </header>
-      ${
-        props.featuredLoading
-          ? renderSettingsLoadingSkeleton({
-              label: t("pluginsPage.loadingFeatured"),
-              rows: 3,
-              carapace: true,
-            })
-          : props.featuredError
-            ? html`<div class="callout danger oc-banner oc-banner-error" role="alert">
-                <span>${formatUiExternalText(props.featuredError)}</span>
-                <button
-                  type="button"
-                  class="btn btn--sm oc-action oc-action-secondary oc-banner-action"
-                  @click=${props.onRetryFeatured}
-                >
-                  ${t("pluginsPage.tryAgain")}
-                </button>
+  return html`<section class="plugin-featured" aria-labelledby="plugin-featured-title">
+    <header class="plugin-catalog-results__header">
+      <div>
+        <h2 id="plugin-featured-title">${t("pluginsPage.featuredTitle")}</h2>
+      </div>
+    </header>
+    ${
+      props.featuredLoading
+        ? renderSettingsLoadingSkeleton({
+            label: t("pluginsPage.loadingFeatured"),
+            rows: 3,
+            carapace: true,
+          })
+        : props.featuredError
+          ? html`<div class="callout danger oc-banner oc-banner-error" role="alert">
+              <span>${formatUiExternalText(props.featuredError)}</span>
+              <button
+                type="button"
+                class="btn btn--sm oc-action oc-action-secondary oc-banner-action"
+                @click=${props.onRetryFeatured}
+              >
+                ${t("pluginsPage.tryAgain")}
+              </button>
+            </div>`
+          : props.featured.length === 0
+            ? html`<p class="plugin-catalog-results__empty">
+                ${t("pluginsPage.noFeaturedResults")}
+              </p>`
+            : html`<div class="plugin-featured__grid">
+                ${repeat(
+                  props.featured,
+                  (plugin) => plugin.id,
+                  (plugin) => renderFeaturedCard(plugin, props),
+                )}
               </div>`
-            : props.featured.length === 0
-              ? html`<p class="plugin-catalog-results__empty">
-                  ${t("pluginsPage.noFeaturedResults")}
-                </p>`
-              : html`<div class="plugin-featured__grid">
-                  ${repeat(
-                    props.featured,
-                    (plugin) => plugin.id,
-                    (plugin) => renderFeaturedCard(plugin, props),
-                  )}
-                </div>`
-      }
-    </section>`,
-    { wide: true, carapace: true },
-  );
+    }
+  </section>`;
 }
 
 function renderCategories(props: PluginCatalogResultsProps): TemplateResult {
@@ -280,7 +279,7 @@ function renderResultRow(
       }}
     ></a>
     <span class="plugin-catalog-result__icon" aria-hidden="true">
-      ${categoryIcon(plugin.catalog.icon)}
+      ${renderCatalogIcon(plugin, props)}
     </span>
     <div class="plugin-catalog-result__identity">
       <div class="plugin-catalog-result__title-row">
@@ -295,6 +294,9 @@ function renderResultRow(
 }
 
 function intentLabel(intent: PluginDiscoveryIntent): string {
+  if (intent === "bundled") {
+    return t("pluginsPage.intentBundled");
+  }
   if (intent === "trending") {
     return t("pluginsPage.intentTrending");
   }
@@ -306,139 +308,136 @@ function intentLabel(intent: PluginDiscoveryIntent): string {
 
 function renderExplorer(props: PluginCatalogResultsProps): TemplateResult {
   const visibleItems = props.result?.items ?? [];
-  return renderSettingsPage(
-    html`
-      <section class="plugin-catalog-results" aria-labelledby="plugin-catalog-results-title">
-        <header class="plugin-catalog-results__header">
-          <div>
-            <h2 id="plugin-catalog-results-title">${t("pluginsPage.exploreTitle")}</h2>
-          </div>
-        </header>
-        <div class="plugin-catalog-controls">
-          ${renderHubTabs({
-            id: "plugin-catalog-intents",
-            active: props.intent,
-            tabs: (["all", "trending", "official"] as const).map((intent) => ({
-              value: intent,
-              label: intentLabel(intent),
-            })),
-            ariaLabel: t("pluginsPage.viewsLabel"),
-            panelId: "plugin-catalog-results-panel",
-            className: "plugin-catalog-intents",
-            carapace: true,
-            variant: "sub",
-            onSelect: props.onIntentChange,
-          })}
-          <label class="plugin-catalog-search">
-            <span aria-hidden="true">${icons.search}</span>
-            <input
-              type="search"
-              class="oc-input"
-              aria-label=${t("pluginsPage.searchClawHub")}
-              placeholder=${t("pluginsPage.searchClawHub")}
-              .value=${props.query}
-              @input=${(event: Event) => {
-                if (event.currentTarget instanceof HTMLInputElement) {
-                  props.onQueryChange(event.currentTarget.value);
-                }
-              }}
-            />
-          </label>
+  return html`
+    <section class="plugin-catalog-results" aria-labelledby="plugin-catalog-results-title">
+      <header class="plugin-catalog-results__header">
+        <div>
+          <h2 id="plugin-catalog-results-title">${t("pluginsPage.exploreTitle")}</h2>
         </div>
-        <div
-          id="plugin-catalog-results-panel"
-          class="plugin-catalog-layout"
-          role="tabpanel"
-          aria-labelledby=${`plugin-catalog-intents-tab-${props.intent}`}
-        >
-          ${renderCategorySelect(props)} ${renderCategories(props)}
-          <div class="plugin-catalog-layout__results">
-            ${
-              props.remoteError
-                ? html`<div class="callout warning oc-banner" role="status">
-                    ${formatUiExternalText(props.remoteError)}
-                  </div>`
-                : nothing
-            }
-            ${
-              props.loading
-                ? renderSettingsLoadingSkeleton({
-                    label: t("pluginsPage.loadingDiscovery"),
-                    rows: 6,
-                    carapace: true,
-                  })
-                : props.error
-                  ? html`<div class="callout danger oc-banner oc-banner-error" role="alert">
-                      <span>${formatUiExternalText(props.error)}</span>
-                      <button
-                        type="button"
-                        class="btn btn--sm oc-action oc-action-secondary oc-banner-action"
-                        @click=${props.onRetry}
-                      >
-                        ${t("pluginsPage.tryAgain")}
-                      </button>
-                    </div>`
-                  : !props.connected
-                    ? html`<p class="plugin-catalog-results__empty">
-                        ${t("pluginsPage.discoveryOffline")}
-                      </p>`
-                    : visibleItems.length === 0
-                      ? html`<p class="plugin-catalog-results__empty">
-                          ${t("pluginsPage.noDiscoveryResults")}
-                        </p>`
-                      : html`<div class="plugin-catalog-results__table">
-                          <div class="plugin-catalog-results__list-header" aria-hidden="true">
-                            <span></span>
-                            <span>${t("pluginsPage.catalogPluginColumn")}</span>
-                            <span>${t("pluginsPage.catalogDownloadsColumn")}</span>
-                          </div>
-                          <div class="plugin-catalog-results__list">
-                            ${repeat(
-                              visibleItems,
-                              (plugin) => plugin.id,
-                              (plugin) => renderResultRow(plugin, props),
-                            )}
-                          </div>
-                        </div>`
-            }
-            ${
-              props.canGoPrevious || props.canGoNext
-                ? html`<nav
-                    class="plugin-catalog-pagination"
-                    aria-label=${t("pluginsPage.catalogPaginationLabel")}
-                  >
-                    ${
-                      props.canGoPrevious
-                        ? html`<button
-                            type="button"
-                            class="btn btn--sm oc-action oc-action-ghost"
-                            ?disabled=${props.paging}
-                            @click=${props.onPreviousPage}
-                          >
-                            ${t("pluginsPage.previousPage")}
-                          </button>`
-                        : nothing
-                    }
-                    <span aria-live="polite">
-                      ${t("pluginsPage.pageNumber", { page: String(props.pageNumber) })}
-                    </span>
+      </header>
+      <div class="plugin-catalog-controls">
+        ${renderHubTabs({
+          id: "plugin-catalog-intents",
+          active: props.intent,
+          tabs: (["all", "bundled", "trending", "official"] as const).map((intent) => ({
+            value: intent,
+            label: intentLabel(intent),
+          })),
+          ariaLabel: t("pluginsPage.viewsLabel"),
+          panelId: "plugin-catalog-results-panel",
+          className: "plugin-catalog-intents",
+          carapace: true,
+          variant: "sub",
+          onSelect: props.onIntentChange,
+        })}
+        <label class="plugin-catalog-search">
+          <span aria-hidden="true">${icons.search}</span>
+          <input
+            type="search"
+            class="oc-input"
+            aria-label=${t("pluginsPage.searchPlugins")}
+            placeholder=${t("pluginsPage.searchPlugins")}
+            .value=${props.query}
+            @input=${(event: Event) => {
+              if (event.currentTarget instanceof HTMLInputElement) {
+                props.onQueryChange(event.currentTarget.value);
+              }
+            }}
+          />
+        </label>
+      </div>
+      <div
+        id="plugin-catalog-results-panel"
+        class="plugin-catalog-layout"
+        role="tabpanel"
+        aria-labelledby=${`plugin-catalog-intents-tab-${props.intent}`}
+      >
+        ${renderCategorySelect(props)} ${renderCategories(props)}
+        <div class="plugin-catalog-layout__results">
+          ${
+            props.remoteError
+              ? html`<div class="callout warning oc-banner" role="status">
+                  ${formatUiExternalText(props.remoteError)}
+                </div>`
+              : nothing
+          }
+          ${
+            props.loading
+              ? renderSettingsLoadingSkeleton({
+                  label: t("pluginsPage.loadingDiscovery"),
+                  rows: 6,
+                  carapace: true,
+                })
+              : props.error
+                ? html`<div class="callout danger oc-banner oc-banner-error" role="alert">
+                    <span>${formatUiExternalText(props.error)}</span>
                     <button
                       type="button"
-                      class="btn btn--sm oc-action oc-action-ghost"
-                      ?disabled=${props.paging || !props.canGoNext}
-                      @click=${props.onNextPage}
+                      class="btn btn--sm oc-action oc-action-secondary oc-banner-action"
+                      @click=${props.onRetry}
                     >
-                      ${t("pluginsPage.nextPage")}
+                      ${t("pluginsPage.tryAgain")}
                     </button>
-                  </nav>`
-                : nothing
-            }
-          </div>
+                  </div>`
+                : !props.connected
+                  ? html`<p class="plugin-catalog-results__empty">
+                      ${t("pluginsPage.discoveryOffline")}
+                    </p>`
+                  : visibleItems.length === 0
+                    ? html`<p class="plugin-catalog-results__empty">
+                        ${t("pluginsPage.noDiscoveryResults")}
+                      </p>`
+                    : html`<div class="plugin-catalog-results__table">
+                        <div class="plugin-catalog-results__list-header" aria-hidden="true">
+                          <span></span>
+                          <span>${t("pluginsPage.catalogPluginColumn")}</span>
+                          <span>${t("pluginsPage.catalogDownloadsColumn")}</span>
+                        </div>
+                        <div class="plugin-catalog-results__list">
+                          ${repeat(
+                            visibleItems,
+                            (plugin) => plugin.id,
+                            (plugin) => renderResultRow(plugin, props),
+                          )}
+                        </div>
+                      </div>`
+          }
+          ${
+            props.canGoPrevious || props.canGoNext
+              ? html`<nav
+                  class="plugin-catalog-pagination"
+                  aria-label=${t("pluginsPage.catalogPaginationLabel")}
+                >
+                  ${
+                    props.canGoPrevious
+                      ? html`<button
+                          type="button"
+                          class="btn btn--sm oc-action oc-action-ghost"
+                          ?disabled=${props.paging}
+                          @click=${props.onPreviousPage}
+                        >
+                          ${t("pluginsPage.previousPage")}
+                        </button>`
+                      : nothing
+                  }
+                  <span aria-live="polite">
+                    ${t("pluginsPage.pageNumber", { page: String(props.pageNumber) })}
+                  </span>
+                  <button
+                    type="button"
+                    class="btn btn--sm oc-action oc-action-ghost"
+                    ?disabled=${props.paging || !props.canGoNext}
+                    @click=${props.onNextPage}
+                  >
+                    ${t("pluginsPage.nextPage")}
+                  </button>
+                </nav>`
+              : nothing
+          }
         </div>
-      </section>
-    `,
-    { wide: true, carapace: true },
-  );
+      </div>
+    </section>
+  `;
 }
 
 export function renderPluginCatalogResults(props: PluginCatalogResultsProps): TemplateResult {

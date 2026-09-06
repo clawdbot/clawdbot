@@ -451,6 +451,97 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Chat with your agent from Telegram groups and direct messages."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Connect OpenClaw to Matrix rooms and direct messages."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Coordinate work using the included calendar plugin."
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Dashboard workboard for agent-owned issues and sessions."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Matrix access token"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Matrix homeserver URL"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Plan and coordinate work from a shared calendar."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Run typed workflows with resumable approvals."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Send and receive Matrix messages."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Web extraction and crawling."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Access token"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Enabled"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Homeserver"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/profile/profile-hero.ts",

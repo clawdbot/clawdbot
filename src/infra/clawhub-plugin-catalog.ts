@@ -24,13 +24,14 @@ export type ClawHubPluginCatalogEntry = {
   categories: string[];
   latestVersion?: string;
   runtimeId?: string;
+  iconUrl?: string;
   downloads?: number;
   installs?: number;
   verificationTier?: string;
 };
 
 export type ClawHubPluginDetail = ClawHubPluginCatalogEntry & {
-  owner?: { handle?: string; displayName?: string };
+  owner?: { handle?: string; displayName?: string; imageUrl?: string };
   topics: string[];
   createdAt?: number;
   updatedAt?: number;
@@ -97,6 +98,14 @@ type ClawHubReadOptions = {
   fetchImpl?: ClawHubFetch;
 };
 
+const OFFICIAL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
+let officialCatalogCache:
+  | {
+      expiresAt: number;
+      value: Promise<ClawHubPluginCatalogEntry[]>;
+    }
+  | undefined;
+
 const BARE_ICON_KEY = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const PLUGIN_CATEGORY_ICON_KEYS = new Set([
   "activity",
@@ -144,6 +153,7 @@ function parseCatalogPackage(value: unknown, context: string): ClawHubPluginCata
   const ownerHandle = readClawHubStringField(value, "ownerHandle", context);
   const latestVersion = readClawHubStringField(value, "latestVersion", context);
   const runtimeId = readClawHubStringField(value, "runtimeId", context);
+  const iconUrl = readClawHubStringField(value, "icon", context);
   const verificationTier = readClawHubStringField(value, "verificationTier", context);
   const downloads = stats
     ? readOptionalNonNegativeNumber(stats, "downloads", `${context} stats`)
@@ -161,6 +171,7 @@ function parseCatalogPackage(value: unknown, context: string): ClawHubPluginCata
     ...(ownerHandle ? { ownerHandle } : {}),
     ...(latestVersion ? { latestVersion } : {}),
     ...(runtimeId ? { runtimeId } : {}),
+    ...(iconUrl ? { iconUrl } : {}),
     ...(verificationTier ? { verificationTier } : {}),
     ...(downloads !== undefined ? { downloads } : {}),
     ...(installs !== undefined ? { installs } : {}),
@@ -440,6 +451,59 @@ export async function fetchClawHubPluginCatalog(
   return parseCatalogList(value);
 }
 
+/** Reads the complete official plugin identity set used to classify bundled-only entries. */
+export async function fetchAllOfficialClawHubPlugins(
+  options: ClawHubReadOptions = {},
+): Promise<ClawHubPluginCatalogEntry[]> {
+  const usesDefaultClient = Object.values(options).every((value) => value === undefined);
+  const now = Date.now();
+  if (usesDefaultClient && officialCatalogCache && now < officialCatalogCache.expiresAt) {
+    return [...(await officialCatalogCache.value)];
+  }
+
+  const read = readAllOfficialClawHubPlugins(options);
+  if (!usesDefaultClient) {
+    return await read;
+  }
+
+  // All-search classification needs the complete official identity set. Keep one bounded,
+  // shared read so repeated keystrokes do not replay every ClawHub pagination request.
+  officialCatalogCache = { expiresAt: now + OFFICIAL_CATALOG_CACHE_TTL_MS, value: read };
+  try {
+    return [...(await read)];
+  } catch (error) {
+    if (officialCatalogCache?.value === read) {
+      officialCatalogCache = undefined;
+    }
+    throw error;
+  }
+}
+
+async function readAllOfficialClawHubPlugins(
+  options: ClawHubReadOptions,
+): Promise<ClawHubPluginCatalogEntry[]> {
+  const items: ClawHubPluginCatalogEntry[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const page = await fetchClawHubPluginCatalog({
+      ...options,
+      intent: "official",
+      ...(cursor ? { cursor } : {}),
+      limit: 100,
+    });
+    items.push(...page.items);
+    cursor = page.nextCursor;
+    if (cursor && seenCursors.has(cursor)) {
+      throw new Error("ClawHub official catalog repeated a pagination cursor");
+    }
+    if (cursor) {
+      seenCursors.add(cursor);
+    }
+  } while (cursor);
+  return items;
+}
+
 export async function fetchClawHubPluginCategories(
   options: ClawHubReadOptions = {},
 ): Promise<ClawHubPluginCategory[]> {
@@ -511,6 +575,9 @@ export async function fetchClawHubPluginDetail(
   const ownerDisplayName = ownerRecord
     ? readClawHubStringField(ownerRecord, "displayName", "plugin owner")
     : undefined;
+  const ownerImageUrl = ownerRecord
+    ? readClawHubStringField(ownerRecord, "image", "plugin owner")
+    : undefined;
 
   const shared = {
     baseUrl: params.baseUrl,
@@ -555,6 +622,7 @@ export async function fetchClawHubPluginDetail(
   const owner = {
     ...(ownerHandle ? { handle: ownerHandle } : {}),
     ...(ownerDisplayName ? { displayName: ownerDisplayName } : {}),
+    ...(ownerImageUrl ? { imageUrl: ownerImageUrl } : {}),
   };
   return {
     ...catalog,

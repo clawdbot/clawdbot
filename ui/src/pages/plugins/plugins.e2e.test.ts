@@ -1,222 +1,33 @@
 // Control UI tests cover plugin catalog browsing and lifecycle mutations.
-import { mkdir, rm } from "node:fs/promises";
-import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
-import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../../test-helpers/control-ui-e2e.ts";
-import {
-  calendarInspection,
-  calendarPlugin,
-  calendarSearchResponse,
-  configSnapshot,
-  discoveryCategories,
+  captureScreenshot,
+  desktopViewport,
+  describeControlUiE2e,
   discoveryResult,
-  enableWorkboardResult,
-  finalDiscoveryPageItems,
-  featuredResult,
   initialInventory,
-  installResult,
+  installMockGateway,
   installedPluginsInventory,
+  inventory,
   localCalendarDisabled,
   localCalendarEnabled,
-  localOnlyDetail,
   localOnlyDiscoveryPlugin,
-  lobsterInspection,
-  lobsterPlugin,
-  matrixDetail,
   matrixConfigSchema,
   matrixDiscoveryPlugin,
   matrixEnabled,
   matrixNeedsSetup,
-  remoteIconPlugin,
-  secondDiscoveryPageItems,
-  telegramPlugin,
-  uninstallResult,
-  workboardDisabled,
-  workboardEnabled,
-  workboardInspection,
-} from "../../test-helpers/plugins-e2e-fixtures.test-support.ts";
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const updateScreenshots = process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1";
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/plugins");
-const desktopViewport = { height: 1000, width: 1440 };
-const pluginMethods = [
-  "plugins.list",
-  "plugins.inspect",
-  "plugins.search",
-  "plugins.catalog.browse",
-  "plugins.catalog.categories",
-  "plugins.catalog.get",
-  "plugins.install",
-  "plugins.setEnabled",
-  "plugins.uninstall",
-];
-let browser: Browser;
-let server: ControlUiE2eServer;
-
-function inventory(plugins: PluginCatalogItem[]): PluginListResult {
-  return { plugins, diagnostics: [], mutationAllowed: true };
-}
-
-function readOnlyConnectResponse() {
-  return {
-    auth: {
-      deviceToken: "plugins-read-only-device-token",
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    features: { events: [], methods: pluginMethods },
-    controlUiTabs: [],
-    protocol: PROTOCOL_VERSION,
-    server: { connId: "plugins-read-only", version: "e2e" },
-    snapshot: {
-      sessionDefaults: {
-        defaultAgentId: "main",
-        mainKey: "main",
-        mainSessionKey: "main",
-        scope: "agent",
-      },
-    },
-    type: "hello-ok",
-  };
-}
-
-async function captureScreenshot(page: Page, name: string): Promise<void> {
-  if (!updateScreenshots) {
-    return;
-  }
-  await mkdir(artifactDir, { recursive: true });
-  await page.locator(".content").screenshot({
-    animations: "disabled",
-    caret: "hide",
-    path: path.join(artifactDir, name),
-  });
-}
-
-async function newContext(viewport = desktopViewport): Promise<BrowserContext> {
-  return browser.newContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport,
-  });
-}
-
-function pluginMethodResponses() {
-  return {
-    "config.get": configSnapshot(false),
-    "plugins.list": initialInventory,
-    "plugins.inspect": {
-      cases: [
-        { match: { pluginId: "workboard" }, response: workboardInspection },
-        { match: { pluginId: "lobster" }, response: lobsterInspection },
-        { match: { pluginId: "calendar-plus" }, response: calendarInspection },
-      ],
-    },
-    "plugins.search": {
-      cases: [
-        {
-          match: { query: "calendar", limit: 20 },
-          response: calendarSearchResponse,
-        },
-      ],
-    },
-    "plugins.catalog.browse": {
-      cases: [
-        { match: { intent: "featured", pageSize: 9 }, response: featuredResult },
-        {
-          match: { intent: "all", cursor: "catalog-page-2", pageSize: 25 },
-          response: {
-            items: secondDiscoveryPageItems,
-            nextCursor: "catalog-page-3",
-          },
-        },
-        {
-          match: { intent: "all", cursor: "catalog-page-3", pageSize: 25 },
-          response: { items: finalDiscoveryPageItems },
-        },
-        {
-          match: { intent: "official", pageSize: 25 },
-          response: { items: [matrixDiscoveryPlugin] },
-        },
-        {
-          match: { intent: "all", category: "channels", pageSize: 25 },
-          response: { items: [matrixDiscoveryPlugin] },
-        },
-        {
-          match: { intent: "all", query: "matrix", pageSize: 25 },
-          response: { items: [matrixDiscoveryPlugin] },
-        },
-        { match: { intent: "all", pageSize: 25 }, response: discoveryResult },
-      ],
-    },
-    "plugins.catalog.categories": discoveryCategories,
-    "plugins.catalog.get": {
-      cases: [
-        { match: { id: matrixDiscoveryPlugin.id }, response: matrixDetail },
-        { match: { id: localOnlyDiscoveryPlugin.id }, response: localOnlyDetail },
-      ],
-    },
-    "plugins.install": {
-      cases: [
-        {
-          match: {
-            source: "clawhub",
-            packageName: "calendar-plus",
-            acknowledgeCapabilities: { reviewToken: calendarInspection.reviewToken },
-          },
-          response: installResult,
-        },
-      ],
-    },
-    "plugins.setEnabled": {
-      cases: [
-        {
-          match: { pluginId: "workboard", enabled: true },
-          response: enableWorkboardResult,
-        },
-      ],
-    },
-    "plugins.uninstall": {
-      cases: [
-        {
-          match: { pluginId: "calendar-plus" },
-          response: uninstallResult,
-        },
-      ],
-    },
-  };
-}
+  newContext,
+  pluginMethodResponses,
+  pluginMethods,
+  readOnlyConnectResponse,
+  server,
+  setupPluginsE2e,
+  teardownPluginsE2e,
+} from "./plugins.e2e.test-support.ts";
 
 describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    if (updateScreenshots) {
-      await rm(artifactDir, { force: true, recursive: true });
-      await mkdir(artifactDir, { recursive: true });
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
+  beforeAll(setupPluginsE2e);
+  afterAll(teardownPluginsE2e);
 
   it("shows a prioritized installed plugins inventory with inline search and settings navigation", async () => {
     const context = await newContext();
@@ -233,6 +44,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}plugins`);
       await page.getByRole("heading", { name: "Installed plugins", exact: true }).waitFor();
       await page.getByRole("heading", { name: "Explore plugins", exact: true }).waitFor();
+      const installedSection = page.locator(".installed-plugins");
       const marketplaceRow = page.locator(".plugin-catalog-result", { hasText: "Matrix" });
       await marketplaceRow.waitFor();
       expect(await marketplaceRow.textContent()).toContain("@openclaw");
@@ -244,8 +56,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         await cards.evaluateAll((elements) =>
           elements.slice(0, 5).map((card) => card.dataset.pluginId),
         ),
-      ).toEqual(["enabled-a", "enabled-b", "attention-a", "attention-b", "disabled-01"]);
-      expect(await page.getByRole("searchbox", { name: "Search plugins" }).count()).toBe(0);
+      ).toEqual(["attention-a", "attention-b", "needs-setup", "enabled-a", "enabled-b"]);
+      expect(
+        await installedSection.getByRole("searchbox", { name: "Search plugins" }).count(),
+      ).toBe(0);
       const firstCard = page.locator('[data-plugin-id="attention-a"]');
       expect(
         await firstCard
@@ -321,7 +135,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       }
       const settingsBeforeSearch = await settingsButton.boundingBox();
       await searchButton.click();
-      const search = page.getByRole("searchbox", { name: "Search plugins" });
+      const search = installedSection.getByRole("searchbox", { name: "Search plugins" });
       await expect
         .poll(() => search.evaluate((element) => element === document.activeElement))
         .toBe(true);
@@ -463,7 +277,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(
         await page.getByText("Connect OpenClaw to Matrix rooms and direct messages.").count(),
       ).toBe(1);
-      const detailTabs = page.getByRole("tablist", { name: "Plugin details" });
+      const detailTabs = page.locator("wa-tab-group.plugin-catalog-detail__tabs");
       expect(await detailTabs.getByRole("tab", { name: "README" }).count()).toBe(1);
       expect(await detailTabs.getByRole("tab", { name: "Skills" }).count()).toBe(1);
       expect(await detailTabs.getByRole("tab", { name: "Configuration" }).count()).toBe(1);
@@ -471,15 +285,32 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await detailTabs.getByRole("tab", { name: "Versions" }).count()).toBe(1);
       expect(await detailTabs.getByRole("tab", { name: "Advanced" }).count()).toBe(1);
       expect(await page.getByText("52.2k", { exact: true }).count()).toBe(1);
-      expect(await page.getByText("Capabilities match the stated purpose.").count()).toBe(1);
-      expect(
-        await page
-          .getByRole("link", { name: "openclaw/openclaw", exact: true })
-          .getAttribute("href"),
-      ).toBe("https://github.com/openclaw/openclaw");
+      expect(await page.getByText("Pass", { exact: true }).count()).toBe(1);
+      expect(await page.getByText("Type", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("code-plugin", { exact: true }).count()).toBe(0);
+      expect(await page.getByRole("link", { name: "openclaw/openclaw", exact: true }).count()).toBe(
+        0,
+      );
       expect(
         await page.getByRole("link", { name: "@openclaw", exact: true }).getAttribute("href"),
-      ).toBe("https://clawhub.ai/user/openclaw");
+      ).toBe("https://clawhub.ai/openclaw");
+      expect(await page.getByRole("link", { name: "Security audit" }).getAttribute("href")).toBe(
+        "https://clawhub.ai/openclaw/plugins/matrix/security-audit",
+      );
+      expect(await page.getByRole("link", { name: "View on ClawHub" }).getAttribute("href")).toBe(
+        "https://clawhub.ai/openclaw/plugins/matrix",
+      );
+      expect(await page.getByRole("tab", { name: "Plugins", exact: true }).count()).toBe(0);
+      expect(
+        await page.getByRole("button", { name: "Install", exact: true }).evaluate((button) => {
+          const probe = document.createElement("span");
+          probe.style.background = "var(--primary)";
+          document.body.append(probe);
+          const expected = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return getComputedStyle(button).backgroundColor === expected;
+        }),
+      ).toBe(true);
 
       await detailTabs.getByRole("tab", { name: "Versions" }).click();
       expect(await page.getByText("2.1.0", { exact: true }).count()).toBe(1);
@@ -685,13 +516,15 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       featureMethods: pluginMethods,
       methodResponses: pluginMethodResponses(),
     });
+
     try {
       await page.goto(`${server.baseUrl}plugins`);
       const row = page.locator(`[data-plugin-id="${localOnlyDiscoveryPlugin.id}"]`);
       await row.waitFor();
       expect(await row.getByText("Local Calendar", { exact: true }).count()).toBe(1);
       expect(await row.getByText(/downloads/u).count()).toBe(0);
-      expect(await row.getByText(/not been published to ClawHub/u).count()).toBe(1);
+      expect(await row.getByText("—", { exact: true }).count()).toBe(1);
+
       await row.getByRole("link", { name: "Local Calendar", exact: true }).click();
       await page.getByRole("heading", { level: 1, name: "Local Calendar", exact: true }).waitFor();
       expect(
@@ -699,6 +532,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       ).toContainEqual({ id: localOnlyDiscoveryPlugin.id });
       expect(await page.getByText("@openclaw", { exact: true }).count()).toBe(0);
       expect(await page.getByText("Security", { exact: true }).count()).toBe(0);
+      await page
+        .locator("wa-tab-group.plugin-catalog-detail__tabs")
+        .getByRole("tab", { name: "Skills" })
+        .click();
+      expect(await page.getByText("Calendar planning", { exact: true }).count()).toBe(1);
     } finally {
       await context.close();
     }
@@ -713,84 +551,24 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         ...pluginMethodResponses(),
         "plugins.catalog.browse": {
           items: [localOnlyDiscoveryPlugin],
-          remoteError: "ClawHub is unavailable. Local plugins remain available.",
+          remoteError:
+            "ClawHub is unavailable: service unavailable. Local plugins remain available.",
         },
       },
     });
+
     try {
       await page.goto(`${server.baseUrl}plugins`);
-      await page.getByText("Local Calendar", { exact: true }).waitFor();
-      expect(await page.getByText(/ClawHub is unavailable/u).count()).toBe(1);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("installs, configures, and enables a catalog plugin across Gateway restarts", async () => {
-    const context = await newContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: [...pluginMethods, "config.schema", "config.set"],
-      methodResponses: {
-        ...pluginMethodResponses(),
-        "config.schema": matrixConfigSchema,
-        "plugins.list": {
-          sequence: [
-            initialInventory,
-            inventory([...initialInventory.plugins, matrixNeedsSetup]),
-            inventory([...initialInventory.plugins, matrixNeedsSetup]),
-            inventory([...initialInventory.plugins, matrixNeedsSetup]),
-            inventory([...initialInventory.plugins, matrixEnabled]),
-          ],
-        },
-        "plugins.install": { ok: true, plugin: matrixNeedsSetup, restartRequired: true },
-        "plugins.setEnabled": { ok: true, plugin: matrixEnabled, restartRequired: true },
-      },
-    });
-    try {
-      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
-      await page.getByRole("button", { name: "Install", exact: true }).click();
-      const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
-      await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
-      expect((await gateway.waitForRequest("plugins.install")).params).toEqual({
-        source: "clawhub",
-        packageName: "matrix",
-      });
-      await gateway.setOnline(false);
-      await gateway.setOnline(true);
-      await wizard.getByRole("textbox", { name: "Homeserver" }).fill("https://matrix.example");
-      await wizard.getByRole("textbox", { name: "Access token" }).fill("secret-token");
-      await wizard.getByRole("button", { name: "Save and enable", exact: true }).click();
-      await gateway.waitForRequest("plugins.setEnabled");
-      await gateway.setOnline(false);
-      await gateway.setOnline(true);
-      await wizard.getByText("Plugin ready", { exact: true }).waitFor();
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("keeps failed and stalled installations actionable", async () => {
-    const context = await newContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: pluginMethods,
-      methodResponses: {
-        ...pluginMethodResponses(),
-        "plugins.install": {
-          __mockError: { code: "UNAVAILABLE", message: "Package download failed; retry." },
-        },
-      },
-    });
-    try {
-      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
-      await page.getByRole("button", { name: "Install", exact: true }).click();
-      const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
-      await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
-      await wizard.getByText("Installation did not complete", { exact: true }).waitFor();
-      await wizard.getByRole("button", { name: "Try again", exact: true }).click();
-      await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
-      await expect.poll(async () => (await gateway.getRequests("plugins.install")).length).toBe(2);
+      const explore = page.getByRole("region", { name: "Explore plugins" });
+      await explore.getByText("Local Calendar", { exact: true }).waitFor();
+      expect(
+        await page
+          .getByText(
+            "ClawHub is unavailable: service unavailable. Local plugins remain available.",
+            { exact: true },
+          )
+          .count(),
+      ).toBe(1);
     } finally {
       await context.close();
     }
@@ -820,7 +598,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         await matrixFeatured
           .getByRole("link", { name: "@openclaw", exact: true })
           .getAttribute("href"),
-      ).toBe("https://clawhub.ai/user/openclaw");
+      ).toBe("https://clawhub.ai/openclaw");
       expect(await matrixFeatured.getByLabel("Official", { exact: true }).count()).toBe(1);
       expect(await matrixFeatured.getByText("52.2k downloads", { exact: true }).count()).toBe(1);
       expect(await matrixFeatured.locator(".plugin-download-count svg").count()).toBe(1);
@@ -867,8 +645,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
           .count(),
       ).toBe(1);
       const telegramCatalog = page.locator('[data-plugin-id="ch_QG9wZW5jbGF3L3RlbGVncmFt"]');
-      expect(await telegramCatalog.count()).toBe(0);
-      expect(await page.locator('[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').count()).toBe(1);
+      expect(await telegramCatalog.count()).toBe(1);
+      expect(
+        await page.locator('.plugin-catalog-result[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').count(),
+      ).toBe(1);
 
       const matrixCatalog = page.locator('.plugin-catalog-result[data-plugin-id="ch_bWF0cml4"]');
       await matrixCatalog.waitFor();
@@ -881,7 +661,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         await matrixCatalog
           .getByRole("link", { name: "@openclaw", exact: true })
           .getAttribute("href"),
-      ).toBe("https://clawhub.ai/user/openclaw");
+      ).toBe("https://clawhub.ai/openclaw");
       expect(await page.getByText("Plugin", { exact: true }).count()).toBeGreaterThan(0);
       expect(await page.getByText("Downloads", { exact: true }).count()).toBeGreaterThan(0);
       expect(
@@ -907,6 +687,17 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       ).toBe("rgba(0, 0, 0, 0)");
 
       let requestCount = (await gateway.getRequests("plugins.catalog.browse")).length;
+      expect(
+        await page
+          .getByRole("tab", { name: "Bundled", exact: true })
+          .evaluate((tab) => Array.from(tab.parentElement?.children ?? []).indexOf(tab)),
+      ).toBe(1);
+      await page.getByRole("tab", { name: "Bundled", exact: true }).click();
+      const bundledRequest = await gateway.waitForRequest("plugins.catalog.browse", {
+        after: requestCount,
+      });
+      expect(bundledRequest.params).toMatchObject({ intent: "bundled", pageSize: 25 });
+      requestCount = (await gateway.getRequests("plugins.catalog.browse")).length;
       await page.getByRole("tab", { name: "Official", exact: true }).click();
       const officialRequest = await gateway.waitForRequest("plugins.catalog.browse", {
         after: requestCount,
@@ -917,8 +708,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await explore.getByRole("link", { name: /Matrix/u }).waitFor();
       expect(await featuredCards.count()).toBe(9);
 
-      await page.getByRole("tab", { name: "All", exact: true }).click();
-      const search = page.getByRole("searchbox", { name: "Search ClawHub plugins" });
+      const search = page.getByRole("searchbox", { name: "Search plugins" });
       requestCount = (await gateway.getRequests("plugins.catalog.browse")).length;
       await search.fill("matrix");
       await expect
@@ -948,9 +738,13 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         )
         .toBe(true);
       await expect.poll(() => explore.locator(".plugin-catalog-result").count()).toBe(25);
+      expect(
+        await page.getByRole("tab", { name: "All", exact: true }).getAttribute("aria-selected"),
+      ).toBe("true");
+      await expect.poll(() => explore.locator(".plugin-catalog-result").count()).toBe(25);
       expect(await page.getByRole("button", { name: "Back", exact: true }).count()).toBe(0);
       await page.getByRole("button", { name: "Next", exact: true }).click();
-      await page.locator(".plugin-catalog-result", { hasText: "Slack" }).waitFor();
+      await page.locator(".plugin-catalog-result", { hasText: "Second page 00" }).waitFor();
       expect(await explore.locator(".plugin-catalog-result").count()).toBe(25);
       expect(await page.getByText("Page 2", { exact: true }).count()).toBe(1);
       expect(await explore.getByRole("link", { name: /Matrix/u }).count()).toBe(0);
@@ -959,7 +753,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await explore.locator(".plugin-catalog-result").count()).toBe(25);
       expect(await page.getByText("Page 1", { exact: true }).count()).toBe(1);
       expect(await page.getByRole("button", { name: "Back", exact: true }).count()).toBe(0);
-      expect(await page.locator(".plugin-catalog-result", { hasText: "Slack" }).count()).toBe(0);
+      expect(
+        await page.locator(".plugin-catalog-result", { hasText: "Second page 00" }).count(),
+      ).toBe(0);
       expect(
         await page.getByText("You’ve reached the end of the catalog.", { exact: true }).count(),
       ).toBe(0);

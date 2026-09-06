@@ -45,6 +45,7 @@ describe("PluginsPage", () => {
       const { page } = await mountPage(
         createContext(harness.gateway),
         delayed ? undefined : routeData,
+        "settings",
       );
 
       if (delayed) {
@@ -69,15 +70,16 @@ describe("PluginsPage", () => {
   it("surfaces a route catalog load failure without retrying it", async () => {
     const { client, request } = createClient(async () => createResult());
     const harness = createGateway(client);
-    const result = createResult();
-    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
+    const { page } = await mountPage(createContext(harness.gateway), {
+      ...createPluginsRouteData(harness.gateway, null),
+      error: "catalog unavailable",
+    });
 
-    const { page } = await mountPage(createContext(harness.gateway), routeData);
-
-    expect(page.result).toBe(result);
+    await waitForFast(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("catalog unavailable"),
+    );
+    expect(page.textContent?.match(/catalog unavailable/gu)).toHaveLength(1);
     expect(request).not.toHaveBeenCalled();
-    expect(page.querySelectorAll("h1")).toHaveLength(1);
-    expect(page.querySelector("h1")?.textContent).toBe("Plugins");
   });
 
   it("surfaces an initial catalog load failure", async () => {

@@ -342,6 +342,7 @@ export const PluginsSearchResultSchema = closedObject({
 
 const PluginDiscoveryIntentSchema = Type.Union([
   Type.Literal("all"),
+  Type.Literal("bundled"),
   Type.Literal("trending"),
   Type.Literal("official"),
   Type.Literal("featured"),
@@ -369,6 +370,7 @@ export const PluginDiscoveryCatalogFactsSchema = closedObject({
   official: Type.Boolean(),
   categories: Type.Array(NonEmptyString),
   icon: Type.Optional(PluginDiscoveryIconKeySchema),
+  imageUrl: Type.Optional(NonEmptyString),
   latestVersion: Type.Optional(NonEmptyString),
   downloads: Type.Optional(Type.Number({ minimum: 0 })),
   installs: Type.Optional(Type.Number({ minimum: 0 })),
@@ -456,6 +458,7 @@ export const PluginDiscoveryDetailSchema = closedObject({
     closedObject({
       handle: Type.Optional(NonEmptyString),
       displayName: Type.Optional(NonEmptyString),
+      imageUrl: Type.Optional(NonEmptyString),
     }),
   ),
   topics: Type.Array(NonEmptyString),

@@ -135,9 +135,19 @@ describe("listGatewayMethods", () => {
     "sessions.github.status",
     "sessions.github.confirm",
     "sessions.title.prepare",
+    "users.mentionable",
+    "mentions.list",
+    "mentions.dismiss",
     "transcripts.list",
     "transcripts.get",
     "models.authOrderSet",
+    "canvas.document.view",
+    "plugins.controlUi.list",
+    "plugins.controlUi.reload",
+    "plugins.controlUi.report",
+    "plugins.controlUi.status",
+    "update.runs.get",
+    "update.runs.list",
   ];
   const pluginDiscoveryMethods = [
     "plugins.catalog.browse",
@@ -355,9 +365,7 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("session.members.listEvidence")).toBe(
       methods.indexOf("diagnostics.lanes") + 1,
     );
-    expect(methods.indexOf("plugins.catalog.browse")).toBe(
-      methods.indexOf("models.authOrderSet") + 1,
-    );
+    expect(methods.indexOf("plugins.catalog.browse")).toBe(methods.indexOf("update.runs.list") + 1);
     expect(methods.indexOf("plugins.catalog.categories")).toBe(
       methods.indexOf("plugins.catalog.browse") + 1,
     );

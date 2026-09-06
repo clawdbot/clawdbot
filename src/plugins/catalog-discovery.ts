@@ -136,20 +136,18 @@ export function resolvePluginDiscoveryIdentity(
 
 export function joinClawHubPluginCatalog(params: {
   remote: readonly ClawHubPluginCatalogEntry[];
+  /** Complete ClawHub identity set used to classify unpublished bundled plugins. */
+  published?: readonly ClawHubPluginCatalogEntry[];
   local: PluginsListResult;
-  includeLocalOnly?: boolean;
-  intent?: "all" | "trending" | "official" | "updated" | "featured";
+  includeBundledOnly?: boolean;
+  intent?: "all" | "bundled" | "trending" | "official" | "updated" | "featured";
   category?: string;
   query?: string;
   cursor?: string;
 }): PluginDiscoveryEntry[] {
   const localIndex = indexLocalPlugins(params.local.plugins);
-  const matchedLocalPlugins = new Set<PluginCatalogEntry>();
   const remote = params.remote.map((plugin) => {
     const localPlugin = findLocalPlugin(plugin, localIndex);
-    if (localPlugin) {
-      matchedLocalPlugins.add(localPlugin);
-    }
     return {
       id: encodePluginDiscoveryId(plugin.packageName),
       catalog: {
@@ -159,6 +157,7 @@ export function joinClawHubPluginCatalog(params: {
         ...(plugin.ownerHandle ? { author: plugin.ownerHandle } : {}),
         official: plugin.isOfficial,
         categories: plugin.categories,
+        ...(plugin.iconUrl ? { imageUrl: plugin.iconUrl } : {}),
         ...(plugin.latestVersion ? { latestVersion: plugin.latestVersion } : {}),
         ...(plugin.downloads !== undefined ? { downloads: plugin.downloads } : {}),
         ...(plugin.installs !== undefined ? { installs: plugin.installs } : {}),
@@ -168,12 +167,19 @@ export function joinClawHubPluginCatalog(params: {
       local: projectLocalFacts(localPlugin, params.local.mutationAllowed),
     };
   });
-  if (!params.includeLocalOnly || params.cursor || (params.intent && params.intent !== "all")) {
+  if (!params.includeBundledOnly) {
     return remote;
+  }
+  const publishedLocalPlugins = new Set<PluginCatalogEntry>();
+  for (const plugin of [...(params.published ?? []), ...params.remote]) {
+    const localPlugin = findLocalPlugin(plugin, localIndex);
+    if (localPlugin) {
+      publishedLocalPlugins.add(localPlugin);
+    }
   }
   const query = normalizedAlias(params.query);
   const localOnly = params.local.plugins
-    .filter((plugin) => !matchedLocalPlugins.has(plugin))
+    .filter((plugin) => plugin.origin === "bundled" && !publishedLocalPlugins.has(plugin))
     .filter((plugin) => {
       const category = localDiscoveryCategory(plugin.category);
       if (params.category && category !== params.category) {

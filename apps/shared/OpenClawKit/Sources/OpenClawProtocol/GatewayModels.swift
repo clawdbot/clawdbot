@@ -21754,6 +21754,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
     public let official: Bool
     public let categories: [String]
     public let icon: String?
+    public let imageurl: String?
     public let latestversion: String?
     public let downloads: Double?
     public let installs: Double?
@@ -21768,6 +21769,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         official: Bool,
         categories: [String],
         icon: String? = nil,
+        imageurl: String? = nil,
         latestversion: String? = nil,
         downloads: Double? = nil,
         installs: Double? = nil,
@@ -21781,6 +21783,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         self.official = official
         self.categories = categories
         self.icon = icon
+        self.imageurl = imageurl
         self.latestversion = latestversion
         self.downloads = downloads
         self.installs = installs
@@ -21796,6 +21799,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         case official
         case categories
         case icon
+        case imageurl = "imageUrl"
         case latestversion = "latestVersion"
         case downloads
         case installs

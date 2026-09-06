@@ -28,7 +28,14 @@ describe("Control UI plugin discovery preview", () => {
       "models",
       "memory",
       "context",
+      "voice",
+      "media",
+      "web",
       "tools",
+      "runtime",
+      "gateway",
+      "security",
+      "other",
     ]);
   });
 });
