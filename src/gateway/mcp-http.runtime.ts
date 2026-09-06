@@ -221,6 +221,7 @@ export class McpLoopbackToolCache {
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
       clientCapsCacheKey,
+      params.pinnedWidgetAuthoring === true ? "pinned-widget-authoring" : "",
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId ?? "",

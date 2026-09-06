@@ -835,6 +835,34 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it.each(["cli", "embedded"] as const)(
+    "preserves recovered dashboard authoring through the %s runtime without inline capability",
+    async (runtime) => {
+      const sessionKey = "agent:main:dashboard:recovered";
+      const sessionEntry = makeSessionEntry("recovered-dashboard-session");
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("recovered"));
+      runEmbeddedAgentMock.mockResolvedValueOnce({ meta: { durationMs: 1 } });
+
+      await runAgentAttempt({
+        providerOverride: runtime === "cli" ? "claude-cli" : "openai",
+        modelOverride: runtime === "cli" ? "opus" : "gpt-5.4",
+        sessionEntry,
+        sessionKey,
+        sessionStore,
+        storePath,
+        workspaceDir: tmpDir,
+        agentDir,
+        opts: { pinnedWidgetAuthoring: true },
+      });
+
+      const run = runtime === "cli" ? firstRunCliAgentArg() : firstEmbeddedAgentArg();
+      expect(run.pinnedWidgetAuthoring).toBe(true);
+      expect(run.clientCaps).toBeUndefined();
+    },
+  );
+
   async function runClaudeCliAttempt(params: {
     sessionKey: string;
     sessionEntry: SessionEntry;

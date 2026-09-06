@@ -8,7 +8,7 @@ import {
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMinimaxModelDiscovery } from "./provider-catalog.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
@@ -35,6 +35,13 @@ afterEach(() => {
 });
 
 describe("minimax provider hooks", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ data: [{ id: "MiniMax-M3" }] })),
+    );
+  });
+
   it("uses the Anthropic model-list route and X-Api-Key auth", () => {
     const discovery = buildMinimaxModelDiscovery();
     const headers = new Headers(

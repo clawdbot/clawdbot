@@ -2389,7 +2389,6 @@ src/commands/agents.commands.identity.ts	1
 src/commands/agents.config.ts	1
 src/commands/agents.providers.ts	8
 src/commands/audit.ts	2
-src/commands/auth-choice-legacy.ts	2
 src/commands/auth-choice-options.ts	2
 src/commands/auth-choice-prompt.ts	1
 src/commands/auth-choice.apply.api-providers.ts	1
@@ -3311,7 +3310,6 @@ src/plugin-sdk/provider-auth-login-flow-runtime.ts	6
 src/plugin-sdk/provider-auth-result.ts	4
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
-src/plugin-sdk/provider-catalog-live-runtime.ts	2
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-enable-config.ts	2
 src/plugin-sdk/provider-entry.ts	3

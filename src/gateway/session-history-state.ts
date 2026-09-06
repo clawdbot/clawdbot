@@ -192,22 +192,22 @@ function paginateSessionMessages(
   let start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
   // Projection can interleave several rows from the same transcript records.
   // Close the page over their seq groups because the public cursor cannot split one.
-  const pageSeqs = new Set(
-    messages.slice(start, endExclusive).map(resolveMessageSeq).filter(Boolean),
-  );
-  const gapSeqs = new Set<number>();
-  for (let index = start - 1; index >= 0; index--) {
-    const seq = resolveMessageSeq(messages[index]);
-    if (seq === undefined) {
-      continue;
+  if (start > 0) {
+    const pageSeqs = new Set<number>();
+    let indexedStart = endExclusive;
+    for (let index = start - 1; index >= 0; index--) {
+      // Index only admitted intervals; unrelated older gaps need no retained sequence set.
+      while (indexedStart > start) {
+        const pageSeq = resolveMessageSeq(messages[--indexedStart]);
+        if (pageSeq !== undefined) {
+          pageSeqs.add(pageSeq);
+        }
+      }
+      const seq = resolveMessageSeq(messages[index]);
+      if (seq !== undefined && pageSeqs.has(seq)) {
+        start = index;
+      }
     }
-    gapSeqs.add(seq);
-    if (!pageSeqs.has(seq)) {
-      continue;
-    }
-    start = index;
-    gapSeqs.forEach((gapSeq) => pageSeqs.add(gapSeq));
-    gapSeqs.clear();
   }
   const paginatedMessages = messages.slice(start, endExclusive);
   const firstSeq = resolveMessageSeq(paginatedMessages[0]);
