@@ -650,101 +650,32 @@ module.exports = {
     );
   });
 
-  it("collects channel CLI metadata during full plugin loads", () => {
+  it.each([
+    { mode: "full", title: "Full" },
+    { mode: "discovery", title: "Discovery" },
+  ])("collects channel CLI metadata during $mode plugin loads", ({ mode, title }) => {
     useNoBundledPlugins();
     const pluginDir = makePluginLoaderTempDir();
-    const modeMarker = path.join(pluginDir, "registration-mode.txt");
-    const fullMarker = path.join(pluginDir, "full-loaded.txt");
-
-    writePluginMetadata({
-      dir: pluginDir,
-      id: "full-cli-metadata-channel",
-      configSchema: EMPTY_PLUGIN_SCHEMA,
-      channels: ["full-cli-metadata-channel"],
-      packageJson: {
-        name: "@openclaw/full-cli-metadata-channel",
-        openclaw: { extensions: ["./index.cjs"] },
-      },
-    });
-    fs.writeFileSync(
-      path.join(pluginDir, "index.cjs"),
-      `${inlineChannelPluginEntryFactorySource()}
-module.exports = {
-  ...defineChannelPluginEntry({
-    id: "full-cli-metadata-channel",
-    name: "Full CLI Metadata Channel",
-    description: "full cli metadata channel",
-    plugin: {
-      id: "full-cli-metadata-channel",
-      meta: {
-        id: "full-cli-metadata-channel",
-        label: "Full CLI Metadata Channel",
-        selectionLabel: "Full CLI Metadata Channel",
-        docsPath: "/channels/full-cli-metadata-channel",
-        blurb: "full cli metadata channel",
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({ accountId: "default" }),
-      },
-      outbound: { deliveryMode: "direct" },
-    },
-    registerCliMetadata(api) {
-      require("node:fs").writeFileSync(
-        ${JSON.stringify(modeMarker)},
-        String(api.registrationMode),
-        "utf-8",
-      );
-      api.registerCli(() => {}, {
-        descriptors: [
-          {
-            name: "full-cli-metadata-channel",
-            description: "Full-load channel CLI metadata",
-            hasSubcommands: true,
-          },
-        ],
-      });
-    },
-    registerFull() {
-      require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
-    },
-  }),
-};`,
-      "utf-8",
-    );
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [pluginDir] },
-          allow: ["full-cli-metadata-channel"],
-        },
-      },
-    });
-
-    expect(fs.readFileSync(modeMarker, "utf-8")).toBe("full");
-    expect(fs.existsSync(fullMarker)).toBe(true);
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
-      "full-cli-metadata-channel",
-    );
-  });
-
-  it("collects channel CLI metadata during discovery plugin loads", () => {
-    useNoBundledPlugins();
-    const pluginDir = makePluginLoaderTempDir();
+    const id = `${mode}-cli-metadata-channel`;
+    const label = `${title} CLI Metadata Channel`;
+    const description = `${mode} cli metadata channel`;
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
     const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
+    const runtimeSetter =
+      mode === "discovery"
+        ? `setRuntime() {
+      require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded", "utf-8");
+    },`
+        : "";
 
     writePluginMetadata({
       dir: pluginDir,
-      id: "discovery-cli-metadata-channel",
+      id,
       configSchema: EMPTY_PLUGIN_SCHEMA,
-      channels: ["discovery-cli-metadata-channel"],
+      channels: [id],
       packageJson: {
-        name: "@openclaw/discovery-cli-metadata-channel",
+        name: `@openclaw/${id}`,
         openclaw: { extensions: ["./index.cjs"] },
       },
     });
@@ -753,20 +684,18 @@ module.exports = {
       `${inlineChannelPluginEntryFactorySource()}
 module.exports = {
   ...defineChannelPluginEntry({
-    id: "discovery-cli-metadata-channel",
-    name: "Discovery CLI Metadata Channel",
-    description: "discovery cli metadata channel",
-    setRuntime() {
-      require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded", "utf-8");
-    },
+    id: ${JSON.stringify(id)},
+    name: ${JSON.stringify(label)},
+    description: ${JSON.stringify(description)},
+    ${runtimeSetter}
     plugin: {
-      id: "discovery-cli-metadata-channel",
+      id: ${JSON.stringify(id)},
       meta: {
-        id: "discovery-cli-metadata-channel",
-        label: "Discovery CLI Metadata Channel",
-        selectionLabel: "Discovery CLI Metadata Channel",
-        docsPath: "/channels/discovery-cli-metadata-channel",
-        blurb: "discovery cli metadata channel",
+        id: ${JSON.stringify(id)},
+        label: ${JSON.stringify(label)},
+        selectionLabel: ${JSON.stringify(label)},
+        docsPath: ${JSON.stringify(`/channels/${id}`)},
+        blurb: ${JSON.stringify(description)},
       },
       capabilities: { chatTypes: ["direct"] },
       config: {
@@ -784,8 +713,8 @@ module.exports = {
       api.registerCli(() => {}, {
         descriptors: [
           {
-            name: "discovery-cli-metadata-channel",
-            description: "Discovery-load channel CLI metadata",
+            name: ${JSON.stringify(id)},
+            description: ${JSON.stringify(`${title}-load channel CLI metadata`)},
             hasSubcommands: true,
           },
         ],
@@ -800,27 +729,23 @@ module.exports = {
     );
 
     const registry = loadOpenClawPlugins({
-      activate: false,
+      ...(mode === "discovery" ? { activate: false } : {}),
       cache: false,
       config: {
         plugins: {
           load: { paths: [pluginDir] },
-          allow: ["discovery-cli-metadata-channel"],
-          entries: {
-            "discovery-cli-metadata-channel": {
-              enabled: true,
-            },
-          },
+          allow: [id],
+          ...(mode === "discovery" ? { entries: { [id]: { enabled: true } } } : {}),
         },
       },
     });
 
-    expect(fs.readFileSync(modeMarker, "utf-8")).toBe("discovery");
-    expect(fs.existsSync(fullMarker)).toBe(false);
-    expect(fs.existsSync(runtimeMarker)).toBe(true);
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
-      "discovery-cli-metadata-channel",
-    );
+    expect(fs.readFileSync(modeMarker, "utf-8")).toBe(mode);
+    expect(fs.existsSync(fullMarker)).toBe(mode === "full");
+    if (mode === "discovery") {
+      expect(fs.existsSync(runtimeMarker)).toBe(true);
+    }
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(id);
   });
 
   it("can force channel runtime entries for CLI registration when setup entries exist", () => {
