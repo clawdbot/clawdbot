@@ -247,11 +247,7 @@ function knownSessionIdentities(params: {
       ...(profile.displayName ? { label: profile.displayName } : {}),
     });
   }
-  return [...identities.values()].toSorted(
-    (left, right) =>
-      (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
-      left.id.localeCompare(right.id),
-  );
+  return [...identities.values()];
 }
 
 function publishSharingChange(params: {

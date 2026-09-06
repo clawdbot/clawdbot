@@ -3491,7 +3491,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("materializes each distinct assistant media row once", async () => {
+  it("materializes latest media payloads once in first-seen order", async () => {
     await withTranscriptFixtureState(
       "openclaw-chat-send-multiple-assistant-media-",
       async (fixtureDir) => {
@@ -3512,7 +3512,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           {
             kind: "block",
             payload: setReplyPayloadMetadata(
-              { text: "First image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
+              { text: "Draft first image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
               {
                 assistantMessageIndex: 1,
                 assistantTranscriptMediaUrls: [firstMediaUrl],
@@ -3526,6 +3526,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
               {
                 assistantMessageIndex: 2,
                 assistantTranscriptMediaUrls: [secondMediaUrl],
+              },
+            ),
+          },
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              { text: "First image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
+              {
+                assistantMessageIndex: 1,
+                assistantTranscriptMediaUrls: [firstMediaUrl],
               },
             ),
           },
@@ -3553,6 +3563,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           expect(JSON.stringify(content)).not.toContain("MEDIA:");
         }
         expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+        const mediaMessageIds = readTranscriptJsonLines(mockState.transcriptPath)
+          .filter((entry) => asOptionalRecord(entry.message)?.role === "assistant")
+          .slice(1)
+          .map((entry) => entry.id);
+        expect(
+          mockState.emittedTranscriptUpdates
+            .filter((update) => mediaMessageIds.includes(update.messageId))
+            .map((update) => update.messageId),
+        ).toEqual(mediaMessageIds);
       },
     );
   });
