@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -13,6 +13,25 @@ import {
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
+// Records every operation reaching the transcript-archive Worker so the test
+// can assert the delete transaction left the Gateway thread, the same way the
+// owner-level session-accessor.sqlite-cleanup-reclamation test does.
+const archiveWorkerOperations = vi.hoisted(() => [] as unknown[]);
+
+vi.mock("../config/sessions/session-accessor.sqlite-archive.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-archive.js")>();
+  return {
+    ...actual,
+    runSqliteTranscriptArchiveWorkerOperation: (
+      params: Parameters<typeof actual.runSqliteTranscriptArchiveWorkerOperation>[0],
+    ) => {
+      archiveWorkerOperations.push((params.workerData as { operation?: unknown }).operation);
+      return actual.runSqliteTranscriptArchiveWorkerOperation(params);
+    },
+  };
+});
+
 const SESSION_ID = "phase3-reclamation-e2e";
 const SESSION_KEY = "discord:group:phase3-reclamation-e2e";
 const CANONICAL_SESSION_KEY = `agent:main:${SESSION_KEY}`;
@@ -24,6 +43,7 @@ const ROWS = 200_000;
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
 afterEach(() => {
+  archiveWorkerOperations.length = 0;
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
@@ -260,6 +280,7 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
       `${JSON.stringify({
         deleteMs,
         maxGatewayGapMs,
+        archiveWorkerOperations,
         rows: ROWS,
         historicalCounts,
         targetCounts,
@@ -318,5 +339,9 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   ]);
   expect(archives.every((archive) => Number(archive.archive_bytes) > 0)).toBe(true);
   expect(samples.length).toBeGreaterThan(0);
-  expect(maxGatewayGapMs).toBeLessThan(500);
+  // The delete transaction must run in the archive Worker (#126035); a fixed
+  // 500 ms ceiling on the Gateway's longest stall tripped on slow CI runners with
+  // the repaired path (612 ms), so bound the stall against the delete it overlaps.
+  expect(archiveWorkerOperations).toContain("reclaim");
+  expect(maxGatewayGapMs).toBeLessThan(deleteMs / 2);
 }, 120_000);

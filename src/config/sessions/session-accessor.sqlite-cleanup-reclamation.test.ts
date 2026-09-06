@@ -20,6 +20,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   afterMaterialize: undefined as (() => void) | undefined,
+  workerOperations: [] as unknown[],
 }));
 
 vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
@@ -32,6 +33,16 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
       const result = await actual.materializeSessionStateDeletePlans(...args);
       archiveMaterializationHook.afterMaterialize?.();
       return result;
+    },
+    // Only session reclamation reaches this export from another module, so the
+    // recorded operations show whether the delete transaction left this thread.
+    runSqliteTranscriptArchiveWorkerOperation: (
+      params: Parameters<typeof actual.runSqliteTranscriptArchiveWorkerOperation>[0],
+    ) => {
+      archiveMaterializationHook.workerOperations.push(
+        (params.workerData as { operation?: unknown }).operation,
+      );
+      return actual.runSqliteTranscriptArchiveWorkerOperation(params);
     },
   };
 });
@@ -53,6 +64,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
 
   afterEach(() => {
     archiveMaterializationHook.afterMaterialize = undefined;
+    archiveMaterializationHook.workerOperations.length = 0;
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -251,9 +263,11 @@ describe("SQLite lifecycle cleanup reclamation", () => {
 
     const samples: number[] = [];
     let previous = 0;
+    let measuredFrom = 0;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     archiveMaterializationHook.afterMaterialize = () => {
-      previous = performance.now();
+      measuredFrom = performance.now();
+      previous = measuredFrom;
       heartbeat = setInterval(() => {
         const current = performance.now();
         samples.push(current - previous);
@@ -275,16 +289,31 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         clearInterval(heartbeat);
       }
     }
+    const reclamationMs = performance.now() - measuredFrom;
 
     const maxGapMs = Math.max(...samples);
     if (process.env.OPENCLAW_TEST_RECLAMATION_LOG === "1") {
       process.stdout.write(
-        `${JSON.stringify({ owner: "lifecycle-cleanup", rows, maxGapMs, result })}\n`,
+        `${JSON.stringify({
+          owner: "lifecycle-cleanup",
+          rows,
+          maxGapMs,
+          reclamationMs,
+          workerOperations: archiveMaterializationHook.workerOperations,
+          result,
+        })}\n`,
       );
     }
     expect(result).toEqual({ removedEntries: 1, archivedTranscriptArtifacts: 1 });
     expect(samples.length).toBeGreaterThan(0);
-    expect(maxGapMs).toBeLessThan(500);
+    // #126035 moved this delete transaction and its commit off the event loop into
+    // the archive Worker, so own that structurally. A wall-clock ceiling cannot
+    // decide it: the two populations overlap, with on-thread reclamation of these
+    // rows measured at 341 ms on a 16-core host while the repaired path measured
+    // 525-624 ms on slower shared CI runners. The parent still blocks briefly on
+    // the commit barrier, so bound that against the window it overlaps.
+    expect(archiveMaterializationHook.workerOperations).toContain("reclaim");
+    expect(maxGapMs).toBeLessThan(reclamationMs / 2);
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
     expect(loadSessionEntry({ sessionKey: unrelatedKey, storePath })).toMatchObject({
       sessionId: unrelatedSessionId,
