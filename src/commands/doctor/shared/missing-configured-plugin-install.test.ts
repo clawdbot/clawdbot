@@ -8,6 +8,7 @@ import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withIsolatedTestHome } from "../../../../test/test-env.js";
 import type { OpenClawConfig, PluginsConfig } from "../../../config/types.js";
+import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
 import { resolvePluginArtifactDeclaredSurface } from "../../../plugins/capability-artifact.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
@@ -1187,6 +1188,90 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     },
   );
+
+  describe.each(["managed", "flat"] as const)("%s canonical host dependency", (layout) => {
+    it.each(["direct", "peer", "both"] as const)(
+      "does not repair a healthy %s host dependency",
+      async (declaration) => {
+        const parent = tempDirs.make("openclaw-doctor-host-dependency-");
+        const pluginId = "host-dependency-plugin";
+        const rootDir =
+          layout === "managed"
+            ? path.join(parent, "project", "node_modules", pluginId)
+            : path.join(parent, pluginId);
+        const hostRoot = expectDefined(
+          resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
+          "running OpenClaw package root",
+        );
+        const dependencies = {
+          "required-runtime": "1.0.0",
+          ...(declaration !== "peer" ? { openclaw: "*" } : {}),
+        };
+        const peerDependencies = declaration !== "direct" ? { openclaw: "*" } : {};
+        createColdPluginFixture({
+          rootDir,
+          pluginId,
+          packageName: pluginId,
+          packageJson: { dependencies, peerDependencies },
+        });
+        const nodeModulesDir = path.join(rootDir, "node_modules");
+        const runtimeDir = path.join(nodeModulesDir, "required-runtime");
+        fs.mkdirSync(runtimeDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(runtimeDir, "package.json"),
+          JSON.stringify({ name: "required-runtime", version: "1.0.0" }),
+        );
+        fs.symlinkSync(hostRoot, path.join(nodeModulesDir, "openclaw"), "junction");
+        const { auditOpenClawPeerDependencyLink } =
+          await import("../../../plugins/plugin-peer-link.js");
+        expect(await auditOpenClawPeerDependencyLink({ packageDir: rootDir })).toBeNull();
+        const cfg: OpenClawConfig = { plugins: { entries: { [pluginId]: { enabled: true } } } };
+        const records = {
+          [pluginId]: {
+            source: "npm" as const,
+            spec: `${pluginId}@1.0.0`,
+            resolvedName: pluginId,
+            installPath: rootDir,
+          },
+        };
+        mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+        mocks.loadPluginMetadataSnapshot.mockReturnValue({
+          plugins: [
+            {
+              id: pluginId,
+              origin: "global",
+              rootDir,
+              source: path.join(rootDir, "index.cjs"),
+              packageName: pluginId,
+              packageDependencies: dependencies,
+              packageOptionalDependencies: {},
+              channels: [],
+            },
+          ],
+          diagnostics: [],
+        });
+        const { detectConfiguredPluginInstallHealthIssues } =
+          await import("./missing-configured-plugin-install.js");
+
+        for (let pass = 0; pass < 2; pass++) {
+          expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env: testEnv })).toEqual(
+            [],
+          );
+          const result = await repairConfiguredPlugins(cfg, testEnv);
+          expect(result.changes).toEqual([]);
+          expect(result.repairedPluginIds).toBeUndefined();
+          expect(result.records).toEqual(records);
+        }
+        expect(fs.realpathSync(path.join(nodeModulesDir, "openclaw"))).toBe(
+          fs.realpathSync(hostRoot),
+        );
+        expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+        expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+        expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+        expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(false);
+      },
+    );
+  });
 
   describe.each([
     { preexisting: false, staleRuntime: false },
