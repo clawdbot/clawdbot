@@ -10,6 +10,7 @@ import {
 import type { AuthProfileStore, OAuthCredential } from "../src/agents/auth-profiles/types.js";
 import { planOpenClawModelsJson } from "../src/agents/models-config.plan.js";
 import * as catalogContext from "../src/agents/models-config.providers.catalog-context.js";
+import { prepareModelCatalogPublication } from "../src/agents/prepared-model-runtime.full-catalog.js";
 import type { ModelProviderConfig } from "../src/config/types.models.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";
@@ -39,6 +40,10 @@ describe("Provider model discovery auth preparation", () => {
     state = await createOpenClawTestState({ prefix: "catalog-auth-order-", agentEnv: "main" });
     agentDir = state.agentDir();
     discovery.providers = [buildOpenAIProvider()];
+    vi.spyOn(providerRuntime, "formatProviderAuthProfileApiKeyWithPlugin").mockImplementation(
+      async ({ provider, context }) =>
+        discovery.providers.find((candidate) => candidate.id === provider)?.formatApiKey?.(context),
+    );
   });
 
   afterEach(async () => {
@@ -82,10 +87,6 @@ describe("Provider model discovery auth preparation", () => {
           discovery.providers = [provider];
         },
       }),
-    );
-    vi.spyOn(providerRuntime, "formatProviderAuthProfileApiKeyWithPlugin").mockImplementation(
-      async ({ provider, context }) =>
-        discovery.providers.find((candidate) => candidate.id === provider)?.formatApiKey?.(context),
     );
     const profileId = "chutes:oauth";
     const config: OpenClawConfig = { auth: { order: { chutes: [profileId] } } };
@@ -355,6 +356,104 @@ describe("Provider model discovery auth preparation", () => {
   });
 
   it.each([
+    { providerId: "chutes", profileCount: 1 },
+    { providerId: "chutes", profileCount: 2 },
+    { providerId: "openai", profileCount: 1 },
+  ])(
+    "retains the $providerId catalog when all $profileCount OAuth profiles fail preparation",
+    async ({ providerId, profileCount }) => {
+      if (providerId === "chutes") {
+        chutesPlugin.register(
+          createTestPluginApi({
+            registerProvider: (provider) => {
+              discovery.providers = [provider];
+            },
+          }),
+        );
+      }
+      const profileIds = Array.from(
+        { length: profileCount },
+        (_, index) => `${providerId}:oauth-${index}`,
+      );
+      const profiles = Object.fromEntries(
+        profileIds.map((profileId) => [
+          profileId,
+          {
+            type: "oauth" as const,
+            provider: providerId,
+            access: `expired-${profileId}`,
+            refresh: `refresh-${profileId}`,
+            expires: Date.now() - 60_000,
+          },
+        ]),
+      );
+      const store: AuthProfileStore = { version: 1, profiles };
+      const config: OpenClawConfig = { auth: { order: { [providerId]: profileIds } } };
+      await state.writeAuthProfiles(store);
+      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
+        undefined,
+      );
+      const refresh = vi
+        .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
+        .mockRejectedValue(new Error("synthetic OAuth refresh failure"));
+      const runtimeAuth = vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider");
+      const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected HTTP"));
+      const outcomes: ProviderCatalogOutcome[] = [];
+      const previousProfileId = profileIds[profileIds.length - 1];
+      const previousCredential = previousProfileId && profiles[previousProfileId];
+      if (!previousProfileId || !previousCredential) {
+        throw new Error("OAuth fixture requires a previous profile");
+      }
+      const auth = {
+        authStore: store,
+        authModes: { [providerId]: "oauth" as const },
+        credentials: { [providerId]: previousCredential },
+      };
+      const priorModel = {
+        id: "prior-account-only-model",
+        name: "Prior Account Model",
+        provider: providerId,
+      };
+      const previous = prepareModelCatalogPublication(
+        {
+          entries: [priorModel],
+          routeVariants: [],
+          providerOutcomes: [
+            { provider: providerId, profileId: previousProfileId, status: "ready" },
+          ],
+        },
+        undefined,
+        auth,
+        (provider) => provider,
+      );
+
+      const plan = await planCatalog(config, store, { providerId, outcomes });
+      const published = prepareModelCatalogPublication(
+        {
+          entries: [],
+          routeVariants: [],
+          staticEntries: readPlannedProvider(plan, providerId)?.models.map((model) =>
+            Object.assign(model, { provider: providerId }),
+          ),
+          providerOutcomes: outcomes,
+        },
+        { ...previous, key: "same-config", pluginFingerprint: "same-plugins" },
+        auth,
+        (provider) => provider,
+      );
+
+      expect(published.catalog.entries).toContainEqual(priorModel);
+      expect(published.discoveryOrigins).toEqual(previous.discoveryOrigins);
+      expect(outcomes).toEqual(
+        profileIds.map((profileId) => ({ provider: providerId, profileId, status: "unavailable" })),
+      );
+      expect(refresh).toHaveBeenCalledTimes(profileCount);
+      expect(runtimeAuth).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
     { completion: "success", timedOut: true },
     { completion: "failure", timedOut: true },
     { completion: "failure", timedOut: false },
@@ -482,6 +581,85 @@ describe("Provider model discovery auth preparation", () => {
           "late-account-model",
         );
       }
+    },
+  );
+
+  it.each(["outcome", "provider"] as const)(
+    "preserves a plugin-owned %s after probing exhausted OAuth",
+    async (resultKind) => {
+      const { config, store } = await createChutesCatalogFixture();
+      const otherProfileId = "openai:other-source";
+      store.profiles[otherProfileId] = {
+        type: "api_key",
+        provider: "openai",
+        key: "independent-source-key",
+      };
+      await state.writeAuthProfiles(store);
+      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
+        undefined,
+      );
+      vi.spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin").mockRejectedValue(
+        new Error("synthetic OAuth refresh failure"),
+      );
+      const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected HTTP"));
+      const provider = discovery.providers[0];
+      if (!provider) {
+        throw new Error("Chutes fixture did not register a provider");
+      }
+      const independentModel = {
+        id: "independent-source-model",
+        name: "Independent Source Model",
+        reasoning: false,
+        input: ["text" as const],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_768,
+        maxTokens: 8_192,
+      };
+      const explicitOutcome: ProviderCatalogOutcome = {
+        provider: "chutes",
+        profileId: otherProfileId,
+        status: "unavailable",
+      };
+      let reads = 0;
+      provider.catalog = {
+        order: "profile",
+        run: async (ctx) => {
+          ctx.resolveProviderAuth("CHUTES");
+          const other = ctx.resolveProviderAuth("openai");
+          expect(other.profileId).toBe(otherProfileId);
+          expect(other.preparationFailed).not.toBe(true);
+          if (resultKind === "outcome") {
+            return {
+              providers: {},
+              get outcomes() {
+                return reads++ === 0 ? [explicitOutcome] : [];
+              },
+            };
+          }
+          return {
+            get provider() {
+              return {
+                baseUrl: "https://api.chutes.ai/v1",
+                apiKey: other.apiKey,
+                models: reads++ === 0 ? [independentModel] : [],
+              };
+            },
+          };
+        },
+      };
+      const outcomes: ProviderCatalogOutcome[] = [];
+
+      const plan = await planCatalog(config, store, { providerId: "chutes", outcomes });
+
+      if (resultKind === "outcome") {
+        expect(outcomes).toEqual([explicitOutcome]);
+      } else {
+        expect(outcomes).toEqual([]);
+        expect(readPlannedProvider(plan, "chutes")?.models.map((model) => model.id)).toContain(
+          independentModel.id,
+        );
+      }
+      expect(fetch).not.toHaveBeenCalled();
     },
   );
 });

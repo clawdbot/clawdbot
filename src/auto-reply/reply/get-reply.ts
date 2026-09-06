@@ -50,20 +50,15 @@ import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
-import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
+import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
-import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
   initFastReplySessionState,
-  buildFastReplyCommandContext,
-  shouldHandleFastReplyTextCommands,
-  shouldUseReplyFastDirectiveExecution,
   resolveGetReplyConfig,
   shouldUseReplyFastTestBootstrap,
-  shouldUseReplyFastTestRuntime,
 } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
@@ -79,7 +74,7 @@ import {
   hasInboundMediaForUnderstanding,
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
-import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
+import { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
@@ -319,12 +314,6 @@ export async function getReplyFromConfig(
     shouldUseReplyFastTestBootstrap({
       isFastTestEnv,
       configOverride,
-    }),
-  );
-  const useFastTestRuntime = resolverTiming.measureSync("reply.resolve_fast_test_runtime", () =>
-    shouldUseReplyFastTestRuntime({
-      cfg,
-      isFastTestEnv,
     }),
   );
   const inboundMediaWasAlreadyStaged = hasStagedMediaFacts(ctx.media);
@@ -907,106 +896,6 @@ export async function getReplyFromConfig(
       groupResolution,
       isHeartbeat: opts?.isHeartbeat,
     });
-
-  if (
-    shouldUseReplyFastDirectiveExecution({
-      isFastTestBootstrap: useFastTestRuntime,
-      isGroup,
-      isHeartbeat: opts?.isHeartbeat === true,
-      resetTriggered,
-      triggerBodyNormalized,
-    })
-  ) {
-    const fastCommand = buildFastReplyCommandContext({
-      ctx: finalized,
-      cfg,
-      agentId,
-      sessionKey,
-      isGroup,
-      triggerBodyNormalized,
-      commandAuthorized,
-    });
-    if (
-      enableLocalPathSelfServe &&
-      canSelfServeLocalPaths({
-        ctx: sessionCtx,
-        cfg,
-        agentId,
-        agentDir,
-        sessionKey,
-        workspaceDir,
-        provider: autoFallbackPrimaryProbe?.provider ?? provider,
-        model: autoFallbackPrimaryProbe?.model ?? model,
-        opts: resolvedOpts,
-        senderIsOwner: fastCommand.senderIsOwner,
-        spawnedBy: normalizeOptionalString(sessionEntry.spawnedBy),
-        stagedPathsAvailable: false,
-      })
-    ) {
-      enableLocalPathSelfServe([finalized, sessionCtx]);
-    }
-    logResolverTiming("milestone", "before_fast_directive_prepared_reply");
-    const fastReplyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
-      runPreparedReply({
-        ctx,
-        sessionCtx,
-        conversation,
-        cfg,
-        agentId,
-        agentDir,
-        agentCfg,
-        sessionCfg,
-        commandAuthorized,
-        command: fastCommand,
-        commandSource: finalized.commandText,
-        allowTextCommands: shouldHandleFastReplyTextCommands({
-          cfg,
-          commandSource: finalized.CommandSource,
-        }),
-        directives: clearInlineDirectives(finalized.commandText),
-        defaultActivation: "always",
-        resolvedThinkLevel: undefined,
-        resolvedVerboseLevel: normalizeVerboseLevel(agentCfg?.verboseDefault),
-        resolvedReasoningLevel: "off",
-        resolvedElevatedLevel: "off",
-        execOverrides: undefined,
-        elevatedEnabled: false,
-        elevatedAllowed: false,
-        blockStreamingEnabled: false,
-        blockReplyChunking: undefined,
-        resolvedBlockStreamingBreak: "text_end",
-        modelState: createFastTestModelSelectionState({
-          agentCfg,
-          provider: autoFallbackPrimaryProbe?.provider ?? provider,
-          model: autoFallbackPrimaryProbe?.model ?? model,
-        }),
-        provider: autoFallbackPrimaryProbe?.provider ?? provider,
-        model: autoFallbackPrimaryProbe?.model ?? model,
-        perMessageQueueMode: undefined,
-        perMessageQueueOptions: undefined,
-        typing,
-        opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
-        defaultModel,
-        timeoutMs,
-        isNewSession,
-        resetTriggered,
-        systemSent,
-        sessionEntry,
-        sessionEntryHandle,
-        sessionStore,
-        sessionKey,
-        sessionId,
-        storePath,
-        workspaceDir,
-        abortedLastRun,
-        autoFallbackPrimaryProbe,
-      }),
-    );
-    if (profilerEnabled) {
-      logResolverTiming("completed", "fast_directive_prepared_reply");
-    }
-    return fastReplyResult;
-  }
 
   const directiveResult = await traceGetReplyPhase("reply.resolve_directives", () =>
     resolveReplyDirectives({

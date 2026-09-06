@@ -48,6 +48,8 @@ CMD ["bash"]
 
 FROM ${OPENCLAW_NODE_ALPINE_IMAGE} AS musl
 
+RUN apk add --no-cache bash
+COPY --from=e2e-runner /opt/openclaw-e2e /opt/openclaw-e2e
 COPY scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
 
 CMD ["sh"]

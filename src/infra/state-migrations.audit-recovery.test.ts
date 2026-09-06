@@ -139,7 +139,7 @@ describe("legacy audit recovery byte handling", () => {
 
       expect(result.warnings.join("\n")).toContain("no longer matches its restore journal target");
       await expect(fs.readFile(rawPath, "utf8")).resolves.toBe(replacementContent);
-      await expect(fs.access(restorePath)).resolves.toBeUndefined();
+      await fs.access(restorePath);
     });
   });
 

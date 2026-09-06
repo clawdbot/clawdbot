@@ -306,6 +306,13 @@ catalog, API-key auth, and dynamic model resolution.
     authentication scheme; a separate `resolveProviderAuth()` call may select a
     different profile. Omitted mode metadata does not change existing callback behavior.
 
+    `ctx.resolveProviderAuth()` may set `preparationFailed: true` when OAuth
+    preparation exhausted its candidates. Do not treat that flag as absent
+    configuration or restart resolution of the same profiles. A hook may still
+    choose another credential source. Its returned provider configuration or
+    explicit outcome remains authoritative; otherwise the catalog owner reports
+    the consumed preparation failure with the attempted profile identities.
+
     For a non-Bearer or nonstandard list endpoint, pass options instead of
     `true`:
 
@@ -867,6 +874,16 @@ catalog, API-key auth, and dynamic model resolution.
       - `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
       - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
       - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
+
+      Bundled and trusted official provider policies can use
+      `resolveEffortThinkingProfile(compat?.supportedReasoningEfforts)` from the
+      private `openclaw/plugin-sdk/provider-thinking-runtime` helper. It accepts
+      exact `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` values,
+      maps `none` to `off`, and prepends `off` while preserving the first occurrence
+      of each remaining level. The default preference is `medium`, `high`, `low`,
+      then `off`. Missing, null, or empty metadata returns `undefined`; a nonempty
+      list without supported values returns an off-only profile. Keep model-specific
+      overrides and API fallbacks in the provider policy.
 
       Bundled and trusted official plugins can also export
       `resolveToolSearchMode(ctx)` from their lightweight `provider-policy-api`

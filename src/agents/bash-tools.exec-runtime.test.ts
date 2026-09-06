@@ -16,6 +16,7 @@ import {
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import {
   getFinishedSession,
   acknowledgeNotifyOnExit,
@@ -205,6 +206,51 @@ describe("runExecProcess cursor tracking", () => {
 });
 
 describe("sandbox exec preparation failures", () => {
+  it.each(["preparation", "supervisor"] as const)(
+    "rechecks the admitting repair authority after deferred %s work",
+    async (boundary) => {
+      let current = true;
+      const controller = new AbortController();
+      const budget = createAgentToolExecutionBudget({
+        signal: controller.signal,
+        abort: (error) => controller.abort(error),
+        isCurrent: () => current,
+      });
+      const childEffect = vi.fn();
+      supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
+        await Promise.resolve();
+        current = false;
+        input.assertCurrent?.();
+        childEffect();
+        return runtimeManagedRun(input);
+      });
+      await expect(
+        budget.run(() =>
+          runExecProcess({
+            command: "echo forbidden",
+            workdir: "/tmp",
+            env: {},
+            usePty: false,
+            warnings: [],
+            maxOutput: 1000,
+            pendingMaxOutput: 1000,
+            notifyOnExit: false,
+            timeoutSec: null,
+            beforeSpawn: async () => {
+              await Promise.resolve();
+              if (boundary === "preparation") {
+                current = false;
+              }
+              return undefined;
+            },
+          }),
+        ),
+      ).rejects.toThrow("execution scope is no longer active");
+      expect(childEffect).not.toHaveBeenCalled();
+      expect(supervisorMock.spawn).toHaveBeenCalledTimes(boundary === "preparation" ? 0 : 1);
+    },
+  );
+
   it.each([
     { mode: "child", usePty: false, cancelCheck: 1, expectedSpawns: 0 },
     { mode: "PTY", usePty: true, cancelCheck: 1, expectedSpawns: 0 },
