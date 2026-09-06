@@ -22,6 +22,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/deepseek",
     manifestAuth: { applyConfig: applyDeepSeekConfig },
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildDeepSeekProvider,
       buildStaticProvider: buildDeepSeekProvider,
       liveModelDiscovery: true,

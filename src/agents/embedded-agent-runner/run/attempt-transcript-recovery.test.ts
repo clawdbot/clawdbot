@@ -4,6 +4,7 @@ import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { stripSessionsYieldArtifacts } from "./attempt-sessions-yield.js";
 import {
   normalizeCompactionRecoveryTranscriptTail,
@@ -32,14 +33,7 @@ it.each(["yield", "precheck", "compaction"])(
         stopReason: "error",
         errorMessage: MID_TURN_PRECHECK_ERROR_MESSAGE,
         timestamp: 2,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
       };
       sessionManager.appendMessage(user);
       sessionManager.appendMessage(error);

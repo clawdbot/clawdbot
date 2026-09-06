@@ -29,6 +29,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/models",
     manifestAuth: { applyConfig: applyMistralConfig },
     catalog: {
+      discoveryMode: "strict",
       allowExplicitBaseUrl: true,
       liveModelDiscovery: true,
     },

@@ -99,9 +99,12 @@ function projectChutesModels(rows: readonly unknown[]): ModelDefinitionConfig[] 
   return models;
 }
 
-/** Discovers Chutes models dynamically, falling back to the bundled static catalog. */
-export async function discoverChutesModels(accessToken?: string): Promise<ModelDefinitionConfig[]> {
+export async function discoverChutesModels(
+  accessToken?: string,
+  options: { discoveryMode?: "strict" } = {},
+): Promise<ModelDefinitionConfig[]> {
   const provider = await buildLiveModelProviderConfig({
+    ...options,
     providerId: "chutes",
     endpoint: `${CHUTES_BASE_URL}/models`,
     providerConfig: { baseUrl: CHUTES_BASE_URL, api: "openai-completions" },

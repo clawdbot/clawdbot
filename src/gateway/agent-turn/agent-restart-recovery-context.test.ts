@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveAgentRestartRecoveryChannelContext,
   resolveAgentRestartRecoveryExecutionIdentityAdmission,
+  resolveAgentRestartRecoveryPinnedWidgetAuthoring,
 } from "./agent-restart-recovery-context.js";
 
 const matchingParams = {
@@ -26,6 +27,61 @@ const matchingParams = {
     restartRecoverySourceIngress: "channel",
   },
 } as const;
+
+describe("resolveAgentRestartRecoveryPinnedWidgetAuthoring", () => {
+  const matchingUiParams = {
+    ...matchingParams,
+    isRestartRecoveryResumeRun: true,
+    sessionEntry: {
+      ...matchingParams.sessionEntry,
+      restartRecoveryDeliverySourceRunId: "control-ui-source-run",
+      restartRecoverySourceIngress: "control-ui" as const,
+    },
+  };
+
+  it("restores dashboard authoring for the exact admitted Control UI recovery", () => {
+    expect(resolveAgentRestartRecoveryPinnedWidgetAuthoring(matchingUiParams)).toBe(true);
+  });
+
+  it.each([
+    { isRestartRecoveryResumeRun: false },
+    { canUseInternalRuntimeHandoff: false },
+    { expectedExistingSessionId: undefined },
+    { expectedExistingSessionId: "replacement-session" },
+    { resolvedSessionId: "replacement-session" },
+    { runId: "replacement-run" },
+    { sessionEntry: undefined },
+    { sessionEntry: { ...matchingUiParams.sessionEntry, sessionId: "replacement-session" } },
+    {
+      sessionEntry: {
+        ...matchingUiParams.sessionEntry,
+        restartRecoveryDeliverySourceRunId: " ",
+      },
+    },
+    {
+      sessionEntry: {
+        ...matchingUiParams.sessionEntry,
+        restartRecoverySourceIngress: undefined,
+      },
+    },
+    {
+      sessionEntry: {
+        ...matchingUiParams.sessionEntry,
+        restartRecoverySourceIngress: "channel" as const,
+      },
+    },
+    {
+      sessionEntry: {
+        ...matchingUiParams.sessionEntry,
+        restartRecoverySourceIngress: "internal" as const,
+      },
+    },
+  ])("does not authorize ordinary, untrusted, or replaced recovery claims", (override) => {
+    expect(
+      resolveAgentRestartRecoveryPinnedWidgetAuthoring({ ...matchingUiParams, ...override }),
+    ).toBeUndefined();
+  });
+});
 
 describe("resolveAgentRestartRecoveryChannelContext", () => {
   it("rehydrates the exact backend-owned recovery claim", () => {

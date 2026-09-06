@@ -26,6 +26,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createCliDeps } from "../isolated-agent.delivery.test-helpers.js";
 import { commitCurrentSessionCronCompletion } from "./current-session-completion.js";
@@ -55,11 +56,12 @@ async function createCompletionFixture(state: OpenClawTestState) {
     session: { store: scope.storePath },
   };
   const payload: ReplyPayload = { text: "Example report", mediaUrl: imagePath };
+  const job = makeCronJob({ id: "report-job", sessionTarget: "current", sessionKey });
   const params: DispatchCronDeliveryParams = {
     cfg,
     cfgWithAgentDefaults: cfg,
     deps: createCliDeps(),
-    job: makeCronJob({ id: "report-job", sessionTarget: "current", sessionKey }),
+    job,
     agentId: "main",
     agentSessionKey: "agent:main:cron:report-job",
     sourceSessionKey: sessionKey,
@@ -72,6 +74,7 @@ async function createCompletionFixture(state: OpenClawTestState) {
     runEndedAt: 2000,
     timeoutMs: 30000,
     resolvedDelivery: { ok: false, mode: "implicit", error: new Error("No external channel") },
+    deliveryPlan: resolveCronDeliveryPlan(job),
     deliveryRequested: true,
     undeliveredRunStatus: "ok",
     spawnOnlyHandoff: false,
@@ -122,6 +125,35 @@ async function createCompletionFixture(state: OpenClawTestState) {
       ),
   };
 }
+
+describe("current-session completion delivery", () => {
+  it.each([{ to: "recipient" }, { accountId: "work" }, { threadId: 0 }])(
+    "preserves the committed report and reports unresolved explicit intent %j",
+    async (coordinates) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(state);
+        try {
+          fixture.params.job.delivery = { mode: "announce", ...coordinates };
+          fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
+          fixture.params.deliveryPayloads = [{ text: "Final report" }];
+          const completion = await fixture.commit();
+          const messages = await fixture.messages();
+          expect(messages).toHaveLength(1);
+          expect(readTranscriptEventMessage(messages[0])?.content).toEqual([
+            { type: "text", text: "Final report" },
+          ]);
+          expect(completion).toEqual({
+            ok: true,
+            requiresExternalDelivery: false,
+            deliveryError: "No external channel",
+          });
+        } finally {
+          fixture.unsubscribe();
+        }
+      });
+    },
+  );
+});
 
 describe("current-session completion media", () => {
   it.each(["ordinary", "promotion-failure"] as const)(

@@ -94,6 +94,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | Metric                                               | Type      | Labels                                                                                    |
 | ---------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------- |
 | `openclaw_gateway_build_info`                        | gauge     | `process_instance_id`, optional `build_id`                                                |
+| `openclaw_gc_duration_seconds`                       | histogram | none                                                                                      |
 | `openclaw_gateway_rpc_requests_total`                | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_first_response_seconds`        | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_seconds`               | histogram | `method`                                                                                  |
@@ -232,6 +233,29 @@ exporter's series cap, and process restarts can also lose observations. Watch
 the existing drop counters and the represented-duration counter when assessing
 coverage. Readiness decisions and persistent liveness-warning thresholds are unchanged.
 
+### Garbage collection duration
+
+`openclaw_gc_duration_seconds` records elapsed garbage collection (GC) duration
+reported by Node.js for the hosting JavaScript isolate. Each observation is one
+GC entry, not CPU time, allocated bytes, or a guaranteed stop-the-world pause.
+Compare its bucket counts with event-loop window maxima to investigate GC as a
+possible contributor to stalls; matching scrape intervals do not prove causality.
+
+Collection uses the existing diagnostics enablement and starts when the
+diagnostics heartbeat observes an interested consumer, such as a metrics exporter. A consumer added
+after heartbeat startup may wait until the next 30-second tick, or longer if the
+event loop is stalled. Entries preceding observer activation are not backfilled.
+Demand is checked when entries are delivered, so a brief consumer gap before the
+next heartbeat can still yield delayed observations. Losing the last
+consumer suppresses new exports; the observer disconnects at the next heartbeat.
+Disabling diagnostics or stopping the heartbeat disconnects it immediately.
+
+The histogram is absent until the first observation, so absence does not prove
+zero GC. Queue drops, the series cap, observation gaps and process restarts limit
+coverage. Diagnostics disable/re-enable preserves the exporter's existing
+counters; restarting the exporter resets them as usual. No extra timer, GC
+trigger, trace attribution or application payload is collected.
+
 ## Label policy
 
 <AccordionGroup>
@@ -306,6 +330,10 @@ increase(openclaw_gateway_event_loop_delay_max_seconds_count[5m])
 
 # Seconds represented by exported event-loop windows
 increase(openclaw_gateway_event_loop_observed_seconds_total[5m])
+
+# Observed GC entries whose elapsed duration exceeded one second
+increase(openclaw_gc_duration_seconds_count[5m])
+  - increase(openclaw_gc_duration_seconds_bucket{le="1"}[5m])
 ```
 
 <Tip>

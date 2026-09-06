@@ -93,12 +93,14 @@ import {
   buildActiveMusicGenerationTaskPromptContextForSession,
   buildActiveVideoGenerationTaskPromptContextForSession,
 } from "../media-generation-task-status.js";
+import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   captureRoutingDecisionWork,
   createModelRoutingTestAdmission,
 } from "../test-helpers/model-routing-decision-e2e-fixtures.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
@@ -2027,14 +2029,7 @@ describe("prepareCliRunContext", () => {
         api: "responses",
         provider: "test-cli",
         model: "test-model",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "stop",
         timestamp: 2,
       },
@@ -3478,6 +3473,7 @@ describe("prepareCliRunContext", () => {
         messageChannel: "telegram",
         messageProvider: "discord",
         clientCaps: ["tool-events", "inline-widgets"],
+        pinnedWidgetAuthoring: true,
         currentChannelId: "telegram:-100123:topic:42",
         currentThreadTs: "42",
         currentMessageId: "reply-message-1",
@@ -3517,6 +3513,7 @@ describe("prepareCliRunContext", () => {
           modelId: "test-model",
           messageProvider: "telegram",
           clientCaps: ["tool-events", "inline-widgets"],
+          pinnedWidgetAuthoring: true,
           currentChannelId: "telegram:-100123:topic:42",
           currentThreadTs: "42",
           currentMessageId: "reply-message-1",
@@ -3592,6 +3589,7 @@ describe("prepareCliRunContext", () => {
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
         expect.objectContaining({
           clientCaps: ["tool-events", "inline-widgets"],
+          pinnedWidgetAuthoring: true,
           taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
           senderIsOwner: false,
@@ -4242,38 +4240,50 @@ describe("prepareCliRunContext", () => {
     expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
   });
 
-  it("requires prepared-execution backends to enforce the derived disabled-tools cap", async () => {
-    const cleanup = vi.fn(async () => {});
-    const prepareExecution = vi.fn(async () => ({ cleanup }));
-    setRawCliBackendForPrepareTest({
-      id: "settings-cli",
-      pluginId: "settings-plugin",
-      bundleMcp: false,
-      nativeToolMode: "selectable",
-      toolAvailabilityEnforcement: "prepare-execution",
-      prepareExecution,
-      config: {
-        command: "settings-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
-    });
+  it.each([false, true])(
+    "preserves preparation refusal after cleanup (fails=%s)",
+    async (fails) => {
+      const cleanup = vi.fn(async () => {
+        if (fails) {
+          throw new Error("preparation cleanup failed");
+        }
+      });
+      const prepareExecution = vi.fn(async () => ({ cleanup }));
+      setRawCliBackendForPrepareTest({
+        id: "settings-cli",
+        pluginId: "settings-plugin",
+        bundleMcp: false,
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "prepare-execution",
+        prepareExecution,
+        config: {
+          command: "settings-cli",
+          args: ["--print"],
+          output: "jsonl",
+          input: "stdin",
+          sessionMode: "existing",
+        },
+      });
 
-    await expect(
-      fixture.prepare({
-        provider: "settings-cli",
-        disableTools: true,
-      }),
-    ).rejects.toThrow(
-      "did not enforce exact per-run tool availability during execution preparation",
-    );
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ toolAvailability: { native: [], openClaw: [] } }),
-    );
-    expect(cleanup).toHaveBeenCalledOnce();
-  });
+      const cleanupScope = createAgentCleanupScope();
+      await expect(
+        cleanupScope.run(() =>
+          fixture.prepare({
+            provider: "settings-cli",
+            disableTools: true,
+            oneShotCliRun: true,
+          }),
+        ),
+      ).rejects.toThrow(
+        "did not enforce exact per-run tool availability during execution preparation",
+      );
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ toolAvailability: { native: [], openClaw: [] } }),
+      );
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(cleanupScope.outcome).toBe(fails ? "uncertain" : "closed");
+    },
+  );
 
   it("still rejects disableTools when a selectable backend cannot enforce an exact cap", async () => {
     setRawCliBackendForPrepareTest({
@@ -6014,14 +6024,7 @@ describe("prepareCliRunContext", () => {
         api: "responses",
         provider: "test-cli",
         model: "test-model",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "stop",
         timestamp: 2,
       },

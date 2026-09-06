@@ -276,6 +276,25 @@ describe("check-cli-bootstrap-imports", () => {
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
   });
 
+  it("accepts no worker artifact directory when the target has no worker contract", () => {
+    const root = makeTempRoot();
+
+    expect(
+      collectWorkerDeployArtifactErrors({ rootDir: root, workerDeployEntrypoints: [] }),
+    ).toEqual([]);
+
+    writeFixture(root, "dist/worker/unexpected.mjs", "export {};\n");
+    expect(
+      collectWorkerDeployArtifactErrors({ rootDir: root, workerDeployEntrypoints: [] }),
+    ).toEqual(["Worker deploy artifact emits unstaged runtime asset dist/worker/unexpected.mjs."]);
+
+    rmSync(join(root, "dist/worker"), { recursive: true, force: true });
+    writeFixture(root, "dist/worker", "not a directory\n");
+    expect(
+      collectWorkerDeployArtifactErrors({ rootDir: root, workerDeployEntrypoints: [] }),
+    ).toEqual(["Worker deploy artifact directory dist/worker is unreadable."]);
+  });
+
   it("rejects worker package imports and dependency manifests", () => {
     const root = makeTempRoot();
     writeFixture(

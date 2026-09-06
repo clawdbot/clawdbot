@@ -171,7 +171,7 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
       const lines = createInterface({ input: child.stdout });
       context.onTestFinished(async () => {
         lines.close();
-        expect(await closeCodexAppServerTransportAndWait(child)).toBe(true);
+        expect(await closeCodexAppServerTransportAndWait(child)).toMatchObject({ exited: true });
       });
       const pending = new Map<
         number,
