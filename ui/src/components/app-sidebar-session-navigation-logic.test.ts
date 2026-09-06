@@ -5,6 +5,7 @@ import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
   buildSidebarSessionNavigationState,
+  collectSidebarSessionRowsByKey,
   compareSidebarSessionRowsByMode,
   resolveSidebarMainSessionKey,
 } from "./app-sidebar-session-navigation-logic.ts";
@@ -370,8 +371,10 @@ describe("sidebar navigation lineage ownership", () => {
   it("projects a known child exactly once under its explicit navigation parent", () => {
     const projected = projectSessionTree({
       roots: [navigationParent, controlParent],
-      agentRows: [navigationParent, controlParent, child],
-      childRowsByParent: {},
+      rowsByKey: collectSidebarSessionRowsByKey({
+        rows: [navigationParent, controlParent, child],
+        childRowsByParent: {},
+      }),
       loadingChildKeys: new Set(),
       knownSessionAttention: [],
       toSidebarSession: (row, isChild) =>
@@ -392,12 +395,55 @@ describe("sidebar navigation lineage ownership", () => {
     ]);
   });
 
+  it("keeps exact-key insertion order while newer rows replace cached child values", () => {
+    const parent: GatewaySessionRow = {
+      key: "agent:main:parent",
+      kind: "direct",
+      updatedAt: 1,
+    };
+    const first: GatewaySessionRow = {
+      key: "agent:main:child",
+      kind: "direct",
+      spawnedBy: parent.key,
+      label: "Old child",
+    };
+    const caseVariant = { ...first, key: "agent:main:Child", label: "Distinct child" };
+    const sibling = { ...first, key: "agent:main:sibling", label: "Sibling" };
+    const current = { ...first, label: "Current child", hasActiveRun: true };
+    const rowsByKey = collectSidebarSessionRowsByKey({
+      rows: [parent, current],
+      childRowsByParent: {
+        firstCache: [first, caseVariant],
+        secondCache: [{ ...first, label: "Later cached child" }, sibling],
+      },
+    });
+    const [tree] = projectSessionTree({
+      roots: [parent],
+      rowsByKey,
+      loadingChildKeys: new Set(),
+      knownSessionAttention: [],
+      toSidebarSession: (row, isChild) => ({
+        ...projectSidebarSession(row),
+        isChild: isChild === true,
+      }),
+    });
+
+    expect(tree?.children.map((row) => [row.key, row.label, row.hasActiveRun])).toEqual([
+      [first.key, "Current child", true],
+      [caseVariant.key, "Distinct child", false],
+      [sibling.key, "Sibling", false],
+    ]);
+    expect(tree?.runningChildCount).toBe(1);
+  });
+
   it("promotes an explicitly categorized child to a sidebar section root", () => {
     const categorizedChild = { ...child, category: "P1 issues from beta feedback" };
     const projected = projectSessionTree({
       roots: [navigationParent, categorizedChild],
-      agentRows: [navigationParent, categorizedChild],
-      childRowsByParent: {},
+      rowsByKey: collectSidebarSessionRowsByKey({
+        rows: [navigationParent, categorizedChild],
+        childRowsByParent: {},
+      }),
       loadingChildKeys: new Set(),
       knownSessionAttention: [],
       toSidebarSession: (row, isChild) =>
@@ -439,8 +485,10 @@ describe("sidebar navigation lineage ownership", () => {
       const childRow = { ...child, ...runState };
       const projected = projectSessionTree({
         roots: [navigationParent],
-        agentRows: [navigationParent, childRow],
-        childRowsByParent: {},
+        rowsByKey: collectSidebarSessionRowsByKey({
+          rows: [navigationParent, childRow],
+          childRowsByParent: {},
+        }),
         loadingChildKeys: new Set(),
         knownSessionAttention: [],
         toSidebarSession: (row, isChild) => ({
@@ -475,8 +523,10 @@ describe("sidebar navigation lineage ownership", () => {
     const childWithBlankParent = { ...child, parentSessionKey: "  \t  " };
     const projected = projectSessionTree({
       roots: [controlParent],
-      agentRows: [controlParent, childWithBlankParent],
-      childRowsByParent: {},
+      rowsByKey: collectSidebarSessionRowsByKey({
+        rows: [controlParent, childWithBlankParent],
+        childRowsByParent: {},
+      }),
       loadingChildKeys: new Set(),
       knownSessionAttention: [],
       toSidebarSession: (row, isChild) =>

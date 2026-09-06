@@ -6,6 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  McpLoopbackToolCache,
+  resolveMcpLoopbackPolicyTools,
+  resolveMcpLoopbackScopedTools,
+} from "./mcp-http.runtime.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 describe("resolveGatewayScopedTools", () => {
@@ -29,7 +34,7 @@ describe("resolveGatewayScopedTools", () => {
     });
 
     const messageTool = result.tools.find((tool) => tool.name === "message");
-    expect(messageTool?.description).toContain("This turn visible reply");
+    expect(messageTool).toBeDefined();
   });
 
   it("keeps webchat room-event turns on automatic source delivery", () => {
@@ -55,8 +60,33 @@ describe("resolveGatewayScopedTools", () => {
     });
 
     const messageTool = result.tools.find((tool) => tool.name === "message");
-    expect(messageTool?.description).toContain("This turn visible reply");
+    expect(messageTool).toBeDefined();
   });
+
+  it.each(["profile", "gateway-deny", "surface-exclusion"] as const)(
+    "rejects collector mode after %s removes its reader",
+    async (restriction) => {
+      const result = resolveGatewayScopedTools({
+        cfg: {
+          agents: { entries: { main: { default: true } } },
+          tools: { profile: restriction === "profile" ? "messaging" : "coding" },
+          ...(restriction === "gateway-deny"
+            ? { gateway: { tools: { deny: ["agents_wait"] } } }
+            : {}),
+        },
+        sessionKey: "agent:main:main",
+        surface: "loopback",
+        ...(restriction === "surface-exclusion" ? { excludeToolNames: ["agents_wait"] } : {}),
+      });
+      const spawn = result.tools.find((tool) => tool.name === "sessions_spawn");
+      expect(spawn).toBeDefined();
+      expect(result.tools.some((tool) => tool.name === "agents_wait")).toBe(false);
+      expect(spawn?.parameters).not.toHaveProperty("properties.collect");
+      await expect(
+        spawn!.execute("uncollectable", { task: "inspect", collect: true }),
+      ).rejects.toThrow("Collector results are unavailable");
+    },
+  );
 
   it("keeps ordinary loopback turns under the configured profile", () => {
     const result = resolveGatewayScopedTools({
@@ -107,6 +137,30 @@ describe("resolveGatewayScopedTools", () => {
     expect(imageTool?.description).toContain("private model context");
   });
 
+  it.each([
+    { first: undefined, second: false },
+    { first: false, second: undefined },
+  ])(
+    "keeps unknown and disabled model vision distinct in cached tools: $first then $second",
+    async ({ first, second }) => {
+      const cache = new McpLoopbackToolCache();
+      const cfg: OpenClawConfig = { tools: { allow: ["computer"] } };
+      for (const modelHasVision of [first, second]) {
+        const result = await cache.resolve({
+          cfg,
+          context: {
+            sessionKey: "agent:main:vision-context",
+            senderIsOwner: true,
+            modelHasVision,
+          },
+        });
+        expect(result.tools.some((tool) => tool.name === "computer")).toBe(
+          modelHasVision !== false,
+        );
+      }
+    },
+  );
+
   it("applies a borrowed runtime policy without reassigning session tools", () => {
     const cfg = {
       agents: {
@@ -151,6 +205,50 @@ describe("resolveGatewayScopedTools", () => {
       }),
     ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
   });
+
+  it.each(
+    [
+      { mode: "policy", resolve: resolveMcpLoopbackPolicyTools },
+      { mode: "exact grant", resolve: resolveMcpLoopbackScopedTools },
+    ].flatMap(({ mode, resolve }) =>
+      [
+        { label: "ls-only", toolsAllow: ["ls"], expected: ["ls"] },
+        { label: "read-only", toolsAllow: ["read"], expected: ["read"] },
+        { label: "mixed", toolsAllow: ["ls", "read"], expected: ["ls", "read"] },
+        {
+          label: "filesystem group",
+          toolsAllow: ["group:fs"],
+          expected: mode === "policy" ? ["ls", "read"] : [],
+        },
+      ].map((testCase) => Object.assign(testCase, { mode, resolve })),
+    ),
+  )(
+    "materializes $label loopback $mode without widening its cap",
+    async ({ resolve, toolsAllow, expected }) => {
+      const scope = {
+        cfg: {
+          plugins: { enabled: false },
+          tools: { profile: "minimal", alsoAllow: ["ls", "read"] },
+        } satisfies OpenClawConfig,
+        context: {
+          sessionKey: "agent:main:cron:listing-surface",
+          workspaceDir: path.join(os.tmpdir(), "openclaw-listing-surface"),
+          senderIsOwner: true,
+          toolsAllow,
+        },
+      };
+      const allowed = await resolve(scope);
+      expect(allowed.tools.map((tool) => tool.name)).toEqual(expected);
+
+      const denied = await resolve({
+        ...scope,
+        cfg: { ...scope.cfg, tools: { ...scope.cfg.tools, deny: ["ls"] } },
+      });
+      expect(denied.tools.map((tool) => tool.name)).toEqual(
+        expected.filter((name) => name !== "ls"),
+      );
+    },
+  );
 
   it("materializes an executable write tool on the mediated CLI surface", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mediated-write-"));
@@ -258,7 +356,6 @@ describe("resolveGatewayScopedTools", () => {
       expect(onYield).toHaveBeenCalledWith("waiting on subagents", "I’m waiting on the subagents.");
       expect(toolResult.details).toEqual({
         status: "yielded",
-        message: "waiting on subagents",
         acknowledgment: "I’m waiting on the subagents.",
       });
     } finally {

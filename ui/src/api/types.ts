@@ -28,6 +28,7 @@ import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
+import type { RequirementConfigCheck, Requirements } from "../../../src/shared/requirements.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
@@ -48,6 +49,7 @@ export type {
   CronScratchGetResult,
   UpdateAvailable,
   UpdateHoldResult,
+  UpdateReportResult,
   UpdateScheduleState,
 } from "../../../packages/gateway-protocol/src/index.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
@@ -97,148 +99,71 @@ export type WhatsAppStatus = {
   lastError?: string | null;
 };
 
-type TelegramBot = {
-  id?: number | null;
-  username?: string | null;
-};
-
-type TelegramWebhook = {
-  url?: string | null;
-  hasCustomCert?: boolean | null;
-};
-
-type TelegramProbe = {
+type ChannelProbe = {
   ok: boolean;
   status?: number | null;
   error?: string | null;
   elapsedMs?: number | null;
-  bot?: TelegramBot | null;
-  webhook?: TelegramWebhook | null;
 };
 
-export type TelegramStatus = {
+type ChannelStatus<Probe = ChannelProbe> = {
   configured: boolean;
-  tokenSource?: string | null;
   running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  probe?: Probe | null;
+  lastProbeAt?: number | null;
+};
+
+type TelegramProbe = ChannelProbe & {
+  bot?: { id?: number | null; username?: string | null } | null;
+  webhook?: { url?: string | null; hasCustomCert?: boolean | null } | null;
+};
+
+export type TelegramStatus = ChannelStatus<TelegramProbe> & {
+  tokenSource?: string | null;
   mode?: string | null;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: TelegramProbe | null;
-  lastProbeAt?: number | null;
 };
 
-type DiscordBot = {
-  id?: string | null;
-  username?: string | null;
+type DiscordProbe = ChannelProbe & {
+  bot?: { id?: string | null; username?: string | null } | null;
 };
 
-type DiscordProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-  bot?: DiscordBot | null;
-};
-
-export type DiscordStatus = {
-  configured: boolean;
+export type DiscordStatus = ChannelStatus<DiscordProbe> & {
   tokenSource?: string | null;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: DiscordProbe | null;
-  lastProbeAt?: number | null;
 };
 
-type GoogleChatProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-};
-
-export type GoogleChatStatus = {
-  configured: boolean;
+export type GoogleChatStatus = ChannelStatus & {
   credentialSource?: string | null;
   audienceType?: string | null;
   audience?: string | null;
   webhookPath?: string | null;
   webhookUrl?: string | null;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: GoogleChatProbe | null;
-  lastProbeAt?: number | null;
 };
 
-type SlackBot = {
+type SlackIdentity = {
   id?: string | null;
   name?: string | null;
 };
 
-type SlackTeam = {
-  id?: string | null;
-  name?: string | null;
+type SlackProbe = ChannelProbe & {
+  bot?: SlackIdentity | null;
+  team?: SlackIdentity | null;
 };
 
-type SlackProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-  bot?: SlackBot | null;
-  team?: SlackTeam | null;
-};
-
-export type SlackStatus = {
-  configured: boolean;
+export type SlackStatus = ChannelStatus<SlackProbe> & {
   botTokenSource?: string | null;
   appTokenSource?: string | null;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: SlackProbe | null;
-  lastProbeAt?: number | null;
 };
 
-type SignalProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-  version?: string | null;
-};
-
-export type SignalStatus = {
-  configured: boolean;
+export type SignalStatus = ChannelStatus<ChannelProbe & { version?: string | null }> & {
   baseUrl: string;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: SignalProbe | null;
-  lastProbeAt?: number | null;
 };
 
-type IMessageProbe = {
-  ok: boolean;
-  error?: string | null;
-};
-
-export type IMessageStatus = {
-  configured: boolean;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
+export type IMessageStatus = ChannelStatus<Pick<ChannelProbe, "ok" | "error">> & {
   cliPath?: string | null;
   dbPath?: string | null;
-  probe?: IMessageProbe | null;
-  lastProbeAt?: number | null;
 };
 
 export type NostrProfile = {
@@ -357,6 +282,10 @@ type SessionCompactionCheckpointPreview = Pick<
 >;
 
 export type GatewaySessionRow = SessionRow & {
+  /** Transient UI-owned Swarm note overlays, not persisted session fields. */
+  swarmPhase?: string;
+  swarmPhaseRank?: number;
+  swarmLog?: string;
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
   placementMove?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacementMove;
   icon?: string;
@@ -523,11 +452,6 @@ export type CronRunsResult = {
   hasMore?: boolean;
 };
 
-type SkillsStatusConfigCheck = {
-  path: string;
-  satisfied: boolean;
-};
-
 type SkillInstallOption = {
   id: string;
   kind: "brew" | "node" | "go" | "uv" | "download";
@@ -585,21 +509,9 @@ export type SkillStatusEntry = {
   modelVisible?: boolean;
   userInvocable?: boolean;
   commandVisible?: boolean;
-  requirements: {
-    anyBins: string[];
-    bins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  missing: {
-    anyBins: string[];
-    bins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  configChecks: SkillsStatusConfigCheck[];
+  requirements: Requirements;
+  missing: Requirements;
+  configChecks: RequirementConfigCheck[];
   install: SkillInstallOption[];
   clawhub?: SkillClawHubLink;
   skillCard?: SkillCardStatus;

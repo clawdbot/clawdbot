@@ -341,6 +341,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { ...PASSIVE_STARTUP_POLICY },
     route: { id: "models-status" },
   },
+  // Default-policy children must remain distinct from the passive parent action.
+  ...["refresh", "set", "set-image", "aliases", "fallbacks", "image-fallbacks", "scan"].map(
+    (subcommand): CliCommandCatalogEntry => ({ commandPath: ["models", subcommand] }),
+  ),
   { commandPath: ["models", "auth"], policy: { stateStoreGuard: "run" } },
   {
     commandPath: ["models", "accounts"],

@@ -35,6 +35,13 @@ const memoryEngineStorageModuleLoader = createLazyImportLoader(
 );
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
+export function resolveStatusGatewayProbeTimeoutMs(opts: {
+  timeoutMs?: number;
+  all?: boolean;
+}): number {
+  return opts.timeoutMs ?? (opts.all ? 5000 : 2500);
+}
+
 function loadGatewayProbeModule() {
   return gatewayProbeModuleLoader.load();
 }
@@ -299,9 +306,8 @@ export async function resolveGatewayProbeSnapshot(params: {
       )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
-  const defaultProbeTimeoutMs = params.opts.all ? 5000 : 2500;
   const timeoutMsExplicit = params.opts.timeoutMs !== undefined;
-  const probeTimeoutMs = params.opts.timeoutMs ?? defaultProbeTimeoutMs;
+  const probeTimeoutMs = resolveStatusGatewayProbeTimeoutMs(params.opts);
   const initialGatewayProbe = shouldProbe
     ? await loadProbeGatewayModule()
         .then(({ probeGateway }) =>

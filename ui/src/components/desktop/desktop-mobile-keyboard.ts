@@ -1,3 +1,5 @@
+import type { DesktopConnectionHandle } from "./desktop-client.ts";
+
 /**
  * Mobile browsers only report composed text through an input's value, so the desktop document
  * keeps a padded sentinel in the field and derives key events from how that value changed.
@@ -5,12 +7,7 @@
 const MOBILE_KEYBOARD_SENTINEL = "________________";
 
 type MobileKeyboardOptions = {
-  /** Live RFB handle, or null while disconnected; absent senders mean a view-only transport. */
-  connection: () => {
-    sendBackspace?: () => void;
-    sendKeyboardEvent?: (event: KeyboardEvent) => void;
-    sendText?: (text: string) => void;
-  } | null;
+  connection: () => DesktopConnectionHandle | null;
   controlling: () => boolean;
   input: () => HTMLTextAreaElement | null | undefined;
 };
@@ -38,7 +35,7 @@ export class DesktopMobileKeyboard {
 
   handleKeyboardEvent(event: KeyboardEvent): void {
     const connection = this.options.connection();
-    if (!this.options.controlling() || !connection?.sendKeyboardEvent) {
+    if (!this.options.controlling() || !connection) {
       return;
     }
     connection.sendKeyboardEvent(event);
@@ -54,17 +51,21 @@ export class DesktopMobileKeyboard {
     const nextValue = input.value;
     const connection = this.options.connection();
     let prefixLength = 0;
-    const comparableLength = Math.min(this.value.length, nextValue.length);
-    while (
-      prefixLength < comparableLength &&
-      this.value.charAt(prefixLength) === nextValue.charAt(prefixLength)
+    for (const character of this.value) {
+      if (!nextValue.startsWith(character, prefixLength)) {
+        break;
+      }
+      prefixLength += character.length;
+    }
+    // DOM offsets use UTF-16; a removed supplementary character is one key action.
+    for (
+      let remaining = Array.from(this.value.slice(prefixLength)).length;
+      remaining > 0;
+      remaining -= 1
     ) {
-      prefixLength += 1;
+      connection?.sendBackspace();
     }
-    for (let index = this.value.length - prefixLength; index > 0; index -= 1) {
-      connection?.sendBackspace?.();
-    }
-    connection?.sendText?.(nextValue.slice(prefixLength));
+    connection?.sendText(nextValue.slice(prefixLength));
     // Refill once the field drifts outside the range that keeps further deletes reportable.
     if (nextValue.length < 1 || nextValue.length > MOBILE_KEYBOARD_SENTINEL.length * 2) {
       this.reset(input);

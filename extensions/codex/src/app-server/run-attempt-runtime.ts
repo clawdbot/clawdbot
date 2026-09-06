@@ -8,11 +8,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexMcpToolOverridesForAgent } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
+import { resolveCodexAppServerAuthAccountCacheKey } from "./auth-bridge.js";
 import {
-  resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey,
-} from "./auth-bridge.js";
+} from "./auth-cache-key.js";
 import { isCodexSandboxExecServerEnabled } from "./config.js";
 import {
   resolveCodexAppServerHookChannelId,
@@ -193,6 +193,10 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   // capability; do not promote that fact to general sender ownership.
   const hasFreshCreatorAuthority =
     cronCreatorAuthorityCapability?.active === true &&
+    !(
+      cronCreatorAuthorityCapability.controlUiAdmin &&
+      cronCreatorAuthorityCapability.callerOrigin.kind === "unknown"
+    ) &&
     cronCreatorAuthorityCapability.runId === params.runId &&
     !cronCreatorAuthorityCapability.signal.aborted;
   const mayResolveScheduledConfiguredMcpCreatorAuthority =

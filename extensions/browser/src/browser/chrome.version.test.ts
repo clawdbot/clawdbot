@@ -14,7 +14,7 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { readBrowserVersion } from "./chrome.executables.js";
+import { readBrowserVersion } from "./chrome.executable-probe.js";
 
 function stubPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", {

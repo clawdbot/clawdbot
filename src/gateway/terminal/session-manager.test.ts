@@ -669,13 +669,19 @@ describe("TerminalSessionManager agent ownership", () => {
   it("co-attaches viewers without take-over and cleans each viewer independently", async () => {
     vi.useFakeTimers();
     try {
-      const emit = vi.fn();
+      const emit = vi.fn((connId: string, event: string) => {
+        // A send can disconnect a viewer before the remaining recipients receive this frame.
+        if (connId === "viewer-1" && event === TERMINAL_EVENT_DATA) {
+          manager.handleDisconnect(connId);
+        }
+      });
       const fake = makeFakePty();
       const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
       const outcome = expectTerminalOpen(await manager.open(baseRequest({ owner: agentOwner })));
 
       expect(manager.attach("viewer-1", outcome.sessionId)).toBeDefined();
       expect(manager.attach("viewer-2", outcome.sessionId)).toBeDefined();
+      expect(manager.attach("viewer-1", outcome.sessionId)).toBeDefined();
       expect(emit).not.toHaveBeenCalledWith(
         "viewer-1",
         TERMINAL_EVENT_EXIT,
@@ -686,11 +692,9 @@ describe("TerminalSessionManager agent ownership", () => {
       await vi.advanceTimersByTimeAsync(4);
       const dataRecipients = emit.mock.calls
         .filter(([, event]) => event === TERMINAL_EVENT_DATA)
-        .map(([connId]) => connId)
-        .toSorted((a, b) => String(a).localeCompare(String(b)));
+        .map(([connId]) => connId);
       expect(dataRecipients).toEqual(["viewer-1", "viewer-2"]);
 
-      manager.handleDisconnect("viewer-1");
       emit.mockClear();
       fake.emitData("one");
       await vi.advanceTimersByTimeAsync(4);

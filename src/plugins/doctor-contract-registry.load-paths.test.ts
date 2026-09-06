@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findLegacyConfigIssues } from "../config/legacy.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   listPluginDoctorLegacyConfigRules,
@@ -359,6 +360,39 @@ function writeLegacyDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: strin
   );
 }
 
+function writeLegacyPostSessionMigrationPlugin(pluginRoot: string, pluginId: string): void {
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: pluginId,
+      configSchema: {},
+      doctorContract: { stateMigrations: true },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n", "utf8");
+  fs.writeFileSync(
+    path.join(pluginRoot, "doctor-contract-api.cjs"),
+    `module.exports = {
+  stateMigrations: [{
+    id: "legacy-post-session-state",
+    label: "Legacy post-session state",
+    doctorOnly: true,
+    phase: "after-session-repair",
+    detectLegacyState() {
+      return { preview: ["legacy external post-session state is pending"] };
+    },
+    migrateLegacyState() {
+      return { changes: ["migrated legacy external post-session state"], warnings: [] };
+    },
+  }],
+};
+`,
+    "utf8",
+  );
+}
+
 function createDoctorPluginConfig(pluginRoot: string, pluginId: string): OpenClawConfig {
   return {
     plugins: {
@@ -682,5 +716,35 @@ describe("doctor contract registry load-path plugins", () => {
         authProfilePrefixes: [],
       },
     ]);
+  });
+
+  it("validates frozen live post-session actions without applying candidate-only refusal", async () => {
+    const stateDir = tempDirs.make("openclaw-doctor-contract-post-session-");
+    const pluginRoot = tempDirs.make("openclaw-doctor-contract-post-session-");
+    const pluginId = "legacy-post-session-owner";
+    writeLegacyPostSessionMigrationPlugin(pluginRoot, pluginId);
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+    const env = makeHermeticDoctorEnv(stateDir);
+
+    const unplanned = await runPostSessionPluginDoctorStateRepairs({ config, env });
+    expect(unplanned.warnings).toContain("legacy external post-session state is pending");
+
+    const planBound = await runPostSessionPluginDoctorStateRepairs({
+      config,
+      env,
+      plannedActions: [],
+    });
+    expect(planBound).toMatchObject({
+      changes: [],
+      warnings: [expect.stringContaining("immutable action order")],
+    });
+    expect(planBound.warnings).not.toContain("legacy external post-session state is pending");
+    const matchingPlan = await runPostSessionPluginDoctorStateRepairs({
+      config,
+      env,
+      plannedActions: [{ pluginId, id: "legacy-post-session-state" }],
+    });
+    expect(matchingPlan.changes).toEqual([]);
+    expect(matchingPlan.warnings).toContain("legacy external post-session state is pending");
   });
 });

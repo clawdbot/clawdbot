@@ -214,6 +214,19 @@ struct RootTabsPresentationTests {
         })
     }
 
+    @Test func `usage summary preserves numeric and string counts with missing totals`() throws {
+        let cases: [(json: String, expected: Int?)] = [
+            (#"{"totals":{"totalTokens":1200}}"#, 1200),
+            (#"{"totals":{"totalTokens":"1200"}}"#, 1200),
+            (#"{"totals":{}}"#, nil),
+            (#"{}"#, nil),
+        ]
+        for testCase in cases {
+            let summary = try JSONDecoder().decode(CostUsageSummaryLite.self, from: Data(testCase.json.utf8))
+            #expect(summary.totalTokens == testCase.expected)
+        }
+    }
+
     @Test func `iOS usage requests device calendar days`() throws {
         let cases: [(timeZoneID: String, timestamp: TimeInterval, expectedOffset: String)] = [
             ("America/Los_Angeles", 1_769_000_000, "UTC-8"),

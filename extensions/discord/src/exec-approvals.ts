@@ -12,6 +12,7 @@ import {
   matchesApprovalRequestFilters,
   resolveApprovalApprovers,
 } from "./approval-runtime.js";
+import { resolveDiscordCommandOwnerEntries } from "./command-owners.js";
 import { parseDiscordTarget } from "./target-parsing.js";
 
 function normalizeDiscordApproverId(value: string): string | undefined {
@@ -31,12 +32,10 @@ function normalizeDiscordApproverId(value: string): string | undefined {
 }
 
 function resolveDiscordOwnerApprovers(cfg: OpenClawConfig): string[] {
-  const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
-  if (!Array.isArray(ownerAllowFrom) || ownerAllowFrom.length === 0) {
-    return [];
-  }
+  // Global owner targets have a nested normalization pass; explicit approvers do not.
+  // Preserve that shipped distinction for targets such as discord:<@123>.
   return resolveApprovalApprovers({
-    explicit: ownerAllowFrom,
+    explicit: resolveDiscordCommandOwnerEntries(cfg),
     normalizeApprover: (value) => normalizeDiscordApproverId(String(value)),
   });
 }

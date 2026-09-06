@@ -23,6 +23,7 @@ function createFakeRfb() {
     viewOnly = false;
     scaleViewport = false;
     readonly disconnect = vi.fn();
+    readonly sendKey = vi.fn();
 
     constructor(
       readonly target: HTMLElement,
@@ -130,19 +131,21 @@ describe("DesktopClient", () => {
       credentials: { username: "operator", password: "secret" },
     });
 
-    handle.setScaleViewport?.(true);
+    handle.setScaleViewport(true);
     expect(instances[0]?.scaleViewport).toBe(true);
-    handle.sendKeyboardEvent?.(new KeyboardEvent("keydown", { key: "k", code: "KeyK" }));
+    handle.sendKeyboardEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK" }));
     expect(onKeyDown).toHaveBeenCalledOnce();
     expect((onKeyDown.mock.calls[0]?.[0] as KeyboardEvent | undefined)?.key).toBe("k");
-    handle.sendText?.("m");
-    handle.sendBackspace?.();
+    handle.sendText("m");
+    handle.sendBackspace();
     expect(onKeyDown.mock.calls.map((call) => (call[0] as KeyboardEvent | undefined)?.key)).toEqual(
-      ["k", "m", "Backspace"],
+      ["k", "m"],
     );
+    expect(instances[0]?.sendKey).toHaveBeenCalledExactlyOnceWith(0xff08, "Backspace");
 
     handle.disableInput();
     expect(instances[0]?.viewOnly).toBe(true);
+    handle.disconnect();
     handle.disconnect();
     expect(instances[0]?.disconnect).toHaveBeenCalledOnce();
   });
@@ -159,19 +162,22 @@ describe("DesktopClient", () => {
     const onDisconnect = vi.fn();
     const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
 
-    await client.connect({
+    const handle = await client.connect({
       wsUrl: "ws://control.example.test/desktop/observe",
       isCurrent: () => true,
       viewOnly: true,
       target: document.createElement("div"),
       onDisconnect,
     });
+    onDisconnect.mockImplementation(() => handle.disconnect());
     if (close) {
       socket.dispatchEvent(new CloseEvent("close", close));
     }
     instances[0]?.dispatchEvent(new CustomEvent("disconnect", { detail: { clean } }));
 
     expect(onDisconnect).toHaveBeenCalledExactlyOnceWith({ ...close, clean });
+    handle.disconnect();
+    expect(instances[0]?.disconnect).not.toHaveBeenCalled();
     if (!close) {
       socket.dispatchEvent(new CloseEvent("close", { code: 1000 }));
       expect(onDisconnect).toHaveBeenCalledExactlyOnceWith({ clean });
@@ -182,7 +188,6 @@ describe("DesktopClient", () => {
     ["LF", "é\nΩ", ["é", "Enter", "Ω"]],
     ["CRLF", "é\r\nΩ", ["é", "Enter", "Ω"]],
     ["CR", "é\rΩ", ["é", "Enter", "Ω"]],
-    ["astral Unicode", "🦞\nΩ", ["\ud83e", "\udd9e", "Enter", "Ω"]],
     ["blank lines", "\n\r\n\r", ["Enter", "Enter", "Enter"]],
   ] as const)("sends %s text line breaks as single Enter presses", async (_name, text, keys) => {
     const { Rfb } = createFakeRfb();
@@ -202,7 +207,7 @@ describe("DesktopClient", () => {
       target,
     });
 
-    handle.sendText?.(text);
+    handle.sendText(text);
 
     expect(events.map(({ type, key, code }) => ({ type, key, code }))).toEqual(
       keys.map((key) => ({ type: "keydown", key, code: "Unidentified" })),

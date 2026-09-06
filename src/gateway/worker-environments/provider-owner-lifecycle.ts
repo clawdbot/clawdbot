@@ -15,6 +15,7 @@ import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTunnelStopReason,
 } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 export function createWorkerProviderOwnerLifecycle(
   options: Pick<
@@ -188,7 +189,7 @@ export function createWorkerProviderOwnerLifecycle(
         );
       } catch (error) {
         saveError(requireCurrentOwner(r), error);
-        throw serviceError("provider_failure", "Worker allocation resolution failed");
+        throw serviceError("provider_failure", boundedWorkerError(error));
       }
       // Publish only the cleanup identity, never a fabricated transport or admission receipt.
       r = move(requireCurrentOwner(r), "draining", { ...allocation, lastError: r.lastError });
@@ -202,7 +203,7 @@ export function createWorkerProviderOwnerLifecycle(
       await destroyLease(destroying, owningProvider, lifecycleLease(destroying, leaseId));
     } catch (error) {
       saveError(requireCurrentOwner(destroying), error);
-      throw serviceError("provider_failure", "Worker provider operation failed");
+      throw serviceError("provider_failure", boundedWorkerError(error));
     }
     return await finishProvenDestroy(
       providerOwnsMachine ? await stopOwner(destroying, "provider-destroyed") : destroying,
@@ -214,6 +215,7 @@ export function createWorkerProviderOwnerLifecycle(
     destroyOptions: {
       requireUnattached?: boolean;
       abandonment?: WorkerEnvironmentAbandonment;
+      retryRequested?: boolean;
     } = {},
   ) => {
     const stopping = options.isStopping();
@@ -253,6 +255,14 @@ export function createWorkerProviderOwnerLifecycle(
         throw serviceError(
           "invalid_state",
           "Attached cloud workers must be stopped through sessions.reclaim",
+        );
+      }
+      // Environment reconciliation owns retries of accepted cleanup. A background
+      // placement projection must not replay its failed provider call or claim success.
+      if (destroyOptions.retryRequested === false && record.destroyRequestedAtMs !== null) {
+        throw serviceError(
+          "invalid_state",
+          `Worker environment cleanup is still pending: ${record.lastError ?? record.state}`,
         );
       }
       record = store.requestDestroy({

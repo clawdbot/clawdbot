@@ -112,20 +112,52 @@ describe("BoundedSerialQueue", () => {
     }
   });
 
-  it("can require every task in the accepted prefix to succeed", async () => {
-    const failure = new Error("persistence failed");
+  it.each([new Error("persistence failed"), undefined])(
+    "preserves the first failure (%s) in a sealed prefix",
+    async (failure) => {
+      const queue = new BoundedSerialQueue({ maxPendingCount: 1, maxPendingWeight: 1 });
+      const first = createDeferred();
+      const task = queue.enqueue(() => first.promise);
+      const laterFailure = new Error("later failure");
+      const later = queue.enqueue(() => {
+        throw laterFailure;
+      });
+      queue.seal();
+      const ordinaryFlush = queue.flush();
+      const strictFlush = queue.flush({ requireSuccess: true });
+
+      first.reject(failure);
+      await Promise.all([
+        expect(ordinaryFlush).resolves.toBeUndefined(),
+        expect(strictFlush).rejects.toBe(failure),
+        expect(task.accepted ? task.completion : Promise.resolve()).rejects.toBe(failure),
+        expect(later.accepted ? later.completion : Promise.resolve()).rejects.toBe(laterFailure),
+      ]);
+      expect(queue.isIdle).toBe(true);
+    },
+  );
+
+  it("does not reject a successful flush prefix for a later synchronous failure", async () => {
+    const first = createDeferred();
     const queue = new BoundedSerialQueue({ maxPendingCount: 1, maxPendingWeight: 1 });
-    const task = queue.enqueue(async () => {
+    const active = queue.enqueue(() => first.promise);
+    const prefix = queue.flush({ requireSuccess: true });
+    const failure = new Error("outside the captured prefix");
+    const later = queue.enqueue(() => {
       throw failure;
     });
-    const ordinaryFlush = queue.flush();
-    const strictFlush = queue.flush({ requireSuccess: true });
+    const laterFailure = expect(later.accepted ? later.completion : Promise.resolve()).rejects.toBe(
+      failure,
+    );
 
-    await expect(ordinaryFlush).resolves.toBeUndefined();
-    await expect(strictFlush).rejects.toBe(failure);
-    if (task.accepted) {
-      await expect(task.completion).rejects.toBe(failure);
+    first.resolve();
+
+    await Promise.all([expect(prefix).resolves.toBeUndefined(), laterFailure]);
+    await expect(queue.flush({ requireSuccess: true })).rejects.toBe(failure);
+    if (active.accepted) {
+      await active.completion;
     }
+    expect(queue.isIdle).toBe(true);
   });
 
   it("seals idempotently while preserving accepted work", async () => {

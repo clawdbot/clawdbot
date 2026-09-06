@@ -6,7 +6,6 @@ import {
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
-import type { AcpSpawnRuntimeCloseHandle } from "../../../acp/control-plane/spawn.js";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import {
   resolveThreadBindingIntroText,
@@ -69,7 +68,6 @@ type AcpSpawnInitializedSession = Awaited<
 
 export type AcpSpawnInitializedRuntime = {
   initialized: AcpSpawnInitializedSession;
-  runtimeCloseHandle: AcpSpawnRuntimeCloseHandle;
   sessionId?: string;
   sessionEntry: SessionEntry | undefined;
   storePath: string;
@@ -153,6 +151,7 @@ export function resolveAcpSpawnRuntimeOptions(params: {
 }
 
 export async function initializeAcpSpawnRuntime(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   targetAgentId: string;
@@ -163,6 +162,7 @@ export async function initializeAcpSpawnRuntime(params: {
   modelExplicit?: boolean;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
+  params.assertActive?.();
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.targetAgentId,
   });
@@ -185,6 +185,7 @@ export async function initializeAcpSpawnRuntime(params: {
   }
 
   const initialized = await getAcpSessionManager().initializeSession({
+    assertActive: params.assertActive,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.targetAgentId,
@@ -199,10 +200,6 @@ export async function initializeAcpSpawnRuntime(params: {
 
   return {
     initialized,
-    runtimeCloseHandle: {
-      runtime: initialized.runtime,
-      handle: initialized.handle,
-    },
     sessionId,
     sessionEntry,
     storePath,
@@ -210,6 +207,7 @@ export async function initializeAcpSpawnRuntime(params: {
 }
 
 export async function bindPreparedAcpThread(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   targetAgentId: string;
@@ -261,6 +259,7 @@ export async function bindPreparedAcpThread(params: {
       }),
     },
   });
+  params.assertActive?.();
   if (!binding.conversation.conversationId) {
     throw new Error(
       params.preparedBinding.placement === "child"

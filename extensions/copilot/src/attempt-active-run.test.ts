@@ -4,6 +4,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { controlRealtimeVoiceAgentRun } from "openclaw/plugin-sdk/realtime-voice";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCopilotActiveRun } from "./attempt-active-run.js";
@@ -103,6 +104,40 @@ describe("registerCopilotActiveRun", () => {
     harnessMocks.claimPendingAgentQuestionAnswer.mockReset();
     harnessMocks.claimPendingAgentQuestionAnswer.mockResolvedValue(false);
     harnessMocks.setActiveEmbeddedRun.mockClear();
+  });
+
+  it("refuses scoped controls before the real V1 handle while preserving unscoped injection", async () => {
+    const runtime = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/agent-harness-runtime")
+    >("openclaw/plugin-sdk/agent-harness-runtime");
+    const { handle, send } = registerTestRun();
+    const queue = vi.spyOn(handle.messageInjection, "queueMessage");
+    const claim = vi.spyOn(handle, "claimPendingUserInputAnswer");
+    runtime.setActiveEmbeddedRun("session-1", handle, "agent:main:session-1");
+    try {
+      const result = await controlRealtimeVoiceAgentRun({
+        sessionKey: "agent:main:session-1",
+        text: "change course",
+        mode: "steer",
+        runTarget: {
+          runId: "run-1",
+          signal: new AbortController().signal,
+          isCurrent: () => true,
+        },
+      });
+      expect(result).toMatchObject({ ok: false, reason: "guarded_injection_unsupported" });
+      expect(queue).not.toHaveBeenCalled();
+      expect(claim).not.toHaveBeenCalled();
+      expect(harnessMocks.claimPendingAgentQuestionAnswer).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+      expect(runtime.queueAgentHarnessMessage("session-1", "unscoped change")).toBe(true);
+      await vi.waitFor(() =>
+        expect(send).toHaveBeenCalledExactlyOnceWith({ prompt: "unscoped change" }),
+      );
+    } finally {
+      runtime.clearActiveEmbeddedRun("session-1", handle);
+      vi.restoreAllMocks();
+    }
   });
 
   it("reports acceptance after send while the transcript receipt is still pending", async () => {
@@ -316,19 +351,35 @@ describe("registerCopilotActiveRun", () => {
     },
   );
 
-  it("reports a claimed pending question as accepted without sending steering", async () => {
-    harnessMocks.claimPendingAgentQuestionAnswer.mockResolvedValueOnce(true);
-    const onQueueAccepted = vi.fn();
-    const { handle, send } = registerTestRun();
+  it.each([false, true])(
+    "preserves confirmed and unconfirmed host questions without SDK steering: failed=%s",
+    async (failed) => {
+      const claimError = new Error("host question confirmation unavailable");
+      if (failed) {
+        harnessMocks.claimPendingAgentQuestionAnswer.mockRejectedValueOnce(claimError);
+      } else {
+        harnessMocks.claimPendingAgentQuestionAnswer.mockResolvedValueOnce(true);
+      }
+      const onQueueAccepted = vi.fn();
+      const { handle, send, waitForSdkUserPersisted } = registerTestRun();
+      const delivery = handle.queueMessage("answer", {
+        isInboundUserMessage: true,
+        onQueueAccepted,
+        waitForTranscriptCommit: true,
+      });
 
-    await expect(
-      handle.queueMessage("answer", { isInboundUserMessage: true, onQueueAccepted }),
-    ).resolves.toBeUndefined();
-
-    expect(onQueueAccepted).toHaveBeenCalledOnce();
-    expect(onQueueAccepted).toHaveBeenCalledWith(true);
-    expect(send).not.toHaveBeenCalled();
-  });
+      if (failed) {
+        await expect(delivery).rejects.toBe(claimError);
+        expect(onQueueAccepted).not.toHaveBeenCalled();
+      } else {
+        await expect(delivery).resolves.toBeUndefined();
+        expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      }
+      expect(harnessMocks.claimPendingAgentQuestionAnswer).toHaveBeenCalledOnce();
+      expect(send).not.toHaveBeenCalled();
+      expect(waitForSdkUserPersisted).not.toHaveBeenCalled();
+    },
+  );
 
   it("exposes pending-question cancellation for queued image fallback", async () => {
     const { handle } = registerTestRun();

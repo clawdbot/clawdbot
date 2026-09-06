@@ -2,15 +2,18 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fsSync from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   isProcessAlive,
   waitForChildClose,
   waitForDead,
   waitForFile,
+  waitForFixtureFile,
   waitForPidFile,
 } from "./process-wait.js";
-import { withTestTimeout } from "./promise.js";
+import { createDeferred, withTestTimeout } from "./promise.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -80,7 +83,7 @@ it("stops waiting when a Linux process is a zombie", async () => {
   vi.spyOn(process, "kill").mockImplementation(() => true);
   vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath) => {
     if (String(filePath) === "/proc/42/status") {
-      return "Name:\tworker\nState:\tZ (zombie)\nPid:\t42\n";
+      return "Name:\tworker\nState:\tZ (zombie)\nPid:\t42\nThreads:\t1\n";
     }
     throw new Error(`unexpected read: ${String(filePath)}`);
   });
@@ -158,11 +161,49 @@ child.once('close', (_code, signal) => {
           await waitForDead(controller.pid, 2_000);
         }
       } finally {
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
           await waitForDead(childPid, 2_000);
         }
       }
     }
   }
 });
+
+it.each(["borrower completion", "persistent file"] as const)(
+  "observes readiness from %s without a file-watch event",
+  async (observation) => {
+    const filename = path.join(tempDirs.make("openclaw-process-receipt-"), "ready");
+    const { promise: completion, resolve: finish } = createDeferred();
+    const watchFile = fsSync.watchFile;
+    // A successful initial stat establishes a baseline without notifying Node's
+    // watchFile listener. A receipt created during that stat must still be seen.
+    const watcher = vi
+      .spyOn(fsSync, "watchFile")
+      .mockImplementation((target, ...args) =>
+        target === filename
+          ? watchFile(filename, { interval: 50 }, () => {})
+          : watchFile(target, ...args),
+      );
+    let ready = false;
+    const waiting = waitForFixtureFile(filename, completion).then(() => {
+      ready = true;
+    });
+    try {
+      fsSync.writeFileSync(filename, "ready");
+      if (observation === "borrower completion") {
+        finish();
+        await nextTurn();
+        expect(ready).toBe(true);
+      }
+      await withTestTimeout(waiting, 10_000, "Persistent readiness was not observed");
+      expect(ready).toBe(true);
+    } finally {
+      finish();
+      await waiting.finally(() => {
+        fsSync.unwatchFile(filename);
+        watcher.mockRestore();
+      });
+    }
+  },
+);

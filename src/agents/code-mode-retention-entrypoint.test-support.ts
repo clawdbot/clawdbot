@@ -4,3 +4,9 @@ export const codeModeRetentionEntrypoint = {
   sourceWorkerName: "code-mode-retention.test-support",
   distWorkerPath: "agents/code-mode-retention.test-support.js",
 } as const;
+
+export const codeModeDescriptionRetentionEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "code-mode-description-retention.test-support",
+  distWorkerPath: "agents/code-mode-description-retention.test-support.js",
+} as const;

@@ -1,5 +1,4 @@
 // Fish Audio provider maps OpenClaw speech contracts to the hosted S2.1 API.
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -10,14 +9,14 @@ import type {
   SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
 import {
-  asBoolean,
   parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
-  trimToUndefined,
-} from "openclaw/plugin-sdk/speech-core";
+} from "openclaw/plugin-sdk/speech-provider";
 import {
+  asBoolean,
   asFiniteNumberInRange,
   asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -242,7 +241,7 @@ function resolveSynthesisRequest(
     SpeechSynthesisRequest,
     "cfg" | "providerConfig" | "providerOverrides" | "text" | "timeoutMs" | "target"
   >,
-): FishAudioTtsRequest & { fileExtension: string; voiceCompatible: boolean } {
+): Omit<FishAudioTtsRequest, "maxBytes"> & { fileExtension: string; voiceCompatible: boolean } {
   const config = readProviderConfig(req.providerConfig);
   const overrides = readOverrides(req.providerOverrides);
   const apiKey = resolveApiKey(config.apiKey);
@@ -262,7 +261,6 @@ function resolveSynthesisRequest(
     topP: overrides.topP ?? config.topP,
     normalize: overrides.normalize ?? config.normalize,
     timeoutMs: req.timeoutMs,
-    maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
     ...output,
   };
 }
@@ -331,8 +329,13 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
       Boolean(resolveApiKey(readProviderConfig(providerConfig).apiKey)),
     synthesize: async (req) => {
       const params = resolveSynthesisRequest(req);
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       return {
-        audioBuffer: await fishAudioTts(params),
+        audioBuffer: await fishAudioTts({
+          ...params,
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+        }),
         outputFormat: params.format,
         fileExtension: params.fileExtension,
         voiceCompatible: params.voiceCompatible,
@@ -340,9 +343,14 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
     },
     streamSynthesize: async (req) => {
       const params = resolveSynthesisRequest(req);
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       const stream = await fishAudioTtsStream({
         ...params,
-        maxBytes: Math.min(params.maxBytes, FISH_AUDIO_STREAM_MAX_BYTES),
+        maxBytes: Math.min(
+          resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+          FISH_AUDIO_STREAM_MAX_BYTES,
+        ),
       });
       return {
         audioStream: stream.audioStream,
@@ -354,8 +362,13 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
     },
     synthesizeTelephony: async (req) => {
       const params = resolveSynthesisRequest({ ...req, target: "telephony" });
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       return {
-        audioBuffer: await fishAudioTts(params),
+        audioBuffer: await fishAudioTts({
+          ...params,
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+        }),
         outputFormat: "pcm",
         sampleRate: 8_000,
       };

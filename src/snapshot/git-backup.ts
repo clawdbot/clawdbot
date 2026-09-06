@@ -5,11 +5,14 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import {
+  GIT_TIMEOUT_MS,
   executeGitCommand as runGit,
+  normalizeGitPathForFilesystem,
   requireGitCommand as requireGit,
-  requireGitCommandBuffer as requireGitBuffer,
+  requireGitCommandOutput,
 } from "../infra/git-exec.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
+import { spawnCommand } from "../process/exec-spawn.js";
 import { BACKUP_RUN_ERROR_MAX_LENGTH } from "../state/backup-run-records.contract.js";
 import {
   GIT_BACKUP_MANIFEST,
@@ -27,7 +30,6 @@ import { ensurePrivateSnapshotRepositoryRoot } from "./local-repository.js";
 import { createOpenClawSnapshotCopy } from "./openclaw-snapshot-copy.js";
 import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 
-const GIT_BACKUP_MATERIALIZE_MAX_BYTES = 1024 * 1024 * 1024;
 const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
 const GIT_BACKUP_NON_BACKUP_HISTORY_WARNING =
   "repository history contains non-backup commits; use a dedicated backup repository";
@@ -113,7 +115,7 @@ function gitBackupRepositoryPrivacyRemediation(repositoryPath: string, cause: un
 async function assertGitRepository(repositoryPath: string, env?: NodeJS.ProcessEnv): Promise<void> {
   const topLevel = await requireGit(repositoryPath, ["rev-parse", "--show-toplevel"], { env });
   const [canonicalTopLevel, canonicalRepository] = await Promise.all([
-    fs.realpath(topLevel),
+    fs.realpath(normalizeGitPathForFilesystem(topLevel)),
     fs.realpath(repositoryPath),
   ]);
   if (canonicalTopLevel !== canonicalRepository) {
@@ -423,15 +425,16 @@ async function materializeGitBackupRef(params: {
       const relative = file.slice(scope.length + 1);
       const destination = path.join(outputPath, relative);
       await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-      // Table dumps can be tens of megabytes on real agent databases; the
-      // 1MB exec default would truncate them into a hash-mismatch failure.
-      await fs.writeFile(
-        destination,
-        await requireGitBuffer(repositoryPath, ["show", `${commit}:${file}`], {
-          maxOutputBytes: GIT_BACKUP_MATERIALIZE_MAX_BYTES,
-        }),
-        { mode: 0o600 },
-      );
+      await fs.writeFile(destination, "", { flag: "wx", mode: 0o600 });
+      // Git owns decoding the blob; pipe its bytes into private staging rather
+      // than collecting another complete table in the parent process.
+      await spawnCommand(["git", "-C", repositoryPath, "show", `${commit}:${file}`], {
+        stdin: "ignore",
+        stdout: { file: destination },
+        buffer: { stdout: false },
+        maxBuffer: { stderr: 1024 * 1024 },
+        timeout: GIT_TIMEOUT_MS,
+      });
     }
     return {
       commit,
@@ -513,10 +516,11 @@ export async function readGitBackupLog(params: {
     `--max-count=${params.limit}`,
     "--pretty=format:%H%x09%cI%x09%s",
   ]);
-  if (result.code !== 0) {
-    throw new Error(formatGitBackupCommandResult("git log", result));
-  }
-  return result.stdout
+  return requireGitCommandOutput(
+    "git log",
+    result,
+    (command, failure) => new Error(formatGitBackupCommandResult(command, failure)),
+  )
     .split("\n")
     .filter(Boolean)
     .map((line) => {

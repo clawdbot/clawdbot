@@ -1,7 +1,12 @@
 /** Verifies plugin HTTP route registration, collision detection, and metadata capture. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { registerPluginHttpRoute, withPluginHttpRouteRegistry } from "./http-registry.js";
+import {
+  adoptPluginHttpRouteHandoffs,
+  createPluginHttpRouteHandoff,
+  registerPluginHttpRoute,
+  withPluginHttpRouteRegistry,
+} from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry } from "./registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -112,6 +117,149 @@ describe("registerPluginHttpRoute", () => {
   afterEach(() => {
     resetPluginRuntimeStateForTest();
   });
+
+  it("transfers retry ingress while retired holders release their leases", () => {
+    const previous = createEmptyPluginRegistry();
+    const next = createEmptyPluginRegistry();
+    const retired = createTrackedRouteLease();
+    const current = createTrackedRouteLease();
+    const route = {
+      path: "/plugins/handoff",
+      auth: "plugin" as const,
+      pluginId: "demo",
+      source: "account",
+    };
+    const unregisterOld = withPluginHttpRouteRegistry(
+      previous,
+      () => registerPluginHttpRoute({ ...route, handler: vi.fn(), throwOnFailure: true }),
+      retired.lease,
+    );
+    const handoff = createPluginHttpRouteHandoff();
+    handoff.park(retired.lease);
+    retired.revoke();
+    expect(retired.cleanups.size).toBe(0);
+    adoptPluginHttpRouteHandoffs(previous, next);
+    expect(previous.httpRoutes).toHaveLength(0);
+    expect(next.httpRoutes).toHaveLength(1);
+    const handler = vi.fn();
+    withPluginHttpRouteRegistry(
+      next,
+      () => registerPluginHttpRoute({ ...route, handler, throwOnFailure: true }),
+      current.lease,
+    );
+    unregisterOld();
+    handoff.release();
+    expect(next.httpRoutes.map((entry) => entry.handler)).toEqual([handler]);
+    current.revoke();
+    expect(next.httpRoutes).toHaveLength(0);
+    expect(current.cleanups.size).toBe(0);
+  });
+
+  it.each([{ pluginId: "other" }, { source: "other-account" }, { auth: "gateway" as const }])(
+    "preserves retry ingress when a successor changes ownership: %j",
+    (changed) => {
+      const registry = createEmptyPluginRegistry();
+      const retired = createTrackedRouteLease();
+      const route = {
+        path: "/plugins/handoff",
+        auth: "plugin" as const,
+        pluginId: "demo",
+        source: "account",
+      };
+      withPluginHttpRouteRegistry(
+        registry,
+        () => registerPluginHttpRoute({ ...route, handler: vi.fn(), throwOnFailure: true }),
+        retired.lease,
+      );
+      const handoff = createPluginHttpRouteHandoff();
+      handoff.park(retired.lease);
+      retired.revoke();
+      const placeholder = registry.httpRoutes[0];
+      expect(() =>
+        registerPluginHttpRoute({
+          ...route,
+          ...changed,
+          registry,
+          handler: vi.fn(),
+          throwOnFailure: true,
+        }),
+      ).toThrow();
+      expect(registry.httpRoutes).toEqual([placeholder]);
+      const next = createEmptyPluginRegistry();
+      registerPluginHttpRoute({
+        ...route,
+        ...changed,
+        registry: next,
+        handler: vi.fn(),
+        throwOnFailure: true,
+      });
+      expect(() => adoptPluginHttpRouteHandoffs(registry, next)).toThrow();
+      expect(registry.httpRoutes).toEqual([placeholder]);
+      handoff.release();
+      expect(registry.httpRoutes).toHaveLength(0);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps sibling handoffs across successor claims (registry swap: %s)",
+    (swapRegistry) => {
+      const registry = createEmptyPluginRegistry();
+      const first = createTrackedRouteLease();
+      const second = createTrackedRouteLease();
+      const firstHandoff = createPluginHttpRouteHandoff();
+      const secondHandoff = createPluginHttpRouteHandoff();
+      const route = {
+        path: "/plugins/shared",
+        auth: "plugin" as const,
+        pluginId: "demo",
+        source: "shared",
+      };
+      for (const owner of [first, second]) {
+        withPluginHttpRouteRegistry(
+          registry,
+          () =>
+            registerPluginHttpRoute({
+              ...route,
+              handler: vi.fn(),
+              reuseExistingSameOwner: true,
+              throwOnFailure: true,
+            }),
+          owner.lease,
+        );
+      }
+      firstHandoff.park(first.lease);
+      first.revoke();
+      secondHandoff.park(second.lease);
+      second.revoke();
+      expect(registry.httpRoutes.map((entry) => entry.handoff)).toEqual([true]);
+      const next = swapRegistry ? createEmptyPluginRegistry() : registry;
+      const handler = vi.fn();
+      const unregister = registerPluginHttpRoute({
+        ...route,
+        registry: next,
+        handler,
+        throwOnFailure: true,
+      });
+      if (swapRegistry) {
+        adoptPluginHttpRouteHandoffs(registry, next);
+      }
+      firstHandoff.release();
+      expect(next.httpRoutes.map((entry) => entry.handler)).toEqual([handler]);
+      unregister();
+      expect(next.httpRoutes.map((entry) => entry.handoff)).toEqual([true]);
+      const secondHandler = vi.fn();
+      const unregisterSecond = registerPluginHttpRoute({
+        ...route,
+        registry: next,
+        handler: secondHandler,
+        throwOnFailure: true,
+      });
+      secondHandoff.release();
+      expect(next.httpRoutes.map((entry) => entry.handler)).toEqual([secondHandler]);
+      unregisterSecond();
+      expect(next.httpRoutes).toHaveLength(0);
+    },
+  );
 
   it("registers route and unregisters it", () => {
     const registry = createEmptyPluginRegistry();
@@ -303,8 +451,12 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes[0]?.handler).toBe(firstHandler);
     expect(logs.at(-1)).toContain("reusing existing webhook path");
 
+    const handoff = createPluginHttpRouteHandoff();
+    handoff.park(firstOwner.lease);
     firstOwner.revoke();
+    handoff.release();
     expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes[0]?.handler).toBe(firstHandler);
     expect(secondOwner.cleanups).toHaveLength(1);
 
     unregisterSecond();

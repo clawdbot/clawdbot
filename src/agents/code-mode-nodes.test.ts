@@ -43,7 +43,6 @@ const nodeSnapshot = [
 
 let applyCodeModeCatalog: typeof import("./code-mode.js").applyCodeModeCatalog;
 let createCodeModeTools: typeof import("./code-mode.js").createCodeModeTools;
-let consumeRepairableCodeModeFailure: typeof import("./code-mode-repair-provenance.js").consumeRepairableCodeModeFailure;
 let createToolSearchCatalogRef: typeof import("./tool-search.js").createToolSearchCatalogRef;
 let createNodesTool: typeof import("./tools/nodes-tool.js").createNodesTool;
 let testing: typeof import("./code-mode.test-support.js").testing;
@@ -115,7 +114,6 @@ describe("Code Mode nodes", () => {
   beforeAll(async () => {
     vi.resetModules();
     ({ applyCodeModeCatalog, createCodeModeTools } = await import("./code-mode.js"));
-    ({ consumeRepairableCodeModeFailure } = await import("./code-mode-repair-provenance.js"));
     ({ createToolSearchCatalogRef } = await import("./tool-search.js"));
     ({ createNodesTool } = await import("./tools/nodes-tool.js"));
     ({ testing } = await import("./code-mode.test-support.js"));
@@ -293,7 +291,7 @@ describe("Code Mode nodes", () => {
       label: "get",
       code: `return (await nodes.get("Desk")).describe();`,
     },
-  ])("keeps a guest error after nodes.$label eligible for ordinary recovery", async ({ code }) => {
+  ])("reports a guest error after nodes.$label", async ({ code }) => {
     const details = await runUntilCompleted({ ...createHarness(), code });
 
     expect(details).toMatchObject({
@@ -301,10 +299,9 @@ describe("Code Mode nodes", () => {
       failurePhase: "bridge",
       bridgeDispatchStarted: true,
     });
-    expect(consumeRepairableCodeModeFailure(details)).toBe(true);
   });
 
-  it("keeps a guest error after nodes.invoke restricted", async () => {
+  it("reports a guest error after nodes.invoke without replaying the invocation", async () => {
     const details = await runUntilCompleted({
       ...createHarness(),
       code: `
@@ -319,7 +316,6 @@ describe("Code Mode nodes", () => {
       failurePhase: "bridge",
       bridgeDispatchStarted: true,
     });
-    expect(consumeRepairableCodeModeFailure(details)).toBe(false);
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
       expect.anything(),

@@ -92,6 +92,11 @@ describe("Codex command RPC helpers", () => {
           assertCurrent: () => undefined,
         }),
     );
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: { sessionId: "session-1", updatedAt: Date.now() },
+    });
   });
 
   afterEach(async () => {
@@ -239,6 +244,66 @@ describe("Codex command RPC helpers", () => {
       authRequirement: "api-key",
       preparedAuth: { kind: "api-key", apiKey: "pinned-key" },
     });
+  });
+
+  it("uses the admitted explicit store instead of an unrelated configured store", async () => {
+    const explicitStorePath = path.join(tempDir, "explicit", "sessions.json");
+    const configuredStorePath = path.join(tempDir, "configured", "sessions.json");
+    config.session = { store: configuredStorePath };
+    setAuthStore({
+      version: 1,
+      profiles: {
+        "openai:first": { type: "api_key", provider: "openai", key: "automatic-key" },
+        "openai:pinned": { type: "api_key", provider: "openai", key: "pinned-key" },
+      },
+      order: { openai: ["openai:first", "openai:pinned"] },
+    });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: explicitStorePath,
+      sessionKey,
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        authProfileOverride: "openai:pinned",
+        authProfileOverrideSource: "user",
+      },
+    });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: configuredStorePath,
+      sessionKey,
+      entry: { sessionId: "unrelated-session", updatedAt: Date.now() },
+    });
+
+    await resume({ storePath: explicitStorePath, authProfileId: "openai:first" });
+
+    expect(acquiredOptions()).toMatchObject({
+      authRequirement: "api-key",
+      preparedAuth: { kind: "api-key", apiKey: "pinned-key" },
+    });
+  });
+
+  it.each([
+    { label: "missing", sessionId: undefined },
+    { label: "mismatched", sessionId: "another-session" },
+  ])("rejects a $label admitted row before auth or client acquisition", async ({ sessionId }) => {
+    const storePath = path.join(tempDir, `authority-${sessionId ?? "missing"}`, "sessions.json");
+    if (sessionId) {
+      await upsertSessionEntry({
+        agentId: "main",
+        storePath,
+        sessionKey,
+        entry: { sessionId, updatedAt: Date.now() },
+      });
+    }
+
+    await expect(resume({ storePath })).rejects.toThrow(
+      "Codex session generation is no longer current: session-1",
+    );
+
+    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+    expect(requestCodexAppServerJsonMock).not.toHaveBeenCalled();
   });
 
   it("does not replace a cooled configured profile with an ambient API key", async () => {

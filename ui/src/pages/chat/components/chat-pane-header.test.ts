@@ -264,7 +264,11 @@ describe("chat pane header", () => {
     });
     const actions = container.querySelector(".chat-pane__actions");
 
-    expect(actions?.lastElementChild?.getAttribute("data-action")).toBe("session-menu");
+    expect(
+      Array.from(actions?.querySelectorAll("button") ?? [])
+        .at(-1)
+        ?.getAttribute("data-action"),
+    ).toBe("session-menu");
     expect(actions?.querySelector(".chat-pane__palette-open")).not.toBeNull();
     expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();
   });
@@ -274,6 +278,7 @@ describe("chat pane header", () => {
       narrow: true,
       mergedChrome: true,
       panelActions: html`<button data-action="persistent-surface"></button>`,
+      panelLayoutActions: html`<button aria-label="Swap Chat and Dashboard"></button>`,
       discussionAction: html`<button data-action="discussion"></button>`,
       diffAction: html`<button data-action="diff"></button>`,
       backgroundTasksAction: html`<button data-action="tasks"></button>`,
@@ -284,6 +289,7 @@ describe("chat pane header", () => {
     });
 
     expect(container.querySelector('[data-action="persistent-surface"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Swap Chat and Dashboard"]')).not.toBeNull();
     expect(container.querySelector('[data-action="discussion"]')).toBeNull();
     expect(container.querySelector('[data-action="diff"]')).toBeNull();
     expect(container.querySelector('[data-action="tasks"]')).toBeNull();
@@ -434,6 +440,17 @@ describe("chat pane header", () => {
       "chat-pane__header-leading",
     );
     expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
+  });
+
+  it.each([false, true])("keeps the public indicator visible in narrow=%s headers", (narrow) => {
+    const { container } = mountHeader({
+      narrow,
+      publicAccessIndicator: html`<span class="chat-pane__public-share-indicator">Public</span>`,
+    });
+
+    expect(container.querySelector(".chat-pane__public-share-indicator")?.textContent).toBe(
+      "Public",
+    );
   });
 
   it("replaces the header owner avatar when visibility is available", () => {

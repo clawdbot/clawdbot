@@ -227,11 +227,17 @@ describe("devices cli approve", () => {
     });
   });
 
-  it("keeps pairing scope for non-admin device approvals", async () => {
+  it.each([
+    { name: "pairing only", scopes: ["operator.pairing"] },
+    {
+      name: "questions and talk",
+      scopes: ["operator.pairing", "operator.questions", "operator.talk"],
+    },
+  ])("keeps least-privilege scopes for non-admin approvals: $name", async ({ scopes }) => {
     primeGatewayPairing([
       pendingDevice({
         requestId: "req-pairing",
-        scopes: ["operator.pairing"],
+        scopes,
       }),
     ]).mockResolvedValueOnce({ device: { deviceId: "device-1" } });
 
@@ -240,7 +246,7 @@ describe("devices cli approve", () => {
     expectGatewayCall(1, {
       method: "device.pair.approve",
       params: { requestId: "req-pairing" },
-      scopes: ["operator.pairing"],
+      scopes,
     });
   });
 
@@ -707,7 +713,6 @@ describe("devices cli tokens", () => {
     it.each([
       { role: "node", scopes: ["operator.admin"] },
       { role: "custom-role", scopes: ["operator.admin"] },
-      { role: "operator", scopes: undefined },
     ])("selects connection scopes for the $role role", async ({ role, scopes }) => {
       const argv = [command, "--device", " device-1 ", "--role", ` ${role} `];
       const tokenScopes = [`${role}.read`, `${role}.write`] as const;

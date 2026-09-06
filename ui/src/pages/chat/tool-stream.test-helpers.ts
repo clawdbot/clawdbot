@@ -7,7 +7,6 @@ type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;
 type MutableHost = ToolStreamHost & {
   sessions: {
     state: { modelOverrides: Record<string, string | null> };
-    refreshReplacement: (agentId?: string | null) => Promise<void>;
   };
   compactionStatus?: unknown;
   compactionClearTimer?: number | null;
@@ -34,7 +33,7 @@ export function createHost(overrides?: Partial<MutableHost>): MutableHost {
     toolStreamSyncTimer: null,
     sessions: {
       state: { modelOverrides },
-      refreshReplacement: vi.fn(async () => undefined),
+      refreshReplacement: vi.fn(async () => null),
     },
     compactionStatus: null,
     compactionClearTimer: null,

@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { t } from "../i18n/index.ts";
-import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
+import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 
@@ -12,7 +12,6 @@ import { icons } from "./icons.ts";
 class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) agentName = "";
   @property({ attribute: false }) avatarUrl: string | null = null;
-  @property({ attribute: false }) authToken: string | null = null;
   @property({ attribute: false }) avatarAuthReady = false;
   @property({ attribute: false }) avatarText = "";
   @property({ attribute: false }) environment: ControlUiEnvironment | null = null;
@@ -26,7 +25,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   onMenuPointerEnter?: (trigger: HTMLElement, event: PointerEvent) => void;
   @property({ attribute: false }) onMenuPointerLeave?: () => void;
 
-  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(this);
+  private readonly avatarLoader = new IdentityAvatarController(this);
 
   override render() {
     return this.avatarLoader.withActiveRoutes(() => this.renderContent());
@@ -35,7 +34,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   private renderContent() {
     const avatarUrl = this.avatarUrl?.startsWith("/")
       ? this.avatarAuthReady
-        ? this.avatarLoader.resolve(this.avatarUrl, this.authToken ? [this.authToken] : [])
+        ? this.avatarLoader.resolve(this.avatarUrl)
         : null
       : this.avatarUrl;
     const menuLabel = this.switcherAvailable
