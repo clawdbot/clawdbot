@@ -3,7 +3,7 @@ import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
-  createTelegramChunkDeliveryTracker,
+  isTelegramSkippableChunkSendError,
   mergeTelegramPartialDeliveryError,
 } from "./chunk-delivery.js";
 import { rethrowTelegramSendError, shouldRetryTelegramSendError } from "./network-errors.js";
@@ -63,20 +63,17 @@ export type TelegramPreparedSendPart = {
   result: Message;
   acceptedParams: Record<string, unknown>;
   plainText: string;
-  hasInlineKeyboard: boolean;
 };
 
 type TextFallback = { index: number; count: number };
-type AcceptedPart = TelegramPreparedSendPart & { messageId: number };
+type AcceptedPart = TelegramPreparedSendPart & { messageId: number; hasInlineKeyboard: boolean };
 type ObservePart = (part: AcceptedPart) => Promise<void>;
 type PartialDeliveryResult = Parameters<typeof mergeTelegramPartialDeliveryError>[1];
-type Tracking = Omit<
-  Parameters<typeof createTelegramChunkDeliveryTracker>[0],
-  "partialDeliveryResult" | "isSilentSkip"
-> & {
-  partialDeliveryResult?: Parameters<
-    typeof createTelegramChunkDeliveryTracker
-  >[0]["partialDeliveryResult"];
+type Tracking = {
+  invalidate: () => void;
+  onRejected: (error: unknown) => void;
+  onSilentSkip?: (error: unknown) => void;
+  partialDeliveryResult?: () => PartialDeliveryResult;
 };
 
 export function createTelegramPreparedSender(config: {
@@ -100,7 +97,11 @@ export function createTelegramPreparedSender(config: {
     });
   };
   const recordAcceptance = (part: TelegramPreparedSendPart) => {
-    const accepted = { ...part, messageId: resolveTelegramMessageIdOrThrow(part.result, "send") };
+    const accepted = {
+      ...part,
+      messageId: resolveTelegramMessageIdOrThrow(part.result, "send"),
+      hasInlineKeyboard: Boolean(part.acceptedParams.reply_markup),
+    };
     // One ledger owns provider acceptance. Receipt/cache/projection observers are
     // fallible and cannot retroactively turn an accepted part into a rejection.
     parts.push(accepted);
@@ -110,12 +111,13 @@ export function createTelegramPreparedSender(config: {
     part: TelegramPreparedSendPart,
     observe: ObservePart,
     details?: () => PartialDeliveryResult,
+    start = 0,
   ) => {
     const accepted = recordAcceptance(part);
     try {
       await observe(accepted);
     } catch (error) {
-      fail(error, 0, details?.());
+      fail(error, start, details?.());
     }
   };
   const request = <T>(
@@ -166,15 +168,21 @@ export function createTelegramPreparedSender(config: {
     drainFallback?: boolean;
   }) => {
     const start = parts.length;
-    const tracker = createTelegramChunkDeliveryTracker({
-      ...params.tracking,
-      isSilentSkip: isTelegramEmptyContentError,
-      partialDeliveryResult: () => ({
-        ...params.tracking.partialDeliveryResult?.(),
-        messageIds: parts.slice(start).map((part) => String(part.messageId)),
-        visibleReplySent: true,
-      }),
-    });
+    let firstRejectedError: unknown;
+    let firstSilentSkipError: unknown;
+    const reject = (error: unknown) => {
+      if (isTelegramEmptyContentError(error)) {
+        firstSilentSkipError ??= error;
+        params.tracking.onSilentSkip?.(error);
+        return;
+      }
+      if (!isTelegramSkippableChunkSendError(error)) {
+        fail(error, start, params.tracking.partialDeliveryResult?.());
+      }
+      firstRejectedError ??= error;
+      params.tracking.invalidate();
+      params.tracking.onRejected(error);
+    };
     let acceptedPages = 0;
     for (const [index, page] of params.pages.entries()) {
       let prepared: ReturnType<typeof params.preparePage>;
@@ -182,7 +190,7 @@ export function createTelegramPreparedSender(config: {
         await config.beforeTextPage?.();
         prepared = params.preparePage(index, acceptedPages);
       } catch (error) {
-        tracker.reject(error);
+        reject(error);
         continue;
       }
       const sendPlainOrHtml = async (
@@ -217,10 +225,10 @@ export function createTelegramPreparedSender(config: {
           }
           // Keep the producer alive for a definite rejected plain part. A
           // rejected next() would close its generator and lose the remaining tail.
-          tracker.reject(error);
+          reject(error);
           return undefined;
         }
-        return { ...sent, hasInlineKeyboard: Boolean(sent.acceptedParams.reply_markup) };
+        return sent;
       };
       const iterator = sendTelegramTextPageParts({
         page,
@@ -250,7 +258,6 @@ export function createTelegramPreparedSender(config: {
             return {
               ...sent,
               acceptedParams,
-              hasInlineKeyboard: Boolean(acceptedParams.reply_markup),
             };
           },
         },
@@ -261,7 +268,7 @@ export function createTelegramPreparedSender(config: {
           try {
             next = await iterator.next();
           } catch (error) {
-            tracker.reject(error);
+            reject(error);
             break;
           }
           if (next.done) {
@@ -271,7 +278,7 @@ export function createTelegramPreparedSender(config: {
           }
           if (next.value.result) {
             const part = { ...next.value.result, plainText: next.value.page.plainText };
-            await tracker.recordAccepted(recordAcceptance(part), params.observe);
+            await accept(part, params.observe, params.tracking.partialDeliveryResult, start);
           }
         }
       } finally {
@@ -280,7 +287,12 @@ export function createTelegramPreparedSender(config: {
         await iterator.return(undefined);
       }
     }
-    tracker.finish();
+    if (firstRejectedError !== undefined) {
+      fail(firstRejectedError, start, params.tracking.partialDeliveryResult?.());
+    }
+    if (parts.length === start && firstSilentSkipError !== undefined) {
+      throw firstSilentSkipError;
+    }
     return parts.slice(start);
   };
 
@@ -312,7 +324,6 @@ export function createTelegramPreparedSender(config: {
     return {
       ...delivery.result.result,
       plainText: delivery.result.deliveredCaption ?? "",
-      hasInlineKeyboard: Boolean(delivery.result.result.acceptedParams.reply_markup),
       captionRemoved: delivery.result.captionRemoved,
       sender: delivery.sender,
     };
