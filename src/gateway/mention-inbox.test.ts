@@ -361,6 +361,7 @@ describe("temporary human mention Inbox", () => {
       invalidateOperatorRolePolicy(f.bob.id);
       await f.setSession({ sessionId: "replacement-session" });
       emitSessionIdentityMutation({
+        agentId: "main",
         kind: "replace",
         previous: { sessionId: SESSION_ID, sessionKeys: [SESSION_KEY] },
         current: { sessionId: "replacement-session", sessionKeys: [SESSION_KEY] },

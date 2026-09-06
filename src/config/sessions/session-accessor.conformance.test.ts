@@ -2487,6 +2487,7 @@ describe("sqlite session normalization", () => {
     };
     expect(loadSessionEntry({ ...sourceEntryScope, sessionKey: branchKey })).toEqual(result.entry);
     expect(notify).toHaveBeenCalledWith({
+      agentId: "main",
       kind: "create",
       previous: { sessionKeys: [] },
       current: { sessionId: result.entry.sessionId, sessionKeys: [branchKey] },

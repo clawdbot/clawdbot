@@ -270,7 +270,7 @@ async function mutateSqliteSessionAtMessage(
         ...(result.entry.sessionId ? [result.entry.sessionId] : []),
       ]);
     }
-    emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+    emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
     return result;
   });
 }

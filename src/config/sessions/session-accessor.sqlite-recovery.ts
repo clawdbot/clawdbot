@@ -205,6 +205,6 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
     }, toDatabaseOptions(resolved));
   });
 
-  emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+  emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
   return result;
 }

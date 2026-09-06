@@ -3125,6 +3125,7 @@ describe("session accessor seam", () => {
 
     expect(result.removedEntries).toBe(1);
     expect(notify).toHaveBeenCalledWith({
+      agentId: "main",
       kind: "delete",
       previous: { sessionId: scope.sessionId, sessionKeys: [scope.sessionKey] },
     });
