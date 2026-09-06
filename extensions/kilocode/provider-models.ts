@@ -182,7 +182,7 @@ function projectKilocodeModels(rows: readonly unknown[]): ModelDefinitionConfig[
       // A malformed row must not hide a later valid row with the same id.
     }
   }
-  for (const staticModel of buildStaticCatalog()) {
+  for (const staticModel of models.length > 0 ? buildStaticCatalog() : []) {
     if (!discoveredIds.has(staticModel.id)) {
       models.unshift(staticModel);
     }
@@ -192,6 +192,7 @@ function projectKilocodeModels(rows: readonly unknown[]): ModelDefinitionConfig[
 
 export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]> {
   const provider = await buildLiveModelProviderConfig({
+    discoveryMode: "strict",
     providerId: "kilocode",
     endpoint: KILOCODE_MODELS_URL,
     providerConfig: { baseUrl: KILOCODE_BASE_URL, api: "openai-completions" },

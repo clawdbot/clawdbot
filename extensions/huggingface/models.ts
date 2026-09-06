@@ -142,6 +142,7 @@ export async function discoverHuggingfaceModels(
 
   const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
   const provider = await buildLiveModelProviderConfig({
+    discoveryMode: "strict",
     providerId: "huggingface",
     endpoint: `${HUGGINGFACE_BASE_URL}/models`,
     providerConfig: { baseUrl: HUGGINGFACE_BASE_URL, api: "openai-completions" },

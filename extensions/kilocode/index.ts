@@ -22,6 +22,7 @@ export default defineSingleProviderPluginEntry({
       applyConfig: applyKilocodeConfig,
     },
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildKilocodeProviderWithDiscovery,
       buildStaticProvider: buildKilocodeProvider,
     },
