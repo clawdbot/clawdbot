@@ -1,5 +1,6 @@
 import {
   buildTemporalContextText,
+  buildHarnessVisibleReplyGuidance,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -72,6 +73,8 @@ export function buildTurnStartParams(
     preserveNativeTurnSettings?: boolean;
     clearInheritedServiceTier?: boolean;
     sessionStatusAvailable?: boolean;
+    messageToolAvailable?: boolean;
+    requireExplicitMessageTarget?: boolean;
   },
 ): CodexTurnStartParams {
   const modelSelection = options.preserveNativeTurnSettings
@@ -99,6 +102,22 @@ export function buildTurnStartParams(
   let additionalContext = buildCodexTemporalAdditionalContext(params, {
     sessionStatusAvailable: options.sessionStatusAvailable === true,
   });
+  // Codex retains earlier fragments in history. Always state the current policy,
+  // including automatic/disabled defaults, without replacing other context entries.
+  additionalContext = {
+    ...additionalContext,
+    openclaw_source_delivery: {
+      kind: "application",
+      value: [
+        "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):",
+        buildHarnessVisibleReplyGuidance({
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          messageToolAvailable: options.messageToolAvailable === true,
+          requireExplicitMessageTarget: options.requireExplicitMessageTarget,
+        }),
+      ].join("\n"),
+    },
+  };
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
   if (currentSenderContext) {
     additionalContext = {

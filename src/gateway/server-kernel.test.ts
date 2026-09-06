@@ -155,6 +155,7 @@ describe("createGatewayKernel", () => {
       const preparationStarted = createDeferred();
       const acceptRequest = vi.fn();
       const hostLifecycle: GatewayHostLifecycle = {
+        externalRestart: { isCurrent: () => true },
         async request(_action, assertCaller) {
           assertCaller();
           preparationStarted.resolve();
@@ -244,6 +245,8 @@ describe("createGatewayKernel", () => {
           value: { gatewayInstanceId: bootId, items: [] },
         });
         const boundHost = kernel.gatewayRequestContext.hostLifecycle!;
+        // Handoff consumption compares the private owner, not a copied predicate.
+        expect(boundHost.externalRestart).toBe(hostLifecycle.externalRestart);
         pendingStop = expect(boundHost.request("stop", () => {})).rejects.toThrow(
           "closed instance",
         );
@@ -544,7 +547,18 @@ describe("createGatewayKernel", () => {
       kernel.kernel.setGatewayLifetimeSidecars([persistentSidecar, successfulPeer]);
 
       await expect(kernel.closeOnStartupFailure()).rejects.toMatchObject({
-        errors: [{ cause: persistentError }],
+        errors: [
+          {
+            message:
+              "shutdown step failed (gateway lifetime sidecars): persistent sidecar cleanup failed",
+            cause: persistentError,
+          },
+          {
+            message:
+              "shutdown step failed (late sidecar cleanup): persistent sidecar cleanup failed",
+            cause: persistentError,
+          },
+        ],
       });
       expect(persistentStop).toHaveBeenCalledTimes(2);
       expect(successfulPeer.stop).toHaveBeenCalledOnce();
@@ -643,7 +657,7 @@ describe("createGatewayKernel", () => {
         sidecarStartup: "defer",
       });
       expect(kernel.transportBridge.current()).toBeUndefined();
-      await expect(kernel.ensureSandboxHostPort()).rejects.toThrow(
+      await expect(kernel.transportBridge.ensureSandboxHostPort()).rejects.toThrow(
         "Gateway listener must start before the sandbox host",
       );
 

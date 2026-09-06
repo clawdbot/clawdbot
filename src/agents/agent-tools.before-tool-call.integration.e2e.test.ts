@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -642,49 +642,75 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("commits final rewritten args immediately before private implementation", async () => {
-    beforeToolCallHook = installBeforeToolCallHook({
-      runBeforeToolCallImpl: async () => ({ params: { value: "rewritten" } }),
-    });
-    const order: string[] = [];
-    const execute = vi.fn(async () => {
-      order.push("body");
-      return { content: [], details: { ok: true } };
-    });
-    const source = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }));
-    const tool = wrapToolDefinition(
-      expectDefined(toToolDefinitions([source])[0], "rewritten private tool definition"),
-    );
-    const preparer = expectDefined(
-      getInternalToolExecutionPreparer(tool),
-      "rewritten private execution preparer",
-    );
-    const prepared = await preparer({
-      toolCallId: "call-rewritten",
-      args: { value: "original" },
-    });
-    expect(prepared.kind).toBe("ready");
-    if (prepared.kind !== "ready") {
-      return;
-    }
-    const onImplementationStart = vi.fn(() => {
-      order.push("commit");
-      queueMicrotask(() => order.push("gap"));
-    });
+  it.each(["source", "adapter"] as const)(
+    "commits final rewritten args immediately before private %s implementation",
+    async (owner) => {
+      beforeToolCallHook = installBeforeToolCallHook({
+        runBeforeToolCallImpl: async () => ({ params: { value: "rewritten" } }),
+      });
+      const order: string[] = [];
+      const execute = vi.fn(async () => {
+        order.push("body");
+        return { content: [], details: { ok: true } };
+      });
+      const base = asAgentTool({ name: "read", execute });
+      const source = owner === "source" ? wrapToolWithBeforeToolCallHook(base) : base;
+      const tool = wrapToolDefinition(
+        expectDefined(toToolDefinitions([source])[0], "rewritten private tool definition"),
+      );
+      const preparer = expectDefined(
+        getInternalToolExecutionPreparer(tool),
+        "rewritten private execution preparer",
+      );
+      let closed = false;
+      let prepared: Awaited<ReturnType<typeof preparer>> | undefined;
+      const preparation = preparer({
+        toolCallId: "call-rewritten",
+        args: { value: "original" },
+      }).then((value) => {
+        prepared = value;
+        if (closed) {
+          value.dispose();
+        }
+        return value;
+      });
+      const pending: Promise<unknown>[] = [Promise.allSettled([preparation])];
 
-    await prepared.execute(onImplementationStart);
-    prepared.dispose();
+      try {
+        prepared = await withTestTimeout(preparation, 2_000, "private preparation did not finish");
+        expect(prepared.kind).toBe("ready");
+        expect(execute).not.toHaveBeenCalled();
+        if (prepared.kind !== "ready") {
+          return;
+        }
+        const onImplementationStart = vi.fn(() => {
+          order.push("commit");
+          queueMicrotask(() => order.push("gap"));
+        });
+        const execution = prepared.execute(onImplementationStart);
+        pending.push(Promise.allSettled([execution]));
+        await withTestTimeout(execution, 2_000, "private implementation did not finish");
 
-    expect(prepared.args).toEqual({ value: "rewritten" });
-    expect(onImplementationStart).toHaveBeenCalledOnce();
-    expect(execute).toHaveBeenCalledWith(
-      "call-rewritten",
-      { value: "rewritten" },
-      undefined,
-      undefined,
-    );
-    expect(order).toEqual(["commit", "body", "gap"]);
-  });
+        expect(prepared.args).toEqual({ value: "rewritten" });
+        expect(onImplementationStart).toHaveBeenCalledOnce();
+        expect(execute).toHaveBeenCalledWith(
+          "call-rewritten",
+          { value: "rewritten" },
+          undefined,
+          undefined,
+        );
+        expect(order).toEqual(["commit", "body", "gap"]);
+      } finally {
+        closed = true;
+        try {
+          prepared?.dispose();
+        } finally {
+          await withTestTimeout(Promise.all(pending), 2_000, "private cleanup did not settle");
+        }
+      }
+    },
+    10_000,
+  );
 
   it("rechecks a private source guard after asynchronous before-tool policy", async () => {
     let releaseHook: (() => void) | undefined;

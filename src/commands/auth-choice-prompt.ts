@@ -1,7 +1,6 @@
 // Interactive grouped auth-choice prompt used by onboarding and agent setup.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
@@ -22,7 +21,6 @@ type PromptAuthChoiceResult = AuthChoice | KeepCurrentAuthChoice;
 type AuthChoiceOrBack = PromptAuthChoiceResult | typeof BACK_VALUE;
 type PromptAuthChoiceGroupedParams = {
   prompter: WizardPrompter;
-  store: AuthProfileStore;
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;
   allowedChoices?: ReadonlySet<string>;

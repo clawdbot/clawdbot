@@ -74,7 +74,7 @@ describe("recent session prefetch", () => {
     const snapshot = {
       client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row(key, NOW - 1)],
     };
     updatePrefetch(snapshot);
@@ -146,7 +146,7 @@ describe("recent session prefetch", () => {
     const snapshot = {
       client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [original],
     };
     updatePrefetch(snapshot);
@@ -186,7 +186,7 @@ describe("recent session prefetch", () => {
       const snapshot = {
         client: createTestGatewayClient(request),
         listRevision: 1,
-        openSessionKeys: [],
+        openSessionKeys: ["agent:main:foreground"],
         rows: [original],
       };
       updatePrefetch(snapshot);
@@ -226,7 +226,7 @@ describe("recent session prefetch", () => {
     const snapshot = {
       client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row(key, NOW - 1)],
     };
     updatePrefetch(snapshot);
@@ -279,7 +279,7 @@ describe("recent session prefetch", () => {
       updatePrefetch({
         client: createTestGatewayClient(request),
         listRevision: 1,
-        openSessionKeys: [],
+        openSessionKeys: ["agent:main:foreground"],
         rows: [row(key, NOW + 1)],
       });
       await vi.advanceTimersByTimeAsync(300);
@@ -520,37 +520,6 @@ describe("recent session prefetch", () => {
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([sessionKey]);
   });
 
-  it("keeps repeated roster refreshes within the bounded recent-session snapshot window", async () => {
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      historyResult((params as { sessionKey: string }).sessionKey),
-    );
-    const client = createTestGatewayClient(request);
-    const rows = Array.from({ length: 25 }, (_, index) =>
-      row(`agent:main:recent-${index}`, NOW - index - 1),
-    );
-
-    for (let listRevision = 1; listRevision <= 10; listRevision += 1) {
-      updatePrefetch({ client, listRevision, openSessionKeys: [], rows });
-      await vi.advanceTimersByTimeAsync(1_000);
-      await settlePromises();
-      await store.flush();
-    }
-
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(
-      rows.slice(0, 20).map(({ key }) => key),
-    );
-    expect(store.readSavedAt("agent:main:recent-0")).not.toBeNull();
-    expect(store.readSavedAt("agent:main:recent-19")).not.toBeNull();
-
-    updatePrefetch({ client, listRevision: 11, openSessionKeys: [], rows });
-    await vi.advanceTimersByTimeAsync(31_000);
-    await settlePromises();
-    await store.flush();
-
-    expect(request).toHaveBeenCalledTimes(20);
-    expect(store.readSavedAt("agent:main:recent-0")).not.toBeNull();
-  });
-
   it("reserves snapshot capacity for presented panes while warming recent background sessions", async () => {
     const presentedSessionKey = "agent:main:presented";
     cacheChatSessionSnapshot(
@@ -592,6 +561,13 @@ describe("recent session prefetch", () => {
       readChatSessionSnapshot(cache, snapshotHost, { sessionKey: presentedSessionKey }),
     ).toEqual(historySnapshot("presented"));
     expect(store.readSavedAt(presentedSessionKey)).not.toBeNull();
+
+    updatePrefetch({ client, listRevision: 11, openSessionKeys: [presentedSessionKey], rows });
+    await vi.advanceTimersByTimeAsync(31_000);
+    await settlePromises();
+    await store.flush();
+    expect(request).toHaveBeenCalledTimes(MAX_CACHED_CHAT_SESSIONS - 1);
+    expect(store.readSavedAt("agent:main:background-0")).not.toBeNull();
   });
 
   it("coalesces a newer list revision until the per-session cooldown expires", async () => {
@@ -601,7 +577,7 @@ describe("recent session prefetch", () => {
     const client = createTestGatewayClient(request);
     const base = {
       client,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
     };
     updatePrefetch({ ...base, listRevision: 1, rows: [row("agent:main:warm", NOW - 1)] });
     await vi.advanceTimersByTimeAsync(2_000);
@@ -687,7 +663,7 @@ describe("recent session prefetch", () => {
     updatePrefetch({
       client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row(sessionKey, NOW + 1)],
     });
     await vi.advanceTimersByTimeAsync(2_000);
@@ -755,7 +731,7 @@ describe("recent session prefetch", () => {
     updatePrefetch({
       client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row(sessionKey, NOW + 1)],
     });
     await vi.advanceTimersByTimeAsync(2_000);
@@ -773,7 +749,7 @@ describe("recent session prefetch", () => {
     updatePrefetch({
       client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [{ ...row(sessionKey, NOW + 1), hasActiveRun: true, status: "running" }],
     });
     await vi.advanceTimersByTimeAsync(2_000);
@@ -798,7 +774,7 @@ describe("recent session prefetch", () => {
     updatePrefetch({
       client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row("agent:main:locked", NOW - 1)],
     });
 
@@ -827,7 +803,7 @@ describe("recent session prefetch", () => {
     updatePrefetch({
       client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row("agent:main:hidden", NOW - 1)],
     });
     await vi.advanceTimersByTimeAsync(1_500);
@@ -851,7 +827,7 @@ describe("recent session prefetch", () => {
     updatePrefetch({
       client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row("agent:main:failed", NOW - 1), row("agent:main:succeeded", NOW - 2)],
     });
 

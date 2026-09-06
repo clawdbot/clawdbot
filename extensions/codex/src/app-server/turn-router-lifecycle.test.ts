@@ -397,9 +397,14 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
       params: { threadId: "thread-close", turnId: "turn-close", itemId: "item-4" },
     });
     await vi.waitFor(() => expect(activeHandler).toHaveBeenCalledTimes(3));
+    harness.send({
+      method: "turn/completed",
+      params: { threadId: "thread-close", turn: { id: "turn-close", items: [] } },
+    });
     harness.process.stderr.write("fatal transport detail\n");
     harness.process.emit("exit", 17, "SIGTERM");
 
+    expect(closingRoute.completed).toBe(true);
     await expect(closingRoute.bindTurn("turn-close")).rejects.toThrow("turn router closed");
     expect(activeHandler.mock.calls[2]?.[2].aborted).toBe(true);
     expect(closingRoute.signal.aborted).toBe(true);
@@ -414,6 +419,50 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
       router.reserveThread({ threadId: "thread-late", onRequest: requestHandler }),
     ).toThrow("turn router is closed");
   });
+
+  it.each(["stale completion", "explicit release", "overflow"] as const)(
+    "does not drain a closed route after %s",
+    async (reason) => {
+      vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const harness = createHarness();
+      const notifications = vi.fn();
+      const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+        threadId: "thread-closed",
+        onNotification: notifications,
+      });
+      route.armTurn();
+      harness.send({
+        method: "turn/completed",
+        params: {
+          threadId: route.threadId,
+          turn: { id: reason === "stale completion" ? "turn-stale" : "turn-current", items: [] },
+        },
+      });
+      if (reason === "explicit release") {
+        route.release();
+      } else if (reason === "overflow") {
+        for (let index = 0; index < 256; index += 1) {
+          harness.send({
+            method: "item/started",
+            params: { threadId: route.threadId, turnId: "turn-current" },
+          });
+        }
+      }
+      harness.client.close();
+
+      await expect(
+        route.bindTurn("turn-current", { completed: reason !== "stale completion" }),
+      ).rejects.toThrow(
+        reason === "stale completion"
+          ? "turn router closed"
+          : reason === "explicit release"
+            ? "thread route is released"
+            : "pre-bind notification buffer exceeded",
+      );
+      expect(route.signal.aborted).toBe(true);
+      expect(notifications).not.toHaveBeenCalled();
+    },
+  );
 
   it("releases dormant waiters and aborts the reservation", async () => {
     const harness = createHarness();

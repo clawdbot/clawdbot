@@ -294,7 +294,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
 }
 
 /** Identifies hidden runtime context independently of its queue or transcript owner. */
-export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
+function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -312,10 +312,34 @@ export function stripRuntimeContextCustomMessages<T>(messages: T[]): T[] {
   return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
 }
 
-function isUserMessage(message: unknown): boolean {
+function isUserMessage(message: unknown): message is { role: "user"; idempotencyKey?: unknown } {
   return Boolean(
     message && typeof message === "object" && (message as { role?: unknown }).role === "user",
   );
+}
+
+/** Budget and submission share the carrier projection for the exact recorded turn. */
+export function resolvePendingRuntimeContextReplay<T>(params: {
+  messages: readonly unknown[];
+  pendingContextMessages: T[];
+  persistedUserIdempotencyKey?: string;
+}) {
+  const persistedUserIndex = params.persistedUserIdempotencyKey
+    ? params.messages.findLastIndex(
+        (message) =>
+          isUserMessage(message) && message.idempotencyKey === params.persistedUserIdempotencyKey,
+      )
+    : -1;
+  const replayPersistedCarrier =
+    persistedUserIndex >= 0 &&
+    isOpenClawRuntimeContextCustomMessage(params.messages[persistedUserIndex + 1]);
+  return {
+    persistedUserIndex,
+    replayPersistedCarrier,
+    pendingContextMessages: replayPersistedCarrier
+      ? stripRuntimeContextCustomMessages(params.pendingContextMessages)
+      : params.pendingContextMessages,
+  };
 }
 
 type RuntimeContextPromptOwner = { user?: unknown; transcriptUser?: unknown; release: () => void };

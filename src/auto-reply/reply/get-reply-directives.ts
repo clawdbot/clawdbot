@@ -7,7 +7,7 @@ import { listAgentEntries } from "../../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -51,11 +51,8 @@ import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js"
 import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
-import {
-  createFastTestModelSelectionState,
-  createModelSelectionState,
-  resolveContextTokens,
-} from "./model-selection.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { TypingController } from "./typing.js";
@@ -69,32 +66,6 @@ const skillCommandsLoader = createLazyImportLoader(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
 
-function loadCommandsRegistry() {
-  return commandsRegistryLoader.load();
-}
-
-function loadSkillCommands() {
-  return skillCommandsLoader.load();
-}
-
-function canUseFastExplicitModelDirective(params: {
-  directives: InlineDirectives;
-  defaultProvider: string;
-  aliasIndex: ModelAliasIndex;
-}): boolean {
-  const raw = normalizeOptionalString(params.directives.rawModelDirective);
-  if (!raw || /^[0-9]+$/.test(raw)) {
-    return false;
-  }
-  return Boolean(
-    resolveModelRefFromString({
-      raw,
-      defaultProvider: params.defaultProvider,
-      aliasIndex: params.aliasIndex,
-    }),
-  );
-}
-
 type ReplyDirectiveContinuation = {
   commandSource: string;
   command: ReturnType<typeof buildCommandContext>;
@@ -102,6 +73,7 @@ type ReplyDirectiveContinuation = {
   skillCommands?: SkillCommandSpec[];
   directives: InlineDirectives;
   cleanedBody: string;
+  inlineCommand?: string;
   messageProviderKey: string;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
@@ -158,7 +130,7 @@ export async function resolveReplyDirectives(params: {
   sessionKey: string;
   storePath?: string;
   sessionScope: Parameters<typeof applyInlineDirectiveOverrides>[0]["sessionScope"];
-  groupResolution: Parameters<typeof resolveGroupRequireMention>[0]["groupResolution"];
+  conversation: PreparedReplyConversation;
   isGroup: boolean;
   triggerBodyNormalized: string;
   resetTriggered: boolean;
@@ -191,7 +163,7 @@ export async function resolveReplyDirectives(params: {
     sessionKey,
     storePath,
     sessionScope,
-    groupResolution,
+    conversation,
     isGroup,
     triggerBodyNormalized,
     resetTriggered,
@@ -243,7 +215,7 @@ export async function resolveReplyDirectives(params: {
     canInterpretTextDirectives && hasSkillReferenceCandidate(command.commandBodyNormalized);
   const reservedCommands = new Set<string>();
   if (hasConfiguredModelAliases) {
-    const { listChatCommands } = await loadCommandsRegistry();
+    const { listChatCommands } = await commandsRegistryLoader.load();
     for (const chatCommand of listChatCommands()) {
       for (const alias of chatCommand.textAliases) {
         reservedCommands.add(normalizeLowercaseStringOrEmpty(alias.replace(/^\//, "")));
@@ -270,7 +242,7 @@ export async function resolveReplyDirectives(params: {
   // This avoids scanning skills for ordinary text, paths, and built-in slash directives.
   const skillCommands =
     canInterpretTextDirectives && (rawAliases.length > 0 || hasSkillReferences)
-      ? (await loadSkillCommands()).listSkillCommandsForWorkspace({
+      ? (await skillCommandsLoader.load()).listSkillCommandsForWorkspace({
           ...skillCommandContext,
           skillFilter,
         })
@@ -279,7 +251,7 @@ export async function resolveReplyDirectives(params: {
 
   const allSkillCommands =
     hasSkillReferences && skillFilter !== undefined
-      ? (await loadSkillCommands()).listSkillCommandsForWorkspace({
+      ? (await skillCommandsLoader.load()).listSkillCommandsForWorkspace({
           ...skillCommandContext,
           includeAllowlistHidden: true,
         })
@@ -309,7 +281,7 @@ export async function resolveReplyDirectives(params: {
     command.isAuthorizedSender &&
     isExplicitCommandTurn(commandTurn) &&
     (commandTurn.kind === "native" ? Boolean(commandTurn.commandName) : canInterpretTextDirectives)
-      ? await loadCommandsRegistry()
+      ? await commandsRegistryLoader.load()
       : undefined;
   const explicitDirectiveCommand = resolveReplyDirectiveCommand(
     commandRegistry
@@ -389,8 +361,7 @@ export async function resolveReplyDirectives(params: {
 
   const requireMention = await resolveGroupRequireMention({
     cfg,
-    ctx: sessionCtx,
-    groupResolution,
+    group: conversation.group,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
   const sessionThinkLevel = directives.clearThinkLevel
@@ -453,58 +424,36 @@ export async function resolveReplyDirectives(params: {
     isFastTestEnv: isFastTestRuntimeEnv(),
   });
 
-  const useFastModelSelection =
-    useFastReplyRuntime &&
-    !hasResolvedHeartbeatModelOverride &&
-    !(agentCfg?.models && Object.keys(agentCfg.models).length > 0) &&
-    !normalizeOptionalString(targetSessionEntry?.modelOverride) &&
-    !normalizeOptionalString(targetSessionEntry?.providerOverride) &&
-    (!directives.hasModelDirective ||
-      canUseFastExplicitModelDirective({
-        directives,
-        defaultProvider,
-        aliasIndex: params.aliasIndex,
-      }));
-
   let modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
   try {
-    modelState = useFastModelSelection
-      ? createFastTestModelSelectionState({
-          agentCfg,
-          provider,
-          model,
-        })
-      : await createModelSelectionState({
-          cfg,
-          agentId,
-          agentCfg,
-          sessionEntry: targetSessionEntry,
-          sessionStore,
-          sessionKey,
-          parentSessionKey:
-            targetSessionEntry?.parentSessionKey ??
-            ctx.ModelParentSessionKey ??
-            ctx.ParentSessionKey,
-          storePath,
-          defaultProvider,
-          defaultModel,
-          primaryProvider,
-          primaryModel,
-          provider,
-          model,
-          hasModelDirective: directives.hasModelDirective,
-          hasOneTurnModelOverride,
-          skipStoredModelOverride,
-          hasResolvedHeartbeatModelOverride,
-          isHeartbeat: opts?.isHeartbeat === true,
-          preparedModelCatalog: params.preparedModelCatalog,
-        });
+    modelState = await createModelSelectionState({
+      cfg,
+      agentId,
+      agentCfg,
+      sessionEntry: targetSessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey:
+        targetSessionEntry?.parentSessionKey ?? ctx.ModelParentSessionKey ?? ctx.ParentSessionKey,
+      storePath,
+      defaultProvider,
+      defaultModel,
+      primaryProvider,
+      primaryModel,
+      provider,
+      model,
+      hasModelDirective: directives.hasModelDirective,
+      hasOneTurnModelOverride,
+      skipStoredModelOverride,
+      hasResolvedHeartbeatModelOverride,
+      isHeartbeat: opts?.isHeartbeat === true,
+      preparedModelCatalog: params.preparedModelCatalog,
+    });
   } catch (error) {
-    if (error instanceof ModelSelectionLockedError) {
-      typing.cleanup();
-      return { kind: "reply", reply: { text: error.message, isError: true } };
-    }
-    if (!isSessionWorkStartInvalidatedError(error)) {
+    if (
+      !(error instanceof ModelSelectionLockedError) &&
+      !isSessionWorkStartInvalidatedError(error)
+    ) {
       throw error;
     }
     typing.cleanup();
@@ -653,6 +602,7 @@ export async function resolveReplyDirectives(params: {
       skillCommands,
       directives,
       cleanedBody,
+      inlineCommand: routedDirectives.inlineCommand,
       messageProviderKey,
       elevatedEnabled,
       elevatedAllowed,

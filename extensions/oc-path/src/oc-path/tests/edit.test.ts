@@ -6,20 +6,19 @@ import { parseMd } from "../parse.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
 
 describe("setOcPath — frontmatter", () => {
-  it("replaces a frontmatter value", () => {
+  it("replaces frontmatter while retaining unrelated pre-existing sentinel text", () => {
     const raw = `---
 name: github
 description: old desc
 ---
-
-Body.
-`;
+Body ${REDACTED_SENTINEL}.`;
     const { ast } = parseMd(raw);
     const r = setOcPath(ast, parseOcPath("oc://AGENTS.md/[frontmatter]/description"), "new desc");
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.ast.raw).toContain("description: new desc");
-      expect(r.ast.raw).not.toContain("old desc");
+      expect(r.ast.raw).toBe(
+        `---\nname: github\ndescription: new desc\n---\n\nBody ${REDACTED_SENTINEL}.`,
+      );
     }
   });
 
@@ -40,6 +39,22 @@ Body.
 });
 
 describe("setOcPath — item kv field", () => {
+  it.each(["$$", "$&", "$1", "$`", "$'", "$HOME"])(
+    "preserves literal dollar replacement text %s",
+    (token) => {
+      const raw = "## Tools\n\n- command: old\n- keep: stable\n";
+      const { ast } = parseMd(raw);
+      const before = structuredClone(ast);
+      const value = `literal ${token}`;
+      const result = setOcPath(ast, parseOcPath("oc://X.md/tools/command/command"), value);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.ast.raw).toBe(`## Tools\n\n- command: ${value}\n- keep: stable\n`);
+      }
+      expect(ast).toEqual(before);
+    },
+  );
+
   it("replaces an item kv value and reflects it in the rebuilt body", () => {
     const raw = `## Boundaries
 
@@ -50,8 +65,7 @@ describe("setOcPath — item kv field", () => {
     const r = setOcPath(ast, parseOcPath("oc://AGENTS.md/boundaries/timeout/timeout"), "30");
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.ast.raw).toContain("- timeout: 30");
-      expect(r.ast.raw).toContain("- enabled: true");
+      expect(r.ast.raw).toBe("## Boundaries\n\n- enabled: true\n- timeout: 30\n");
     }
   });
 

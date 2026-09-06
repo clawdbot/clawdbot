@@ -544,6 +544,7 @@ describe("ModelSetupWizardRunner", () => {
       if (status === "busy") {
         expect(terminalResult).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ done: true, status: "error", error: "Setup busy" }),
+          true,
         );
       } else if (lifecycle === "open") {
         expect(terminalResult).toHaveBeenCalledExactlyOnceWith(

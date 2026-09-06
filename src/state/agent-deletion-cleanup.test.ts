@@ -7,18 +7,23 @@ import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-service.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "./openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
+  withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const roots: string[] = [];
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const root of roots.splice(0)) {
@@ -53,6 +58,131 @@ function fixture() {
 }
 
 describe("agent deletion database cleanup authority", () => {
+  it.each(["settle", "replace", "rollback", "finish"] as const)(
+    "rejects admission before index repair after its cleanup owner is retired by %s",
+    async (retire) => {
+      const f = fixture();
+      const writer = openNodeSqliteDatabase(f.target.path);
+      try {
+        writer.exec("DROP INDEX idx_agent_cache_expiry");
+      } finally {
+        writer.close();
+      }
+      const deletion = f.begin();
+      const checked = createDeferred();
+      const resume = createDeferred();
+      const check = integrityWorker.assertSqliteIntegrityInWorker;
+      vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
+        async (...args) => {
+          await check(...args);
+          checked.resolve();
+          await resume.promise;
+        },
+      );
+      let rejected: Promise<unknown> | undefined;
+      let operationCalled = false;
+      const running = deletion.runDatabaseCleanup(f.target, async () => {
+        rejected = expect(
+          withOpenClawAgentDatabaseAsync(f.options, () => {
+            operationCalled = true;
+          }),
+        ).rejects.toThrow(/no longer/);
+        // A retained admission must not outlive a callback that did not await it.
+        if (retire !== "settle") {
+          await rejected;
+        }
+      });
+      try {
+        await checked.promise;
+        if (retire === "settle") {
+          await running;
+        } else if (retire === "replace") {
+          f.begin();
+        } else {
+          deletion[retire]();
+        }
+      } finally {
+        resume.resolve();
+        await running;
+        await rejected;
+      }
+      const reader = openNodeSqliteDatabase(f.target.path, { readOnly: true });
+      try {
+        expect(
+          reader
+            .prepare("SELECT name FROM sqlite_schema WHERE name='idx_agent_cache_expiry'")
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        reader.close();
+      }
+      expect(operationCalled).toBe(false);
+      expect(() =>
+        assertNoOpenClawAgentDatabaseLeases("worker", { env: f.options.env }),
+      ).not.toThrow();
+    },
+  );
+
+  it("does not expose cleanup admission to a coalesced operation outside its scope", async () => {
+    const f = fixture();
+    const deletion = f.begin();
+    const checked = createDeferred();
+    const resume = createDeferred();
+    const releaseOwner = createDeferred();
+    const check = integrityWorker.assertSqliteIntegrityInWorker;
+    vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
+      async (...args) => {
+        await check(...args);
+        checked.resolve();
+        await resume.promise;
+      },
+    );
+    const running = deletion.runDatabaseCleanup(f.target, () =>
+      withOpenClawAgentDatabaseAsync(f.options, async () => {
+        await releaseOwner.promise;
+        f.write("owned");
+      }),
+    );
+    try {
+      await checked.promise;
+      let outsideCalled = false;
+      const rejected = expect(
+        withOpenClawAgentDatabaseAsync(f.options, (database) => {
+          outsideCalled = true;
+          return database.db.isOpen;
+        }),
+      ).rejects.toThrow("active deletion cleanup");
+      resume.resolve();
+      await rejected;
+      expect(outsideCalled).toBe(false);
+    } finally {
+      resume.resolve();
+      releaseOwner.resolve();
+      await running;
+    }
+    expect(f.read()).toBe("owned");
+  });
+
+  it("rechecks a settled cleanup scope before an async operation on a borrowed survivor", async () => {
+    const f = fixture();
+    const options = { ...f.options, agentId: "kept", path: path.join(f.root, "shared.sqlite") };
+    const kept = openOpenClawAgentDatabase(options);
+    const deletion = f.begin();
+    let operationCalled = false;
+    let rejected: Promise<unknown> | undefined;
+    await deletion.runDatabaseCleanup({ agentId: "kept", path: kept.path }, async () => {
+      rejected = expect(
+        withOpenClawAgentDatabaseAsync(options, () => {
+          operationCalled = true;
+        }),
+      ).rejects.toThrow("no longer active");
+    });
+    await rejected;
+    expect(operationCalled).toBe(false);
+    expect(kept.db.isOpen).toBe(true);
+    expect(openOpenClawAgentDatabase(options)).toBe(kept);
+  });
+
   it("keeps a cold cleanup handle private through awaits and closes it before settlement", async () => {
     const f = fixture();
     const deletion = f.begin();

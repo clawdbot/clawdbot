@@ -234,7 +234,6 @@ export function renderGroupedMessage(
     onRequestUpdate?: () => void;
     canvasPluginSurfaceUrl?: string | null;
     resourceBasePath?: string;
-    localMediaPreviewRoots?: readonly string[];
     mediaPolicyKey?: string;
     connectionEpoch?: number;
     assistantAttachmentAuthToken?: string | null;
@@ -284,7 +283,6 @@ export function renderGroupedMessage(
     policyKey: opts.mediaPolicyKey,
     ...(hasImages ? imageMessageIdentity(message, opts.sessionKey) : {}),
     connectionEpoch: opts.connectionEpoch,
-    localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
     resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,
     onRequestUpdate: opts.onRequestUpdate,

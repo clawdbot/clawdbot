@@ -164,7 +164,7 @@ openclaw onboard --install-daemon
 
 Corepack selects the exact pnpm version from `package.json` (currently pnpm 12).
 If Corepack is unavailable, install that version explicitly with
-`npm install -g pnpm@12.1.0 --allow-scripts=pnpm@12.1.0`; keep npm install scripts and optional dependencies
+`npm install -g pnpm@12.3.4 --allow-scripts=pnpm@12.3.4`; keep npm install scripts and optional dependencies
 enabled so pnpm can provision its native executable.
 
 Or skip the global install and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.

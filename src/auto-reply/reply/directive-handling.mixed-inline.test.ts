@@ -249,7 +249,7 @@ describe("mixed inline directives", () => {
 
   describe.each(["", "please reply "])("model scope with prefix %j", (prefix) => {
     it.each([
-      { scope: undefined, flag: "", owner: true, target: undefined, writes: true },
+      { scope: undefined, flag: "", owner: true, target: undefined, writes: false },
       { scope: "session", flag: "", owner: true, target: undefined, writes: false },
       { scope: "agent", flag: "", owner: true, target: "agent", writes: true },
       { scope: "global", flag: "", owner: true, target: "defaults", writes: true },
@@ -379,10 +379,7 @@ describe("mixed inline directives", () => {
       );
       expect(triggerSessionPatchHook).toHaveBeenCalledOnce();
       expect(refreshQueuedFollowupSession).toHaveBeenCalledOnce();
-      expect(persistStickyModelSelectionBestEffort).toHaveBeenCalledExactlyOnceWith({
-        agentId: "main",
-        model: "openai/gpt-5.6-luna",
-      });
+      expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
       expect(enqueueSystemEvent).toHaveBeenCalledOnce();
       expect(enqueueSystemEvent).toHaveBeenCalledWith("Model switched to openai/gpt-5.6-luna.", {
         sessionKey: "agent:main:dm:1",

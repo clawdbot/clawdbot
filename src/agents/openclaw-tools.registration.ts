@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
+import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import {
   isRuntimeToolAllowed,
   isToolAllowedByPolicies,
@@ -31,12 +32,6 @@ function expandProgressCardPolicyNames(
     : undefined;
 }
 
-/**
- * Registration helpers for optional OpenClaw-owned tools.
- *
- * This keeps model/runtime gating separate from tool construction so callers can
- * assemble candidate tools first, then filter by config and execution contract.
- */
 /** Drops disabled optional tools while preserving candidate order. */
 export function collectPresentOpenClawTools(
   candidates: readonly (AnyAgentTool | null | undefined)[],
@@ -58,13 +53,9 @@ export function shouldIncludeProgressCardToolForOpenClawTools(params: {
   if (params.config?.tools?.updatePlan === false) {
     return false;
   }
-  const deny = uniqueStrings([
-    ...(params.config?.tools?.deny ?? []),
-    ...(params.pluginToolDenylist ?? []),
-  ]);
   if (
     !isToolAllowedByPolicyName("progress_card", {
-      deny: expandShippedCoreToolPolicyNames(deny),
+      deny: expandShippedCoreToolPolicyNames(params.pluginToolDenylist),
     }) ||
     !isRuntimeToolAllowed("progress_card", params.runtimeToolAllowlist)
   ) {
@@ -94,6 +85,12 @@ export function shouldIncludeProgressCardToolForOpenClawTools(params: {
       effective.globalProviderPolicy,
       effective.agentPolicy,
       effective.agentProviderPolicy,
+      resolveRequesterToolPolicies({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.agentSessionKey,
+        senderPolicyMode: "never",
+      }).subagentPolicy,
     ].map(expandProgressCardPolicyNames),
   );
 }

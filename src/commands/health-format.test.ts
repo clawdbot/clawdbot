@@ -84,6 +84,26 @@ function createMultiAccountHealthSummary(
 }
 
 describe("formatHealthChannelLines", () => {
+  it.each([false, true])("keeps the named startup error with terminal controls=%s", (controls) => {
+    const error = "Legacy exec approvals exist at /tmp/synthetic/exec-approvals.json.";
+    const summary = createHealthSummary({
+      channels: {
+        telegram: {
+          accountId: "default",
+          configured: true,
+          running: false,
+          healthState: "not-running",
+          lastError: controls ? `\u001b[31m${error}\u001b[0m\n` : error,
+        },
+      },
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+    });
+    expect(formatHealthChannelLines(summary)).toEqual([
+      `Telegram: not-running (${error}${controls ? "\\n" : ""})`,
+    ]);
+  });
+
   it("formats per-account probe timings", () => {
     const summary = createHealthSummary({
       channels: {
@@ -285,6 +305,25 @@ describe("formatHealthChannelLines", () => {
     expect(
       formatHealthChannelLines(summary, { accountIdsByChannel: { matrix: ["1", "9"] } }),
     ).toStrictEqual(["Matrix: ok (1ms)"]);
+  });
+
+  it("keeps the selected username first, deduplicates it, and preserves webhook text", () => {
+    const summary = createMultiAccountHealthSummary(
+      { accountId: "1", probe: { ok: true, bot: { username: "sibling" } } },
+      {
+        accountId: "9",
+        probe: {
+          ok: true,
+          elapsedMs: 12,
+          bot: { username: "selected" },
+          webhook: { url: "https://example.test/hook" },
+        },
+      },
+    );
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual([
+      "Matrix: ok (@selected, @sibling) (12ms) - webhook https://example.test/hook",
+    ]);
   });
 
   it.each([undefined, {}])("preserves the channel snapshot when accounts are %j", (accounts) => {

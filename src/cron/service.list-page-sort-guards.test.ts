@@ -100,6 +100,7 @@ describe("cron listPage sort guards", () => {
 
     expect(unpaginated.map((job) => job.id)).toEqual(["earlier", "later", "paused-a", "paused-z"]);
     expect(unpaginated.map((job) => job.id)).toEqual(page.jobs.map((job) => job.id));
+    expect(jobs.map((job) => job.id)).toEqual(["paused-z", "later", "paused-a", "earlier"]);
   });
 
   it("applies the same stable id tiebreaker to unpaginated cron jobs", async () => {

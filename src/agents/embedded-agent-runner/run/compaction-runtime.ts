@@ -123,6 +123,7 @@ export async function compactEmbeddedRunForRecovery(
       messageChannel: runParams.messageChannel,
       messageProvider: runParams.messageProvider,
       clientCaps: runParams.clientCaps,
+      pinnedWidgetAuthoring: runParams.pinnedWidgetAuthoring,
       chatType: runParams.chatType,
       agentAccountId: runParams.agentAccountId,
       conversationRoutePeerId: runParams.conversationRoutePeerId,
@@ -136,6 +137,8 @@ export async function compactEmbeddedRunForRecovery(
       bootstrapWorkspaceDir: runParams.bootstrapWorkspaceDir,
       permissionMode: runParams.permissionMode,
       sessionRoot: runParams.sessionRoot,
+      requireWorkspaceOnly: runParams.requireWorkspaceOnly,
+      requireWritableSandbox: runParams.requireWritableSandbox,
       agentDir: input.agentDir,
       config: runParams.config,
       toolOverrides: runParams.toolOverrides,
@@ -221,6 +224,7 @@ export async function compactEmbeddedRunForRecovery(
             // Attach private facts to the object the delegate actually receives.
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                requestBudget: input.state.compactionRequestBudget,
                 memoryTranscript: owner.sessionManager
                   ? {
                       sessionManager: owner.sessionManager,
@@ -534,7 +538,6 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (
       contextEngine.info.ownsCompaction !== true ||
       !compactResult.ok ||
-      !compactResult.compacted ||
       !hookRunner?.hasHooks("after_compaction")
     ) {
       return;
@@ -543,7 +546,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
       await hookRunner.runAfterCompaction(
         {
           messageCount: -1,
-          compactedCount: -1,
+          compactedCount: compactResult.compacted ? -1 : 0,
           tokenCount: compactResult.result?.tokensAfter,
           sessionFile:
             resolveCompactionSuccessorTranscript(compactResult).sessionFile ??

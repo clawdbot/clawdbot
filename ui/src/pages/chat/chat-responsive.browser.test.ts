@@ -385,6 +385,9 @@ function activityAlignmentHtml() {
   return `
     <div class="chat-thread" role="log">
       <div class="chat-thread-inner">
+        <div class="chat-group tool">
+          <div class="chat-group-messages" data-tool-column-reference>Inspecting the available tools.</div>
+        </div>
         <div class="chat-group tool chat-group--activity chat-group--with-footer">
           <div class="chat-group-messages">
             <div class="chat-activity-group is-open">
@@ -1579,10 +1582,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const activityGroup = await getRect(page, ".chat-activity-group");
       const activitySummary = await getRect(page, ".chat-activity-group__summary");
       const failedSummary = await getRect(page, "[data-failed-call-row]");
-      const thread = await getRect(page, ".chat-thread-inner");
+      const toolColumn = await getRect(page, "[data-tool-column-reference]");
       expect(activitySummary.width).toBeLessThan(activityGroup.width);
       expect(failedSummary.width).toBeLessThan(activityGroup.width);
-      expect(activityGroup.left - thread.left).toBeCloseTo(51, 0);
+      expect(activityGroup.left).toBeCloseTo(toolColumn.left, 0);
       const styles = await page.evaluate(() => {
         const activity = document.querySelector<HTMLElement>(".chat-activity-group__summary")!;
         const label = activity.querySelector<HTMLElement>(".chat-activity-group__label")!;
@@ -1767,6 +1770,39 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           borderWidth: "1px",
         },
       ]);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("hides image avatars when the mobile transcript drops their grid column", async () => {
+    const page = await openBrowserPage(430, 720);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread">
+            <div class="chat-group assistant chat-group--with-footer">
+              <img class="chat-avatar assistant" alt="Assistant" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36'/%3E" />
+              <div class="chat-group-messages">
+                <div class="chat-bubble"><div class="chat-text">Completed work remains readable.</div></div>
+              </div>
+              <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+      const avatar = page.locator(".chat-avatar");
+      for (const width of [430, 400, 390, 320, 401, 1366]) {
+        await page.setViewportSize({ width, height: 720 });
+        if (width <= 400) {
+          await expectBrowser(avatar).toBeHidden();
+        } else {
+          await expectBrowser(avatar).toBeVisible();
+          const image = await avatar.boundingBox();
+          const text = await page.locator(".chat-text").boundingBox();
+          expect(image!.x + image!.width).toBeLessThanOrEqual(text!.x);
+        }
+      }
     } finally {
       await closeBrowserPage(page);
     }
@@ -4246,35 +4282,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }
     },
   );
-
-  it("keeps newly opened sidebar columns transparent while panel owners retain their surface", async () => {
-    const page = await openBrowserPage(1_000, 700);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="sidebar-region" style="--panel: rgb(12, 34, 56)">
-            <main class="sidebar-region__primary">Primary chat</main>
-          </div>
-        </body></html>`,
-      );
-
-      const backgrounds = await page.evaluate(() => {
-        const column = document.createElement("section");
-        column.className = "sidebar-column";
-        column.innerHTML = '<div class="sidebar-panel">Owned panel surface</div>';
-        document.querySelector(".sidebar-region")?.append(column);
-        return {
-          column: getComputedStyle(column).backgroundColor,
-          panel: getComputedStyle(column.firstElementChild!).backgroundColor,
-        };
-      });
-
-      expect(backgrounds.column).toBe("rgba(0, 0, 0, 0)");
-      expect(backgrounds.panel).toBe("rgb(12, 34, 56)");
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
 
   it.each([
     { dock: "narrow", width: 620, height: 600 },

@@ -6,6 +6,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import type { GitHubPublicationOptions } from "./github-publication-controller.ts";
 import { createTestSessionCapability } from "./session-capability.test-support.ts";
 import type { GitHubPublicationBinding, SessionGateway } from "./session-capability.ts";
 
@@ -195,6 +196,126 @@ const publishedResult = {
 };
 
 describe("application-owned publication custody", () => {
+  it.each(["research", "main"])("keeps the ordinary %s global session literal", async (agentId) => {
+    const { attach, request, update } = publicationHarness();
+    const hello = gatewayHelloForMethods(["sessions.github.publish"]);
+    hello.snapshot = {
+      sessionDefaults: { defaultAgentId: "main", mainKey: "main", mainSessionKey: "global" },
+    };
+    update({ hello });
+    const key = `agent:${agentId}:global`;
+    const binding = attach({ key, agentId, kind: "global", sessionId: key, updatedAt: 1 });
+    await publicationSettled(binding);
+    expect(request.mock.calls.filter(([method]) => method.startsWith("sessions.github."))).toEqual([
+      ["sessions.github.options", { sessionKey: key, agentId }],
+    ]);
+  });
+
+  it("keeps every publication stage on its explicit global owner when another owner attaches", async () => {
+    const { attach, request, update } = publicationHarness();
+    const hello = gatewayHelloForMethods(["sessions.github.publish"]);
+    hello.snapshot = {
+      sessionDefaults: { defaultAgentId: "main", mainKey: "main", mainSessionKey: "global" },
+    };
+    update({ hello });
+    const account = { accountId: 2, login: "synthetic-tools" };
+    const generation = "bdca439a-e787-4f9f-b5f3-a878c662cc76";
+    const requestId = "bdca439a-e787-4f9f-b5f3-a878c662cc77";
+    const options: GitHubPublicationOptions = {
+      shared: null,
+      personal: {
+        state: "connected",
+        generation,
+        account,
+        accessExpiresAtMs: null,
+        refreshState: "available",
+        pending: null,
+      },
+      pendingPersonal: null,
+    };
+    const result = {
+      requestId,
+      publisher: { source: "personal" as const, ...account },
+      status: "needs_confirmation" as const,
+      message: "Review the synthetic publication.",
+    };
+    const confirmation = {
+      account,
+      generation,
+      requestDigest: "a".repeat(64),
+      pushRepository: "synthetic/demo",
+      repository: "synthetic/demo",
+      branch: "feature/one",
+      baseBranch: "main",
+      sourceHeadCommit: "1".repeat(40),
+      sourceIndexTree: "2".repeat(40),
+      workspaceTree: "3".repeat(40),
+    };
+    request.mockResolvedValueOnce(options);
+    const research = attach({
+      key: "global",
+      agentId: "research",
+      kind: "global",
+      sessionId: "research-parent",
+      updatedAt: 1,
+    });
+    (await publicationSettled(research)).onSelect!("personal");
+    request.mockResolvedValueOnce(result).mockResolvedValueOnce({ result, confirmation });
+    research.view()!.onPublish!();
+    const review = await publicationSettled(research);
+    request.mockResolvedValueOnce({ ...publishedResult, requestId, publisher: result.publisher });
+    review.onConfirm!();
+    await publicationSettled(research);
+    expect(
+      request.mock.calls
+        .filter(([method]) => method.startsWith("sessions.github."))
+        .map(([method]) => method),
+    ).toEqual([
+      "sessions.github.options",
+      "sessions.github.publish",
+      "sessions.github.status",
+      "sessions.github.confirm",
+    ]);
+    for (const method of [
+      "sessions.github.options",
+      "sessions.github.publish",
+      "sessions.github.status",
+      "sessions.github.confirm",
+    ]) {
+      expect(request).toHaveBeenCalledWith(
+        method,
+        expect.objectContaining({ sessionKey: "global", agentId: "research" }),
+      );
+    }
+
+    const old = createDeferred<GitHubPublicationOptions>();
+    request.mockImplementationOnce(() => old.promise);
+    research.view()!.onRefresh();
+    research.detach();
+    const mainOptions = {
+      shared: { source: "system-configured" as const, accountId: 3, login: "main-tools" },
+      personal: null,
+      pendingPersonal: null,
+    };
+    request.mockResolvedValueOnce(mainOptions);
+    const main = attach({
+      key: "global",
+      agentId: "main",
+      kind: "global",
+      sessionId: "main-parent",
+      updatedAt: 1,
+    });
+    expect((await publicationSettled(main)).options).toEqual(mainOptions);
+    expect(request).toHaveBeenLastCalledWith("sessions.github.options", {
+      sessionKey: "global",
+      agentId: "main",
+    });
+    old.resolve({ ...options, pendingPersonal: { result, confirmation } });
+    await nextTurn();
+    expect(main.view()!.options).toEqual(mainOptions);
+    expect(main.view()!.result).toBeNull();
+  });
+
   it.each(["not-deleted", "rejected", "confirmed"] as const)(
     "keeps publication custody until a pending deletion is %s",
     async (outcome) => {

@@ -14,7 +14,10 @@ import {
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import { ensureAgentDatabaseLeaseSchema } from "./openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
 type AgentDatabaseLeaseDatabase = Pick<
@@ -44,9 +47,11 @@ export function runWithAgentDatabaseMaintenanceAuthority<T>(
 }
 
 /** Revalidate the held lease, including immediately before committing a versioned rebuild. */
-export function assertAgentDatabaseMaintenanceAuthority(): void {
+export function assertAgentDatabaseMaintenanceAuthority(
+  expected?: OpenClawStateLeaseContext,
+): void {
   const authority = maintenanceAuthority.getStore();
-  if (!authority) {
+  if (!authority || (expected && authority !== expected)) {
     throw new Error(
       "Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
     );
@@ -129,6 +134,35 @@ export function releaseOpenClawAgentDatabaseLease(
       db.deleteFrom("agent_database_leases").where("lease_id", "=", leaseId),
     );
   }, options);
+}
+
+/** An awaited open may consume its scan only while its original runtime claim survives. */
+export function assertOpenClawAgentDatabaseLease(
+  leaseId: string,
+  params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
+): void {
+  const ownerStartTime = getFileLockProcessStartTime(process.pid);
+  const database = openOpenClawStateDatabase({ env: params.env });
+  const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
+  const held = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("agent_database_leases")
+      .select(["agent_id", "path", "owner_pid", "owner_start_time"])
+      .where("lease_id", "=", leaseId),
+  );
+  if (
+    !held ||
+    held.agent_id !== params.agentId ||
+    held.path !== params.path ||
+    held.owner_pid !== process.pid ||
+    // Claims allow an unavailable start identity; only two known identities prove reuse.
+    (held.owner_start_time !== null &&
+      ownerStartTime !== null &&
+      held.owner_start_time !== ownerStartTime)
+  ) {
+    throw new Error(`Agent database open lost its runtime lease: ${params.path}`);
+  }
 }
 
 export function assertNoOpenClawAgentDatabaseLeases(

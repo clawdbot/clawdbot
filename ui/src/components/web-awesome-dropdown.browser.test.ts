@@ -260,7 +260,8 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
   it("keeps a reopened submenu visible after its interrupted hide finishes", async () => {
     const f = await fixture();
     await open(f);
-    f.parent.submenuOpen = true;
+    // Focus precedes the opening animation; settle it before pausing the hide.
+    await f.parent.openSubmenu();
     await expect.poll(() => document.activeElement).toBe(f.nested);
     const submenu = f.parent.submenuElement;
     await duringElementAnimation(

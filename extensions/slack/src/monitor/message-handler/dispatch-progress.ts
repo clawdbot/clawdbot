@@ -3,13 +3,10 @@ import {
   createChannelProgressDraftCompositor,
   createChannelProgressWorkCounter,
   createDraftStreamLoop,
-  formatChannelProgressDraftText,
-  isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   type ChannelProgressDraftCompositorSnapshot,
-  type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -108,7 +105,6 @@ export function createSlackProgressRuntime(runtimeParams: {
       previewToolProgressEnabled,
       previewStreamingEnabled,
     });
-  let previewToolProgressSuppressed = false;
   // Plan title and task rows already delivered to the native stream; the
   // reconciler diffs each snapshot against it and terminalizes ids that drop
   // out (plan shrinks, summary <-> plan source switches).
@@ -364,7 +360,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       if (!draftStream) {
         return false;
       }
-      const snapshot = progressDraft.getSnapshot();
+      const snapshot = options.snapshot;
       progressCard.setFallbackText(previewText);
       draftStream.update(
         useDraftProgressCard
@@ -378,6 +374,16 @@ export function createSlackProgressRuntime(runtimeParams: {
         await draftStream.flush();
       }
       return Boolean(draftStream.messageId() && draftStream.channelId());
+    },
+    deleteCurrent: async () => {
+      if (useNativeProgressStreaming) {
+        // Native streams append task changes; clearing a plan retires its task rows.
+        nativeUpdates.update(true);
+        await nativeUpdates.flush();
+      } else {
+        await draftStream?.clear();
+        draftStream?.forceNewMessage();
+      }
     },
   });
   const commentaryProgressEnabled = progressDraft.commentaryProgressEnabled;
@@ -472,50 +478,10 @@ export function createSlackProgressRuntime(runtimeParams: {
   };
 
   const pushPlanProgress = async (steps?: AgentPlanStep[], explanation?: string) => {
-    if (isProgressMode) {
-      if (slackProgressStyle === "compact") {
-        return false;
-      }
-      return await progressDraft.pushPlanProgress(steps, { explanation });
-    }
-    if (previewToolProgressSuppressed || !draftStream) {
+    if (isProgressMode && slackProgressStyle === "compact") {
       return false;
     }
-    const text = formatChannelProgressDraftText({
-      entry: account.config,
-      lines: [...progressDraft.getSnapshot().lines],
-      seed: progressSeed,
-      formatLine: formatSlackProgressDraftLine,
-      narration: explanation,
-      plan: steps,
-    });
-    if (text) {
-      draftStream.update(text);
-    }
-    return false;
-  };
-
-  const pushPreviewProgress = async (
-    line?: ChannelProgressDraftLine,
-    options?: { toolName?: string },
-  ) => {
-    if (!draftStream && !useNativeProgressStreaming) {
-      return false;
-    }
-    if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
-      return false;
-    }
-    const normalized = line?.text.replace(/\s+/g, " ").trim();
-    if (isProgressMode) {
-      if (!line || !normalized) {
-        return await progressDraft.noteActivity();
-      }
-      return await progressDraft.pushToolProgress(line, options);
-    }
-    if (!line || !normalized || !draftStream || !previewToolProgressEnabled) {
-      return false;
-    }
-    return await progressDraft.pushToolProgress(line, options);
+    return await progressDraft.pushPlanProgress(steps, { explanation });
   };
 
   const updateDraftFromPartial = (text?: string) => {
@@ -525,8 +491,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     }
 
     if (slackStreaming.mode === "block") {
-      previewToolProgressSuppressed = true;
-      progressDraft.suppress();
+      progressDraft.resetActivity({ suppressed: true });
       const next = applyAppendOnlyStreamUpdate({
         incoming: trimmed,
         rendered: appendRenderedText,
@@ -546,8 +511,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       return false;
     }
 
-    previewToolProgressSuppressed = true;
-    progressDraft.suppress();
+    progressDraft.resetActivity({ suppressed: true });
     draftStream?.update(trimmed);
     hasStreamedAnswer = true;
     return false;
@@ -569,7 +533,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       if (!normalized) {
         return false;
       }
-      const visible = await pushPreviewProgress({
+      const visible = await progressDraft.pushToolProgress({
         id: "reasoning",
         kind: "item",
         text: normalized,
@@ -587,10 +551,6 @@ export function createSlackProgressRuntime(runtimeParams: {
     hasStreamedAnswer = false;
     appendRenderedText = "";
     appendSourceText = "";
-  };
-  const resetDraftProgressState = () => {
-    previewToolProgressSuppressed = false;
-    progressDraft.reset();
   };
   const beginNewProgressTurn = async (options?: { force?: boolean }) => {
     if (useNativeProgressStreaming) {
@@ -636,13 +596,14 @@ export function createSlackProgressRuntime(runtimeParams: {
       : async () => {
           if (isProgressMode) {
             await beginNewProgressTurn();
+            progressDraft.beginAssistantMessage();
             return;
           }
           if (hasStreamedAnswer) {
             draftStream?.forceNewMessage();
           }
           resetDraftDeliveryState();
-          resetDraftProgressState();
+          progressDraft.beginAssistantMessage();
         };
 
   const onQueuedFollowupAdmitted =
@@ -660,7 +621,7 @@ export function createSlackProgressRuntime(runtimeParams: {
           }
           delivery.resetDeliveryTracker();
           resetDraftDeliveryState();
-          resetDraftProgressState();
+          progressDraft.reset();
         };
   // A queued turn can drain after its dispatch returned, so dispatch closeout is
   // no longer available to settle the card it published. Leave none in Working.

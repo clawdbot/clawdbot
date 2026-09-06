@@ -10,6 +10,27 @@ export const capabilityCatalogFamilies = [
   "realtimeVoiceProviders",
 ] as const;
 
+/** Materialize one registration without copying its descriptor or invoking provider operations. */
+export function resolveCapabilityProviderRegistration<T extends { id: string }>(
+  entry: T | ((context: PluginCapabilityCatalogContext) => T),
+  resolveContext: (() => PluginCapabilityCatalogContext) | undefined,
+): T {
+  if (typeof entry !== "function") {
+    return entry;
+  }
+  if (!resolveContext) {
+    throw new Error(
+      "Capability provider factories require host context; supply resolveCapabilityCatalogContext when creating the registry.",
+    );
+  }
+  const provider = entry(resolveContext());
+  if (isPromiseLike(provider)) {
+    void Promise.resolve(provider).catch(() => {});
+    throw new Error("capability provider factories must be synchronous");
+  }
+  return provider;
+}
+
 /** Validate the declared public surface without copying provider objects or their hidden methods. */
 export function resolvePluginCapabilityCatalog(
   module: unknown,

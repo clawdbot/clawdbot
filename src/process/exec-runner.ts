@@ -65,7 +65,7 @@ export type CommandOptions = {
   maxPreservedOutputLines?: number;
   preserveOutputLine?: PreserveOutputLine;
   killProcessTree?: boolean;
-  /** Signal used when terminating the direct child; tree termination owns its own grace policy. */
+  /** Initial signal for direct-child and graceful process-group cancellation. */
   killSignal?: NodeJS.Signals | number;
   /** Grace between graceful termination and the force-kill fallback. */
   killGraceMs?: number;
@@ -123,6 +123,7 @@ async function runCommandWithOutputEncoding(
       signal: null,
       killed: false,
       termination: "signal",
+      cleanup: "normal",
       noOutputTimedOut: false,
     };
   }
@@ -198,6 +199,7 @@ async function runCommandWithOutputEncoding(
     isChildExited: () => childExited,
     isCommandSettled: () => commandSettled,
     killGraceMs: resolvedKillGraceMs,
+    killSignal,
   });
 
   const clearNoOutputTimer = () => {
@@ -387,12 +389,18 @@ async function runCommandWithOutputEncoding(
     signal?.removeEventListener("abort", onAbort);
     releaseOutput();
   });
-  await terminationController.settle();
+  let cleanup = await terminationController.settle();
+  const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
+  if (cleanup !== "forced" && resolvedSignal) {
+    cleanup = "uncertain";
+  }
   if (terminatingOutputError) {
-    throw terminatingOutputError;
+    throw Object.assign(terminatingOutputError, { cleanup });
   }
   if (outputObserverError !== undefined) {
-    throw toErrorObject(outputObserverError, "Command output observer failed");
+    throw Object.assign(toErrorObject(outputObserverError, "Command output observer failed"), {
+      cleanup,
+    });
   }
   // Patched Node can report null/null after a cmd.exe shim exits. Execa turns
   // that into a cause-less failure; preserve the shim fallback only post-spawn.
@@ -440,13 +448,20 @@ async function runCommandWithOutputEncoding(
     )
   ) {
     const error = createSanitizedCommandError(result);
+    Object.assign(error, {
+      cleanup:
+        typeof nodeChild.pid === "number"
+          ? cleanup === "normal"
+            ? "uncertain"
+            : cleanup
+          : "normal",
+    });
     if (outputErrorStream) {
       Object.assign(error, { outputErrorStream });
     }
     throw error;
   }
 
-  const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
   const resolvedCode = resolveProcessExitCode({
     explicitCode: result.exitCode ?? childExitState?.code,
     childExitCode: nodeChild.exitCode,
@@ -511,6 +526,7 @@ async function runCommandWithOutputEncoding(
     code: normalizedCode,
     signal: resolvedSignal,
     killed: nodeChild.killed,
+    cleanup,
     termination: termination === "output-limit" ? "signal" : termination,
     noOutputTimedOut: termination === "no-output-timeout",
     outputLimitExceeded: termination === "output-limit" || undefined,

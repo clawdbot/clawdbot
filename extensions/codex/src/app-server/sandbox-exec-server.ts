@@ -9,7 +9,7 @@ import { isIP, type AddressInfo } from "node:net";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
-import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import type { RawData, WebSocket } from "ws";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
@@ -17,6 +17,7 @@ import {
   startCodexNodeExecServerRelay,
 } from "./sandbox-exec-server-node-relay.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
+import { websocket } from "./sandbox-exec-server.websocket.js";
 import { parseRequest } from "./sandbox-exec-server/json-rpc.js";
 import type { SandboxChildOwner } from "./sandbox-exec-server/sandbox-child.js";
 import { CodexSandboxExecSession } from "./sandbox-exec-server/session.js";
@@ -251,7 +252,7 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
     }
     connection = { kind: "sandbox", backend, fsBridge };
   }
-  const server = new WebSocketServer({
+  const server = new websocket.WebSocketServer({
     host: "127.0.0.1",
     port: 0,
     // Match ws' historical default: Codex fs/writeFile sends one base64 JSON-RPC

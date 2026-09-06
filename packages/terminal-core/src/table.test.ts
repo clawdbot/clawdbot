@@ -897,6 +897,31 @@ console.log(JSON.stringify({
 });
 
 describe("wrapNoteMessage", () => {
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+    ["CR", "\r"],
+    ["Unicode line separator", "\u2028"],
+    ["Unicode paragraph separator", "\u2029"],
+  ])("preserves note text across %s line endings", (_label, separator) => {
+    const input = ["First paragraph.", "", "- Second paragraph."].join(separator);
+    const writes: string[] = [];
+    const output = {
+      columns: 80,
+      write(chunk: string) {
+        writes.push(chunk);
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+
+    noteToStream(input, "Note", output);
+
+    const rendered = stripAnsi(writes.join(""));
+    expect(rendered).toContain("First paragraph.");
+    expect(rendered).toContain("- Second paragraph.");
+    expect(wrapNoteMessage(input, { columns: 80 })).toBe("First paragraph.\n\n- Second paragraph.");
+  });
+
   it("preserves long filesystem paths without inserting spaces/newlines", () => {
     const input =
       "/Users/user/Documents/Github/impact-signals-pipeline/with/really/long/segments/file.txt";

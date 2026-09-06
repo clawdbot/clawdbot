@@ -4,6 +4,7 @@ import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
+  type SessionsPatchManyResult,
   validateSessionsAssignOwnerParams,
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
@@ -27,10 +28,13 @@ import {
 } from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
+import { projectSessionPatchResult } from "../session-utils-model.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
-import { executeSessionPatch, executeSessionPatchMany } from "./sessions-patch-engine.js";
+import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
+import { createCommitGuard } from "./sessions-patch-errors.js";
+import { sessionPatchTargetIdentity } from "./sessions-patch-expectations.js";
 import { loadSessionsRuntimeModule, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -61,18 +65,34 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const executed = await executeSessionPatchMany({
+    const targets = params.targets;
+    const executed = await executeSessionPatchMutations({
       client,
       context,
       patch: params.patch,
-      sessionMutationAuthorization,
-      targets: params.targets,
+      targets: targets.map((target) => ({
+        ...target,
+        commitGuard: createCommitGuard(target.key.trim(), () =>
+          sessionMutationAuthorization?.assertTargetCurrent({
+            sessionKey: target.key.trim(),
+            ...(target.agentId ? { agentId: target.agentId } : {}),
+          }),
+        ),
+      })),
     });
     if (!executed.ok) {
       respond(false, undefined, executed.error);
       return;
     }
-    respond(true, { outcomes: executed.outcomes }, undefined);
+    const outcomes: SessionsPatchManyResult["outcomes"] = [];
+    for (const [index, outcome] of executed.outcomes.entries()) {
+      const target = targets[index]!;
+      const identity = { key: target.key, ...(target.agentId ? { agentId: target.agentId } : {}) };
+      outcomes.push(
+        outcome.ok ? { ok: true, ...identity } : { ok: false, ...identity, error: outcome.error },
+      );
+    }
+    respond(true, { outcomes }, undefined);
   },
   "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
@@ -91,17 +111,39 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const executed = await executeSessionPatch({
+    const patch = { ...params, key };
+    const target = sessionPatchTargetIdentity(patch);
+    const executed = await executeSessionPatchMutations({
       client,
       context,
-      patch: { ...params, key },
-      sessionMutationAuthorization,
+      patch,
+      targets: [
+        {
+          ...target,
+          commitGuard: createCommitGuard(target.key, sessionMutationAuthorization?.assertCurrent),
+        },
+      ],
     });
     if (!executed.ok) {
       respond(false, undefined, executed.error);
       return;
     }
-    respond(true, executed.result, undefined);
+    const outcome = executed.outcomes[0]!;
+    if (!outcome.ok) {
+      respond(false, undefined, outcome.error);
+      return;
+    }
+    const prepared = executed.preparedByIndex[0]!;
+    respond(
+      true,
+      projectSessionPatchResult({
+        ...prepared,
+        cfg: executed.cfg,
+        entry: outcome.entry,
+        modelCatalog: await executed.catalogs.available(prepared.targetAgentId),
+      }),
+      undefined,
+    );
   },
   "sessions.assignOwner": async ({ params, respond, context, client }) => {
     if (
