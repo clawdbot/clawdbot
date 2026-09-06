@@ -206,9 +206,10 @@ depending on the per-kind AST shape.
 `set` writes one concrete target:
 
 - Markdown frontmatter values and `- key: value` item fields are string
-  leaves. Markdown insertions append sections, frontmatter keys, or section
-  items and render a canonical markdown shape for the changed file. Section
-  bodies are not writable as a whole through `set`.
+  leaves. Values are literal, including `$1`, `$&`, and `$$`. Markdown
+  insertions append sections, frontmatter keys, or section items and render a
+  canonical Markdown shape for the changed file. Section bodies are not
+  writable as a whole through `set`.
 - JSONC leaf writes coerce the string value to the existing leaf type
   (`string`, finite `number`, `true`/`false`, or `null`). Use `--value-json`
   when a JSONC/JSON/JSONL leaf replacement should parse `<value>` as JSON and
@@ -515,10 +516,10 @@ auto-detection.
 
 ## Notes
 
-- `set` writes bytes through the substrate's emit path, which applies the
-  redaction-sentinel guard automatically. A leaf carrying
-  `__OPENCLAW_REDACTED__` (verbatim or as a substring) is refused at write
-  time.
+- `set` refuses string leaf values containing `__OPENCLAW_REDACTED__`
+  (verbatim or as a substring) before a write or dry-run preview. This includes
+  Markdown insertion values for frontmatter, items, and headings. Ordinary
+  edits retain unrelated pre-existing marker text.
 - JSONC parsing and leaf edits use the plugin-local `jsonc-parser`
   dependency, so comments and formatting are preserved on ordinary leaf
   writes instead of going through a hand-rolled parser/re-render path.

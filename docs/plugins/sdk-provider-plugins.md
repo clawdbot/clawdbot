@@ -584,6 +584,17 @@ catalog, API-key auth, and dynamic model resolution.
     that discovery inside `catalog.run`, gated on usable auth, and keep
     `staticRun` network-free for offline catalog generation.
 
+    Official provider plugins that share credentials can use
+    `resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, providerIds)` from
+    the private runtime `openclaw/plugin-sdk/provider-catalog-shared` subpath.
+    Keep provider precedence in the caller's ordered IDs. The helper stops at
+    the first result with an `apiKey` or `discoveryApiKey` and returns that whole
+    result, preserving its profile and auth mode. An unresolved SecretRef marker
+    takes precedence over another provider's live key; fields are never mixed
+    across accounts. It returns `undefined` when no provider has auth and
+    propagates lookup failures. Official plugin releases using this host export
+    must require a host version that provides it in their `compat.pluginApi`.
+
   </Step>
 
   <Step title="Add dynamic model resolution">

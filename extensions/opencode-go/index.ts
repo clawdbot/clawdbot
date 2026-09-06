@@ -1,5 +1,6 @@
 // Opencode Go plugin entrypoint registers its OpenClaw integration.
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -18,18 +19,6 @@ import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { createOpencodeGoAttributionWrapper, createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
-type OpencodeGoCatalogAuth = { apiKey?: string; discoveryApiKey?: string; profileId?: string };
-
-function resolveOpencodeGoCatalogAuth(
-  resolveProviderApiKey: (providerId: string) => OpencodeGoCatalogAuth,
-): OpencodeGoCatalogAuth | undefined {
-  const own = resolveProviderApiKey(PROVIDER_ID);
-  if (own.apiKey || own.discoveryApiKey) {
-    return own;
-  }
-  const shared = resolveProviderApiKey("opencode");
-  return shared.apiKey || shared.discoveryApiKey ? shared : undefined;
-}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -99,7 +88,10 @@ export default defineSingleProviderPluginEntry({
         if (ctx.providerIds !== undefined && !ctx.providerIds.includes(PROVIDER_ID)) {
           return null;
         }
-        const auth = resolveOpencodeGoCatalogAuth(ctx.resolveProviderApiKey);
+        const auth = resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, [
+          PROVIDER_ID,
+          "opencode",
+        ]);
         if (!auth) {
           return null;
         }

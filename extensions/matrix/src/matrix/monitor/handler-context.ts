@@ -164,13 +164,11 @@ export async function resolveMatrixInboundContext(config: {
   let threadContext = threadRootId
     ? await resolveThreadContext({ roomId, threadRootId })
     : undefined;
-  let threadContextBlockedByPolicy = false;
   if (
     threadContext?.senderId &&
     !shouldIncludeRoomContextSender("thread", threadContext.senderId)
   ) {
     logVerboseMessage(`matrix: drop thread root context (mode=${contextVisibilityMode})`);
-    threadContextBlockedByPolicy = true;
     threadContext = undefined;
   }
   let replyContext: Awaited<ReturnType<typeof resolveReplyContext>> | undefined;
@@ -180,8 +178,6 @@ export async function resolveMatrixInboundContext(config: {
       replyToSender: threadContext.senderLabel,
       replyToSenderId: threadContext.senderId,
     };
-  } else if (replyToEventId && replyToEventId === threadRootId && threadContextBlockedByPolicy) {
-    replyContext = await resolveReplyContext({ roomId, eventId: replyToEventId });
   } else {
     replyContext = replyToEventId
       ? await resolveReplyContext({ roomId, eventId: replyToEventId })
