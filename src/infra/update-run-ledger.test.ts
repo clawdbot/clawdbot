@@ -1,6 +1,7 @@
 import { fork } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
@@ -31,6 +32,37 @@ function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-ledger-") } };
 }
 
+function snapshotDatabaseFiles(filename: string) {
+  const metadata = (pathname: string) => {
+    const stat = fs.lstatSync(pathname, { bigint: true });
+    return {
+      dev: stat.dev,
+      ino: stat.ino,
+      mode: stat.mode,
+      uid: stat.uid,
+      gid: stat.gid,
+      size: stat.size,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+    };
+  };
+  const directory = path.dirname(filename);
+  return {
+    directory: metadata(directory),
+    entries: fs.readdirSync(directory).toSorted(),
+    files: ["", "-wal", "-shm", "-journal"].map((suffix) => {
+      const pathname = `${filename}${suffix}`;
+      return fs.existsSync(pathname)
+        ? {
+            suffix,
+            metadata: metadata(pathname),
+            sha256: createHash("sha256").update(fs.readFileSync(pathname)).digest("hex"),
+          }
+        : { suffix, absent: true };
+    }),
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
@@ -46,6 +78,7 @@ describe("update run ledger", () => {
     expect(listUpdateRuns({}, options)).toEqual([]);
     expect(findActiveUpdateRun(options)).toBeUndefined();
     expect(fs.existsSync(filename)).toBe(false);
+    expect(fs.readdirSync(options.env.OPENCLAW_STATE_DIR)).toEqual([]);
 
     const initial = openOpenClawStateDatabase(options);
     const hasLedger = () =>
@@ -80,6 +113,110 @@ describe("update run ledger", () => {
     expect(getUpdateRun(runId, options)).toEqual(created);
     expect(createUpdateRun({ runId, trigger: "api" }, options)).toEqual(created);
     expect(listUpdateRuns({}, options)).toEqual([created]);
+  });
+
+  it.each(
+    (["get", "list", "active"] as const).flatMap((reader) =>
+      [false, true].map((retainedWal) => ({ reader, retainedWal })),
+    ),
+  )(
+    "keeps cold $reader reads artifact-preserving with retained WAL=$retainedWal",
+    ({ reader, retainedWal }) => {
+      const sourceOptions = isolatedOptions();
+      const created = createUpdateRun({ trigger: "cli" }, sourceOptions);
+      const sourcePath = resolveOpenClawStateSqlitePath(sourceOptions.env);
+      let options = sourceOptions;
+      let expected = created;
+      if (retainedWal) {
+        const { db } = openOpenClawStateDatabase(sourceOptions);
+        db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        expected = recordUpdateRunPhase(created.runId, "staging", {}, sourceOptions);
+        options = isolatedOptions();
+        const filename = resolveOpenClawStateSqlitePath(options.env);
+        fs.mkdirSync(path.dirname(filename), { recursive: true });
+        // Capture committed WAL bytes while the only producer is idle, then close
+        // it before observing the copy. Omitting WAL must not return stale history.
+        fs.copyFileSync(sourcePath, filename);
+        fs.copyFileSync(`${sourcePath}-wal`, `${filename}-wal`);
+        const mainOnly = path.join(tempDirs.make("openclaw-update-main-only-"), "main.sqlite");
+        fs.copyFileSync(sourcePath, mainOnly);
+        const control = new DatabaseSync(mainOnly, { readOnly: true });
+        try {
+          expect(
+            control.prepare("SELECT phase FROM update_runs WHERE run_id = ?").get(created.runId),
+          ).toEqual({ phase: "requested" });
+        } finally {
+          control.close();
+        }
+      }
+      closeOpenClawStateDatabaseForTest();
+      const filename = resolveOpenClawStateSqlitePath(options.env);
+      expect(fs.existsSync(`${filename}-shm`)).toBe(false);
+      expect(fs.existsSync(`${filename}-wal`)).toBe(retainedWal);
+      const before = snapshotDatabaseFiles(filename);
+      const result =
+        reader === "get"
+          ? getUpdateRun(created.runId, options)
+          : reader === "list"
+            ? listUpdateRuns({}, options)
+            : findActiveUpdateRun(options);
+      expect(result).toEqual(reader === "list" ? [expected] : expected);
+      expect(snapshotDatabaseFiles(filename)).toEqual(before);
+    },
+  );
+
+  it("leaves a cold store without the history table unchanged", () => {
+    const options = isolatedOptions();
+    const { db } = openOpenClawStateDatabase(options);
+    expect(
+      db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get(),
+    ).toBeUndefined();
+    closeOpenClawStateDatabaseForTest();
+    const filename = resolveOpenClawStateSqlitePath(options.env);
+    const before = snapshotDatabaseFiles(filename);
+    expect(getUpdateRun(randomUUID(), options)).toBeUndefined();
+    expect(listUpdateRuns({}, options)).toEqual([]);
+    expect(findActiveUpdateRun(options)).toBeUndefined();
+    expect(snapshotDatabaseFiles(filename)).toEqual(before);
+  });
+
+  it("keeps the idle cached writer usable after history reads", () => {
+    const options = isolatedOptions();
+    const created = createUpdateRun({ trigger: "cli" }, options);
+    const { db } = openOpenClawStateDatabase(options);
+    const filename = resolveOpenClawStateSqlitePath(options.env);
+    const before = snapshotDatabaseFiles(filename);
+    expect(getUpdateRun(created.runId, options)).toEqual(created);
+    expect(listUpdateRuns({}, options)).toEqual([created]);
+    expect(findActiveUpdateRun(options)).toEqual(created);
+    expect(snapshotDatabaseFiles(filename)).toEqual(before);
+    expect(db.isOpen).toBe(true);
+    expect(recordUpdateRunPhase(created.runId, "staging", {}, options).phase).toBe("staging");
+  });
+
+  it("reads committed history without consuming the cached writer's transaction", () => {
+    const options = isolatedOptions();
+    const created = createUpdateRun({ trigger: "cli" }, options);
+    const { db } = openOpenClawStateDatabase(options);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare("UPDATE update_runs SET phase = 'staging' WHERE run_id = ?").run(created.runId);
+      expect(getUpdateRun(created.runId, options)).toEqual(created);
+      expect(listUpdateRuns({}, options)).toEqual([created]);
+      expect(findActiveUpdateRun(options)).toEqual(created);
+      expect(db.isTransaction).toBe(true);
+      expect(
+        db.prepare("SELECT phase FROM update_runs WHERE run_id = ?").get(created.runId),
+      ).toEqual({
+        phase: "staging",
+      });
+      db.exec("COMMIT");
+    } finally {
+      if (db.isTransaction) {
+        db.exec("ROLLBACK");
+      }
+    }
+    expect(getUpdateRun(created.runId, options)?.phase).toBe("staging");
   });
 
   it("keeps phase order and merges repeated steps while preserving terminal outcomes and later boot facts", () => {

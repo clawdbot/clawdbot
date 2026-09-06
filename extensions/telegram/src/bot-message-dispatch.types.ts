@@ -18,12 +18,12 @@ import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
+import type { LaneDeliveryStateTracker } from "./lane-delivery-state.js";
 import type {
   DraftLaneState,
-  LaneDeliveryStateTracker,
   LaneName,
   LaneTextDeliverer,
-} from "./lane-delivery.js";
+} from "./lane-delivery-text-deliverer.js";
 
 export type DispatchTelegramMessageParams = {
   context: TelegramMessageContext;
