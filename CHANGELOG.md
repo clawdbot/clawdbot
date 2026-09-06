@@ -31,7 +31,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Removed credentials:** preserve an explicit same-provider account selection through agent commands and model changes when its credential disappears, using the selected agent’s credential scope, so authentication explains how to recover instead of reporting an unknown model; restore the credential or select another configured profile. Stale automatic selections and incompatible-provider selections still clear.
+- **Removed credentials:** preserve an explicit same-provider account selection when admitting chat messages, preparing agent commands, and changing models if its credential disappears, using the selected agent’s credential scope; report actionable authentication recovery instead of silently switching accounts or reporting an unknown model. Restore the credential or select another configured profile. Stale automatic selections and incompatible-provider selections still clear.
 - **Upgrade safety:** refuse a shared-database schema migration while an older updater still owns completion, so package rollback cannot leave the old updater writing a newer schema; automatic cross-schema upgrades require direct installation after the updater exits. Stop the Gateway through its deployment owner, create a verified backup, install the target with the package manager and prefix that own the installation, then run `openclaw doctor --fix` from the new install before restarting. See [database migration recovery](https://docs.openclaw.ai/reference/database-schemas#doctor-refuses-a-schema-migration-during-an-update).
 - **Temporary provider failures:** resume the existing transcript with bounded backoff after transient rate limits, preserving completed work and showing retry status. Related #139312. (#139397)
 - **Selected authentication:** preserve the selected credential profile, workspace, and metadata across plugin scopes. (#139413)
@@ -99,7 +99,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete 0229a108fee749327b2cc60c4d228299dfe2f889..0c2bb27f35132e9b731544ba3d84749d9d85b436 history: 310 in-range PRs + 0 retained seed-only PRs = 310 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete 0229a108fee749327b2cc60c4d228299dfe2f889..9bf78c82b2f8061877f611ad876dfd5c95d34f3b history: 310 in-range PRs + 0 retained seed-only PRs = 310 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 Shipped baseline exclusions: v2026.9.1 (1 PRs: #131767); v2026.9.2 (224 PRs: #113611, #114580, #114625, #116157, #118358, #124633, #127177, #127182, #129561, #129897, #131436, #132552, #133318, #133323, #135808, #136146, #136364, #136661, #136755, #136781, #136900, #137030, #137131, #137342, #137368, #137506, #137527, #137637, #137681, #137738, #137830, #137885, #137923, #138111, #138207, #138223, #138246, #138248, #138249, #138280, #138332, #138360, #138394, #138398, #138440, #138449, #138481, #138492, #138500, #138524, #138556, #138568, #138574, #138624, #138625, #138627, #138635, #138641, #138648, #138655, #138656, #138669, #138674, #138675, #138680, #138687, #138690, #138693, #138694, #138695, #138699, #138701, #138707, #138708, #138709, #138711, #138713, #138715, #138716, #138717, #138718, #138719, #138720, #138725, #138728, #138730, #138731, #138733, #138734, #138737, #138738, #138739, #138740, #138742, #138743, #138744, #138745, #138746, #138747, #138748, #138752, #138754, #138758, #138759, #138764, #138765, #138766, #138767, #138769, #138772, #138776, #138780, #138781, #138782, #138784, #138785, #138792, #138793, #138794, #138796, #138801, #138804, #138805, #138806, #138810, #138813, #138814, #138816, #138818, #138820, #138822, #138824, #138827, #138828, #138830, #138832, #138837, #138838, #138840, #138841, #138845, #138849, #138851, #138854, #138855, #138856, #138857, #138858, #138859, #138860, #138862, #138863, #138865, #138866, #138868, #138872, #138875, #138876, #138877, #138878, #138880, #138884, #138885, #138888, #138889, #138890, #138891, #138894, #138895, #138896, #138898, #138902, #138904, #138907, #138908, #138909, #138910, #138911, #138912, #138914, #138916, #138920, #138921, #138925, #138926, #138927, #138930, #138931, #138932, #138933, #138935, #138937, #138940, #138941, #138942, #138946, #138949, #138957, #138960, #138961, #138962, #138967, #138968, #138969, #138970, #138971, #138973, #138974, #138977, #138978, #138979, #138980, #139018, #139020, #139046, #139056, #139111, #139116, #139126, #139132, #139135, #139136, #139150, #139153).
 
@@ -415,6 +415,7 @@ Shipped baseline exclusions: v2026.9.1 (1 PRs: #131767); v2026.9.2 (224 PRs: #11
 - **PR #139459**
 - **PR #139519**
 - **PR #139466** Related #139448.
+
 ## 2026.9.2
 
 ### Highlights
