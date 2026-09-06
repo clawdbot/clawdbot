@@ -225,23 +225,25 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             sshTarget: state.remoteTarget,
             remoteURL: connectivity.resolvedURL ?? URL(string: state.remoteUrl),
             resolvedHostLabel: connectivity.resolvedHostLabel)
+        // Probe the rows that exist now; a catalog refresh can take seconds while
+        // a profile window is open, and cards must not wait for it.
+        self.store.beginProbing(targets: self.rows.map(\.gateway.target)) { [weak self] in
+            guard let self, self.openingID == openingID else { return }
+            self.updateCards()
+        }
         self.updateCards()
         self.refreshTask = Task { [weak self] in
-            await DashboardManager.shared.refreshGatewaySnapshots()
+            async let refresh: Void = DashboardManager.shared.refreshGatewaySnapshots()
+            let profiles = try? await MacGatewayProfileStore.shared.catalogProfiles()
             guard let self, !Task.isCancelled, self.openingID == openingID else { return }
-            do {
-                let profiles = try await MacGatewayProfileStore.shared.catalogProfiles()
-                guard !Task.isCancelled, self.openingID == openingID else { return }
+            if let profiles {
                 self.profiles = Dictionary(uniqueKeysWithValues: profiles.map { ($0.profile.id, $0) })
-            } catch {
-                guard !Task.isCancelled, self.openingID == openingID else { return }
+            } else {
                 self.logger.debug("Could not load Gateway menu profile metadata")
             }
-            let targets = DashboardGatewayMenuModel.items(from: DashboardManager.shared.gatewayEntries).map(\.target)
-            self.store.beginProbing(targets: targets) { [weak self] in
-                guard let self, self.openingID == openingID else { return }
-                self.updateCards()
-            }
+            self.updateCards()
+            await refresh
+            guard !Task.isCancelled, self.openingID == openingID else { return }
             self.updateCards()
         }
     }
