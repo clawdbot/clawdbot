@@ -15,8 +15,6 @@ import { loadVitestPerformanceConfig } from "../test/vitest/vitest.performance-c
 import {
   jsdomOptimizedDeps,
   nonIsolatedRunnerPath,
-  preserveIndependentVitestProject,
-  resolveDefaultVitestPool,
   sharedVitestConfig,
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
@@ -111,7 +109,7 @@ const sharedUiTestConfig = {
   // Preserve calls recorded during shared setup and beforeAll hooks.
   clearMocks: false,
   isolate: false,
-  pool: resolveDefaultVitestPool(),
+  pool: "threads",
   // Real-Chromium layout tests exceed Vitest's 5s default on 4vcpu CI runners;
   // without this the checks-ui lane flakes on cold hover/interaction tests.
   testTimeout: 60_000,
@@ -209,7 +207,8 @@ export default defineConfig({
     reporters: sharedVitestConfig.test.reporters,
     // These projects already own their complete plugins, aliases, and test config.
     projects: [
-      defineProject({
+      {
+        extends: false,
         plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
@@ -237,8 +236,9 @@ export default defineConfig({
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
-      }),
-      defineProject({
+      },
+      {
+        extends: false,
         plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
@@ -254,8 +254,9 @@ export default defineConfig({
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
-      }),
-      defineProject({
+      },
+      {
+        extends: false,
         plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
@@ -275,8 +276,8 @@ export default defineConfig({
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
-      }),
-      createUiBrowserVitestConfig(),
-    ].map(preserveIndependentVitestProject),
+      },
+      { ...createUiBrowserVitestConfig(), extends: false },
+    ],
   },
 });

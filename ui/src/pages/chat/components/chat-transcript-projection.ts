@@ -8,6 +8,7 @@ import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
 import {
   isUiGlobalScopeConfigured,
+  isSubagentSessionKey,
   parseAgentSessionKey,
   resolveUiGlobalAliasAgentId,
 } from "../../../lib/sessions/session-key.ts";
@@ -231,12 +232,10 @@ export function projectChatTranscript(
   const isEmpty =
     chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
   transcript.setContentReady(!props.loading);
-  // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
-  // as the always-visible identity marker. The canonical session kind decides;
-  // the sessions list is capped, so absent/unknown rows classify by key:
-  // global aliases first, then the same core key-shape helper the gateway
-  // uses. Message senderLabels are not a signal here: gateway sanitization
-  // labels 1:1 channel DM rows too.
+  // 1:1 exchanges do not need an avatar gutter; group threads keep it to identify
+  // multiple voices. The capped sessions list may omit the selected row, so absent
+  // or unknown rows classify by key, with global aliases taking precedence.
+  // senderLabels are not a signal: gateway sanitization also labels 1:1 channel DMs.
   const rowKind = activeSession?.kind;
   const sessionKind =
     rowKind && rowKind !== "unknown"
@@ -244,13 +243,10 @@ export function projectChatTranscript(
       : isGlobalAliasKey
         ? "global"
         : classifySessionKind(props.sessionKey);
-  // Only agent-solo kinds qualify: "global" aggregates every inbound context
-  // under session.scope="global" (including group/channel senders), so it
-  // keeps avatars like "group" and "unknown" do. An identity-resolving gateway
-  // (multi-user trusted proxy) also keeps them: several people share these
-  // sessions, so the author marker is signal, not decoration.
-  // A forwarded cross-session message is another voice in the room: the thread
-  // stops rendering as a compact direct exchange and identity chrome returns.
+  // Only agent-solo kinds qualify. Global sessions aggregate inbound contexts,
+  // including groups/channels; identity-resolving gateways also share sessions
+  // between people, so both keep avatars. A forwarded cross-session message adds
+  // another voice to a direct exchange and restores identity chrome.
   const hasForwardedGroups = chatItems.some(
     (item) => item.kind === "group" && hasForwardedSource(item),
   );
@@ -258,6 +254,16 @@ export function projectChatTranscript(
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
     !props.userId &&
     !hasForwardedGroups;
+  // Precedence: explicit prop, subagent classification/spawnedBy/key → none, direct → footer, else gutter.
+  const avatarPlacement =
+    props.avatarPlacement ??
+    (activeSession?.classification === "subagent" ||
+    activeSession?.spawnedBy ||
+    isSubagentSessionKey(props.sessionKey)
+      ? "none"
+      : isDirectThread
+        ? "footer"
+        : "gutter");
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -344,7 +350,7 @@ export function projectChatTranscript(
       onDiscardQueuedMessage: props.onDiscardQueuedMessage,
       queuedMessageAction: props.queuedMessageAction,
       personActivity: props.personActivity,
-      showAvatarGutter: !isDirectThread,
+      avatarPlacement,
       contextWindow: threadContextWindow,
       resolveReplyPreview,
       onResolveReply: props.replyMessageAccess?.request,
@@ -642,9 +648,8 @@ export function projectChatTranscript(
     JSON.stringify([...latestBrowserTabs]),
     props.sessionKey,
     props.presented,
-    // Session activity/title patches do not change settled rows. Their visible
-    // session facts (gutter, reasoning, context window, recap) own invalidation.
-    isDirectThread,
+    // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
+    avatarPlacement,
     props.boardProvider,
     props.boardProvider?.canPinWidgets,
     props.boardProvider?.canPinMcpApps,

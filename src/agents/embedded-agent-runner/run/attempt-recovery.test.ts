@@ -9,6 +9,7 @@ import { normalizeUsage } from "../../usage.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import { recoverEmbeddedRunAttempt } from "./attempt-recovery.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 type TransportDropScenario = {
@@ -19,10 +20,15 @@ type TransportDropScenario = {
   codeModeSuspended?: boolean;
   failedToolCallId?: string;
   lastToolError?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["lastToolError"];
-  transportDropContinuations?: number;
+  retryAvailable?: boolean;
   terminal?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["terminal"];
   yieldDetected?: boolean;
 };
+
+vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/backoff.js")>()),
+  sleepWithAbort: vi.fn(async () => {}),
+}));
 
 const disabledCompactionRuntime = {
   prepareRecoveryOwner: () => {
@@ -90,15 +96,28 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
   const markOwnedTranscriptRetry = vi.fn();
   const continueFromCurrentTranscript = vi.fn();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
-  contextRecoveryState.transportDropContinuations = scenario.transportDropContinuations ?? 0;
-  const failoverRetryController = {
-    resolveAuthProfileFailureReason: vi.fn(),
-    advanceAuthProfile: vi.fn(),
-    advanceRateLimitAuthProfile: vi.fn(),
-    maybeMarkAuthProfileFailure: vi.fn(),
-    maybeRetryTransient: vi.fn(),
-    transientRetryCount: 0,
-  };
+  const failoverRetryController = createEmbeddedRunFailoverRetryController({
+    runParams: { runId: "run:transport-drop" } as Parameters<
+      typeof createEmbeddedRunFailoverRetryController
+    >[0]["runParams"],
+    provider: "openai",
+    modelId: "gpt-5.6-luna",
+    globalLane: "test",
+    agentDir: "/tmp/provider-recovery-test",
+    fallbackConfigured: false,
+    profileFailureStore: { version: 1, profiles: {} },
+    getLastProfileId: () => undefined,
+    getSessionId: () => "session:transport-drop",
+    harnessOwnsTransport: () => false,
+    getRuntimeAuthOwnerId: () => "embedded",
+    getApiKeyInfo: () => null,
+    advanceAuthProfile: vi.fn(async () => false),
+  });
+  if (scenario.retryAvailable === false) {
+    failoverRetryController.setTransientRetryBudget(0);
+  }
+  vi.spyOn(failoverRetryController, "maybeMarkAuthProfileFailure");
+  const onAgentEvent = vi.fn();
   const recovery = await recoverEmbeddedRunAttempt({
     runInput: {
       runParams: {
@@ -106,6 +125,7 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
         agentId: "main",
         sessionId: "session:transport-drop",
         runId: "run:transport-drop",
+        onAgentEvent,
       },
       resolvedSessionKey: "agent:main:transport-drop",
       startedAtMs: Date.now(),
@@ -160,6 +180,7 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     continueFromCurrentTranscript,
     contextRecoveryState,
     failoverRetryController,
+    onAgentEvent,
   };
 }
 
@@ -169,12 +190,11 @@ describe("recoverEmbeddedRunAttempt", () => {
       recovery,
       markOwnedTranscriptRetry,
       continueFromCurrentTranscript,
-      contextRecoveryState,
       failoverRetryController,
     } = await recoverAfterTransportDrop();
 
     expect(recovery).toMatchObject({ action: "retry" });
-    expect(contextRecoveryState.transportDropContinuations).toBe(1);
+    expect(failoverRetryController.transientRetryCount).toBe(1);
     expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(1);
     expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
@@ -211,7 +231,7 @@ describe("recoverEmbeddedRunAttempt", () => {
   );
 
   it.each<[string, TransportDropScenario]>([
-    ["the exec batch is still running", { activeCount: 1 }],
+    ["tools have uncertain outcomes", { activeCount: 1 }],
     [
       "the failed tool summary does not match the settled batch",
       {
@@ -228,10 +248,6 @@ describe("recoverEmbeddedRunAttempt", () => {
         lastToolError: { toolName: "exec", error: "command failed" },
       },
     ],
-    ["the run was externally aborted", { terminal: { kind: "aborted", source: "external" } }],
-    ["the run timed out", { terminal: { kind: "timeout", phase: "prompt", source: "runtime" } }],
-    ["the attempt already has terminal state", { yieldDetected: true }],
-    ["the assistant error is not transient", { errorMessage: "invalid request: bad schema" }],
     [
       "the failure is retryable but not a transport drop",
       { errorMessage: "429 rate limit exceeded; retry after 2 seconds", diagnostics: [] },
@@ -240,7 +256,46 @@ describe("recoverEmbeddedRunAttempt", () => {
       "the errored turn already carried visible text",
       { content: [{ type: "text", text: "Partial" }] },
     ],
-    ["the continuation budget is spent", { transportDropContinuations: 2 }],
+    [
+      "Codex reports a terminal provider prompt error",
+      {
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: Object.assign(
+            new Error("Rate limit reached on tokens per min (TPM). Please try again in 2s."),
+            { status: 429 },
+          ),
+        },
+        diagnostics: [],
+      },
+    ],
+  ])("continues the existing transcript when %s", async (_label, scenario) => {
+    const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript, onAgentEvent } =
+      await recoverAfterTransportDrop(scenario);
+
+    expect(recovery).toMatchObject({ action: "retry" });
+    expect(markOwnedTranscriptRetry).toHaveBeenCalledOnce();
+    expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "run_status",
+        data: expect.objectContaining({ phase: "retrying", retryAttempt: 1 }),
+      }),
+    );
+  });
+
+  it.each<[string, TransportDropScenario]>([
+    ["the run was externally aborted", { terminal: { kind: "aborted", source: "external" } }],
+    ["the run timed out", { terminal: { kind: "timeout", phase: "prompt", source: "runtime" } }],
+    ["the attempt yielded", { yieldDetected: true }],
+    ["the assistant error is not transient", { errorMessage: "invalid request: bad schema" }],
+    ["the provider requires authentication", { errorMessage: "401 unauthorized" }],
+    [
+      "the provider has exhausted its quota",
+      { errorMessage: "429 insufficient_quota: current quota exhausted", diagnostics: [] },
+    ],
+    ["the continuation budget is spent", { retryAvailable: false }],
   ])("keeps the replay gate closed when %s", async (_label, scenario) => {
     const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
       await recoverAfterTransportDrop(scenario);

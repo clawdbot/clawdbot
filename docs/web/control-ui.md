@@ -33,6 +33,14 @@ The headline owns that run's sidebar subtitle instead of heuristic live activity
 
 Session observation is enabled by default. Safe preamble headlines do not require a utility model; the utility model only owns richer assessments and terminal summaries. In **Settings > Appearance > Sidebar**, you can turn observation off gateway-wide, inspect the resolved small model and its provenance, or choose automatic routing, disable utility tasks, or select an explicit `agents.defaults.utilityModel`. The equivalent config controls are `gateway.controlUi.sessionObserver: false` and `agents.defaults.utilityModel: ""`.
 
+Session links in messages open inside the Control UI. This includes `agent:` keys,
+root-relative chat URLs, and URLs on the current origin or the Gateway's public origin
+when its applied configuration is loaded. Hovering a link shows the session card
+when the session is known locally. Unknown or ambiguous session references remain
+navigable without a card; links to other origins keep normal browser behavior.
+Document-relative hrefs are never session links; file references such as
+`src/utils/foo.ts` retain workspace file handling.
+
 ## Environment identity
 
 When you run several Gateways, set `gateway.controlUi.environment` to distinguish their browser tabs and windows:
@@ -487,6 +495,34 @@ uses the requesting session's loaded title, not the open conversation's title. I
 metadata is unavailable, the normal session-name fallback remains until it loads.
 This label does not change which request the approval buttons resolve.
 
+### Side panel keyboard shortcuts
+
+The side panel **+** menu and the keyboard shortcut overview (⌘/ on Apple
+platforms, Ctrl+/ elsewhere) show the same panel shortcuts. A shortcut opens its
+panel, activates an existing hidden tab, or closes the panel when it is visible.
+Only the active, presented chat pane responds, including while the composer has
+focus. Availability follows the menu: Terminal, Browser, Desktop, and Discussion
+need their corresponding capabilities; Dashboard needs an available session board
+and is omitted in compact panes. Conversation has no shortcut.
+
+| Panel      | macOS | Windows / Linux  |
+| ---------- | ----- | ---------------- |
+| Terminal   | ⌃\`   | Ctrl+\`          |
+| Browser    | ⌘⌥⇧U  | Ctrl+Alt+Shift+U |
+| Files      | ⌘⇧B   | Ctrl+Shift+B     |
+| Side chat  | ⌘⇧S   | Ctrl+Shift+S     |
+| Tasks      | ⌘⌥⇧K  | Ctrl+Alt+Shift+K |
+| Desktop    | ⌘⌥⇧D  | Ctrl+Alt+Shift+D |
+| Discussion | ⌘⌥⇧J  | Ctrl+Alt+Shift+J |
+| Dashboard  | ⌘⌥⇧G  | Ctrl+Alt+Shift+G |
+| Review     | ⌘⌥⇧E  | Ctrl+Alt+Shift+E |
+
+Command+Option chords accept Option symbols through the physical key; Ctrl+Alt chords require the matching ASCII letter to preserve non-ASCII AltGr text. Dead keys and composition are ignored.
+
+The new panel chords include Option/Alt to avoid browser actions such as developer
+tools, Read Aloud, and find previous, and OpenClaw's existing debug-overlay shortcut.
+The existing Terminal, Files, and Side chat bindings are unchanged.
+
 ### This Mac (macOS app)
 
 Inside the [macOS app](/platforms/macos), Settings includes a **This Mac** group
@@ -505,6 +541,7 @@ are Gateway settings and remain available in every browser.
 
 <AccordionGroup>
   <Accordion title="Chat and Talk">
+    - Subagent transcripts hide author avatars in both the main chat view and task details; sender names remain visible.
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`). Archived sessions keep the composer disabled and show a banner with an **Unarchive** action before the conversation can continue.
     - Opening or refreshing chat requests up to 80 recent messages. Each background warming pass reads at most two inactive sessions sequentially, with up to 20 messages per session, after presented chat loads finish. Automatic warming waits for a visible conversation on the current page; dashboard-only views still warm the session you hover or keyboard-focus. Scrolling back requests up to 1,000 older messages per page and prefetches the next page. Per-message text caps and response-byte limits can reduce these counts.
     - A previous run's error banner clears when Chat adopts a new run or history confirms a newer successful run. Retiring the banner does not erase recorded diagnostics. A late error from the same run can remain visible beside its delivered answer; reconnecting or refreshing metadata alone does not establish recovery.
@@ -807,6 +844,8 @@ They are generated separately from the agent's work, so a title is not a complet
 status or a report of tool access. Existing titles and manual names are left
 unchanged; click a title to rename it.
 
+Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Tool and subagent activity rows use the same text size and weight. Running subagents show **Subagent** beside an animated indicator; terminal rows show **Subagent finished**, **Subagent failed**, or **Subagent cancelled**.
+
 Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
 
 <AccordionGroup>
@@ -836,6 +875,7 @@ Chat error banners, including cloud runner failures, show short messages in full
     - The **Files** tab in each Chat pane's unified side panel lists thread files, project files, and artifacts. Reopen it with ⇧⌘B, the files toggle in the title bar, or the panel's **+** menu; the title-bar toggle carries a changed-file count badge.
     - File paths recognized in chat messages read as their basename with a small glyph for the file type in front — a Markdown page, a `package.json` manifest, a TypeScript source, a `.tsx` component, a config or data file, a shell script, and an image each get their own mark, and anything else falls back to a plain document. When two links in the same message share a basename, each keeps just enough of its trailing path to stay distinct. The full path stays on the link: it is what the tooltip shows, what opens in the file panel, and what the message's **Copy** action returns, since copy hands back the original Markdown. Labels you write yourself in a `[label](path)` link are never rewritten. The glyph is drawn from the bundled icon set, never fetched from the network, and is decorative only: it is not read by screen readers and is not part of copied text. Text that is not a recognizable path — anything carrying spaces, parentheses, a `#` fragment, or a `?` query — stays plain prose.
     - Clicking a file reference in chat, a file path in an expanded read/edit/write tool card, or a file row in **Files** opens the **Review** tab. UTF-8 text files use a CodeMirror-based code view with syntax highlighting, line numbers, jump-to-line, in-file search, copy actions, and an open-in-external-editor menu. AVIF, GIF, JPEG, PNG, and WebP images no larger than 256 KiB render inline; other binary files show metadata without lossy text decoding. When the Gateway advertises `sessions.files.set` to an `operator.admin` connection, the text panel adds an Edit mode with dirty tracking and Cmd/Ctrl-S save; unsaved drafts survive file, panel, and session navigation in the current browser tab until explicitly saved or discarded. Saves are compare-and-swap on a content hash returned by `sessions.files.get`: if the file changed on disk since it was loaded (for example because the agent kept working), the panel shows a conflict notice with Reload (take the latest content) and Overwrite (keep the local edit) actions. Writes go through the same fs-safe workspace guards as reads — path containment, symlink/hardlink rejection, and a 256 KiB UTF-8 cap — and only overwrite existing files; the editor never creates or deletes them. If the editor cannot load, use **Retry** or **View Raw Text**. A missing editor chunk after an update offers **Reload**, which waits for the Gateway to become reachable.
+    - Subagent sessions opened in the main chat view are view-only. The composer identifies the parent session and offers **Open parent session** so you can continue the conversation there. Message input, model and access pickers, microphone, and attachment controls are hidden. **Stop** remains available when the Gateway reports an abortable run.
     - The **Tasks** tab lists the current agent's background tasks and subagents (`tasks.list` scoped by agent, kept live by `task` events): running work shows a live elapsed timer, tool-use count, the tool currently in use, and a stop control, while the collapsible finished section adds run durations. Inline subagent activity rows show status and progress without per-task edit counters. **Review** retains each task’s cumulative edit-activity counter; the checkout chip above the composer shows the session checkout’s actual Git diff. Selecting a task from either a task row or an inline subagent activity row opens its live status and transcript in **Review** without replacing the main conversation; tasks whose session is the current conversation show their prompt and output inspector there instead. Open **Tasks** with the title-bar activity toggle or the panel's **+** menu; the task snapshot loads eagerly, so the title-bar toggle carries a running-count badge without opening the tab first. The Tasks page remains the full cross-agent ledger.
     - Each task has a main view and a unified side panel. The task toolbar's **Swap** button exchanges the main view and active side-panel tab; its tooltip names both views, for example **Swap Chat and Dashboard**. Chat, Dashboard, Browser, Terminal, Files, and Review can all be main. Other side-panel tabs remain available. **Focus** in the main pane header gives that view the full task area; **Restore split** brings the side panel back. Swapping or focusing preserves live content and drafts. Closing the whole side panel hides it without changing the main view, and the browser remembers each task's arrangement.
     - The task toolbar's **Layout** menu positions the side panel left, right, or below the main area. It adapts to each pane's own width rather than the window, falls back to a bottom strip in a narrow pane or compact window, and hides its dock controls until the pane widens. Phone-sized viewports still open review content full-screen.
