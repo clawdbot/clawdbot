@@ -299,7 +299,11 @@ async function runPluginUninstallCommandUnlocked(
     let finalWriteOptions = mutationWriteOptions;
     let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
     if (plan.directoryRemoval) {
-      const disabledConfig = prepareConfigForDisabledPluginSet(sourceConfig, policyPluginIds);
+      const disabledConfig = prepareConfigForDisabledPluginSet(
+        sourceConfig,
+        policyPluginIds,
+        plan.config,
+      );
       const disabledCommit = await tracePluginLifecyclePhaseAsync(
         "config disable",
         () =>
@@ -391,6 +395,7 @@ async function runPluginUninstallCommandUnlocked(
 
     const removed = formatUninstallActionLabels({
       ...plan.actions,
+      loadPath: initialPlan.actions.loadPath || plan.actions.loadPath,
       directory: directoryResult.directoryRemoved,
     });
 

@@ -526,7 +526,11 @@ export async function uninstallManagedPlugin(params: {
       warnings: [],
     };
     if (plan.directoryRemoval) {
-      const disabledConfig = prepareConfigForDisabledPluginSet(snapshot.config, policyPluginIds);
+      const disabledConfig = prepareConfigForDisabledPluginSet(
+        snapshot.config,
+        policyPluginIds,
+        plan.config,
+      );
       await replaceConfigFile({
         nextConfig: disabledConfig,
         baseHash: snapshot.baseHash,
@@ -602,6 +606,7 @@ export async function uninstallManagedPlugin(params: {
     refreshManagedPluginMetadata({ config: nextConfig, env });
     const removed = formatUninstallActionLabels({
       ...plan.actions,
+      loadPath: initialPlan.actions.loadPath || plan.actions.loadPath,
       directory: directoryResult.directoryRemoved,
     });
     return {

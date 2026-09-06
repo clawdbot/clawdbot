@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Plugins CLI uninstall tests cover plugin removal selection and uninstall output.
@@ -576,6 +578,93 @@ describe("plugins cli uninstall", () => {
     expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "removes owned aliases before deleting files and preserves later edits (retry=%s)",
+    async (retry) => {
+      const root = await fs.realpath(tempDirs.make("openclaw-cli-uninstall-alias-"));
+      const sourcePath = path.join(root, "source");
+      const installPath = path.join(root, "extensions", "alpha");
+      const aliasPath = path.join(root, "alias");
+      const unrelatedPath = path.join(root, "unrelated");
+      const addedPath = path.join(root, "added");
+      await Promise.all(
+        [sourcePath, installPath, unrelatedPath, addedPath].map((dir) =>
+          fs.mkdir(dir, { recursive: true }),
+        ),
+      );
+      await fs.symlink(installPath, aliasPath, "dir");
+      const installRecords = {
+        alpha: { source: "path" as const, sourcePath, installPath },
+      };
+      let currentConfig: OpenClawConfig = {
+        plugins: {
+          entries: { alpha: { enabled: true } },
+          load: { paths: [aliasPath, unrelatedPath] },
+        },
+      };
+      pluginCliConfigMock.mockImplementation(() => currentConfig);
+      configWriteMock.mockImplementation(async (config) => {
+        currentConfig = config as OpenClawConfig;
+      });
+      setInstalledPluginIndexInstallRecords(installRecords);
+      buildPluginSnapshotReportMock.mockReturnValue({
+        plugins: [
+          {
+            id: "alpha",
+            name: "alpha",
+            source: path.join(installPath, "index.js"),
+            channelIds: [],
+          },
+        ],
+        diagnostics: [],
+      });
+      const actual =
+        await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
+      planPluginUninstallMock.mockImplementation((params) =>
+        actual.planPluginUninstall(params as Parameters<typeof actual.planPluginUninstall>[0]),
+      );
+      let failRemoval = retry;
+      applyPluginUninstallDirectoryRemovalMock.mockImplementation(async (removal) => {
+        expect(currentConfig.plugins?.load?.paths).toEqual([unrelatedPath]);
+        if (failRemoval) {
+          failRemoval = false;
+          return { directoryRemoved: false, warnings: ["simulated removal failure"] };
+        }
+        const result = await actual.applyPluginUninstallDirectoryRemoval(
+          removal as Parameters<typeof actual.applyPluginUninstallDirectoryRemoval>[0],
+        );
+        currentConfig = {
+          ...currentConfig,
+          logging: { level: "debug" },
+          plugins: { ...currentConfig.plugins, load: { paths: [unrelatedPath, addedPath] } },
+        };
+        return result;
+      });
+      if (retry) {
+        await expect(
+          runPluginsCommand(["plugins", "uninstall", "alpha", "--force"]),
+        ).rejects.toThrow("remains disabled and tracked");
+        expect(currentConfig.plugins?.entries?.alpha).toEqual({ enabled: false });
+        expect(
+          writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+        ).not.toHaveBeenCalled();
+        expect((await fs.stat(installPath)).isDirectory()).toBe(true);
+      }
+
+      await runPluginsCommand(["plugins", "uninstall", "alpha", "--force"]);
+
+      expect(currentConfig.plugins?.load?.paths).toEqual([unrelatedPath, addedPath]);
+      expect(currentConfig.logging).toEqual({ level: "debug" });
+      expect(currentConfig.plugins?.entries?.alpha).toEqual({ enabled: false });
+      expect((await fs.stat(sourcePath)).isDirectory()).toBe(true);
+      await expect(fs.stat(installPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expectInstallRecordsWrittenWithLease({}, currentConfig);
+      if (!retry) {
+        expectRuntimeLogIncludes("Removed: plugin settings, install record, load path, directory");
+      }
+    },
+  );
 
   it("rejects stale child-keyed records that claim one package path", async () => {
     const sharedPath = "/tmp/openclaw-ambiguous-uninstall-pack";
