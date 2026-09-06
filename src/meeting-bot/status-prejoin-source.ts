@@ -91,6 +91,51 @@ export function createMeetingStatusPreludeSource(
     }
     return undefined;
   };
+  // Keep these names scoped: older plugin lifecycle fragments declare their own helpers.
+  const meetingAudioInput = (() => {
+    const isVirtualAudioDevice = (value) =>
+      /^(?:blackhole 2ch(?: \\(virtual\\))?|openclaw meeting audio)$/i.test(
+        String(value || "").replace(/\\s+/g, " ").trim()
+      );
+    const isVirtualAudioDeviceNode = (node) => [
+      node?.getAttribute?.("aria-label"),
+      node?.getAttribute?.("title"),
+      node?.label,
+      node?.value,
+      text(node),
+    ].some(isVirtualAudioDevice);
+    const microphoneDeviceRoots = () => {
+      // Consumer in-call controls expose the listbox itself, without the prejoin
+      // selected-device button/combobox wrapper.
+      const control = firstRaw(selectors.microphoneDevice) || firstRaw(selectors.microphoneDeviceMenu);
+      if (!control) return { control, roots: [] };
+      const roots = [control];
+      const scope = control.closest?.(selectors.microphoneDeviceScope);
+      if (scope && !roots.includes(scope)) roots.push(scope);
+      const listboxId = control.getAttribute?.("aria-controls");
+      const listbox = listboxId ? document.getElementById?.(listboxId) : undefined;
+      if (listbox && !roots.includes(listbox)) roots.push(listbox);
+      const liveMenu = firstRaw(selectors.microphoneDeviceMenu);
+      if (liveMenu && !roots.includes(liveMenu)) roots.push(liveMenu);
+      return { control, roots };
+    };
+    const selectedMicrophoneLabel = () => {
+      const { control, roots } = microphoneDeviceRoots();
+      const selectedOption = control?.selectedOptions?.[0];
+      if (selectedOption && isVirtualAudioDeviceNode(selectedOption)) {
+        return label(selectedOption) || selectedOption.value;
+      }
+      if (control && isVirtualAudioDeviceNode(control)) return label(control) || control.value;
+      for (const root of roots) {
+        const selected = firstWithin(root, selectors.selectedMicrophoneDevice);
+        if (selected && isVirtualAudioDeviceNode(selected)) {
+          return label(selected) || selected.value;
+        }
+      }
+      return undefined;
+    };
+    return { isVirtualAudioDevice, isVirtualAudioDeviceNode, microphoneDeviceRoots, selectedMicrophoneLabel };
+  })();
   ${options.controlLookupSource}
   const waitForUi = () => new Promise((resolve) => setTimeout(resolve, 120));
   const bridgeOwnedBySession = (entry) => Boolean(

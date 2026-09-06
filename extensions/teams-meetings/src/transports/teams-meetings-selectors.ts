@@ -46,6 +46,7 @@ export const TEAMS_MEETING_SELECTORS = {
     'select[data-tid="microphone-select"]',
   ],
   microphoneDeviceMenu: ['[data-tid="microphone-settings"][role="listbox"]'],
+  microphoneDeviceScope: '[data-tid="device-settings-microphone"]',
   selectedMicrophoneDevice: ["option:checked", '[role="option"][aria-selected="true"]'],
   audioDeviceOptions: ["option", '[role="option"]'],
   leave: [
