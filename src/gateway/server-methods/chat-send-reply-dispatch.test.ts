@@ -4,12 +4,28 @@ import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
+import { buildAssistantDisplayContentFromReplyPayloads } from "./chat-assistant-content.js";
 import {
   buildTranscriptReplyText,
   createChatSendReplyDispatch,
 } from "./chat-send-reply-dispatch.js";
 
 describe("buildTranscriptReplyText", () => {
+  it.each(["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "keeps %s out of combined command display text",
+    async (controlText) => {
+      const payloads = [{ text: "First instruction" }, { text: controlText }, { text: "Done" }];
+      expect(buildTranscriptReplyText(payloads)).toBe("First instruction\n\nDone");
+      expect(
+        await buildAssistantDisplayContentFromReplyPayloads({
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          payloads,
+        }),
+      ).toEqual([{ type: "text", text: "First instruction\n\nDone" }]);
+    },
+  );
+
   it("preserves authored indentation across split fenced-code reply payloads", () => {
     expect(
       buildTranscriptReplyText([
