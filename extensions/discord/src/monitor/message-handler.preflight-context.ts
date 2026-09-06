@@ -10,6 +10,7 @@ type SharedPreflightFields =
   | "accountId"
   | "token"
   | "runtime"
+  | "buildContext"
   | "botUserId"
   | "abortSignal"
   | "guildHistories"
@@ -40,6 +41,7 @@ export function buildDiscordMessagePreflightContext({
     accountId: preflightParams.accountId,
     token: preflightParams.token,
     runtime: preflightParams.runtime,
+    buildContext: preflightParams.buildContext,
     botUserId: preflightParams.botUserId,
     abortSignal: preflightParams.abortSignal,
     guildHistories: preflightParams.guildHistories,
