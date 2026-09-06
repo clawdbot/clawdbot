@@ -28,11 +28,10 @@ export {
 
 const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
 const VERSION_TIMEOUT_MS = 15_000;
-// macOS 26 blocks the first exec of a freshly downloaded unsigned binary for
-// ~35-40s while syspolicyd evaluates it (see #138672). The evaluation is
-// cached per binary hash, so retrying the same command with a wider budget
-// succeeds; the steady-state timeout stays fast for genuinely broken systems.
-const VERSION_RETRY_TIMEOUT_MS = 120_000;
+// Freshly extracted macOS binaries can spend tens of seconds in Gatekeeper
+// evaluation. Keep this wider budget at the pre-publication version check;
+// reused, post-publication, and CUDA probes retain the fast default.
+const FRESH_VERSION_TIMEOUT_MS = 120_000;
 
 export type LlamaDownloadProgress = (status: {
   downloadedSize: number;
@@ -241,40 +240,26 @@ export async function downloadVerifiedFile(params: {
   }
 }
 
-function isExecTimeoutError(error: unknown): boolean {
-  // SAFETY: runServerCommand wraps execFile failures with the original error as cause; only timeout kills set killed+SIGTERM.
-  const cause = (error as { cause?: { killed?: boolean; signal?: string } }).cause;
-  return cause?.killed === true && cause?.signal === "SIGTERM";
-}
-
 async function runServerCommand(
   command: string,
   args: string[],
   signal?: AbortSignal,
+  timeoutMs = VERSION_TIMEOUT_MS,
 ): Promise<string> {
-  const attempt = (timeoutMs: number) =>
-    new Promise<string>((resolve, reject) => {
-      execFile(
-        command,
-        args,
-        { timeout: timeoutMs, signal, windowsHide: true },
-        (error, stdout, stderr) => {
-          if (error) {
-            reject(new Error(error.message, { cause: error }));
-          } else {
-            resolve(`${stdout}${stderr}`.trim());
-          }
-        },
-      );
-    });
-  try {
-    return await attempt(VERSION_TIMEOUT_MS);
-  } catch (error) {
-    if (!isExecTimeoutError(error) || signal?.aborted) {
-      throw error;
-    }
-    return await attempt(VERSION_RETRY_TIMEOUT_MS);
-  }
+  return await new Promise((resolve, reject) => {
+    execFile(
+      command,
+      args,
+      { timeout: timeoutMs, signal, windowsHide: true },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(error.message, { cause: error }));
+        } else {
+          resolve(`${stdout}${stderr}`.trim());
+        }
+      },
+    );
+  });
 }
 
 function formatRuntimeDependencyError(error: unknown): Error {
@@ -298,10 +283,11 @@ async function validateInstalledServer(
   command: string,
   asset: LlamaServerAsset,
   signal?: AbortSignal,
+  versionTimeoutMs = VERSION_TIMEOUT_MS,
 ): Promise<void> {
   let version: string;
   try {
-    version = await runServerCommand(command, ["--version"], signal);
+    version = await runServerCommand(command, ["--version"], signal, versionTimeoutMs);
   } catch (error) {
     signal?.throwIfAborted();
     throw formatRuntimeDependencyError(error);
@@ -396,7 +382,12 @@ async function installLlamaServer(
     }
     options.signal?.throwIfAborted();
     await fsp.chmod(extractedCommand, 0o755);
-    await validateInstalledServer(extractedCommand, asset, options.signal);
+    await validateInstalledServer(
+      extractedCommand,
+      asset,
+      options.signal,
+      FRESH_VERSION_TIMEOUT_MS,
+    );
     await fsp.mkdir(path.dirname(installDir), { recursive: true });
     options.signal?.throwIfAborted();
     await fsp.rm(installDir, { recursive: true, force: true });

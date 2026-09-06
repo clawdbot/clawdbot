@@ -115,7 +115,6 @@ function installWriteFileThroughWrite(handle: FileHandle): void {
       }
       offset += bytesWritten;
     }
-    // SAFETY: the stub reuses the real FileHandle write signature; only call sequencing is overridden.
   }) as typeof handle.writeFile;
 }
 
@@ -234,7 +233,6 @@ describe("downloadVerifiedFile", () => {
         firstWrite = false;
         writes.push(result.bytesWritten);
         return result;
-        // SAFETY: the stub reuses the real FileHandle write signature; only call sequencing is overridden.
       }) as typeof handle.write;
       installWriteFileThroughWrite(handle);
     });
@@ -269,7 +267,6 @@ describe("downloadVerifiedFile", () => {
     injectFileHandle((handle) => {
       handle.write = vi.fn(async () => {
         throw new Error("injected write failure");
-        // SAFETY: the stub reuses the real FileHandle write signature; only call sequencing is overridden.
       }) as typeof handle.write;
       installWriteFileThroughWrite(handle);
     });
@@ -338,28 +335,28 @@ describe("ensureLlamaServerInstalled", () => {
     );
   });
 
-  it("retries a timed-out first exec with a wider budget (macOS 26 security scan)", async () => {
-    // Regression for #138672: macOS 26 blocks the first exec of a freshly
-    // downloaded unsigned binary for ~35-40s while syspolicyd evaluates it, so
-    // the 15s cap killed the version check before setup could finish. The
-    // evaluation is cached per binary hash, so the retry succeeds.
-    const command = await createInstalledServer();
-    const calls: Array<number | undefined> = [];
+  it("uses the wider version timeout only for a freshly extracted CPU ZIP", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "llama-cpu-install-")));
+    tempRoots.push(root);
+    mocks.resolveLlamaCppDataDir.mockReturnValue(root);
+    const source = selectLlamaServerAsset("win32", "arm64", { kind: "cpu" });
+    const serverBytes = await new JSZip()
+      .file(source.executable, "server")
+      .generateAsync({ type: "nodebuffer" });
+    const asset: LlamaServerAsset = {
+      ...source,
+      sha256: createHash("sha256").update(serverBytes).digest("hex"),
+    };
+    mockDownload(serverBytes);
+    const calls: Array<{ command: string; args: string[]; timeout?: number }> = [];
     mocks.execFile.mockImplementation(
       (
-        _command: string,
-        _args: string[],
+        command: string,
+        args: string[],
         options: { timeout?: number },
         callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
       ) => {
-        calls.push(options.timeout);
-        if (calls.length === 1) {
-          const error = new Error(`Command failed: ${command} --version`) as ExecFileException;
-          error.killed = true;
-          error.signal = "SIGTERM";
-          callback(error, "", "");
-          return;
-        }
+        calls.push({ command, args, timeout: options.timeout });
         callback(
           null,
           `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
@@ -368,53 +365,62 @@ describe("ensureLlamaServerInstalled", () => {
       },
     );
 
-    await expect(ensureLlamaServerInstalled()).resolves.toMatchObject({ command });
-    expect(calls).toEqual([15_000, 120_000]);
+    const { command } = resolveManagedLlamaServerPaths(asset);
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
+
+    expect(
+      calls.map((call) => ({
+        published: call.command === command,
+        args: call.args,
+        timeout: call.timeout,
+      })),
+    ).toEqual([
+      { published: false, args: ["--version"], timeout: 120_000 },
+      { published: true, args: ["--version"], timeout: 15_000 },
+      { published: true, args: ["--version"], timeout: 15_000 },
+    ]);
+    expect(await fs.readFile(command, "utf8")).toBe("server");
+    expect((await fs.readdir(root)).every((entry) => !entry.startsWith("."))).toBe(true);
   });
 
-  it("does not retry exec failures that are not timeouts", async () => {
-    const command = await createInstalledServer();
-    let calls = 0;
-    mocks.execFile.mockImplementation(
-      (
-        _command: string,
-        _args: string[],
-        _options: unknown,
-        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
-      ) => {
-        calls += 1;
-        const error = new Error(`spawn ${command} ENOENT`) as ExecFileException;
-        error.code = "ENOENT";
-        callback(error, "", "");
-      },
-    );
-
-    await expect(ensureLlamaServerInstalled()).rejects.toThrow();
-    expect(calls).toBe(1);
-  });
-
-  it("does not retry after the caller aborts", async () => {
-    await createInstalledServer();
-    const calls: Array<number | undefined> = [];
+  it("aborts fresh validation and removes the unpublished CPU ZIP files", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "llama-cpu-abort-")));
+    tempRoots.push(root);
+    mocks.resolveLlamaCppDataDir.mockReturnValue(root);
+    const source = selectLlamaServerAsset("win32", "arm64", { kind: "cpu" });
+    const serverBytes = await new JSZip()
+      .file(source.executable, "server")
+      .generateAsync({ type: "nodebuffer" });
+    const asset: LlamaServerAsset = {
+      ...source,
+      sha256: createHash("sha256").update(serverBytes).digest("hex"),
+    };
+    mockDownload(serverBytes);
     const controller = new AbortController();
+    const timeouts: Array<number | undefined> = [];
     mocks.execFile.mockImplementation(
       (
-        _command: string,
+        command: string,
         _args: string[],
         options: { timeout?: number },
         callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
       ) => {
-        calls.push(options.timeout);
+        timeouts.push(options.timeout);
         controller.abort();
-        const error = new Error("timeout") as ExecFileException;
-        error.killed = true;
-        error.signal = "SIGTERM";
+        const error = new Error("The operation was aborted") as ExecFileException;
+        error.cmd = `${command} --version`;
         callback(error, "", "");
       },
     );
 
-    await expect(ensureLlamaServerInstalled({ signal: controller.signal })).rejects.toThrow();
-    expect(calls).toEqual([15_000]);
+    const { command } = resolveManagedLlamaServerPaths(asset);
+    await expect(
+      ensureLlamaServerInstalled({ asset, signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(timeouts).toEqual([120_000]);
+    await expect(fs.stat(command)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readdir(root)).toEqual([]);
   });
 
   it.each(["ready", "corrupt-runtime", "missing-runtime", "no-device", "cancelled"] as const)(
@@ -461,13 +467,15 @@ describe("ensureLlamaServerInstalled", () => {
         return { response: new Response(new Uint8Array(payload)), release };
       });
       const validatedFiles: string[][] = [];
+      const commandCalls: Array<{ args: string[]; timeout?: number }> = [];
       mocks.execFile.mockImplementation(
         (
           command: string,
           args: string[],
-          _options: unknown,
+          options: { timeout?: number },
           callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
         ) => {
+          commandCalls.push({ args, timeout: options.timeout });
           void fs.readdir(path.dirname(command)).then((files) => {
             validatedFiles.push(files);
             const stdout =
@@ -499,6 +507,12 @@ describe("ensureLlamaServerInstalled", () => {
         expect(
           validatedFiles.every((files) => runtime.files.every((file) => files.includes(file))),
         ).toBe(true);
+        expect(commandCalls).toEqual([
+          { args: ["--version"], timeout: 120_000 },
+          { args: ["--list-devices"], timeout: 15_000 },
+          { args: ["--version"], timeout: 15_000 },
+          { args: ["--list-devices"], timeout: 15_000 },
+        ]);
       } else {
         const expected = {
           "corrupt-runtime": /SHA-256 mismatch/u,
@@ -508,6 +522,14 @@ describe("ensureLlamaServerInstalled", () => {
         }[outcome];
         await expect(result).rejects.toThrow(expected);
         await expect(fs.stat(command)).rejects.toMatchObject({ code: "ENOENT" });
+        if (outcome === "no-device") {
+          expect(commandCalls).toEqual([
+            { args: ["--version"], timeout: 120_000 },
+            { args: ["--list-devices"], timeout: 15_000 },
+          ]);
+        } else {
+          expect(commandCalls).toEqual([]);
+        }
       }
       expect((await fs.readdir(root)).every((entry) => !entry.startsWith("."))).toBe(true);
       expect(
