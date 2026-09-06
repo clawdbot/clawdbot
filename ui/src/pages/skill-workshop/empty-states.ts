@@ -68,6 +68,8 @@ function resolveBoardEmptyState(
         title: t("skillWorkshop.empty.staleTitle"),
         body: t("skillWorkshop.empty.staleBody"),
       };
+    case "all":
+      break;
   }
   return {
     icon: "search",
