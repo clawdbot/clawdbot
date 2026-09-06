@@ -20,7 +20,10 @@ const MATRIX_MEDIA_KINDS: Record<string, MatrixMessageAttachmentKind> = {
 };
 
 function resolveMatrixMediaKind(msgtype: string | undefined): MatrixMessageAttachmentKind | null {
-  return MATRIX_MEDIA_KINDS[msgtype ?? ""] ?? null;
+  // msgtype is remote-controlled, so an inherited key such as "toString" or
+  // "__proto__" must not read through to Object.prototype.
+  const key = msgtype ?? "";
+  return Object.hasOwn(MATRIX_MEDIA_KINDS, key) ? (MATRIX_MEDIA_KINDS[key] ?? null) : null;
 }
 
 function resolveMatrixMediaLabel(
