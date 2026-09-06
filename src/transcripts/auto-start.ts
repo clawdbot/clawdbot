@@ -21,7 +21,7 @@ import {
 import { resolveTranscriptsConfig, type ResolvedTranscriptsAutoStartConfig } from "./config.js";
 import type { TranscriptOccupancyWatchHandle, TranscriptSourceLocator } from "./provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
-import { transcriptSessionSelector, type TranscriptsStore } from "./store.js";
+import { transcriptSessionSelector } from "./store.js";
 
 const AUTO_START_RETRY_ATTEMPTS = 12;
 const AUTO_START_RETRY_MS = 5_000;

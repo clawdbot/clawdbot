@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -33,8 +34,8 @@ describe("transcript provider cleanup custody", () => {
       const requests: TranscriptStartRequest[] = [];
       let subscribed = false;
       let failing = true;
-      const stopEntered = Promise.withResolvers<void>();
-      const releaseStop = Promise.withResolvers<void>();
+      const stopEntered = createDeferred();
+      const releaseStop = createDeferred();
       const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async ({ sessionId }) => {
         if (owner === "concurrent-service" && failing) {
           stopEntered.resolve();
