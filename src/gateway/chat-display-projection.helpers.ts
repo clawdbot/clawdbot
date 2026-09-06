@@ -12,6 +12,24 @@ export type RoleContentMessage = {
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 
+/** Removes private yield inputs from a display copy without changing the source argument objects. */
+export function stripPrivateToolCallContextForDisplay(entry: Record<string, unknown>): boolean {
+  if (entry.type !== "toolCall" || entry.name !== "sessions_yield") {
+    return false;
+  }
+  let changed = false;
+  for (const field of ["arguments", "input"]) {
+    const toolInput = readRecord(entry[field]);
+    if (!toolInput || !("message" in toolInput)) {
+      continue;
+    }
+    const { message: _, ...publicInput } = toolInput;
+    entry[field] = publicInput;
+    changed = true;
+  }
+  return changed;
+}
+
 export function takeAssistantManagedMediaUrlsForDisplay(
   entry: Record<string, unknown>,
   role: string,

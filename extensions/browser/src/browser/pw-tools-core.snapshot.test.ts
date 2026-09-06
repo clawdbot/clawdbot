@@ -573,10 +573,10 @@ describe("pw-tools-core aria snapshot storage", () => {
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
       expectedDocumentIdentity: "cdp:loader-1",
-      refs: {
-        e1: { role: "button", name: "Save", nth: 0, backendDOMNodeId: 42 },
-        e2: { role: "button", name: "Save", nth: 1, backendDOMNodeId: 84 },
-      },
+      refs: Object.freeze({
+        e1: Object.freeze({ role: "button", name: "Save", nth: 0, backendDOMNodeId: 42 }),
+        e2: Object.freeze({ role: "button", name: "Save", nth: 1, backendDOMNodeId: 84 }),
+      }),
     });
 
     expect(storeRoleRefsForTarget).toHaveBeenCalledWith({

@@ -6,7 +6,6 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import type { AgentPlanStep } from "../channels/streaming.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
@@ -14,10 +13,6 @@ import {
   parseJsonMessageParam,
 } from "../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
-import {
-  normalizeProgressCardInput,
-  ProgressCardInputError,
-} from "../session-cards/progress-card-input.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -58,24 +53,6 @@ export function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
   const created = createToolTerminalObserver(ctx.params.runId);
   fallbackToolTerminalObservers.set(ctx.state, created);
   return created;
-}
-
-export function readProgressCardPlanInput(args: unknown): { steps: AgentPlanStep[] } | undefined {
-  const params = readRecordField(args);
-  if (!params) {
-    return undefined;
-  }
-  try {
-    return {
-      steps:
-        normalizeProgressCardInput({ markdown: params.markdown, plan: params.plan }).steps ?? [],
-    };
-  } catch (error) {
-    if (error instanceof ProgressCardInputError) {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 export function isMiddlewareToolResultError(result: unknown): boolean {

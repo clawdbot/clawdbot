@@ -3,6 +3,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import {
@@ -52,14 +53,7 @@ function makeAssistantMessage(
     api: "responses",
     provider: "openai",
     model: "gpt-5.4",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     role: "assistant",
     content,
     timestamp: Date.now(),

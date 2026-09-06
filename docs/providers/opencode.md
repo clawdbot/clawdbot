@@ -119,6 +119,11 @@ deprecated models are excluded from active discovery and its offline fallback.
 Deprecated explicit refs remain resolvable for existing configurations but are
 not shown as current recommendations.
 
+Account-list failures produce a failed catalog outcome, not a successful seed
+list. A successful empty or fully filtered account response stays empty.
+The separate public metadata feed can still use trusted offline metadata when
+it is unavailable; that does not replace or retry the account-list request.
+
 Price estimates also refresh through the [hosted model catalog](/concepts/models#hosted-catalog-updates),
 using the same public OpenCode pricing feed as live discovery. Hosted updates
 activate after the next Gateway restart; the bundled snapshot remains available

@@ -17,7 +17,7 @@ import {
   runSingleCheck,
   selectChecksForShard,
 } from "../../scripts/run-additional-boundary-checks.mts";
-import { waitForFile, waitForPidFile } from "../helpers/process-wait.js";
+import { waitForChildClose, waitForFile, waitForPidFile } from "../helpers/process-wait.js";
 
 function createOutputBuffer() {
   const chunks: string[] = [];
@@ -85,21 +85,6 @@ async function waitForNotRunning(pid: number, timeoutMs: number): Promise<void> 
     await sleep(5);
   }
   throw new Error(`process still running: ${pid}`);
-}
-
-async function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs: number,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
 }
 
 describe("run-additional-boundary-checks", () => {
