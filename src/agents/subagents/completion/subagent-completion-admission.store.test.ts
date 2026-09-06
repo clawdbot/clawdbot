@@ -31,7 +31,12 @@ import {
   blockSubagentCompletionDelivery,
   settleSubagentCompletionDelivery,
 } from "./subagent-completion-admission.store.js";
-import { records, requesterWakeDriver } from "./subagent-completion-admission.test-helpers.js";
+import {
+  armRequesterWake,
+  failedRecords,
+  records,
+  requesterWakeDriver,
+} from "./subagent-completion-admission.test-helpers.js";
 import {
   admitCorrelatedSubagentSessionDelivery,
   dismissSubagentCompletionDelivery,
@@ -111,36 +116,6 @@ describe("atomic subagent completion admission store", () => {
     closeOpenClawStateDatabaseForTest();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     database = openOpenClawStateDatabase();
-  }
-
-  function armRequesterWake(
-    input: ReturnType<typeof records>,
-    batchRunIds = [input.subagent.runId],
-  ) {
-    input.subagent.cleanupHandled = true;
-    input.subagent.cleanupCompletedAt = Date.now();
-    input.subagent.requesterSettleWake = {
-      status: "pending",
-      attemptCount: 0,
-      rearmGeneration: 1,
-      batchRunIds,
-    };
-    return input;
-  }
-
-  function failedRecords(
-    status: Extract<TaskRecord["status"], "cancelled" | "failed" | "timed_out">,
-    outcome: NonNullable<SubagentRunRecord["execution"]["outcome"]>,
-  ) {
-    const input = records();
-    input.task.status = status;
-    delete input.task.terminalOutcome;
-    input.task.error = "original child failure";
-    input.task.terminalSummary = "original failure summary";
-    input.task.cleanupAfter = Date.now() + 5_000;
-    input.subagent.endedReason = status === "cancelled" ? "subagent-killed" : "subagent-error";
-    input.subagent.execution.outcome = outcome;
-    return armRequesterWake(input);
   }
 
   function reopenOwners() {

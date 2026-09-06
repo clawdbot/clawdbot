@@ -7,6 +7,7 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 export function records() {
   const now = Date.now();
@@ -117,4 +118,34 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     },
   };
+}
+
+export function armRequesterWake(
+  input: ReturnType<typeof records>,
+  batchRunIds = [input.subagent.runId],
+) {
+  input.subagent.cleanupHandled = true;
+  input.subagent.cleanupCompletedAt = Date.now();
+  input.subagent.requesterSettleWake = {
+    status: "pending",
+    attemptCount: 0,
+    rearmGeneration: 1,
+    batchRunIds,
+  };
+  return input;
+}
+
+export function failedRecords(
+  status: Extract<TaskRecord["status"], "cancelled" | "failed" | "timed_out">,
+  outcome: NonNullable<SubagentRunRecord["execution"]["outcome"]>,
+) {
+  const input = records();
+  input.task.status = status;
+  delete input.task.terminalOutcome;
+  input.task.error = "original child failure";
+  input.task.terminalSummary = "original failure summary";
+  input.task.cleanupAfter = Date.now() + 5_000;
+  input.subagent.endedReason = status === "cancelled" ? "subagent-killed" : "subagent-error";
+  input.subagent.execution.outcome = outcome;
+  return armRequesterWake(input);
 }
