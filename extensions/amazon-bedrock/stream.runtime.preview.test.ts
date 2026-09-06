@@ -1,10 +1,38 @@
 import { createServer } from "node:http";
+import { crc32 } from "node:zlib";
 import type { AssistantMessageEvent, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
-import { bedrockEvent } from "../../test/helpers/amazon-eventstream.js";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
+
+function bedrockEvent(type: string, payload: unknown): Buffer {
+  // Amazon event-stream frames carry string headers and CRCs over the prelude
+  // and full message. Exercise the SDK decoder instead of mocking its output.
+  const headers = Buffer.concat(
+    Object.entries({
+      ":message-type": "event",
+      ":event-type": type,
+      ":content-type": "application/json",
+    }).map(([name, value]) => {
+      const bytes = Buffer.alloc(1 + name.length + 3 + value.length);
+      bytes.writeUInt8(name.length, 0);
+      bytes.write(name, 1);
+      bytes.writeUInt8(7, 1 + name.length);
+      bytes.writeUInt16BE(value.length, 2 + name.length);
+      bytes.write(value, 4 + name.length);
+      return bytes;
+    }),
+  );
+  const body = Buffer.from(JSON.stringify(payload));
+  const frame = Buffer.alloc(16 + headers.length + body.length);
+  frame.writeUInt32BE(frame.length, 0);
+  frame.writeUInt32BE(headers.length, 4);
+  frame.writeUInt32BE(crc32(frame.subarray(0, 8)), 8);
+  headers.copy(frame, 12);
+  body.copy(frame, 12 + headers.length);
+  frame.writeUInt32BE(crc32(frame.subarray(0, -4)), frame.length - 4);
+  return frame;
+}
 
 type Frame = readonly [type: string, payload: unknown];
 const startMessage: Frame = ["messageStart", { role: "assistant" }];
@@ -62,7 +90,9 @@ async function readBedrockFrames(options: {
       server.listen(0, "127.0.0.1", resolve);
     });
     const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Missing loopback address");
+    if (!address || typeof address === "string") {
+      throw new Error("Missing loopback address");
+    }
     const model = {
       id: "amazon.nova-micro-v1:0",
       name: "Bedrock preview fixture",
@@ -89,8 +119,12 @@ async function readBedrockFrames(options: {
       },
       { signal },
     );
-    if (options.queued) await stream.result();
-    for await (const event of stream) options.observe(event);
+    if (options.queued) {
+      await stream.result();
+    }
+    for await (const event of stream) {
+      options.observe(event);
+    }
     const result = await stream.result();
     expect(requests).toBe(1);
     return result;
@@ -113,9 +147,10 @@ it("bounds full-buffer preview work without losing raw deltas, progress, or term
   const expected = { body, tail: ["雪\n\\path", { ready: true }] };
   const raw = JSON.stringify(expected);
   const chunks: string[] = [];
-  for (let offset = 0; offset < raw.length; offset += 256)
+  for (let offset = 0; offset < raw.length; offset += 256) {
     chunks.push(raw.slice(offset, offset + 256));
-  const acknowledgments = chunks.map(() => createDeferred());
+  }
+  const acknowledgments = chunks.map(() => Promise.withResolvers<void>());
   async function* frames(): AsyncGenerator<Frame> {
     yield startMessage;
     yield startTool(0);
@@ -199,14 +234,16 @@ it.for([false, true])(
       { index: 3, input: firstRaw.slice(1050) },
       { index: 8, input: secondRaw.slice(530) },
     ];
-    const gates = deltas.map(() => createDeferred());
+    const gates = deltas.map(() => Promise.withResolvers<void>());
     async function* frames(): AsyncGenerator<Frame> {
       yield startMessage;
       yield startTool(3);
       yield startTool(8);
       for (const [index, delta] of deltas.entries()) {
         yield toolDelta(delta.index, delta.input);
-        if (!queued) await gates[index]!.promise;
+        if (!queued) {
+          await gates[index]!.promise;
+        }
       }
       yield stopTool(8);
       yield stopTool(3);
@@ -224,7 +261,9 @@ it.for([false, true])(
         if (event.type === "toolcall_delta") {
           const block = event.partial.content[event.contentIndex];
           expect(block?.type).toBe("toolCall");
-          if (block?.type !== "toolCall") throw new Error("Missing active tool call");
+          if (block?.type !== "toolCall") {
+            throw new Error("Missing active tool call");
+          }
           received.push({ index: Number(block.id.slice(5)), input: event.delta });
           observedPreviews.push(
             typeof block.arguments.body === "string" ? block.arguments.body.length : 0,

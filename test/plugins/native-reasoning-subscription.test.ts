@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { crc32 } from "node:zlib";
 import type { Message, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import bedrockPlugin from "../../extensions/amazon-bedrock/index.js";
@@ -6,7 +7,6 @@ import { createSubscribedSessionHarness } from "../../src/agents/embedded-agent-
 import { runAgentLoop } from "../../src/agents/runtime/index.js";
 import { onAgentEventForRun } from "../../src/infra/agent-events.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
-import { bedrockEvent } from "../helpers/amazon-eventstream.js";
 import { createDeferred } from "../helpers/promise.js";
 
 const model = {
@@ -26,6 +26,35 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+function bedrockEvent(type: string, payload: unknown): Buffer {
+  // Amazon event-stream frames carry string headers and CRCs over the prelude
+  // and full message. Exercise the SDK decoder instead of mocking its output.
+  const headers = Buffer.concat(
+    Object.entries({
+      ":message-type": "event",
+      ":event-type": type,
+      ":content-type": "application/json",
+    }).map(([name, value]) => {
+      const bytes = Buffer.alloc(1 + name.length + 3 + value.length);
+      bytes.writeUInt8(name.length, 0);
+      bytes.write(name, 1);
+      bytes.writeUInt8(7, 1 + name.length);
+      bytes.writeUInt16BE(value.length, 2 + name.length);
+      bytes.write(value, 4 + name.length);
+      return bytes;
+    }),
+  );
+  const body = Buffer.from(JSON.stringify(payload));
+  const frame = Buffer.alloc(16 + headers.length + body.length);
+  frame.writeUInt32BE(frame.length, 0);
+  frame.writeUInt32BE(headers.length, 4);
+  frame.writeUInt32BE(crc32(frame.subarray(0, 8)), 8);
+  headers.copy(frame, 12);
+  body.copy(frame, 12 + headers.length);
+  frame.writeUInt32BE(crc32(frame.subarray(0, -4)), frame.length - 4);
+  return frame;
+}
 
 describe("native provider reasoning subscription", () => {
   it.for(["incremental", "buffered"] as const)(
