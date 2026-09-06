@@ -161,6 +161,12 @@ describe("CronPage hidden refreshes", () => {
       held.resolve();
       await settle();
       expect(request).not.toHaveBeenCalled();
+      for (const method of refreshMethods) {
+        expect(
+          oldRequest.mock.calls.filter(([called]) => called === method),
+          method,
+        ).toHaveLength(1);
+      }
       oldRequest.mockClear();
       visibility("visible");
       globalThis.dispatchEvent(new Event("focus"));
@@ -206,7 +212,7 @@ describe("CronPage hidden refreshes", () => {
       for (const [selector, value] of [
         ["#cron-name", "Synthetic task"],
         ["#cron-payload-text", "Synthetic prompt"],
-      ]) {
+      ] as const) {
         const input = page.querySelector(selector) as HTMLInputElement;
         input.value = value;
         input.dispatchEvent(new Event("input", { bubbles: true }));
