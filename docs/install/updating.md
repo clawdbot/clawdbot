@@ -665,7 +665,8 @@ update, it stops the candidate and restores the previous generation: package,
 command shim, service definition, and config writer stamp. Owned, writable
 service metadata is refreshed; protected service definitions are preserved.
 The CLI verifies the restarted previous Gateway's service health, version/build
-identity, plugins, channels, and `/readyz` again.
+identity, plugins, channels, and `/readyz` again, then requires a new successful
+agent turn and fresh readback of its saved request and response.
 
 The candidate may have advanced the config writer stamp without changing config
 content. Rollback restores that stamp and uses the existing intentional-recovery
@@ -679,8 +680,11 @@ measured from service stop through verified recovery. The headline is
 verification failure. The command still exits nonzero; recovery does not turn a
 rejected candidate into a successful update.
 
-The bounded inference check is advisory:
-`inference: unavailable` by itself does not trigger rollback.
+Serving verification is required, not advisory. It uses configured inference and
+has a 60-second budget. Unavailable inference, timeout, a failed turn, or missing
+saved messages fails verification. A restored Gateway must pass its own serving
+check before the run can finish as `rolled-back`; candidate proof cannot be reused
+after a restart or restoration.
 
 If configuration content or a schema version changed, rollback is refused with
 `state-migrated-no-rollback`. The updater attempts

@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
   restartCommand:
     vi.fn<typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand>(),
+  serving: vi.fn<typeof import("../../infra/update-serving-verification.js").verifyUpdateServing>(),
   healthy: false,
   version: "2026.9.3",
   stop: vi.fn<
@@ -68,6 +69,7 @@ vi.mock("../daemon-cli/restart-health-probe.js", async (importOriginal) => ({
 vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: async ({ expectedVersion }: { expectedVersion?: string }) => ({
+    gatewayBootId: "repair-boot",
     healthy: mocks.healthy && mocks.version === expectedVersion,
     runtime: { status: mocks.healthy ? "running" : "stopped", pid: 4321 },
     gatewayVersion: mocks.version,
@@ -97,7 +99,9 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => ({
 vi.mock("./update-command-convergence.js", () => ({
   convergeUpdatePlugins: mocks.converge,
 }));
-vi.mock("./update-command-inference.js", () => ({ runUpdateInferenceProbe: async () => true }));
+vi.mock("../../infra/update-serving-verification.js", () => ({
+  verifyUpdateServing: mocks.serving,
+}));
 vi.mock("./update-command-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-result.js")>()),
   writeControlPlaneUpdateRestartSentinelBestEffort: async () => {},
@@ -106,6 +110,7 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
 import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -189,6 +194,28 @@ function fixture(): FinishUpdateParams {
 describe("post-activation repair after rollback refusal or failure", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.serving.mockReset().mockImplementation(async (params) => ({
+      status: "verified",
+      receipt: {
+        runId: params.runId,
+        gateway: {
+          bootId: "repair-boot",
+          version: params.expectedVersion,
+          buildId: params.expectedBuildId ?? null,
+        },
+        agentId: "main",
+        sessionKey: "repair-session",
+        sessionId: "repair-session-id",
+        agentRunId: "00000000-0000-4000-8000-000000000002",
+        verifiedAtMs: Date.now(),
+        transcript: {
+          generation: "repair-generation",
+          maxSeq: 2,
+          user: { entryId: "user-entry", seq: 1 },
+          assistant: { entryId: "assistant-entry", seq: 2 },
+        },
+      },
+    }));
     mocks.healthy = false;
     mocks.version = "2026.9.3";
     mocks.readService.mockResolvedValue({
@@ -238,199 +265,226 @@ describe("post-activation repair after rollback refusal or failure", () => {
     { rollback: "unavailable", repaired: false },
     { rollback: "restored", repaired: true },
     { rollback: "restored", repaired: false },
-  ])("$rollback rollback with repaired=$repaired", async ({ rollback, repaired }) => {
-    const params = fixture();
-    if (rollback === "unavailable") {
-      params.result.mode = "git";
-      params.rollbackBlockedReason = undefined;
-      params.schemaVersions = [];
-    }
-    if (rollback === "failed") {
-      params.rollbackBlockedReason = undefined;
-      params.packageTransaction = {
-        backupRoot: "/backup",
-        rollback: vi.fn(),
-        complete: vi.fn(async () => {}),
-      };
-    }
-    const run = params.opts.run!;
-    const completeRecovery = vi.fn(async () => {});
-    if (rollback === "restored") {
-      const candidateRoot = await fs.realpath(dirs.make("repair-candidate-runtime-"));
-      const previousRoot = await fs.realpath(dirs.make("repair-previous-runtime-"));
-      for (const [root, version] of [
-        [candidateRoot, "2026.9.3"],
-        [previousRoot, "2026.9.1"],
-      ] as const) {
+    { rollback: "blocked", repaired: false, healthy: true, servingUnavailable: true },
+    { rollback: "restored", repaired: false, healthy: true, servingUnavailable: true },
+  ])(
+    "$rollback rollback with repaired=$repaired servingUnavailable=$servingUnavailable",
+    async ({ rollback, repaired, healthy, servingUnavailable }) => {
+      if (servingUnavailable) {
+        mocks.serving.mockResolvedValue({
+          status: "unavailable",
+          reason: "persistence-unavailable",
+        });
+      }
+      const params = fixture();
+      if (rollback === "unavailable") {
+        params.result.mode = "git";
+        params.rollbackBlockedReason = undefined;
+        params.schemaVersions = [];
+      }
+      if (rollback === "failed") {
+        params.rollbackBlockedReason = undefined;
+        params.packageTransaction = {
+          backupRoot: "/backup",
+          rollback: vi.fn(),
+          complete: vi.fn(async () => {}),
+        };
+      }
+      const run = params.opts.run!;
+      const completeRecovery = vi.fn(async () => {});
+      if (rollback === "restored") {
+        const candidateRoot = await fs.realpath(dirs.make("repair-candidate-runtime-"));
+        const previousRoot = await fs.realpath(dirs.make("repair-previous-runtime-"));
+        for (const [root, version] of [
+          [candidateRoot, "2026.9.3"],
+          [previousRoot, "2026.9.1"],
+        ] as const) {
+          await fs.writeFile(
+            path.join(root, "package.json"),
+            JSON.stringify({ type: "module", version }),
+          );
+        }
+        const worker = "dist/infra/update-candidate-state.worker.js";
+        await fs.mkdir(path.dirname(path.join(candidateRoot, worker)), { recursive: true });
         await fs.writeFile(
-          path.join(root, "package.json"),
-          JSON.stringify({ type: "module", version }),
+          path.join(candidateRoot, worker),
+          `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
+        );
+        params.result.root = candidateRoot;
+        params.root = previousRoot;
+        params.preManagedServiceStop = {
+          ...params.preManagedServiceStop!,
+          serviceUpdateVerdict: {
+            kind: "owned",
+            root: candidateRoot,
+            fingerprint: "fixture",
+            refreshDefinition: false,
+          },
+        };
+        const actual = await vi.importActual<typeof import("./update-command-rollback.js")>(
+          "./update-command-rollback.js",
+        );
+        mocks.rollback.mockImplementation(actual.rollbackFailedUpdate);
+        mocks.stop.mockResolvedValue({
+          ...params.preManagedServiceStop!,
+          windowsTaskAutoStartRecovery: {
+            suspended: Promise.resolve(true),
+            beginMutation: () => {},
+            restore: vi.fn(async () => {}),
+            handoff: () => {},
+            complete: completeRecovery,
+            interrupted: () => false,
+          },
+        });
+        params.rollbackBlockedReason = undefined;
+        params.previousVerified = true;
+        params.schemaVersions = await readUpdateStateSchemaVersions({
+          stateDir: run.env.OPENCLAW_STATE_DIR!,
+          config: {},
+          env: run.env,
+        });
+        params.packageTransaction = {
+          backupRoot: "/backup",
+          complete: vi.fn(async () => {}),
+          rollback: async () => {
+            mocks.version = "2026.9.1";
+            return {
+              name: "package rollback",
+              activePackageRoot: previousRoot,
+              command: "restore",
+              cwd: previousRoot,
+              exitCode: 0,
+              durationMs: 1,
+            };
+          },
+        };
+      }
+      const activeRoot = rollback === "restored" ? params.root : params.result.root;
+      mocks.repair.mockImplementation(async (repair: UpdateRepairParams) => {
+        expect(repair.context.phase).toBe("verifying");
+        expect(repair.target).toMatchObject({
+          installRoot: activeRoot,
+          stateDir: run.env.OPENCLAW_STATE_DIR,
+          configPath: run.env.OPENCLAW_CONFIG_PATH,
+        });
+        expect(repair.target.candidateRoot).toBeUndefined();
+        expect(getUpdateRun(run.runId, { env: run.env })?.phase).toBe("repairing");
+        const signal = new AbortController().signal;
+        expect((await repair.validate(signal)).ok).toBe(false);
+        expect(mocks.restart).toHaveBeenCalledTimes(rollback === "restored" ? 2 : 1);
+        repair.onEvent?.({
+          type: "turn-started",
+          turn: 1,
+          model: "gpt-5.6-luna",
+          provider: "openai",
+        });
+        mocks.restartCommand.mockImplementationOnce(async () => {
+          mocks.healthy = healthy ?? repaired;
+          return "accepted";
+        });
+        const validation = await repair.validate(signal);
+        const attempt = {
+          turn: 1,
+          model: "gpt-5.6-luna",
+          provider: "openai",
+          durationMs: 20,
+          toolCalls: 1,
+          summary: "Repaired startup configuration.",
+          validation,
+        };
+        repair.onEvent?.({ type: "turn-finished", ...attempt });
+        repair.onEvent?.({ type: "stopped", status: validation.ok ? "repaired" : "unrepaired" });
+        return {
+          status: validation.ok ? "repaired" : "unrepaired",
+          finalValidation: validation,
+          attempts: [attempt],
+        };
+      });
+      if (repaired && rollback !== "restored") {
+        await expect(finishUpdate(params)).resolves.toMatchObject({ status: "ok" });
+      } else {
+        const reason =
+          rollback === "blocked"
+            ? "state-migrated-no-rollback"
+            : rollback === "failed"
+              ? "source-rollback-failed"
+              : "readyz-unhealthy";
+        await expect(finishUpdate(params)).rejects.toMatchObject({
+          exitCode: 1,
+          result: {
+            status: "error",
+            reason,
+            root: activeRoot,
+            after: { version: rollback === "restored" ? "2026.9.1" : "2026.9.3" },
+          },
+        });
+      }
+      if (healthy || repaired) {
+        expect(mocks.serving).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runId: run.runId,
+            env: run.env,
+            expectedVersion: rollback === "restored" ? "2026.9.1" : "2026.9.3",
+          }),
+        );
+        expect(mocks.serving.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
+          mocks.restartCommand.mock.invocationCallOrder.at(-1)!,
         );
       }
-      const worker = "dist/infra/update-candidate-state.worker.js";
-      await fs.mkdir(path.dirname(path.join(candidateRoot, worker)), { recursive: true });
-      await fs.writeFile(
-        path.join(candidateRoot, worker),
-        `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
-      );
-      params.result.root = candidateRoot;
-      params.root = previousRoot;
-      params.preManagedServiceStop = {
-        ...params.preManagedServiceStop!,
-        serviceUpdateVerdict: {
-          kind: "owned",
-          root: candidateRoot,
-          fingerprint: "fixture",
-          refreshDefinition: false,
-        },
-      };
-      const actual = await vi.importActual<typeof import("./update-command-rollback.js")>(
-        "./update-command-rollback.js",
-      );
-      mocks.rollback.mockImplementation(actual.rollbackFailedUpdate);
-      mocks.stop.mockResolvedValue({
-        ...params.preManagedServiceStop!,
-        windowsTaskAutoStartRecovery: {
-          suspended: Promise.resolve(true),
-          beginMutation: () => {},
-          restore: vi.fn(async () => {}),
-          handoff: () => {},
-          complete: completeRecovery,
-          interrupted: () => false,
-        },
-      });
-      params.rollbackBlockedReason = undefined;
-      params.previousVerified = true;
-      params.schemaVersions = await readUpdateStateSchemaVersions({
-        stateDir: run.env.OPENCLAW_STATE_DIR!,
-        config: {},
-        env: run.env,
-      });
-      params.packageTransaction = {
-        backupRoot: "/backup",
-        complete: vi.fn(async () => {}),
-        rollback: async () => {
-          mocks.version = "2026.9.1";
-          return {
-            name: "package rollback",
-            activePackageRoot: previousRoot,
-            command: "restore",
-            cwd: previousRoot,
-            exitCode: 0,
-            durationMs: 1,
-          };
-        },
-      };
-    }
-    const activeRoot = rollback === "restored" ? params.root : params.result.root;
-    mocks.repair.mockImplementation(async (repair: UpdateRepairParams) => {
-      expect(repair.context.phase).toBe("verifying");
-      expect(repair.target).toMatchObject({
-        installRoot: activeRoot,
-        stateDir: run.env.OPENCLAW_STATE_DIR,
-        configPath: run.env.OPENCLAW_CONFIG_PATH,
-      });
-      expect(repair.target.candidateRoot).toBeUndefined();
-      expect(getUpdateRun(run.runId, { env: run.env })?.phase).toBe("repairing");
-      const signal = new AbortController().signal;
-      expect((await repair.validate(signal)).ok).toBe(false);
-      expect(mocks.restart).toHaveBeenCalledTimes(rollback === "restored" ? 2 : 1);
-      repair.onEvent?.({
-        type: "turn-started",
-        turn: 1,
-        model: "gpt-5.6-luna",
-        provider: "openai",
-      });
-      mocks.restartCommand.mockImplementationOnce(async () => {
-        mocks.healthy = repaired;
-        return "accepted";
-      });
-      const validation = await repair.validate(signal);
-      const attempt = {
-        turn: 1,
-        model: "gpt-5.6-luna",
-        provider: "openai",
-        durationMs: 20,
-        toolCalls: 1,
-        summary: "Repaired startup configuration.",
-        validation,
-      };
-      repair.onEvent?.({ type: "turn-finished", ...attempt });
-      repair.onEvent?.({ type: "stopped", status: validation.ok ? "repaired" : "unrepaired" });
-      return {
-        status: validation.ok ? "repaired" : "unrepaired",
-        finalValidation: validation,
-        attempts: [attempt],
-      };
-    });
-    if (repaired && rollback !== "restored") {
-      await expect(finishUpdate(params)).resolves.toMatchObject({ status: "ok" });
-    } else {
-      const reason =
-        rollback === "blocked"
-          ? "state-migrated-no-rollback"
-          : rollback === "failed"
-            ? "source-rollback-failed"
-            : "readyz-unhealthy";
-      await expect(finishUpdate(params)).rejects.toMatchObject({
-        exitCode: 1,
-        result: {
-          status: "error",
-          reason,
-          root: activeRoot,
-          after: { version: rollback === "restored" ? "2026.9.1" : "2026.9.3" },
-        },
-      });
-    }
-    expect(mocks.converge).toHaveBeenCalledTimes(repaired && rollback !== "restored" ? 1 : 0);
-    expect(mocks.repair).toHaveBeenCalledOnce();
-    if (rollback === "restored") {
-      expect(completeRecovery).toHaveBeenCalled();
-      if (repaired) {
-        expect(completeRecovery).not.toHaveBeenCalledWith(false);
-      } else {
-        expect(completeRecovery).toHaveBeenCalledWith(false);
+      expect(mocks.converge).toHaveBeenCalledTimes(repaired && rollback !== "restored" ? 1 : 0);
+      expect(mocks.repair).toHaveBeenCalledOnce();
+      if (rollback === "restored") {
+        expect(completeRecovery).toHaveBeenCalled();
+        if (repaired) {
+          expect(completeRecovery).not.toHaveBeenCalledWith(false);
+        } else {
+          expect(completeRecovery).toHaveBeenCalledWith(false);
+        }
       }
-    }
-    expect(mocks.rollback).toHaveBeenCalledTimes(rollback === "unavailable" ? 0 : 1);
-    if (rollback === "unavailable") {
-      expect(getUpdateRun(run.runId, { env: run.env })?.steps).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ step: "package rollback", status: "skipped" }),
-        ]),
+      expect(mocks.rollback).toHaveBeenCalledTimes(rollback === "unavailable" ? 0 : 1);
+      if (rollback === "unavailable") {
+        expect(getUpdateRun(run.runId, { env: run.env })?.steps).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ step: "package rollback", status: "skipped" }),
+          ]),
+        );
+      }
+      expect(mocks.restart).toHaveBeenCalledTimes(rollback === "restored" ? 2 : 1);
+      expect(mocks.restartCommand).toHaveBeenCalledOnce();
+      expect(mocks.restartCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          result: expect.objectContaining({ root: activeRoot }),
+          signal: expect.any(AbortSignal),
+        }),
+        "restart",
+        true,
       );
-    }
-    expect(mocks.restart).toHaveBeenCalledTimes(rollback === "restored" ? 2 : 1);
-    expect(mocks.restartCommand).toHaveBeenCalledOnce();
-    expect(mocks.restartCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        result: expect.objectContaining({ root: activeRoot }),
-        signal: expect.any(AbortSignal),
-      }),
-      "restart",
-      true,
-    );
-    expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
-      status: repaired ? (rollback === "restored" ? "rolled-back" : "succeeded") : "failed",
-      after: { version: rollback === "restored" ? "2026.9.1" : "2026.9.3" },
-      ...(rollback === "restored" ? { reason: "readyz-unhealthy" } : {}),
-      repair: [expect.objectContaining({ attempt: 1 })],
-      ...(repaired
-        ? {
-            verification: {
-              serviceRunning: true,
-              versionMatch: true,
-              readyz: true,
-              inferenceProbe: "passed",
-            },
-          }
-        : {}),
-    });
-  });
+      expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
+        status: repaired ? (rollback === "restored" ? "rolled-back" : "succeeded") : "failed",
+        after: { version: rollback === "restored" ? "2026.9.1" : "2026.9.3" },
+        ...(rollback === "restored" ? { reason: "readyz-unhealthy" } : {}),
+        repair: [expect.objectContaining({ attempt: 1 })],
+        ...(repaired
+          ? {
+              verification: {
+                serviceRunning: true,
+                versionMatch: true,
+                readyz: true,
+                inferenceProbe: "passed",
+              },
+            }
+          : {}),
+      });
+    },
+  );
 
-  it.each([true, false])(
-    "settles Windows recovery after candidate repair and plugin activation (healthy=%s)",
-    async (activated) => {
+  it.each([
+    { activated: true, finalProof: true },
+    { activated: false, finalProof: true },
+    { activated: true, finalProof: false },
+  ])(
+    "settles Windows recovery after candidate repair and plugin activation (healthy=$activated, proof=$finalProof)",
+    async ({ activated, finalProof }) => {
       const params = fixture();
       const run = params.opts.run!;
       vi.stubEnv("OPENCLAW_WINDOWS_TASK_NAME", "repair-plugin-fixture");
@@ -503,7 +557,20 @@ describe("post-activation repair after rollback refusal or failure", () => {
           if (!mocks.healthy) {
             restart.onVerificationFailure?.("readyz-unhealthy");
           }
-          return mocks.healthy ? "ok" : "restart-health-failed";
+          const verification = await verifyUpdatedGateway({
+            result: restart.result,
+            opts: restart.opts,
+            serviceEnv: run.env,
+            gatewayPort: 19101,
+            expectedVersion: restart.result.after?.version ?? undefined,
+            expectedBuildId: restart.result.after?.buildId ?? undefined,
+            requireRunningService: true,
+            onVerified: restart.onVerified,
+          });
+          if (!verification.ok) {
+            restart.onVerificationFailure?.(verification.summary);
+          }
+          return verification.ok ? "ok" : "restart-health-failed";
         });
         mocks.restartCommand.mockImplementation(async () => {
           await startTask();
@@ -532,6 +599,12 @@ describe("post-activation repair after rollback refusal or failure", () => {
             expect(mocks.healthy).toBe(true);
             await convergence.beforeDoctor?.();
             expect(enabled).toBe(false);
+            if (!finalProof) {
+              mocks.serving.mockResolvedValue({
+                status: "unavailable",
+                reason: "persistence-unavailable",
+              });
+            }
             return {
               resultWithPostUpdate: {
                 ...convergence.result,
@@ -542,7 +615,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
           },
         );
 
-        if (activated) {
+        if (activated && finalProof) {
           await expect(finishUpdate(params)).resolves.toMatchObject({ status: "ok" });
         } else {
           await expect(finishUpdate(params)).rejects.toMatchObject({
@@ -558,7 +631,10 @@ describe("post-activation repair after rollback refusal or failure", () => {
         expect(mocks.restart).toHaveBeenCalledTimes(2);
         expect(mocks.restartCommand).toHaveBeenCalledOnce();
         expect(mocks.stop).toHaveBeenCalledTimes(2);
-        expect(enabled).toBe(activated);
+        expect(enabled).toBe(activated && finalProof);
+        if (activated) {
+          expect(mocks.serving).toHaveBeenCalledTimes(2);
+        }
         expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baselineListeners);
       } finally {
         for (const recovery of recoveries) {

@@ -2263,7 +2263,7 @@ src/cli/capability-cli/audio.ts	3
 src/cli/capability-cli/embedding.ts	3
 src/cli/capability-cli/image.ts	17
 src/cli/capability-cli/model.ts	4
-src/cli/capability-cli/shared.ts	6
+src/cli/capability-cli/shared.ts	4
 src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	7
 src/cli/capability-cli/web.ts	6
@@ -2279,7 +2279,7 @@ src/cli/command-secret-gateway.ts	2
 src/cli/command-secret-targets.ts	2
 src/cli/completion-runtime.ts	4
 src/cli/config-cli-input.ts	2
-src/cli/config-cli-path.ts	6
+src/cli/config-cli-path.ts	5
 src/cli/config-cli-runner.ts	3
 src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	7
@@ -2329,7 +2329,6 @@ src/cli/plugin-install-plan.ts	1
 src/cli/plugins-authoring-command.ts	8
 src/cli/plugins-command-helpers.ts	1
 src/cli/plugins-install-config.ts	2
-src/cli/plugins-uninstall-command.ts	4
 src/cli/plugins-update-command.ts	5
 src/cli/ports.ts	9
 src/cli/precomputed-help.ts	1
@@ -3472,7 +3471,6 @@ src/plugins/update-summary.ts	2
 src/plugins/web-search-credential-presence.ts	1
 src/plugins/web-search-install-catalog.ts	2
 src/poll-params.ts	1
-src/process/command-queue.state.ts	1
 src/process/command-queue.ts	2
 src/process/exec-spawn.ts	4
 src/process/exec.ts	3

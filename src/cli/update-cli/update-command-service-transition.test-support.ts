@@ -6,6 +6,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import * as startRepair from "../daemon-cli/start-repair.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   maybeRestartService,
@@ -15,6 +16,7 @@ import {
 
 type InstallRootTransitionFixture = {
   root: string;
+  run: NonNullable<UpdateCommandOptions["run"]>;
   mocks: {
     running: boolean;
     events: string[];
@@ -46,7 +48,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
   ] as const)(
     "refreshes a verified installed root with $scenario",
     async ({ scenario, mode, allowed }) => {
-      const { root, mocks } = getFixture();
+      const { root, run, mocks } = getFixture();
       const replacementRoot = path.join(root, "replacement");
       const replacementEntry = path.join(replacementRoot, "dist", "index.js");
       await fs.mkdir(path.dirname(replacementEntry), { recursive: true });
@@ -118,6 +120,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
       let servingBuildId = "previous-build";
       if (mode === "git") {
         mocks.health.mockImplementation(async ({ port, expectedBuildId }) => ({
+          gatewayBootId: "service-boot",
           healthy: mocks.running && (!expectedBuildId || expectedBuildId === servingBuildId),
           staleGatewayPids: [],
           runtime: { status: mocks.running ? "running" : "stopped" },
@@ -178,7 +181,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
           steps: [],
           durationMs: 0,
         },
-        opts: { json: true },
+        opts: { json: true, run },
         refreshServiceEnv: true,
         serviceUpdateVerdict: verdict,
         serviceEnv: state.env,
@@ -217,6 +220,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
 export function registerRestartOutcomeTests(
   getFixture: () => {
     root: string;
+    run: NonNullable<UpdateCommandOptions["run"]>;
     mocks: Pick<
       InstallRootTransitionFixture["mocks"],
       "child" | "health" | "configSnapshot" | "capability"
@@ -245,7 +249,7 @@ export function registerRestartOutcomeTests(
   ])(
     "carries the real lifecycle's serialized %s result through a child process",
     async (scenario, expected) => {
-      const { root, mocks } = getFixture();
+      const { root, run, mocks } = getFixture();
       const repairing = scenario.startsWith("repair ");
       if (repairing) {
         vi.spyOn(restartRepairOwner, "repairLoadedGatewayServiceForStart").mockResolvedValueOnce({
@@ -298,7 +302,7 @@ export function registerRestartOutcomeTests(
         await maybeRestartService({
           shouldRestart: true,
           result: { status: "ok", mode: "npm", root, steps: [], durationMs: 0 },
-          opts: { json: false },
+          opts: { json: false, run },
           refreshServiceEnv: false,
           serviceUpdateVerdict: {
             kind: "owned",

@@ -2503,6 +2503,7 @@ NODE
               tests: [
                 "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
                 "OpenClawKit tests",
+                "Swabble tests",
                 "Swift test",
               ],
             }
