@@ -35,6 +35,7 @@ import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 import { countPhysicalOutboundSends, PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { createOutboundPayloadPlan, projectOutboundPayloadPlanForOutbound } from "./payloads.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
 type AppendAssistantTranscript =
@@ -947,6 +948,66 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]?.messageId).toBe("message-adapter-1");
   });
 
+  it.each(
+    ["text", "media", "payload", "formattedText", "formattedMedia"].flatMap((kind) =>
+      [false, true].map((skipQueue) => ({ kind, skipQueue })),
+    ),
+  )("forwards cancellation to $kind sends (skipQueue: $skipQueue)", async ({ kind, skipQueue }) => {
+    const abortController = new AbortController();
+    const observedSignals: Array<AbortSignal | undefined> = [];
+    const cancel = (signal: AbortSignal | undefined): never => {
+      observedSignals.push(signal);
+      abortController.abort();
+      throw new DOMException("operator canceled delivery", "AbortError");
+    };
+    if (kind === "formattedText" || kind === "formattedMedia") {
+      setTestOutbound({
+        deliveryCapabilities: { durableFinal: { text: true, media: true } },
+        [kind === "formattedText" ? "sendFormattedText" : "sendFormattedMedia"]: async (ctx: {
+          abortSignal?: AbortSignal;
+        }) => cancel(ctx.abortSignal),
+      });
+    } else {
+      setMatrixMessageAdapter({
+        durableFinal: { capabilities: { text: true, media: true, payload: true } },
+        send: {
+          text: vi.fn(),
+          lifecycle: {
+            beforeSendAttempt: (ctx) => {
+              observedSignals.push(ctx.signal);
+            },
+          },
+          [kind]: async (ctx: ChannelMessageSendTextContext) => cancel(ctx.signal),
+        },
+      });
+    }
+
+    await expect(
+      deliverMatrix({
+        payloads: [
+          {
+            text: "hello",
+            ...(kind === "media" || kind === "formattedMedia"
+              ? { mediaUrl: "https://example.com/image.png" }
+              : {}),
+            ...(kind === "payload" ? { channelData: { mode: "custom" } } : {}),
+          },
+        ],
+        abortSignal: abortController.signal,
+        queuePolicy: "required",
+        skipQueue,
+      }),
+    ).rejects.toThrow("operator canceled delivery");
+
+    expect(observedSignals).toHaveLength(kind.startsWith("formatted") ? 1 : 2);
+    for (const signal of observedSignals) {
+      expect(signal?.aborted).toBe(true);
+      if (skipQueue) {
+        expect(signal).toBe(abortController.signal);
+      }
+    }
+  });
+
   it("does not run successful delivery lifecycle hooks for an explicit no-send", async () => {
     const beforeSendAttempt = vi.fn(() => "pending-no-send");
     const afterSendSuccess = vi.fn();
@@ -1002,6 +1063,27 @@ describe("deliverOutboundPayloads", () => {
     expect(messageSendText).not.toHaveBeenCalled();
   });
 
+  it("synchronously revalidates after the awaited handoff and before adapter invocation", async () => {
+    const messageSendText = installMatrixTextMessageAdapter({ messageId: "must-not-send" });
+    let writerIsCurrent = true;
+
+    await expect(
+      deliverMatrix({
+        skipQueue: true,
+        onPlatformSendDispatch: async () => {
+          await Promise.resolve();
+          writerIsCurrent = false;
+        },
+        assertDirectAdapterHandoff: () => {
+          if (!writerIsCurrent) {
+            throw new Error("turn authority closed after awaited handoff");
+          }
+        },
+      }),
+    ).rejects.toThrow("turn authority closed after awaited handoff");
+    expect(messageSendText).not.toHaveBeenCalled();
+  });
+
   it("fails closed for an unfinished conversation intent without route authority", async () => {
     const messageSendText = installMatrixTextMessageAdapter({
       messageId: "should-not-send",
@@ -1017,7 +1099,7 @@ describe("deliverOutboundPayloads", () => {
         },
         onDeliveryAttempt: async () => {},
       }),
-    ).rejects.toMatchObject({ retryable: false });
+    ).rejects.toMatchObject({ cause: { retryable: false }, queueCustody: "released" });
     expect(messageSendText).not.toHaveBeenCalled();
   });
 
@@ -1183,6 +1265,37 @@ describe("deliverOutboundPayloads", () => {
 
     expect(order).toEqual(["queue", "authorize"]);
     expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("revalidates persisted session writer authority after queue admission", async () => {
+    const messageSendText = installMatrixTextMessageAdapter({
+      messageId: "must-not-send",
+      durableFinal: { capabilities: { text: true } },
+    });
+
+    await expect(
+      deliverMatrix({
+        deliveryCompletion: {
+          kind: "pending-final",
+          deliveryId: "delivery-stale-writer",
+          intentId: "intent-stale-writer",
+          sessionId: "session-stale-writer",
+          sessionKey: "agent:main:matrix:room:stale-writer",
+          storePath: "/tmp/openclaw-missing-stale-writer.sqlite",
+          sessionWriterDeliveryAuthority: {
+            agentId: "main",
+            expectedLifecycleRevision: "revision-old",
+            expectedSessionId: "session-stale-writer",
+            expectedWriterRunId: "run-old",
+            sessionKey: "agent:main:matrix:room:stale-writer",
+            storePath: "/tmp/openclaw-missing-stale-writer.sqlite",
+          },
+        },
+      }),
+    ).rejects.toThrow("Session writer changed before final reply delivery");
+
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledOnce();
+    expect(messageSendText).not.toHaveBeenCalled();
   });
 
   it("finalizes owner state only after a chunked batch completes", async () => {
@@ -1969,7 +2082,7 @@ describe("deliverOutboundPayloads", () => {
           queuePolicy: "required",
           deliveryRetryOwner: "caller",
         }),
-      ).rejects.toThrow(code);
+      ).rejects.toMatchObject({ message: expect.stringContaining(code), queueCustody: "released" });
 
       expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
         "mock-queue-id",
@@ -2009,6 +2122,22 @@ describe("deliverOutboundPayloads", () => {
     );
     expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("retains custody when caller-owned retirement fails", async () => {
+    queueMocks.moveToFailed.mockRejectedValueOnce(new Error("claim was replaced"));
+    const sendMatrix = vi
+      .fn()
+      .mockRejectedValueOnce(createNetworkError("connect refused", "ECONNREFUSED", "connect"));
+
+    await expect(
+      deliverMatrix({
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryRetryOwner: "caller",
+      }),
+    ).rejects.toMatchObject({ message: "connect refused", queueCustody: "held" });
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
   it("keeps a reporting-only caller's entry recoverable after a proven pre-connect failure", async () => {
@@ -3234,6 +3363,54 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("leaves projected Gateway reset status notices unchanged for banner hooks", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockImplementation(async (event) => {
+      const payload = (event as { payload: { text?: string; isStatusNotice?: boolean } }).payload;
+      if (payload.isStatusNotice) {
+        return { payload };
+      }
+      return {
+        payload: {
+          ...payload,
+          text: `${payload.text ?? ""}\n⏳ session too long, try /new`,
+        },
+      };
+    });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "ack",
+      roomId: "!room",
+    });
+    const projected = projectOutboundPayloadPlanForOutbound(
+      createOutboundPayloadPlan([{ text: "✅ New session started.", isStatusNotice: true }]),
+    );
+
+    await deliverMatrix({
+      to: "!room",
+      payloads: projected,
+      deps: { matrix: sendText },
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "matrix",
+        context: { channelId: "matrix", conversationId: "!room" },
+      },
+    });
+
+    expect(hookMocks.runner.runReplyPayloadSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "✅ New session started.",
+          isStatusNotice: true,
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(requireMatrixSendCall(sendText)[1]).toBe("✅ New session started.");
+  });
+
   it("strips internal runtime scaffolding before adapter payload normalization copies text", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "message_sending",
@@ -3728,72 +3905,113 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
-  it("uses adapter-provided formatted senders and scoped media roots when available", async () => {
-    const sendText = vi.fn(async ({ text }: { text: string }) => ({
-      channel: "line" as const,
-      messageId: `fallback:${text}`,
-    }));
-    const sendMedia = vi.fn(async ({ text }: { text: string }) => ({
-      channel: "line" as const,
-      messageId: `media:${text}`,
-    }));
-    const sendFormattedText = vi.fn(async ({ text }: { text: string }) => [
-      { channel: "line" as const, messageId: `fmt:${text}:1` },
-      { channel: "line" as const, messageId: `fmt:${text}:2` },
-    ]);
-    const sendFormattedMedia = vi.fn(
-      async ({ text }: { text: string; mediaLocalRoots?: readonly string[] }) => ({
+  it.each([
+    { ordinaryMedia: true, caption: "photo", mediaUrls: ["file:///tmp/f.png"] },
+    { ordinaryMedia: false, caption: "photo", mediaUrls: ["file:///tmp/f.png"] },
+    { ordinaryMedia: false, caption: "", mediaUrls: ["file:///tmp/f.png"] },
+    {
+      ordinaryMedia: false,
+      caption: "album",
+      mediaUrls: ["file:///tmp/f.png", "file:///tmp/g.png"],
+    },
+  ])(
+    "uses formatted senders and scoped roots ($ordinaryMedia, $caption)",
+    async ({ ordinaryMedia, caption, mediaUrls }) => {
+      const sendText = vi.fn(async ({ text }: { text: string }) => ({
         channel: "line" as const,
-        messageId: `fmt-media:${text}`,
-      }),
-    );
-    setTestOutbound({ sendText, sendMedia, sendFormattedText, sendFormattedMedia }, "line");
+        messageId: `fallback:${text}`,
+      }));
+      const sendMedia = vi.fn(async ({ text }: { text: string }) => ({
+        channel: "line" as const,
+        messageId: `media:${text}`,
+      }));
+      const sendFormattedText = vi.fn(async ({ text }: { text: string }) => [
+        { channel: "line" as const, messageId: `fmt:${text}:1` },
+        { channel: "line" as const, messageId: `fmt:${text}:2` },
+      ]);
+      const sendFormattedMedia = vi.fn(
+        async ({
+          text,
+          mediaUrl,
+        }: {
+          text: string;
+          mediaUrl: string;
+          mediaLocalRoots?: readonly string[];
+        }) => ({
+          channel: "line" as const,
+          messageId: `fmt-media:${mediaUrl}:${text}`,
+        }),
+      );
+      setTestOutbound(
+        {
+          sendText,
+          ...(ordinaryMedia ? { sendMedia } : {}),
+          sendFormattedText,
+          sendFormattedMedia,
+        },
+        "line",
+      );
 
-    const textResults = await deliverOutboundPayloads({
-      cfg: { channels: { line: {} } } as OpenClawConfig,
-      channel: "line",
-      to: "U123",
-      accountId: "default",
-      payloads: [{ text: "hello **boss**" }],
-    });
+      const textResults = await deliverOutboundPayloads({
+        cfg: { channels: { line: {} } } as OpenClawConfig,
+        channel: "line",
+        to: "U123",
+        accountId: "default",
+        payloads: [{ text: "hello **boss**" }],
+      });
 
-    expect(sendFormattedText).toHaveBeenCalledTimes(1);
-    const formattedTextOptions = requireMockCallArg(sendFormattedText, "sendFormattedText") as
-      | { accountId?: unknown; text?: unknown; to?: unknown }
-      | undefined;
-    expect(formattedTextOptions?.to).toBe("U123");
-    expect(formattedTextOptions?.text).toBe("hello **boss**");
-    expect(formattedTextOptions?.accountId).toBe("default");
-    expect(sendText).not.toHaveBeenCalled();
-    expect(textResults.map((entry) => entry.messageId)).toEqual([
-      "fmt:hello **boss**:1",
-      "fmt:hello **boss**:2",
-    ]);
+      expect(sendFormattedText).toHaveBeenCalledTimes(1);
+      const formattedTextOptions = requireMockCallArg(sendFormattedText, "sendFormattedText") as
+        | { accountId?: unknown; text?: unknown; to?: unknown }
+        | undefined;
+      expect(formattedTextOptions?.to).toBe("U123");
+      expect(formattedTextOptions?.text).toBe("hello **boss**");
+      expect(formattedTextOptions?.accountId).toBe("default");
+      expect(sendText).not.toHaveBeenCalled();
+      expect(textResults.map((entry) => entry.messageId)).toEqual([
+        "fmt:hello **boss**:1",
+        "fmt:hello **boss**:2",
+      ]);
 
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-    await deliverOutboundPayloads({
-      cfg,
-      channel: "line",
-      to: "U123",
-      payloads: [{ text: "photo", mediaUrl: "file:///tmp/f.png" }],
-      session: { agentId: "work" },
-    });
+      const cfg = { channels: { line: {} } } as OpenClawConfig;
+      const onDeliveredPayload = vi.fn();
+      const mediaResults = await deliverOutboundPayloads({
+        cfg,
+        channel: "line",
+        to: "U123",
+        payloads: [{ text: caption, mediaUrls }],
+        session: { agentId: "work" },
+        onDeliveredPayload,
+      });
 
-    expect(sendFormattedMedia).toHaveBeenCalledTimes(1);
-    const sendFormattedMediaCall = requireMockCallArg(sendFormattedMedia, "sendFormattedMedia") as
-      | { mediaLocalRoots?: string[]; mediaUrl?: unknown; text?: unknown; to?: unknown }
-      | undefined;
-    expect(sendFormattedMediaCall?.to).toBe("U123");
-    expect(sendFormattedMediaCall?.text).toBe("photo");
-    expect(sendFormattedMediaCall?.mediaUrl).toBe("file:///tmp/f.png");
-    expect(sendFormattedMediaCall?.mediaLocalRoots).toContain(expectedPreferredTmpRoot);
-    expect(
-      sendFormattedMediaCall?.mediaLocalRoots?.some((root) =>
-        root.endsWith(path.join(".openclaw", "workspace-work")),
-      ),
-    ).toBe(true);
-    expect(sendMedia).not.toHaveBeenCalled();
-  });
+      expect(sendFormattedMedia).toHaveBeenCalledTimes(mediaUrls.length);
+      const sendFormattedMediaCall = requireMockCallArg(
+        sendFormattedMedia,
+        "sendFormattedMedia",
+      ) as
+        | { mediaLocalRoots?: string[]; mediaUrl?: unknown; text?: unknown; to?: unknown }
+        | undefined;
+      expect(sendFormattedMediaCall?.to).toBe("U123");
+      expect(sendFormattedMediaCall?.text).toBe(caption);
+      expect(sendFormattedMediaCall?.mediaUrl).toBe(mediaUrls[0]);
+      expect(sendFormattedMedia.mock.calls.map(([call]) => [call.text, call.mediaUrl])).toEqual(
+        mediaUrls.map((mediaUrl, index) => [index === 0 ? caption : "", mediaUrl]),
+      );
+      expect(mediaResults.map((entry) => entry.messageId)).toEqual(
+        mediaUrls.map((mediaUrl, index) => `fmt-media:${mediaUrl}:${index === 0 ? caption : ""}`),
+      );
+      expect(onDeliveredPayload).toHaveBeenCalledWith(
+        expect.objectContaining({ text: caption, mediaUrls }),
+      );
+      expect(sendFormattedMediaCall?.mediaLocalRoots).toContain(expectedPreferredTmpRoot);
+      expect(
+        sendFormattedMediaCall?.mediaLocalRoots?.some((root) =>
+          root.endsWith(path.join(".openclaw", "workspace-work")),
+        ),
+      ).toBe(true);
+      expect(sendMedia).not.toHaveBeenCalled();
+    },
+  );
 
   it("persists formatted sub-send results before a later adapter chunk fails", async () => {
     const firstResult = { channel: "line" as const, messageId: "fmt-1" };
@@ -5122,16 +5340,44 @@ describe("deliverOutboundPayloads", () => {
     });
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
 
-    const results = await deliverMatrix({
-      payloads: [{ text: "hi" }],
-      deps: { matrix: sendMatrix },
-    });
-
-    expect(results).toStrictEqual([]);
+    await expect(
+      deliverMatrix({
+        payloads: [{ text: "hi" }],
+        deps: { matrix: sendMatrix },
+      }),
+    ).rejects.toMatchObject({ queueCustody: "held" });
     expect(sendMatrix).not.toHaveBeenCalled();
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
+
+  it.each(["intent observer", "claim acquisition", "lease startup"])(
+    "preserves admitted custody when %s fails before execution",
+    async (boundary) => {
+      const failure = new Error(`${boundary} failed`);
+      if (boundary === "claim acquisition") {
+        queueMocks.withActiveDeliveryClaim.mockRejectedValueOnce(failure);
+      }
+      if (boundary === "lease startup") {
+        queueMocks.renewDeliveryPlatformSendLease.mockRejectedValueOnce(failure);
+      }
+      const sendMatrix = vi.fn();
+      await expect(
+        deliverMatrix({
+          deps: { matrix: sendMatrix },
+          onDeliveryIntent: () => {
+            if (boundary === "intent observer") {
+              throw failure;
+            }
+          },
+        }),
+      ).rejects.toMatchObject({ queueCustody: "held" });
+      expect(queueMocks.enqueueDelivery).toHaveBeenCalledOnce();
+      expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+      expect(queueMocks.moveToFailed).not.toHaveBeenCalled();
+      expect(sendMatrix).not.toHaveBeenCalled();
+    },
+  );
 
   it("emits a terminal failure without queueing when preparation is aborted", async () => {
     hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
@@ -6046,7 +6292,7 @@ describe("deliverOutboundPayloads", () => {
     });
     const warnCall = requireMockCall(logMocks.warn, "warn");
     expect(warnCall[0]).toBe(
-      "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+      "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia; media URLs will be dropped and text fallback will be used",
     );
     const warnContext = warnCall[1] as { channel?: unknown; mediaCount?: unknown } | undefined;
     expect(warnContext?.channel).toBe("matrix");
@@ -6071,7 +6317,7 @@ describe("deliverOutboundPayloads", () => {
     expect(requireMockCallArg(sendText, "sendText").text).toBe("caption");
     const warnCall = requireMockCall(logMocks.warn, "warn");
     expect(warnCall[0]).toBe(
-      "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+      "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia; media URLs will be dropped and text fallback will be used",
     );
     const warnContext = warnCall[1] as { channel?: unknown; mediaCount?: unknown } | undefined;
     expect(warnContext?.channel).toBe("matrix");
@@ -6091,13 +6337,13 @@ describe("deliverOutboundPayloads", () => {
         payloads: [{ text: "   ", mediaUrl: "https://example.com/file.png" }],
       }),
     ).rejects.toThrow(
-      "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
+      "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia and no text fallback is available for media payload",
     );
 
     expect(sendText).not.toHaveBeenCalled();
     const warnCall = requireMockCall(logMocks.warn, "warn");
     expect(warnCall[0]).toBe(
-      "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+      "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia; media URLs will be dropped and text fallback will be used",
     );
     const warnContext = warnCall[1] as { channel?: unknown; mediaCount?: unknown } | undefined;
     expect(warnContext?.channel).toBe("matrix");

@@ -19,6 +19,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "incognito",
   "archivedAt",
   "archivedBy",
+  "archiveReason",
   "pinnedAt",
   "lastReadAt",
   "agentStatus",
@@ -37,6 +38,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "sessionDiffBaselineCapture",
   "worktree",
   "projectId",
+  "repositoryWorkspaceId",
   "pendingProjectGitUrl",
   "pendingWorktree",
   "parentSessionKey",
@@ -95,8 +97,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "lastTtsReadLatestHash",
   "lastTtsReadLatestAt",
   "execHost",
-  "execSecurity",
-  "execAsk",
   "execNode",
   "execCwd",
   "responseUsage",
@@ -157,6 +157,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "contextTokensSource",
   "contextBudgetStatus",
   "compactionCount",
+  "transcriptByteCompactionLatch",
   "compactionCheckpoints",
   "memoryFlush",
   "cliSessionIds",
@@ -165,6 +166,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "claudeCliSessionId",
   "label",
   "icon",
+  "color",
   "category",
   "boardFace",
   "displayName",
@@ -174,6 +176,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "groupChannel",
   "space",
   "skillsSnapshot",
+  "skillLibrarySelections",
   "systemPromptReport",
   "pluginDebugEntries",
   "hookExternalContentSource",
@@ -181,6 +184,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "quotaSuspension",
   "pendingTranscriptRepair",
   "visibility",
+  "publicShare",
 ] as const satisfies ReadonlyArray<
   keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
 >;
@@ -199,6 +203,9 @@ const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValu
   SESSION_ENTRY_RESERVED_SLOT_KEY_LIST,
 );
 const RETIRED_SESSION_SLOT_KEYS = new Set<string>([
+  // retired session fields; reserved so plugin slots can never collide with historical data
+  "execSecurity",
+  "execAsk",
   "channel",
   "origin",
   "route",

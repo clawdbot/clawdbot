@@ -1,6 +1,7 @@
 /**
  * Resolves bundled static catalog rows for embedded-agent model selection.
  */
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../../config/types.models.js";
@@ -27,6 +28,8 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildInlineProviderModels, type InlineModelEntry } from "./model.inline-provider.js";
 import type { BundledStaticCatalogState } from "./model.static-catalog.types.js";
@@ -65,17 +68,6 @@ function normalizeStaticCatalogInput(
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
 }
 
-function normalizeStaticCatalogCost(
-  cost: NormalizedModelCatalogRow["cost"],
-): ProviderRuntimeModel["cost"] {
-  return {
-    input: cost?.input ?? 0,
-    output: cost?.output ?? 0,
-    cacheRead: cost?.cacheRead ?? 0,
-    cacheWrite: cost?.cacheWrite ?? 0,
-  };
-}
-
 /** Converts a normalized catalog row into the provider runtime model shape. */
 function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRuntimeModel {
   return {
@@ -86,7 +78,7 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     baseUrl: row.baseUrl ?? "",
     reasoning: row.reasoning,
     input: normalizeStaticCatalogInput(row.input),
-    cost: normalizeStaticCatalogCost(row.cost),
+    cost: normalizeResolvedPricing(row.cost ?? {}),
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextWindows: row.contextWindows?.map((option) => ({ ...option })),
     contextWindowDefault: row.contextWindowDefault,
@@ -110,7 +102,7 @@ function completeProviderStaticCatalogModel(
     baseUrl: model.baseUrl ?? "",
     reasoning: model.reasoning ?? false,
     input: normalizeStaticCatalogInput(model.input),
-    cost: model.cost ?? normalizeStaticCatalogCost(undefined),
+    cost: model.cost ?? normalizeResolvedPricing({}),
     contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextTokens: model.contextTokens,
     maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
@@ -212,42 +204,6 @@ function resolveBundledStaticCatalogState(
   return state;
 }
 
-/** Returns whether a bundled static catalog asks runtime discovery to augment its rows. */
-export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  workspaceDir?: string;
-}): boolean {
-  const provider = normalizeProviderId(params.provider);
-  if (!provider) {
-    return false;
-  }
-  const catalogParams = {
-    cfg: params.cfg,
-    env: params.env ?? process.env,
-    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
-    workspaceDir: params.workspaceDir,
-  };
-  const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot(catalogParams);
-  const plugins = resolveBundledStaticCatalogState(catalogParams, metadataSnapshot).plugins;
-  return plugins.some((plugin) => {
-    const catalog = plugin.modelCatalog;
-    if (catalog?.runtimeAugment !== true) {
-      return false;
-    }
-    return (
-      Object.keys(catalog.providers ?? {}).some(
-        (candidate) => normalizeProviderId(candidate) === provider,
-      ) ||
-      Object.keys(catalog.aliases ?? {}).some(
-        (candidate) => normalizeProviderId(candidate) === provider,
-      )
-    );
-  });
-}
-
 type BundledStaticCatalogLookup = {
   provider: string;
   modelId: string;
@@ -290,7 +246,7 @@ export function createBundledStaticCatalogModelResolver(params?: {
     workspaceDir: params?.workspaceDir,
   };
   const matchesStaticModelId = params?.metadataSnapshot
-    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot })
     : staticModelIdMatches;
   return (lookup) => {
     const provider = normalizeProviderId(lookup.provider);
@@ -483,9 +439,11 @@ async function loadBundledProviderStaticCatalogModels(params: {
   return modelsByProvider;
 }
 
-/** Loads all enabled bundled provider static-catalog rows without live discovery or writes. */
+/** Reads static rows from discovery entries and captured owners without activating runtimes. */
 export async function loadBundledProviderStaticCatalogContextModels(
-  params: BundledProviderStaticCatalogResolverParams = {},
+  params: BundledProviderStaticCatalogResolverParams & {
+    registeredProviders?: Readonly<PluginRegistry["providers"]>;
+  } = {},
 ): Promise<ProviderRuntimeModel[]> {
   const env = params.env ?? process.env;
   const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot({
@@ -494,7 +452,19 @@ export async function loadBundledProviderStaticCatalogContextModels(
     ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     workspaceDir: params.workspaceDir,
   });
-  const discoveryEntryPluginIds = new Set(
+  const preparedStaticProviderCatalog = {
+    providers: dedupeByKey(
+      [
+        ...(params.preparedStaticProviderCatalog?.providers ?? []),
+        ...(params.registeredProviders ?? []).map(({ pluginId, provider }) =>
+          Object.assign({}, provider, { pluginId }),
+        ),
+      ],
+      (provider) => `${provider.pluginId}\0${provider.id}`,
+    ),
+    entries: params.preparedStaticProviderCatalog?.entries ?? [],
+  };
+  const staticCatalogPluginIds = new Set(
     (
       metadataSnapshot?.manifestRegistry?.plugins ??
       loadPluginManifestRegistryCore({
@@ -506,6 +476,11 @@ export async function loadBundledProviderStaticCatalogContextModels(
       plugin.origin === "bundled" && plugin.providerDiscoverySource ? [plugin.id] : [],
     ),
   );
+  for (const provider of preparedStaticProviderCatalog.providers) {
+    if (provider.pluginId && provider.staticCatalog) {
+      staticCatalogPluginIds.add(provider.pluginId);
+    }
+  }
   const providerScopedPluginIds = params.providerIds?.flatMap((provider) =>
     resolveBundledProviderStaticCatalogPluginIds({
       provider,
@@ -525,7 +500,7 @@ export async function loadBundledProviderStaticCatalogContextModels(
         })
       : providerScopedPluginIds;
   const pluginIds = [...new Set(candidatePluginIds)]
-    .filter((pluginId) => discoveryEntryPluginIds.has(pluginId))
+    .filter((pluginId) => staticCatalogPluginIds.has(pluginId))
     .toSorted((left, right) => left.localeCompare(right));
   if (pluginIds.length === 0) {
     return [];
@@ -538,9 +513,7 @@ export async function loadBundledProviderStaticCatalogContextModels(
           cfg: params.cfg,
           workspaceDir: params.workspaceDir,
           env,
-          ...(params.preparedStaticProviderCatalog
-            ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
-            : {}),
+          preparedStaticProviderCatalog,
           ...(metadataSnapshot ? { providerMetadataOwners: metadataSnapshot.owners } : {}),
           ...(metadataSnapshot ? { pluginMetadataSnapshot: metadataSnapshot } : {}),
         }),
@@ -559,7 +532,7 @@ function createScopedBundledProviderStaticCatalogModelResolver(
 ) => Promise<ProviderRuntimeModel | undefined> {
   const env = params.env ?? process.env;
   const matchesStaticModelId = params.metadataSnapshot
-    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot })
     : staticModelIdMatches;
   const pluginCatalogs = new Map<string, Promise<Map<string, ProviderRuntimeModel[]>>>();
   const providerPluginIds = new Map<string, string[]>();

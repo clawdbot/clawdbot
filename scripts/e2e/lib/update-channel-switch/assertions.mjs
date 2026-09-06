@@ -146,9 +146,21 @@ function prepareGitFixture(root) {
     packageJson.pnpm = pnpmConfig;
   }
   const fixtureUiBuildSource = `const fs=require("node:fs");fs.mkdirSync("dist/control-ui",{recursive:true});fs.writeFileSync("dist/control-ui/index.html",${JSON.stringify(controlUiHtml)})`;
+  const fixtureBuildPath = path.join(root, ".openclaw-fixture", "build.mjs");
+  fs.mkdirSync(path.dirname(fixtureBuildPath), { recursive: true });
+  fs.copyFileSync(new URL("./build.mjs", import.meta.url), fixtureBuildPath);
+  fs.copyFileSync(
+    path.join(root, "dist", "build-info.json"),
+    path.join(root, ".openclaw-fixture", "build-info.json"),
+  );
+  // The tarball omits source .gitignore rules; build metadata must remain generated.
+  fs.appendFileSync(
+    path.join(root, ".gitignore"),
+    "\n/dist/build-info.json\n/dist/.buildstamp\n/dist/.runtime-postbuildstamp\n",
+  );
   packageJson.scripts = {
     ...packageJson.scripts,
-    build: 'node -e "console.log(\\"fixture build skipped\\")"',
+    build: "node .openclaw-fixture/build.mjs",
     lint: 'node -e "console.log(\\"fixture lint skipped\\")"',
     "ui:build": `node -e ${JSON.stringify(fixtureUiBuildSource)}`,
   };

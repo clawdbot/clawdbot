@@ -39,7 +39,10 @@ import type {
 } from "./tui-types.js";
 
 type EventHandlerChatLog = {
-  addLiveUser: (text: string, options: { messageId: string; runId?: string }) => void;
+  addLiveUser: (
+    text: string,
+    options: { messageId: string; runId?: string; sendId?: string },
+  ) => void;
   startTool: (toolCallId: string, toolName: string, args: unknown, runId?: string) => void;
   updateToolResult: (
     toolCallId: string,
@@ -72,7 +75,7 @@ type EventHandlerContext = {
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
   refreshSessionInfo?: () => Promise<void>;
-  loadHistory?: () => Promise<TuiHistoryLoadResult>;
+  loadHistory: () => Promise<TuiHistoryLoadResult>;
   noteLocalRunId?: (runId: string) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
@@ -106,7 +109,6 @@ export function createEventHandlers(context: EventHandlerContext) {
   const runCoordinator = new TuiSessionRunCoordinator({
     state,
     loadHistory,
-    refreshSessionInfo,
     restoreTerminalError: (message) => chatLog.addSystem(message),
     requestRender: (force) => tui.requestRender(force),
     finalizeHistoryOwnedRun: ({ runId, result, previouslyDisplayed }) => {
@@ -528,10 +530,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const liveUserMessage = readTuiSessionUserMessage(evt);
     if (liveUserMessage) {
-      chatLog.addLiveUser(liveUserMessage.text, {
-        messageId: liveUserMessage.messageId,
-        ...(liveUserMessage.runId ? { runId: liveUserMessage.runId } : {}),
-      });
+      chatLog.addLiveUser(liveUserMessage.text, liveUserMessage);
       tui.requestRender();
     }
 

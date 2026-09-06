@@ -123,8 +123,9 @@ case "$agent" in
       unset ANTHROPIC_AUTH_TOKEN
       unset ANTHROPIC_OAUTH_TOKEN
     fi
+    # Resolve through ACPX so pnpm cannot select an unrelated root or hoisted SDK.
     claude_code_version="$(
-      node -e 'const path = require("node:path"); const packagePath = path.join(path.dirname(require.resolve("@anthropic-ai/claude-agent-sdk")), "package.json"); process.stdout.write(require(packagePath).claudeCodeVersion);'
+      node -e 'const path = require("node:path"); const { createRequire } = require("node:module"); const acpxRequire = createRequire(path.resolve("extensions/acpx/package.json")); const adapterPackagePath = acpxRequire.resolve("@agentclientprotocol/claude-agent-acp/package.json"); const adapterRequire = createRequire(adapterPackagePath); const sdkEntry = adapterRequire.resolve("@anthropic-ai/claude-agent-sdk"); const packagePath = path.join(path.dirname(sdkEntry), "package.json"); process.stdout.write(require(packagePath).claudeCodeVersion);'
     )"
     claude_package_json="$NPM_CONFIG_PREFIX/lib/node_modules/@anthropic-ai/claude-code/package.json"
     real_claude="$NPM_CONFIG_PREFIX/bin/claude-real"
@@ -162,7 +163,7 @@ WRAP
       chmod +x "$NPM_CONFIG_PREFIX/bin/claude"
     fi
     export CLAUDE_CODE_EXECUTABLE="$NPM_CONFIG_PREFIX/bin/claude"
-    echo "Using Claude Code $claude_code_version declared by the installed Claude Agent SDK"
+    echo "Using Claude Code $claude_code_version declared by the ACPX-owned Claude Agent SDK"
     claude --version
     claude auth status || true
     ;;
@@ -187,32 +188,7 @@ WRAP
     if [ ! -x "$NPM_CONFIG_PREFIX/bin/gemini" ]; then
       run_setup_command npm install -g @google/gemini-cli
     fi
-    if [ -n "${GEMINI_API_KEY:-}" ] || [ -n "${GOOGLE_API_KEY:-}" ]; then
-      gemini_auth_type="gemini-api-key"
-      if [ -z "${GEMINI_API_KEY:-}" ] && [ -n "${GOOGLE_API_KEY:-}" ]; then
-        gemini_auth_type="vertex-ai"
-        export GOOGLE_GENAI_USE_VERTEXAI="${GOOGLE_GENAI_USE_VERTEXAI:-true}"
-      fi
-      GEMINI_CLI_AUTH_TYPE="$gemini_auth_type" node <<'NODE'
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-
-const settingsPath = path.join(os.homedir(), ".gemini", "settings.json");
-let settings = {};
-try {
-  settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-} catch {}
-settings.security = settings.security && typeof settings.security === "object" ? settings.security : {};
-settings.security.auth =
-  settings.security.auth && typeof settings.security.auth === "object" ? settings.security.auth : {};
-settings.security.auth.selectedType = process.env.GEMINI_CLI_AUTH_TYPE;
-settings.security.auth.enforcedType = process.env.GEMINI_CLI_AUTH_TYPE;
-fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
-NODE
-      echo "Using Gemini CLI auth type $gemini_auth_type"
-    fi
+    openclaw_live_stage_gemini_auth
     ;;
   opencode)
     if [ ! -x "$NPM_CONFIG_PREFIX/bin/opencode" ]; then
@@ -235,7 +211,7 @@ openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}"
-node --import tsx scripts/test-live.mts -- ${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-src/gateway/gateway-acp-bind.live.test.ts}
+openclaw_live_run_staged_script scripts/test-live -- ${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-src/gateway/gateway-acp-bind.live.test.ts}
 EOF
 
 openclaw_live_acp_bind_append_build_extension acpx

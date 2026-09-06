@@ -374,8 +374,6 @@ describe("OpenClaw shell source initialization", () => {
       runtimeConfigClient: null,
       runtimeConfigSource: null,
       sessionKeyClient: null,
-      sidebarWorkboardRuntime: null,
-      syncSidebarWorkboard: vi.fn(),
     } as unknown as ShellGatewayHost;
     const owner = new ShellGatewayOwner(host);
     const reconnecting = {
@@ -618,7 +616,10 @@ describe("OpenClaw shell server preferences", () => {
       },
     } as unknown as ApplicationContext["runtimeConfig"];
     const context = {
-      gateway: { connection: { gatewayUrl: "ws://sidebar.test" } },
+      gateway: {
+        connection: { gatewayUrl: "ws://sidebar.test" },
+        snapshot: { phase: "connected" },
+      },
       navigation: { update: updateNavigation },
       theme: { refresh: refreshTheme },
       // reconcileServerUiPrefs only accepts the current context's capability.

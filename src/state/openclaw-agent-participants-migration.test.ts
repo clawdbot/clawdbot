@@ -40,7 +40,7 @@ describe("participant identity migration", () => {
       );
       expect(result.skipped).toBe(false);
       const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(18);
+      expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
     });
   });
 
@@ -77,7 +77,7 @@ describe("participant identity migration", () => {
       expect(result.totals.issues).toBe(0);
       const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(18);
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
         expect(
           database
             .prepare("SELECT value_json FROM cache_entries WHERE scope = 'participant-proof'")
@@ -135,7 +135,7 @@ describe("participant identity migration", () => {
           if (scenario === "absent") {
             await migration;
             expect(database.prepare("SELECT * FROM session_participants").all()).toEqual([]);
-            expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(18);
+            expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
           } else {
             await expect(migration).rejects.toThrow(
               scenario === "rollback"
@@ -340,10 +340,10 @@ describe("participant identity migration", () => {
               last_prompted_at: null,
             }),
           ]);
-          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(18);
+          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
           expect(
             database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
-          ).toBe(18);
+          ).toBe(19);
           expect(
             database
               .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")

@@ -99,10 +99,10 @@ Grant this plugin access to conversation hooks in `openclaw.json`:
 }
 ```
 
-Merge that entry into your existing config, then restart and inspect:
+Merge that entry into your existing config, then let the default hybrid reload
+mode apply it and inspect:
 
 ```bash
-openclaw gateway restart
 openclaw plugins inspect hook-demo --runtime --json
 ```
 
@@ -118,7 +118,8 @@ the field is only the sender's raw text.
 
 Hook registration does not bypass plugin loading rules. The plugin must be
 loaded and enabled; `plugins.enabled`, `plugins.allow`, and `plugins.deny` still
-apply. Restart the Gateway after changing plugin code or hook configuration.
+apply. Restart the Gateway after changing plugin code. With the default hybrid
+reload mode, hook policy changes hot-reload the existing plugin runtime.
 
 - Non-bundled plugins need explicit
   `plugins.entries.<id>.hooks.allowConversationAccess: true` for
@@ -327,6 +328,10 @@ To short-circuit an agent turn with a synthetic reply or silence, use
 | `session_start` / `session_end`          | Observe | Track session lifecycle boundaries                           |
 | `before_compaction` / `after_compaction` | Observe | Observe compaction boundaries; no rewrite or veto result     |
 | `before_reset`                           | Observe | Observe session-reset events (`/reset`, programmatic resets) |
+
+Successful engine-owned compaction attempts emit `after_compaction` even when
+no history changes, with `compactedCount: 0`. Failed or aborted attempts do not
+emit that completion hook.
 
 `session_end.reason` is one of `new`, `reset`, `idle`, `daily`, `compaction`,
 `deleted`, `shutdown`, `restart`, or `unknown`. `session_start` has no reason
@@ -699,7 +704,7 @@ harness-native shell. It receives:
 - `event.sessionKey`
 - `event.toolName`, currently always `"exec"`
 - `event.host`, one of `"gateway"`, `"sandbox"`, or `"node"`
-- context fields such as `ctx.agentId`, `ctx.sessionKey`,
+- context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.messageProvider`, and `ctx.channelId`
 
 Return a `Record<string, string>` to merge into the exec environment. Handlers
@@ -780,6 +785,8 @@ For multiple registrations, the first defined provider/model override and
 restrictions intersect. A nested ordinary `before_prompt_build` dispatch on
 the same runner is skipped while its outer dispatch is active; other hook
 families and independent turns remain available.
+
+Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
 
 ### Authorized prompt enrichment
 
@@ -996,6 +1003,10 @@ approval resumes, policy summaries, background monitor
 deltas, and command continuations that should be visible to the model on the
 next turn but should not become permanent system prompt text.
 
+Pass `agentId` with an unscoped `sessionKey`, such as `global`, when multiple
+agents are configured. Enqueueing, consumption, and plugin session state stay in
+that agent's store; the owner selector is not part of the persisted injection.
+
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
 `restart`. The host removes the owning plugin's persistent session extension
@@ -1020,11 +1031,18 @@ message context and a host dispatcher, and a handled result reports
 `queuedFinal` and delivery `counts`. Use `before_agent_reply` for a simple
 synthetic reply, and the sending hooks below to transform outgoing payloads.
 
-Runtime takeovers should forward `ctx.onAgentRunStart` and
-`ctx.userTurnTranscriptRecorder` to their runtime helper. The ACP dispatch
-helper forwards both automatically. Share the recorder so the runtime and
+Runtime takeovers should forward `ctx.onAgentRunStart`,
+`ctx.userTurnTranscriptRecorder`, and optional
+`ctx.prepareAssistantTranscriptMessage` to their runtime helper. The ACP dispatch
+helper forwards all three automatically. Share the recorder so the runtime and
 Gateway do not append the same user turn independently; mark runtime
 persistence only after a successful transcript write.
+
+The host-provided preparer records display ownership before the canonical
+assistant append, using original runtime text captured before transcript-only
+hooks. It preserves raw content and IDs and grants no file access or write
+authority. Keep it in process and bound to its owning turn; after that turn
+aborts, is replaced, or completes, it returns the message unchanged.
 
 The optional third `onAgentRunStart` argument can offer
 `completionSource: "reply-dispatch"` with a `getResult()` callback. The host must

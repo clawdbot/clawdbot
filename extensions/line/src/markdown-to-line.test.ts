@@ -220,6 +220,25 @@ describe("processLineMessage", () => {
     ).toEqual(["Before", "Code", "Between", "Table", "After"]);
   });
 
+  it("delivers a code block the card cannot hold as text instead of cutting it", () => {
+    // The card shows 2000 characters. Nothing in LINE caps a Flex text there, so
+    // a longer block belongs to the reader in full, the way an oversized table
+    // already reaches them as text.
+    const code = Array.from({ length: 120 }, (_, i) => `const line${i} = ${i}; // padding`).join(
+      "\n",
+    );
+    expect(code.length).toBeGreaterThan(2000);
+
+    const result = processLineMessage(`Header\n\n\`\`\`ts\n${code}\n\`\`\`\n\nFooter`);
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("const line0 = 0;");
+    expect(result.text).toContain("const line119 = 119;");
+    expect(result.text).not.toContain("\n...");
+    expect(result.text.indexOf("Header")).toBeLessThan(result.text.indexOf("const line0"));
+    expect(result.text.indexOf("const line119")).toBeLessThan(result.text.indexOf("Footer"));
+  });
+
   it("processes text with code blocks", () => {
     const text = `Check this code:
 

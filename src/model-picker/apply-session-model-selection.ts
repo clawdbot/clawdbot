@@ -21,7 +21,7 @@ import { refreshQueuedFollowupSession } from "../auto-reply/reply/queue.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { resolveSupportedThinkingLevel } from "../auto-reply/thinking.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import {
   adoptPersistedSessionSnapshot,
   SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
@@ -36,6 +36,7 @@ import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../sessions/model-overrides.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 
 export type SessionModelSelectionRequest = {
   provider: string;
@@ -63,6 +64,7 @@ export type ApplySessionModelSelectionParams = {
   thinkingCatalog?: readonly ModelCatalogEntry[];
   canPersistStickyModelSelection?: boolean;
   stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
+  validateAuthProfileSelection?: () => string | undefined;
   request: SessionModelSelectionRequest;
   /** Raw directive text used only by the existing session patch hook. */
   patchModel?: string;
@@ -75,6 +77,7 @@ export type ApplySessionModelSelectionResult =
       provider: string;
       model: string;
       effectiveModelRef: string;
+      agentRuntime: string;
       changed: boolean;
       contextTokens: number;
       configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
@@ -192,6 +195,10 @@ export async function applySessionModelSelection(
   if (prepared.status === "rejected") {
     return prepared;
   }
+  const authProfileError = params.validateAuthProfileSelection?.();
+  if (authProfileError) {
+    return { status: "rejected", reason: "not-allowed", message: authProfileError };
+  }
   // Metadata preparation can yield. Memory-only sessions need the same lock and
   // replacement fence that persisted sessions enforce in their atomic write.
   const currentEntry = params.storePath
@@ -269,6 +276,7 @@ export async function applySessionModelSelection(
       reassertLiveModelSwitchPending: applied.changed && nextEntry.liveModelSwitchPending === true,
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
+      validateCommit: params.validateAuthProfileSelection,
     });
     if (persistence.entry) {
       params.sessionStore[params.sessionKey] = persistence.entry;
@@ -276,6 +284,9 @@ export async function applySessionModelSelection(
     }
     if (persistence.status === "model-selection-locked") {
       return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
+    }
+    if (persistence.status === "commit-rejected") {
+      return { status: "rejected", reason: "not-allowed", message: persistence.error };
     }
     if (
       persistence.status !== "current" ||
@@ -299,6 +310,17 @@ export async function applySessionModelSelection(
     persistedEntry = params.sessionEntry;
   }
 
+  const agentRuntime = resolveEffectiveAgentRuntime({
+    cfg: params.cfg,
+    provider: request.provider,
+    modelId: request.model,
+    modelApi: selectedCatalogEntry?.api,
+    modelBaseUrl: selectedCatalogEntry?.baseUrl,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionEntry: persistedEntry,
+  });
+
   const provider = request.provider;
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
@@ -309,12 +331,17 @@ export async function applySessionModelSelection(
       ? persistStickyModelSelectionBestEffort({
           agentId: params.agentId,
           model: effectiveModelRef,
-          ...(params.stickyModelSelectionTarget
-            ? { target: params.stickyModelSelectionTarget }
-            : {}),
+          // The shipped SDK opt-in resolves its effective layer inside the config mutation.
+          // Ordinary chat callers supply an authorized target or leave persistence disabled.
+          target: params.stickyModelSelectionTarget ?? "effective",
         })
       : undefined;
   if (changed) {
+    emitSessionLifecycleEvent({
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      reason: "patch",
+    });
     triggerSessionPatchHook({
       cfg: params.cfg,
       sessionEntry: persistedEntry,
@@ -328,20 +355,11 @@ export async function applySessionModelSelection(
       nextRouteResolution: "resolved",
       nextModelOverrideSource: request.isDefault ? undefined : "user",
       nextAuthProfileId: persistedEntry.authProfileOverride,
-      nextAuthProfileIdSource: resolveSessionAuthProfileOverrideSource(persistedEntry),
+      nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(persistedEntry),
       nextThinking: {
         level: persistedEntry.thinkingLevel,
         catalog: [...thinkingCatalog],
-        agentRuntime: resolveEffectiveAgentRuntime({
-          cfg: params.cfg,
-          provider,
-          modelId: model,
-          modelApi: selectedCatalogEntry?.api,
-          modelBaseUrl: selectedCatalogEntry?.baseUrl,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sessionEntry: persistedEntry,
-        }),
+        agentRuntime,
       },
     });
   }
@@ -355,16 +373,7 @@ export async function applySessionModelSelection(
 
   const contextProvider = resolveContextConfigProviderForRuntime({
     provider,
-    runtimeId: resolveEffectiveAgentRuntime({
-      cfg: params.cfg,
-      provider,
-      modelId: model,
-      modelApi: selectedCatalogEntry?.api,
-      modelBaseUrl: selectedCatalogEntry?.baseUrl,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionEntry: persistedEntry,
-    }),
+    runtimeId: agentRuntime,
     config: params.cfg,
   });
   return {
@@ -372,6 +381,7 @@ export async function applySessionModelSelection(
     provider,
     model,
     effectiveModelRef,
+    agentRuntime,
     changed,
     contextTokens: resolveContextTokens({
       cfg: params.cfg,

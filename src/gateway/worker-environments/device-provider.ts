@@ -142,6 +142,10 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
     id: DEVICE_WORKER_PROVIDER_ID,
     supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
+    resolveAllocation: async (profile, operationId) => ({
+      leaseId: deviceLeaseId(requireDeviceId(profile), operationId),
+      sharedHost: true,
+    }),
     provision: async (profile, operationId) => {
       const deviceId = requireDeviceId(profile);
       const availability = await resolveAvailability(deviceId);
@@ -149,9 +153,8 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
         throw new WorkerProviderError(deviceUnavailableText(deviceId, availability));
       }
       return {
-        leaseId: deviceLeaseId(deviceId, operationId),
+        ...(await provider.resolveAllocation(profile, operationId)),
         node: { deviceId },
-        sharedHost: true,
       };
     },
     inspect: async ({ profile }) => {

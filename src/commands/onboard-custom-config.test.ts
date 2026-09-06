@@ -1,5 +1,5 @@
 // Onboard custom config tests cover provider-specific config merging and context-window bounds.
-import { setCurrentManifestModelIdNormalizationRecords } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { setCurrentManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { describe, expect, it, vi } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import * as providerModelNormalizationRuntime from "../agents/provider-model-normalization.runtime.js";
@@ -140,7 +140,7 @@ it("rejects custom aliases already used by the selected agent", () => {
 });
 
 it("validates authored and inherited aliases without discovering plugin metadata", () => {
-  setCurrentManifestModelIdNormalizationRecords(undefined);
+  setCurrentManifestModelIdNormalizationPolicies(undefined);
   const currentSnapshot = vi
     .spyOn(currentPluginMetadataSnapshot, "getCurrentPluginMetadataSnapshot")
     .mockImplementation(() => {
@@ -216,7 +216,7 @@ it("validates authored and inherited aliases without discovering plugin metadata
       }),
     ).toBeUndefined();
   } finally {
-    setCurrentManifestModelIdNormalizationRecords(undefined);
+    setCurrentManifestModelIdNormalizationPolicies(undefined);
     currentSnapshot.mockRestore();
     loadedSnapshot.mockRestore();
     runtimeNormalization.mockRestore();

@@ -3,16 +3,21 @@ import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e
 import {
   SESSION_DRAG_MIME,
   captureSessionAccessibilityProof,
+  captureUiProof,
   chatSessionListResponse,
   controlUiSessionPath,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
   sidebarSessionOrder,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 async function readTopTranscriptAnchor(thread: import("playwright").Locator) {
   return thread.evaluate((element) => {
@@ -70,7 +75,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count(), { timeout: 10_000 }).toBe(2);
       await expect
@@ -126,13 +131,28 @@ suite.define(() => {
       methodResponses: {
         "chat.history": initialResponses,
         "chat.startup": initialResponses,
-        "sessions.list": chatSessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          {
+            key: sessionA,
+            sessionId: `${sessionA}:backing`,
+            kind: "direct",
+            label: "Session A",
+            updatedAt: 2,
+          },
+          {
+            key: sessionB,
+            sessionId: `${sessionB}:backing`,
+            kind: "direct",
+            label: "Session B",
+            updatedAt: 1,
+          },
+        ]),
       },
       sessionKey: sessionA,
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       await waitForChatScrollIdle(page);
       await gateway.waitForRequest("agent.identity.get");
       const initialIdentityRequestCount = (await gateway.getRequests("agent.identity.get")).length;
@@ -227,7 +247,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText("Split toolbar proof.").waitFor({ timeout: 10_000 });
 
       // Desktop renders no topbar row: the sidebar owns navigation.
@@ -236,6 +256,13 @@ suite.define(() => {
       const splitEntry = page.getByRole("button", { name: "Open split view" });
       await expect.poll(() => splitEntry.isVisible()).toBe(true);
       await expect.poll(() => page.locator(".chat-pane__header").count()).toBe(1);
+      const taskHeader = page.locator(".chat-pane__header");
+      const regularHeaderPadding = await taskHeader.evaluate(
+        (header) => getComputedStyle(header).paddingLeft,
+      );
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("Keep this draft while docking beside native controls");
+      const originalComposer = await composer.elementHandle();
       await page.evaluate(() => {
         document.documentElement.classList.add("openclaw-native-macos");
         document.querySelector(".shell")?.classList.add("shell--nav-collapsed");
@@ -247,6 +274,31 @@ suite.define(() => {
             .evaluate((header) => getComputedStyle(header).paddingLeft),
         )
         .toBe("90px");
+      await openChatSidePanelType(page, "Files");
+      await dockChatSidePanel(page, "left");
+      const sideHeader = page.locator('[data-region-header="side"]');
+      const filesTab = sideHeader.getByRole("tab", { name: "Files", exact: true });
+      await filesTab.waitFor();
+      await expect
+        .poll(() => taskHeader.evaluate((header) => getComputedStyle(header).paddingLeft))
+        .toBe(regularHeaderPadding);
+      await expect
+        .poll(() => filesTab.evaluate((tab) => tab.getBoundingClientRect().left))
+        .toBeGreaterThanOrEqual(90);
+      const taskHeaderBox = await taskHeader.boundingBox();
+      const sideHeaderBox = await sideHeader.boundingBox();
+      expect(taskHeaderBox?.y).toBeCloseTo(sideHeaderBox!.y, 0);
+      expect(taskHeaderBox!.x).toBeGreaterThan(sideHeaderBox!.x);
+      expect(
+        await composer.evaluate((element, original) => element === original, originalComposer),
+      ).toBe(true);
+      expect(await composer.inputValue()).toBe(
+        "Keep this draft while docking beside native controls",
+      );
+      await originalComposer?.dispose();
+      await sideHeader.getByRole("button", { name: "Close Files", exact: true }).click();
+      await filesTab.waitFor({ state: "detached" });
+      await composer.fill("");
       await page.evaluate(() => {
         document.documentElement.classList.remove("openclaw-native-macos");
         document.querySelector(".shell")?.classList.remove("shell--nav-collapsed");
@@ -351,17 +403,27 @@ suite.define(() => {
       await expect.poll(() => actionRows.first().isVisible()).toBe(false);
       await expect.poll(() => actionRows.last().isVisible()).toBe(true);
       const targetHeader = headers.first();
-      await expect
-        .poll(() =>
-          targetHeader.evaluate((header) => {
-            const owner = header.closest("openclaw-chat-pane");
-            return (
-              header.parentElement?.classList.contains("chat-main__conversation-column") === true &&
-              owner?.classList.contains("chat-split-view__pane") === true
-            );
-          }),
-        )
-        .toBe(true);
+      const headerGeometry = await headers.evaluateAll((nodes) =>
+        nodes.map((header) => {
+          const owner = header.closest("openclaw-chat-pane");
+          const main = owner?.querySelector('[data-region="main"]:not([hidden])');
+          if (!main) {
+            throw new Error("Each task toolbar must have visible main content");
+          }
+          const toolbar = header.getBoundingClientRect();
+          const content = main.getBoundingClientRect();
+          return {
+            height: toolbar.height,
+            left: Math.abs(toolbar.left - content.left),
+            right: Math.abs(toolbar.right - content.right),
+            gap: Math.abs(toolbar.bottom - content.top),
+          };
+        }),
+      );
+      for (const geometry of headerGeometry) {
+        expect(geometry.height).toBeGreaterThan(0);
+        expect(Math.max(geometry.left, geometry.right, geometry.gap)).toBeLessThanOrEqual(1);
+      }
 
       const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
       await dataTransfer.evaluate(
@@ -420,11 +482,7 @@ suite.define(() => {
   });
 
   it("opens current context and latest-run usage from the composer ring", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
@@ -515,11 +573,7 @@ suite.define(() => {
   });
 
   it("routes page typing to the active composer without stealing text input focus", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
@@ -562,11 +616,7 @@ suite.define(() => {
   });
 
   it("keeps stale context visible as approximate without warning", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -611,11 +661,7 @@ suite.define(() => {
   });
 
   it("keeps chat usable while sessions are still loading", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.list"],
@@ -638,7 +684,7 @@ suite.define(() => {
 
       // The chat boot hydrates the sidebar session list; that request stays
       // deferred here while the composer must remain fully usable.
-      await gateway.waitForRequest("sessions.list");
+      await gateway.waitForRequest("sessions.list", { match: rosterMatch });
 
       await composer.fill("draft while sessions load");
       expect(await composer.inputValue()).toBe("draft while sessions load");
@@ -657,11 +703,7 @@ suite.define(() => {
   });
 
   it("keeps every sidebar session stable while selecting sessions and supports sort modes", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const createdSessionKeys = Array.from(
       { length: 11 },
@@ -702,7 +744,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
         .waitFor({
@@ -749,35 +791,59 @@ suite.define(() => {
     }
   });
 
-  it("flips a sidebar short route before any list refresh and refreshes only for an outbox", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+  it("releases a retained queued send after the canonical session list records idle", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const firstKey = "agent:main:thread:aaaaaaaa-1111-4111-8111-111111111111";
     const secondKey = "agent:main:thread:bbbbbbbb-2222-4222-8222-222222222222";
-    const sessions = chatSessionListResponse([
-      { key: firstKey, kind: "direct", label: "Instant A", updatedAt: 2 },
+    const activeSessions = chatSessionListResponse([
+      {
+        key: firstKey,
+        kind: "direct",
+        label: "Instant A",
+        updatedAt: 2,
+        activeRunIds: ["server-run"],
+        hasActiveRun: true,
+        status: "running",
+      },
+      { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
+    ]);
+    const idleSessions = chatSessionListResponse([
+      {
+        key: firstKey,
+        kind: "direct",
+        label: "Instant A",
+        updatedAt: 3,
+        activeRunIds: [],
+        hasActiveRun: false,
+        lastRunId: "server-run",
+        status: "done",
+      },
       { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
-      methodResponses: { "sessions.list": sessions },
+      methodResponses: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: { hasActiveRun: false, status: "done" },
+          thinkingLevel: null,
+        },
+        "sessions.list": activeSessions,
+      },
       sessionKey: firstKey,
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
       await page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`).waitFor();
       await page
         .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
         .getByText("Instant A")
         .waitFor();
       await page.waitForTimeout(500);
-      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+      const initialListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       const initialMetadataCount = (await gateway.getRequests("chat.metadata")).length;
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", rosterMatch);
 
       await page
         .locator(
@@ -788,9 +854,9 @@ suite.define(() => {
         .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
         .getByText("Instant B")
         .waitFor();
-      const emptyOutboxListRequests = (await gateway.getRequests("sessions.list")).slice(
-        initialListCount,
-      );
+      const emptyOutboxListRequests = (
+        await gateway.getRequests("sessions.list", rosterMatch)
+      ).slice(initialListCount);
       expect(emptyOutboxListRequests).toHaveLength(0);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(initialMetadataCount);
       const emptyOutboxListCount = initialListCount + emptyOutboxListRequests.length;
@@ -839,22 +905,27 @@ suite.define(() => {
         .getByText("Instant A")
         .waitFor();
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBe(emptyOutboxListCount + 1);
-      if (emptyOutboxListRequests.length === 0) {
-        await gateway.resolveDeferred("sessions.list", sessions);
-      }
+      const queued = page.locator(".chat-queue").getByText("flush after idle reconciliation");
+      await queued.waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await captureUiProof(suite, page, "queued-idle-release", "01-queued-before-idle.png");
+      await gateway.resolveDeferred("sessions.list", idleSessions);
+      const send = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(send.params)).toMatchObject({
+        message: "flush after idle reconciliation",
+        sessionKey: firstKey,
+      });
+      await queued.waitFor({ state: "detached" });
+      await captureUiProof(suite, page, "queued-idle-release", "02-sent-after-idle.png");
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("keeps derived sidebar titles and accessible state after session patch refreshes", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const initialKey = "agent:main:session-a";
     const key = "agent:main:session-b";
@@ -908,12 +979,12 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, initialKey));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.locator("a.sidebar-recent-session__link").click();
       await expect
         .poll(async () => {
-          const requests = await gateway.getRequests("sessions.list");
+          const requests = await gateway.getRequests("sessions.list", rosterMatch);
           return requests.map((request) => request.params);
         })
         .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
@@ -930,9 +1001,9 @@ suite.define(() => {
       expect(await link.getAttribute("aria-current")).toBe("page");
       expect(await link.getAttribute("aria-describedby")).toBeNull();
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
-      await captureSessionAccessibilityProof(page, "after-derived-title");
+      await captureSessionAccessibilityProof(suite, page, "after-derived-title");
 
-      const listCountBeforePatch = (await gateway.getRequests("sessions.list")).length;
+      const listCountBeforePatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await row.hover();
       await row.getByRole("button", { name: "Pin session" }).click();
 
@@ -943,14 +1014,14 @@ suite.define(() => {
       });
       await expect
         .poll(async () => {
-          const requests = await gateway.getRequests("sessions.list");
+          const requests = await gateway.getRequests("sessions.list", rosterMatch);
           return requests.slice(listCountBeforePatch).map((request) => request.params);
         })
         .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
       await expect.poll(() => label.textContent()).toBe(readableTitle);
       expect(await link.getAttribute("aria-current")).toBe("page");
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
-      await captureSessionAccessibilityProof(page, "after-patch-refresh");
+      await captureSessionAccessibilityProof(suite, page, "after-patch-refresh");
     } finally {
       await suite.closeBrowserContext(context);
     }

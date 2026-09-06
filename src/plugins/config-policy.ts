@@ -7,8 +7,8 @@ import {
 } from "./config-activation-shared.js";
 import {
   identityNormalizePluginId,
-  isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
   normalizePluginsConfigWithResolverCore as normalizePluginsConfigWithResolverShared,
+  resolveChannelConfigEnablement,
   type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
@@ -25,30 +25,6 @@ export function normalizePluginsConfigWithResolver(
   return normalizePluginsConfigWithResolverShared(config, normalizePluginId);
 }
 
-function resolvePluginActivationState(params: {
-  id: string;
-  origin: PluginOrigin;
-  config: NormalizedPluginsConfig;
-  rootConfig?: OpenClawConfig;
-  enabledByDefault?: boolean;
-  sourceConfig?: NormalizedPluginsConfig;
-  sourceRootConfig?: OpenClawConfig;
-  autoEnabledReason?: string;
-}): PluginActivationState {
-  return toPluginActivationState(
-    resolvePluginActivationDecisionShared({
-      ...params,
-      activationSource: {
-        plugins: params.sourceConfig ?? params.config,
-        rootConfig: params.sourceRootConfig ?? params.rootConfig,
-      },
-      isBundledChannelEnabledByChannelConfig,
-    }),
-  );
-}
-
-const isBundledChannelEnabledByChannelConfig = isBundledChannelEnabledByChannelConfigShared;
-
 type PolicyEffectiveActivationParams = {
   id: string;
   origin: PluginOrigin;
@@ -58,10 +34,20 @@ type PolicyEffectiveActivationParams = {
   sourceConfig?: NormalizedPluginsConfig;
   sourceRootConfig?: OpenClawConfig;
   autoEnabledReason?: string;
+  channelIds?: readonly string[];
 };
 
 export function resolvePolicyPluginActivationState(
   params: PolicyEffectiveActivationParams,
 ): PluginActivationState {
-  return resolvePluginActivationState(params);
+  return toPluginActivationState(
+    resolvePluginActivationDecisionShared({
+      ...params,
+      activationSource: {
+        plugins: params.sourceConfig ?? params.config,
+        rootConfig: params.sourceRootConfig ?? params.rootConfig,
+      },
+      resolveChannelConfigEnablement,
+    }),
+  );
 }

@@ -39,7 +39,7 @@ import {
   type SessionCapabilityStore,
   type SubagentSessionRole,
 } from "./subagents/spawn/subagent-capabilities.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { createToolPolicyMatcher } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
@@ -56,6 +56,7 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "openclaw",
   // Status/scheduling - main agent coordinates
   "session_status",
+  "progress_card",
   AUTOMATIONS_TOOL_NAME,
   // Direct user/session sends - subagents communicate through announce chain
   "message",
@@ -138,17 +139,6 @@ export function resolveInheritedToolPolicyForSession(
     ...(inheritedToolAllow.length > 0 ? { allow: inheritedToolAllow } : {}),
     ...(inheritedToolDeny.length > 0 ? { deny: inheritedToolDeny } : {}),
   };
-}
-
-/** Filter runtime tools by sandbox allow/deny policy. */
-export function filterToolsByPolicy<TTool extends { name: string }>(
-  tools: TTool[],
-  policy?: SandboxToolPolicy,
-): TTool[] {
-  if (!policy) {
-    return tools;
-  }
-  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
 /** Resolve the shared profile, scope, extra, and sandbox policy layers. */
@@ -329,18 +319,13 @@ function hasExplicitToolSection(section: unknown): boolean {
   return section !== undefined && section !== null;
 }
 
-/** Detect tool config sections that previously widened profiles implicitly.
- *  Used only for migration warnings — not merged into profileAlsoAllow.  #47487 */
-type ImplicitProfileGrantDetection = {
-  entries: Array<{ section: string; grants: string[] }>;
-};
-
+/** Detect removed implicit grants for migration warnings only (#47487). */
 function detectImplicitProfileGrants(params: {
   globalTools?: OpenClawConfig["tools"];
   agentTools?: AgentToolsConfig;
   includeGlobalSections: boolean;
-}): ImplicitProfileGrantDetection | undefined {
-  const entries: ImplicitProfileGrantDetection["entries"] = [];
+}): Array<{ section: string; grants: string[] }> {
+  const entries: Array<{ section: string; grants: string[] }> = [];
   if (
     hasExplicitToolSection(params.agentTools?.exec) ||
     (params.includeGlobalSections && hasExplicitToolSection(params.globalTools?.exec))
@@ -353,18 +338,7 @@ function detectImplicitProfileGrants(params: {
   ) {
     entries.push({ section: "tools.fs", grants: ["read", "write", "edit"] });
   }
-  if (entries.length === 0) {
-    return undefined;
-  }
-  return { entries };
-}
-
-function formatImplicitToolSections(sections: string[]): string {
-  return sections.join(" / ");
-}
-
-function formatToolListForWarning(toolNames: string[]): string {
-  return toolNames.map((toolName) => `"${toolName}"`).join(", ");
+  return entries;
 }
 
 /** Resolve the layered global, provider, agent, and profile tool policies. */
@@ -427,43 +401,7 @@ export function resolveEffectiveToolPolicy(params: {
     markFrozenClawToolAllowPolicy(agentPolicy);
   }
 
-  // Warn affected users about removed implicit grants (#47487), but only when
-  // the active profile/explicit alsoAllow do not already grant those tools.
-  if (profile) {
-    const implicitGrants = detectImplicitProfileGrants({
-      globalTools,
-      agentTools,
-      includeGlobalSections: profileSource === "global",
-    });
-    if (implicitGrants) {
-      const profilePolicy = mergeAlsoAllowPolicy(
-        resolveToolProfilePolicy(profile),
-        explicitProfileAlsoAllow,
-      );
-      const uncoveredEntries = implicitGrants.entries
-        .map((entry) => ({
-          section: entry.section,
-          grants: entry.grants.filter(
-            (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
-          ),
-        }))
-        .filter((entry) => entry.grants.length > 0);
-      const uncovered = uncoveredEntries.flatMap((entry) => entry.grants);
-      if (uncovered.length > 0) {
-        logWarn(
-          `tools policy: profile "${profile}"${agentId ? ` (agent "${agentId}")` : ""} has ` +
-            `configured tool sections (${formatImplicitToolSections(uncoveredEntries.map((entry) => entry.section))}) that no longer implicitly widen ` +
-            `the profile. Add alsoAllow: [${formatToolListForWarning(uncovered)}] ` +
-            `explicitly if these tools should be available. See #47487.`,
-        );
-      }
-    }
-  }
-
-  const profileAlsoAllow = explicitProfileAlsoAllow
-    ? uniqueStrings(explicitProfileAlsoAllow)
-    : undefined;
-  return {
+  const effectivePolicy = {
     agentId,
     globalPolicy: pickSandboxToolPolicy(globalTools),
     globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
@@ -472,13 +410,63 @@ export function resolveEffectiveToolPolicy(params: {
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
     // alsoAllow is applied at the profile stage to avoid early filtering.
-    profileAlsoAllow,
+    profileAlsoAllow: explicitProfileAlsoAllow
+      ? uniqueStrings(explicitProfileAlsoAllow)
+      : undefined,
     providerProfileAlsoAllow: Array.isArray(agentProviderPolicy?.alsoAllow)
       ? agentProviderPolicy?.alsoAllow
       : Array.isArray(providerPolicy?.alsoAllow)
         ? providerPolicy?.alsoAllow
         : undefined,
   };
+
+  // Recommend removed implicit grants only when adding them to the profile
+  // can work: every other static policy layer must permit the tool.
+  if (profile) {
+    const implicitGrants = detectImplicitProfileGrants({
+      globalTools,
+      agentTools,
+      includeGlobalSections: profileSource === "global",
+    });
+    if (implicitGrants.length > 0) {
+      const profilePolicy = mergeAlsoAllowPolicy(
+        resolveToolProfilePolicy(profile),
+        explicitProfileAlsoAllow,
+      );
+      const matchesProfile = createToolPolicyMatcher(profilePolicy);
+      const restrictionMatchers = [
+        effectivePolicy.globalPolicy,
+        effectivePolicy.globalProviderPolicy,
+        effectivePolicy.agentPolicy,
+        effectivePolicy.agentProviderPolicy,
+        mergeAlsoAllowPolicy(
+          resolveToolProfilePolicy(effectivePolicy.providerProfile),
+          effectivePolicy.providerProfileAlsoAllow,
+        ),
+      ].map((policy) => createToolPolicyMatcher(policy));
+      const uncoveredEntries = implicitGrants
+        .map((entry) => ({
+          section: entry.section,
+          grants: entry.grants.filter(
+            (toolName) =>
+              !matchesProfile(toolName) &&
+              restrictionMatchers.every((matches) => matches(toolName)),
+          ),
+        }))
+        .filter((entry) => entry.grants.length > 0);
+      const uncovered = uncoveredEntries.flatMap((entry) => entry.grants);
+      if (uncovered.length > 0) {
+        logWarn(
+          `tools policy: profile "${profile}"${agentId ? ` (agent "${agentId}")` : ""} has ` +
+            `configured tool sections (${uncoveredEntries.map((entry) => entry.section).join(" / ")}) that no longer implicitly widen ` +
+            `the profile. Add alsoAllow: [${uncovered.map((toolName) => `"${toolName}"`).join(", ")}] ` +
+            `explicitly if these tools should be available. See #47487.`,
+        );
+      }
+    }
+  }
+
+  return effectivePolicy;
 }
 
 function denyAllToolPolicy(): SandboxToolPolicy {

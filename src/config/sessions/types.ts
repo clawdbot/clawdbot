@@ -7,7 +7,11 @@ import type {
 } from "@openclaw/acp-core/types";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
-import type { SessionRow, SessionRunStatus } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionEntryArchiveReason,
+  SessionRow,
+  SessionRunStatus,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
@@ -31,6 +35,7 @@ import type {
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
+  SessionActor,
   SessionCreatedVia,
   SessionEntryProvenance,
   SessionOwnerAssignment,
@@ -328,7 +333,9 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Timestamp (ms) when the session was archived from active session lists. */
     archivedAt?: number;
     /** Actor that archived the session; cleared when the session is restored. */
-    archivedBy?: SessionCreatedActor;
+    archivedBy?: SessionActor;
+    /** Stable lifecycle cause; absent values are legacy archives and remain manually protected. */
+    archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
     /** Timestamp (ms) when an operator client last marked the session read. */
@@ -364,6 +371,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     };
     /** Project registry id selected when this logical session node was created. */
     projectId?: string;
+    /** Durable cloud repository owner; never identifies a Gateway filesystem path. */
+    repositoryWorkspaceId?: string;
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
     /** Exact parent incarnation captured when this child was created. */
@@ -489,8 +498,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Timestamp (ms) when `/tts latest` last sent audio for this session. */
     lastTtsReadLatestAt?: number;
     execHost?: string;
-    execSecurity?: string;
-    execAsk?: string;
     execNode?: string;
     /** Working directory interpreted only by the bound exec node. */
     execCwd?: string;
@@ -513,7 +520,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** One-run rollback guard for a model selected by the agent sessions tool. */
     modelFallback?: AgentPatchedSessionModelFallback;
     authProfileOverride?: string;
-    authProfileOverrideSource?: "auto" | "user";
+    authProfileOverrideSource?: "auto" | "user" | "user-link";
     authProfileOverrideCompactionCount?: number;
     /**
      * Set on explicit user-driven session model changes (for example `/model`
@@ -582,6 +589,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     label?: string;
     /** Persistent operator/agent-set sidebar emoji icon (single grapheme). */
     icon?: string;
+    /** Named sidebar tint (SESSION_COLOR_IDS); palette mirrors Claude Code /color for import. */
+    color?: string;
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
     category?: string;
     /** Preferred Control UI face when a caller opens this session without explicit face intent. */
@@ -596,6 +605,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
     ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
     skillsSnapshot?: SessionSkillSnapshot;
+    /** Explicit authorized immutable library pins; current speakers never replace this selection. */
+    skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     systemPromptReport?: SessionSystemPromptReport;
     /**
      * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
@@ -609,6 +620,8 @@ export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Explicit world-readable publication, bound to one transcript generation. */
+  publicShare?: { id: string; sessionId: string; createdAt: number };
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
   /** Exact run that produced the latest terminal Gateway lifecycle projection. */
@@ -623,6 +636,12 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     name?: string;
     baseRef?: string;
     titleSource: string;
+  };
+  /** Suppresses repeated byte-triggered compaction after an oversized successor was observed. */
+  transcriptByteCompactionLatch?: {
+    activeBytes: number;
+    sessionId: string;
+    maxBytes: number;
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
@@ -798,6 +817,9 @@ function mergeSessionEntryWithPolicy(
   }
   if (existing.projectId !== undefined) {
     next.projectId = existing.projectId;
+  }
+  if (existing.repositoryWorkspaceId !== undefined) {
+    next.repositoryWorkspaceId = existing.repositoryWorkspaceId;
   }
   if (existing.forkSource !== undefined) {
     next.forkSource = existing.forkSource;

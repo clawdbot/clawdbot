@@ -164,14 +164,14 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
         "supports_websockets=false",
       ].join("\n");
       await fs.writeFile(path.join(codexHome, "config.toml"), config);
-      const child = createStdioTransport(
+      const child = await createStdioTransport(
         { transport: "stdio", command, commandSource: "config", args, cwd, headers: {} },
         { ...env, PATH: "/usr/bin:/bin", SHELL: "/bin/sh" },
       );
       const lines = createInterface({ input: child.stdout });
       context.onTestFinished(async () => {
         lines.close();
-        expect(await closeCodexAppServerTransportAndWait(child)).toBe(true);
+        expect(await closeCodexAppServerTransportAndWait(child)).toMatchObject({ exited: true });
       });
       const pending = new Map<
         number,

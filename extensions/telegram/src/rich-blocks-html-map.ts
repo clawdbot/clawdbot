@@ -1,6 +1,5 @@
 // Block-level HTML-island mapping: figures/lists/tables/media/maps/collages
 // and island discovery, on top of the fragment parser in rich-blocks-html.ts.
-import { tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
 import {
   richTextToPlainString,
   type InputRichBlock,
@@ -13,8 +12,6 @@ import {
   htmlNodesToRichText,
   nodeText,
   parseHtmlAttrs,
-  parseHtmlFragment,
-  VOID_TAGS,
   type HtmlNode,
 } from "./rich-blocks-html.js";
 import { renderTelegramMonospaceGrid } from "./text-width.js";
@@ -22,6 +19,7 @@ import { renderTelegramMonospaceGrid } from "./text-width.js";
 // matching close (or a void tag) becomes a typed block; anything else stays text.
 const BLOCK_ISLAND_TAGS = new Set([
   "details",
+  "p",
   "table",
   "ul",
   "ol",
@@ -43,12 +41,13 @@ const BLOCK_ISLAND_TAGS = new Set([
 ]);
 
 const MEDIA_SRC_RE = /^https:\/\//i;
+type HtmlContentRenderer = (nodes: readonly HtmlNode[]) => InputRichBlock[];
 
 // True when a container holds meaningful content outside its allowed children;
 // such islands stay literal instead of silently dropping the stray content.
 function hasStrayContent(nodes: readonly HtmlNode[], allowed: ReadonlySet<string>): boolean {
   return nodes.some((node) =>
-    node.kind === "text" ? node.text.trim() !== "" : !allowed.has(node.name),
+    node.kind === "text" ? node.text.trim() !== "" : !node.closed || !allowed.has(node.name),
   );
 }
 
@@ -108,7 +107,7 @@ function captionFromFigcaption(nodes: readonly HtmlNode[]): RichBlockCaption | u
   }
   const cite = figcaption.children.find(
     (node): node is Extract<HtmlNode, { kind: "element" }> =>
-      node.kind === "element" && node.name === "cite",
+      node.kind === "element" && node.closed && node.name === "cite",
   );
   const textNodes = figcaption.children.filter((node) => node !== cite);
   const text = htmlNodesToRichText(textNodes);
@@ -159,7 +158,10 @@ function figureToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichB
 
 const LIST_CHILDREN = new Set(["li"]);
 
-function listToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBlock | undefined {
+function listToBlock(
+  node: Extract<HtmlNode, { kind: "element" }>,
+  renderContent: HtmlContentRenderer,
+): InputRichBlock | undefined {
   if (hasStrayContent(node.children, LIST_CHILDREN)) {
     return undefined;
   }
@@ -175,7 +177,7 @@ function listToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBlo
         parseHtmlAttrs(grandchild.raw).get("type") === "checkbox",
     );
     const contentNodes = child.children.filter((grandchild) => grandchild !== checkbox);
-    const blocks = htmlNodesToBlocks(contentNodes);
+    const blocks = renderContent(contentNodes);
     const item: InputRichBlockListItem = {
       blocks: blocks.length > 0 ? blocks : [{ type: "paragraph", text: "" }],
     };
@@ -196,7 +198,13 @@ function listToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBlo
   };
 }
 
-const CELL_ALIGN_VALUES = new Set(["left", "center", "right"]);
+function resolveTableCellAlign(value: string | undefined): RichBlockTableCell["align"] {
+  return value === "center" || value === "right" ? value : "left";
+}
+
+function resolveTableCellValign(value: string | undefined): RichBlockTableCell["valign"] {
+  return value === "top" || value === "bottom" ? value : "middle";
+}
 
 function tableCellFromElement(
   node: Extract<HtmlNode, { kind: "element" }>,
@@ -207,14 +215,14 @@ function tableCellFromElement(
   const colspan = strictNumber(attrs.get("colspan"), /^\d+$/u) ?? Number.NaN;
   const rowspan = strictNumber(attrs.get("rowspan"), /^\d+$/u) ?? Number.NaN;
   const align = attrs.get("align")?.toLowerCase();
+  const valign = attrs.get("valign")?.toLowerCase();
   return {
+    align: resolveTableCellAlign(align),
+    valign: resolveTableCellValign(valign),
     ...(text !== "" ? { text } : {}),
     ...(node.name === "th" || inHeader ? { is_header: true as const } : {}),
     ...(Number.isSafeInteger(colspan) && colspan > 1 ? { colspan } : {}),
     ...(Number.isSafeInteger(rowspan) && rowspan > 1 ? { rowspan } : {}),
-    ...(align && CELL_ALIGN_VALUES.has(align)
-      ? { align: align as RichBlockTableCell["align"] }
-      : {}),
   };
 }
 
@@ -258,6 +266,10 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
     for (const child of parent.children) {
       if (child.kind !== "element") {
         stray ||= child.text.trim() !== "";
+        continue;
+      }
+      if (!child.closed) {
+        stray = true;
         continue;
       }
       if (child.name === "caption") {
@@ -390,70 +402,23 @@ function collageToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRich
   };
 }
 
-function richTextIsBlank(text: RichText): boolean {
-  if (typeof text === "string") {
-    return text.trim() === "";
+function elementToBlock(
+  node: Extract<HtmlNode, { kind: "element" }>,
+  renderContent: HtmlContentRenderer,
+): InputRichBlock | undefined {
+  if (!node.closed) {
+    return undefined;
   }
-  if (Array.isArray(text)) {
-    return text.every(richTextIsBlank);
-  }
-  if (text.type === "mathematical_expression") {
-    return text.expression.trim() === "";
-  }
-  if (text.type === "custom_emoji") {
-    return false;
-  }
-  return richTextIsBlank(text.text);
-}
-
-/** Map island element nodes plus loose text into typed blocks. */
-function htmlNodesToBlocks(nodes: readonly HtmlNode[]): InputRichBlock[] {
-  const blocks: InputRichBlock[] = [];
-  let pendingInline: HtmlNode[] = [];
-  const flushInline = () => {
-    if (pendingInline.length === 0) {
-      return;
-    }
-    const text = htmlNodesToRichText(pendingInline);
-    pendingInline = [];
-    // Indentation between child tags collapses to spaces; a whitespace-only
-    // run is layout, not content, and must not mint blank paragraphs.
-    if (!richTextIsBlank(text)) {
-      blocks.push({ type: "paragraph", text });
-    }
-  };
-  for (const node of nodes) {
-    const block = node.kind === "element" ? elementToBlock(node) : undefined;
-    if (block) {
-      flushInline();
-      blocks.push(block);
-      continue;
-    }
-    if (node.kind === "element" && node.name === "p") {
-      flushInline();
-      const text = htmlNodesToRichText(node.children);
-      if (text !== "") {
-        blocks.push({ type: "paragraph", text });
-      }
-      continue;
-    }
-    pendingInline.push(node);
-  }
-  flushInline();
-  return blocks;
-}
-
-function elementToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBlock | undefined {
   switch (node.name) {
     case "hr":
       return { type: "divider" };
     case "details": {
       const summary = node.children.find(
         (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.name === "summary",
+          child.kind === "element" && child.closed && child.name === "summary",
       );
       const bodyNodes = node.children.filter((child) => child !== summary);
-      const blocks = htmlNodesToBlocks(bodyNodes);
+      const blocks = renderContent(bodyNodes);
       return {
         type: "details",
         summary: summary ? htmlNodesToRichText(summary.children) : "Details",
@@ -463,7 +428,7 @@ function elementToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRich
     }
     case "ul":
     case "ol":
-      return listToBlock(node);
+      return listToBlock(node, renderContent);
     case "table":
       return tableToBlock(node);
     case "figure":
@@ -475,9 +440,9 @@ function elementToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRich
     case "blockquote": {
       const cite = node.children.find(
         (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.name === "cite",
+          child.kind === "element" && child.closed && child.name === "cite",
       );
-      const blocks = htmlNodesToBlocks(node.children.filter((child) => child !== cite));
+      const blocks = renderContent(node.children.filter((child) => child !== cite));
       if (blocks.length === 0) {
         return undefined;
       }
@@ -489,7 +454,7 @@ function elementToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRich
     case "aside": {
       const cite = node.children.find(
         (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.name === "cite",
+          child.kind === "element" && child.closed && child.name === "cite",
       );
       const text = htmlNodesToRichText(node.children.filter((child) => child !== cite));
       if (text === "") {
@@ -528,105 +493,34 @@ function elementToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRich
   }
 }
 
-type TelegramHtmlIsland = {
-  start: number;
-  end: number;
-  blocks: InputRichBlock[];
-};
+export function renderTelegramHtmlIsland(
+  node: Extract<HtmlNode, { kind: "element" }>,
+  renderContent: HtmlContentRenderer,
+): InputRichBlock[] {
+  if (node.name === "p") {
+    return renderContent(node.children);
+  }
+  const block = elementToBlock(node, renderContent);
+  return block ? [block] : [{ type: "paragraph", text: htmlNodesToRichText([node]) }];
+}
 
-/**
- * Find supported block islands inside a text range. Returns non-overlapping
- * spans in order; text outside spans stays on the markdown paragraph path.
- */
-export function findTelegramHtmlIslands(text: string): TelegramHtmlIsland[] {
-  if (!text.includes("<")) {
-    return [];
-  }
-  const islands: TelegramHtmlIsland[] = [];
-  const tags = [...tokenizeHtmlTags(text)];
-  // Open non-island containers seen at scan level; a supported tag nested in an
-  // unsupported wrapper (<custom><hr/></custom>) must stay literal with it.
-  const openContainers: string[] = [];
-  let index = 0;
-  while (index < tags.length) {
-    const tag = tags[index];
-    if (!tag) {
-      index += 1;
-      continue;
+/** Select whole authored islands; unsupported and unmatched parents stay literal. */
+export function findTelegramHtmlIslands(
+  nodes: readonly HtmlNode[],
+): Array<Extract<HtmlNode, { kind: "element" }>> {
+  return nodes.filter((node): node is Extract<HtmlNode, { kind: "element" }> => {
+    if (node.kind !== "element" || !node.closed || !BLOCK_ISLAND_TAGS.has(node.name)) {
+      return false;
     }
-    const startsIsland =
-      !tag.closing && BLOCK_ISLAND_TAGS.has(tag.name) && openContainers.length === 0;
-    if (!startsIsland) {
-      if (tag.closing) {
-        const openIndex = openContainers.lastIndexOf(tag.name);
-        if (openIndex >= 0) {
-          openContainers.length = openIndex;
-        }
-      } else if (!tag.selfClosing && !VOID_TAGS.has(tag.name)) {
-        openContainers.push(tag.name);
-      }
-      index += 1;
-      continue;
+    if (node.name !== "a") {
+      return true;
     }
-    let end = tag.end;
-    const contentStart = tag.end;
-    let contentEnd = tag.end;
-    let matched = tag.selfClosing || VOID_TAGS.has(tag.name);
-    if (!matched) {
-      let depth = 1;
-      // Tag names quoted in prose (<code><details></code>) must not count
-      // toward matching; models routinely mention tags inside code spans.
-      let codeDepth = 0;
-      let scan = index + 1;
-      while (scan < tags.length) {
-        const candidate = tags[scan];
-        if (candidate && (candidate.name === "code" || candidate.name === "pre")) {
-          if (candidate.closing) {
-            codeDepth = Math.max(0, codeDepth - 1);
-          } else if (!candidate.selfClosing) {
-            codeDepth += 1;
-          }
-          scan += 1;
-          continue;
-        }
-        if (candidate && candidate.name === tag.name && codeDepth === 0) {
-          depth += candidate.closing ? -1 : candidate.selfClosing ? 0 : 1;
-          if (depth === 0) {
-            end = candidate.end;
-            contentEnd = candidate.start;
-            matched = true;
-            index = scan;
-            break;
-          }
-        }
-        scan += 1;
-      }
-    }
-    if (!matched) {
-      // An unclosed supported opener wraps everything after it; treating later
-      // tags as islands would extract blocks out of a malformed fragment.
-      openContainers.push(tag.name);
-      index += 1;
-      continue;
-    }
-    if (tag.name === "a") {
-      // Only an empty named anchor is a block; href/labelled links stay inline
-      // so a mid-sentence link never breaks its paragraph apart.
-      const attrs = parseHtmlAttrs(tag.raw);
-      const isEmptyNamedAnchor =
-        attrs.get("name") !== undefined &&
-        attrs.get("href") === undefined &&
-        text.slice(contentStart, contentEnd).trim() === "";
-      if (!isEmptyNamedAnchor) {
-        index += 1;
-        continue;
-      }
-    }
-    const blocks = htmlNodesToBlocks(parseHtmlFragment(text.slice(tag.start, end)));
-    if (blocks.length > 0) {
-      islands.push({ start: tag.start, end, blocks });
-    }
-    index += 1;
-  }
-  return islands;
+    const attrs = parseHtmlAttrs(node.raw);
+    // Hrefs and labelled links stay inline so they cannot split a sentence.
+    return (
+      attrs.has("name") &&
+      !attrs.has("href") &&
+      node.children.every((child) => child.kind === "text" && !child.text.trim())
+    );
+  });
 }

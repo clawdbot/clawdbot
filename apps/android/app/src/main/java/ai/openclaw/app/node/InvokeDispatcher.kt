@@ -4,292 +4,175 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.protocol.OpenClawCalendarCommand
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
+import ai.openclaw.app.protocol.OpenClawCapability
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMobileUiCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
+import ai.openclaw.app.protocol.OpenClawPhotosCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 
-/** Runtime state for SMS search, split so permission prompts are not reported as hard unavailability. */
-internal enum class SmsSearchAvailabilityReason {
-  Available,
-  PermissionRequired,
-  Unavailable,
-}
-
-/**
- * Distinguish permanent SMS search unavailability from permission-gated search.
- */
-internal fun classifySmsSearchAvailability(
-  readSmsAvailable: Boolean,
-  smsFeatureEnabled: Boolean,
-  smsTelephonyAvailable: Boolean,
-): SmsSearchAvailabilityReason {
-  if (readSmsAvailable) return SmsSearchAvailabilityReason.Available
-  if (!smsFeatureEnabled || !smsTelephonyAvailable) return SmsSearchAvailabilityReason.Unavailable
-  return SmsSearchAvailabilityReason.PermissionRequired
-}
-
-internal fun smsSearchAvailabilityError(
-  readSmsAvailable: Boolean,
-  smsFeatureEnabled: Boolean,
-  smsTelephonyAvailable: Boolean,
-): GatewaySession.InvokeResult? =
-  when (
-    classifySmsSearchAvailability(
-      readSmsAvailable = readSmsAvailable,
-      smsFeatureEnabled = smsFeatureEnabled,
-      smsTelephonyAvailable = smsTelephonyAvailable,
-    )
-  ) {
-    SmsSearchAvailabilityReason.Available,
-    SmsSearchAvailabilityReason.PermissionRequired,
-    -> null
-    SmsSearchAvailabilityReason.Unavailable ->
-      GatewaySession.InvokeResult.error(
-        code = "SMS_UNAVAILABLE",
-        message = "SMS_UNAVAILABLE: SMS not available on this device",
-      )
-  }
-
-/**
- * Gateway node.invoke command router for Android-owned capabilities.
- */
+/** Owns Android command bindings and their live advertised/invoke availability. */
 class InvokeDispatcher(
-  private val cameraHandler: CameraHandler,
-  private val locationHandler: LocationHandler,
-  private val deviceHandler: DeviceHandler,
-  private val notificationsHandler: NotificationsHandler,
-  private val systemHandler: SystemHandler,
-  private val talkHandler: TalkHandler,
-  private val photosHandler: PhotosHandler,
-  private val contactsHandler: ContactsHandler,
-  private val calendarHandler: CalendarHandler,
-  private val motionHandler: MotionHandler,
-  private val smsHandler: SmsHandler,
-  private val debugHandler: DebugHandler,
-  private val callLogHandler: CallLogHandler,
-  private val mobileUiHandler: MobileUiHandler,
+  cameraHandler: CameraHandler,
+  locationHandler: LocationHandler,
+  deviceHandler: DeviceHandler,
+  notificationsHandler: NotificationsHandler,
+  systemHandler: SystemHandler,
+  talkHandler: TalkHandler,
+  photosHandler: PhotosHandler,
+  contactsHandler: ContactsHandler,
+  calendarHandler: CalendarHandler,
+  motionHandler: MotionHandler,
+  smsHandler: SmsHandler,
+  debugHandler: DebugHandler,
+  callLogHandler: CallLogHandler,
+  mobileUiHandler: MobileUiHandler,
   private val isForeground: () -> Boolean,
-  private val cameraEnabled: () -> Boolean,
-  private val locationEnabled: () -> Boolean,
-  private val sendSmsAvailable: () -> Boolean,
+  cameraEnabled: () -> Boolean,
+  locationEnabled: () -> Boolean,
+  sendSmsAvailable: () -> Boolean,
   private val readSmsAvailable: () -> Boolean,
-  private val smsFeatureEnabled: () -> Boolean,
-  private val smsTelephonyAvailable: () -> Boolean,
-  private val callLogAvailable: () -> Boolean,
-  private val photosAvailable: () -> Boolean,
-  private val installedAppsSharingEnabled: () -> Boolean,
-  private val debugBuild: () -> Boolean,
-  private val motionActivityAvailable: () -> Boolean,
-  private val motionPedometerAvailable: () -> Boolean,
-  private val mobileUiAvailable: () -> Boolean,
+  smsSearchPossible: () -> Boolean,
+  callLogAvailable: () -> Boolean,
+  photosAvailable: () -> Boolean,
+  installedAppsSharingEnabled: () -> Boolean,
+  debugBuild: () -> Boolean,
+  motionActivityAvailable: () -> Boolean,
+  motionPedometerAvailable: () -> Boolean,
+  mobileUiAvailable: () -> Boolean,
+  private val voiceWakeAvailable: () -> Boolean,
 ) {
-  /** Dispatches one gateway node.invoke command after foreground and availability gates pass. */
+  private class CommandGate(
+    val isAvailable: () -> Boolean,
+    val unavailable: GatewaySession.InvokeResult,
+    val isAdvertised: () -> Boolean = isAvailable,
+  )
+
+  private class Command(
+    val name: String,
+    val invoke: suspend (String?) -> GatewaySession.InvokeResult,
+    val gate: CommandGate? = null,
+    val requiresForeground: Boolean = false,
+  )
+
+  private val cameraGate =
+    CommandGate(cameraEnabled, unavailable("CAMERA_DISABLED", "enable Camera in Settings"))
+  private val locationGate =
+    CommandGate(locationEnabled, unavailable("LOCATION_DISABLED", "enable Location in Settings"))
+  private val motionActivityGate =
+    CommandGate(motionActivityAvailable, unavailable("MOTION_UNAVAILABLE", "accelerometer not available"))
+  private val motionPedometerGate =
+    CommandGate(motionPedometerAvailable, unavailable("PEDOMETER_UNAVAILABLE", "step counter not available"))
+  private val smsUnavailable = unavailable("SMS_UNAVAILABLE", "SMS not available on this device")
+  private val smsSendGate = CommandGate(sendSmsAvailable, smsUnavailable)
+  private val smsSearchGate =
+    CommandGate(
+      isAvailable = { readSmsAvailable() || smsSearchPossible() },
+      unavailable = smsUnavailable,
+      // Search is advertised before READ_SMS is granted so its handler can request permission.
+      isAdvertised = smsSearchPossible,
+    )
+  private val callLogGate =
+    CommandGate(callLogAvailable, unavailable("CALL_LOG_UNAVAILABLE", "call log not available on this build"))
+  private val photosGate =
+    CommandGate(photosAvailable, unavailable("PHOTOS_UNAVAILABLE", "photos not available on this build"))
+  private val installedAppsGate =
+    CommandGate(installedAppsSharingEnabled, unavailable("INSTALLED_APPS_SHARING_DISABLED", "enable Installed Apps in Settings"))
+  private val debugGate =
+    CommandGate(debugBuild, unavailable("INVALID_REQUEST", "unknown command"))
+  private val mobileUiGate =
+    CommandGate(mobileUiAvailable, unavailable("MOBILE_UI_UNAVAILABLE", "accessibility service is not connected"))
+
+  // Keep protocol ordering stable. The same entries advertise and dispatch each bound handler.
+  private val commands =
+    listOf(
+      Command(OpenClawSystemCommand.Notify.rawValue, systemHandler::handleSystemNotify),
+      Command(OpenClawTalkCommand.PttStart.rawValue, talkHandler::handlePttStart),
+      Command(OpenClawTalkCommand.PttStop.rawValue, talkHandler::handlePttStop),
+      Command(OpenClawTalkCommand.PttCancel.rawValue, talkHandler::handlePttCancel),
+      Command(OpenClawTalkCommand.PttOnce.rawValue, talkHandler::handlePttOnce, requiresForeground = true),
+      Command(OpenClawCameraCommand.List.rawValue, cameraHandler::handleList, cameraGate, requiresForeground = true),
+      Command(OpenClawCameraCommand.Snap.rawValue, cameraHandler::handleSnap, cameraGate, requiresForeground = true),
+      Command(OpenClawCameraCommand.Clip.rawValue, cameraHandler::handleClip, cameraGate, requiresForeground = true),
+      Command(OpenClawLocationCommand.Get.rawValue, locationHandler::handleLocationGet, locationGate),
+      Command(OpenClawDeviceCommand.Status.rawValue, deviceHandler::handleDeviceStatus),
+      Command(OpenClawDeviceCommand.Info.rawValue, deviceHandler::handleDeviceInfo),
+      Command(OpenClawDeviceCommand.Permissions.rawValue, deviceHandler::handleDevicePermissions),
+      Command(OpenClawDeviceCommand.Health.rawValue, deviceHandler::handleDeviceHealth),
+      Command(OpenClawDeviceCommand.Apps.rawValue, deviceHandler::handleDeviceApps, installedAppsGate),
+      Command(OpenClawNotificationsCommand.List.rawValue, notificationsHandler::handleNotificationsList),
+      Command(OpenClawNotificationsCommand.Actions.rawValue, notificationsHandler::handleNotificationsActions),
+      Command(OpenClawPhotosCommand.Latest.rawValue, photosHandler::handlePhotosLatest, photosGate),
+      Command(OpenClawContactsCommand.Search.rawValue, contactsHandler::handleContactsSearch),
+      Command(OpenClawContactsCommand.Add.rawValue, contactsHandler::handleContactsAdd),
+      Command(OpenClawCalendarCommand.Events.rawValue, calendarHandler::handleCalendarEvents),
+      Command(OpenClawCalendarCommand.Add.rawValue, calendarHandler::handleCalendarAdd),
+      Command(OpenClawMotionCommand.Activity.rawValue, motionHandler::handleMotionActivity, motionActivityGate),
+      Command(OpenClawMotionCommand.Pedometer.rawValue, motionHandler::handleMotionPedometer, motionPedometerGate),
+      Command(OpenClawSmsCommand.Send.rawValue, smsHandler::handleSmsSend, smsSendGate),
+      Command(OpenClawSmsCommand.Search.rawValue, smsHandler::handleSmsSearch, smsSearchGate),
+      Command(OpenClawCallLogCommand.Search.rawValue, callLogHandler::handleCallLogSearch, callLogGate),
+      Command(OpenClawMobileUiCommand.Observe.rawValue, mobileUiHandler::handleObserve, mobileUiGate),
+      Command(OpenClawMobileUiCommand.Act.rawValue, mobileUiHandler::handleAct, mobileUiGate),
+      Command("debug.logs", { debugHandler.handleLogs() }, debugGate),
+      Command("debug.ed25519", { debugHandler.handleEd25519() }, debugGate),
+    )
+  private val commandsByName = commands.associateBy(Command::name)
+
   suspend fun handleInvoke(
     command: String,
     paramsJson: String?,
   ): GatewaySession.InvokeResult {
-    val spec =
-      InvokeCommandRegistry.find(command)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: unknown command",
-        )
-    if (spec.requiresForeground && !isForeground()) {
-      // Foreground-only commands need an active Activity surface before touching UI or capture APIs.
-      return GatewaySession.InvokeResult.error(
-        code = "NODE_BACKGROUND_UNAVAILABLE",
-        message = "NODE_BACKGROUND_UNAVAILABLE: command requires foreground",
-      )
+    val binding = commandsByName[command] ?: return unavailable("INVALID_REQUEST", "unknown command")
+    if (binding.requiresForeground && !isForeground()) {
+      return unavailable("NODE_BACKGROUND_UNAVAILABLE", "command requires foreground")
     }
-    availabilityError(spec.availability)?.let { return it }
-
-    return dispatchInvoke(command, paramsJson)
+    val gate = binding.gate
+    if (gate != null && !gate.isAvailable()) return gate.unavailable
+    return binding.invoke(paramsJson)
   }
 
-  private suspend fun dispatchInvoke(
-    command: String,
-    paramsJson: String?,
-  ): GatewaySession.InvokeResult {
-    // Command strings come from OpenClawProtocolConstants; the registry above owns advertised availability.
-    return when (command) {
-      // Camera commands
-      OpenClawCameraCommand.List.rawValue -> cameraHandler.handleList(paramsJson)
-      OpenClawCameraCommand.Snap.rawValue -> cameraHandler.handleSnap(paramsJson)
-      OpenClawCameraCommand.Clip.rawValue -> cameraHandler.handleClip(paramsJson)
-
-      // Location command
-      OpenClawLocationCommand.Get.rawValue -> locationHandler.handleLocationGet(paramsJson)
-
-      // Device commands
-      OpenClawDeviceCommand.Status.rawValue -> deviceHandler.handleDeviceStatus(paramsJson)
-      OpenClawDeviceCommand.Info.rawValue -> deviceHandler.handleDeviceInfo(paramsJson)
-      OpenClawDeviceCommand.Permissions.rawValue -> deviceHandler.handleDevicePermissions(paramsJson)
-      OpenClawDeviceCommand.Health.rawValue -> deviceHandler.handleDeviceHealth(paramsJson)
-      OpenClawDeviceCommand.Apps.rawValue -> deviceHandler.handleDeviceApps(paramsJson)
-
-      // Notifications command
-      OpenClawNotificationsCommand.List.rawValue -> notificationsHandler.handleNotificationsList(paramsJson)
-      OpenClawNotificationsCommand.Actions.rawValue -> notificationsHandler.handleNotificationsActions(paramsJson)
-
-      // System command
-      OpenClawSystemCommand.Notify.rawValue -> systemHandler.handleSystemNotify(paramsJson)
-
-      // Talk commands
-      OpenClawTalkCommand.PttStart.rawValue -> talkHandler.handlePttStart(paramsJson)
-      OpenClawTalkCommand.PttStop.rawValue -> talkHandler.handlePttStop(paramsJson)
-      OpenClawTalkCommand.PttCancel.rawValue -> talkHandler.handlePttCancel(paramsJson)
-      OpenClawTalkCommand.PttOnce.rawValue -> talkHandler.handlePttOnce(paramsJson)
-
-      // Photos command
-      ai.openclaw.app.protocol.OpenClawPhotosCommand.Latest.rawValue ->
-        photosHandler.handlePhotosLatest(
-          paramsJson,
-        )
-
-      // Contacts command
-      OpenClawContactsCommand.Search.rawValue -> contactsHandler.handleContactsSearch(paramsJson)
-      OpenClawContactsCommand.Add.rawValue -> contactsHandler.handleContactsAdd(paramsJson)
-
-      // Calendar command
-      OpenClawCalendarCommand.Events.rawValue -> calendarHandler.handleCalendarEvents(paramsJson)
-      OpenClawCalendarCommand.Add.rawValue -> calendarHandler.handleCalendarAdd(paramsJson)
-
-      // Motion command
-      OpenClawMotionCommand.Activity.rawValue -> motionHandler.handleMotionActivity(paramsJson)
-      OpenClawMotionCommand.Pedometer.rawValue -> motionHandler.handleMotionPedometer(paramsJson)
-
-      // SMS command
-      OpenClawSmsCommand.Send.rawValue -> smsHandler.handleSmsSend(paramsJson)
-      OpenClawSmsCommand.Search.rawValue -> smsHandler.handleSmsSearch(paramsJson)
-
-      // CallLog command
-      OpenClawCallLogCommand.Search.rawValue -> callLogHandler.handleCallLogSearch(paramsJson)
-
-      // Mobile accessibility commands
-      OpenClawMobileUiCommand.Observe.rawValue -> mobileUiHandler.handleObserve(paramsJson)
-      OpenClawMobileUiCommand.Act.rawValue -> mobileUiHandler.handleAct(paramsJson)
-
-      // Debug commands
-      "debug.ed25519" -> debugHandler.handleEd25519()
-      "debug.logs" -> debugHandler.handleLogs()
-      else -> GatewaySession.InvokeResult.error(code = "INVALID_REQUEST", message = "INVALID_REQUEST: unknown command")
-    }
+  fun buildInvokeCommands(): List<String> {
+    // A settings change must not split a command family within one connect payload.
+    val availability = mutableMapOf<CommandGate, Boolean>()
+    return commands
+      .filter { command ->
+        val gate = command.gate
+        gate == null || availability.getOrPut(gate, gate.isAdvertised)
+      }.map(Command::name)
   }
 
-  private fun availabilityError(availability: InvokeCommandAvailability): GatewaySession.InvokeResult? =
-    when (availability) {
-      InvokeCommandAvailability.Always -> null
-      InvokeCommandAvailability.CameraEnabled ->
-        if (cameraEnabled()) {
-          null
-        } else {
-          GatewaySession.InvokeResult.error(
-            code = "CAMERA_DISABLED",
-            message = "CAMERA_DISABLED: enable Camera in Settings",
-          )
-        }
-      InvokeCommandAvailability.LocationEnabled ->
-        if (locationEnabled()) {
-          null
-        } else {
-          GatewaySession.InvokeResult.error(
-            code = "LOCATION_DISABLED",
-            message = "LOCATION_DISABLED: enable Location in Settings",
-          )
-        }
-      InvokeCommandAvailability.MotionActivityAvailable ->
-        if (motionActivityAvailable()) {
-          null
-        } else {
-          GatewaySession.InvokeResult.error(
-            code = "MOTION_UNAVAILABLE",
-            message = "MOTION_UNAVAILABLE: accelerometer not available",
-          )
-        }
-      InvokeCommandAvailability.MotionPedometerAvailable ->
-        if (motionPedometerAvailable()) {
-          null
-        } else {
-          GatewaySession.InvokeResult.error(
-            code = "PEDOMETER_UNAVAILABLE",
-            message = "PEDOMETER_UNAVAILABLE: step counter not available",
-          )
-        }
-      InvokeCommandAvailability.SendSmsAvailable ->
-        if (sendSmsAvailable()) {
-          null
-        } else {
-          GatewaySession.InvokeResult.error(
-            code = "SMS_UNAVAILABLE",
-            message = "SMS_UNAVAILABLE: SMS not available on this device",
-          )
-        }
-      InvokeCommandAvailability.ReadSmsAvailable,
-      InvokeCommandAvailability.RequestableSmsSearchAvailable,
-      ->
-        // SMS search may still be advertised as promptable; runtime invoke fails only on permanent unavailability.
-        smsSearchAvailabilityError(
-          readSmsAvailable = readSmsAvailable(),
-          smsFeatureEnabled = smsFeatureEnabled(),
-          smsTelephonyAvailable = smsTelephonyAvailable(),
-        )
-      InvokeCommandAvailability.CallLogAvailable ->
-        if (callLogAvailable()) {
-          null
-        } else {
-          GatewaySession.InvokeResult.error(
-            code = "CALL_LOG_UNAVAILABLE",
-            message = "CALL_LOG_UNAVAILABLE: call log not available on this build",
-          )
-        }
-      InvokeCommandAvailability.PhotosAvailable ->
-        if (photosAvailable()) {
-          null
-        } else {
-          GatewaySession.InvokeResult.error(
-            code = "PHOTOS_UNAVAILABLE",
-            message = "PHOTOS_UNAVAILABLE: photos not available on this build",
-          )
-        }
-      InvokeCommandAvailability.InstalledAppsSharingEnabled ->
-        if (installedAppsSharingEnabled()) {
-          null
-        } else {
-          GatewaySession.InvokeResult.error(
-            code = "INSTALLED_APPS_SHARING_DISABLED",
-            message = "INSTALLED_APPS_SHARING_DISABLED: enable Installed Apps in Settings",
-          )
-        }
-      InvokeCommandAvailability.DebugBuild ->
-        if (debugBuild()) {
-          null
-        } else {
-          GatewaySession.InvokeResult.error(
-            code = "INVALID_REQUEST",
-            message = "INVALID_REQUEST: unknown command",
-          )
-        }
-      InvokeCommandAvailability.MobileUiAvailable ->
-        if (mobileUiAvailable()) {
-          null
-        } else {
-          GatewaySession.InvokeResult.error(
-            code = "MOBILE_UI_UNAVAILABLE",
-            message = "MOBILE_UI_UNAVAILABLE: accessibility service is not connected",
-          )
-        }
+  fun buildCapabilities(): List<String> =
+    buildList {
+      add(OpenClawCapability.Device.rawValue)
+      add(OpenClawCapability.Notifications.rawValue)
+      add(OpenClawCapability.System.rawValue)
+      if (cameraGate.isAvailable()) add(OpenClawCapability.Camera.rawValue)
+      // A promptable search alone does not advertise the SMS capability.
+      if (smsSendGate.isAvailable() || readSmsAvailable()) add(OpenClawCapability.Sms.rawValue)
+      add(OpenClawCapability.Talk.rawValue)
+      if (locationGate.isAvailable()) add(OpenClawCapability.Location.rawValue)
+      if (photosGate.isAvailable()) add(OpenClawCapability.Photos.rawValue)
+      add(OpenClawCapability.Contacts.rawValue)
+      add(OpenClawCapability.Calendar.rawValue)
+      if (motionActivityGate.isAvailable() || motionPedometerGate.isAvailable()) add(OpenClawCapability.Motion.rawValue)
+      if (callLogGate.isAvailable()) add(OpenClawCapability.CallLog.rawValue)
+      if (voiceWakeAvailable()) add(OpenClawCapability.VoiceWake.rawValue)
+      if (mobileUiGate.isAvailable()) add(OpenClawCapability.MobileUI.rawValue)
     }
+
+  private fun unavailable(
+    code: String,
+    message: String,
+  ): GatewaySession.InvokeResult = GatewaySession.InvokeResult.error(code, "$code: $message")
 }
 
-/**
- * Talk-mode command adapter implemented by the voice subsystem.
- */
+/** Talk-mode command adapter implemented by the voice subsystem. */
 interface TalkHandler {
   /** Starts a push-to-talk capture session and keeps it open until stop or cancel. */
   suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult

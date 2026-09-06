@@ -3,13 +3,23 @@ import fsCore from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
+import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import {
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
@@ -32,26 +42,62 @@ import {
   runMemoryFlushIfNeeded as runMemoryFlushIfNeededRaw,
   runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw,
 } from "./agent-runner-memory.js";
-import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import {
   createTestFollowupRun,
-  createTestTemplateContext,
   withTestModelContextTokens,
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { createSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
-const compactEmbeddedAgentSessionMock = vi.fn();
+const {
+  compactEmbeddedAgentSessionMock,
+  runEmbeddedAgentEntryMock,
+  runEmbeddedAgentMock,
+  refreshQueuedFollowupSessionMock,
+  incrementCompactionCountMock,
+  registerAgentRunContextMock,
+  clearAgentRunContextMock,
+} = vi.hoisted(() => ({
+  compactEmbeddedAgentSessionMock: vi.fn(),
+  runEmbeddedAgentEntryMock: vi.fn(),
+  runEmbeddedAgentMock: vi.fn(),
+  refreshQueuedFollowupSessionMock: vi.fn(),
+  incrementCompactionCountMock: vi.fn(),
+  registerAgentRunContextMock: vi.fn(),
+  clearAgentRunContextMock: vi.fn(),
+}));
 const runWithModelFallbackMock = vi.fn();
-const runEmbeddedAgentEntryMock = vi.fn();
-const runEmbeddedAgentMock = vi.fn();
-const refreshQueuedFollowupSessionMock = vi.fn();
-const incrementCompactionCountMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
-const ensureMemoryFlushTargetFileMock = vi.fn();
-const registerAgentRunContextMock = vi.fn();
-const clearAgentRunContextMock = vi.fn();
+
+vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({
+  runEmbeddedAgentEntry: runEmbeddedAgentEntryMock,
+}));
+vi.mock("../../agents/embedded-agent.js", () => ({
+  compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock,
+  runEmbeddedAgent: runEmbeddedAgentMock,
+}));
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
+  refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
+}));
+vi.mock("./session-updates.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-updates.js")>()),
+  incrementCompactionCount: incrementCompactionCountMock,
+}));
+vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
+  registerAgentRunContext: registerAgentRunContextMock,
+  clearAgentRunContext: clearAgentRunContextMock,
+}));
+
+let incrementCompactionCount: typeof import("./session-updates.js").incrementCompactionCount;
+beforeAll(async () => {
+  ({ incrementCompactionCount } =
+    await vi.importActual<typeof import("./session-updates.js")>("./session-updates.js"));
+});
+
 const TEST_MAX_FLUSH_FAILURES = 3;
 
 type MemoryFlushTestParams = Parameters<typeof runMemoryFlushIfNeededRaw>[0] & {
@@ -139,49 +185,12 @@ type TestReplyOperation = ReplyOperation & {
 };
 
 function createReplyOperation(): TestReplyOperation {
-  const now = Date.now();
-  return {
-    key: "test",
-    sessionId: "session",
-    turnKind: "visible",
-    abortSignal: new AbortController().signal,
-    staleExpiryReason: undefined,
-    resetTriggered: false,
-    terminalRecovery: false,
-    acceptedSteeredInboundAudio: false,
-    startedAtMs: now,
-    lastActivityAtMs: now,
-    phase: "queued",
-    result: null,
-    recordActivity: vi.fn(),
-    hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
+  const { replyOperation } = createMockReplyOperation({ key: "test" });
+  return Object.assign(replyOperation, {
+    phase: "queued" as const,
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
-    updateSessionKey: vi.fn<ReplyOperation["updateSessionKey"]>(),
-    bindToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityProjector: vi.fn(),
-    projectToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityRoute: vi.fn(),
-    attachBackend: vi.fn(),
-    detachBackend: vi.fn(),
-    freezeAbort: vi.fn(),
-    retainFailureUntilComplete: vi.fn(),
-    complete: vi.fn(),
-    completeThen: vi.fn((afterClear: () => void) => {
-      afterClear();
-    }),
-    completeWithAfterClearBarrier: vi.fn(),
-    fail: vi.fn(),
-    abortByUser: vi.fn(() => true),
-    abortForRestart: vi.fn(() => true),
-    supersede: vi.fn(() => true),
-    markTerminalRecovery: vi.fn(),
-    markAcceptedSteeredInboundAudio: vi.fn(),
-    markWaitingForDeferredMaintenance: vi.fn(),
-    markDeferredMaintenanceWaitEnded: vi.fn(),
-    markWaitingForGlobalLane: vi.fn(),
-    markGlobalLaneWaitEnded: vi.fn(),
-  };
+  });
 }
 
 function createCompactionLifecycle(replyOperation: ReplyOperation) {
@@ -217,13 +226,6 @@ async function writeTestSessionTranscript(params: {
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 10 });
   await replaceTranscriptEvents(scope, params.events);
 }
-
-type RefreshQueuedFollowupSessionParams = {
-  key?: string;
-  previousSessionId?: string;
-  nextSessionId?: string;
-  nextSessionFile?: string;
-};
 
 type ModelFallbackParams = {
   provider?: string;
@@ -261,6 +263,8 @@ function modelRoutingProvenance(
 }
 
 type EmbeddedAgentParams = {
+  preparedRunAdmission?: PreparedAgentRunAdmission;
+  sessionManager?: SessionManager;
   provider?: string;
   model?: string;
   thinkLevel?: string;
@@ -306,16 +310,6 @@ type CompactEmbeddedAgentSessionParams = {
   trigger?: string;
 };
 
-function requireRefreshQueuedFollowupSessionCall(index = 0) {
-  const call = refreshQueuedFollowupSessionMock.mock.calls[index]?.[0] as
-    | RefreshQueuedFollowupSessionParams
-    | undefined;
-  if (!call) {
-    throw new Error(`refreshQueuedFollowupSession call ${index} missing`);
-  }
-  return call;
-}
-
 function requireModelFallbackCall(index = 0) {
   const call = runWithModelFallbackMock.mock.calls[index]?.[0] as ModelFallbackParams | undefined;
   if (!call) {
@@ -342,6 +336,33 @@ function requireCompactEmbeddedAgentSessionCall(index = 0) {
   return call;
 }
 
+async function commitSourceCompaction(params: { sessionKey: string; storePath: string }) {
+  const entry = loadSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
+  if (!entry) {
+    throw new Error("expected compaction predecessor");
+  }
+  const accepted = await acceptCompactionSuccessor({
+    currentTarget: {
+      agentId: "main",
+      sessionId: entry.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    expectedEntry: {
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      activeWriterRunId: entry.activeWriterRunId,
+    },
+    assertActive: () => {},
+    result: {
+      ok: true,
+      compacted: true,
+      result: { sessionId: "session-rotated", tokensBefore: 120, tokensAfter: 42 },
+    },
+  });
+  return accepted;
+}
+
 describe("runMemoryFlushIfNeeded", () => {
   let rootDir = "";
 
@@ -353,13 +374,13 @@ describe("runMemoryFlushIfNeeded", () => {
     return await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
       sessionEntry,
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
+      storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
       replyOperation: createReplyOperation(),
       ...overrides,
@@ -386,26 +407,36 @@ describe("runMemoryFlushIfNeeded", () => {
     });
   }
 
-  async function runProjectedCompaction(completed: boolean, followupRun = createTestFollowupRun()) {
+  async function createOversizedByteCompactionFixture() {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
-    const sessionEntry = createFlushSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
-    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
-    runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onAgentEvent?.({ stream: "compaction", data: { phase: "end", completed } });
-      return {
-        payloads: [],
-        meta: { agentMeta: { sessionId: "session-rotated" } },
-      };
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [{ type: "message", message: { role: "user", content: "x".repeat(256) } }],
     });
-    const result = await runDefaultMemoryFlush(sessionEntry, {
-      followupRun,
-      sessionStore,
-      sessionKey,
-      storePath,
-    });
-    return { followupRun, result, sessionKey, storePath };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+    };
+    await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, sessionEntry);
+    const run = async (entry: SessionEntry, maxActiveTranscriptBytes = "10b") =>
+      await runSessionCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { maxActiveTranscriptBytes } } } },
+        followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        modelContextTokens: 100_000,
+        sessionEntry: entry,
+        sessionStore: { [sessionKey]: entry },
+        sessionKey,
+        storePath,
+        isHeartbeat: false,
+        ...createCompactionLifecycle(createReplyOperation()),
+      });
+    return { run, sessionEntry, storePath };
   }
 
   beforeEach(async () => {
@@ -423,6 +454,9 @@ describe("runMemoryFlushIfNeeded", () => {
       .mockReset()
       .mockImplementation(
         async (params: Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0]) => {
+          const assistantErrorTranscript = createAssistantErrorTranscript({
+            runId: params.identity.runId,
+          });
           const fallbackResult = (await runWithModelFallbackMock({
             ...params.selection,
             ...params.identity,
@@ -454,6 +488,8 @@ describe("runMemoryFlushIfNeeded", () => {
               options: Parameters<ModelFallbackParams["run"]>[2],
             ) =>
               params.runCandidate(provider, model, {
+                assistantErrorTranscript,
+                classifyResult: () => undefined,
                 allowTransientCooldownProbe: options.allowTransientCooldownProbe,
                 isFinalFallbackAttempt: options.isFinalFallbackAttempt,
                 isFallbackRetry: false,
@@ -486,7 +522,6 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     runEmbeddedAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
     refreshQueuedFollowupSessionMock.mockReset();
-    ensureMemoryFlushTargetFileMock.mockReset().mockResolvedValue(undefined);
     ensureSelectedAgentHarnessPluginMock.mockReset().mockResolvedValue(undefined);
     registerAgentRunContextMock.mockReset();
     clearAgentRunContextMock.mockReset();
@@ -498,33 +533,18 @@ describe("runMemoryFlushIfNeeded", () => {
       const previous = params.sessionStore[sessionKey] as SessionEntry;
       const nextEntry: SessionEntry = {
         ...previous,
-        compactionCount: (previous.compactionCount ?? 0) + 1,
+        compactionCount: (previous.compactionCount ?? 0) + Math.max(0, params.amount ?? 1),
+        transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
       };
-      if (typeof params.newSessionId === "string" && params.newSessionId) {
-        nextEntry.sessionId = params.newSessionId;
-      }
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
         await writeTestSessionStore(params.storePath, sessionKey, nextEntry);
       }
       return nextEntry.compactionCount;
     });
-    setAgentRunnerMemoryTestDeps({
-      compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock as never,
-      runEmbeddedAgentEntry: runEmbeddedAgentEntryMock as never,
-      runEmbeddedAgent: runEmbeddedAgentMock as never,
-      ensureMemoryFlushTargetFile: ensureMemoryFlushTargetFileMock as never,
-      refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
-      incrementCompactionCount: incrementCompactionCountMock as never,
-      clearAgentRunContext: clearAgentRunContextMock as never,
-      registerAgentRunContext: registerAgentRunContextMock as never,
-      randomUUID: () => "00000000-0000-0000-0000-000000000001",
-      now: () => 1_700_000_000_000,
-    });
   });
 
   afterEach(async () => {
-    setAgentRunnerMemoryTestDeps();
     cliBackendsTesting.resetDepsForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearMemoryPluginState();
@@ -547,10 +567,10 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it.each([
-    ["default", 8_767, false, false],
-    ["default", 8_768, true, false],
-    ["default", 12_767, true, false],
-    ["default", 12_768, true, true],
+    ["provider", 8_767, false, false],
+    ["provider", 8_768, true, false],
+    ["provider", 12_767, true, false],
+    ["provider", 12_768, true, true],
     ["custom", 18_767, false, false],
     ["custom", 18_768, true, false],
     ["custom", 20_767, true, false],
@@ -581,76 +601,89 @@ describe("runMemoryFlushIfNeeded", () => {
     },
   );
 
-  it("runs exactly one auto-reply memory flush turn, rotates, and persists metadata", async () => {
-    const followupRun = createTestFollowupRun({
-      authProfileId: "anthropic:work",
-      authProfileIdSource: "user",
-      allowEmptyAssistantReplyAsSilent: false,
-      terminalReplyExpectation: "required",
+  it("reuses its private buffer and admitted lifecycle across a model fallback", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = createFlushSessionEntry({ lifecycleRevision: "memory-generation" });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+    const primaryError = new Error("primary failed after private compaction");
+    let memorySession: SessionManager | undefined;
+    let admission: PreparedAgentRunAdmission | undefined;
+    let admittedContext: AdmittedRunContext | undefined;
+    runEmbeddedAgentMock
+      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        admission = params.preparedRunAdmission;
+        memorySession = params.sessionManager;
+        if (!admission || !memorySession) {
+          throw new Error("Missing private memory runtime");
+        }
+        expect(memorySession.getSessionTarget()).toBeUndefined();
+        admittedContext = await admission.admit("embedded");
+        expect(getAdmittedRunDelegatedAuthority(admittedContext)).toBeDefined();
+        const retained = memorySession.appendMessage({
+          role: "user",
+          content: "Private retained work",
+          timestamp: 1,
+        });
+        memorySession.appendCompaction("Private summary", retained, 120);
+        throw primaryError;
+      })
+      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        if (!memorySession || !admission || !admittedContext) {
+          throw new Error("Missing first memory attempt");
+        }
+        expect(params.sessionManager).toBe(memorySession);
+        expect(params.preparedRunAdmission).toBe(admission);
+        expect(await admission.admit("embedded")).toBe(admittedContext);
+        expect(getAdmittedRunDelegatedAuthority(admittedContext)).toBeDefined();
+        expect(memorySession.getBranch().at(-1)).toMatchObject({
+          type: "compaction",
+          summary: "Private summary",
+        });
+        expect(loadMainSessionEntry(storePath).compactionCount).toBe(1);
+        return { payloads: [], meta: {} };
+      });
+    runWithModelFallbackMock.mockImplementationOnce(async (params: ModelFallbackParams) => {
+      await expect(
+        params.run("anthropic", "claude", {
+          modelRoutingProvenance: modelRoutingProvenance("anthropic", "claude"),
+        }),
+      ).rejects.toBe(primaryError);
+      return {
+        result: await params.run("anthropic", "fallback", {
+          modelRoutingProvenance: modelRoutingProvenance("anthropic", "claude", "fallback"),
+        }),
+        provider: "anthropic",
+        model: "fallback",
+        attempts: [],
+      };
     });
-    const { result, sessionKey, storePath } = await runProjectedCompaction(true, followupRun);
-
-    expect(result.outcome).toBe("completed");
-    expect(result.sessionEntry?.sessionId).toBe("session-rotated");
-    expect(followupRun.run.sessionId).toBe("session-rotated");
-    expect(runEmbeddedAgentEntryMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    expect(requireModelFallbackCall().userLockedAuthProfileId).toBe("anthropic:work");
-    const flushCall = requireEmbeddedAgentCall();
-    expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
-    expect(flushCall.transcriptPrompt).toBe("");
-    expect(flushCall.prompt).not.toBe(flushCall.transcriptPrompt);
-    expect(flushCall.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
-    expect(flushCall.silentExpected).toBe(true);
-    expect(flushCall.allowEmptyAssistantReplyAsSilent).toBe(true);
-    expect(flushCall.terminalReplyExpectation).toBe("optional");
-    expect(registerAgentRunContextMock).toHaveBeenCalledWith(
-      "00000000-0000-0000-0000-000000000001",
-      expect.objectContaining({
-        isControlUiVisible: false,
-        projectSessionActive: false,
-        projectSessionLifecycle: false,
-        projectSessionMessages: false,
-        sessionId: "session",
-        sessionKey,
+    const result = await runDefaultMemoryFlush(sessionEntry, {
+      followupRun: createTestFollowupRun({
+        thinkingCatalog: [
+          { provider: "anthropic", id: "claude", input: ["text"] },
+          { provider: "anthropic", id: "fallback", input: ["text"] },
+        ],
       }),
-    );
-    expect(ensureMemoryFlushTargetFileMock).toHaveBeenCalledWith({
-      workspaceDir: followupRun.run.workspaceDir,
-      relativePath: flushCall.memoryFlushWritePath,
+      sessionStore,
+      sessionKey,
+      storePath,
     });
-    expect(ensureMemoryFlushTargetFileMock.mock.invocationCallOrder[0]).toBeLessThan(
-      registerAgentRunContextMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(registerAgentRunContextMock.mock.invocationCallOrder[0]).toBeLessThan(
-      runEmbeddedAgentEntryMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(runEmbeddedAgentEntryMock.mock.invocationCallOrder[0]).toBeLessThan(
-      clearAgentRunContextMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(clearAgentRunContextMock).toHaveBeenCalledOnce();
-    expect(clearAgentRunContextMock).toHaveBeenCalledWith("00000000-0000-0000-0000-000000000001");
-    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledTimes(1);
-    const refreshCall = requireRefreshQueuedFollowupSessionCall();
-    expect(refreshCall.key).toBe(sessionKey);
-    expect(refreshCall.previousSessionId).toBe("session");
-    expect(refreshCall.nextSessionId).toBe("session-rotated");
-    expect(refreshCall.nextSessionFile).toBe(sessionKey);
-
-    const persisted = loadMainSessionEntry(storePath);
-    expect(persisted.sessionId).toBe("session-rotated");
-    expect(persisted.compactionCount).toBe(2);
-    expect(persisted.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 1 });
-  });
-
-  it("does not rotate or increment for an incomplete projected compaction end", async () => {
-    const { followupRun, result, storePath } = await runProjectedCompaction(false);
-
-    expect(result.sessionEntry?.sessionId).toBe("session");
-    expect(followupRun.run.sessionId).toBe("session");
+    expect(result.outcome).toBe("completed");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
-    expect(loadMainSessionEntry(storePath).compactionCount).toBe(1);
+    expect(loadMainSessionEntry(storePath)).toMatchObject({
+      sessionId: "session",
+      lifecycleRevision: "memory-generation",
+      compactionCount: 1,
+      memoryFlush: { kind: "succeeded", compactionCount: 1 },
+    });
+    if (!admittedContext) {
+      throw new Error("Memory attempt was not admitted");
+    }
+    expect(getAdmittedRunDelegatedAuthority(admittedContext)).toBeUndefined();
   });
 
   it("inherits requester taint across a multi-write flush", async () => {
@@ -686,34 +719,37 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceTranscriptEvents(scope, [
-      {
-        type: "message",
-        message: { role: "user", content: "Research this", __openclaw: { senderIsOwner: true } },
-      },
-      {
-        type: "message",
-        message: {
-          role: "toolResult",
-          content: "untrusted page",
-          __openclaw: { resultContentSource: "network" },
-        },
-      },
-      {
-        type: "message",
-        message: {
-          role: "assistant",
-          content: "network-derived answer",
-          __openclaw: { turnTainted: true },
-        },
-      },
-      // Force the bounded SQLite tail to lose the turn boundary and taint marker.
-      // A truncated active turn must remain conservatively tainted.
-      ...Array.from({ length: 512 }, (_, index) => ({
-        type: "custom",
-        data: { index },
-      })),
-    ]);
+    const transcript = SessionManager.open(scope, rootDir);
+    const user = {
+      role: "user" as const,
+      content: "Research this",
+      timestamp: 1,
+      __openclaw: { senderIsOwner: true },
+    };
+    transcript.appendMessage(user);
+    const networkResult = {
+      role: "toolResult" as const,
+      toolCallId: "network-read",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text" as const, text: "untrusted page" }],
+      timestamp: 2,
+      __openclaw: { resultContentSource: "network" as const },
+    };
+    transcript.appendMessage(networkResult);
+    const answer = {
+      ...makeAssistantMessageFixture({
+        content: [{ type: "text", text: "network-derived answer" }],
+        stopReason: "stop",
+        errorMessage: undefined,
+      }),
+      __openclaw: { turnTainted: true },
+    };
+    transcript.appendMessage(answer);
+    // The bounded taint reader loses the original turn marker across this tail.
+    for (let index = 0; index < 512; index += 1) {
+      transcript.appendCustomEntry("fixture-tail", { index });
+    }
     const targetPath = path.join(rootDir, "memory", "2023-11-14.md");
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
     runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -743,69 +779,84 @@ describe("runMemoryFlushIfNeeded", () => {
     );
   });
 
-  it("revalidates immutable Ultra for each memory-flush fallback candidate", async () => {
-    const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 80_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      thinkingLevel: "ultra",
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
-    runWithModelFallbackMock.mockImplementationOnce(
-      async (params: { run: ModelFallbackParams["run"] }) => {
-        await params.run("openai", "gpt-5.6-sol", {
-          modelRoutingProvenance: modelRoutingProvenance("openai", "gpt-5.6-sol"),
-        });
-        return {
-          result: await params.run("demo", "basic", {
-            modelRoutingProvenance: modelRoutingProvenance("openai", "gpt-5.6-sol", "fallback"),
-          }),
-          provider: "demo",
-          model: "basic",
-          attempts: [],
-        };
-      },
-    );
-    const followupRun = createTestFollowupRun();
-    followupRun.run.provider = "openai";
-    followupRun.run.model = "gpt-5.6-sol";
-    followupRun.run.thinkLevel = "ultra";
+  it.each([undefined, "default", "ultra"] as const)(
+    "revalidates original thinking for memory-flush fallback with turn request=%s",
+    async (override) => {
+      const storePath = path.join(rootDir, "sessions.json");
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        thinkingLevel: "ultra",
+      };
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+      runWithModelFallbackMock.mockImplementationOnce(
+        async (params: { run: ModelFallbackParams["run"] }) => {
+          await params.run("openai", "gpt-5.6-sol", {
+            modelRoutingProvenance: modelRoutingProvenance("openai", "gpt-5.6-sol"),
+          });
+          return {
+            result: await params.run("demo", "basic", {
+              modelRoutingProvenance: modelRoutingProvenance("openai", "gpt-5.6-sol", "fallback"),
+            }),
+            provider: "demo",
+            model: "basic",
+            attempts: [],
+          };
+        },
+      );
+      const followupRun = createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        thinkLevel: "ultra",
+        thinkingCatalog: [
+          { provider: "openai", id: "gpt-5.6-sol", input: ["text"] },
+          { provider: "demo", id: "basic", input: ["text"] },
+        ],
+      });
 
-    await runMemoryFlushIfNeeded({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: { memoryFlush: {} },
-            models: {
-              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+      if (override !== undefined) {
+        followupRun.run = {
+          ...followupRun.run,
+          thinkLevel: override === "ultra" ? "off" : "ultra",
+          thinkLevelOverride: override,
+        };
+      }
+
+      await runMemoryFlushIfNeeded({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: { memoryFlush: {} },
+              models: {
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+              },
             },
           },
         },
-      },
-      followupRun,
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
-      defaultModel: "openai/gpt-5.6-sol",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
+        followupRun,
+        defaultModel: "openai/gpt-5.6-sol",
+        modelContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
 
-    expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
-      "ultra",
-      "high",
-    ]);
-    expect(followupRun.run.thinkLevel).toBe("ultra");
-  });
+      expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
+        "ultra",
+        "high",
+      ]);
+      expect(followupRun.run.thinkLevel).toBe(override === "ultra" ? "off" : "ultra");
+    },
+  );
 
   it("preserves thinking for runtime-discovered Ollama memory-flush models", async () => {
     const storePath = path.join(rootDir, "sessions.json");
@@ -825,12 +876,13 @@ describe("runMemoryFlushIfNeeded", () => {
       model: "qwen3.5:4b",
     });
     followupRun.run.thinkLevel = "high";
-    followupRun.run.thinkingCatalog = [{ provider: "ollama", id: "qwen3.5:4b", reasoning: true }];
+    followupRun.run.thinkingCatalog = [
+      { provider: "ollama", id: "qwen3.5:4b", reasoning: true, input: ["text"] },
+    ];
 
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun,
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "ollama/qwen3.5:4b",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -883,7 +935,6 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionId: sessionEntry.sessionId,
         sessionKey: "main",
       }),
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -909,29 +960,18 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionStore = { main: sessionEntry };
     await writeTestSessionStore(storePath, "main", sessionEntry);
     const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
-    runEmbeddedAgentMock.mockImplementationOnce(
-      async (params: {
-        onAgentEvent?: (event: {
-          stream: string;
-          data: { phase: string; completed?: boolean };
-        }) => void;
-      }) => {
-        params.onAgentEvent?.({
-          stream: "compaction",
-          data: { phase: "end", completed: true },
-        });
-        return {
-          payloads: [
-            { text: "normal silent maintenance reply" },
-            {
-              text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
-              isError: true,
-            },
-          ],
-          meta: { agentMeta: { sessionId: "session-rotated" } },
-        };
-      },
-    );
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      return {
+        payloads: [
+          { text: "normal silent maintenance reply" },
+          {
+            text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+            isError: true,
+          },
+        ],
+        meta: {},
+      };
+    });
     const followupRun = createTestFollowupRun();
 
     const result = await runDefaultMemoryFlush(sessionEntry, {
@@ -951,11 +991,11 @@ describe("runMemoryFlushIfNeeded", () => {
     ]);
     expect(requireModelFallbackCall().userLockedAuthProfileId).toBeUndefined();
     expect(result.outcome).toBe("failed");
-    expect(result.sessionEntry?.sessionId).toBe("session-rotated");
-    expect(followupRun.run.sessionId).toBe("session-rotated");
+    expect(result.sessionEntry?.sessionId).toBe("session");
+    expect(followupRun.run.sessionId).toBe("session");
     const persisted = loadMainSessionEntry(storePath);
-    expect(persisted.sessionId).toBe("session-rotated");
-    expect(persisted.compactionCount).toBe(2);
+    expect(persisted.sessionId).toBe("session");
+    expect(persisted.compactionCount).toBe(1);
     expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 1 });
   });
 
@@ -1065,7 +1105,11 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 1 });
   });
 
-  it.each([
+  it.each<{
+    stage: string;
+    afterRegistration: boolean;
+    setup: (error: Error) => void | (() => void);
+  }>([
     {
       stage: "initial plan resolution",
       afterRegistration: false,
@@ -1097,7 +1141,18 @@ describe("runMemoryFlushIfNeeded", () => {
       stage: "target preparation",
       afterRegistration: false,
       setup: (error: Error) => {
-        ensureMemoryFlushTargetFileMock.mockRejectedValueOnce(error);
+        const originalOpen = fsCore.promises.open.bind(fsCore.promises);
+        const targetPath = path.join(rootDir, "memory/2023-11-14.md");
+        const openSpy = vi
+          .spyOn(fsCore.promises, "open")
+          .mockImplementation(async (target, flags, mode) => {
+            if (target === targetPath) {
+              openSpy.mockRestore();
+              throw error;
+            }
+            return await originalOpen(target, flags, mode);
+          });
+        return () => openSpy.mockRestore();
       },
     },
     {
@@ -1114,13 +1169,12 @@ describe("runMemoryFlushIfNeeded", () => {
     await writeTestSessionStore(storePath, "main", sessionEntry);
     const message = `${failure.stage} failed`;
     const error = new Error(message);
-    const cleanup = failure.setup(error) as (() => void) | undefined;
+    const cleanup = failure.setup(error);
     const replyOperation = createReplyOperation();
     const visibleErrorPayloads: ReplyPayload[] = [];
     const params = {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off" as const,
@@ -1152,7 +1206,7 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(clearAgentRunContextMock).toHaveBeenCalledTimes(failure.afterRegistration ? 1 : 0);
       if (failure.afterRegistration) {
         expect(clearAgentRunContextMock).toHaveBeenCalledWith(
-          "00000000-0000-0000-0000-000000000001",
+          registerAgentRunContextMock.mock.calls[0]?.[0],
         );
         expect(registerAgentRunContextMock.mock.invocationCallOrder[0]).toBeLessThan(
           clearAgentRunContextMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -1174,7 +1228,9 @@ describe("runMemoryFlushIfNeeded", () => {
         compactionCount: 1,
       });
     } finally {
-      cleanup?.();
+      if (cleanup) {
+        cleanup();
+      }
     }
   });
 
@@ -1192,7 +1248,9 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(result).toEqual({ sessionEntry, outcome: "skipped" });
-    expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(registerAgentRunContextMock).not.toHaveBeenCalled();
     expect(runEmbeddedAgentEntryMock).not.toHaveBeenCalled();
   });
@@ -1287,8 +1345,14 @@ describe("runMemoryFlushIfNeeded", () => {
           },
         },
       },
-      followupRun: createTestFollowupRun({ provider: "anthropic", model: "claude" }),
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude",
+        thinkingCatalog: [
+          { provider: "anthropic", id: "claude", input: ["text"] },
+          { provider: "ollama", id: "qwen3:8b", input: ["text"] },
+        ],
+      }),
       defaultModel: "anthropic/claude",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1304,96 +1368,121 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(fallbackCall.provider).toBe("ollama");
     expect(fallbackCall.model).toBe("qwen3:8b");
     expect(fallbackCall.requestedRouteResolution).toBe("raw");
-    expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
-    expect(fallbackCall.sessionId).toBe("session");
+    expect(fallbackCall.abortSignal?.aborted).toBe(false);
+    expect(fallbackCall.sessionId).toEqual(expect.any(String));
+    expect(fallbackCall.sessionId).not.toBe(sessionEntry.sessionId);
+    expect(isInternalSessionEffectsKey(fallbackCall.sessionKey ?? "")).toBe(true);
     expect(fallbackCall.fallbacksOverride).toEqual([]);
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const agentCall = requireEmbeddedAgentCall();
+    expect(agentCall).toMatchObject({
+      sessionId: fallbackCall.sessionId,
+      sessionKey: fallbackCall.sessionKey,
+      sessionPersistence: "detached",
+      sandboxSessionKey: "main",
+    });
+    expect(agentCall.sessionManager?.getSessionTarget()).toBeUndefined();
     expect(agentCall.provider).toBe("ollama");
     expect(agentCall.model).toBe("qwen3:8b");
-    expect(agentCall.abortSignal).toBe(replyOperation.abortSignal);
+    expect(agentCall.abortSignal).toBe(fallbackCall.abortSignal);
     expect(agentCall.authProfileId).toBeUndefined();
     expect(agentCall.authProfileIdSource).toBeUndefined();
   });
 
-  it("loads the selected harness before memory-flush fallback preflight", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          compaction: {
-            memoryFlush: {},
+  it.each([undefined, "model-owner"])(
+    "prepares the requested memory runtime without pinning observations (owner %s)",
+    async (pluginOwnerId) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {},
+            },
           },
         },
-      },
-    };
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 80_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 1,
-      agentRuntimeOverride: "codex",
-    };
-    const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
-    runWithModelFallbackMock.mockImplementationOnce(
-      async (params: { provider: string; model: string; run: ModelFallbackParams["run"] }) => ({
-        result: await params.run(params.provider, params.model, {
-          isFinalFallbackAttempt: false,
-          modelRoutingProvenance: modelRoutingProvenance(params.provider, params.model),
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 1,
+        agentRuntimeOverride: "codex",
+        modelSelectionLocked: pluginOwnerId !== undefined,
+        pluginOwnerId,
+        agentHarnessId: "openclaw",
+      };
+      const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
+      runWithModelFallbackMock.mockImplementationOnce(
+        async (params: { provider: string; model: string; run: ModelFallbackParams["run"] }) => ({
+          result: await params.run(params.provider, params.model, {
+            isFinalFallbackAttempt: false,
+            modelRoutingProvenance: modelRoutingProvenance(params.provider, params.model),
+          }),
+          provider: params.provider,
+          model: params.model,
+          attempts: [],
         }),
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      }),
-    );
+      );
 
-    await runMemoryFlushIfNeeded({
-      cfg,
-      followupRun: createTestFollowupRun({
-        agentId: "main",
+      await runMemoryFlushIfNeeded({
+        cfg,
+        followupRun: createTestFollowupRun({
+          agentId: "main",
+          sessionKey: "main",
+          runtimePolicySessionKey,
+          workspaceDir: rootDir,
+          provider: "openai",
+          model: "gpt-5.4",
+          modelSelectionLocked: sessionEntry.modelSelectionLocked,
+        }),
+        defaultModel: "openai/gpt-5.4",
+        modelContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
         sessionKey: "main",
         runtimePolicySessionKey,
-        workspaceDir: "/workspace",
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      const fallbackCall = requireModelFallbackCall();
+      expect(fallbackCall.agentId).toBe("main");
+      expect(fallbackCall.sessionId).toEqual(expect.any(String));
+      expect(fallbackCall.sessionId).not.toBe(sessionEntry.sessionId);
+      expect(isInternalSessionEffectsKey(fallbackCall.sessionKey ?? "")).toBe(true);
+      expect(fallbackCall.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
+      expect(requireEmbeddedAgentCall()).toMatchObject({
+        sessionId: fallbackCall.sessionId,
+        sessionKey: fallbackCall.sessionKey,
+        sessionPersistence: "detached",
+        sandboxSessionKey: runtimePolicySessionKey,
+        isFinalFallbackAttempt: false,
+        agentHarnessId: undefined,
+        agentHarnessRuntimeOverride: "codex",
+      });
+
+      await fallbackCall.prepareAgentHarnessRuntime?.({
         provider: "openai",
         model: "gpt-5.4",
-      }),
-      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
-      defaultModel: "openai/gpt-5.4",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      runtimePolicySessionKey,
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
-
-    const fallbackCall = requireModelFallbackCall();
-    expect(fallbackCall.agentId).toBe("main");
-    expect(fallbackCall.sessionKey).toBe(runtimePolicySessionKey);
-    expect(fallbackCall.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
-    expect(requireEmbeddedAgentCall().isFinalFallbackAttempt).toBe(false);
-
-    await fallbackCall.prepareAgentHarnessRuntime?.({
-      provider: "openai",
-      model: "gpt-5.4",
-      agentHarnessRuntimeOverride: "codex",
-    });
-
-    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        agentId: "main",
-        sessionKey: runtimePolicySessionKey,
-        agentHarnessId: "codex",
         agentHarnessRuntimeOverride: "codex",
-        workspaceDir: "/workspace",
-      }),
-    );
-  });
+      });
+
+      expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openai",
+          modelId: "gpt-5.4",
+          agentId: "main",
+          sessionKey: runtimePolicySessionKey,
+          agentHarnessId: "codex",
+          agentHarnessRuntimeOverride: "codex",
+          workspaceDir: rootDir,
+        }),
+      );
+    },
+  );
 
   it("ignores stale runtime pins before memory-flush fallback preflight", async () => {
     const sessionEntry: SessionEntry = {
@@ -1412,7 +1501,6 @@ describe("runMemoryFlushIfNeeded", () => {
         provider: "openai",
         model: "gpt-5.4",
       }),
-      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
       defaultModel: "openai/gpt-5.4",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1448,7 +1536,6 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: {},
       followupRun: createTestFollowupRun({ provider: "codex-cli" }),
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "codex-cli/gpt-5.5",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1470,12 +1557,14 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     const result = await runDefaultMemoryFlush(sessionEntry, {
-      sessionCtx: createTestTemplateContext({ Provider: "webchat" }),
+      followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
     });
 
     expect(result).toEqual({ sessionEntry, outcome: "skipped" });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("skips memory flush for an incognito key after process-local state is gone", async () => {
@@ -1485,7 +1574,6 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     const result = await runDefaultMemoryFlush(sessionEntry, {
-      sessionCtx: createTestTemplateContext({ Provider: "webchat" }),
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
     });
@@ -1512,7 +1600,6 @@ describe("runMemoryFlushIfNeeded", () => {
         provider: "anthropic",
         model: "claude-opus-4-6",
       }),
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1527,41 +1614,81 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("uses runtime policy session key when checking memory-flush sandbox writability", async () => {
-    const sessionEntry = createFlushSessionEntry();
+  it.each([
+    { agentId: "main", sessionKey: "global", runtimePolicySessionKey: "global" },
+    {
+      agentId: "other",
+      sessionKey: "agent:other:main",
+      runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+    },
+  ])(
+    "uses the policy owner's memory-flush writability for $sessionKey",
+    async ({ agentId, sessionKey, runtimePolicySessionKey }) => {
+      const sessionEntry = createFlushSessionEntry();
 
-    const result = await runMemoryFlushIfNeeded({
-      cfg: {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "non-main",
-              scope: "agent",
-              workspaceAccess: "ro",
-            },
-            compaction: {
-              memoryFlush: {},
+      const result = await runMemoryFlushIfNeeded({
+        cfg: {
+          agents: {
+            ownership: "explicit",
+            entries: { main: {}, other: { sandbox: { workspaceAccess: "rw" } } },
+            defaults: {
+              sandbox: {
+                mode: "all",
+                scope: "agent",
+                workspaceAccess: "ro",
+              },
+              compaction: {
+                memoryFlush: {},
+              },
             },
           },
         },
+        followupRun: createTestFollowupRun({
+          agentId,
+          sessionKey,
+          runtimePolicySessionKey,
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        modelContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        runtimePolicySessionKey,
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("skips memory flush when a persisted sandbox requirement caps workspace access", async () => {
+    const sessionKey = "agent:main:guest";
+    const storePath = path.join(rootDir, "agents", "main", "sessions", "sessions.json");
+    const sessionEntry = createFlushSessionEntry({ sandbox: "required" });
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    const result = await runDefaultMemoryFlush(sessionEntry, {
+      cfg: {
+        session: { store: storePath },
+        agents: {
+          defaults: {
+            sandbox: { mode: "off", workspaceAccess: "rw" },
+            compaction: { memoryFlush: {} },
+          },
+        },
       },
-      followupRun: createTestFollowupRun({
-        sessionKey: "agent:main:main",
-        runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
-      }),
-      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore: { "agent:main:main": sessionEntry },
-      sessionKey: "agent:main:main",
-      runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      followupRun: createTestFollowupRun({ sessionKey, workspaceDir: rootDir }),
+      sessionKey,
+      storePath,
     });
 
     expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+    await expect(fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -1904,7 +2031,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it.each(["user", "auto"] as const)(
-    "passes resolved context budget and $authProfileIdSource auth profile to preflight compaction",
+    "passes resolved context budget and %s auth profile to preflight compaction",
     async (authProfileIdSource) => {
       const sessionEntry: SessionEntry = {
         sessionId: "session",
@@ -1941,29 +2068,36 @@ describe("runMemoryFlushIfNeeded", () => {
   );
   it.each([
     {
+      label: "fresh local tool turn in a 32K window",
+      totalTokens: 12_824,
+      shouldCompact: false,
+      requestedRuntime: "openclaw",
+      contextWindowTokens: 32_768,
+    },
+    {
       label: "below the 32K threshold",
-      totalTokens: 12_767,
+      totalTokens: 24_575,
       shouldCompact: false,
       requestedRuntime: "openclaw",
       contextWindowTokens: 32_768,
     },
     {
       label: "at the 32K threshold",
-      totalTokens: 12_768,
+      totalTokens: 24_576,
       shouldCompact: true,
       requestedRuntime: "openclaw",
       contextWindowTokens: 32_768,
     },
     {
       label: "below the capped 8K threshold",
-      totalTokens: 3_999,
+      totalTokens: 5_999,
       shouldCompact: false,
       requestedRuntime: "openclaw",
       contextWindowTokens: 8_000,
     },
     {
       label: "at the capped 8K threshold",
-      totalTokens: 4_000,
+      totalTokens: 6_000,
       shouldCompact: true,
       requestedRuntime: "openclaw",
       contextWindowTokens: 8_000,
@@ -2068,13 +2202,116 @@ describe("runMemoryFlushIfNeeded", () => {
         });
         expect(incrementCompactionCountMock).toHaveBeenCalledWith(
           expect.objectContaining({
-            expectedSession: { sessionId: "session", lifecycleRevision: "owned-generation" },
-            authorize,
+            expectedSession: expect.objectContaining({
+              sessionId: "session",
+              lifecycleRevision: "owned-generation",
+            }),
           }),
         );
       }
     },
   );
+
+  it("skips the pre-compaction checkpoint when there is no hard pressure", async () => {
+    const sessionEntry = createFlushSessionEntry({ totalTokens: 10_000 });
+    const beforeCompaction = vi.fn(async (entry: SessionEntry) => entry);
+
+    await runDefaultPreflight(sessionEntry, { beforeCompaction });
+
+    expect(beforeCompaction).not.toHaveBeenCalled();
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("awaits one pre-compaction checkpoint and compacts the refreshed session", async () => {
+    const sessionEntry = createFlushSessionEntry({ totalTokens: 90_000 });
+    const refreshedEntry = { ...sessionEntry, sessionId: "checkpoint-successor" };
+    const entered = createDeferred();
+    const release = createDeferred();
+    const events: string[] = [];
+    const beforeCompaction = vi.fn(async (entry: SessionEntry) => {
+      expect(entry.sessionId).toBe("session");
+      events.push("checkpoint started");
+      entered.resolve();
+      await release.promise;
+      events.push("checkpoint completed");
+      return refreshedEntry;
+    });
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async () => {
+      events.push("compactor started");
+      return { ok: true, compacted: true, result: { tokensAfter: 42 } };
+    });
+    const pending = runDefaultPreflight(sessionEntry, { beforeCompaction });
+    try {
+      await expect(
+        Promise.race([
+          entered.promise.then(() => "checkpoint"),
+          pending.then(() => "returned before checkpoint"),
+        ]),
+      ).resolves.toBe("checkpoint");
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+      release.resolve();
+      await pending;
+
+      expect(beforeCompaction).toHaveBeenCalledOnce();
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
+      expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+        sessionId: "checkpoint-successor",
+        preflightRequired: true,
+      });
+      expect(events).toEqual(["checkpoint started", "checkpoint completed", "compactor started"]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  });
+
+  it("skips compaction when the checkpoint returns a session below hard pressure", async () => {
+    const sessionEntry = createFlushSessionEntry({ totalTokens: 90_000 });
+    const refreshedEntry = { ...sessionEntry, totalTokens: 10_000 };
+    const beforeCompaction = vi.fn(async () => refreshedEntry);
+
+    const result = await runDefaultPreflight(sessionEntry, { beforeCompaction });
+
+    expect(beforeCompaction).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ sessionId: "session", totalTokens: 10_000 });
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+  });
+
+  it("does not compact after cancellation during the pre-compaction checkpoint", async () => {
+    const sessionEntry = createFlushSessionEntry({ totalTokens: 90_000 });
+    const controller = new AbortController();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const beforeCompaction = vi.fn(async (entry: SessionEntry) => {
+      entered.resolve();
+      await release.promise;
+      return entry;
+    });
+    const pending = runDefaultPreflight(sessionEntry, {
+      beforeCompaction,
+      abortSignal: controller.signal,
+    });
+    try {
+      await expect(
+        Promise.race([
+          entered.promise.then(() => "checkpoint"),
+          pending.then(() => "returned before checkpoint"),
+        ]),
+      ).resolves.toBe("checkpoint");
+      controller.abort(new Error("cancelled during checkpoint"));
+      const rejection = expect(pending).rejects.toThrow("cancelled during checkpoint");
+      release.resolve();
+      await rejection;
+
+      expect(beforeCompaction).toHaveBeenCalledOnce();
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+      expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  });
 
   it.each([
     { stage: "before start", invalidation: "authorization" },
@@ -2100,9 +2337,10 @@ describe("runMemoryFlushIfNeeded", () => {
       };
       const compactorStarted = createDeferred();
       const releaseCompactor = createDeferred();
-      compactEmbeddedAgentSessionMock.mockImplementationOnce(async () => {
+      compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
         compactorStarted.resolve();
         await releaseCompactor.promise;
+        host?.assertActive?.();
         return { ok: true, compacted: true, result: { tokensAfter: 42, sessionId: "successor" } };
       });
       const onCompactionStart = vi.fn();
@@ -2372,7 +2610,6 @@ describe("runMemoryFlushIfNeeded", () => {
   });
   it("updates the active preflight run after transcript rotation", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
-    const successorFile = path.join(rootDir, "session-rotated.jsonl");
     await writeTestSessionTranscript({
       rootDir,
       sessionKey: "agent:main:main",
@@ -2381,14 +2618,18 @@ describe("runMemoryFlushIfNeeded", () => {
     registerMemoryFlushPlanResolverForTest(() =>
       createModifiedMemoryFlushPlan({ softThresholdTokens: 1, reserveTokensFloor: 0 }),
     );
-    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
-        tokensAfter: 42,
-        sessionId: "session-rotated",
-        sessionFile: successorFile,
-      },
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
+      host?.assertActive?.();
+      const accepted = await commitSourceCompaction({
+        sessionKey: "agent:main:main",
+        storePath: path.join(rootDir, "sessions.json"),
+      });
+      host?.onCommitted?.(accepted);
+      return {
+        ok: true,
+        compacted: true,
+        result: { tokensAfter: 42, sessionId: accepted.sessionId },
+      };
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -2535,19 +2776,28 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("reads flush usage and byte size from SQLite without statting a retired transcript path", async () => {
     const sessionFile = path.join(rootDir, "memory-flush-usage-and-size.jsonl");
-    await writeTestSessionTranscript({
-      rootDir,
-      events: [
-        {
-          type: "message",
-          message: {
-            role: "assistant",
-            content: "large answer",
-            usage: { input: 80_000, output: 4_000 },
-          },
+    const scope = {
+      agentId: "main",
+      sessionId: "session",
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+    SessionManager.open(scope, rootDir).appendMessage(
+      makeAssistantMessageFixture({
+        content: [{ type: "text", text: "large answer" }],
+        stopReason: "stop",
+        errorMessage: undefined,
+        usage: {
+          input: 80_000,
+          output: 4_000,
+          totalTokens: 84_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
-      ],
-    });
+      }),
+    );
     const originalStat = fsCore.promises.stat.bind(fsCore.promises);
     const statSpy = vi
       .spyOn(fsCore.promises, "stat")
@@ -2577,6 +2827,50 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(directTranscriptStats).toEqual([]);
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes appended transcript growth before persisting fresh usage", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "small answer",
+            usage: { input: 40_000, output: 2_000 },
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "user",
+            content: `large follow-up ${"x".repeat(450_000)}`,
+          },
+        },
+      ],
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+      compactionCount: 0,
+      // A prior flush prevents a new model usage report from hiding the stale anchor.
+      memoryFlush: { kind: "succeeded", compactionCount: 0 },
+    };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+
+    const flushResult = await runDefaultMemoryFlush(sessionEntry, { storePath });
+
+    expect(flushResult.outcome).toBe("skipped");
+    const persistedAfterFlush = loadMainSessionEntry(storePath);
+    expect(persistedAfterFlush.totalTokensFresh).toBe(true);
+    expect(persistedAfterFlush.totalTokens).toBeGreaterThan(80_000);
+
+    await runDefaultPreflight(persistedAfterFlush, { storePath });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalled();
   });
 
   it("fails when required preflight compaction returns an unknown successful no-op", async () => {
@@ -3155,48 +3449,61 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.currentTokenCount).toBeGreaterThan(100_000);
   });
 
-  it("combines latest usage with post-usage tail pressure for preflight compaction", async () => {
-    const sessionFile = path.join(rootDir, "combined-tail-pressure-session.jsonl");
-    await writeTestSessionTranscript({
-      rootDir,
-      events: [
-        {
-          type: "message",
-          message: {
-            role: "assistant",
-            content: "small answer",
-            usage: { input: 90_000, output: 2_000 },
+  it.each([0, 513])(
+    "combines latest usage with post-usage tail pressure across %i display-only messages",
+    async (activityCount) => {
+      const sessionFile = path.join(rootDir, "combined-tail-pressure-session.jsonl");
+      await writeTestSessionTranscript({
+        rootDir,
+        events: [
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: "small answer",
+              usage: { input: 90_000, output: 2_000 },
+            },
           },
-        },
-        {
-          type: "message",
-          message: {
-            role: "user",
-            content: `moderate follow-up ${"x".repeat(36_000)}`,
+          ...Array.from({ length: activityCount }, () => ({
+            type: "message",
+            message: {
+              role: "custom",
+              customType: "tool-activity",
+              display: true,
+              excludeFromContext: true,
+              content: "completed",
+            },
+          })),
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content: `moderate follow-up ${"x".repeat(36_000)}`,
+            },
           },
-        },
-      ],
-    });
-    registerMemoryFlushPlanResolverForTest(() =>
-      createModifiedMemoryFlushPlan({ reserveTokensFloor: 0 }),
-    );
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokensFresh: false,
-    };
-
-    await runDefaultPreflight(sessionEntry, {
-      followupRun: createTestFollowupRun({
+        ],
+      });
+      registerMemoryFlushPlanResolverForTest(() =>
+        createModifiedMemoryFlushPlan({ reserveTokensFloor: 0 }),
+      );
+      const sessionEntry: SessionEntry = {
         sessionId: "session",
-        sessionFile,
-        sessionKey: "main",
-      }),
-    });
+        updatedAt: Date.now(),
+        totalTokensFresh: false,
+      };
 
-    const compactCall = requireCompactEmbeddedAgentSessionCall();
-    expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
-  });
+      await runDefaultPreflight(sessionEntry, {
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "main",
+        }),
+      });
+
+      const compactCall = requireCompactEmbeddedAgentSessionCall();
+      expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
+    },
+  );
 
   it("does not count bytes from a large latest usage record as post-usage tail pressure", async () => {
     const sessionFile = path.join(rootDir, "large-usage-record-session.jsonl");
@@ -3349,11 +3656,111 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionFile).toBe("main");
   });
 
+  it("enforces the active transcript byte threshold during heartbeats", async () => {
+    const sessionFile = path.join(rootDir, "large-heartbeat-session.jsonl");
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [{ type: "message", message: { role: "user", content: "x".repeat(256) } }],
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+    };
+
+    await runSessionCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      modelContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: true,
+    });
+
+    expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+      preflightCompactionTrigger: "transcript_bytes",
+      preflightRequired: true,
+      sessionId: "session",
+      trigger: "budget",
+    });
+  });
+
+  it("does not repeat byte-triggered compaction until an oversized successor grows by one threshold", async () => {
+    const fixture = await createOversizedByteCompactionFixture();
+
+    await fixture.run(fixture.sessionEntry);
+    await fixture.run(loadMainSessionEntry(fixture.storePath));
+    await replaceTranscriptEvents(
+      {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey: "main",
+        storePath: fixture.storePath,
+      },
+      [{ type: "message", message: { role: "user", content: "x".repeat(260) } }],
+    );
+    await fixture.run(loadMainSessionEntry(fixture.storePath));
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-arms byte-triggered compaction after the oversized successor grows by one threshold", async () => {
+    const fixture = await createOversizedByteCompactionFixture();
+
+    await fixture.run(fixture.sessionEntry);
+    await replaceTranscriptEvents(
+      {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey: "main",
+        storePath: fixture.storePath,
+      },
+      [{ type: "message", message: { role: "user", content: "x".repeat(512) } }],
+    );
+    await fixture.run(loadMainSessionEntry(fixture.storePath));
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves token-pressure compaction while byte retries are latched", async () => {
+    const fixture = await createOversizedByteCompactionFixture();
+
+    await fixture.run(fixture.sessionEntry);
+    const tokenHeavyEntry: SessionEntry = {
+      ...loadMainSessionEntry(fixture.storePath),
+      totalTokens: 90_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    };
+    await fixture.run(tokenHeavyEntry);
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(2);
+    expect(requireCompactEmbeddedAgentSessionCall(1).preflightCompactionTrigger).toBe("tokens");
+  });
+
   it.each([
     ["fresh session selected from the outset", "fresh", "codex"],
     ["upgraded session with historical embedded ownership", "upgraded", "openclaw"],
   ])(
-    "byte-guards a Codex runtime %s through native preflight",
+    "latches Codex byte preflight for a %s when the successful mock omits the host callback",
     async (_label, fixtureId, agentHarnessId) => {
       const storePath = path.join(rootDir, `sqlite-codex-byte-guard-${fixtureId}.json`);
       const sessionKey = "agent:main:main";
@@ -3376,33 +3783,37 @@ describe("runMemoryFlushIfNeeded", () => {
       };
       const sessionStore = { [sessionKey]: sessionEntry };
       const replyOperation = createReplyOperation();
-
-      const entry = await runSessionCompactionIfNeeded({
-        cfg: {
-          agents: {
-            defaults: {
-              compaction: { maxActiveTranscriptBytes: "10b" },
+      const run = async (entry: SessionEntry | undefined) =>
+        await runSessionCompactionIfNeeded({
+          cfg: {
+            agents: {
+              defaults: {
+                compaction: { maxActiveTranscriptBytes: "10b" },
+              },
             },
           },
-        },
-        followupRun: createTestFollowupRun({
-          provider: "openai",
-          model: "gpt-5.5",
-          sessionId: "session",
+          followupRun: createTestFollowupRun({
+            provider: "openai",
+            model: "gpt-5.5",
+            sessionId: "session",
+            sessionKey,
+          }),
+          defaultModel: "gpt-5.5",
+          modelContextTokens: 1_000_000,
+          sessionEntry: entry,
+          sessionStore,
           sessionKey,
-        }),
-        defaultModel: "gpt-5.5",
-        modelContextTokens: 1_000_000,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        storePath,
-        isHeartbeat: false,
-        ...createCompactionLifecycle(replyOperation),
-      });
+          storePath,
+          isHeartbeat: false,
+          ...createCompactionLifecycle(replyOperation),
+        });
+
+      let entry = await run(sessionEntry);
+      entry = await run(entry);
 
       expect(entry?.compactionCount).toBe(1);
       expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
       expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
         agentHarnessId: "codex",
         contextTokenBudget: 1_000_000,
@@ -3413,8 +3824,328 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
         trigger: "budget",
       });
+      expect(compactEmbeddedAgentSessionMock.mock.calls[0]?.[1]).toMatchObject({
+        transcriptBytePreflightHarness: "codex",
+        onHostCompactionCommitted: expect.any(Function),
+      });
+      const latchedEntry = loadSessionEntry({ storePath, sessionKey });
+      expect(latchedEntry?.transcriptByteCompactionLatch).toMatchObject({
+        sessionId: "session",
+        maxBytes: 10,
+      });
+      const latchedBytes = latchedEntry?.transcriptByteCompactionLatch?.activeBytes ?? 0;
+      expect(latchedBytes).toBeGreaterThan(0);
+
+      await replaceTranscriptEvents(scope, [
+        { message: { role: "user", content: "x".repeat(512) }, type: "message" },
+      ]);
+      entry = await run(entry);
+
+      expect(entry?.compactionCount).toBe(2);
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(2);
+      expect(
+        loadSessionEntry({ storePath, sessionKey })?.transcriptByteCompactionLatch?.activeBytes,
+      ).toBeGreaterThan(latchedBytes);
     },
   );
+
+  it("persists Codex byte accounting before the accepted compactor returns", async () => {
+    const storePath = path.join(rootDir, "sqlite-codex-held-accounting.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+    const manager = SessionManager.open(scope, rootDir);
+    manager.appendMessage({ role: "user", content: "x".repeat(256), timestamp: 1 });
+    const activeBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const accountingCommitted = createDeferred();
+    const releaseCompactor = createDeferred();
+    incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
+      const firstKeptEntryId = manager.getLeafId();
+      expect(firstKeptEntryId).toBeTruthy();
+      host?.withCompactionPersistence?.(
+        () => manager.appendCompaction("summary", firstKeptEntryId!, 100),
+        (entryId: string, appendedText: string) => {
+          const event = JSON.parse(appendedText.trim()) as { id?: string; type?: string };
+          return event.id === entryId && event.type === "compaction";
+        },
+      );
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+        compactionCount: 1,
+        transcriptByteCompactionLatch: {
+          activeBytes,
+          sessionId: "session",
+          maxBytes: 10,
+        },
+      });
+      const accepted = await acceptCompactionSuccessor({
+        currentTarget: scope,
+        expectedEntry: {
+          sessionId: sessionEntry.sessionId,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+          activeWriterRunId: sessionEntry.activeWriterRunId,
+        },
+        assertActive: () => {},
+        result: {
+          ok: true,
+          compacted: true,
+          result: { sessionId: sessionEntry.sessionId, tokensBefore: 10, tokensAfter: 42 },
+        },
+      });
+      host?.onCommitted?.(accepted);
+      await host?.onHostCompactionCommitted?.({
+        entry: accepted.entry,
+        tokensAfter: 42,
+        compactionKind: "context-engine",
+      });
+      expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
+      accountingCommitted.resolve();
+      await releaseCompactor.promise;
+      return {
+        ok: true,
+        compacted: true,
+        compactionKind: "context-engine",
+        result: { tokensAfter: 42 },
+      };
+    });
+    const pending = runSessionCompactionIfNeeded({
+      cfg: {
+        agents: { defaults: { compaction: { maxActiveTranscriptBytes: "10b" } } },
+      },
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "gpt-5.5",
+      modelContextTokens: 1_000_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: true,
+    });
+    try {
+      await Promise.race([
+        accountingCommitted.promise,
+        pending.then(() => {
+          throw new Error("Preflight returned before the compactor release");
+        }),
+      ]);
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+        compactionCount: 1,
+        transcriptByteCompactionLatch: {
+          sessionId: "session",
+          maxBytes: 10,
+        },
+      });
+      expect(
+        loadSessionEntry({ storePath, sessionKey })?.transcriptByteCompactionLatch?.activeBytes,
+      ).toBeGreaterThanOrEqual(activeBytes);
+      releaseCompactor.resolve();
+      await pending;
+      expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
+    } finally {
+      releaseCompactor.resolve();
+      await pending.catch(() => undefined);
+    }
+  });
+
+  it("refreshes the Codex byte latch after maintenance shrinks an oversized transcript", async () => {
+    const fixture = await createOversizedByteCompactionFixture();
+    const sessionKey = "main";
+    const scope = {
+      agentId: "main",
+      sessionId: "session",
+      sessionKey,
+      storePath: fixture.storePath,
+    };
+    const sessionEntry: SessionEntry = {
+      ...fixture.sessionEntry,
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
+    };
+    await upsertSessionEntryCore(scope, sessionEntry);
+    const run = async (entry: SessionEntry) =>
+      await runSessionCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "10b" } } } },
+        followupRun: createTestFollowupRun({
+          provider: "openai",
+          model: "gpt-5.5",
+          sessionId: "session",
+          sessionKey,
+        }),
+        defaultModel: "gpt-5.5",
+        modelContextTokens: 1_000_000,
+        sessionEntry: entry,
+        sessionStore: { [sessionKey]: entry },
+        sessionKey,
+        storePath: fixture.storePath,
+        isHeartbeat: true,
+      });
+    const initialBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+    let settledBytes = 0;
+    incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
+      const accepted = await acceptCompactionSuccessor({
+        currentTarget: scope,
+        expectedEntry: {
+          sessionId: sessionEntry.sessionId,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+          activeWriterRunId: sessionEntry.activeWriterRunId,
+        },
+        assertActive: () => {},
+        result: {
+          ok: true,
+          compacted: true,
+          result: { sessionId: "session", tokensBefore: 10, tokensAfter: 42 },
+        },
+      });
+      host?.onCommitted?.(accepted);
+      const commit = {
+        entry: accepted.entry,
+        tokensAfter: 42,
+        compactionKind: "context-engine" as const,
+      };
+      await host?.onHostCompactionCommitted?.(commit);
+      await replaceTranscriptEvents(scope, [
+        { type: "message", message: { role: "user", content: "x".repeat(128) } },
+      ]);
+      settledBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+      await host?.onHostCompactionTranscriptSettled?.(commit);
+      return {
+        ok: true,
+        compacted: true,
+        compactionKind: "context-engine",
+        result: { tokensAfter: 42 },
+      };
+    });
+
+    await run(sessionEntry);
+    await run(loadMainSessionEntry(fixture.storePath));
+
+    expect(settledBytes).toBeGreaterThan(10);
+    expect(settledBytes).toBeLessThan(initialBytes);
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(loadMainSessionEntry(fixture.storePath).compactionCount).toBe(1);
+    expect(loadMainSessionEntry(fixture.storePath).transcriptByteCompactionLatch).toEqual({
+      activeBytes: settledBytes,
+      sessionId: "session",
+      maxBytes: 10,
+    });
+  });
+
+  it("clears a Codex byte latch after shrink below the cap without compacting", async () => {
+    const storePath = path.join(rootDir, "sqlite-codex-shrink-below-cap.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await replaceTranscriptEvents(scope, [
+      { message: { role: "user", content: "small" }, type: "message" },
+    ]);
+    const activeBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      compactionCount: 1,
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
+      transcriptByteCompactionLatch: {
+        activeBytes: activeBytes + 100,
+        sessionId: "session",
+        maxBytes: activeBytes + 1,
+      },
+    };
+    await upsertSessionEntryCore(scope, sessionEntry);
+    incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
+
+    await runSessionCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { maxActiveTranscriptBytes: `${activeBytes + 1}b` },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
+      defaultModel: "gpt-5.5",
+      modelContextTokens: 1_000_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: true,
+    });
+
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
+    expect(
+      loadSessionEntry({ storePath, sessionKey })?.transcriptByteCompactionLatch,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "session identity",
+      latch: { activeBytes: 1, sessionId: "other-session", maxBytes: 10 },
+    },
+    {
+      name: "threshold",
+      latch: { activeBytes: 1, sessionId: "session", maxBytes: 20 },
+    },
+  ])("resets a Codex byte latch on $name mismatch and rearms compaction", async ({ latch }) => {
+    const storePath = path.join(
+      rootDir,
+      `sqlite-codex-latch-${latch.sessionId}-${latch.maxBytes}.json`,
+    );
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await replaceTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+    ]);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      compactionCount: 1,
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
+      transcriptByteCompactionLatch: latch,
+    };
+    await upsertSessionEntryCore(scope, sessionEntry);
+    incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
+
+    const entry = await runSessionCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "10b" } } } },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
+      defaultModel: "gpt-5.5",
+      modelContextTokens: 1_000_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: true,
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
+    expect(entry?.compactionCount).toBe(2);
+    expect(
+      loadSessionEntry({ storePath, sessionKey })?.transcriptByteCompactionLatch,
+    ).toMatchObject({
+      sessionId: "session",
+      maxBytes: 10,
+    });
+  });
 
   it("leaves a reset SQLite Codex session below the byte fuse for native compaction", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");
@@ -3536,7 +4267,6 @@ describe("runMemoryFlushIfNeeded", () => {
     const flushResult = await runMemoryFlushIfNeeded({
       cfg,
       followupRun,
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -3794,9 +4524,11 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceTranscriptEvents(scope, [
-      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
-    ]);
+    SessionManager.open(scope, rootDir).appendMessage({
+      role: "user",
+      content: "x".repeat(256),
+      timestamp: 1,
+    });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -3810,7 +4542,6 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -3972,7 +4703,6 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ extraSystemPrompt: "extra system" }),
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",

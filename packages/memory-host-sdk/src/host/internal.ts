@@ -11,6 +11,7 @@ import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs
 import { isExplicitExtraMarkdownFilePath } from "./explicit-extra-markdown.js";
 import {
   isFileMissingError,
+  isPathInside,
   readRegularFile,
   statRegularFile,
   walkDirectory,
@@ -63,7 +64,7 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 3;
+export const MEMORY_CHUNKING_VERSION = 4;
 
 type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
@@ -82,6 +83,20 @@ function ensureMemoryHostDir(dir: string): string {
 }
 
 export { ensureMemoryHostDir as ensureDir };
+
+// File discovery skips non-regular entries. Keep the same rule when a listed
+// file changes before its index entry is built, or one path can abort the sync.
+async function statEnumerableMemoryFile(absPath: string): Promise<fsSync.Stats | null> {
+  try {
+    const stat = await fs.lstat(absPath);
+    return stat.isFile() ? stat : null;
+  } catch (error) {
+    if (isFileMissingError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
 
 function normalizeRelPath(value: string): string {
   const trimmed = value.trim().replace(/^[./]+/, "");
@@ -133,14 +148,12 @@ export function matchesExtraMemoryPathEntry(
     return true;
   }
   const relativePath = path.relative(entry.path, candidatePath);
-  if (!relativePath) {
-    return true;
-  }
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
-    return false;
-  }
   try {
-    return path.posix.matchesGlob(relativePath.replaceAll(path.sep, "/"), entry.pattern);
+    return (
+      !relativePath ||
+      (isPathInside(entry.path, candidatePath) &&
+        path.posix.matchesGlob(relativePath.replaceAll(path.sep, "/"), entry.pattern))
+    );
   } catch {
     return false;
   }
@@ -180,6 +193,39 @@ function shouldDescendMemoryEntry(
   return entry.kind === "directory" && entry.name !== ".openclaw-repair";
 }
 
+class MemorySourceScanError extends Error {
+  readonly path: string;
+  readonly code?: string;
+
+  constructor(sourcePath: string, cause: unknown) {
+    const code =
+      cause !== null &&
+      typeof cause === "object" &&
+      "code" in cause &&
+      typeof cause.code === "string"
+        ? cause.code
+        : undefined;
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`memory source scan failed at ${sourcePath}${code ? ` (${code})` : ""}: ${detail}`, {
+      cause,
+    });
+    this.name = "MemorySourceScanError";
+    this.path = sourcePath;
+    this.code = code;
+  }
+}
+
+async function scanMemorySource<T>(sourcePath: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (isFileMissingError(error) || error instanceof MemorySourceScanError) {
+      throw error;
+    }
+    throw new MemorySourceScanError(sourcePath, error);
+  }
+}
+
 async function collectMemoryFilesFromDir(
   dir: string,
   files: string[],
@@ -187,18 +233,20 @@ async function collectMemoryFilesFromDir(
   shouldSkipPath?: (absPath: string) => boolean,
   extraPathEntry?: NormalizedExtraMemoryPath,
 ): Promise<void> {
-  const scan = await walkDirectory(dir, {
-    symlinks: "skip",
-    descend: (entry) => shouldDescendMemoryEntry(entry, shouldSkipPath),
-    include: (entry) =>
-      !shouldSkipPath?.(entry.path) &&
-      entry.kind === "file" &&
-      isAllowedMemoryFilePath(entry.path, multimodal) &&
-      (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
-  });
+  const scan = await scanMemorySource(dir, () =>
+    walkDirectory(dir, {
+      symlinks: "skip",
+      descend: (entry) => shouldDescendMemoryEntry(entry, shouldSkipPath),
+      include: (entry) =>
+        !shouldSkipPath?.(entry.path) &&
+        entry.kind === "file" &&
+        isAllowedMemoryFilePath(entry.path, multimodal) &&
+        (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
+    }),
+  );
   const operationalFailure = scan.failedDirs.find((failure) => !isFileMissingError(failure.error));
   if (operationalFailure) {
-    throw operationalFailure.error;
+    throw new MemorySourceScanError(operationalFailure.path, operationalFailure.error);
   }
   files.push(...scan.entries.map((entry) => entry.path));
 }
@@ -215,29 +263,22 @@ export async function listMemoryFiles(
     shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
 
   const addMarkdownFile = async (absPath: string) => {
-    try {
-      const stat = await statRegularFile(absPath);
-      if (stat.missing) {
-        return;
-      }
-      if (!absPath.endsWith(".md")) {
-        return;
-      }
-      result.push(absPath);
-    } catch (error) {
-      if (!isFileMissingError(error)) {
-        throw error;
-      }
+    const stat = await scanMemorySource(absPath, () => statEnumerableMemoryFile(absPath));
+    if (!stat || !absPath.endsWith(".md")) {
+      return;
     }
+    result.push(absPath);
   };
 
-  const memoryFile = await resolveCanonicalRootMemoryFile(workspaceDir);
+  const memoryFile = await scanMemorySource(workspaceDir, () =>
+    resolveCanonicalRootMemoryFile(workspaceDir),
+  );
   if (memoryFile) {
     await addMarkdownFile(memoryFile);
   }
   await addMarkdownFile(path.join(workspaceDir, "USER.md"));
   try {
-    const dirStat = await fs.lstat(memoryDir);
+    const dirStat = await scanMemorySource(memoryDir, () => fs.lstat(memoryDir));
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
       // Default memory roots stay Markdown-only; multimodal discovery is an extraPaths opt-in.
       await collectMemoryFilesFromDir(memoryDir, result, undefined, shouldSkipWorkspaceMemoryPath);
@@ -256,7 +297,7 @@ export async function listMemoryFiles(
         continue;
       }
       try {
-        const stat = await fs.lstat(inputPath);
+        const stat = await scanMemorySource(inputPath, () => fs.lstat(inputPath));
         if (stat.isSymbolicLink()) {
           continue;
         }
@@ -308,11 +349,10 @@ export async function buildFileEntry(
   workspaceDir: string,
   multimodal?: MemoryMultimodalSettings,
 ): Promise<MemoryFileEntry | null> {
-  const regularFile = await statRegularFile(absPath);
-  if (regularFile.missing) {
+  const stat = await statEnumerableMemoryFile(absPath);
+  if (!stat) {
     return null;
   }
-  const stat = regularFile.stat;
   const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);
@@ -508,14 +548,23 @@ export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEnt
   return entries;
 }
 
+/** Takes the trailing slice of text within the weighted char budget, without splitting surrogate pairs. */
+function takeTailByEstimatedChars(text: string, budget: number): string {
+  const chars = Array.from(text);
+  let acc = 0;
+  let start = chars.length;
+  while (start > 0 && acc + estimateStringChars(chars[start - 1] ?? "") <= budget) {
+    acc += estimateStringChars(chars[start - 1] ?? "");
+    start -= 1;
+  }
+  return chars.slice(start).join("");
+}
+
 export function chunkMarkdown(
   content: string,
   chunking: { tokens: number; overlap: number; perEntry?: boolean },
 ): MemoryChunk[] {
   const lines = content.split("\n");
-  if (lines.length === 0) {
-    return [];
-  }
   const maxChars = Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
   const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
   const chunks: MemoryChunk[] = [];
@@ -549,8 +598,8 @@ export function chunkMarkdown(
     });
   };
 
-  const carryOverlap = () => {
-    if (overlapChars <= 0 || current.length === 0) {
+  const carryOverlap = (window: number) => {
+    if (window <= 0 || current.length === 0) {
       current = [];
       currentChars = 0;
       return;
@@ -562,14 +611,37 @@ export function chunkMarkdown(
       if (!entry) {
         continue;
       }
-      acc += estimateStringChars(entry.line) + 1;
+      const entrySize = estimateStringChars(entry.line) + 1;
+      const remaining = window - acc;
+      if (entrySize > remaining) {
+        // A segment wider than the remaining window keeps only its trailing
+        // slice, measured in the same weighted units as the budget.
+        const tail = kept.length === 0 ? takeTailByEstimatedChars(entry.line, remaining - 1) : "";
+        if (tail.length > 0) {
+          kept.unshift({ line: tail, lineNo: entry.lineNo });
+          acc += estimateStringChars(tail) + 1;
+        }
+        break;
+      }
+      acc += entrySize;
       kept.unshift(entry);
-      if (acc >= overlapChars) {
+      if (acc >= window) {
         break;
       }
     }
     current = kept;
     currentChars = acc;
+  };
+
+  const appendSegment = (segment: string, lineNo: number, chars: number) => {
+    const lineSize = chars + 1;
+    if (currentChars + lineSize > maxChars && current.length > 0) {
+      flush();
+      // Carry and the incoming segment share one budget, including line separators.
+      carryOverlap(Math.min(overlapChars, Math.max(0, maxChars - lineSize)));
+    }
+    current.push({ line: segment, lineNo });
+    currentChars += lineSize;
   };
 
   const finishEntry = (entryEndLine: number) => {
@@ -598,41 +670,34 @@ export function chunkMarkdown(
       entryStartLine = curatedEntry.kind === "entry" ? lineNo : undefined;
       entryFirstChunk = chunks.length;
     }
-    const segments: string[] = [];
     if (line.length === 0) {
-      segments.push("");
+      appendSegment("", lineNo, 0);
     } else {
-      // First pass: slice at maxChars (preserves original behaviour for Latin).
-      // Second pass: if a segment's *weighted* size still exceeds the budget
-      // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
-      // chunking.tokens so the chunk stays within the token budget.
       for (let start = 0; start < line.length;) {
         const coarse = truncateUtf16Safe(line.slice(start), maxChars);
-        if (estimateStringChars(coarse) > maxChars) {
-          const fineStep = Math.max(1, chunking.tokens);
-          for (let j = 0; j < coarse.length;) {
-            let end = Math.min(j + fineStep, coarse.length);
-            const lastCodeUnit = coarse.charCodeAt(end - 1);
-            if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && end < coarse.length) {
-              end += 1;
+        const coarseChars = estimateStringChars(coarse);
+        if (coarseChars > maxChars) {
+          // Rare and supplementary ideographs can cost several tokens each.
+          // Split by the estimator's units while keeping every code point intact.
+          let partStart = 0;
+          let partEnd = 0;
+          let partChars = 0;
+          for (const character of coarse) {
+            const chars = estimateStringChars(character);
+            if (partChars + chars > maxChars) {
+              appendSegment(coarse.slice(partStart, partEnd), lineNo, partChars);
+              partStart = partEnd;
+              partChars = 0;
             }
-            segments.push(coarse.slice(j, end));
-            j = end;
+            partEnd += character.length;
+            partChars += chars;
           }
+          appendSegment(coarse.slice(partStart), lineNo, partChars);
         } else {
-          segments.push(coarse);
+          appendSegment(coarse, lineNo, coarseChars);
         }
         start += coarse.length;
       }
-    }
-    for (const segment of segments) {
-      const lineSize = estimateStringChars(segment) + 1;
-      if (currentChars + lineSize > maxChars && current.length > 0) {
-        flush();
-        carryOverlap();
-      }
-      current.push({ line: segment, lineNo });
-      currentChars += lineSize;
     }
   }
   flush();

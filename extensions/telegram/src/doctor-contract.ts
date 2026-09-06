@@ -10,7 +10,7 @@ import {
   defineChannelAliasMigration,
   hasLegacyAccountStreamingAliases,
   normalizeChannelAccounts,
-  stripRetiredChannelKeys,
+  type CompatMutationResult,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 const streamingAliasMigration = defineChannelAliasMigration({
@@ -27,6 +27,51 @@ const RETIRED_TUNING_KEYS = new Set([
   "retry",
   "errorCooldownMs",
 ]);
+
+function stripRetiredTelegramTuning(
+  entry: Record<string, unknown>,
+  scope: "channel" | "account" | "chat" | "topic",
+): CompatMutationResult {
+  let changed = false;
+  const updated = { ...entry };
+  for (const key of scope === "channel" || scope === "account"
+    ? RETIRED_TUNING_KEYS
+    : ["errorCooldownMs"]) {
+    if (Object.hasOwn(updated, key)) {
+      delete updated[key];
+      changed = true;
+    }
+  }
+  // Account IDs and sender-policy keys can equal retired setting names. Descend
+  // only through Telegram's config maps, never arbitrary object properties.
+  const maps = scope === "topic" ? [] : scope === "chat" ? ["topics"] : ["groups", "direct"];
+  if (scope === "channel") {
+    maps.push("accounts");
+  }
+  for (const key of maps) {
+    const entries = asObjectRecord(entry[key]);
+    if (!entries) {
+      continue;
+    }
+    const nextEntries = { ...entries };
+    for (const [id, value] of Object.entries(entries)) {
+      const child = asObjectRecord(value);
+      if (!child) {
+        continue;
+      }
+      const next = stripRetiredTelegramTuning(
+        child,
+        key === "accounts" ? "account" : key === "topics" ? "topic" : "chat",
+      );
+      if (next.changed) {
+        nextEntries[id] = next.entry;
+        updated[key] = nextEntries;
+        changed = true;
+      }
+    }
+  }
+  return { entry: changed ? updated : entry, changed };
+}
 
 function hasRetiredTelegramDmConfig(value: unknown): boolean {
   const entry = asObjectRecord(value);
@@ -237,21 +282,16 @@ export function normalizeCompatibilityConfig({
 }): ChannelDoctorConfigMutation {
   const changes: string[] = [];
   const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
-  const tuningKnobs = stripRetiredChannelKeys({
-    cfg: aliases.config,
-    channelId: "telegram",
-    keys: RETIRED_TUNING_KEYS,
-    scope: "recursive",
-  });
   const rawEntry = asObjectRecord(
-    (tuningKnobs.config.channels as Record<string, unknown> | undefined)?.telegram,
+    (aliases.config.channels as Record<string, unknown> | undefined)?.telegram,
   );
   if (!rawEntry) {
     return { config: cfg, changes: [] };
   }
 
-  let updated = rawEntry;
-  let changed = tuningKnobs.config !== cfg;
+  const tuningKnobs = stripRetiredTelegramTuning(rawEntry, "channel");
+  let updated = tuningKnobs.entry;
+  let changed = aliases.config !== cfg || tuningKnobs.changed;
   if (tuningKnobs.changed) {
     changes.push("Removed retired Telegram tuning knobs.");
   }
@@ -348,9 +388,9 @@ export function normalizeCompatibilityConfig({
   }
   return {
     config: {
-      ...tuningKnobs.config,
+      ...aliases.config,
       channels: {
-        ...tuningKnobs.config.channels,
+        ...aliases.config.channels,
         telegram: updated as unknown as NonNullable<OpenClawConfig["channels"]>["telegram"],
       } as OpenClawConfig["channels"],
     },

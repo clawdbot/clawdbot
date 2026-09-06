@@ -155,10 +155,12 @@ class GatewaySessionCustomHeadersTest {
                       if (frame["type"]?.jsonPrimitive?.content != "req") return
                       val id = frame["id"]?.jsonPrimitive?.content ?: return
                       when (frame["method"]?.jsonPrimitive?.content) {
-                        "connect" ->
+                        "connect" -> {
                           webSocket.send(
                             """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""",
                           )
+                        }
+
                         "artifacts.download" -> {
                           val requestedArtifactId =
                             frame["params"]

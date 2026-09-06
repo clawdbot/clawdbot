@@ -12,7 +12,7 @@ import type {
   BrowserProfileConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { resolveGatewayPort } from "openclaw/plugin-sdk/core";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-policy";
 import { isLoopbackHost, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -26,6 +26,7 @@ import {
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
+import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
@@ -543,7 +544,11 @@ export function resolveProfile(
   }
 
   if (driver === "existing-session") {
-    const existingSessionCdp = normalizeExistingSessionCdpUrl(rawProfileUrl, profileName);
+    const mcpArgs = normalizeStringList(profile.mcpArgs) ?? undefined;
+    const existingSessionCdp = normalizeExistingSessionCdpUrl(
+      normalizeChromeMcpOptions({ ...profile, mcpArgs }).browserUrl,
+      profileName,
+    );
     return {
       name: profileName,
       cdpPort: 0,
@@ -552,7 +557,7 @@ export function resolveProfile(
       cdpIsLoopback: existingSessionCdp?.cdpIsLoopback ?? true,
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       mcpCommand: normalizeOptionalString(profile.mcpCommand),
-      mcpArgs: normalizeStringList(profile.mcpArgs) ?? undefined,
+      mcpArgs,
       color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       driver,
       executablePath,

@@ -34,7 +34,7 @@ export class LegacyContextEngine implements ContextEngine {
     };
   }
 
-  compact(params: Parameters<ContextEngine["compact"]>[0]) {
-    return delegateCompactionToRuntime(params);
-  }
+  // Preserve the canonical delegate identity so the host knows the built-in
+  // runtime, rather than this engine wrapper, owns the compaction watchdog.
+  readonly compact = delegateCompactionToRuntime;
 }

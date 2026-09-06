@@ -4,6 +4,7 @@
  * guidance, and weakly-attached channel metadata for wrapped tools.
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
@@ -29,6 +30,7 @@ export { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
 type ChannelMessageActionDiscoveryParams = {
   cfg?: OpenClawConfig;
+  chatType?: ChatType | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;

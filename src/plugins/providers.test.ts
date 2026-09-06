@@ -29,7 +29,7 @@ const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
 const getRuntimePluginRegistryForLoadOptionsMock = vi.fn<GetRuntimePluginRegistryForLoadOptions>();
 const resolveCompatibleRuntimePluginRegistryMock = vi.fn<ResolveCompatibleRuntimePluginRegistry>();
 const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
-const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_) => false);
+const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_options) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
 const loadPluginMetadataSnapshotMock = vi.fn<LoadPluginMetadataSnapshot>();
 const loadPluginRegistrySnapshotMock = vi.fn<LoadPluginRegistrySnapshot>();
@@ -217,6 +217,7 @@ function createMetadataSnapshotFixture(
       setupProviders: ownerMap([]),
       commandAliases: ownerMap([]),
       contracts: ownerMap([]),
+      modelIdNormalizationPolicies: new Map(),
     },
   };
 }
@@ -475,6 +476,11 @@ describe("resolvePluginProviders", () => {
       resolveRuntimePluginRegistry: (...args: Parameters<ResolveRuntimePluginRegistry>) =>
         resolveRuntimePluginRegistryMock(...args),
     }));
+    vi.doMock("./providers.runtime.js", async () => {
+      const { createProviderRegistryResolver } = await import("./providers.runtime-core.js");
+      const loader = await import("./loader.js");
+      return createProviderRegistryResolver(loader);
+    });
     vi.doMock("../config/plugin-auto-enable.js", () => ({
       applyPluginAutoEnable: (...args: Parameters<ApplyPluginAutoEnable>) =>
         applyPluginAutoEnableMock(...args),
@@ -535,6 +541,56 @@ describe("resolvePluginProviders", () => {
     ({ resolvePluginProvidersCore: resolvePluginProviders } =
       await import("./providers.runtime.js"));
     ({ setActivePluginRegistry } = await import("./runtime.js"));
+  });
+
+  it("offers only opted-in personal methods under the installed plugin policy", async () => {
+    const { listPersonalAccountAuthChoices, resolvePersonalAccountAuthMethod } =
+      await import("./personal-account-auth.js");
+    const bundled = createManifestProviderPlugin({
+      id: "personal-provider",
+      providerIds: ["personal-provider"],
+    });
+    bundled.providerAuthChoices = [
+      {
+        provider: "personal-provider",
+        method: "api-key",
+        choiceId: "personal-key",
+        personalAccount: true,
+      },
+      { provider: "personal-provider", method: "host-import", choiceId: "host-import" },
+    ];
+    const workspace = createManifestProviderPlugin({
+      id: "workspace-provider",
+      providerIds: ["workspace-provider"],
+      origin: "workspace",
+    });
+    workspace.providerAuthChoices = [
+      {
+        provider: "workspace-provider",
+        method: "api-key",
+        choiceId: "workspace-key",
+        personalAccount: true,
+      },
+    ];
+    setManifestPlugins([bundled, workspace]);
+    expect(listPersonalAccountAuthChoices({}).map((choice) => choice.choiceId)).toEqual([
+      "personal-key",
+    ]);
+    for (const plugins of [
+      { enabled: false },
+      { deny: ["personal-provider"] },
+      { allow: ["unrelated"] },
+      { entries: { "personal-provider": { enabled: false } } },
+    ]) {
+      expect(listPersonalAccountAuthChoices({ plugins })).toEqual([]);
+      expect(
+        await resolvePersonalAccountAuthMethod({ plugins }, "personal-provider", "api-key"),
+      ).toBeUndefined();
+    }
+    expect(
+      await resolvePersonalAccountAuthMethod({}, "personal-provider", "host-import"),
+    ).toBeUndefined();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("does not treat cli backend ids as provider owners", () => {
@@ -775,13 +831,11 @@ describe("resolvePluginProviders", () => {
     loadOpenClawPluginsMock.mockReturnValue(registry);
     loadPluginManifestRegistryMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
-    applyPluginAutoEnableMock.mockImplementation(
-      (params): PluginAutoEnableResult => ({
-        config: params.config ?? ({} as OpenClawConfig),
-        changes: [],
-        autoEnabledReasons: {},
-      }),
-    );
+    applyPluginAutoEnableMock.mockImplementation((params): PluginAutoEnableResult => ({
+      config: params.config ?? ({} as OpenClawConfig),
+      changes: [],
+      autoEnabledReasons: {},
+    }));
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "google",

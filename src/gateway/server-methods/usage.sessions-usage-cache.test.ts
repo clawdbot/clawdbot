@@ -93,7 +93,7 @@ describe("sessions.usage result cache", () => {
     vi.clearAllMocks();
     testApi.sessionsUsageCache.clear();
     mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
-      agentIdBySessionKey: new Map(),
+      targetsBySessionKey: new Map(),
       durableTargets: [],
       storePath: "(multiple)",
       store: {},
@@ -141,7 +141,18 @@ describe("sessions.usage result cache", () => {
       tools: { listChars: 0, schemaChars: 0, entries: [] },
     };
     mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
-      agentIdBySessionKey: new Map([["agent:main:main", "main"]]),
+      targetsBySessionKey: new Map([
+        [
+          "agent:main:main",
+          {
+            agentId: "main",
+            storeTarget: {
+              agentId: "main",
+              storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
+            },
+          },
+        ],
+      ]),
       durableTargets: [],
       storePath: "(multiple)",
       store: {
@@ -230,9 +241,27 @@ describe("sessions.usage result cache", () => {
         },
       };
       mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
-        agentIdBySessionKey: new Map([
-          ["agent:main:first", "main"],
-          ["agent:main:second", "main"],
+        targetsBySessionKey: new Map([
+          [
+            "agent:main:first",
+            {
+              agentId: "main",
+              storeTarget: {
+                agentId: "main",
+                storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
+              },
+            },
+          ],
+          [
+            "agent:main:second",
+            {
+              agentId: "main",
+              storeTarget: {
+                agentId: "main",
+                storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
+              },
+            },
+          ],
         ]),
         durableTargets: [],
         storePath: "(multiple)",
@@ -240,13 +269,13 @@ describe("sessions.usage result cache", () => {
           "agent:main:first": {
             sessionId: "session-first",
             updatedAt: 200,
-            createdActor: { type: "human", id: firstProfile.id },
+            createdActor: { type: "human", source: "profile", id: firstProfile.id },
             visibility: "shared",
           },
           "agent:main:second": {
             sessionId: "session-second",
             updatedAt: 100,
-            createdActor: { type: "human", id: secondProfile.id },
+            createdActor: { type: "human", source: "profile", id: secondProfile.id },
             visibility: "shared",
           },
         },

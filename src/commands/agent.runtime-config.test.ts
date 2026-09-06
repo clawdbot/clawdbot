@@ -94,7 +94,12 @@ vi.mock("../config/runtime-snapshot.js", () => ({
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 
-const getActiveSecretsRuntimeSnapshotMock = vi.hoisted(() => vi.fn<() => object | null>());
+const getActiveSecretsRuntimeConfigSnapshotMock = vi.hoisted(() =>
+  vi.fn<typeof import("../secrets/runtime-state.js").getActiveSecretsRuntimeConfigSnapshot>(),
+);
+vi.mock("../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeConfigSnapshot: getActiveSecretsRuntimeConfigSnapshotMock,
+}));
 const prepareSecretsRuntimeSnapshotMock = vi.hoisted(() =>
   vi.fn(
     async (params: {
@@ -106,6 +111,7 @@ const prepareSecretsRuntimeSnapshotMock = vi.hoisted(() =>
       config: params.assignmentConfig,
       authStores: [],
       authStoreCredentialsRevision: 0,
+      authStoreSnapshotsRevision: 0,
       warnings: [],
       webTools: {},
     }),
@@ -113,7 +119,6 @@ const prepareSecretsRuntimeSnapshotMock = vi.hoisted(() =>
 );
 const activateSecretsRuntimeSnapshotMock = vi.hoisted(() => vi.fn());
 vi.mock("../secrets/runtime.js", () => ({
-  getActiveSecretsRuntimeSnapshot: getActiveSecretsRuntimeSnapshotMock,
   prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,
   activateSecretsRuntimeSnapshot: activateSecretsRuntimeSnapshotMock,
 }));
@@ -163,8 +168,10 @@ function mockConfig(home: string, storePath: string): OpenClawConfig {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getActiveSecretsRuntimeSnapshotMock.mockImplementation(() => ({
+  getActiveSecretsRuntimeConfigSnapshotMock.mockImplementation(() => ({
+    config: loadConfigMock(),
     sourceConfig: loadConfigMock(),
+    configRefsPrepared: true,
   }));
   readConfigFileSnapshotForWriteMock.mockResolvedValue({
     snapshot: { valid: false, resolved: {} as OpenClawConfig },
@@ -186,7 +193,7 @@ describe("agentCommand runtime config", () => {
         snapshot: { valid: true, resolved: sourceConfig },
         writeOptions: { basePluginMetadataSnapshot: pluginMetadataSnapshot },
       });
-      getActiveSecretsRuntimeSnapshotMock.mockReturnValue(null);
+      getActiveSecretsRuntimeConfigSnapshotMock.mockReturnValue(null);
 
       await resolveAgentRuntimeConfig(runtime);
 
@@ -258,7 +265,11 @@ describe("agentCommand runtime config", () => {
         snapshot: { valid: true, resolved: sourceConfig },
         writeOptions: {},
       });
-      getActiveSecretsRuntimeSnapshotMock.mockReturnValue({ sourceConfig });
+      getActiveSecretsRuntimeConfigSnapshotMock.mockReturnValue({
+        config: loadedConfig,
+        sourceConfig,
+        configRefsPrepared: true,
+      });
       resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
         resolvedConfig,
         effectiveConfig: resolvedConfig,
@@ -278,7 +289,7 @@ describe("agentCommand runtime config", () => {
       expect(targetIds.has("models.providers.*.apiKey")).toBe(true);
       expect(targetIds.has("channels.telegram.botToken")).toBe(false);
       expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
-      expect(prepared.cfg).toBe(resolvedConfig);
+      expect(prepared).toBe(resolvedConfig);
     });
   });
 
@@ -430,8 +441,7 @@ describe("agentCommand runtime config", () => {
       expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
       expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
       expect(setRuntimeConfigSnapshotMock).not.toHaveBeenCalled();
-      expect(prepared.cfg).toBe(loadedConfig);
-      expect(prepared.sourceConfig).toBe(loadedConfig);
+      expect(prepared).toBe(loadedConfig);
     });
   });
 

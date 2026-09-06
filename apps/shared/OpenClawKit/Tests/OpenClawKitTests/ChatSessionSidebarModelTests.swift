@@ -672,7 +672,7 @@ struct ChatSessionSidebarModelTests {
                     agentId: "work",
                     runId: "run-work",
                     revision: 3,
-                    updatedAt: 1_000,
+                    updatedAt: 1000,
                     headline: "Replayed work status",
                     health: "on-track")),
             to: foreign,
@@ -808,6 +808,30 @@ struct ChatSessionSidebarModelTests {
         #expect(cleared.observerDigest == nil)
         #expect(cleared.status == nil)
         #expect(cleared.lastRunError == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func `session color survives coding and partial events but clears on tombstone`(nested: Bool) throws {
+        let decoder = JSONDecoder()
+        let entry = try decoder.decode(
+            OpenClawChatSessionEntry.self,
+            from: Data(#"{"key":"agent:main:work","color":"red"}"#.utf8))
+        var sessions = try [decoder.decode(
+            OpenClawChatSessionEntry.self,
+            from: JSONEncoder().encode(entry))]
+        #expect(sessions[0].color == "red")
+        for (field, expected) in [
+            ("", "red"),
+            (#", "color":"blue""#, "blue"),
+            (#", "color":null"#, nil),
+            ("", nil),
+        ] as [(String, String?)] {
+            let row = #"{"key":"agent:main:work"\#(field)}"#
+            let payload = nested ? #"{"reason":"patch","session":\#(row)}"# : row
+            let change = try decoder.decode(OpenClawChatSessionsChangedEvent.self, from: Data(payload.utf8))
+            sessions = try #require(ChatSessionSidebarModel.applying(sessionChange: change, to: sessions))
+            #expect(sessions[0].color == expected)
+        }
     }
 
     @Test func `active run id tombstone clears exact ids while omission is inert`() throws {

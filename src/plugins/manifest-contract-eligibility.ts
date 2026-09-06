@@ -5,12 +5,12 @@ import {
   resolveChannelConfigRecord,
 } from "../config/channel-configured-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
+import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
+import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { resolveManifestOwnerBasePolicyBlock } from "./manifest-owner-policy.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
-import { getPluginCache } from "./plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type {
   PluginMetadataManifestView,
@@ -24,13 +24,18 @@ export function isManifestPluginOwnerAllowedByControlPlanePolicy(params: {
     channels?: readonly string[];
   };
   config?: OpenClawConfig;
+  /** Batch callers carry the policy normalized from this same config. */
+  normalizedConfig?: NormalizedPluginsConfig;
   allowRestrictiveAllowlistBypass?: boolean;
+  allowBundledProviderCompat?: boolean;
+  /** Callers scoped to an explicit env read compat from that env's state root. */
+  env?: NodeJS.ProcessEnv;
 }): boolean {
   if (!params.config?.plugins) {
     return true;
   }
   const config = params.config;
-  const normalized = normalizePluginsConfig(config.plugins);
+  const normalized = params.normalizedConfig ?? normalizePluginsConfig(config.plugins);
   // Global disable is owned by each runtime surface; bundled speech remains intentionally usable.
   const normalizedConfig = normalized.enabled ? normalized : { ...normalized, enabled: true };
   const block = resolveManifestOwnerBasePolicyBlock({
@@ -54,9 +59,10 @@ export function isManifestPluginOwnerAllowedByControlPlanePolicy(params: {
   ) {
     return true;
   }
-  const metadata = getPluginCache().metadata;
-  metadata.bundledDiscoveryMode ??= { value: readBundledDiscoveryMode() };
-  return metadata.bundledDiscoveryMode.value === "compat";
+  return (
+    params.allowBundledProviderCompat === true &&
+    readBundledDiscoveryModeMemoized(params.env) === "compat"
+  );
 }
 
 export function isManifestPluginAvailableForControlPlane(params: {
@@ -66,7 +72,10 @@ export function isManifestPluginAvailableForControlPlane(params: {
     "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
   > & { channels?: readonly string[] };
   config?: OpenClawConfig;
+  normalizedConfig?: NormalizedPluginsConfig;
   allowRestrictiveAllowlistBypass?: boolean;
+  allowBundledProviderCompat?: boolean;
+  env?: NodeJS.ProcessEnv;
 }): boolean {
   if (!isManifestPluginOwnerAllowedByControlPlanePolicy(params)) {
     return false;
@@ -74,7 +83,12 @@ export function isManifestPluginAvailableForControlPlane(params: {
   if (params.plugin.origin === "bundled") {
     return true;
   }
-  return isInstalledPluginEnabled(params.snapshot.index, params.plugin.id, params.config);
+  return isInstalledPluginEnabled(
+    params.snapshot.index,
+    params.plugin.id,
+    params.config,
+    params.env,
+  );
 }
 
 export function hasManifestContractValue(params: {
@@ -91,7 +105,9 @@ export function listAvailableManifestContractPlugins(params: {
   contract: PluginManifestContractListKey;
   value?: string;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 }): PluginManifestRecord[] {
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   return params.snapshot.plugins.filter(
     (plugin) =>
       hasManifestContractValue({
@@ -103,6 +119,9 @@ export function listAvailableManifestContractPlugins(params: {
         snapshot: params.snapshot,
         plugin,
         config: params.config,
+        normalizedConfig,
+        env: params.env,
+        allowBundledProviderCompat: isBundledProviderCompatContract(params.contract),
       }),
   );
 }
@@ -111,6 +130,7 @@ export function listAvailableManifestContractValues(params: {
   snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
   contract: PluginManifestContractListKey;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 }): string[] {
   const values = new Set<string>();
   for (const plugin of listAvailableManifestContractPlugins(params)) {

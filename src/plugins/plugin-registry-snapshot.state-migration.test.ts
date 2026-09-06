@@ -11,14 +11,11 @@ import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   acquireStartupMigrationLease,
-  needsStateMigrationCheckpoint,
+  readMigrationCheckpointStatus,
   recordSuccessfulStateMigrations,
   type MigrationCheckpointIdentity,
 } from "../infra/startup-migration-checkpoint.js";
-import {
-  autoMigrateLegacyPluginDoctorState,
-  resetAutoMigrateLegacyStateForTest,
-} from "../infra/state-migrations.doctor.js";
+import { autoMigrateLegacyPluginDoctorState } from "../infra/state-migrations.plugin-doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
@@ -47,7 +44,6 @@ beforeEach(() => {
 afterEach(() => {
   clearPluginDoctorContractRegistryCache();
   clearPluginMetadataLifecycleCaches();
-  resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
@@ -228,7 +224,7 @@ describe("persisted plugin registry Doctor contract freshness", () => {
     const reused = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
     expect(reused.registrySource).toBe("persisted");
     expect(checkpointIdentity(reused)).toEqual(checkpoint.identity);
-    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(false);
+    expect(readMigrationCheckpointStatus(checkpoint)).toBe("state-current");
 
     fs.writeFileSync(
       contractPath,
@@ -255,7 +251,7 @@ module.exports = {
     );
     // Package changes are visible to an explicit owner refresh, not to retained generations.
     expect(loadPluginMetadataSnapshot({ config: {}, env, stateDir })).toBe(persisted);
-    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(false);
+    expect(readMigrationCheckpointStatus(checkpoint)).toBe("state-current");
     clearPluginMetadataLifecycleCaches();
     await withPluginCache(createPluginCache(), async () => {
       const refreshed = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
@@ -272,8 +268,8 @@ module.exports = {
       expect(refreshedIdentity.pluginMigrationFingerprint).not.toBe(
         checkpoint.identity.pluginMigrationFingerprint,
       );
-      expect(needsStateMigrationCheckpoint({ ...checkpoint, identity: refreshedIdentity })).toBe(
-        true,
+      expect(readMigrationCheckpointStatus({ ...checkpoint, identity: refreshedIdentity })).toBe(
+        "stale",
       );
 
       const migration = await autoMigrateLegacyPluginDoctorState({ config: {}, env });

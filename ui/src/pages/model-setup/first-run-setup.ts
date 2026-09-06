@@ -6,8 +6,7 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import type { ModelSetupDetectionConnection } from "./detect-cache.ts";
+import { formatDateTimeMs } from "../../lib/format.ts";
 import {
   clearFirstRunActivationReceipt,
   persistFirstRunActivationReceipt,
@@ -16,33 +15,52 @@ import {
   type FirstRunActivationReceipt,
   firstRunActivationDeadline,
 } from "./first-run-activation-receipt.ts";
+import { formatModelSetupError, type ModelSetupTaskResult } from "./model-setup-task-result.ts";
 import {
-  formatModelSetupError,
-  type ModelSetupActivationTaskResult,
-  type ModelSetupTaskResult,
-} from "./model-setup-task-result.ts";
-import {
-  activationTargetId,
   mapVerifyResult,
   type ModelSetupActivationState,
   type ModelSetupPageState,
   type ModelSetupVerifyState,
 } from "./state.ts";
 
-export type ModelSetupRouteData = {
-  state: ModelSetupPageState;
-  connection: ModelSetupDetectionConnection;
-  firstRun: boolean;
+export type ModelSetupConnection = Pick<
+  ApplicationContext["gateway"]["snapshot"],
+  "client" | "hello"
+> & {
+  agentId: string | null;
 };
 
-type Candidate = SystemAgentSetupDetectResult["candidates"][number];
+export function captureModelSetupConnection(
+  context: ApplicationContext,
+  firstRun: boolean,
+  previousRecoveryScope: string | null = null,
+) {
+  const snapshot = context.gateway.snapshot;
+  return {
+    client: snapshot.client,
+    hello: snapshot.hello,
+    agentId: context.agentSelection.state.selectedId,
+    connected: snapshot.phase === "connected",
+    firstRun,
+    connectionRevision: context.gateway.connectionRevision,
+    // Hello owns authentication; retain its scope only while disconnected.
+    recoveryScope:
+      snapshot.phase === "connected"
+        ? (snapshot.hello?.auth?.recoveryScope ?? null)
+        : previousRecoveryScope,
+  };
+}
+
+export type ModelSetupRouteData = { firstRun: boolean };
+
 type SetupOutcome<T> = ModelSetupTaskResult<T> | undefined;
 
 type FirstRunOwner = {
   generation: number;
   connectionRevision: number;
-  routeData: ModelSetupRouteData;
-  connection: ModelSetupDetectionConnection;
+  recoveryScope: string | null;
+  firstRun: boolean;
+  connection: ModelSetupConnection;
 };
 
 type FirstRunActivation = {
@@ -62,10 +80,6 @@ type FirstRunSetupHost = {
   canUseSetup: (client: GatewayBrowserClient | null) => boolean;
   canVerify: (client: GatewayBrowserClient | null) => boolean;
   verify: () => Promise<SetupOutcome<SystemAgentSetupVerifyResult>>;
-  activate: (
-    candidate: Candidate,
-    targetId: string,
-  ) => Promise<ModelSetupActivationTaskResult | undefined>;
   setVerifyState: (state: ModelSetupVerifyState) => void;
   setActivationState: (state: ModelSetupActivationState) => void;
   setRefreshWarning: (warning: string | null) => void;
@@ -74,8 +88,7 @@ type FirstRunSetupHost = {
 export class FirstRunSetup {
   private generation = 0;
   private started = false;
-  private readonly attempts = new Set<string>();
-  private readyConnection: ModelSetupDetectionConnection | null = null;
+  private readyConnection: ModelSetupConnection | null = null;
   private pending: FirstRunActivation | null = null;
 
   constructor(private readonly host: FirstRunSetupHost) {}
@@ -95,30 +108,53 @@ export class FirstRunSetup {
     });
   }
 
-  setReadyConnection(connection: ModelSetupDetectionConnection | null): void {
+  setReadyConnection(connection: ModelSetupConnection | null): void {
     this.readyConnection = connection;
   }
 
   routeChanged(): void {
+    const receipt = this.pending?.receipt ?? null;
     this.reset();
     this.readyConnection = null;
     this.pending = null;
     if (this.host.routeData()?.firstRun === false) {
-      clearFirstRunActivationReceipt();
+      clearFirstRunActivationReceipt(receipt);
     }
   }
 
-  connectionChanged(connection: ModelSetupDetectionConnection): void {
+  connectionChanged(connection: ModelSetupConnection): void {
     this.reset();
     this.readyConnection = null;
     if (
       this.pending &&
-      (connection.client !== this.pending.owner.connection.client ||
+      (!this.pending.owner.recoveryScope ||
         connection.agentId !== this.pending.owner.connection.agentId ||
-        this.host.context().gateway.connectionRevision !== this.pending.owner.connectionRevision)
+        this.host.context().gateway.connectionRevision !== this.pending.owner.connectionRevision ||
+        (this.host.context().gateway.snapshot.phase === "connected" &&
+          (connection.hello?.auth?.recoveryScope ?? null) !== this.pending.owner.recoveryScope))
     ) {
+      const receipt = this.pending.receipt;
       this.pending = null;
+      clearFirstRunActivationReceipt(receipt);
     }
+  }
+
+  reconnectActivation(connection: ModelSetupConnection): void {
+    const activation = this.pending;
+    if (!activation) {
+      return;
+    }
+    const context = this.host.context();
+    if (
+      !activation.owner.recoveryScope ||
+      activation.owner.connectionRevision !== context.gateway.connectionRevision ||
+      activation.owner.recoveryScope !== (connection.hello?.auth?.recoveryScope ?? null) ||
+      activation.owner.connection.agentId !== connection.agentId ||
+      activation.owner.firstRun !== this.host.routeData()?.firstRun
+    ) {
+      return;
+    }
+    activation.owner = this.owner(activation.owner.firstRun);
   }
 
   retryDetection(): boolean {
@@ -126,8 +162,12 @@ export class FirstRunSetup {
       return false;
     }
     if (this.pending && Date.now() < this.pending.deadlineMs) {
-      this.host.setRefreshWarning(t("modelSetup.recovery.wait"));
-      return false;
+      this.host.setRefreshWarning(
+        t("modelSetup.recovery.wait", { time: formatDateTimeMs(this.pending.deadlineMs) }),
+      );
+      // A read-only refresh can reveal a committed model without retiring the
+      // unresolved activation receipt or permitting another provider mutation.
+      return true;
     }
     if (this.host.routeData()?.firstRun) {
       const page = this.host.pageState();
@@ -189,13 +229,20 @@ export class FirstRunSetup {
     if (restored) {
       // Reconnection creates a new owner without reviving old response handles.
       this.pending = {
-        owner: this.owner(routeData),
+        owner: this.owner(routeData.firstRun),
         modelRef: restored.modelRef,
         kind: restored.kind,
         deadlineMs: restored.deadlineMs,
         receipt,
         outcome: "pending",
       };
+    }
+    // Detection is not consent. Only an existing, owner-bound activation receipt
+    // may resume verification after reconnect; a fresh visit never tests or
+    // activates even a configured or recommended model.
+    if (!this.pending) {
+      this.started = true;
+      return;
     }
     const configured = pageState.result.setupComplete && pageState.result.configuredModel;
     if (this.pending && (!configured || !this.pending.modelRef)) {
@@ -212,11 +259,8 @@ export class FirstRunSetup {
       });
       return;
     }
-    if (!configured && isGatewayMethodAdvertised(snapshot, "openclaw.setup.activate") !== true) {
-      return;
-    }
     this.started = true;
-    void this.run(this.owner(routeData), pageState.result);
+    void this.run(this.owner(routeData.firstRun), pageState.result);
   }
 
   beginActivation(intent: { kind: string; modelRef?: string }): FirstRunActivation | null {
@@ -224,7 +268,7 @@ export class FirstRunSetup {
     if (!routeData?.firstRun) {
       return null;
     }
-    const owner = this.owner(routeData);
+    const owner = this.owner(routeData.firstRun);
     const receipt = persistFirstRunActivationReceipt(this.host.context(), intent);
     this.pending = {
       owner,
@@ -300,7 +344,7 @@ export class FirstRunSetup {
     // The operator explicitly selects this exact model; do not turn a failed
     // or late verification into permission to adopt whichever model appears next.
     const modelRef = page.result.configuredModel;
-    const owner = this.owner(pending.owner.routeData);
+    const owner = this.owner(pending.owner.firstRun);
     const outcome = await this.verify();
     if (!this.owns(owner) || this.pending !== pending || !outcome || "error" in outcome) {
       return;
@@ -312,17 +356,16 @@ export class FirstRunSetup {
     }
   }
 
-  private owner(routeData: ModelSetupRouteData): FirstRunOwner {
-    const context = this.host.context();
+  // Equivalent router data can be republished mid-activation. The mounted
+  // lifecycle and mode/connection changes, not that object, own this generation.
+  private owner(firstRun: boolean): FirstRunOwner {
+    const connection = captureModelSetupConnection(this.host.context(), firstRun);
     return {
       generation: this.generation,
-      routeData,
-      connectionRevision: context.gateway.connectionRevision,
-      connection: {
-        client: context.gateway.snapshot.client,
-        hello: context.gateway.snapshot.hello,
-        agentId: context.agentSelection.state.selectedId,
-      },
+      firstRun,
+      connectionRevision: connection.connectionRevision,
+      recoveryScope: connection.recoveryScope,
+      connection,
     };
   }
 
@@ -356,7 +399,7 @@ export class FirstRunSetup {
     if (!routeData) {
       return undefined;
     }
-    const owner = this.owner(routeData);
+    const owner = this.owner(routeData.firstRun);
     const pending = this.pending;
     const outcome = await this.host.verify();
     if (!this.owns(owner) || !outcome) {
@@ -400,7 +443,6 @@ export class FirstRunSetup {
   private reset(): void {
     this.generation += 1;
     this.started = false;
-    this.attempts.clear();
   }
 
   private owns(owner: FirstRunOwner): boolean {
@@ -409,7 +451,8 @@ export class FirstRunSetup {
     return (
       owner.generation === this.generation &&
       owner.connectionRevision === context.gateway.connectionRevision &&
-      owner.routeData === this.host.routeData() &&
+      owner.recoveryScope === (snapshot.hello?.auth?.recoveryScope ?? null) &&
+      owner.firstRun === this.host.routeData()?.firstRun &&
       snapshot.phase === "connected" &&
       snapshot.client === owner.connection.client &&
       snapshot.hello === owner.connection.hello &&
@@ -429,38 +472,6 @@ export class FirstRunSetup {
       }
       if (outcome.value.ok) {
         this.finishVerified(outcome.value.modelRef);
-        return;
-      }
-      if (this.pending) {
-        return;
-      }
-    }
-    const context = this.host.context();
-    if (isGatewayMethodAdvertised(context.gateway.snapshot, "openclaw.setup.activate") !== true) {
-      return;
-    }
-    for (const candidate of detection.candidates) {
-      const targetId = activationTargetId(candidate.kind, candidate.modelRef);
-      if (
-        candidate.credentials === false ||
-        (detection.configuredModel &&
-          (candidate.kind === "existing-model" ||
-            candidate.modelRef === detection.configuredModel)) ||
-        this.attempts.has(targetId)
-      ) {
-        continue;
-      }
-      if (!this.owns(owner)) {
-        return;
-      }
-      this.attempts.add(targetId);
-      const outcome = await this.host.activate(candidate, targetId);
-      if (!this.owns(owner) || !outcome || "error" in outcome) {
-        return;
-      }
-      // Only a definitive Gateway rejection permits trying another candidate.
-      if (!outcome.isCurrent() || outcome.value.result.ok) {
-        return;
       }
     }
   }

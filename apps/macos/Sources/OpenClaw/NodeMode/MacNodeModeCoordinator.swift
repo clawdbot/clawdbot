@@ -220,11 +220,6 @@ final class MacNodeModeCoordinator: NSObject {
         self.notificationCenter.addObserver(
             self,
             selector: #selector(self.nodeHostConfigurationChanged),
-            name: .openclawCLIInstalled,
-            object: nil)
-        self.notificationCenter.addObserver(
-            self,
-            selector: #selector(self.nodeHostConfigurationChanged),
             name: .openclawCuaDriverAvailabilityChanged,
             object: nil)
     }
@@ -321,10 +316,6 @@ final class MacNodeModeCoordinator: NSObject {
             computerControlProvider: ComputerControlProvider.current())
     }
 
-    func currentCanvasPluginSurfaceRoute() async -> GatewayCanvasHostRoute? {
-        await self.session.currentCanvasHostRoute()
-    }
-
     func setPresenceActivityReportingEnabled(_ enabled: Bool) async {
         await self.presenceReporter.setReportingEnabled(enabled)
     }
@@ -348,10 +339,6 @@ final class MacNodeModeCoordinator: NSObject {
                 "mac node presence clear failed: \(error.localizedDescription, privacy: .public)")
             return .retry
         }
-    }
-
-    func refreshCanvasPluginSurfaceRoute(replacing observedURL: String?) async -> GatewayCanvasHostRoute? {
-        await self.session.refreshCanvasHostRoute(replacing: observedURL)
     }
 
     private func refresh(
@@ -555,7 +542,7 @@ final class MacNodeModeCoordinator: NSObject {
                     continue
                 }
                 self.logger.error("mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
-                let failure = Self.nodeHostWorkerFailure(error)
+                let failure = Self.nodeGatewayConnectionFailure(error)
                 self.channelStatus.record(.unavailable(reason: failure.reason, diagnostic: failure.diagnostic))
                 try? await Task.sleep(nanoseconds: min(retryDelay, 10_000_000_000))
                 retryDelay = min(retryDelay * 2, 10_000_000_000)
@@ -605,6 +592,9 @@ final class MacNodeModeCoordinator: NSObject {
                 completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
                 isPaused: false)
         else { return nil }
+        // Node credentials belong to the selected endpoint, matching the operator route.
+        // A missing owner must not unlock legacy role-global token storage.
+        let deviceAuth = Self.nodeDeviceAuthBinding(for: endpoint)
         let options = GatewayConnectOptions(
             role: "node",
             scopes: [],
@@ -619,7 +609,9 @@ final class MacNodeModeCoordinator: NSObject {
             clientId: "openclaw-macos",
             clientMode: "node",
             clientDisplayName: InstanceIdentity.displayName,
-            deviceIdentityProfile: Self.nodeIdentityProfile)
+            deviceIdentityProfile: Self.nodeIdentityProfile,
+            allowStoredDeviceAuth: deviceAuth.allowStoredDeviceAuth,
+            deviceAuthGatewayID: deviceAuth.gatewayID)
         let sessionBox = self.buildSessionBox(url: config.url, tls: endpoint.tls)
 
         // Resolve compatibility fallback before node admission. Operator recovery
@@ -988,27 +980,17 @@ extension MacNodeModeCoordinator {
         }
         if let activeInput = self.activeNodeHostWorkerInput {
             // Worker launch metadata is startup-scoped. Route retries reuse it instead of
-            // repeating CLI and runtime discovery until an explicit restart resets state.
+            // resolving the bundle again until an explicit restart resets state.
             try self.nodeHostWorkerRetryPolicy.prepareForStart(activeInput)
             return try await nodeHostWorker.start(launch: activeInput.launch)
         }
         let launch: MacNodeHostWorkerLaunch
         do {
-            if let projectLaunch = try await CommandResolver.projectNodeHostWorkerLaunch() {
-                launch = projectLaunch
-            } else {
-                switch await CLIInstaller.status() {
-                case let .ready(location, _):
-                    launch = MacNodeHostWorkerLaunch(command: CommandResolver.nodeHostWorkerCommand(
-                        prefix: [location]))
-                case let status:
-                    throw MacNodeHostWorker.WorkerError.unavailable(reason: status.message)
-                }
-            }
+            launch = try await CommandResolver.nodeHostWorkerLaunch()
         } catch let error as RuntimeResolutionError {
             throw MacNodeHostWorker.WorkerError.unavailable(reason: RuntimeLocator.describeFailure(error))
         }
-        var workerEnvironment: [String: String] = [:]
+        var workerEnvironment = launch.environment
         if provider == .cua, let endpoint = CuaDriverHostCoordinator.shared.workerEndpoint {
             workerEnvironment[CuaDriverWorkerEnvironment.endpoint] = try endpoint.environmentValue()
         }
@@ -1043,6 +1025,14 @@ extension MacNodeModeCoordinator {
             return (reason, diagnostic)
         }
         return (error.localizedDescription, nil)
+    }
+
+    static func nodeGatewayConnectionFailure(_ error: Error) -> (reason: String, diagnostic: String?) {
+        guard let problem = GatewayConnectionProblemMapper.map(error: error),
+              problem.needsPairingApproval
+        else { return self.nodeHostWorkerFailure(error) }
+        let reason = problem.actionLabel.map { "\(problem.statusText) — \($0)" } ?? problem.statusText
+        return (reason, problem.message)
     }
 
     private func handleNodeHostWorkerFailure(configurationGeneration: UInt64) {
@@ -1117,6 +1107,12 @@ extension MacNodeModeCoordinator {
 }
 
 extension MacNodeModeCoordinator {
+    nonisolated static func nodeDeviceAuthBinding(
+        for endpoint: GatewayConnection.EndpointSnapshot) -> (allowStoredDeviceAuth: Bool, gatewayID: String?)
+    {
+        (endpoint.deviceAuthGatewayID != nil, endpoint.deviceAuthGatewayID)
+    }
+
     static func endpointTransitionRequiresDisconnect(
         from previous: GatewayEndpointState,
         to next: GatewayEndpointState) -> Bool

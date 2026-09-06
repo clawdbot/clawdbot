@@ -20,6 +20,7 @@ import {
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 describe("openai transport stream", () => {
   it("keeps bounded redacted diagnostics UTF-16 well-formed", () => {
@@ -247,14 +248,7 @@ describe("openai transport stream", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: Date.now(),
     };
@@ -338,6 +332,7 @@ describe("openai transport stream", () => {
       reasoningTokens: 3,
       totalTokens: 9,
     });
+    expect(output.usage.contextUsage).toEqual({ state: "unavailable" });
   });
 
   it("prices Responses cache writes separately from ordinary input", async () => {
@@ -377,6 +372,11 @@ describe("openai transport stream", () => {
       cacheRead: 20,
       cacheWrite: 30,
       reasoningTokens: 0,
+      totalTokens: 110,
+    });
+    expect(output.usage.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 100,
       totalTokens: 110,
     });
     expect(output.usage.cost.input).toBeCloseTo(0.00025);
@@ -1208,10 +1208,11 @@ describe("openai transport stream", () => {
 
     expect(testing.buildOpenAISdkRequestOptions(codexModel, undefined, { stream: true })).toEqual({
       headers: { Accept: "text/event-stream" },
+      maxRetries: 0,
     });
     expect(
       testing.buildOpenAISdkRequestOptions(transportAliasModel, undefined, { stream: true }),
-    ).toEqual({ headers: { Accept: "text/event-stream" } });
+    ).toEqual({ headers: { Accept: "text/event-stream" }, maxRetries: 0 });
     expect(testing.buildOpenAISdkRequestOptions(codexModel)).toBeUndefined();
     expect(
       testing.buildOpenAISdkRequestOptions(nonNativeChatGPTModel, undefined, { stream: true }),

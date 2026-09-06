@@ -48,6 +48,7 @@ import {
   appendGatewayLifecycleAudit,
   createGatewayLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
+import { resolveGatewayConfigPorts, resolveGatewayLifecycleContext } from "./lifecycle-context.js";
 import {
   runServiceRestart,
   runServiceStart,
@@ -62,18 +63,15 @@ import { createDaemonActionContext, createNullWriter } from "./response.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
-  type GatewayRestartSnapshot,
+  formatGatewayRestartFailure,
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
-import {
-  resolveGatewayLifecycleContext,
-  resolveGatewayConfigPorts,
-  renderGatewayServiceStartHints,
-} from "./shared.js";
+import { renderGatewayServiceStartHints } from "./shared.js";
+import { verifyGatewayStartReadiness } from "./start-health.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -85,30 +83,6 @@ function postRestartHealthAttempts(): number {
   return process.platform === "win32"
     ? Math.ceil(WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS / POST_RESTART_HEALTH_DELAY_MS)
     : POST_RESTART_HEALTH_ATTEMPTS;
-}
-
-function formatRestartFailure(params: {
-  health: GatewayRestartSnapshot;
-  port: number;
-  defaultTimeoutSeconds: number;
-}): { statusLine: string; failMessage: string } {
-  if (params.health.waitOutcome === "stopped-free") {
-    const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
-    return {
-      statusLine: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
-      failMessage: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
-    };
-  }
-
-  const elapsed = params.health.elapsedMs;
-  const timeoutSeconds = Math.max(
-    1,
-    Math.round(elapsed === undefined ? params.defaultTimeoutSeconds : elapsed / 1000),
-  );
-  return {
-    statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
-    failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
-  };
 }
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
@@ -486,6 +460,14 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         state,
         issues,
       }),
+    postStartCheck: ({ fail, warnings }) =>
+      verifyGatewayStartReadiness({
+        service,
+        expectedPort,
+        resolveContext: () => resolveGatewayLifecycleContext(service),
+        fail,
+        warnings,
+      }),
     expectedPort,
     opts,
   });
@@ -640,7 +622,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
       return null;
     },
-    postRestartCheck: async ({ warnings, fail, stdout, warn }) => {
+    postRestartCheck: async ({ warnings, fail, stdout, warn, activationAccepted: accepted }) => {
+      let activationAccepted = accepted;
       if (restartedWithoutServiceManager) {
         // Unmanaged restarts have no service-manager state to watch; use listener health and,
         // when targeted delivery required it, prove the previous lock owner was replaced.
@@ -674,6 +657,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         fail(
           `Gateway restart timed out after ${unmanagedRestartWaitSeconds}s waiting for health checks.`,
           [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
+          activationAccepted ? "restart-health-failed" : undefined,
         );
         throw new Error("unreachable after gateway restart health failure");
       }
@@ -711,6 +695,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         if (retryRestart.outcome === "scheduled") {
           return retryRestart;
         }
+        activationAccepted = true;
         health = await waitForHealthy();
       }
 
@@ -719,7 +704,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       const diagnostics = renderRestartDiagnostics(health);
-      const failure = formatRestartFailure({
+      const failure = formatGatewayRestartFailure({
         health,
         port: managedRestartPort,
         defaultTimeoutSeconds: restartWaitSeconds,
@@ -744,10 +729,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         warnings.push(...diagnostics);
       }
 
-      fail(failure.failMessage, [
-        formatCliCommand("openclaw gateway status --deep"),
-        formatCliCommand("openclaw doctor"),
-      ]);
+      fail(
+        failure.failMessage,
+        [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
+        activationAccepted ? "restart-health-failed" : undefined,
+      );
       throw new Error("unreachable after gateway restart failure");
     },
   });

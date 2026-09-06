@@ -1,4 +1,5 @@
 // File Transfer tests cover dir fetch plugin behavior.
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -201,6 +202,9 @@ describe("handleDirFetch — happy path", () => {
     await fs.writeFile(path.join(tmpRoot, "b.txt"), "beta\n");
     await fs.mkdir(path.join(tmpRoot, "sub"));
     await fs.writeFile(path.join(tmpRoot, "sub", "c.txt"), "gamma\n");
+    await fs.writeFile(path.join(tmpRoot, ".root-note"), "hidden root\n");
+    await fs.mkdir(path.join(tmpRoot, ".hidden"));
+    await fs.writeFile(path.join(tmpRoot, ".hidden", "note.txt"), "hidden member\n");
 
     const r = await handleDirFetch({ path: tmpRoot });
     if (!r.ok) {
@@ -220,13 +224,19 @@ describe("handleDirFetch — happy path", () => {
     expect(buf[0]).toBe(0x1f);
     expect(buf[1]).toBe(0x8b);
 
-    // file count covers the regular files we created (3); BSD tar may also
+    // file count covers the regular files we created (5); BSD tar may also
     // list directory entries, so be generous.
-    expect(r.fileCount).toBeGreaterThanOrEqual(3);
+    expect(r.fileCount).toBeGreaterThanOrEqual(5);
     expect(r.entries).toContain("a.txt");
     expect(r.entries).toContain("b.txt");
     expect(r.entries).toContain("sub");
     expect(r.entries).toContain("sub/c.txt");
+    const archiveEntries = execFileSync("/usr/bin/tar", ["-tzf", "-"], {
+      input: buf,
+      encoding: "utf8",
+    }).split("\n");
+    expect(archiveEntries).toEqual(expect.arrayContaining(["./.root-note", "./.hidden/note.txt"]));
+    expect(r.entries).toEqual(expect.arrayContaining([".root-note", ".hidden/note.txt"]));
     expect(r.fileCount).toBe(r.entries?.length);
   });
 });

@@ -7,6 +7,7 @@ import {
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -14,11 +15,7 @@ suite.define(() => {
   it.each(["queue", "steer", "collect", "followup"] as const)(
     "explains and submits the opposite of %s with modified Enter",
     async (followUpMode) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const inheritsQueueMode = followUpMode === "collect" || followUpMode === "followup";
       const runtimeConfig = {
@@ -79,7 +76,7 @@ suite.define(() => {
           await expectRequestCountStable(gateway, "chat.send", 1);
           await gateway.setMethodResponse("chat.history", {
             messages: [{ role: "user", content: [{ type: "text", text: initialText }] }],
-            sessionId: "control-ui-e2e-session",
+            sessionId: "session:agent:main:main",
             sessionInfo: {
               key: "main",
               hasActiveRun: false,
@@ -92,7 +89,10 @@ suite.define(() => {
           await gateway.emitChatFinal({ runId, text: "The original run is done." });
           const sends = await waitForRequests(gateway, "chat.send", 2);
           const queuedParams = requireRecord(sends[1]?.params);
-          expect(queuedParams).toMatchObject({ message: followUpText, sessionKey: "main" });
+          expect(queuedParams).toMatchObject({
+            message: followUpText,
+            sessionKey: "agent:main:main",
+          });
           expect(queuedParams).not.toHaveProperty("queueMode");
           await queuedRow.waitFor({ state: "detached" });
           await expectRequestCountStable(gateway, "chat.send", 2);
@@ -103,7 +103,7 @@ suite.define(() => {
             deliver: false,
             message: followUpText,
             queueMode: "steer",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
           });
           expect(steerParams).not.toHaveProperty("expectedRunId");
           expect(steerParams).not.toHaveProperty("expectedLeafEntryId");

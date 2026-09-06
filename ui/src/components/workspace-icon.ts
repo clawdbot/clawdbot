@@ -17,19 +17,10 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) authReady = false;
   /** Route whose bytes the browser refused to decode; keyed so a new session retries. */
   @state() private undecodableRouteUrl: string | null = null;
-  private readonly loader = new AuthenticatedAvatarRouteLoader(
-    () => {
-      if (this.isConnected) {
-        this.requestUpdate();
-      }
-    },
-    { cacheNotFound: true, retryUnavailable: true },
-  );
-
-  override disconnectedCallback() {
-    this.loader.reset();
-    super.disconnectedCallback();
-  }
+  private readonly loader = new AuthenticatedAvatarRouteLoader(this, {
+    cacheNotFound: true,
+    retryUnavailable: true,
+  });
 
   override render() {
     return this.loader.withActiveRoutes(() => this.renderContent());

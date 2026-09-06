@@ -6,7 +6,7 @@ import { Command } from "commander";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
-const findCallMatchesInStoreMock = vi.hoisted(() => vi.fn());
+const findCallInStoreMock = vi.hoisted(() => vi.fn());
 const loadActiveCallsFromStoreMock = vi.hoisted(() => vi.fn());
 const tailscaleMocks = vi.hoisted(() => ({
   cleanup: vi.fn(),
@@ -32,7 +32,7 @@ vi.mock("../api.js", async (importOriginal) => ({
 }));
 vi.mock("./manager/store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./manager/store.js")>()),
-  findCallMatchesInStore: findCallMatchesInStoreMock,
+  findCallInStore: findCallInStoreMock,
   loadActiveCallsFromStore: loadActiveCallsFromStoreMock,
 }));
 vi.mock("./webhook/tailscale.js", async (importOriginal) => ({
@@ -43,6 +43,7 @@ vi.mock("./webhook/tailscale.js", async (importOriginal) => ({
 }));
 
 import { registerVoiceCallCli } from "./cli.js";
+import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function captureStdout() {
   let output = "";
@@ -84,7 +85,7 @@ function gatewayCredentialsError(message: string): Error {
 describe("voice-call CLI status fallback", () => {
   afterEach(() => {
     callGatewayFromCliMock.mockReset();
-    findCallMatchesInStoreMock.mockReset();
+    findCallInStoreMock.mockReset();
     loadActiveCallsFromStoreMock.mockReset();
     tailscaleMocks.cleanup.mockReset();
     tailscaleMocks.getSelfInfo.mockReset();
@@ -109,11 +110,45 @@ describe("voice-call CLI status fallback", () => {
     registerVoiceCallCli({
       program,
       config: config as never,
+      coreConfig: {},
       ensureRuntime,
       logger: { info() {}, warn() {}, error() {}, debug() {} } as never,
     });
     return program;
   }
+
+  it("reports an ambiguous phone-call owner during setup without starting telephony", async () => {
+    const ensureRuntime = vi.fn();
+    const program = new Command();
+    registerVoiceCallCli({
+      program,
+      config: createVoiceCallBaseConfig(),
+      coreConfig: {
+        agents: { ownership: "explicit", entries: { operator: {}, support: {} } },
+      },
+      ensureRuntime,
+      logger: { info() {}, warn() {}, error() {} },
+    });
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(["voicecall", "setup", "--json"], { from: "user" });
+    } finally {
+      capturer.restore();
+    }
+    expect(JSON.parse(capturer.output())).toMatchObject({
+      ok: false,
+      checks: expect.arrayContaining([
+        {
+          id: "agent-owner",
+          ok: false,
+          message: expect.stringContaining(
+            "Set plugins.entries.voice-call.config.agentId to a configured agent ID.",
+          ),
+        },
+      ]),
+    });
+    expect(ensureRuntime).not.toHaveBeenCalled();
+  });
 
   async function runStatusWithUnavailableGateway(params: {
     persisted?: unknown;
@@ -121,7 +156,7 @@ describe("voice-call CLI status fallback", () => {
     args?: string[];
   }): Promise<unknown> {
     callGatewayFromCliMock.mockRejectedValue(params.error ?? gatewayTransportError());
-    findCallMatchesInStoreMock.mockResolvedValue({ byCallId: params.persisted });
+    findCallInStoreMock.mockReturnValue(params.persisted);
     const ensureRuntime = vi.fn(async () => {
       throw new Error("status fallback must not initialize the telephony runtime");
     });
@@ -129,6 +164,7 @@ describe("voice-call CLI status fallback", () => {
     registerVoiceCallCli({
       program,
       config: {} as never,
+      coreConfig: {},
       ensureRuntime,
       stateRuntime: {} as never,
       logger: { info() {}, warn() {}, error() {}, debug() {} } as never,

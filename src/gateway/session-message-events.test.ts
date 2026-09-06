@@ -24,7 +24,9 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronDeliveryPlan } from "../cron/delivery-plan.js";
 import { dispatchCronDelivery } from "../cron/isolated-agent/delivery-dispatch.js";
+import type { CronJob } from "../cron/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as secureRandom from "../infra/secure-random.js";
@@ -32,7 +34,12 @@ import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
-import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-profiles.js";
+import {
+  ensureProfileForEmail,
+  listProfiles,
+  setAvatar,
+  setDisplayName,
+} from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -298,7 +305,14 @@ describe("session.message websocket events", () => {
       const declaredEvent = await declaredPresence;
       const declaredEntry = findWatchedEntry(declaredEvent);
       expect(declaredEntry?.watchedSessions).toEqual(declaredKeys);
-      expect(declaredEntry?.user).toBeUndefined();
+      const ownerProfile = listProfiles().find((profile) => profile.emails.length === 0);
+      expect(ownerProfile).toBeDefined();
+      expect(declaredEntry?.user).toEqual({
+        id: ownerProfile!.id,
+        identity: { type: "profile", id: ownerProfile!.id },
+        avatarUrl: currentProfileAvatarUrl(ownerProfile!.id),
+        ...(ownerProfile!.displayName ? { name: ownerProfile!.displayName } : {}),
+      });
       expect(declaredEvent.stateVersion?.presence).toBeGreaterThan(initialPresenceVersion ?? 0);
 
       // Sidebar narration owns message subscriptions for running rows, but those
@@ -1009,24 +1023,25 @@ describe("session.message websocket events", () => {
       });
       await rpcReq(webWs, "sessions.messages.subscribe", { key: sessionKey });
 
+      const job: CronJob = {
+        id: "job-webchat",
+        name: "Current WebChat completion",
+        sessionTarget: "current",
+        sessionKey,
+        wakeMode: "now",
+        enabled: true,
+        state: {},
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
+        payload: { kind: "agentTurn", message: "Finish later" },
+      };
       const liveEventPromise = waitForSessionMessageEvent(webWs, sessionKey);
       const dispatched = await dispatchCronDelivery({
         cfg: { session: { store: storePath } },
         cfgWithAgentDefaults: { session: { store: storePath } },
         deps: {},
-        job: {
-          id: "job-webchat",
-          name: "Current WebChat completion",
-          sessionTarget: "current",
-          sessionKey,
-          wakeMode: "now",
-          enabled: true,
-          state: {},
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
-          payload: { kind: "agentTurn", message: "Finish later" },
-        },
+        job,
         agentId: "main",
         agentSessionKey: "cron:job-webchat",
         sourceSessionKey: sessionKey,
@@ -1047,6 +1062,7 @@ describe("session.message websocket events", () => {
           mode: "implicit",
           error: new Error("WebChat uses canonical session events"),
         },
+        deliveryPlan: resolveCronDeliveryPlan(job),
         deliveryRequested: true,
         undeliveredRunStatus: "ok",
         spawnOnlyHandoff: false,
@@ -2079,7 +2095,7 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "early selected prompt" }],
       timestamp: Date.now(),
     };
-    await persistSessionTranscriptTurn(
+    const persisted = await persistSessionTranscriptTurn(
       {
         agentId: "main",
         sessionId: "sess-main",
@@ -2087,10 +2103,11 @@ describe("session.message websocket events", () => {
         storePath,
       },
       {
-        messages: [{ message: transcriptMessage }],
+        messages: [{ eventId: "msg-selected", message: transcriptMessage }],
         updateMode: "none",
       },
     );
+    expect(persisted.appendedCount).toBe(1);
 
     const ws = await harness.openWs();
     try {
@@ -2109,7 +2126,10 @@ describe("session.message websocket events", () => {
           sessionKey: "agent:main:main",
           storePath,
         },
-        message: transcriptMessage,
+        message: {
+          ...transcriptMessage,
+          content: [{ type: "text", text: "stale queued prompt" }],
+        },
         messageId: "msg-selected",
       });
 
@@ -2118,6 +2138,14 @@ describe("session.message websocket events", () => {
         sessionKey: "agent:main:main",
         messageId: "msg-selected",
         messageSeq: 1,
+      });
+      expect(requireRecord(messageEvent.payload, "selected session event").message).toMatchObject({
+        ...transcriptMessage,
+        __openclaw: {
+          id: "msg-selected",
+          seq: 1,
+          transcriptPosition: { source: expect.any(String), rawSeq: expect.any(Number) },
+        },
       });
     } finally {
       ws.close();
@@ -2709,6 +2737,7 @@ describe("session.message websocket events", () => {
     const ledger: WorkerTranscriptCommitStore = {
       begin: () => ({ kind: "claimed" }),
       complete: ({ outcome }) => outcome,
+      discardUncommitted: () => {},
     };
     const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
     const identity: WorkerConnectionIdentity = {
@@ -2769,6 +2798,7 @@ describe("session.message websocket events", () => {
         ),
       );
       const outcome = await committer.commit({
+        assertCurrent: () => undefined,
         identity,
         request: {
           runEpoch: identity.ownerEpoch,

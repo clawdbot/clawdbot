@@ -46,9 +46,11 @@ function copyWithExecCommand(text: string): boolean {
   } finally {
     document.body.removeChild(textarea);
     if (previouslyFocused?.isConnected) {
+      // Deferred focus must retain its document after that environment's globals retire.
+      const ownerDocument = textarea.ownerDocument;
       window.setTimeout(() => {
-        const activeElement = document.activeElement;
-        if (previouslyFocused.isConnected && (!activeElement || activeElement === document.body)) {
+        const { activeElement, body } = ownerDocument;
+        if (previouslyFocused.isConnected && (!activeElement || activeElement === body)) {
           previouslyFocused.focus({ preventScroll: true });
         }
       }, 0);

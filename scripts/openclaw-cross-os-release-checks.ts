@@ -5,10 +5,12 @@
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveCrossOsCompanionPackages } from "./lib/cross-os-release-checks/companions.ts";
+import {
+  resolveCrossOsPackageSet,
+  startCrossOsPackageRegistry,
+} from "./lib/cross-os-release-checks/companions.ts";
 import type { CandidateBuild, LaneResult } from "./lib/cross-os-release-checks/config.ts";
 import {
-  isSupportedCrossOsSuite,
   parseArgs,
   readRunnerOverrideEnv,
   resolveProviderConfig,
@@ -32,6 +34,7 @@ import {
   writeSummary,
 } from "./lib/cross-os-release-checks/reporting.ts";
 import { formatError } from "./lib/cross-os-release-checks/shared.ts";
+import { isSupportedCrossOsSuite } from "./lib/cross-os-release-checks/suite-filter.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
@@ -172,6 +175,11 @@ async function main(argv: string[]) {
   };
 
   let build: CandidateBuild;
+  let registry: Awaited<ReturnType<typeof startCrossOsPackageRegistry>>;
+  const previousRegistry = {
+    NPM_CONFIG_REGISTRY: process.env.NPM_CONFIG_REGISTRY,
+    npm_config_registry: process.env.npm_config_registry,
+  };
   try {
     build = sourceDir
       ? await prepareCandidate({
@@ -192,15 +200,21 @@ async function main(argv: string[]) {
         `Provider "${provider}" requires an immutable prerelease companion registry.`,
       );
     }
-    const companions = pluginRegistry
-      ? resolveCrossOsCompanionPackages({
+    const packageSet = pluginRegistry
+      ? resolveCrossOsPackageSet({
           artifactDir: pluginRegistry.dir,
           candidateVersion: build.candidateVersion,
           manifestSha256: pluginRegistry.manifestSha256,
           requiredPackages: requiredCompanionPackages,
           sourceSha: build.sourceSha,
         })
-      : [];
+      : { companions: [], packages: [] };
+    const { companions } = packageSet;
+    registry = await startCrossOsPackageRegistry(packageSet.packages, logsDir);
+    if (registry) {
+      process.env.NPM_CONFIG_REGISTRY = registry.url;
+      process.env.npm_config_registry = registry.url;
+    }
 
     if (suite === "packaged-fresh") {
       summary.result = await runFreshLane({
@@ -255,6 +269,16 @@ async function main(argv: string[]) {
       status: "fail",
       error: formatError(error),
     };
+  } finally {
+    await registry?.close();
+    for (const name of ["NPM_CONFIG_REGISTRY", "npm_config_registry"] as const) {
+      const value = previousRegistry[name];
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
   }
 
   writeSummary(outputDir, summary);

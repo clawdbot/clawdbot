@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import {
   createBackgroundTasksProps,
@@ -91,6 +91,187 @@ afterEach(() => {
 });
 
 describe("background tasks concurrent snapshots", () => {
+  it("does not retry a transient snapshot after the pane switches sessions", async () => {
+    vi.useFakeTimers();
+    try {
+      const replacement = makeTask({
+        id: "task-new-session",
+        sessionKey: "agent:main:replacement",
+      });
+      let unavailable = true;
+      const request = vi.fn(() => {
+        if (unavailable) {
+          return Promise.reject(
+            new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message: "task registry changed during tasks.list; retry",
+              retryable: true,
+              retryAfterMs: 100,
+            }),
+          );
+        }
+        return Promise.resolve({ tasks: [replacement] });
+      });
+      const host: BackgroundTasksHost = {
+        sessionKey: "agent:main:current",
+        client: { request } as unknown as GatewayBrowserClient,
+        connected: true,
+        connectionEpoch: 1,
+        hello: null,
+      };
+
+      createBackgroundTasksProps(host);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(2);
+      host.sessionKey = "agent:main:replacement";
+      unavailable = false;
+      createBackgroundTasksProps(host);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(createBackgroundTasksProps(host).tasks?.map((task) => task.id)).toEqual([
+        replacement.id,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps global owner switches separate through canonical acknowledgments and late responses", async () => {
+    const mainTask = makeTask({ id: "main-task", sessionKey: "global" });
+    const workTask = makeTask({ id: "work-task", sessionKey: "global", agentId: "work" });
+    let resolveMain!: (value: { tasks: TaskSummary[] }) => void;
+    const mainPage = new Promise<{ tasks: TaskSummary[] }>((resolve) => {
+      resolveMain = resolve;
+    });
+    let deferMain = true;
+    const request = vi.fn((_method: string, params: { agentId?: string }) =>
+      params.agentId === "work"
+        ? Promise.resolve({ tasks: [workTask] })
+        : deferMain
+          ? mainPage
+          : Promise.resolve({ tasks: [mainTask] }),
+    );
+    const host = {
+      sessionKey: "agent:main:main",
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      hello: null,
+    } satisfies BackgroundTasksHost;
+    const previousProps = createBackgroundTasksProps(host);
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ sessionKey: "global", agentId: "main" });
+
+    host.sessionKey = "agent:work:main";
+    host.assistantAgentId = "work";
+    expect(createBackgroundTasksProps(host).tasks).toBeNull();
+    await flushAsync();
+    expect(createBackgroundTasksProps(host).tasks).toEqual([workTask]);
+    host.sessionKey = "global";
+    expect(createBackgroundTasksProps(host).tasks).toEqual([workTask]);
+    previousProps.onRefresh();
+    previousProps.onLoadDetail?.(mainTask);
+    previousProps.onCancel(mainTask.id);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    resolveMain({ tasks: [mainTask] });
+    await flushAsync();
+    expect(createBackgroundTasksProps(host).tasks).toEqual([workTask]);
+    deferMain = false;
+    host.assistantAgentId = "main";
+    expect(createBackgroundTasksProps(host).tasks).toBeNull();
+    await flushAsync();
+    expect(createBackgroundTasksProps(host).tasks).toEqual([mainTask]);
+    expect(request).toHaveBeenCalledTimes(6);
+  });
+
+  it("uses scoped snapshots for unseen bare requester events without adopting the executor owner", async () => {
+    const task = makeTask({
+      id: "cross-owner-task",
+      agentId: "work",
+      sessionKey: "global",
+      ownerKey: "global",
+      childSessionKey: "agent:work:subagent:child",
+    });
+    let listed = false;
+    const request = vi.fn((_method: string, params: { agentId?: string; sessionKey?: string }) =>
+      Promise.resolve({
+        tasks:
+          listed && (params.agentId === "main" || params.sessionKey === task.childSessionKey)
+            ? [task]
+            : [],
+      }),
+    );
+    const host = (assistantAgentId: string, sessionKey = "global") => ({
+      sessionKey,
+      assistantAgentId,
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      hello: null,
+    });
+    const main = host("main");
+    const work = host("work");
+    const child = host("work", task.childSessionKey);
+    for (const pane of [main, work, child]) {
+      createBackgroundTasksProps(pane);
+    }
+    await flushAsync();
+    listed = true;
+    for (const pane of [main, work, child]) {
+      handleBackgroundTasksEvent(pane, { action: "upserted", task });
+    }
+    expect(createBackgroundTasksProps(work).tasks).toEqual([]);
+    await flushAsync();
+    expect(createBackgroundTasksProps(main).tasks).toEqual([task]);
+    expect(createBackgroundTasksProps(work).tasks).toEqual([]);
+    expect(createBackgroundTasksProps(child).tasks).toEqual([task]);
+
+    const completed = { ...task, status: "completed", updatedAt: 3_000 };
+    const callsBefore = request.mock.calls.length;
+    handleBackgroundTasksEvent(main, { action: "upserted", task: completed });
+    expect(createBackgroundTasksProps(main).tasks?.[0]?.status).toBe("completed");
+    expect(request).toHaveBeenCalledTimes(callsBefore);
+  });
+
+  it.each([false, true])(
+    "keeps ambiguous events out of an in-flight snapshot (presented=%s)",
+    async (presented) => {
+      const task = makeTask({ id: "new-global-task", sessionKey: "global", agentId: "work" });
+      let resolveInitial!: (value: { tasks: TaskSummary[] }) => void;
+      const initial = new Promise<{ tasks: TaskSummary[] }>((resolve) => {
+        resolveInitial = resolve;
+      });
+      let listed = false;
+      const request = vi.fn(() => (listed ? Promise.resolve({ tasks: [task] }) : initial));
+      const host = {
+        sessionKey: "global",
+        assistantAgentId: "main",
+        agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+        client: { request } as unknown as GatewayBrowserClient,
+        connected: true,
+        hello: null,
+      };
+      createBackgroundTasksProps(host);
+      listed = true;
+      handleBackgroundTasksEvent(host, { action: "upserted", task }, presented);
+      handleBackgroundTasksEvent(host, { action: "upserted", task }, presented);
+      expect(createBackgroundTasksProps(host, { presented: false }).tasks).toBeNull();
+      expect(request).toHaveBeenCalledTimes(2);
+      resolveInitial({ tasks: [] });
+      await flushAsync();
+      if (!presented) {
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(createBackgroundTasksProps(host, { presented: false }).tasks).toBeNull();
+      }
+      createBackgroundTasksProps(host);
+      await flushAsync();
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(createBackgroundTasksProps(host).tasks).toEqual([task]);
+    },
+  );
+
   it.each([
     {
       name: "a terminal event",

@@ -1,3 +1,4 @@
+import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRetirement,
@@ -12,14 +13,14 @@ export type SessionWorkerPlacementContext = {
   workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get">;
   workerPlacementDispatchService?: Pick<WorkerPlacementDispatchContract, "reclaim">;
   workerSessionPlacementService?: Pick<WorkerSessionPlacementStore, "getMany"> &
-    Partial<Pick<WorkerSessionPlacementStore, "retireSessionPlacement">>;
+    Partial<Pick<WorkerSessionPlacementStore, "retireSessionPlacement" | "listForReconcile">>;
 };
 
 type PlacementMutationAction = "fork" | "reset" | "restore" | "rewind" | "switch";
 type Placement = WorkerSessionPlacementRecord;
 type PlacementState = Placement["state"];
 
-export class SessionWorkerPlacementMutationError extends Error {
+class SessionWorkerPlacementMutationError extends Error {
   constructor(state: PlacementState, action: PlacementMutationAction, key: string) {
     super(`Session ${key} cannot ${action} while cloud worker placement is ${state}.`);
   }
@@ -169,9 +170,10 @@ function samePlacementOwner(
   );
 }
 
-/** Capture retirement without erasing cloud affinity before fallible session cleanup. */
-export function prepareSessionWorkerPlacementRetirement(
+/** Retain the exact stopped placement across fallible workspace or session mutations. */
+export function prepareSessionWorkerPlacementMutationCheck(
   params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+  operation: "mutation" | "retirement" = "mutation",
 ) {
   const expected = readSessionWorkerPlacement(params);
   const assertCurrent = () => {
@@ -181,10 +183,19 @@ export function prepareSessionWorkerPlacementRetirement(
       current?.turnClaim ||
       (current && !isWorkerPlacementSafeForMutation(params.context, current))
     ) {
-      throw new Error(`Worker session placement ${params.sessionId} changed before retirement`);
+      throw new Error(`Worker session placement ${params.sessionId} changed before ${operation}`);
     }
   };
   assertCurrent();
+  return assertCurrent;
+}
+
+/** Capture retirement without erasing cloud affinity before fallible session cleanup. */
+export function prepareSessionWorkerPlacementRetirement(
+  params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+) {
+  const expected = readSessionWorkerPlacement(params);
+  const assertCurrent = prepareSessionWorkerPlacementMutationCheck(params, "retirement");
   const retire = params.context.workerSessionPlacementService?.retireSessionPlacement;
   if (expected && !retire) {
     throw new Error("Worker session placement retirement service is unavailable");
@@ -220,9 +231,11 @@ export function prepareSessionWorkerPlacementStop(params: {
 }): () => Promise<void> {
   const { agentId, context, sessionId, sessionKey } = params;
   const expected = readSessionWorkerPlacement(params);
+  // Cron run aliases share their base's physical session, even after session-id adoption.
   const matches = (candidate: Placement) =>
     candidate.sessionId === sessionId &&
-    candidate.sessionKey === sessionKey &&
+    (candidate.sessionKey === sessionKey ||
+      parseCronRunScopeSuffix(candidate.sessionKey).baseSessionKey === sessionKey) &&
     candidate.agentId === agentId;
   if (expected && !matches(expected)) {
     throw new Error(`Session ${sessionKey} cloud worker placement identity changed.`);
@@ -257,7 +270,7 @@ export function prepareSessionWorkerPlacementStop(params: {
     // The dispatch owner rechecks source eligibility before its own drain, and
     // caller authority throughout reconciliation. Never force-abandon unsynced work.
     const reclaimed = await context.workerPlacementDispatchService.reclaim(
-      { agentId, sessionId, sessionKey },
+      { agentId, sessionId, sessionKey: expected.sessionKey },
       params.authorize,
       beforeDrain,
     );

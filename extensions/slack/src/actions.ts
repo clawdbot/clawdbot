@@ -13,6 +13,10 @@ import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
+import {
+  openSlackConversationWithClient,
+  parseSlackConversationOpenInput,
+} from "./conversation-open.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
 import { normalizeSlackOutboundText } from "./format.js";
@@ -116,39 +120,39 @@ const SLACK_EMOJI_SKIN_TONE_BY_MODIFIER = new Map([
 // Unicode glyph. Models keep passing the glyph because the `emoji` param
 // reads as "an emoji"; map the common ones so the reaction is not silently
 // dropped. Unknown glyphs still pass through unchanged (no regression).
-const SLACK_EMOJI_SHORTNAME_BY_GLYPH: Record<string, string> = {
-  "✅": "white_check_mark",
-  "❌": "x",
-  "👍": "thumbsup",
-  "👎": "thumbsdown",
-  "🎉": "tada",
-  "❤": "heart",
-  "😄": "smile",
-  "😂": "joy",
-  "🚀": "rocket",
-  "👀": "eyes",
-  "🙏": "pray",
-  "🔥": "fire",
-  "💯": "100",
-  "⚠": "warning",
-  "➕": "heavy_plus_sign",
-  "➖": "heavy_minus_sign",
-  "🤔": "thinking_face",
-  "👨‍💻": "male-technologist",
-  "👨💻": "male-technologist",
-  "👩‍💻": "female-technologist",
-  "⚡": "zap",
-  "🌐": "globe_with_meridians",
-  "😱": "scream",
-  "🥱": "yawning_face",
-  "😨": "fearful",
-  "⏳": "hourglass_flowing_sand",
-  "✍": "writing_hand",
-  "🗜": "compression",
-  "🧠": "brain",
-  "🛠": "hammer_and_wrench",
-  "💻": "computer",
-};
+const SLACK_EMOJI_SHORTNAME_BY_GLYPH = new Map([
+  ["✅", "white_check_mark"],
+  ["❌", "x"],
+  ["👍", "thumbsup"],
+  ["👎", "thumbsdown"],
+  ["🎉", "tada"],
+  ["❤", "heart"],
+  ["😄", "smile"],
+  ["😂", "joy"],
+  ["🚀", "rocket"],
+  ["👀", "eyes"],
+  ["🙏", "pray"],
+  ["🔥", "fire"],
+  ["💯", "100"],
+  ["⚠", "warning"],
+  ["➕", "heavy_plus_sign"],
+  ["➖", "heavy_minus_sign"],
+  ["🤔", "thinking_face"],
+  ["👨‍💻", "male-technologist"],
+  ["👨💻", "male-technologist"],
+  ["👩‍💻", "female-technologist"],
+  ["⚡", "zap"],
+  ["🌐", "globe_with_meridians"],
+  ["😱", "scream"],
+  ["🥱", "yawning_face"],
+  ["😨", "fearful"],
+  ["⏳", "hourglass_flowing_sand"],
+  ["✍", "writing_hand"],
+  ["🗜", "compression"],
+  ["🧠", "brain"],
+  ["🛠", "hammer_and_wrench"],
+  ["💻", "computer"],
+]);
 
 function normalizeSlackEmojiName(raw: string): string {
   const trimmed = raw.trim();
@@ -160,7 +164,7 @@ function normalizeSlackEmojiName(raw: string): string {
   const glyphKey = withoutColons
     .replace(SLACK_EMOJI_SKIN_TONE_MODIFIER_RE, "")
     .replace(SLACK_EMOJI_VARIATION_SELECTOR_RE, "");
-  const shortname = SLACK_EMOJI_SHORTNAME_BY_GLYPH[glyphKey];
+  const shortname = SLACK_EMOJI_SHORTNAME_BY_GLYPH.get(glyphKey);
   const skinTone = modifier ? SLACK_EMOJI_SKIN_TONE_BY_MODIFIER.get(modifier) : undefined;
   if (!shortname || !skinTone) {
     return shortname ?? withoutColons;
@@ -487,6 +491,12 @@ export async function deleteSlackMessage(
     channel: channelId,
     ts: messageId,
   });
+}
+
+export async function openSlackConversation(userIds: unknown, opts: SlackActionClientOpts = {}) {
+  const input = parseSlackConversationOpenInput(userIds, opts.teamId);
+  const client = await getClient({ ...opts, teamId: input.teamId }, "write");
+  return await openSlackConversationWithClient(client, input);
 }
 
 export async function resolveSlackConversationName(

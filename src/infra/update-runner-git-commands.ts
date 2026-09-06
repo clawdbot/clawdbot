@@ -1,5 +1,9 @@
-import { DEV_BRANCH } from "./update-channels.js";
-import type { CommandRunner, UpdateStepResult } from "./update-runner-types.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { parseDocument } from "yaml";
+import { hasErrnoCode } from "./errno.js";
+import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
+import type { CommandRunner } from "./update-runner-types.js";
 
 const BUILD_MAX_OLD_SPACE_MB = 8192;
 const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
@@ -38,6 +42,10 @@ export function resolveBuildEnv(
   };
 }
 
+export function gitCleanCheckArgs(gitRoot: string): string[] {
+  return ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"];
+}
+
 async function hasExplicitPnpmPreferOfflineConfig(params: {
   runCommand: CommandRunner;
   cwd: string;
@@ -62,15 +70,15 @@ async function hasExplicitPnpmPreferOfflineConfig(params: {
   }
 }
 
-export async function resolveInstallEnv(
+export async function prepareCandidateCommandEnv(
   manager: "pnpm" | "bun" | "npm",
   env: NodeJS.ProcessEnv | undefined,
   cwd: string,
   runCommand: CommandRunner,
   timeoutMs: number,
-): Promise<NodeJS.ProcessEnv | undefined> {
+): Promise<{ env: NodeJS.ProcessEnv | undefined; restoreWorkspace?: () => Promise<void> }> {
   if (manager !== "pnpm") {
-    return env;
+    return { env };
   }
   const effectiveEnv = env ?? process.env;
   const hasExplicitPreferOffline =
@@ -79,69 +87,49 @@ export async function resolveInstallEnv(
   const hasConfigPreferOffline = hasExplicitPreferOffline
     ? false
     : await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv });
-  const installEnv: NodeJS.ProcessEnv = {
-    ...env,
+  const candidateEnv: NodeJS.ProcessEnv = {
+    ...resolvePnpmCandidateEnv(env, "node_modules/.pnpm"),
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
     npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
     pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
   };
   if (!hasExplicitPreferOffline && !hasConfigPreferOffline) {
-    installEnv.PNPM_CONFIG_PREFER_OFFLINE = "true";
-    installEnv.pnpm_config_prefer_offline = "true";
+    candidateEnv.PNPM_CONFIG_PREFER_OFFLINE = "true";
+    candidateEnv.pnpm_config_prefer_offline = "true";
   }
-  return installEnv;
-}
-
-function isSupersededInstallFailure(
-  step: UpdateStepResult,
-  steps: readonly UpdateStepResult[],
-): boolean {
-  return (
-    step.name === "deps install" &&
-    steps.some(
-      (candidate) => candidate.name === "deps install (ignore scripts)" && candidate.exitCode === 0,
-    )
-  );
-}
-
-function isPreflightCandidateFailure(step: UpdateStepResult): boolean {
-  return /^preflight (?:reset|clean|checkout|package manager|deps install(?: \(ignore scripts\))?|build|config validate|lint) \(.+\)$/u.test(
-    step.name,
-  );
-}
-
-function isSupersededTargetRefFailure(
-  step: UpdateStepResult,
-  followingSteps: readonly UpdateStepResult[],
-): boolean {
-  const isTargetRefProbe = step.name.startsWith("git rev-parse ");
-  const isTargetTagFetch = step.name.startsWith("git fetch ") && step.name.includes(" refs/tags/");
-  const isUpstreamProbe = step.name === "upstream check";
-  const isLocalDevBranchProbe = step.name === `git show-ref ${DEV_BRANCH}`;
-  if (!isTargetRefProbe && !isTargetTagFetch && !isUpstreamProbe && !isLocalDevBranchProbe) {
-    return false;
+  const workspaceFile = path.join(cwd, "pnpm-workspace.yaml");
+  const original = await fs.readFile(workspaceFile, "utf8").catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  });
+  if (original === undefined) {
+    return { env: candidateEnv };
   }
-  if (isLocalDevBranchProbe) {
-    return followingSteps.some(
-      (candidate) =>
-        candidate.name.startsWith(`git checkout -B ${DEV_BRANCH} `) && candidate.exitCode === 0,
-    );
-  }
-  return followingSteps.some(
-    (candidate) => candidate.name.startsWith("git rev-parse ") && candidate.exitCode === 0,
-  );
-}
-
-export function findBlockingGitFailure(
-  steps: readonly UpdateStepResult[],
-): UpdateStepResult | undefined {
-  return steps.find(
-    (step, index) =>
-      step.exitCode !== 0 &&
-      !isPreflightCandidateFailure(step) &&
-      !isSupersededInstallFailure(step, steps) &&
-      !isSupersededTargetRefFailure(step, steps.slice(index + 1)),
-  );
+  // pnpm 10 applies workspace settings after env, including in nested installs.
+  // Only the disposable worktree gets this override; retain all operator settings.
+  const workspace = parseDocument(original);
+  workspace.set("virtualStoreDir", "node_modules/.pnpm");
+  const isolated = workspace.toString();
+  const backupDirectory = await fs.mkdtemp(path.join(path.dirname(cwd), "workspace-original-"));
+  const backupFile = path.join(backupDirectory, "pnpm-workspace.yaml");
+  // Move the entry so a tracked symlink never lets preparation edit its external target.
+  await fs.rename(workspaceFile, backupFile);
+  await fs.writeFile(workspaceFile, isolated);
+  return {
+    env: candidateEnv,
+    restoreWorkspace: async () => {
+      // Do not hide build/lifecycle edits from the authoritative Git clean check.
+      if (
+        (await fs.lstat(workspaceFile)).isFile() &&
+        (await fs.readFile(workspaceFile, "utf8")) === isolated
+      ) {
+        await fs.rename(backupFile, workspaceFile);
+      }
+      await fs.rm(backupDirectory, { recursive: true, force: true });
+    },
+  };
 }
 
 export function shouldRunDevPreflightLint(env: NodeJS.ProcessEnv = process.env): boolean {

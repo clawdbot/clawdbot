@@ -1,21 +1,23 @@
 // Command-specific secret target policy. Each exported helper returns the config secret IDs
 // a command may inspect, with optional concrete-path filters for selected providers/accounts.
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
+import { getConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
 } from "../plugins/types.js";
 import { resolvePluginWebFetchProviders } from "../plugins/web-fetch-providers.runtime.js";
-import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
-import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { normalizeOptionalAccountId } from "../routing/session-key.js";
 import { loadChannelSecretContractApi } from "../secrets/channel-contract-api.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { compileTargetRegistryEntry, matchPathTokens } from "../secrets/target-registry-pattern.js";
 import {
   discoverConfigSecretTargetsByIds,
@@ -39,23 +41,23 @@ const STATIC_MODEL_TARGET_IDS = [
   "models.providers.*.request.tls.key",
   "models.providers.*.request.tls.passphrase",
 ] as const;
-const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
+const STATIC_TTS_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
+  "agents.entries.*.tts.providers.*.apiKey",
+  "agents.entries.*.tts.personas.*.providers.*.apiKey",
+  "tts.providers.*.apiKey",
+  "tts.personas.*.providers.*.apiKey",
+] as const;
+const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
+  ...STATIC_TTS_TARGET_IDS,
   "memory.search.remote.apiKey",
   "agents.entries.*.memory.search.remote.apiKey",
-  "agents.entries.*.tts.providers.*.apiKey",
-  "tts.providers.*.apiKey",
   "skills.entries.*.apiKey",
 ] as const;
 const STATIC_MEMORY_EMBEDDING_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
   "memory.search.remote.apiKey",
   "agents.entries.*.memory.search.remote.apiKey",
-] as const;
-const STATIC_TTS_TARGET_IDS = [
-  ...STATIC_MODEL_TARGET_IDS,
-  "agents.entries.*.tts.providers.*.apiKey",
-  "tts.providers.*.apiKey",
 ] as const;
 const STATIC_GATEWAY_AUTH_TARGET_IDS = [
   "gateway.auth.token",
@@ -561,7 +563,7 @@ function getCapabilityWebSearchAutoDetectTargets(config: OpenClawConfig): Comman
   return getCapabilityWebProviderAutoDetectTargets({
     config,
     baseTargetIds: getCapabilityWebSearchCommandSecretTargetIds(),
-    providers: sortWebSearchProvidersForAutoDetect(
+    providers: sortPluginEntriesForAutoDetect(
       resolvePluginWebSearchProviders({
         config,
       }),
@@ -574,7 +576,7 @@ function getCapabilityWebFetchAutoDetectTargets(config: OpenClawConfig): Command
   return getCapabilityWebProviderAutoDetectTargets({
     config,
     baseTargetIds: getCapabilityWebFetchCommandSecretTargetIds(),
-    providers: sortWebFetchProvidersForAutoDetect(
+    providers: sortPluginEntriesForAutoDetect(
       resolvePluginWebFetchProviders({
         config,
       }),
@@ -791,11 +793,24 @@ export function getTtsCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(STATIC_TTS_TARGET_IDS);
 }
 
-/** Agent runtime credential targets, optionally including all channel credential targets. */
-export function getAgentRuntimeCommandSecretTargetIds(params?: {
+/** Agent startup targets not already owned by its prepared secrets snapshot. */
+export function getAgentRuntimeCommandSecretTargetIds(params: {
+  config: OpenClawConfig;
   includeChannelTargets?: boolean;
 }): Set<string> {
-  if (params?.includeChannelTargets !== true) {
+  const snapshot = getActiveSecretsRuntimeConfigSnapshot();
+  // The facts token also owns authored refs outside the enumerable config; equal sets can differ.
+  const prepared =
+    snapshot?.configRefsPrepared &&
+    (params.config === snapshot.config ||
+      (getConfigResolutionFacts(params.config) === getConfigResolutionFacts(snapshot.config) &&
+        isDeepStrictEqual(params.config, snapshot.config)));
+  // Preparation already classified these owners. Re-resolving every model/tool ref would turn
+  // one isolated cold owner into a turn-wide failure (or retry it with local credentials).
+  if (prepared) {
+    return params.includeChannelTargets ? getChannelsCommandSecretTargetIds() : new Set();
+  }
+  if (params.includeChannelTargets !== true) {
     return toTargetIdSet(getAgentRuntimeBaseTargetIds());
   }
   return toTargetIdSet(getCommandSecretTargets().agentRuntime);
@@ -923,14 +938,10 @@ export function getCapabilityWebSearchCommandSecretTargets(
 export function getStatusCommandSecretTargetIds(
   config?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-  options?: { includeChannelTargets?: boolean },
 ): Set<string> {
-  const channelTargetIds =
-    options?.includeChannelTargets === false
-      ? []
-      : config
-        ? getConfiguredChannelSecretTargetIds(config, env)
-        : getChannelSecretTargetIds();
+  const channelTargetIds = config
+    ? getConfiguredChannelSecretTargetIds(config, env)
+    : getChannelSecretTargetIds();
   return toTargetIdSet([...STATIC_STATUS_TARGET_IDS, ...channelTargetIds]);
 }
 

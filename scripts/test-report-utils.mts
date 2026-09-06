@@ -32,7 +32,7 @@ export function readJsonFile(filePath: fs.PathOrFileDescriptor) {
   return parsed;
 }
 
-function validateVitestJsonReport(reportPath: fs.PathLike) {
+export function validateVitestJsonReport(reportPath: fs.PathLike) {
   const displayPath = typeof reportPath === "string" ? reportPath : reportPath.toString();
   if (!fs.existsSync(reportPath)) {
     return `missing Vitest JSON report: ${displayPath}`;
@@ -73,10 +73,9 @@ export function runVitestJsonReport({
 
   if (!(reportPath && fs.existsSync(resolvedReportPath))) {
     const run = spawnSync(
-      "pnpm",
+      process.execPath,
       [
-        "exec",
-        "vitest",
+        path.join(import.meta.dirname, "run-vitest.mjs"),
         "run",
         "--config",
         config,

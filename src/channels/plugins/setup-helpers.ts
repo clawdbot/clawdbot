@@ -5,6 +5,7 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { writeChannelSection } from "./config-helpers.js";
 import { resolveSingleAccountPromotion } from "./setup-promotion-helpers.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
@@ -21,14 +22,6 @@ function getChannelSection(
 ): ChannelSectionBase | undefined {
   const section = (cfg.channels as Record<string, unknown> | undefined)?.[channelKey];
   return section && typeof section === "object" ? (section as ChannelSectionBase) : undefined;
-}
-
-function writeChannelSection(
-  cfg: OpenClawConfig,
-  channelKey: string,
-  section: ChannelSectionBase,
-): OpenClawConfig {
-  return { ...cfg, channels: { ...cfg.channels, [channelKey]: section } } as OpenClawConfig;
 }
 
 export function applyAccountNameToChannelSection(params: {

@@ -1,7 +1,8 @@
 // Resolves OpenClaw update channels from config, tags, and versions.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parse as parseSemver } from "semver";
-import { normalizeLegacyDotBetaVersion } from "./semver.js";
+import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
+import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 
 /** Release stream used to choose registry tags and update policy defaults. */
 export type UpdateChannel = "stable" | "extended-stable" | "beta" | "dev";
@@ -64,6 +65,26 @@ export function channelToNpmTag(channel: UpdateChannel): string {
   return "latest";
 }
 
+/** Beta follows the newest published beta or stable version, including plugin packages. */
+export function selectNpmChannelVersion<T extends { version: string | null }>(
+  beta: T,
+  latest: T,
+): T {
+  if (!latest.version) {
+    return beta;
+  }
+  if (!beta.version) {
+    return latest;
+  }
+  const comparison =
+    compareOpenClawReleaseVersions(beta.version, latest.version) ??
+    compareValidSemver(
+      normalizeLegacyDotBetaVersion(beta.version),
+      normalizeLegacyDotBetaVersion(latest.version),
+    );
+  return comparison !== null && comparison < 0 ? latest : beta;
+}
+
 /** Returns whether a version/tag explicitly targets the beta stream. */
 export function isBetaTag(tag: string): boolean {
   return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
@@ -124,18 +145,13 @@ export function resolveEffectiveUpdateChannel(params: {
   installKind: "git" | "package" | "unknown";
   git?: { tag?: string | null; branch?: string | null };
 }): { channel: UpdateChannel; source: UpdateChannelSource } {
-  if (
-    params.currentVersion &&
-    isBetaTag(params.currentVersion) &&
-    params.configChannel !== "extended-stable" &&
-    params.configChannel !== "beta" &&
-    params.configChannel !== "dev"
-  ) {
-    return { channel: "beta", source: "installed-version" };
-  }
-
+  // A one-off package tag does not replace the operator's saved update policy.
   if (params.configChannel) {
     return { channel: params.configChannel, source: "config" };
+  }
+
+  if (params.currentVersion && isBetaTag(params.currentVersion)) {
+    return { channel: "beta", source: "installed-version" };
   }
 
   if (params.installKind === "package" && params.currentVersion) {
@@ -167,7 +183,7 @@ export function resolveEffectiveUpdateChannel(params: {
 }
 
 /** Formats an operator-facing channel label that includes the deciding source. */
-export function formatUpdateChannelLabel(params: {
+function formatUpdateChannelLabel(params: {
   channel: UpdateChannel;
   source: UpdateChannelSource;
   gitTag?: string | null;

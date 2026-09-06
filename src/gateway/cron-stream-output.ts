@@ -104,6 +104,7 @@ async function waitForInFlightBatch(
 
 /** Owns one stream source's bounded output and dispatch cadence. */
 export class CronStreamOutput {
+  private readonly params: Omit<CronStreamOutputParams, "job" | "scheduleKey" | "sourceIdentity">;
   private job: CronStreamJob;
   private scheduleKey: string;
   private sourceIdentity: string;
@@ -132,14 +133,15 @@ export class CronStreamOutput {
   private lastFireStartedAtMs: number;
   private nextEligibleAttemptAtMs: number;
 
-  constructor(private readonly params: CronStreamOutputParams) {
-    this.job = params.job;
-    this.scheduleKey = params.scheduleKey;
-    this.sourceIdentity = params.sourceIdentity;
-    this.matcher = this.compileMatcher(params.job.schedule);
-    this.lastFireStartedAtMs = params.job.state.lastRunAtMs ?? 0;
-    this.nextEligibleAttemptAtMs = params.job.state.lastRunAtMs
-      ? params.job.state.lastRunAtMs + params.minIntervalMs
+  constructor({ job, scheduleKey, sourceIdentity, ...params }: CronStreamOutputParams) {
+    this.params = params;
+    this.job = job;
+    this.scheduleKey = scheduleKey;
+    this.sourceIdentity = sourceIdentity;
+    this.matcher = this.compileMatcher(job.schedule);
+    this.lastFireStartedAtMs = job.state.lastRunAtMs ?? 0;
+    this.nextEligibleAttemptAtMs = job.state.lastRunAtMs
+      ? job.state.lastRunAtMs + params.minIntervalMs
       : 0;
   }
 

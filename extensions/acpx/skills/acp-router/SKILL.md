@@ -210,7 +210,7 @@ Defaults are:
 
 - `openclaw -> openclaw acp`
 - `claude -> bundled @agentclientprotocol/claude-agent-acp@0.70.0`
-- `codex -> bundled @agentclientprotocol/codex-acp@1.6.0 through OpenClaw's isolated CODEX_HOME wrapper`
+- `codex -> bundled @agentclientprotocol/codex-acp@1.6.2 through OpenClaw's isolated CODEX_HOME wrapper`
 - `copilot -> copilot --acp --stdio`
 - `cursor -> cursor-agent acp`
 - `droid -> droid exec --output-format acp`

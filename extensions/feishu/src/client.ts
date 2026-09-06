@@ -2,6 +2,7 @@
 import type { Agent } from "node:https";
 import { createRequire } from "node:module";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import {
   readPluginPackageVersion,
@@ -128,12 +129,6 @@ function stringifyMultipartFieldValue(value: unknown): string | undefined {
     default:
       return undefined;
   }
-}
-
-function bufferToBlobPart(value: Buffer): Uint8Array<ArrayBuffer> {
-  const bytes = new Uint8Array(value.byteLength);
-  bytes.set(value);
-  return bytes;
 }
 
 function normalizeMultipartUploadData<D>(

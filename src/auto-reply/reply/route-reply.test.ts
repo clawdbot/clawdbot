@@ -320,7 +320,8 @@ describe("routeReply", () => {
       deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:item-1",
     });
 
-    expect(res.ok).toBe(true);
+    expect(res).toMatchObject({ ok: true, delivered: false });
+    expect(res.queueCustody).toBeUndefined();
     expect(lastDeliveryPayload()).toMatchObject({ text: "hello" });
     expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
       kind: "block",
@@ -992,21 +993,34 @@ describe("routeReply", () => {
     expect(lastDeliveryPayload().text).toBe("hi");
   });
 
-  it("passes mirror data when sessionKey is set", async () => {
-    await routeTestReply({
-      payload: { text: "hi" },
-      channel: "slack",
-      to: "channel:C123",
-      sessionKey: "agent:main:main",
-      isGroup: true,
-      groupId: "channel:C123",
-    });
-    const mirror = lastDelivery().mirror as Record<string, unknown>;
-    expect(mirror.sessionKey).toBe("agent:main:main");
-    expect(mirror.text).toBe("hi");
-    expect(mirror.isGroup).toBe(true);
-    expect(mirror.groupId).toBe("channel:C123");
-  });
+  it.each([
+    { sessionKey: "agent:main:main", expectedAgentId: "main" },
+    { sessionKey: "global", expectedAgentId: "finance" },
+  ])(
+    "preserves delivery and mirror ownership for $sessionKey",
+    async ({ sessionKey, expectedAgentId }) => {
+      const request = {
+        payload: { text: "hi" },
+        channel: "slack" as const,
+        to: "channel:C123",
+        sessionKey,
+        agentId: "finance",
+        cfg: {
+          agents: { ownership: "explicit" as const, entries: { main: {}, finance: {} } },
+        },
+        isGroup: true,
+        groupId: "channel:C123",
+      };
+      await routeTestReply(request);
+      expect(lastDelivery().session).toMatchObject({ agentId: expectedAgentId });
+      const mirror = lastDelivery().mirror as Record<string, unknown>;
+      expect(mirror.agentId).toBe(expectedAgentId);
+      expect(mirror.sessionKey).toBe(sessionKey);
+      expect(mirror.text).toBe("hi");
+      expect(mirror.isGroup).toBe(true);
+      expect(mirror.groupId).toBe("channel:C123");
+    },
+  );
 
   it("skips mirror data when mirror is false", async () => {
     await routeTestReply({

@@ -76,3 +76,11 @@ export type ProviderResponseModelEquivalenceContext = {
   requestedModelId: string;
   responseModelId: string;
 };
+
+/** Provider-owned default for one resolved inference route; never an authored config setting. */
+export type ProviderToolSearchPolicyContext = {
+  provider: string;
+  modelId: string;
+  api: string;
+  baseUrl?: string;
+};

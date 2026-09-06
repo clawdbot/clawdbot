@@ -2,8 +2,10 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -65,6 +67,7 @@ suite.define(() => {
   it("preserves the compact horizontal grid at desktop and mobile widths", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
       await installMockGateway(page, {
+        ...workboardUi,
         sessionKey,
         controlUiWidgetKinds: [
           { pluginId: "workboard", kind: "workboard:board", label: "Workboard board" },
@@ -76,7 +79,7 @@ suite.define(() => {
         },
       });
       await showDashboard(page);
-      await page.goto(`${suite.server.baseUrl}dashboard`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
 
       const board = page.locator('[data-test-id="workboard-board-widget"] .workboard-board');
       await board.waitFor();

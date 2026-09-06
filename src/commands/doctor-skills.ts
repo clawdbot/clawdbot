@@ -11,7 +11,6 @@ import {
   detectGhConfigDirMismatch,
   formatGhConfigDirMismatchHint,
   type GhConfigDiscoveryInput,
-  type GhConfigDiscoveryResult,
 } from "../skills/lifecycle/gh-config-discovery.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
@@ -19,37 +18,23 @@ import {
   disableUnavailableSkillsInConfig,
 } from "./doctor-skills-core.js";
 
-function defaultGhConfigDiscoveryInput(): GhConfigDiscoveryInput {
-  return {
-    platform: process.platform,
-    env: process.env as GhConfigDiscoveryInput["env"],
-    fileExists: (absolutePath) => existsSync(absolutePath),
-  };
-}
-
 /** Builds a GitHub CLI config-dir hint for eligible GitHub skill setups. */
 function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
-  return describeGhConfigDirHintFromDiscovery(skills, defaultGhConfigDiscoveryInput());
-}
-
-/** Builds a GitHub CLI config-dir hint from injected discovery inputs for tests. */
-function describeGhConfigDirHintFromDiscovery(
-  skills: SkillStatusEntry[],
-  discoveryInput: GhConfigDiscoveryInput,
-): string[] {
+  const discoveryInput: GhConfigDiscoveryInput = {
+    platform: process.platform,
+    env: process.env as GhConfigDiscoveryInput["env"],
+    fileExists: existsSync,
+  };
   const githubSkill = skills.find((skill) => skill.name === "github");
-  if (!githubSkill) {
-    return [];
-  }
   if (
-    !githubSkill.eligible ||
+    !githubSkill?.eligible ||
     githubSkill.blockedByAgentFilter ||
     githubSkill.disabled ||
     githubSkill.blockedByAllowlist
   ) {
     return [];
   }
-  const result: GhConfigDiscoveryResult = detectGhConfigDirMismatch(discoveryInput);
+  const result = detectGhConfigDirMismatch(discoveryInput);
   if (result.kind !== "mismatch") {
     return [];
   }
@@ -147,7 +132,8 @@ export async function maybeRepairSkillReadiness(params: {
     return params.cfg;
   }
 
-  const shouldDisable = await params.prompter.confirmAutoFix({
+  // Updating may migrate required state, but must not disable optional skills for this environment.
+  const shouldDisable = await params.prompter.confirmRuntimeRepair({
     message:
       agentIds.length === 1
         ? `Disable ${fleetUnavailable.length} unavailable skill${fleetUnavailable.length === 1 ? "" : "s"} in config?`

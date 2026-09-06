@@ -26,7 +26,10 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime: mocks.defaultRuntime,
+}));
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
   isGatewayClientRequestError: (error: unknown) =>
@@ -434,7 +437,7 @@ describe("skills curator cli", () => {
   it("prints the last collection and experience outcomes", async () => {
     await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
-      expect.stringContaining("Collection review workspac"),
+      expect.stringContaining("Collection review: attempted"),
     );
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining("Experience review workspac: proposed (proposal-1)"),

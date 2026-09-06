@@ -124,6 +124,11 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   if (issues.legacyScheduleCron) {
     lines.push(`- ${pluralize(issues.legacyScheduleCron, "job")} still uses \`schedule.cron\``);
   }
+  if (issues.legacyScheduleKind) {
+    lines.push(
+      `- ${pluralize(issues.legacyScheduleKind, "job")} stores a non-canonical schedule \`kind\` or stream \`mode\` that will be normalized`,
+    );
+  }
   if (issues.legacyPayloadKind) {
     lines.push(`- ${pluralize(issues.legacyPayloadKind, "job")} needs payload kind normalization`);
   }

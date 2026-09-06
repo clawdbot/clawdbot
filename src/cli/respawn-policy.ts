@@ -1,31 +1,7 @@
 // CLI respawn skip policy for help, interactive TTY commands, and foreground Gateway runs.
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { getCommandPathWithRootOptions, getCommandPositionalsWithRootOptions } from "./argv.js";
-
-const GATEWAY_RUN_BOOLEAN_FLAGS = [
-  "--allow-unconfigured",
-  "--claude-cli-logs",
-  "--cli-backend-logs",
-  "--compact",
-  "--dev",
-  "--force",
-  "--raw-stream",
-  "--reset",
-  "--tailscale-reset-on-exit",
-  "--verbose",
-] as const;
-
-const GATEWAY_RUN_VALUE_FLAGS = [
-  "--auth",
-  "--bind",
-  "--password",
-  "--password-file",
-  "--port",
-  "--raw-stream-path",
-  "--tailscale",
-  "--token",
-  "--ws-log",
-] as const;
+import { getCommandPathWithRootOptions } from "./argv.js";
+import { isForegroundGatewayRunArgv } from "./gateway-run-argv.js";
 
 const INTERACTIVE_TTY_COMMANDS = new Set(["tui", "terminal", "chat"]);
 
@@ -59,31 +35,24 @@ export function isTerminalInteractiveRespawnArgv(argv: string[]): boolean {
   return invocation.primary === null || INTERACTIVE_TTY_COMMANDS.has(invocation.primary);
 }
 
-function isForegroundGatewayRunArgv(argv: string[]): boolean {
-  const positionals = getCommandPositionalsWithRootOptions(argv, {
-    commandPath: ["gateway"],
-    booleanFlags: GATEWAY_RUN_BOOLEAN_FLAGS,
-    valueFlags: GATEWAY_RUN_VALUE_FLAGS,
-  });
-  if (!positionals) {
-    return false;
-  }
-  // Foreground gateway owns the terminal/process environment itself; respawning would
-  // add an extra parent process around the long-lived server.
-  return positionals.length === 0 || (positionals.length === 1 && positionals[0] === "run");
-}
-
 /** Returns whether CLI startup should avoid the general respawn wrapper for this argv. */
 export function shouldSkipRespawnForArgv(
   argv: string[],
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   const invocation = resolveCliArgvInvocation(argv);
+  const isGatewayStatus =
+    invocation.commandPath.length === 2 &&
+    invocation.commandPath[0] === "gateway" &&
+    invocation.commandPath[1] === "status";
   return (
     invocation.hasHelpOrVersion ||
     isInteractiveTtyCommandArgv(argv) ||
     isForegroundGmailRunArgv(argv) ||
     shouldKeepNativeHookRelayInProcess(argv, platform) ||
+    // Status commonly overlaps the running Gateway; a warning-only wrapper doubles
+    // transient CLI memory. Startup-environment respawn remains separately owned.
+    isGatewayStatus ||
     (invocation.primary === "gateway" && isForegroundGatewayRunArgv(argv))
   );
 }

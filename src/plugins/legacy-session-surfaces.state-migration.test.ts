@@ -2,10 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  autoMigrateLegacyState,
-  resetAutoMigrateLegacyStateForTest,
-} from "../infra/state-migrations.doctor.js";
+import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
@@ -21,7 +18,6 @@ const tempDirs: string[] = [];
 afterEach(() => {
   clearPluginRegistryLoadCache();
   clearPluginMetadataLifecycleCaches();
-  resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);

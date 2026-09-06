@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveDockerPluginSelection } from "../../scripts/lib/docker-plugin-selection.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -54,6 +55,46 @@ function runSelector(
 }
 
 describe("Docker plugin selection", () => {
+  it("adds standalone direct and Gateway provider selections to the shared live image", () => {
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts/print-live-docker-plugin-selection.mjs"), repoRoot, "twitch"],
+      {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          OPENCLAW_LIVE_PROVIDERS: "ollama",
+          OPENCLAW_LIVE_GATEWAY_MODELS: "mistral/mistral-large-latest",
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split(",")).toEqual(
+      expect.arrayContaining(["ollama", "mistral", "twitch"]),
+    );
+  });
+
+  it("selects provider owners by manifest capability without assuming matching plugin ids", () => {
+    const extensionsRoot = tempDirs.make("openclaw-docker-provider-selection-");
+    writePlugin(extensionsRoot, "provider-source", "provider-plugin");
+    writePlugin(extensionsRoot, "other-source", "other-plugin");
+    fs.writeFileSync(
+      path.join(extensionsRoot, "provider-source", "openclaw.plugin.json"),
+      JSON.stringify({ id: "provider-plugin", providers: ["api-provider", "portal-provider"] }),
+    );
+
+    expect(
+      resolveDockerPluginSelection({
+        extensionsRoot,
+        selection: "other-plugin,provider-plugin",
+        providers: ["portal-provider", "custom-unregistered-provider"],
+      }),
+    ).toEqual(["other-source", "provider-source"]);
+    expect(resolveDockerPluginSelection({ extensionsRoot, providers: ["api-provider"] })).toEqual([
+      "provider-source",
+    ]);
+  });
+
   it("includes required core-bundled dependencies without changing optional plugin selections", () => {
     const fixtureRoot = tempDirs.make("openclaw-docker-required-bundled-plugins-");
     const extensionsRoot = path.join(fixtureRoot, "extensions");

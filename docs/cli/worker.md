@@ -33,6 +33,13 @@ turns into the same environment while background processes remain. Each turn
 still receives a fresh bounded envelope, Gateway connection, and tool authority.
 The standalone command above remains a single-turn entry point.
 
+Launches must fit 25 MiB in each complete serialized form: the node invocation
+event and the managed worker input line, including the node's connection endpoint.
+The Gateway trims older complete turns when needed, without discarding the newest
+provider replay checkpoint. If that replay unit cannot fit, the turn fails before
+handoff with a visible retry instruction. The managed line limit excludes its final
+newline; standalone stdin counts every byte.
+
 Admission fails closed if the envelope is invalid, the credential is rejected,
 the bundle or protocol features do not match, or the session and owner epoch are
 no longer current. Missing, duplicate, or unknown tool names also invalidate the
@@ -65,7 +72,27 @@ The process runs the normal embedded agent loop with a restricted backend:
 
 Worker mode does not start channels, Gateway HTTP surfaces, or plugin auto-start
 beyond the assigned session toolset. It uses a throwaway state directory and has
-no standing provider or forge credentials.
+no model provider credentials. When the Gateway's effective shared GitHub identity
+is available, the worker receives a turn-bound access token in its private launch
+envelope. The token is materialized in a private per-turn profile inside the
+throwaway state directory, with earlier profiles removed before the next binding,
+and scrubbed when that directory is removed. The sealed worker launcher binds it
+to each `exec` child. GitHub CLI must be installed on the worker host; the bundle
+includes the launcher, not `gh`.
+
+Materialized skill files are temporary turn inputs in a private directory separate
+from worker state and its GitHub credentials. A failed per-turn deletion logs
+`Materialized skill cleanup failed`. Node Claude skill sessions separately report
+`Node Claude skill session cleanup failed` for temporary Workshop configuration. These
+bounded, redacted warnings identify files that may remain. Wait until the worker or
+session and its owned processes have stopped before checking permissions and manually
+removing the reported directory. A completed turn alone does not mean a managed worker
+has stopped. These filesystem deletion failures preserve the original success, error,
+cancellation, or timeout without replaying work or claiming deletion succeeded.
+Worker state deletion, including GitHub credential cleanup, still rejects on failure.
+Process draining, authority revocation, database close, and transport or MCP close
+retain their existing failure behavior. Invalid skill integrity or delivery limits
+still reject the turn.
 
 The worker loads workspace `AGENTS.md` through the bounded bootstrap loader and
 appends Gateway-supplied system instructions as literal text. It does not discover

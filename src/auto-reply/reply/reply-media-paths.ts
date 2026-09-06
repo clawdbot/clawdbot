@@ -157,6 +157,7 @@ export function createReplyMediaPathNormalizer(params: {
     if (!sandboxWorkspacePromise) {
       sandboxWorkspacePromise = ensureSandboxWorkspaceForSession({
         config: params.cfg,
+        agentId,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
       }).then((sandbox) =>

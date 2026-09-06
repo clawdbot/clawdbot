@@ -1,6 +1,5 @@
 // Tests task command routing and persisted task state replies.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   completeTaskRunByRunIdCore,
   createQueuedTaskRunCore,
@@ -15,20 +14,16 @@ import {
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
 
-vi.mock("../../agents/agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
-    "../../agents/agent-scope.js",
-  );
-  return {
-    ...actual,
-    resolveSessionAgentId: vi.fn(actual.resolveSessionAgentId),
-  };
-});
-
 const baseCfg = baseCommandTestConfig;
 
-async function buildTasksReplyForTest(params: { agentId?: string; sessionKey?: string } = {}) {
-  const commandParams = buildCommandTestParams("/tasks", baseCfg);
+async function buildTasksReplyForTest(
+  params: {
+    agentId?: string;
+    sessionKey?: string;
+    cfg?: Parameters<typeof buildCommandTestParams>[1];
+  } = {},
+) {
+  const commandParams = buildCommandTestParams("/tasks", params.cfg ?? baseCfg);
   const result = await handleTasksCommand(
     {
       ...commandParams,
@@ -113,6 +108,36 @@ describe("handleTasksCommand task board", () => {
     expect(reply.text).toContain("⚠️ Incomplete background task");
     expect(reply.text).toContain("Subagent · blocked");
     expect(reply.text).not.toContain("✅ Incomplete background task");
+  });
+
+  it.each(["research", "ops"])("isolates the global task board for %s", async (agentId) => {
+    for (const requesterAgentId of ["research", "ops", undefined]) {
+      const executorAgentId = requesterAgentId === "research" ? "ops" : "research";
+      createRunningTaskRunCore({
+        runtime: "cli",
+        requesterSessionKey: "global",
+        requesterAgentId,
+        agentId: executorAgentId,
+        childSessionKey: `agent:${executorAgentId}:subagent:${requesterAgentId ?? "unknown"}`,
+        runId: `global-board-task-${requesterAgentId ?? "unknown"}`,
+        task: `${requesterAgentId ?? "unknown"} private task`,
+      });
+    }
+
+    const reply = await buildTasksReplyForTest({
+      sessionKey: "global",
+      agentId,
+      cfg: {
+        ...baseCfg,
+        session: { scope: "global" },
+        agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
+      },
+    });
+
+    expect(reply.text).toContain("Current session: 1 active · 1 total");
+    expect(reply.text).toContain(`${agentId} private task`);
+    expect(reply.text).not.toContain(`${agentId === "research" ? "ops" : "research"} private task`);
+    expect(reply.text).not.toContain("unknown private task");
   });
 
   it("lists session-backed video generation tasks for the current session", async () => {
@@ -235,7 +260,7 @@ describe("handleTasksCommand task board", () => {
 
     const reply = await buildTasksReplyForTest();
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).not.toContain("stale completed task");
     expect(reply.text).not.toContain("done a while ago");
   });
@@ -255,7 +280,7 @@ describe("handleTasksCommand task board", () => {
       sessionKey: "agent:main:empty-session",
     });
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("hidden background task");
     expect(reply.text).not.toContain("hidden progress detail");
@@ -280,7 +305,7 @@ describe("handleTasksCommand task board", () => {
       sessionKey: "agent:main:empty-session",
     });
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("hidden video background task");
     expect(reply.text).not.toContain("Queued video generation");
@@ -296,14 +321,12 @@ describe("handleTasksCommand task board", () => {
       task: "target hidden background task",
       progressSummary: "hidden target progress detail",
     });
-    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
-
     const reply = await buildTasksReplyForTest({
-      agentId: "main",
+      agentId: "target",
       sessionKey: "agent:target:empty-session",
     });
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("target hidden background task");
   });

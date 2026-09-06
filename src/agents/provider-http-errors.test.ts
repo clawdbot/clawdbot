@@ -204,6 +204,22 @@ describe("provider error utils", () => {
     }
   });
 
+  it("preserves the request timeout that interrupts an error body", async () => {
+    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(timeout);
+        },
+      }),
+      { status: 503 },
+    );
+
+    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toBe(
+      timeout,
+    );
+  });
+
   it("propagates an already-expired lazy error-body deadline", async () => {
     const cancel = vi.fn();
     const response = new Response(
@@ -414,6 +430,29 @@ describe("provider error utils", () => {
       }),
     ).rejects.toThrow("Provider catalog failed: JSON response exceeds 2048 bytes");
 
+    expect(streamed.getReadCount()).toBeLessThan(20);
+  });
+
+  it("honors custom JSON overflow errors and stops reading", async () => {
+    const streamed = createStreamingJsonResponse({
+      chunkCount: 20,
+      chunkSize: 1024,
+    });
+    const sentinel = new Error("custom overflow");
+    const onOverflow = vi.fn(() => sentinel);
+
+    const error = await readProviderJsonResponse(streamed.response, "Provider catalog failed", {
+      maxBytes: 2048,
+      onOverflow,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBe(sentinel);
+    expect(onOverflow).toHaveBeenCalledOnce();
+    expect(onOverflow).toHaveBeenCalledWith({
+      size: 3072,
+      maxBytes: 2048,
+      res: streamed.response,
+    });
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 

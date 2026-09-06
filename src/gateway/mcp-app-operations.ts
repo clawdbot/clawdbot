@@ -11,11 +11,11 @@ import {
   ReadResourceRequestSchema,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { getSessionMcpRequestSignal } from "../agents/agent-bundle-mcp-request-context.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   peekSessionMcpRuntime,
-} from "../agents/agent-bundle-mcp-runtime.js";
+} from "../agents/agent-bundle-mcp-manager-api.js";
+import { getSessionMcpRequestSignal } from "../agents/agent-bundle-mcp-request-context.js";
 import type { McpCatalogTool, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import {
   acquireMcpAppViewRequest,

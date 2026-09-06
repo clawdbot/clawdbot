@@ -14,6 +14,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { clearTuiLastSessionPointers } from "../tui/tui-last-session.js";
+import { countLabel } from "./doctor-state-integrity-format.js";
 
 /** Chunk size for sync transcript scans. */
 const TRANSCRIPT_SCAN_CHUNK_BYTES = 64 * 1024;
@@ -52,10 +53,6 @@ type HeartbeatMainSessionRepairDeclined = {
   declineReason: "record-too-large";
   reason?: undefined;
 };
-
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
 
 function sessionEntryHasSyntheticHeartbeatOwnership(entry: SessionEntry): boolean {
   return (

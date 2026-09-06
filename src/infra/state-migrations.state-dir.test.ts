@@ -11,7 +11,7 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   autoMigrateLegacyStateDir,
   resetAutoMigrateLegacyStateDirForTest,
-} from "./state-migrations.js";
+} from "./state-migrations.state-dir.js";
 
 async function withStateDirFixture(run: (root: string) => Promise<void>): Promise<void> {
   try {
@@ -48,6 +48,27 @@ describe("legacy state dir auto-migration", () => {
         "ok",
       );
       expect(fs.readFileSync(path.join(root, ".clawdbot", "marker.txt"), "utf-8")).toBe("ok");
+    });
+  });
+
+  it("links an empty legacy state dir to an existing canonical root", async () => {
+    await withStateDirFixture(async (root) => {
+      const legacyDir = path.join(root, ".clawdbot");
+      const targetDir = path.join(root, ".openclaw");
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(path.join(targetDir, "openclaw.json"), "{}", "utf-8");
+
+      const result = await autoMigrateLegacyStateDir({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => root,
+      });
+
+      expect(result).toMatchObject({ migrated: true, skipped: false, warnings: [] });
+      expect(result.changes).toContain(
+        `State dir: ${legacyDir} → ${targetDir} (legacy path now symlinked)`,
+      );
+      expect(fs.realpathSync(legacyDir)).toBe(fs.realpathSync(targetDir));
     });
   });
 

@@ -1,5 +1,5 @@
 // OpenAI completions provider adapts chat completions to the agent runtime.
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import type {
   ChatCompletionAssistantMessageParam,
   ChatCompletionContentPartText,
@@ -8,10 +8,11 @@ import type {
   ChatCompletionSystemMessageParam,
 } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { getAiTransportHost } from "../host.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provider-options.js";
+// OpenAI completions provider adapts chat completions to the agent runtime.
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
@@ -21,9 +22,10 @@ import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-
 import {
   createOpenAIProviderAcceptanceHook,
   isOpenAICompletionsThinkingEnabled,
-  resolveOpenAIClientBaseUrl,
 } from "../transports/openai-transport-shared.js";
+import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import {
+  assignTransportErrorDetails,
   transportAbortError,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
@@ -43,7 +45,6 @@ import {
 } from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -51,10 +52,10 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { splitSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveCacheRetention } from "./cache-retention.js";
-import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "./openai-completions-tool-calls.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import { createOpenAIProviderClient } from "./openai-provider-client.js";
 import {
   resolveOpenAICompletionsResponseFormat,
   shouldOmitOllamaCompatResponseFormat,
@@ -93,23 +94,7 @@ export const streamOpenAICompletions: StreamFunction<
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
-    const output: AssistantMessage = {
-      role: "assistant",
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
     const provisionalCommentaryTags: PendingCommentaryTags = new Map();
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
@@ -122,7 +107,14 @@ export const streamOpenAICompletions: StreamFunction<
       );
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-      const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
+      const client = createClient(
+        model,
+        context,
+        apiKey,
+        resolveOpencodeSessionHeaders(model, options),
+        cacheSessionId,
+        compat,
+      );
       let params = buildParams(model, context, options, compat, cacheRetention);
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
@@ -132,7 +124,7 @@ export const streamOpenAICompletions: StreamFunction<
       const requestOptions = {
         signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-        maxRetries: options?.maxRetries ?? 0,
+        maxRetries: 0,
       };
       const { data: openaiStream, response } = await client.chat.completions
         .create(
@@ -241,8 +233,7 @@ export const streamOpenAICompletions: StreamFunction<
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      const terminal = projectProviderError(error, options?.signal);
-      Object.assign(output, terminal);
+      const terminal = assignTransportErrorDetails(output, error, options?.signal);
       finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
       clearPendingCommentaryText(provisionalCommentaryTags);
       tagUnresolvedTextAsCommentary(output);
@@ -322,31 +313,7 @@ function createClient(
     }
   }
 
-  // Merge options headers last so they can override defaults
-  if (optionsHeaders) {
-    Object.assign(headers, optionsHeaders);
-  }
-
-  const defaultHeaders =
-    model.provider === "cloudflare-ai-gateway"
-      ? {
-          ...headers,
-          Authorization: headers.Authorization ?? null,
-          "cf-aig-authorization": `Bearer ${apiKey}`,
-        }
-      : headers;
-
-  const baseUrl = isCloudflareProvider(model.provider)
-    ? resolveCloudflareBaseUrl(model)
-    : model.baseUrl;
-  return new OpenAI({
-    apiKey,
-    baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
-    dangerouslyAllowBrowser: true,
-    defaultHeaders,
-    // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
-    fetch: getAiTransportHost().buildModelFetch(model),
-  });
+  return createOpenAIProviderClient(model, apiKey, headers, optionsHeaders);
 }
 
 function buildParams(
@@ -480,14 +447,14 @@ function buildParams(
   const thinkingLevelMap = model.thinkingLevelMap as
     | Partial<Record<NonNullable<OpenAICompletionsOptions["reasoningEffort"]>, string | null>>
     | undefined;
+  const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
   const reasoningEffort =
     options?.reasoningEffort === undefined
-      ? undefined
+      ? (offReasoningEffort ?? undefined)
       : (reasoningEffortMap[options.reasoningEffort] ??
         thinkingLevelMap?.[options.reasoningEffort] ??
         options.reasoningEffort);
   const reasoningEnabled = reasoningEffort !== undefined && reasoningEffort !== "none";
-  const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
     params.thinking = reasoningEnabled

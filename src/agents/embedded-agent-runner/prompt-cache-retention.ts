@@ -3,6 +3,7 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
+import type { OpenAICompletionsCompat } from "../../llm/types.js";
 
 type CacheRetention = "none" | "short" | "long";
 
@@ -26,7 +27,7 @@ export function resolveCacheRetention(
   provider: string,
   modelApi?: string,
   modelId?: string,
-  supportsPromptCacheKey?: boolean,
+  compat?: Pick<OpenAICompletionsCompat, "supportsPromptCacheKey" | "cacheControlFormat">,
 ): CacheRetention | undefined {
   const hasExplicitCacheConfig =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
@@ -37,16 +38,12 @@ export function resolveCacheRetention(
     hasExplicitCacheConfig,
   });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
-  // OpenAI-compatible completions backends (oMLX, llama.cpp, etc.) opt into
-  // prompt caching via `compat.supportsPromptCacheKey: true`. Without that
-  // flag they sit outside the anthropic/google family gates, so issue #81281
-  // dropped the user's explicit `cacheRetention` before the transport layer
-  // could emit it. Proxies that route non-cacheable models via the same
-  // openai-completions wire (amazon-bedrock + amazon.* nova models) leave
-  // the flag unset, so the existing family gate still applies to them.
-  const cacheKeyEligible = supportsPromptCacheKey === true;
+  // Marker-based caches accept retention without accepting OpenAI cache-key fields.
+  // Keep these capabilities independent so explicit "none" can suppress markers.
+  const compatEligible =
+    compat?.supportsPromptCacheKey === true || compat?.cacheControlFormat === "anthropic";
 
-  if (!family && !googleEligible && !cacheKeyEligible) {
+  if (!family && !googleEligible && !compatEligible) {
     return undefined;
   }
 

@@ -4,18 +4,23 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 export type SessionLifecycleEvent = {
   sessionKey: string;
   agentId?: string;
-  reason: string;
   parentSessionKey?: string;
   label?: string;
   displayName?: string;
-};
+} & (
+  | { reason: string; swarmGroupId?: never; kind?: never; text?: never }
+  | { reason: "swarm-note"; swarmGroupId: string; kind: "phase" | "log"; text: string }
+);
 
 export type SessionIdentityMutationTarget = {
   sessionId?: string;
   sessionKeys: readonly string[];
 };
 
-export type SessionIdentityMutation =
+export type SessionIdentityMutation = {
+  /** Resolved operation scope for bare keys; qualified keys retain their own agent. */
+  agentId: string;
+} & (
   | {
       kind: "create" | "move" | "replace" | "reset";
       previous: SessionIdentityMutationTarget;
@@ -24,7 +29,8 @@ export type SessionIdentityMutation =
   | {
       kind: "delete";
       previous: SessionIdentityMutationTarget;
-    };
+    }
+);
 
 export type SessionIdentityMutationListener = (mutation: SessionIdentityMutation) => void;
 

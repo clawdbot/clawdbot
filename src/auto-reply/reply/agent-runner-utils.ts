@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -74,7 +75,7 @@ export async function resolveQueuedReplyExecutionConfig(
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: runtimeConfig,
     commandName: "reply",
-    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+    targetIds: getAgentRuntimeCommandSecretTargetIds({ config: runtimeConfig }),
     optionalActivePaths: getAgentRuntimeOptionalCommandSecretPaths(runtimeConfig),
   });
   const baseResolvedConfig = resolvedConfig ?? runtimeConfig;
@@ -107,9 +108,6 @@ export async function resolveQueuedReplyExecutionConfig(
   return scopedResolved.resolvedConfig ?? baseResolvedConfig;
 }
 
-/**
- * Build provider-specific threading context for tool auto-injection.
- */
 /** Builds channel threading context for message-tool replies. */
 export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
@@ -203,6 +201,23 @@ export const formatBunFetchSocketError = (message: string) => {
     "```",
   ].join("\n");
 };
+
+/** Remaps the original inline request without reusing a queued model's clamped level. */
+export function resolveRunThinkingLevelForFallbackCandidate(
+  params: Omit<Parameters<typeof resolveCandidateThinkingLevel>[0], "level"> & {
+    run: FollowupRun["run"];
+  },
+) {
+  const { run, ...candidate } = params;
+  return resolveCandidateThinkingLevel({
+    ...candidate,
+    // Reset and inherited choices already resolved defaults when this turn was admitted.
+    level:
+      run.thinkLevelOverride === "default"
+        ? run.thinkLevel
+        : (run.thinkLevelOverride ?? run.thinkLevel),
+  });
+}
 
 /** Resolves candidate-scoped fast mode after model fallback changes provider/model. */
 export function resolveRunFastModeForFallbackCandidate(params: {
@@ -314,7 +329,7 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
 }
 
 /** Builds execution-specific embedded run params for queued reply dispatch. */
-export function buildEmbeddedRunExecutionParams(params: {
+export async function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;
   sessionCtx: TemplateContext;
@@ -333,7 +348,7 @@ export function buildEmbeddedRunExecutionParams(params: {
     hasRepliedRef: params.hasRepliedRef,
   });
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
-  const runBaseParams = buildEmbeddedRunBaseParams({
+  const runBaseParams = await buildEmbeddedRunBaseParams({
     run: params.run,
     provider: params.provider,
     model: params.model,

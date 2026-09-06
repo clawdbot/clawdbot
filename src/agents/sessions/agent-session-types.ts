@@ -30,6 +30,7 @@ type AgentSessionCompactionOutcome =
 
 type AgentSessionCompactionEndEvent = {
   type: "compaction_end";
+  itemId?: string;
   reason: "manual" | "threshold" | "overflow";
   outcome: AgentSessionCompactionOutcome;
 };
@@ -45,7 +46,7 @@ export type AgentSessionEvent =
   | { type: "queue_update"; steering: readonly string[]; followUp: readonly string[] }
   | { type: "agent_settled" }
   | { type: "agent_handoff" }
-  | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
+  | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow"; itemId?: string }
   | { type: "session_info_changed"; name: string | undefined }
   | { type: "thinking_level_changed"; level: ThinkingLevel }
   | AgentSessionCompactionEndEvent
@@ -113,6 +114,8 @@ export interface PromptOptions {
   source?: InputSource;
   /** Internal RPC hook for prompt preflight acceptance or rejection. */
   preflightResult?: (success: boolean) => void;
+  /** Internal identity for a current user turn that is already durable. */
+  persistedUserIdempotencyKey?: string;
 }
 
 /** Result from cycling the active model. */

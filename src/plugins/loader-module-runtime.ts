@@ -1,5 +1,6 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { toSafeImportPath } from "../shared/import-specifier.js";
+import { VERSION } from "../version.js";
 import { attachPluginApiFacades } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
@@ -9,7 +10,7 @@ import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
-import { createRuntimeState } from "./runtime/runtime-state.js";
+import { createRuntimeBase } from "./runtime/runtime-base.js";
 import type {
   CreatePluginRuntimeOptions,
   PluginRuntimeFactory,
@@ -22,26 +23,35 @@ import {
 } from "./sdk-alias.js";
 import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
 
-const LAZY_RUNTIME_REFLECTION_KEYS = [
-  "version",
-  "gateway",
-  "config",
-  "agent",
-  "subagent",
-  "system",
-  "media",
-  "mediaUnderstanding",
-  "tts",
-  "channel",
-  "events",
-  "logging",
-  "state",
-  "modelAuth",
-  "imageGeneration",
-  "videoGeneration",
-  "musicGeneration",
-  "llm",
-] as const satisfies readonly (keyof PluginRuntime)[];
+// Preserve the existing enumeration order, appending surfaces added to the runtime contract.
+// Scoped runtime proxies also ask for descriptors after their get trap returns.
+const LAZY_RUNTIME_PROPERTIES = {
+  version: true,
+  gateway: true,
+  config: true,
+  agent: true,
+  subagent: true,
+  system: true,
+  media: true,
+  mediaUnderstanding: true,
+  tts: true,
+  channel: true,
+  events: true,
+  logging: true,
+  state: true,
+  modelAuth: true,
+  imageGeneration: true,
+  videoGeneration: true,
+  musicGeneration: true,
+  llm: true,
+  hooks: true,
+  nodes: true,
+  sandbox: true,
+  worktrees: true,
+  webSearch: true,
+  tasks: true,
+  modelConfig: true,
+} satisfies Record<keyof PluginRuntime, true>;
 
 function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   api: OpenClawPluginApi;
@@ -97,7 +107,9 @@ export function runPluginRegisterSyncInRegistry(
   registry: PluginRegistry,
   pluginId: string,
 ): void {
-  withPluginRegistrationContext(registry, pluginId, () => runPluginRegisterSync(register, api));
+  withPluginRegistrationContext(registry, pluginId, () => runPluginRegisterSync(register, api), {
+    registerMemoryCapability: api.registerMemoryCapability,
+  });
 }
 
 export function createPluginModuleLoader(options: {
@@ -155,12 +167,14 @@ export function createLazyPluginRuntime(params: {
   runtimeOptions?: CreatePluginRuntimeOptions;
   loadPluginModule: ReturnType<typeof createPluginModuleLoader>;
 }): PluginRuntime {
-  // Avoid loading every channel/runtime dependency tree until a plugin actually
-  // reaches a runtime API surface.
-  let createPluginRuntimeFactory: PluginRuntimeFactory | null = null;
-  const resolveCreatePluginRuntime = (): PluginRuntimeFactory => {
-    if (createPluginRuntimeFactory) {
-      return createPluginRuntimeFactory;
+  const cache = getPluginCache();
+  type RuntimeModule = {
+    createPluginRuntime?: PluginRuntimeFactory;
+  };
+  let runtimeModule: RuntimeModule | undefined;
+  const resolveRuntimeModule = (): RuntimeModule => {
+    if (runtimeModule) {
+      return runtimeModule;
     }
     const resolution = resolvePluginRuntimeModulePathWithDiagnostics({
       devSourceRoot: params.devSourceRoot,
@@ -175,74 +189,85 @@ export function createLazyPluginRuntime(params: {
       );
     }
     const resolvedPath = resolution.resolvedPath;
-    const runtimeModule = withProfile(
-      { source: resolvedPath },
-      "runtime-module",
-      () =>
-        params.loadPluginModule(resolvedPath) as {
-          createPluginRuntime?: PluginRuntimeFactory;
-        },
+    runtimeModule = withPluginCache(cache, () =>
+      withProfile(
+        { source: resolvedPath },
+        "runtime-module",
+        () => params.loadPluginModule(resolvedPath) as RuntimeModule,
+      ),
     );
-    if (typeof runtimeModule.createPluginRuntime !== "function") {
-      throw new Error("Plugin runtime module missing createPluginRuntime export");
-    }
-    createPluginRuntimeFactory = runtimeModule.createPluginRuntime;
-    return createPluginRuntimeFactory;
+    return runtimeModule;
   };
 
-  const cache = getPluginCache();
-  const state = createRuntimeState();
+  const base = createRuntimeBase();
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= withPluginCache(cache, () =>
-      resolveCreatePluginRuntime()(params.runtimeOptions, state),
-    );
+    resolvedRuntime ??= withPluginCache(cache, () => {
+      const { createPluginRuntime } = resolveRuntimeModule();
+      if (typeof createPluginRuntime !== "function") {
+        throw new Error("Plugin runtime module missing createPluginRuntime export");
+      }
+      return createPluginRuntime(params.runtimeOptions, base);
+    });
     return resolvedRuntime;
   };
   const getRuntimeProperty = (prop: PropertyKey, ...receiver: [] | [unknown]): unknown => {
-    if (prop === "state" && !resolvedRuntime) {
-      return state;
-    }
-    return receiver.length === 0
-      ? Reflect.get(resolveRuntime(), prop)
-      : Reflect.get(resolveRuntime(), prop, receiver[0]);
-  };
-  const lazyRuntimeReflectionKeySet = new Set<PropertyKey>(LAZY_RUNTIME_REFLECTION_KEYS);
-  const resolveLazyRuntimeDescriptor = (prop: PropertyKey): PropertyDescriptor | undefined => {
-    if (!lazyRuntimeReflectionKeySet.has(prop)) {
-      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
-    }
-    return {
-      configurable: true,
-      enumerable: true,
-      get() {
-        return getRuntimeProperty(prop);
-      },
-      set(value: unknown) {
-        Reflect.set(resolveRuntime() as object, prop, value);
-      },
-    };
-  };
-  return new Proxy({} as PluginRuntime, {
-    get(_target, prop, receiver) {
-      // Instance-bound surfaces are complete runtime objects. Keep them direct so
-      // the first Gateway call does not materialize the broad plugin runtime graph.
-      if (prop === "gateway" || prop === "nodes" || prop === "subagent") {
+    // Prepared metadata and host facades must not initialize broad runtime services.
+    if (!resolvedRuntime) {
+      if (
+        prop === "gateway" ||
+        prop === "hooks" ||
+        prop === "nodes" ||
+        prop === "subagent" ||
+        prop === "modelAuth" ||
+        prop === "modelConfig"
+      ) {
         const value = params.runtimeOptions?.[prop];
         if (value !== undefined) {
           return value;
         }
       }
-      return getRuntimeProperty(prop, receiver);
-    },
+      if (prop === "version") {
+        return VERSION;
+      }
+      if (prop === "config" || prop === "state" || prop === "system") {
+        return base[prop];
+      }
+    }
+    return receiver.length === 0
+      ? Reflect.get(resolveRuntime(), prop)
+      : Reflect.get(resolveRuntime(), prop, receiver[0]);
+  };
+  const resolveLazyRuntimeDescriptor = (prop: PropertyKey): PropertyDescriptor | undefined => {
+    // Once loaded, assignment through the proxy must see the owner's real descriptor.
+    if (resolvedRuntime || !Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop)) {
+      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
+    }
+    const descriptor: PropertyDescriptor = {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return getRuntimeProperty(prop);
+      },
+    };
+    // Policy facets match defineCachedValue's getter-only contract before loading too.
+    if (prop !== "modelAuth" && prop !== "modelConfig") {
+      descriptor.set = (value: unknown) => {
+        Reflect.set(resolveRuntime() as object, prop, value);
+      };
+    }
+    return descriptor;
+  };
+  return new Proxy({} as PluginRuntime, {
+    get: (_target, prop, receiver) => getRuntimeProperty(prop, receiver),
     set(_target, prop, value, receiver) {
       return Reflect.set(resolveRuntime(), prop, value, receiver);
     },
     has(_target, prop) {
-      return lazyRuntimeReflectionKeySet.has(prop) || Reflect.has(resolveRuntime(), prop);
+      return Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop) || Reflect.has(resolveRuntime(), prop);
     },
     ownKeys() {
-      return [...LAZY_RUNTIME_REFLECTION_KEYS];
+      return Object.keys(LAZY_RUNTIME_PROPERTIES);
     },
     getOwnPropertyDescriptor(_target, prop) {
       return resolveLazyRuntimeDescriptor(prop);
@@ -288,9 +313,6 @@ export function resolvePluginModuleExport(moduleExport: unknown): {
     }
   }
   const resolved = candidates[0];
-  if (typeof resolved === "function") {
-    return { register: resolved as OpenClawPluginDefinition["register"] };
-  }
   if (resolved && typeof resolved === "object") {
     const definition = resolved as OpenClawPluginDefinition;
     return { definition, register: definition.register };

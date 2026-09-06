@@ -2,7 +2,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { getPluginCacheRoot } from "./plugin-cache.js";
 import {
@@ -25,21 +25,27 @@ type PublicSurfaceLocation = {
   boundaryRoot: string;
 };
 
-function createResolutionKey(params: { dirName: string; artifactBasename: string }): string {
-  const bundledPluginsDir = resolveBundledPluginsDir();
-  return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
+function createResolutionKey(params: {
+  dirName: string;
+  artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const bundledPluginsDir = resolveBundledPluginsDir(params.env);
+  return `${params.dirName}::${params.artifactBasename}::${areBundledPluginsDisabled(params.env)}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
 }
 
 function resolvePublicSurfaceLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 }): PublicSurfaceLocation | null {
-  const bundledPluginsDir = resolveBundledPluginsDir();
+  const bundledPluginsDir = resolveBundledPluginsDir(params.env);
   const modulePath = resolveBundledPluginPublicSurfacePath({
     rootDir: OPENCLAW_PACKAGE_ROOT,
     ...(bundledPluginsDir ? { bundledPluginsDir, bundledPluginsDirMode: "explicit" as const } : {}),
     dirName: params.dirName,
     artifactBasename: params.artifactBasename,
+    env: params.env,
   });
   if (!modulePath) {
     return null;
@@ -56,6 +62,7 @@ function resolvePublicSurfaceLocationUncached(params: {
 function resolvePublicSurfaceLocation(params: {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 }): PublicSurfaceLocation | null {
   const key = createResolutionKey(params);
   const artifacts = getPluginCacheRoot(OPENCLAW_PACKAGE_ROOT).artifacts;
@@ -118,6 +125,7 @@ function loadBundledPublicSurfaceAtLocation(params: {
 export function loadBundledPluginPublicArtifactModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 }): T {
   const location = resolvePublicSurfaceLocation(params);
   if (!location) {
@@ -160,11 +168,13 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
 export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extends object>(params: {
   dirName: string;
   artifactCandidates: readonly string[];
+  env?: NodeJS.ProcessEnv;
 }): T | null {
   for (const artifactBasename of params.artifactCandidates) {
     const location = resolvePublicSurfaceLocation({
       dirName: params.dirName,
       artifactBasename,
+      env: params.env,
     });
     if (location) {
       return loadBundledPublicSurfaceAtLocation({

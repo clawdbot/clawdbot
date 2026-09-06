@@ -3,20 +3,12 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isCodexAppServerStartupError,
-  resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
   resolveCodexGatewayTimeoutWithGraceMs,
   resolveCodexStartupTimeoutMs,
-  resolveCodexTurnAssistantCompletionIdleTimeoutMs,
-  resolveCodexTurnCompletionIdleTimeoutMs,
-  resolveCodexTurnTerminalIdleTimeoutMs,
   withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
 
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
-const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
-const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
-const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
-const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 
 describe("Codex app-server attempt timeouts", () => {
   afterEach(() => {
@@ -48,89 +40,6 @@ describe("Codex app-server attempt timeouts", () => {
         timeoutFloorMs: Number.NaN,
       }),
     ).toBe(CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS);
-  });
-
-  it("normalizes turn idle timeout overrides", () => {
-    expect(CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS).toBe(5 * 60_000);
-    expect(CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS).toBeGreaterThan(
-      CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
-    );
-
-    expect(resolveCodexTurnCompletionIdleTimeoutMs(undefined)).toBe(
-      CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
-    );
-    expect(resolveCodexTurnCompletionIdleTimeoutMs(Number.POSITIVE_INFINITY)).toBe(
-      CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
-    );
-    expect(resolveCodexTurnCompletionIdleTimeoutMs(2.9)).toBe(2);
-    expect(resolveCodexTurnCompletionIdleTimeoutMs(0)).toBe(1);
-    expect(resolveCodexTurnCompletionIdleTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
-
-    expect(resolveCodexTurnAssistantCompletionIdleTimeoutMs(undefined)).toBe(
-      CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-    );
-    expect(resolveCodexTurnAssistantCompletionIdleTimeoutMs(Number.NaN)).toBe(
-      CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-    );
-    expect(resolveCodexTurnAssistantCompletionIdleTimeoutMs(9.8)).toBe(9);
-    expect(resolveCodexTurnAssistantCompletionIdleTimeoutMs(-10)).toBe(1);
-
-    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, 123)).toBe(
-      CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-    );
-    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(Number.NaN, 123)).toBe(
-      CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-    );
-    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, 120_000)).toBe(
-      CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-    );
-    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, 6 * 60_000)).toBe(
-      6 * 60_000,
-    );
-    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, Number.NaN)).toBe(
-      CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-    );
-    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(7.9, 123)).toBe(7);
-    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(0, 123)).toBe(1);
-    expect(
-      resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(
-        Number.MAX_SAFE_INTEGER,
-        Number.MAX_SAFE_INTEGER,
-      ),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
-
-    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined)).toBe(
-      CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
-    );
-    expect(resolveCodexTurnTerminalIdleTimeoutMs(Number.NEGATIVE_INFINITY)).toBe(
-      CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
-    );
-    expect(resolveCodexTurnTerminalIdleTimeoutMs(3.7)).toBe(3);
-    expect(resolveCodexTurnTerminalIdleTimeoutMs(-1)).toBe(1);
-    expect(resolveCodexTurnTerminalIdleTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
-  });
-
-  it("derives the terminal idle timeout from the effective run budget", () => {
-    const overFloor = CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS + 15 * 60_000;
-    // A run budget above the 30-minute floor extends the watchdog (the #85242 fix).
-    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, overFloor)).toBe(overFloor);
-    // A run budget below the floor keeps the 30-minute floor (protection never shortened).
-    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, 10 * 60_000)).toBe(
-      CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
-    );
-    // A non-finite budget falls back to the 30-minute default.
-    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, Number.POSITIVE_INFINITY)).toBe(
-      CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
-    );
-    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
-    // An explicit override still wins even when a run budget is present.
-    expect(resolveCodexTurnTerminalIdleTimeoutMs(5 * 60_000, overFloor)).toBe(5 * 60_000);
   });
 
   it("caps gateway timeout grace", () => {

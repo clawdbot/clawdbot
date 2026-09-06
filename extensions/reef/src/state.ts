@@ -458,21 +458,32 @@ export class ReviewApprovalStore {
       : { approved: persisted.approved, approvalDigest: review.approvalDigest };
   }
 
-  async decide(digest: string, approved: boolean): Promise<boolean> {
+  async lookupDecision(
+    approvalDigest: string,
+  ): Promise<"none" | "pending" | { approved: boolean }> {
+    this.authoritySignal?.throwIfAborted();
+    const current = this.#store.lookup(approvalDigest);
+    if (!current) {
+      return "none";
+    }
+    return current.approved === undefined ? "pending" : { approved: current.approved };
+  }
+
+  async decide(digest: string, approved: boolean): Promise<ReviewRequest | undefined> {
     const update = this.#store.update;
     if (!update) {
       throw new Error("Reef review state requires atomic plugin-state updates");
     }
-    let found = false;
+    let decided: ReviewRequest | undefined;
     this.authoritySignal?.throwIfAborted();
     update(digest, (current) => {
       if (!current) {
         return undefined;
       }
-      found = true;
+      decided = structuredClone(current.review);
       return { ...current, approved };
     });
-    return found;
+    return decided;
   }
 
   async list(): Promise<ReviewRequest[]> {

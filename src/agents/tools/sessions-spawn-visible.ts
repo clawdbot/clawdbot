@@ -1,9 +1,11 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  isSubagentSpawnDepthAllowed,
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
@@ -26,6 +28,7 @@ import {
   countActiveRunsForSession,
   registerSubagentRun,
 } from "../subagents/registry/subagent-registry.js";
+import { deleteSubagentSessionForCleanup } from "../subagents/registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
@@ -41,13 +44,13 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
     }),
   ),
-  category: Type.Optional(
+  group: Type.Optional(
     Type.String({
       description:
-        "Sidebar category for a visible session. Omit or pass an empty string to leave it ungrouped.",
+        "Custom sidebar group for a visible session; a new name creates the group. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -63,6 +66,7 @@ export type VisibleSessionsSpawnDeps = {
 
 type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
   SpawnedToolContext & {
+    onSpawnEffectsStart?: () => void;
     agentSessionKey?: string;
     requesterTurnRunId?: string;
     completionOwnerKey?: string;
@@ -82,21 +86,6 @@ function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
 }
 
-async function deleteVisibleSession(
-  gatewayCall: InProcessGatewayCaller,
-  childSessionKey: string,
-): Promise<void> {
-  try {
-    await gatewayCall("sessions.delete", {
-      key: childSessionKey,
-      deleteTranscript: true,
-      emitLifecycleHooks: false,
-    });
-  } catch {
-    // Best-effort rollback only.
-  }
-}
-
 export async function maybeSpawnVisibleSession(params: {
   raw: Record<string, unknown>;
   task: string;
@@ -106,16 +95,17 @@ export async function maybeSpawnVisibleSession(params: {
   requestedAgentId?: string;
   runTimeoutSeconds?: number;
   sandbox: "inherit" | "require";
+  expectsCompletionMessage: boolean;
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
   const promptedAt = Date.now();
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
-  const category = readToolStringParam(params.raw, "category");
+  const group = readToolStringParam(params.raw, "group");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
-      ["category", category],
+      ["group", group],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
       ["worktreeBaseRef", worktreeBaseRef],
@@ -134,6 +124,8 @@ export async function maybeSpawnVisibleSession(params: {
   const modelOverride = normalizeToolModelOverride(readToolStringParam(params.raw, "model"));
   const requestedCwd = readToolStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
+  // A visible session starts one run; empty attachment fields request no staging.
+  const requestedMode = params.raw.mode === "run" ? undefined : params.raw.mode;
   const unsupported = [
     [
       "runtime",
@@ -150,7 +142,7 @@ export async function maybeSpawnVisibleSession(params: {
       params.raw.thread === true ? true : undefined,
       "visible sessions route to the dashboard, not a channel thread",
     ],
-    ["mode", params.raw.mode, "visible sessions are persistent dashboard sessions"],
+    ["mode", requestedMode, "visible sessions are persistent dashboard sessions"],
     [
       "lightContext",
       params.raw.lightContext === true ? true : undefined,
@@ -158,12 +150,16 @@ export async function maybeSpawnVisibleSession(params: {
     ],
     [
       "attachments",
-      Array.isArray(params.raw.attachments) ? params.raw.attachments : undefined,
+      Array.isArray(params.raw.attachments) && params.raw.attachments.length > 0
+        ? params.raw.attachments
+        : undefined,
       "attachment staging is not wired to the sessions.create path",
     ],
     [
       "attachAs",
-      params.raw.attachAs,
+      isRecord(params.raw.attachAs)
+        ? readToolStringParam(params.raw.attachAs, "mountPath")
+        : params.raw.attachAs,
       "attachment staging is not wired to the sessions.create path",
     ],
   ] as const;
@@ -189,7 +185,7 @@ export async function maybeSpawnVisibleSession(params: {
   });
   const maxDepth =
     cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
-  if (callerDepth >= maxDepth) {
+  if (!isSubagentSpawnDepthAllowed(callerDepth, maxDepth)) {
     return {
       status: "forbidden",
       error: `sessions_spawn is not allowed at this depth (current depth: ${callerDepth}, max: ${maxDepth})`,
@@ -243,13 +239,20 @@ export async function maybeSpawnVisibleSession(params: {
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
   });
-  const requesterRuntime = resolveSandboxRuntimeStatus({ cfg, sessionKey: requesterKey });
-  const childRuntime = resolveSandboxRuntimeStatus({
+  const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
-    sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+    sessionKey: requesterKey,
+    agentId: requesterAgentId,
   });
+  // Gateway creation inherits the exact parent's requirement before admitting a child run.
+  const childRuntimeSandboxed =
+    requesterRuntime.sandboxRequired ||
+    resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+    }).sandboxed;
   const requesterSandboxed = params.options?.sandboxed === true || requesterRuntime.sandboxed;
-  if (!childRuntime.sandboxed && (requesterSandboxed || params.sandbox === "require")) {
+  if (!childRuntimeSandboxed && (requesterSandboxed || params.sandbox === "require")) {
     return {
       status: "forbidden",
       error: requesterSandboxed
@@ -266,7 +269,7 @@ export async function maybeSpawnVisibleSession(params: {
     : undefined;
   // Sandbox mounts only the target workspace; cwd must stay within that boundary.
   if (
-    childRuntime.sandboxed &&
+    childRuntimeSandboxed &&
     spawnedCwd &&
     (!spawnedWorkspaceCwd || !isPathInside(spawnedWorkspaceCwd, spawnedCwd))
   ) {
@@ -295,6 +298,8 @@ export async function maybeSpawnVisibleSession(params: {
       error: `sessions_spawn has reached max active children for this session (${reservation.activeChildren}/${maxChildren})`,
     };
   }
+  // Successful admission reserves a child before Gateway work can start.
+  params.options?.onSpawnEffectsStart?.();
   try {
     const gatewayCall = params.options?.callGateway ?? callInProcessGatewayTool;
     const createGatewayCall: InProcessGatewayCaller =
@@ -313,6 +318,8 @@ export async function maybeSpawnVisibleSession(params: {
         }));
     let response: {
       key?: string;
+      sessionId?: string;
+      entry?: { lifecycleRevision?: string };
       runStarted?: boolean;
       runId?: string;
       runError?: unknown;
@@ -321,7 +328,8 @@ export async function maybeSpawnVisibleSession(params: {
       response = await createGatewayCall("sessions.create", {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
-        ...(category ? { category } : {}),
+        // sessions.create persists the group under the legacy wire field `category`.
+        ...(group ? { category: group } : {}),
         model: resolvedModel,
         task: params.task,
         parentSessionKey: requesterKey,
@@ -365,21 +373,28 @@ export async function maybeSpawnVisibleSession(params: {
         error: runError,
       };
     }
-    if (response.runStarted !== true) {
-      await deleteVisibleSession(gatewayCall, childSessionKey);
-      return { status: "error", error: runError, childSessionKey };
-    }
-    if (!runId) {
-      // A started run with no run id is untrackable: it cannot be registered,
-      // announced, or cancelled, so never leave it as a visible orphan. Abort
-      // by key to stop whatever is running, then delete the session.
-      try {
-        await gatewayCall("sessions.abort", { key: childSessionKey, agentId: targetAgentId });
-      } catch {
-        // Best-effort stop before cleanup.
-      }
-      await deleteVisibleSession(gatewayCall, childSessionKey);
-      return { status: "error", error: runError };
+    const cleanupCreatedSession = async () => {
+      // Deletion drains active work only after checking the creation receipt.
+      // Never recapture identity from a key that a reset or replacement may own.
+      const outcome = await deleteSubagentSessionForCleanup({
+        callGateway: ({ method, params: cleanupParams }) => gatewayCall(method, cleanupParams),
+        childSessionKey,
+        expectedSessionId: response.sessionId,
+        expectedLifecycleRevision: response.entry?.lifecycleRevision,
+        emitLifecycleHooks: false,
+      });
+      return outcome === "deleted"
+        ? "Session removed."
+        : outcome === "changed"
+          ? "Session changed; newer session kept."
+          : "Session cleanup unconfirmed. Inspect the child session before retrying.";
+    };
+    if (response.runStarted !== true || !runId) {
+      return {
+        status: "error",
+        error: `${runError}. ${await cleanupCreatedSession()}`,
+        childSessionKey,
+      };
     }
     try {
       (params.options?.registerRun ?? registerSubagentRun)({
@@ -401,41 +416,17 @@ export async function maybeSpawnVisibleSession(params: {
         task: params.task,
         taskName: params.taskName,
         agentId: targetAgentId,
-        requesterAgentId: params.options?.requesterAgentIdOverride,
+        requesterAgentId,
         cleanup: "keep",
         label: params.label || undefined,
         runTimeoutSeconds,
-        expectsCompletionMessage: params.raw.expectsCompletionMessage !== false,
+        expectsCompletionMessage: params.expectsCompletionMessage,
         spawnMode: "run",
       });
     } catch (error) {
-      let abortResponse: { abortedRunId?: string | null };
-      try {
-        abortResponse = await gatewayCall<{ abortedRunId?: string | null }>("sessions.abort", {
-          key: childSessionKey,
-          runId,
-          agentId: targetAgentId,
-        });
-      } catch (abortError) {
-        return {
-          status: "error",
-          error: `Visible run registration failed: ${summarizeSessionsSpawnError(error)}. Run abort failed: ${summarizeSessionsSpawnError(abortError)}. Session kept.`,
-          childSessionKey,
-          runId,
-        };
-      }
-      if (abortResponse.abortedRunId !== runId) {
-        return {
-          status: "error",
-          error: `Visible run registration failed: ${summarizeSessionsSpawnError(error)}. Run abort unconfirmed. Session kept.`,
-          childSessionKey,
-          runId,
-        };
-      }
-      await deleteVisibleSession(gatewayCall, childSessionKey);
       return {
         status: "error",
-        error: `Visible run registration failed: ${summarizeSessionsSpawnError(error)}. Run aborted; cleanup attempted.`,
+        error: `Visible run registration failed: ${summarizeSessionsSpawnError(error)}. ${await cleanupCreatedSession()}`,
         childSessionKey,
         runId,
       };

@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
+  cleanupPreparedModelRuntimeHarness,
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "../agents/prepared-model-runtime.test-harness.js";
@@ -11,7 +12,12 @@ import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/r
 import type { AgentHarnessV2 } from "../agents/harness/types.js";
 import { getPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
-import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
+import {
+  advancePreparedModelRuntimeConfig,
+  loadPublishedGatewayReplyDispatchRuntime,
+  refreshPreparedModelRuntimeSnapshots,
+  registerPreparedModelRuntimePublicationListener,
+} from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -20,6 +26,10 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import {
   buildModelsListResult,
@@ -36,6 +46,7 @@ import {
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const mocks = getPreparedModelRuntimeMocks();
+let state: OpenClawTestState;
 const config = {
   agents: {
     defaults: {
@@ -53,14 +64,16 @@ const model = {
   api: "openai-chatgpt-responses" as const,
 };
 const context = {
+  broadcast: vi.fn(),
   getRuntimeConfig: () => config,
   logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 } as unknown as GatewayRequestContext;
 let sidecars: GatewayPostReadySidecarHandle[] = [];
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("OPENAI_API_KEY", "");
-  resetPreparedModelRuntimeHarness();
+  state = await createOpenClawTestState({ label: "prepared-model-runtime" });
+  resetPreparedModelRuntimeHarness(state);
   mocks.configuredAgentIds = ["main"];
   mocks.authStorage.getAll.mockReturnValue({
     openai: {
@@ -133,11 +146,12 @@ function configureHarnessOwnedUnresolvedAuth() {
   };
 }
 
-afterEach(async () => {
-  vi.unstubAllEnvs();
+afterEach(async ({ task }) => {
   for (const sidecar of sidecars) {
     await sidecar.stop();
   }
+  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
+  vi.unstubAllEnvs();
 });
 
 async function createLifecycle(getConfig: () => OpenClawConfig = () => config) {
@@ -260,6 +274,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       });
       const entered = createDeferredCore();
       const resume = createDeferredCore();
+      let result: ReturnType<typeof buildModelsListResult> | undefined;
       try {
         await publishOwner(nativeConfig);
         const owner = getPreparedModelCatalogOwnerSnapshot({
@@ -302,7 +317,7 @@ describe("gateway chat metadata lifecycle composition", () => {
           },
           catalogProjector: projector,
         };
-        const result = buildModelsListResult(request);
+        result = buildModelsListResult(request);
         await entered.promise;
         ready = !initialReady;
         resume.resolve();
@@ -331,6 +346,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         expect(loadModelCatalog).not.toHaveBeenCalled();
       } finally {
         resume.resolve();
+        await Promise.allSettled([result]);
         restoreActivePluginRegistrySnapshot(previousRegistry);
       }
     },
@@ -340,6 +356,8 @@ describe("gateway chat metadata lifecycle composition", () => {
     { wildcard: false, invalidate: "dispose" },
     { wildcard: true, invalidate: "dispose" },
     { wildcard: false, invalidate: "registry" },
+    { wildcard: false, invalidate: "stamp" },
+    { wildcard: false, invalidate: "generation" },
   ])(
     "revalidates native observations (wildcard=$wildcard, $invalidate) without rediscovery",
     async ({ wildcard, invalidate }) => {
@@ -375,12 +393,14 @@ describe("gateway chat metadata lifecycle composition", () => {
         expect(scope).toMatchObject({
           config: nativeConfig,
           agentId: "main",
-          agentDir: "/tmp/configured-main",
+          agentDir: state.agentDir("main"),
           workspaceDir: "/tmp/workspace-main",
           provider: "openai",
           modelId: "codex-latest",
         });
-        expect(scope.config).toBe(nativeConfig);
+        if (scope.config !== nativeConfig) {
+          return undefined;
+        }
         return !disposed && observedRevision === revision ? { accountType: "apiKey" } : undefined;
       });
       const harness: AgentHarnessV2 = {
@@ -430,9 +450,9 @@ describe("gateway chat metadata lifecycle composition", () => {
         }
         const expectNativeAvailable = async (available: boolean) => {
           const expected = { models: expectedModels(available) };
-          await expect(
-            lifecycle.readStartup({ agentId: "main", readPolicy: "ready" }),
-          ).resolves.toMatchObject({ metadata: expected });
+          const catalogs = await lifecycle.readStartup({ agentId: "main", readPolicy: "ready" });
+          expect(catalogs?.sessionModelCatalog).toBe(catalogs?.defaultModelCatalog);
+          expect(catalogs).not.toHaveProperty("metadata");
           await expect(lifecycle.read({ agentId: "main" })).resolves.toMatchObject(expected);
           await expect(lifecycle.readStartup({ agentId: "main" })).resolves.toMatchObject({
             metadata: expected,
@@ -455,6 +475,9 @@ describe("gateway chat metadata lifecycle composition", () => {
                 metadataSnapshot: owner.metadataSnapshot,
                 preparedAuthStore: { version: 1, profiles: {} },
                 preparedRuntimeAuthModes: owner.authModes,
+                pluginRegistry: owner.pluginRegistry,
+                isCurrent: owner.isCurrent,
+                observationConfig: owner.observationConfig,
               }),
             }),
           ).resolves.toMatchObject(expected);
@@ -486,13 +509,108 @@ describe("gateway chat metadata lifecycle composition", () => {
             ? []
             : [expect.objectContaining({ id: "codex-latest", available: false })],
         });
+        const lockedStartup = await lifecycle.readStartup({
+          agentId: "main",
+          sessionEntry: lockedSession,
+        });
+        expect(lockedStartup?.metadata).toEqual(lockedMetadata);
         await expect(
           lifecycle.readStartup({
             agentId: "main",
             sessionEntry: lockedSession,
             readPolicy: "ready",
           }),
-        ).resolves.toMatchObject({ metadata: lockedMetadata });
+        ).resolves.toEqual({
+          sessionModelCatalog: lockedStartup?.sessionModelCatalog,
+          defaultModelCatalog: lockedStartup?.defaultModelCatalog,
+        });
+
+        if (invalidate === "generation") {
+          const loader: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] = (params) =>
+            loadGatewayModelCatalogSnapshot({ ...params, getConfig: () => currentConfig });
+          registerGatewayModelCatalogPrivateAccess(loader, {
+            loadDeferred: (params) =>
+              loadPreparedGatewayModelCatalogSnapshot({
+                ...params,
+                getConfig: () => currentConfig,
+              }),
+            readPrepared: (params) =>
+              readPreparedGatewayModelCatalogOwnerSnapshot({
+                ...params,
+                getConfig: () => currentConfig,
+              }),
+          });
+          const retained = await prepareModelsListResult({
+            context: { ...nativeContext, loadGatewayModelCatalogSnapshot: loader },
+            agentId: "main",
+            params: { view: "configured", preparedOnly: true },
+          });
+          expect(retained.isCurrent()).toBe(true);
+          expect(retained.read()).toMatchObject({ models: expectedModels(true) });
+          const entered = createDeferredCore();
+          const release = createDeferredCore<{ agentDir: string; wrote: false }>();
+          mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
+            entered.resolve();
+            return await release.promise;
+          });
+          const events: string[] = [];
+          const published = createDeferredCore();
+          const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+            events.push(event.phase);
+            if (event.phase === "published" || event.phase === "failed") {
+              published.resolve();
+            }
+          });
+          let nextRead: ReturnType<typeof lifecycle.read> | undefined;
+          try {
+            expect(mocks.mutationListener).toBeTypeOf("function");
+            mocks.mutationListener!({
+              agentDir: state.agentDir("main"),
+              affectsInheritedStores: false,
+            });
+            expect(events).toEqual(["invalidated"]);
+            let settled = false;
+            nextRead = lifecycle.read({ agentId: "main" });
+            void nextRead.then(
+              () => {
+                settled = true;
+              },
+              () => {
+                settled = true;
+              },
+            );
+            await entered.promise;
+            expect(settled).toBe(false);
+            await expect(
+              lifecycle.readStartup({ agentId: "main", readPolicy: "ready" }),
+            ).resolves.toBeUndefined();
+            const staleCurrent = retained.isCurrent();
+            const staleModels = retained.read().models;
+            release.resolve({ agentDir: state.agentDir("main"), wrote: false });
+            await published.promise;
+            expect(events).toEqual(["invalidated", "published"]);
+            await expect(nextRead).resolves.toMatchObject({ models: expectedModels(true) });
+            const replacement = getPreparedModelCatalogOwnerSnapshot({
+              agentId: "main",
+              config: nativeConfig,
+              readOnly: true,
+              allowGatewaySubagentBinding: true,
+            });
+            expect(replacement).toBeDefined();
+            expect(replacement).not.toBe(owner);
+            expect(replacement?.pluginRegistry).toBe(owner.pluginRegistry);
+            expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+            expect({ current: staleCurrent, models: staleModels }).toMatchObject({
+              current: false,
+              models: expectedModels(false),
+            });
+          } finally {
+            release.resolve({ agentDir: state.agentDir("main"), wrote: false });
+            await Promise.allSettled([nextRead]);
+            unregister();
+          }
+          return;
+        }
 
         currentConfig = { ...nativeConfig };
         await lifecycle.refresh();
@@ -503,6 +621,24 @@ describe("gateway chat metadata lifecycle composition", () => {
         ).resolves.toBeUndefined();
         await lifecycle.read({ agentId: "main" });
         await expectNativeAvailable(true);
+
+        if (invalidate === "stamp") {
+          advancePreparedModelRuntimeConfig(currentConfig);
+          const advanced = getPreparedModelCatalogOwnerSnapshot({
+            agentId: "main",
+            config: currentConfig,
+            readOnly: true,
+            allowGatewaySubagentBinding: true,
+          });
+          expect(advanced).not.toBe(owner);
+          expect(advanced?.config).toBe(currentConfig);
+          expect(advanced?.pluginRegistry).toBe(owner.pluginRegistry);
+          await lifecycle.refresh();
+          expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+          expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(builds);
+          await expectNativeAvailable(true);
+          return;
+        }
 
         revision += 1;
         await expectNativeAvailable(false);
@@ -516,9 +652,9 @@ describe("gateway chat metadata lifecycle composition", () => {
           setActivePluginRegistry(createEmptyPluginRegistry());
         }
         await expect(racingRead).resolves.toMatchObject({
-          models: expectedModels(false),
+          models: expectedModels(invalidate === "registry"),
         });
-        await expectNativeAvailable(false);
+        await expectNativeAvailable(invalidate === "registry");
         expect(loadModelCatalog).toHaveBeenCalledTimes(2);
         expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(builds);
       } finally {
@@ -619,7 +755,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         },
       } as EmbeddedRunAttemptResult,
       provider: "openai",
-      agentDir: "/tmp/configured-main",
+      agentDir: state.agentDir("main"),
       modelId: "gpt-5.4",
       modelApi: "openai-chatgpt-responses",
       modelBaseUrl: "https://chatgpt.com/backend-api/codex",
@@ -646,7 +782,7 @@ describe("gateway chat metadata lifecycle composition", () => {
     await vi.waitFor(async () => await expectAvailable(lifecycle));
 
     revokeRuntimeAuthMaterializations({
-      agentDir: "/tmp/configured-main",
+      agentDir: state.agentDir("main"),
       provider: "openai",
       runtimeOwnerId: "codex",
     });
@@ -683,7 +819,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       },
       attempt: {} as EmbeddedRunAttemptResult,
       provider: "openai",
-      agentDir: "/tmp/configured-main",
+      agentDir: state.agentDir("main"),
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
       modelBaseUrl: "https://api.openai.com/v1",
@@ -712,13 +848,82 @@ describe("gateway chat metadata lifecycle composition", () => {
     );
 
     revokeRuntimeAuthMaterializations({
-      agentDir: "/tmp/configured-main",
+      agentDir: state.agentDir("main"),
       provider: "openai",
       runtimeOwnerId: "codex",
     });
     await vi.waitFor(
       async () => await expectAvailable(lifecycle, false, orderedConfig, orderedContext),
     );
+  });
+
+  it("retains a settled metadata failure during a later independent auth publication", async () => {
+    mocks.configuredAgentIds = ["main", "worker"];
+    await publishOwner();
+    const lifecycle = await createLifecycle();
+    const ownedSidecars: GatewayPostReadySidecarHandle[] = [];
+    const failure = new Error("worker auth publication failed");
+    const phases: string[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      phases.push(event.phase);
+    });
+    let failedDispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+    let healthyDispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+    let metadataRead: Promise<void> | undefined;
+    try {
+      await lifecycle.attachContext(context, ownedSidecars);
+      await expectAvailable(lifecycle);
+      mocks.ensureOpenClawModelsJson.mockRejectedValueOnce(failure);
+      expect(mocks.mutationListener).toBeTypeOf("function");
+      mocks.mutationListener!({
+        agentDir: state.agentDir("worker"),
+        affectsInheritedStores: false,
+      });
+      failedDispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
+      await expect(failedDispatch).rejects.toBe(failure);
+      await expect(lifecycle.read({ agentId: "main" })).rejects.toBe(failure);
+      // Drain the completed publication's promise continuations before starting a new
+      // transaction; this must not exercise two components of one queued transaction.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(phases).toEqual(["invalidated", "failed"]);
+      phases.length = 0;
+
+      mocks.mutationListener!({
+        agentDir: state.agentDir("main"),
+        affectsInheritedStores: false,
+      });
+      healthyDispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
+      let metadataOutcome: unknown = Symbol("pending");
+      metadataRead = lifecycle.read({ agentId: "main" }).then(
+        (value) => {
+          metadataOutcome = value;
+        },
+        (error: unknown) => {
+          metadataOutcome = error;
+        },
+      );
+      await expect(healthyDispatch).resolves.toMatchObject({ agentId: "main" });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(phases).toContain("invalidated");
+      expect(phases).not.toContain("published");
+      expect(getPreparedModelCatalogOwnerSnapshot({ agentId: "worker", config })).toBeUndefined();
+      // The healthy component can admit work, but it cannot make the failed global
+      // metadata generation ready or turn its recorded failure into an endless wait.
+      expect(metadataOutcome).toBe(failure);
+
+      await publishOwner();
+      await expectAvailable(lifecycle);
+    } finally {
+      unregister();
+      for (const sidecar of ownedSidecars) {
+        await sidecar.stop();
+      }
+      await Promise.allSettled([failedDispatch, healthyDispatch, metadataRead]);
+    }
   });
 
   it("recovers a failed catch-up when the prepared owner publishes after attachment", async () => {

@@ -45,15 +45,21 @@ function assertEqual(label, actual, expected, argv) {
 }
 
 const [mode, unitPath, expected, positionRaw] = process.argv.slice(2);
-if (!mode || !unitPath || expected === undefined) {
+if (!mode || !unitPath || (mode !== "entrypoint-exists" && expected === undefined)) {
   fail(
-    "usage: assert-exec-start.mjs entrypoint <unit-path> <expected> | argument <unit-path> <expected> <one-based-position>",
+    "usage: assert-exec-start.mjs entrypoint <unit-path> <expected> | entrypoint-exists <unit-path> | argument <unit-path> <expected> <one-based-position>",
   );
 }
 
 const programArguments = readProgramArguments(unitPath);
 if (mode === "entrypoint") {
   assertEqual("entrypoint", resolveGatewayEntrypoint(programArguments), expected, programArguments);
+} else if (mode === "entrypoint-exists") {
+  const entrypoint = resolveGatewayEntrypoint(programArguments);
+  if (!fs.statSync(entrypoint, { throwIfNoEntry: false })?.isFile()) {
+    fail(`Entrypoint in service unit does not exist: ${entrypoint}`);
+  }
+  console.log(entrypoint);
 } else if (mode === "argument") {
   const position = Number.parseInt(positionRaw ?? "", 10);
   if (!Number.isSafeInteger(position) || position < 1) {

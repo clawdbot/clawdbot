@@ -1,57 +1,28 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
-  isHiddenAssistantStreamText,
-  loadChatHistory,
-  type ChatHistoryResult,
-  type ChatState,
-} from "./chat-history.ts";
-import { makeChatHost } from "./chat-host.test-support.ts";
+  activeHistory,
+  createState,
+  type TestState,
+} from "./chat-history.inflight.test-support.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
-  admitInitialUserMessageHandoff,
+  admitChatSubmission,
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
-  setChatSessionProjection,
+  publishChatSessionProjection,
 } from "./history-merge.ts";
-import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { visibleCurrentAssistantStreamTail } from "./stream-reconciliation.ts";
-import { handleAgentEvent, type ToolStreamEntry } from "./tool-stream.ts";
-
-type TestState = ChatState & Parameters<typeof handleAgentEvent>[0];
-type TestSessions = NonNullable<ChatState["sessions"]> &
-  Parameters<typeof handleAgentEvent>[0]["sessions"];
-
-function createState(result: ChatHistoryResult): TestState {
-  const host = makeChatHost({
-    requestHandlers: { "chat.history": result },
-    sessionKey: "main",
-  });
-  const sessions: TestSessions = {
-    refreshReplacement: vi.fn(async () => undefined),
-    reconcileRunTerminal: vi.fn(),
-  };
-  return {
-    ...host,
-    chatToolMessages: host.chatToolMessages ?? [],
-    chatStreamSegments: host.chatStreamSegments ?? [],
-    connectionEpoch: 1,
-    chatThinkingLevel: null,
-    chatVerboseLevel: null,
-    chatStreamStartedAt: null,
-    sessions,
-    toolStreamById: host.toolStreamById ?? new Map<string, ToolStreamEntry>(),
-    toolStreamOrder: host.toolStreamOrder ?? [],
-    toolStreamSyncTimer: host.toolStreamSyncTimer ?? null,
-    requestUpdate: vi.fn(),
-  };
-}
+import { buildInitialChatSubmission } from "./user-message-content.ts";
 
 async function loadHistoryWithBrowserTimers(state: TestState): Promise<void> {
   const globalWithWindow = globalThis as typeof globalThis & {
@@ -91,21 +62,6 @@ function renderedText(state: TestState) {
   );
 }
 
-function activeHistory(runId: string): ChatHistoryResult {
-  return {
-    messages: [],
-    sessionInfo: {
-      key: "main",
-      kind: "direct",
-      updatedAt: 1,
-      hasActiveRun: true,
-      activeRunIds: [runId],
-      status: "running",
-    },
-    inFlightRun: { runId, text: "" },
-  };
-}
-
 function failedHistory(): ChatHistoryResult {
   return {
     messages: [
@@ -130,6 +86,43 @@ function failedHistory(): ChatHistoryResult {
 }
 
 describe("chat history in-flight assistant recovery", () => {
+  it("retires an interrupted run from authoritative history after missing its live terminal", async () => {
+    const active = activeHistory("run-interrupted");
+    const interrupted: ChatHistoryResult = {
+      messages: [],
+      sessionInfo: {
+        ...active.sessionInfo!,
+        hasActiveRun: false,
+        activeRunIds: [],
+        lastRunId: "run-interrupted",
+        status: "killed",
+      },
+      pendingInputs: {
+        items: [
+          {
+            id: "input-interrupted-before-turn",
+            runId: "queued-input",
+            acceptedAt: 1,
+            state: "interrupted",
+            message: { role: "user", content: "Open a PR to fix it" },
+          },
+        ],
+        total: 1,
+      },
+    };
+    const request = vi.fn().mockResolvedValueOnce(active).mockResolvedValueOnce(interrupted);
+    const state = createState(active);
+    state.client = { request } as unknown as GatewayBrowserClient;
+
+    await loadChatHistory(state);
+    expect(state.chatRunId).toBe("run-interrupted");
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
   it.each(["chat.startup", "chat.history"] as const)(
     "recovers a failure missed before route subscription through %s",
     async (method) => {
@@ -139,15 +132,16 @@ describe("chat history in-flight assistant recovery", () => {
         request: vi.fn().mockResolvedValue(history),
       } as unknown as GatewayBrowserClient;
       if (method === "chat.startup") {
-        state.initialUserMessage = createInitialUserMessageHandoff();
-        prepareInitialUserMessageHandoff(
-          state.initialUserMessage,
-          state.sessionKey,
-          { text: "Inspect the unavailable project", createdAt: 1 },
-          state.client,
-          { runId: "run-first" },
+        state.chatSubmissions = createChatSubmissions();
+        state.chatSubmissions.retain(
+          buildInitialChatSubmission(
+            state.sessionKey,
+            { text: "Inspect the unavailable project", createdAt: 1 },
+            state.client,
+            "run-first",
+          ),
         );
-        admitInitialUserMessageHandoff(state, state.sessionKey);
+        admitChatSubmission(state);
       }
 
       await loadChatHistory(state, { startup: method === "chat.startup" });
@@ -227,46 +221,7 @@ describe("chat history in-flight assistant recovery", () => {
     },
   );
 
-  it.each([
-    {
-      name: "restores workspace preparation before visible activity",
-      phase: "preparing_workspace",
-      text: "",
-      startup: { state: "status", runId: "run-live", phase: "preparing_workspace" },
-    },
-    ...["naming_worktree", "creating_worktree", "running_setup"].map((phase) => ({
-      name: `restores ${phase} before visible activity`,
-      phase,
-      text: "",
-      startup: { state: "status", runId: "run-live", phase },
-    })),
-    {
-      name: "keeps actual assistant activity ahead of an older startup status",
-      phase: "preparing_workspace",
-      text: "The assistant already started responding.",
-      startup: { state: "activity", runId: "run-live" },
-    },
-  ])("$name", async ({ phase, text, startup }) => {
-    const history = activeHistory("run-live");
-    history.inFlightRun!.text = text;
-    history.inFlightRun!.events = [
-      {
-        runId: "run-live",
-        seq: 1,
-        stream: "run_status",
-        ts: 900,
-        sessionKey: "main",
-        data: { phase },
-      },
-    ];
-    const state = createState(history);
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunStartup).toEqual(startup);
-  });
-
-  it("restores active tool state and authoritative preamble time from the in-flight run snapshot", async () => {
+  it("restores tools, preamble time, and output usage from the in-flight run snapshot", async () => {
     const history = activeHistory("run-live");
     (history.inFlightRun as { events?: unknown[] }).events = [
       {
@@ -294,11 +249,20 @@ describe("chat history in-flight assistant recovery", () => {
           args: { path: "README.md" },
         },
       },
+      {
+        runId: "run-live",
+        seq: 3,
+        stream: "usage",
+        ts: 1_100,
+        sessionKey: "main",
+        data: { outputTokens: 695, context: { totalTokens: 1_500, contextWindow: 8_000 } },
+      },
     ];
     const state = createState(history);
 
     await loadHistoryWithBrowserTimers(state);
 
+    expect(state.chatRunUsageById?.get("run-live")?.outputTokens).toBe(695);
     expect(state.chatToolMessages[0]).toMatchObject({
       runId: "run-live",
       toolCallId: "call-restored",
@@ -806,7 +770,7 @@ describe("chat history in-flight assistant recovery", () => {
     expect(state.chatMessages).toEqual(history.messages);
   });
 
-  it("adopts an active run before its first assistant text arrives", async () => {
+  it("adopts an active run without treating an empty snapshot as activity", async () => {
     const history = activeHistory("run-reconnected");
     const state = createState(history);
 
@@ -814,7 +778,20 @@ describe("chat history in-flight assistant recovery", () => {
 
     expect(state.chatRunId).toBe("run-reconnected");
     expect(state.chatStream).toBeNull();
-    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-reconnected" });
+    expect(state.chatRunStartup).toBeFalsy();
+    handleChatGatewayEvent(state, {
+      runId: "run-reconnected",
+      sessionKey: "main",
+      seq: 1,
+      state: "status",
+      phase: "preparing_context",
+    });
+    expect(state.chatRunStartup).toEqual({
+      state: "status",
+      runId: "run-reconnected",
+      phase: "preparing_context",
+      seq: 1,
+    });
   });
 
   it.each([
@@ -882,7 +859,7 @@ describe("chat history in-flight assistant recovery", () => {
     const loadPromise = loadChatHistory(state);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     const projection = getChatSessionProjection(state);
-    setChatSessionProjection(state, { ...projection, runs: { ...projection.runs } });
+    publishChatSessionProjection(state, { ...projection, runs: { ...projection.runs } });
     resolveHistory(history);
     await loadPromise;
 

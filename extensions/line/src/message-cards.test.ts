@@ -1,7 +1,7 @@
 // Line tests cover message cards plugin behavior.
-import { createServer } from "node:http";
 import { messagingApi } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import {
   datetimePickerAction,
@@ -12,7 +12,7 @@ import {
   uriAction,
   type Action,
 } from "./actions.js";
-import { registerLineCardCommand } from "./card-command.js";
+import { handleLineCardCommand } from "./card-command.js";
 import {
   createActionCard,
   createImageCard,
@@ -89,12 +89,7 @@ const lineTemplateMessageScenarios = [
 async function runLineFlexCardCommand(
   args: string,
 ): Promise<{ altText: string; contents: messagingApi.FlexContainer }> {
-  const result = (await registerCommandWithHandler((command: unknown) => {
-    const { handler } = command as {
-      handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-    };
-    return handler({ channel: "line", args });
-  })) as {
+  const result = (await handleLineCardCommand(args)) as {
     channelData: {
       line: { flexMessage: { altText: string; contents: messagingApi.FlexContainer } };
     };
@@ -128,45 +123,34 @@ async function withLineProvider(
   run: (client: messagingApi.MessagingApiClient, requests: LineProviderRequest[]) => Promise<void>,
 ): Promise<void> {
   const requests: LineProviderRequest[] = [];
-  const server = createServer((request, response) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer) => {
-      chunks.push(chunk);
-    });
-    request.once("end", () => {
-      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-        messages: Array<{ type: string; altText: string }>;
-      };
-      requests.push({
-        path: request.url ?? "",
-        authenticated: request.headers.authorization === "Bearer isolated-test-token",
-        type: payload.messages[0]?.type ?? "",
-        altText: payload.messages[0]?.altText ?? "",
+  await withServer(
+    (request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
       });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ sentMessages: [{ id: `card-${requests.length}` }] }));
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("LINE card provider did not bind a TCP port");
-    }
-    const client = new messagingApi.MessagingApiClient({
-      channelAccessToken: "isolated-test-token",
-      baseURL: `http://127.0.0.1:${address.port}`,
-    });
-    await run(client, requests);
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+      request.once("end", () => {
+        const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+          messages: Array<{ type: string; altText: string }>;
+        };
+        requests.push({
+          path: request.url ?? "",
+          authenticated: request.headers.authorization === "Bearer isolated-test-token",
+          type: payload.messages[0]?.type ?? "",
+          altText: payload.messages[0]?.altText ?? "",
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ sentMessages: [{ id: `card-${requests.length}` }] }));
+      });
+    },
+    async (baseUrl) => {
+      const client = new messagingApi.MessagingApiClient({
+        channelAccessToken: "isolated-test-token",
+        baseURL: baseUrl,
+      });
+      await run(client, requests);
+    },
+  );
 }
 
 describe("createConfirmTemplate", () => {
@@ -495,16 +479,9 @@ describe("action label/data surrogate-safe truncation", () => {
   });
 
   it("/card action command visibly disables overlong callback data", async () => {
-    const registerCommand = (command: unknown) => {
-      const { handler } = command as {
-        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-      };
-      return handler({
-        channel: "line",
-        args: `action "Menu" "Body" --actions "${labelWithEmoji}|k=${"d".repeat(297)}😀"`,
-      });
-    };
-    const result = (await registerCommandWithHandler(registerCommand)) as {
+    const result = (await handleLineCardCommand(
+      `action "Menu" "Body" --actions "${labelWithEmoji}|k=${"d".repeat(297)}😀"`,
+    )) as {
       channelData: {
         line: {
           flexMessage: {
@@ -570,15 +547,9 @@ describe("action label/data surrogate-safe truncation", () => {
 
   it("/card buttons retains the template-specific 20-character action label limit", async () => {
     const label = "x".repeat(40);
-    const result = (await registerCommandWithHandler((command: unknown) => {
-      const { handler } = command as {
-        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-      };
-      return handler({
-        channel: "line",
-        args: `buttons "Menu" "Body" --actions "${label}|/status"`,
-      });
-    })) as {
+    const result = (await handleLineCardCommand(
+      `buttons "Menu" "Body" --actions "${label}|/status"`,
+    )) as {
       channelData: {
         line: { templateMessage: Parameters<typeof buildTemplateMessageFromPayload>[0] };
       };
@@ -697,16 +668,9 @@ describe("action label/data surrogate-safe truncation", () => {
   });
 
   it("/card receipt preserves a provider-valid Unicode alternative-text boundary", async () => {
-    const registerCommand = (command: unknown) => {
-      const { handler } = command as {
-        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-      };
-      return handler({
-        channel: "line",
-        args: `receipt "R" "${"a".repeat(395)}:😀x" --total "$30"`,
-      });
-    };
-    const result = (await registerCommandWithHandler(registerCommand)) as {
+    const result = (await handleLineCardCommand(
+      `receipt "R" "${"a".repeat(395)}:😀x" --total "$30"`,
+    )) as {
       channelData: { line: { flexMessage: { altText: string } } };
     };
     const altText = result.channelData.line.flexMessage.altText;
@@ -1073,15 +1037,3 @@ describe("action label/data surrogate-safe truncation", () => {
     }
   });
 });
-
-async function registerCommandWithHandler(
-  runHandler: (command: unknown) => Promise<unknown>,
-): Promise<unknown> {
-  let result: unknown;
-  registerLineCardCommand({
-    registerCommand(command: unknown) {
-      result = runHandler(command);
-    },
-  } as never);
-  return result;
-}

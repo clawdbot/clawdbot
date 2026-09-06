@@ -1,6 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { splitAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
+import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 
@@ -13,6 +13,35 @@ function renderToolOutput(text: string, width: number) {
 }
 
 describe("ToolExecutionComponent", () => {
+  it("keeps tool arguments, output, and running status independent across updates", () => {
+    const component = new ToolExecutionComponent("read", { path: "initial.txt" });
+    component.setPartialResult({ content: [{ type: "text", text: "partial output" }] });
+    component.setArgs({ path: "updated.txt" });
+    component.setExpanded(true);
+
+    let rendered = normalizeTestText(component.render(80).join("\n"));
+    expect(rendered).toContain("updated.txt");
+    expect(rendered).not.toContain("initial.txt");
+    expect(rendered).toContain("partial output");
+    expect(rendered).toContain("(running)");
+
+    component.setResult({ content: [{ type: "text", text: "final output" }] }, { isError: true });
+    component.setArgs({ path: "complete.txt" });
+    component.setExpanded(false);
+
+    rendered = normalizeTestText(component.render(80).join("\n"));
+    expect(rendered).toContain("complete.txt");
+    expect(rendered).toContain("final output");
+    expect(rendered).not.toContain("partial output");
+    expect(rendered).not.toContain("(running)");
+
+    component.setPartialResult(undefined);
+    rendered = normalizeTestText(component.render(80).join("\n"));
+    expect(rendered).toContain("complete.txt");
+    expect(rendered).toContain("(running)");
+    expect(rendered).not.toContain("final output");
+  });
+
   it.each(
     [
       { source: "    # heading\n    command --flag", literal: "# heading" },
@@ -164,7 +193,7 @@ describe("ToolExecutionComponent", () => {
     const raw = lines.join("\n");
     const normalized = normalizeTestText(raw).replace(/[\u2067\u2069]/gu, "");
     const linkedRtl = lines.find((line) => line.includes("عنصر") && line.includes("\x1b]8;;"));
-    const targets = splitAnsiSegments(raw).flatMap((segment) => {
+    const targets = [...iterateAnsiSegments(raw)].flatMap((segment) => {
       if (segment.kind !== "ansi" || !segment.value.startsWith("\x1b]8;;")) {
         return [];
       }

@@ -1,6 +1,5 @@
 /**
- * Confirms admitted plugin and account apps against their actual Codex thread before
- * OpenClaw commits a binding or starts a turn.
+ * Checks app availability and enforces restricted MCP surfaces before a turn.
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -8,7 +7,40 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { v2 } from "./protocol.js";
+import type { JsonObject, v2 } from "./protocol.js";
+import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
+import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-mcp-attestation.js";
+
+/** Every admission path checks the same surface; its lifecycle owner keeps the claim fenced. */
+export async function attestCodexThreadToolSurface(
+  params: Parameters<typeof checkCodexThreadAppAvailability>[0] & {
+    threadConfig?: JsonObject;
+    restrictedToolSurface: boolean;
+    lifecycleTiming: CodexThreadLifecycleTimingTracker;
+    assertCurrent: () => void;
+  },
+): Promise<void> {
+  params.assertCurrent();
+  if (params.appIds.length > 0) {
+    await params.lifecycleTiming.measure("plugin-app-attestation", () =>
+      checkCodexThreadAppAvailability(params),
+    );
+    params.assertCurrent();
+  }
+  if (params.restrictedToolSurface) {
+    // Codex exposes admitted account apps through its built-in codex_apps server.
+    await params.lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
+      attestCodexRestrictedToolSurfaceMcpServersDisabled(
+        params.client,
+        params.threadId,
+        params.threadConfig,
+        params.signal,
+        params.appIds.length > 0 ? ["codex_apps"] : [],
+      ),
+    );
+    params.assertCurrent();
+  }
+}
 
 class CodexPluginThreadAppAttestationError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -18,7 +50,7 @@ class CodexPluginThreadAppAttestationError extends Error {
 }
 
 /** Reads the existing runtime snapshot with the started thread's effective app policy. */
-export async function attestCodexPluginThreadApps(params: {
+export async function checkCodexThreadAppAvailability(params: {
   client: CodexAppServerClient;
   threadId: string;
   appIds: readonly string[];
@@ -37,11 +69,13 @@ export async function attestCodexPluginThreadApps(params: {
       { signal: params.signal },
     );
   } catch (error) {
+    params.signal?.throwIfAborted();
     throw new CodexPluginThreadAppAttestationError(
       `Codex could not confirm admitted apps for thread ${params.threadId}`,
       { cause: error },
     );
   }
+  params.signal?.throwIfAborted();
 
   const installedById = new Map(response.apps.map((app) => [app.id, app] as const));
   const failures = appIds.flatMap((appId): string[] => {
@@ -55,9 +89,12 @@ export async function attestCodexPluginThreadApps(params: {
     return app.callable ? [] : [`${appId}:not-callable`];
   });
   if (failures.length > 0) {
-    throw new CodexPluginThreadAppAttestationError(
-      `Codex thread ${params.threadId} did not expose admitted apps: ${failures.join(", ")}`,
-    );
+    // Availability is not authorization: Codex still filters and checks each tool.
+    // An optional app with no allowed tools must not prevent unrelated chat or heartbeats.
+    embeddedAgentLog.warn("codex apps unavailable; continuing with remaining tools", {
+      threadId: params.threadId,
+      failures,
+    });
   }
 }
 

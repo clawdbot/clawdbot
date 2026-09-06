@@ -44,7 +44,7 @@ function screenshotClient() {
 }
 
 describe("browser tab previews", () => {
-  it("keeps anonymous result revisions stable across rendering prefixes but distinct across results", () => {
+  it("keeps anonymous result revisions stable across reads but distinct across results", () => {
     const message = {
       role: "toolResult",
       toolName: "browser",
@@ -52,7 +52,7 @@ describe("browser tab previews", () => {
     };
     const initial = latestBrowserTabCards([message], []).get(tabKey())?.revision;
     expect(initial).toBeTruthy();
-    expect(extractToolCardsCached(message, "visible-row")[0]?.previewRevision).toBe(initial);
+    expect(extractToolCardsCached(message)[0]?.previewRevision).toBe(initial);
     expect(latestBrowserTabCards([message, { ...message }], []).get(tabKey())?.revision).not.toBe(
       initial,
     );

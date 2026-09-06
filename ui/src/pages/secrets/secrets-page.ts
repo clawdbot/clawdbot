@@ -274,7 +274,12 @@ class SecretsPage extends OpenClawLightDomElement {
   }
 
   private async removeEntry(entry: (typeof this.store.entries)[number]) {
+    // A confirmation belongs to the client that opened it. Same-client reconnects remain valid,
+    // but a replacement client must never inherit this destructive action.
+    const gateway = this.context.gateway;
+    const client = this.store.client;
     if (
+      !client ||
       !this.canDelete ||
       !(await showConfirmDialog({
         title: t("common.delete"),
@@ -286,6 +291,11 @@ class SecretsPage extends OpenClawLightDomElement {
       return;
     }
     this.notice = null;
+    if (this.context.gateway !== gateway || this.store.client !== client || !this.canDelete) {
+      this.store.error = t("secretsStore.deleteFailed");
+      this.requestUpdate();
+      return;
+    }
     await this.runStoreTask(async (store) => {
       const result = await deleteSecretsStoreEntry(store, entry.name);
       if (result && this.store === store) {

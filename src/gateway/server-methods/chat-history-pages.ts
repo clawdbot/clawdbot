@@ -4,6 +4,7 @@ import {
   dropPreSessionStartAnnouncePairs,
   isHeartbeatHistoryTurnBoundaryMessage,
   projectChatDisplayMessages,
+  projectChatDisplayMessagesWithState,
   augmentChatHistoryWithCanvasBlocks,
 } from "../chat-display-projection.js";
 import {
@@ -13,8 +14,9 @@ import {
 } from "../cli-session-history.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
-  capOffsetChatHistoryProjectedMessages,
   dropChatHistoryOverreadContextMessage,
+  readChatHistoryMessageId,
+  readChatHistoryRecoveryContext,
   readChatHistoryMessageSeq,
   readIncrementalChatHistoryTail,
   type IncrementalChatHistoryTail,
@@ -25,11 +27,6 @@ import {
   type ReadRecentSessionMessagesResult,
 } from "../session-transcript-readers.js";
 import type { loadSessionEntry } from "../session-utils.js";
-
-export function readChatHistoryMessageId(message: unknown): string | undefined {
-  const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
-  return typeof metadata?.id === "string" ? metadata.id : undefined;
-}
 
 type ChatHistoryPage = {
   activeLeafEntryId?: string | null;
@@ -148,46 +145,53 @@ export function enrichChatHistoryCompactionMarkers(
 function resolveChatHistoryMessageGroup(
   messages: unknown[],
   index: number,
-): { start: number; end: number } {
+  messageCost: (message: unknown) => number,
+): { start: number; end: number; cost: number } {
   const seq = readChatHistoryMessageSeq(messages[index]);
-  if (seq === undefined) {
-    return { start: index, end: index + 1 };
-  }
   let start = index;
   let end = index + 1;
+  let cost = messageCost(messages[index]);
+  if (seq === undefined) {
+    return { start, end, cost };
+  }
   while (start > 0 && readChatHistoryMessageSeq(messages[start - 1]) === seq) {
     start -= 1;
+    cost += messageCost(messages[start]);
   }
   while (end < messages.length && readChatHistoryMessageSeq(messages[end]) === seq) {
+    cost += messageCost(messages[end]);
     end += 1;
   }
-  return { start, end };
+  return { start, end, cost };
 }
 
 export function capChatHistoryAroundMessage(params: {
   messages: unknown[];
   messageId: string;
-  fits: (messages: unknown[]) => boolean;
-}): unknown[] | undefined {
+  maxCost: number;
+  messageCost?: (message: unknown) => number;
+}): unknown[] {
   const anchorIndex = params.messages.findIndex(
     (message) => readChatHistoryMessageId(message) === params.messageId,
   );
   if (anchorIndex === -1) {
-    return undefined;
+    return [];
   }
-  const anchorGroup = resolveChatHistoryMessageGroup(params.messages, anchorIndex);
-  if (!params.fits(params.messages.slice(anchorGroup.start, anchorGroup.end))) {
+  const messageCost = params.messageCost ?? (() => 1);
+  const anchorGroup = resolveChatHistoryMessageGroup(params.messages, anchorIndex, messageCost);
+  if (!(anchorGroup.cost <= params.maxCost)) {
     return [params.messages[anchorIndex]];
   }
 
-  let { start, end } = anchorGroup;
+  let { start, end, cost } = anchorGroup;
   let canGrowOlder = start > 0;
   let canGrowNewer = end < params.messages.length;
   while (canGrowOlder || canGrowNewer) {
     if (canGrowOlder) {
-      const olderGroup = resolveChatHistoryMessageGroup(params.messages, start - 1);
-      if (params.fits(params.messages.slice(olderGroup.start, end))) {
+      const olderGroup = resolveChatHistoryMessageGroup(params.messages, start - 1, messageCost);
+      if (cost + olderGroup.cost <= params.maxCost) {
         start = olderGroup.start;
+        cost += olderGroup.cost;
       } else {
         canGrowOlder = false;
       }
@@ -195,9 +199,10 @@ export function capChatHistoryAroundMessage(params: {
     canGrowOlder &&= start > 0;
 
     if (canGrowNewer) {
-      const newerGroup = resolveChatHistoryMessageGroup(params.messages, end);
-      if (params.fits(params.messages.slice(start, newerGroup.end))) {
+      const newerGroup = resolveChatHistoryMessageGroup(params.messages, end, messageCost);
+      if (cost + newerGroup.cost <= params.maxCost) {
         end = newerGroup.end;
+        cost += newerGroup.cost;
       } else {
         canGrowNewer = false;
       }
@@ -309,20 +314,41 @@ export async function readChatHistoryPage(params: {
           max,
           Math.max(readPage.messages.length, readPage.totalMessages > pageOffset ? 1 : 0),
         );
-    const projected = incrementalTail
-      ? incrementalTail.projected
-      : projectChatDisplayMessages(localMessages, {
-          includeCommentaryFallbacks: true,
-          maxChars: effectiveMaxChars,
-          resolveCurrentUserProfileDisplay,
-          turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
-        });
+    const project = (messages: unknown[]) =>
+      projectChatDisplayMessagesWithState(messages, {
+        includeCommentaryFallbacks: true,
+        maxChars: effectiveMaxChars,
+        resolveCurrentUserProfileDisplay,
+        turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
+      });
+    const projection = incrementalTail?.projection ?? project(localMessages);
+    let projected = incrementalTail?.projected ?? projection.messages;
+    const newestPageSeq = readChatHistoryMessageSeq(localMessages.at(-1));
+    if (
+      !incrementalTail &&
+      pageOffset > 0 &&
+      newestPageSeq !== undefined &&
+      projection.assistantErrorPending
+    ) {
+      const recoveryContext = await readChatHistoryRecoveryContext({
+        messages: localMessages,
+        project,
+        readScope,
+        displaySource: readPage.displaySource,
+        maxBytes: maxHistoryBytes,
+      });
+      if (recoveryContext.length > 0) {
+        projected = project([...localMessages, ...recoveryContext]).messages.filter(
+          (message) => (readChatHistoryMessageSeq(message) ?? Infinity) <= newestPageSeq,
+        );
+      }
+    }
     const windowed = messageId
-      ? (capChatHistoryAroundMessage({
+      ? capChatHistoryAroundMessage({
           messages: projected,
           messageId,
-          fits: (messages) => messages.length <= max,
-        }) ?? capOffsetChatHistoryProjectedMessages(projected, max))
+          maxCost: max,
+        })
       : projected;
     if (messageId) {
       // Numeric offsets do not encode the selected historical transcript source.
@@ -332,7 +358,9 @@ export async function readChatHistoryPage(params: {
       ...(isTailPage
         ? {
             activeLeafEntryId: resolveChatHistoryActiveLeafEntryId(readPage),
-            ...(readPage.transcriptSource === "active" && readPage.deltaCursor
+            ...(readPage.transcriptSource === "active" &&
+            readPage.deltaCursor &&
+            !incrementalTail?.projection.assistantErrorPending
               ? { deltaCursor: readPage.deltaCursor }
               : {}),
           }
@@ -407,6 +435,13 @@ export async function readChatHistoryPage(params: {
       maxChars: effectiveMaxChars,
       resolveCurrentUserProfileDisplay,
     });
+    // Import snapshots are terminal, but a missing display anchor is not a tail request.
+    if (
+      messageId &&
+      !displayMessages.some((message) => readChatHistoryMessageId(message) === messageId)
+    ) {
+      return { messages: [] };
+    }
     return {
       activeLeafEntryId,
       messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
@@ -421,7 +456,9 @@ export async function readChatHistoryPage(params: {
   }
   return {
     activeLeafEntryId,
-    ...(readPage.transcriptSource === "active" && readPage.deltaCursor
+    ...(readPage.transcriptSource === "active" &&
+    readPage.deltaCursor &&
+    !incrementalTail.projection.assistantErrorPending
       ? { deltaCursor: readPage.deltaCursor }
       : {}),
     messages: augmentChatHistoryWithCanvasBlocks(incrementalTail.projected),

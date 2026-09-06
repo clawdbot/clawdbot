@@ -1,44 +1,8 @@
 import path from "node:path";
+import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
 const EXTENSIONS_PATH_PREFIX = "extensions/";
 const repoRoot = path.resolve(import.meta.dirname, "../..");
-const VITEST_VALUE_FLAGS = new Set([
-  "-c",
-  "-r",
-  "-t",
-  "--browser",
-  "--changed",
-  "--config",
-  "--coverage.all",
-  "--coverage.exclude",
-  "--coverage.extension",
-  "--coverage.include",
-  "--coverage.provider",
-  "--coverage.reporter",
-  "--coverage.reportsDirectory",
-  "--dir",
-  "--environment",
-  "--environmentOptions",
-  "--hookTimeout",
-  "--inspect",
-  "--inspectBrk",
-  "--maxConcurrency",
-  "--maxWorkers",
-  "--minWorkers",
-  "--mode",
-  "--name",
-  "--outputFile",
-  "--pool",
-  "--project",
-  "--reporter",
-  "--retry",
-  "--root",
-  "--sequence",
-  "--shard",
-  "--testNamePattern",
-  "--testTimeout",
-  "--workspace",
-]);
 
 export function normalizeRelativePath(inputPath: string, cwd = process.cwd()): string {
   const absolutePath = path.isAbsolute(inputPath)
@@ -63,28 +27,25 @@ export function relativizeExtensionVitestArgs(vitestArgs: string[], cwd = proces
   const args: string[] = [];
   for (let index = 0; index < vitestArgs.length; index += 1) {
     const arg = vitestArgs[index]!;
-    if (arg === "--exclude") {
-      const value = vitestArgs[index + 1];
-      args.push(arg);
-      if (value) {
-        args.push(relativizeExtensionVitestPath(value, cwd));
-        index += 1;
-      }
-      continue;
+    if (arg === "--") {
+      // Native separator tails are opaque operands, not test-file filters.
+      args.push(...vitestArgs.slice(index));
+      break;
     }
-
-    if (VITEST_VALUE_FLAGS.has(arg)) {
-      args.push(arg);
-      const value = vitestArgs[index + 1];
-      if (value) {
-        args.push(value);
-        index += 1;
-      }
+    const value = vitestArgs[index + 1];
+    if (vitestOptionConsumesNextArg(arg, value)) {
+      args.push(
+        arg,
+        arg === "--exclude" || arg === "--exclude="
+          ? relativizeExtensionVitestPath(value!, cwd)
+          : value!,
+      );
+      index += 1;
       continue;
     }
 
     const excludePrefix = "--exclude=";
-    if (arg.startsWith(excludePrefix)) {
+    if (arg.startsWith(excludePrefix) && arg.length > excludePrefix.length) {
       args.push(
         `${excludePrefix}${relativizeExtensionVitestPath(arg.slice(excludePrefix.length), cwd)}`,
       );

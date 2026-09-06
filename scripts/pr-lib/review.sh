@@ -31,7 +31,8 @@ review_claim() {
     local user_log
     user_log=".local/review-claim-user-attempt-$attempt.log"
 
-    if reviewer=$(gh_plain api user --jq .login 2>"$user_log"); then
+    # A relay's REST /user may identify its caller, not the local mutation writer.
+    if reviewer=$(gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login 2>"$user_log"); then
       printf "%s\n" "$reviewer" >"$user_log"
       break
     fi
@@ -306,13 +307,10 @@ review_tests() {
 
 review_init() {
   local pr="$1"
-  local root json pr_url
-  root=$(repo_root) || return 1
+  local json pr_url
   # Metadata reads are read-only, so fetching before the side-effect marker keeps a
-  # transient GitHub failure inside the lock's auto-release window. Command substitution
-  # is already a subshell, so this cd gives gh its repo context without moving the
-  # caller - enter_worktree still reports the real invocation cwd.
-  json=$(cd "$root" && pr_meta_json "$pr") || return 1
+  # transient GitHub failure inside the lock's auto-release window.
+  json=$(pr_meta_json "$pr") || return 1
 
   enter_worktree "$pr" true || return 1
   write_pr_meta_files "$json"

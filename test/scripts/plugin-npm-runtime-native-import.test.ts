@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { pruneBundledPluginSourceNodeModules } from "../../scripts/postinstall-bundled-plugins.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -130,47 +129,40 @@ describe("explicit source native-import preparation", () => {
     ["cjs", "peerDependencies"],
     ["esm", "dependencies"],
     ["cjs", "dependencies"],
-  ])(
-    "prepares pruned %s output with an actual %s host without rebuilding",
-    (format, declaration) => {
-      const { root, packageDir, entry } = fixture(format, declaration);
-      fs.mkdirSync(path.join(packageDir, "node_modules"));
-      fs.symlinkSync(root, path.join(packageDir, "node_modules/openclaw"), "junction");
-      pruneBundledPluginSourceNodeModules({ extensionsDir: path.join(root, "extensions") });
+  ])("prepares %s output with a missing %s host link without rebuilding", (format, declaration) => {
+    const { root, packageDir, entry } = fixture(format, declaration);
+    const compiled = runCli(root, ["extensions/demo"]);
+    expect(compiled.status, compiled.stderr).toBe(0);
+    expect(fs.existsSync(path.join(packageDir, "node_modules"))).toBe(false);
+    const missing = nativeImport(root, entry, format);
+    expect(missing.status).not.toBe(0);
+    expect(missing.stderr).toMatch(/Cannot find (?:package|module) 'openclaw/u);
 
-      const compiled = runCli(root, ["extensions/demo"]);
-      expect(compiled.status, compiled.stderr).toBe(0);
-      expect(fs.existsSync(path.join(packageDir, "node_modules"))).toBe(false);
-      const missing = nativeImport(root, entry, format);
-      expect(missing.status).not.toBe(0);
-      expect(missing.stderr).toMatch(/Cannot find (?:package|module) 'openclaw/u);
+    writeFile(packageDir, "node_modules/keep/marker", "unrelated local contents");
+    const directories = [
+      "dist",
+      "extensions/demo/dist",
+      "node_modules",
+      "extensions/demo/node_modules/keep",
+    ];
+    const before = snapshot(root, directories);
+    const prepared = runCli(root, ["--prepare-native-import", "extensions/demo"]);
+    expect(prepared.status, prepared.stderr).toBe(0);
+    expect(fs.existsSync(path.join(root, "executed"))).toBe(false);
+    const link = path.join(packageDir, "node_modules/openclaw");
+    expect(fs.realpathSync(link)).toBe(root);
+    const linkBefore = fs.lstatSync(link, { bigint: true });
+    const repeated = runCli(root, ["extensions/demo", "--prepare-native-import"]);
+    expect(repeated.status, repeated.stderr).toBe(0);
+    expect(fs.lstatSync(link, { bigint: true }).mtimeNs).toBe(linkBefore.mtimeNs);
+    expect(snapshot(root, directories)).toEqual(before);
 
-      writeFile(packageDir, "node_modules/keep/marker", "unrelated local contents");
-      const directories = [
-        "dist",
-        "extensions/demo/dist",
-        "node_modules",
-        "extensions/demo/node_modules/keep",
-      ];
-      const before = snapshot(root, directories);
-      const prepared = runCli(root, ["--prepare-native-import", "extensions/demo"]);
-      expect(prepared.status, prepared.stderr).toBe(0);
-      expect(fs.existsSync(path.join(root, "executed"))).toBe(false);
-      const link = path.join(packageDir, "node_modules/openclaw");
-      expect(fs.realpathSync(link)).toBe(root);
-      const linkBefore = fs.lstatSync(link, { bigint: true });
-      const repeated = runCli(root, ["extensions/demo", "--prepare-native-import"]);
-      expect(repeated.status, repeated.stderr).toBe(0);
-      expect(fs.lstatSync(link, { bigint: true }).mtimeNs).toBe(linkBefore.mtimeNs);
-      expect(snapshot(root, directories)).toEqual(before);
-
-      const loaded = nativeImport(root, entry, format);
-      expect(loaded.status, loaded.stderr).toBe(0);
-      expect(loaded.stdout.trim()).toBe("host third-party");
-      expect(fs.readFileSync(path.join(root, "executed"), "utf8")).toBe("yes");
-      expect(snapshot(root, directories)).toEqual(before);
-    },
-  );
+    const loaded = nativeImport(root, entry, format);
+    expect(loaded.status, loaded.stderr).toBe(0);
+    expect(loaded.stdout.trim()).toBe("host third-party");
+    expect(fs.readFileSync(path.join(root, "executed"), "utf8")).toBe("yes");
+    expect(snapshot(root, directories)).toEqual(before);
+  });
 
   it.each(["devDependencies", "optionalDependencies"])(
     "does not infer a host declaration from %s or publication metadata",

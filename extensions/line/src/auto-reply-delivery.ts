@@ -14,10 +14,14 @@ import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-run
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { FlexContainer } from "./flex-templates/types.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
-import { hasLineSpecificMediaOptions } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
-import { findLineHttpError, resolveLineNonDispatchRetryable } from "./send-retry.js";
-import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
+import { createLineQuickReply } from "./rich-messages.js";
+import {
+  explainLineRefusal,
+  findLineHttpError,
+  resolveLineNonDispatchRetryable,
+} from "./send-retry.js";
+import type { LineChannelData, LineQuickReplyItem, LineTemplateMessagePayload } from "./types.js";
 
 type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (
@@ -25,7 +29,6 @@ type LineAutoReplyDeps = {
   ) => messagingApi.TemplateMessage | messagingApi.TextMessage | null;
   processLineMessage: (text: string) => ProcessedLineMessage;
   chunkMarkdownText: (text: string, limit: number) => string[];
-  createQuickReplyItems: (labels: string[]) => messagingApi.QuickReply;
   pushMessagesLine: (
     to: string,
     messages: messagingApi.Message[],
@@ -217,7 +220,15 @@ export async function deliverLineAutoReply(params: {
   };
 
   const richMessages: messagingApi.Message[] = [];
-  const hasQuickReplies = Boolean(lineData.quickReplies?.length);
+  // The presentation renderer emits typed items; plain labels are the caller-authored carrier.
+  const quickReplyItems: LineQuickReplyItem[] = lineData.quickReplyItems?.length
+    ? lineData.quickReplyItems
+    : (lineData.quickReplies ?? []).map((label) => ({
+        label,
+        action: { type: "command", command: label },
+      }));
+  const quickReplyLabels = quickReplyItems.map((item) => item.label);
+  const hasQuickReplies = quickReplyItems.length > 0;
 
   if (lineData.flexMessage) {
     richMessages.push(
@@ -267,15 +278,13 @@ export async function deliverLineAutoReply(params: {
       ? deps.chunkMarkdownText(processed.text, textLimit)
       : [];
 
-  // Match the push path (outbound.ts): honor channelData.line.mediaKind and the
-  // other LINE media options so a reply-token video/audio is not silently
-  // downgraded to an image. Generic media stays image-only but still goes
-  // through the same validation boundary. A media build failure is partial only
-  // after another visible part lands; media-only failures remain full failures.
+  // Match the push path (outbound.ts): hand the LINE media options to the same
+  // leaf so a reply-token video/audio is not downgraded to an image. A media
+  // build failure is partial only after another visible part lands; media-only
+  // failures remain full failures.
   const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
-  const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
   const mediaOpts: Parameters<LineAutoReplyDeps["buildMediaMessage"]>[1] = {
-    mediaKind: useLineSpecificMedia ? lineData.mediaKind : "image",
+    mediaKind: lineData.mediaKind,
     previewImageUrl: lineData.previewImageUrl,
     durationMs: lineData.durationMs,
     trackingId: lineData.trackingId,
@@ -307,7 +316,7 @@ export async function deliverLineAutoReply(params: {
   if (hasQuickReplies && textMessages.length === 0 && richMediaMessages.length === 0) {
     textMessages.push({
       type: "text",
-      text: buildLineQuickReplyFallbackText(lineData.quickReplies),
+      text: buildLineQuickReplyFallbackText(quickReplyLabels),
     });
   }
   if (hasQuickReplies) {
@@ -320,7 +329,7 @@ export async function deliverLineAutoReply(params: {
     const target = expectDefined(targetMessages[lastIndex], "last LINE auto-reply message");
     targetMessages[lastIndex] = {
       ...target,
-      quickReply: deps.createQuickReplyItems(lineData.quickReplies!),
+      quickReply: createLineQuickReply(quickReplyItems),
     };
   }
 
@@ -354,8 +363,8 @@ export async function deliverLineAutoReply(params: {
           ? [
               {
                 type: "text" as const,
-                text: buildLineQuickReplyFallbackText(lineData.quickReplies),
-                quickReply: deps.createQuickReplyItems(lineData.quickReplies!),
+                text: buildLineQuickReplyFallbackText(quickReplyLabels),
+                quickReply: createLineQuickReply(quickReplyItems),
               },
             ]
           : [];
@@ -369,7 +378,7 @@ export async function deliverLineAutoReply(params: {
       // atomically. Retry its text/actions plus the tail that was never attempted.
       const lastRetryMessage = retryMessages.at(-1);
       if (quickRepliesNeedCarrier && lastRetryMessage && !lastRetryMessage.quickReply) {
-        lastRetryMessage.quickReply = deps.createQuickReplyItems(lineData.quickReplies!);
+        lastRetryMessage.quickReply = createLineQuickReply(quickReplyItems);
       }
       try {
         await sendLineMessages(retryMessages, false);
@@ -381,10 +390,16 @@ export async function deliverLineAutoReply(params: {
 
   if (deliveryError !== undefined) {
     if (!visibleReplySent) {
-      // No user-visible content landed, so this is a full delivery failure.
-      // Throwing lets the caller surface or replace it instead of recording a
-      // successful empty reply.
-      throw toLineDeliveryError(deliveryError);
+      // Only an entirely refused delivery can replace the original failure with quota guidance.
+      const named = toLineDeliveryError(deliveryError);
+      const refusal = await explainLineRefusal({
+        error: named,
+        cfg: params.cfg,
+        accountId,
+      });
+      throw refusal.reason !== named.message
+        ? new Error(refusal.reason, { cause: deliveryError })
+        : named;
     }
     // Other visible content landed; preserve that evidence so downstream
     // recovery does not replay text the user already saw.

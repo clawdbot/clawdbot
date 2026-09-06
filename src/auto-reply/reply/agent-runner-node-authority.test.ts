@@ -12,23 +12,13 @@ import {
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
 
-// The fixture registers its plugin directly; disk discovery is outside this handoff.
-vi.mock("../../plugins/loader.js", () => ({
-  loadAndActivateRootPluginRegistry: vi.fn(() => {
-    throw new Error("unexpected plugin discovery");
-  }),
-  loadOpenClawPlugins: vi.fn(() => {
-    throw new Error("unexpected plugin discovery");
-  }),
-}));
-
 vi.mock("../../agents/agent-tools.js", () => ({
   createOpenClawCodingTools: vi.fn(() => {
     throw new Error("unexpected coding tool construction");
   }),
 }));
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 let execute: Awaited<ReturnType<typeof getExecuteAgentTurnForTest>>;
 let fixture: typeof import("../../gateway/worker-environments/worker-turn-launcher.test-support.js");
@@ -89,6 +79,7 @@ describe("webchat admission to plugin node duplex authority", () => {
         await import("../../gateway/node-invoke-plugin-policy.test-helpers.js");
       const { runWithGatewayRequestEnvelope } = await import("../../gateway/server-methods.js");
       const { createGatewayNodesRuntime } = await import("../../gateway/server-plugins.js");
+      const { success } = await import("../../gateway/worker-environments/tunnel.test-support.js");
       const { createPluginRecord } = await import("../../plugins/loader-records.js");
       const {
         markPluginRegistryActive,
@@ -98,7 +89,8 @@ describe("webchat admission to plugin node duplex authority", () => {
       const { createEmptyPluginRegistry } = await import("../../plugins/registry-empty.js");
       const { withPluginRuntimePluginScope, withPluginRuntimeRegistryScope } =
         await import("../../plugins/runtime/gateway-request-scope.js");
-      const { setActivePluginRegistry } = await import("../../plugins/runtime.js");
+      const { getActivePluginRegistry, getActivePluginRegistryVersion, setActivePluginRegistry } =
+        await import("../../plugins/runtime.js");
       const {
         attachedEnvironment,
         createWorkerSessionTurnPlacementProvider,
@@ -186,6 +178,7 @@ describe("webchat admission to plugin node duplex authority", () => {
       preparedRegistry.nodeHostCommands.push(...registry.nodeHostCommands);
       const scopedRegistry = mode === "shared" ? registry : preparedRegistry;
       setActivePluginRegistry(registry);
+      const activeRegistryVersion = getActivePluginRegistryVersion();
       const methodRegistry = createGatewayMethodRegistry(
         [
           {
@@ -225,12 +218,14 @@ describe("webchat admission to plugin node duplex authority", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        launchTurn: vi.fn(),
-        runWorkspaceCommand: vi.fn(),
+        runWorkspaceCommand: vi.fn(async () => success()),
         syncWorkspace: vi.fn(),
         quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
         reconcileWorkspace: async (request) => {
-          request.journal.commit(MANIFEST_REF);
+          if (request.source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
+          request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
@@ -415,6 +410,9 @@ describe("webchat admission to plugin node duplex authority", () => {
           },
         },
       );
+      // Error classification may load provider hooks, but must not replace the node-policy registry.
+      expect(getActivePluginRegistry()).toBe(registry);
+      expect(getActivePluginRegistryVersion()).toBe(activeRegistryVersion);
       if (mode !== "placement" && mode !== "session") {
         expect(reply).toMatchObject({ kind: "success" });
       }

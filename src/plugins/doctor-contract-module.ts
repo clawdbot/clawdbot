@@ -1,5 +1,6 @@
 import type { ChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
+import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   OpenKeyedStoreOptions,
@@ -14,6 +15,17 @@ export type PluginDoctorStateMigrationDetection = {
 };
 
 export type PluginDoctorStateMigrationContext = {
+  /** Non-creating canonical ACP claims for this backend, including incomplete evidence. */
+  inspectAcpSessionClaims?: () => Promise<{
+    claims: PluginDoctorAcpSessionClaim[];
+    incomplete: string[];
+  }>;
+  /** Present only inside offline repair; compares metadata and entry binding before writing. */
+  updateAcpSessionIdentity?: (input: {
+    claim: PluginDoctorAcpSessionClaim;
+    runtimeSessionName: string;
+    acpxRecordId: string;
+  }) => void;
   openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
   /** Doctor-only batch import preserving source age and remaining retention. */
   importPluginStateEntries?: (
@@ -43,6 +55,13 @@ export type PluginDoctorStateMigrationContext = {
    *  the host fixes the channel identity and doctor state directory. Older test
    *  hosts may omit it. */
   channelIngressQueues?: readonly PluginDoctorChannelIngressQueueAccess[];
+};
+
+export type PluginDoctorAcpSessionClaim = {
+  agentId: string;
+  sessionKey: string;
+  binding: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "sessionStartedAt">;
+  meta: SessionAcpMeta;
 };
 
 /** Read-only projection of a durable ingress queue. Detection runs before the host
@@ -76,29 +95,31 @@ export type PluginDoctorChannelIngressQueueAccess = {
   }) => ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
 };
 
+type PluginDoctorStateMigrationInput = {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  oauthDir: string;
+  /** Same workspace selected for Gateway plugin services; never Doctor's cwd. */
+  serviceWorkspaceDir?: string;
+  context: PluginDoctorStateMigrationContext;
+};
+
 export type PluginDoctorStateMigration = {
   id: string;
   label: string;
   /** Import retired file state only during explicit `doctor --fix` repair. */
   doctorOnly?: boolean;
   phase?: "after-session-repair";
-  detectLegacyState: (params: {
-    config: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-    stateDir: string;
-    oauthDir: string;
-    context: PluginDoctorStateMigrationContext;
-  }) =>
+  detectLegacyState: (
+    params: PluginDoctorStateMigrationInput,
+  ) =>
     | Promise<PluginDoctorStateMigrationDetection | null>
     | PluginDoctorStateMigrationDetection
     | null;
-  migrateLegacyState: (params: {
-    config: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-    stateDir: string;
-    oauthDir: string;
-    context: PluginDoctorStateMigrationContext;
-  }) =>
+  migrateLegacyState: (
+    params: PluginDoctorStateMigrationInput,
+  ) =>
     | Promise<{ changes: string[]; warnings: string[]; notices?: string[] }>
     | { changes: string[]; warnings: string[]; notices?: string[] };
 };

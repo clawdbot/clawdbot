@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "../../agents/run-termination.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
@@ -18,6 +19,7 @@ import {
   retainQueuedAgentRunContext,
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
+import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
@@ -30,6 +32,7 @@ import {
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  measureLaunchTurn,
   credential,
   openSessionManager,
   placements,
@@ -153,12 +156,16 @@ describe("worker turn launcher reclaimed placement", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn,
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
         }),
         reconcileWorkspace: vi.fn(async (request) => {
-          request.journal.commit(MANIFEST_REF);
+          if (request.source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
+          request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
@@ -376,10 +383,10 @@ describe("worker turn launcher reclaimed placement", () => {
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
       placements,
-      resolveWorkspacePath: async () => {
+      resolveWorkspace: async () => {
         workspaceResolutionStarted.resolve();
         await resumeWorkspaceResolution.promise;
-        return root;
+        return { kind: "local", path: root };
       },
     });
     const uninstallPlacement = installSessionPlacementAdmissionProvider(provider);
@@ -413,7 +420,10 @@ describe("worker turn launcher reclaimed placement", () => {
       const versionBeforeRejectedAdmission = readAgentRunIndexVersion();
 
       resumeWorkspaceResolution.resolve();
-      await expect(pending).rejects.toThrow("stale gateway lifecycle");
+      await expect(pending).rejects.toMatchObject({ code: AGENT_RUN_RESTART_ABORT_ERROR_CODE });
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID }).activeWorkKind,
+      ).toBeUndefined();
       expect(getAgentRunContext(runId)).toMatchObject({
         lifecycleGeneration: replacementGeneration,
         sessionId: "replacement-session",

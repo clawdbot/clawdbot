@@ -68,7 +68,6 @@ import {
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
-import { shouldAwaitExecApprovalInline } from "./bash-tools.exec-approval-wait.js";
 import {
   buildHeadlessExecApprovalDeniedMessage,
   buildExecApprovalFollowupTarget,
@@ -99,6 +98,7 @@ type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
   env: Record<string, string>;
+  githubProfileDir?: string;
   pathPrepend?: string[];
   requestedEnv?: Record<string, string>;
   pty: boolean;
@@ -106,6 +106,7 @@ type ProcessGatewayAllowlistParams = {
   defaultTimeoutSec: number;
   security: ExecSecurity;
   ask: ExecAsk;
+  bypassHostApprovalFloors?: boolean;
   autoReview?: boolean;
   autoReviewer?: ExecAutoReviewer;
   signal?: AbortSignal;
@@ -139,6 +140,7 @@ type ProcessGatewayAllowlistParams = {
   approvalRunningNoticeMs: number;
   maxOutput: number;
   pendingMaxOutput: number;
+  cleanupMs?: number;
   processContinuationAvailable?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
@@ -489,10 +491,12 @@ async function resolveGatewayExecApprovalFollowupText(params: {
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
+  const cleanupMs = params.cleanupMs;
   const { approvals, hostSecurity, hostAsk, askFallback } = await resolveExecHostApprovalContext({
     agentId: params.agentId,
     security: params.security,
     ask: params.ask,
+    bypassHostApprovalFloors: params.bypassHostApprovalFloors,
     host: "gateway",
   });
   const cwdAuthorizationBound = hostSecurity === "allowlist" || hostAsk !== "off";
@@ -670,6 +674,7 @@ export async function processGatewayAllowlist(
         source: options.source,
         security: options.source === "ask-fallback" ? fallbackSecurity : hostSecurity,
         ask: hostAsk,
+        bypassHostApprovalFloors: params.bypassHostApprovalFloors,
         allowlistSatisfied: allowlistAuthorizationSatisfied || durableApprovalSatisfied,
         ...(delayedAuthorization ? { policySnapshot: evaluationPolicySnapshot } : {}),
         requireAutoAllowSkills:
@@ -1326,7 +1331,9 @@ export async function processGatewayAllowlist(
       };
     };
 
-    if (unavailableReason === null && shouldAwaitExecApprovalInline(params)) {
+    // Keep the original run and its delivery callback until approval resolves.
+    // Only callers with an explicit follow-up owner may detach this work.
+    if (unavailableReason === null && params.approvalFollowupMode === undefined) {
       if (params.runId) {
         emitAgentEvent({
           runId: params.runId,
@@ -1498,6 +1505,7 @@ export async function processGatewayAllowlist(
               execCommand: approvalDecision.execCommandOverride,
               workdir: params.workdir,
               env: params.env,
+              githubProfileDir: params.githubProfileDir,
               pathPrepend: params.pathPrepend,
               sandbox: undefined,
               containerWorkdir: null,
@@ -1505,6 +1513,7 @@ export async function processGatewayAllowlist(
               warnings: params.warnings,
               maxOutput: params.maxOutput,
               pendingMaxOutput: params.pendingMaxOutput,
+              cleanupMs,
               notifyOnExit: false,
               notifyOnExitEmptySuccess: false,
               scopeKey: params.scopeKey,
@@ -1537,7 +1546,7 @@ export async function processGatewayAllowlist(
           // Suspension must observe one side of this handoff at every instant.
           markBackgrounded(run.session);
           return { status: "started" as const, run };
-        });
+        }, "exec-host:approval");
       } catch (error) {
         if (
           error instanceof GatewayDrainingError ||

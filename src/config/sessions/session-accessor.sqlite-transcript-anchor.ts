@@ -10,15 +10,21 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { readMessageIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 /** Reads one active message identity from the caller's current SQLite transaction. */
 export function readActiveTranscriptEntryAnchorInTransaction(params: {
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "db" | "path">;
   resolved: ResolvedTranscriptScope;
   entryId: string;
   message?: unknown;
 }): TranscriptEntryAnchor | undefined {
+  // Branch changes retain old projection rows until deferred reconciliation.
+  // An anchor must never certify those rows as the current active path.
+  if (sessionTranscriptIndexNeedsReconcile(params.database.db, params.resolved.sessionId)) {
+    return undefined;
+  }
   const db = getSessionKysely(params.database.db);
   const row = executeSqliteQueryTakeFirstSync(
     params.database.db,

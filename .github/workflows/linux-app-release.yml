@@ -1,75 +1,198 @@
 name: Linux App Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing OpenClaw release tag to receive Linux companion bundles, for example v2026.7.1
-        required: true
-        type: string
-      desktop-test-bundles:
-        description: Also build unsigned macOS/Windows test bundles
-        default: false
-        type: boolean
+  workflow_run: # zizmor: ignore[dangerous-triggers] main-only release builder; exact successful request/main identity is validated before selected-tag execution, while signing and publication stay in fresh jobs
+    workflows: ["Linux App Release Request"]
+    branches: [main]
+    types: [completed]
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
-  group: linux-app-release-${{ inputs.tag }}
+  group: linux-app-release-${{ github.event.workflow_run.id }}
   cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  MINISIGN_ARCHIVE_SHA256: 9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
+  MINISIGN_BINARY_SHA256: 2c74dffcc1c9a5ee55957c60971998ace2b89f22585631594ec2152c588af8db
+  MINISIGN_URL: https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
+  TAURI_CLI_ARCHIVE_SHA256: 6864602a34292aa6f2ad40ae019eebe5c1064d6c623fe20696a8a8974067e60b
+  TAURI_CLI_BINARY_SHA256: 23a27f61c50417fe87c92fa958fb56ecc8de7c791f78df3cac046c8579b45897
+  TAURI_CLI_URL: https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.11.4/cargo-tauri-x86_64-unknown-linux-gnu.tgz
 
 jobs:
   validate_release:
     name: Validate release tag
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      github.event.workflow_run.repository.full_name == 'openclaw/openclaw' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.name == 'Linux App Release Request' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    permissions:
+      contents: read
     # Build jobs check out this exact SHA so a tag force-moved mid-run cannot
     # swap in code the ancestry guard never validated.
     outputs:
+      desktop_test_bundles: ${{ steps.request.outputs.desktop_test_bundles }}
+      release_tag: ${{ steps.request.outputs.release_tag }}
       tag_sha: ${{ steps.ancestry.outputs.tag_sha }}
+      updater_pubkey: ${{ steps.updater_trust.outputs.updater_pubkey }}
     steps:
-      - name: Validate tag input format
+      - name: Validate trusted release request
+        id: request
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
-            # Alpha/beta semver suffixes map to a Debian revision that sorts
-            # AFTER the plain stable version, breaking beta-to-stable upgrades;
-            # numeric stable revisions (-N) order correctly and stay allowed.
-            echo "Linux bundles ship for stable release tags only (vYYYY.M.PATCH or vYYYY.M.PATCH-N); got: ${RELEASE_TAG}"
+          # Reject stale requests visibly before selected code runs; a job-level
+          # SHA gate would silently skip the whole release when main advances.
+          if [[ "$REQUEST_HEAD_SHA" != "$WORKFLOW_SHA" ]]; then
+            echo "::error::Main advanced after this Linux release request. Dispatch a new Linux App Release Request from main with the same inputs." >&2
             exit 1
           fi
+          pattern='^Linux App Release Request \[(v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?)\] desktop=(true|false)$'
+          if [[ ! "${REQUEST_TITLE}" =~ ${pattern} ]]; then
+            echo "Release request title does not match the trusted request contract"
+            exit 1
+          fi
+          echo "release_tag=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          echo "desktop_test_bundles=${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
 
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: refs/tags/${{ steps.request.outputs.release_tag }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Ensure tag commit is reachable from main
-        id: ancestry
+      - name: Checkout trusted release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            apps/linux/src-tauri/tauri.conf.json
+            scripts/lib/record-shared.mjs
+            scripts/release-tooling-identity.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Verify trusted release tooling identity
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=10s 120s git fetch --quiet origin main
-          tag_sha=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")
-          if ! git merge-base --is-ancestor "${tag_sha}" origin/main; then
-            echo "Tag ${RELEASE_TAG} (${tag_sha}) is not reachable from main; Linux bundles ship for main-based releases only."
+          node .release-tooling/scripts/release-tooling-identity.mjs verify \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$WORKFLOW_REF" \
+            --workflow-full-ref "$WORKFLOW_FULL_REF" \
+            --workflow-sha "$WORKFLOW_SHA"
+
+      - name: Validate updater trust root
+        id: updater_trust
+        run: |
+          set -euo pipefail
+          selected_config=apps/linux/src-tauri/tauri.conf.json
+          trusted_config=.release-tooling/apps/linux/src-tauri/tauri.conf.json
+          if [[ ! -f "$selected_config" || -L "$selected_config" ||
+                ! -f "$trusted_config" || -L "$trusted_config" ]]; then
+            echo "Updater trust metadata must be regular files"
             exit 1
           fi
-          echo "tag_sha=${tag_sha}" >> "$GITHUB_OUTPUT"
+          selected_pubkey=$(jq -er '.plugins.updater.pubkey' "$selected_config")
+          trusted_pubkey=$(jq -er '.plugins.updater.pubkey' "$trusted_config")
+          if [[ ! "$trusted_pubkey" =~ ^[A-Za-z0-9+/]+={0,2}$ ||
+                "$selected_pubkey" != "$trusted_pubkey" ]]; then
+            echo "Selected tag updater trust root must match trusted release tooling"
+            exit 1
+          fi
+          echo "updater_pubkey=$trusted_pubkey" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag commit is reachable from its release branch
+        id: ancestry
+        env:
+          RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+          import sys
+
+          from ci_git_owner import GitFailure, git_output, run_git
+
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          release_tag = os.environ["RELEASE_TAG"]
+
+          def is_ancestor(sha, ref):
+              try:
+                  run_git(workspace, "merge-base", "--is-ancestor", sha, ref)
+                  return True
+              except GitFailure as error:
+                  if error.code == 1:
+                      return False
+                  raise
+
+          run_git(
+              workspace,
+              "fetch",
+              "--no-tags",
+              "origin",
+              "+refs/heads/main:refs/remotes/origin/main",
+              timeout=120,
+              reclaim_locks=True,
+          )
+          if not is_ancestor(os.environ["WORKFLOW_SHA"], "origin/main"):
+              print("Linux release tooling must be reachable from current main.", file=sys.stderr)
+              raise SystemExit(1)
+          tag_sha = git_output(
+              workspace,
+              "rev-parse",
+              f"refs/tags/{release_tag}^{{commit}}",
+          ).rstrip("\n")
+          if not is_ancestor(tag_sha, "origin/main"):
+              # The validated stable tag chooses its sole eligible release branch;
+              # numeric correction tags share the base version's release branch.
+              release_branch = f"release/{release_tag[1:].split('-', 1)[0]}"
+              release_ref = f"refs/remotes/origin/{release_branch}"
+              run_git(
+                  workspace,
+                  "fetch",
+                  "--no-tags",
+                  "origin",
+                  f"+refs/heads/{release_branch}:{release_ref}",
+                  timeout=120,
+                  reclaim_locks=True,
+              )
+              if not is_ancestor(tag_sha, release_ref):
+                  print(
+                      f"Tag {release_tag} ({tag_sha}) is not reachable from main "
+                      f"or {release_branch}.",
+                      file=sys.stderr,
+                  )
+                  raise SystemExit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"tag_sha={tag_sha}\n")
+          PYTHON
 
       - name: Ensure matching GitHub release exists
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
         run: gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName --jq .tagName
 
   build_linux:
@@ -79,67 +202,135 @@ jobs:
     # runners would silently drop Ubuntu 22.04/Debian 12 users.
     runs-on: ubuntu-22.04
     timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      deb_artifact_id: ${{ steps.upload_deb.outputs.artifact-id }}
+      unsigned_appimage_artifact_id: ${{ steps.upload_appimage.outputs.artifact-id }}
     steps:
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            at-spi2-core \
+            build-essential \
+            curl \
+            dbus-x11 \
+            ffmpeg \
+            file \
+            gir1.2-atspi-2.0 \
+            gstreamer1.0-libav \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-tools \
+            libatk-adaptor \
+            libayatana-appindicator3-dev \
+            libegl1 \
+            libgles2 \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            mesa-utils \
+            patchelf \
+            pciutils \
+            procps \
+            psmisc \
+            python3-gi \
+            wget \
+            wmctrl \
+            xauth \
+            xdg-utils \
+            xvfb
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false
 
-      - name: Install Tauri system dependencies
+      - name: Install selected-tag dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            curl \
-            file \
-            gstreamer1.0-libav \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-good \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            wget
+          corepack enable
+          pnpm install --frozen-lockfile --prefer-offline \
+            --config.ignore-scripts=false --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+      - name: Checkout trusted Linux packaging tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache-mode: restore
-          install-bun: "false"
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            apps/linux/scripts/stage-appimage-gstreamer.sh
+            apps/linux/scripts/tauri-appimage-tools.sh
+            apps/linux/scripts/tauri-appimage-tools-x86_64.tsv
+            apps/linux/scripts/finalize-appimage.sh
+            apps/linux/tests/packaged_runtime_smoke.py
+            apps/linux/tests/first_run.py
+          sparse-checkout-cone-mode: false
+
+      - name: Stage AppImage GStreamer plugins
+        run: | # zizmor: ignore[github-env] static runner-temporary path consumed by the Tauri build in this secretless job
+          plugins="${RUNNER_TEMP}/openclaw-gstreamer-plugins"
+          .release-tooling/apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins" \
+            | tee "${RUNNER_TEMP}/openclaw-gstreamer-elements.tsv"
+          echo "GSTREAMER_PLUGINS_DIR=$plugins" >> "$GITHUB_ENV"
+
+      - name: Prepare pinned AppImage tools
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
+        run: |
+          set -euo pipefail
+          .release-tooling/apps/linux/scripts/tauri-appimage-tools.sh prepare
+          .release-tooling/apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
 
       - name: Build Linux companion bundles
         working-directory: apps/linux/src-tauri
         env:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
-          RELEASE_TAG: ${{ inputs.tag }}
-          # Sign the AppImage updater artifact so the companion can verify updates.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          LDAI_RUNTIME_FILE: ${{ runner.temp }}/openclaw-tauri-cache/tauri/.appimage-runtime-x86_64
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           # Stamp the release version into the bundles; the committed manifests
           # keep a placeholder 0.1.0 so releases stay tag-driven.
           pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
-            --config "{\"version\":\"${version}\"}"
+            --config "{\"version\":\"${version}\",\"bundle\":{\"createUpdaterArtifacts\":false,\"useLocalToolsDir\":false}}"
 
-      - name: Verify and rename Linux bundles
+      - name: Finalize AppImage
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
+        run: |
+          set -euo pipefail
+          bundle_dir=apps/linux/src-tauri/target/release/bundle/appimage
+          .release-tooling/apps/linux/scripts/finalize-appimage.sh "$bundle_dir"
+
+      - name: Verify and stage unsigned Linux bundles
+        env:
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           shopt -s nullglob
           version="${RELEASE_TAG#v}"
           debs=(apps/linux/src-tauri/target/release/bundle/deb/*.deb)
           appimages=(apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage)
-          if [[ ${#debs[@]} -ne 1 || ${#appimages[@]} -ne 1 || ! -f "${appimages[0]}.sig" ]]; then
-            echo "Expected one deb, one AppImage, and its updater signature"
+          signatures=(apps/linux/src-tauri/target/release/bundle/appimage/*.sig)
+          if [[ ${#debs[@]} -ne 1 || ${#appimages[@]} -ne 1 || ${#signatures[@]} -ne 0 ]]; then
+            echo "Expected one deb, one unsigned finalized AppImage, and no stale signature"
             exit 1
           fi
           deb_version=$(dpkg-deb -f "${debs[0]}" Version)
@@ -147,16 +338,140 @@ jobs:
             echo "Debian package version '${deb_version}' does not match release version '${version}'"
             exit 1
           fi
-          mkdir -p dist/linux-app/release dist/linux-app/signatures
+          mkdir -p dist/linux-app/release dist/linux-app/unsigned
           cp "${debs[0]}" "dist/linux-app/release/OpenClaw-${version}-amd64.deb"
-          cp "${appimages[0]}" "dist/linux-app/release/OpenClaw-${version}-amd64.AppImage"
-          cp "${appimages[0]}.sig" \
-            "dist/linux-app/signatures/OpenClaw-${version}-amd64.AppImage.sig"
+          cp "${appimages[0]}" "dist/linux-app/unsigned/OpenClaw-${version}-amd64.AppImage"
 
-      - name: Upload Linux bundles
+      - name: Test packaged AppImage runtime
+        id: packaged-runtime
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
+            /usr/bin/python3 .release-tooling/apps/linux/tests/packaged_runtime_smoke.py \
+            "dist/linux-app/unsigned/OpenClaw-${version}-amd64.AppImage" \
+            --output "${RUNNER_TEMP}/linux-packaged-runtime" \
+            --require-fuse \
+            --shell-container \
+              "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
+
+      - name: Upload packaged runtime failure evidence
+        if: failure() && steps.packaged-runtime.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: linux-app-release
+          name: linux-app-release-runtime-failure
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/linux-packaged-runtime
+
+      - name: Upload Debian bundle
+        id: upload_deb
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-app-release-deb
+          path: dist/linux-app/release/*.deb
+          if-no-files-found: error
+
+      - name: Upload finalized unsigned AppImage
+        id: upload_appimage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-app-release-unsigned-appimage
+          path: dist/linux-app/unsigned/*.AppImage
+          if-no-files-found: error
+
+  # Signing secrets enter only this fresh artifact-only runner; selected-tag
+  # source and trusted packaging helpers never cross the job boundary.
+  sign_linux:
+    name: Sign finalized Linux AppImage
+    needs:
+      - validate_release
+      - build_linux
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions: {}
+    outputs:
+      signed_appimage_artifact_id: ${{ steps.upload_signed_appimage.outputs.artifact-id }}
+    steps:
+      - name: Install trusted signing tools
+        run: |
+          set -euo pipefail
+          minisign_archive="${RUNNER_TEMP}/minisign-0.12-linux.tar.gz"
+          tauri_archive="${RUNNER_TEMP}/cargo-tauri-x86_64-unknown-linux-gnu.tgz"
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            --output "$minisign_archive" "$MINISIGN_URL"
+          printf '%s  %s\n' "$MINISIGN_ARCHIVE_SHA256" "$minisign_archive" | sha256sum --check -
+          tar -xzf "$minisign_archive" -C "${RUNNER_TEMP}/bin" --strip-components=2 \
+            minisign-linux/x86_64/minisign
+          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |
+            sha256sum --check -
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            --output "$tauri_archive" "$TAURI_CLI_URL"
+          printf '%s  %s\n' "$TAURI_CLI_ARCHIVE_SHA256" "$tauri_archive" | sha256sum --check -
+          tar -xzf "$tauri_archive" -C "${RUNNER_TEMP}/bin" cargo-tauri
+          printf '%s  %s\n' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |
+            sha256sum --check -
+          chmod 0555 "${RUNNER_TEMP}/bin/cargo-tauri" "${RUNNER_TEMP}/bin/minisign"
+          "${RUNNER_TEMP}/bin/cargo-tauri" --version
+          "${RUNNER_TEMP}/bin/minisign" -v
+
+      - name: Download finalized unsigned AppImage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.build_linux.outputs.unsigned_appimage_artifact_id }}
+          path: dist/signing-input
+
+      - name: Sign finalized AppImage
+        env:
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          UPDATER_PUBLIC_KEY: ${{ needs.validate_release.outputs.updater_pubkey }}
+        run: |
+          set -euo pipefail
+          # Artifact download follows installation; revalidate exact tool bytes before using credentials.
+          printf '%s  %s\n' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |
+            sha256sum --check -
+          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |
+            sha256sum --check -
+          version="${RELEASE_TAG#v}"
+          appimage="dist/signing-input/OpenClaw-${version}-amd64.AppImage"
+          mapfile -d '' inputs < <(find dist/signing-input -mindepth 1 -maxdepth 1 -print0)
+          if [[ ! "${TAG_SHA}" =~ ^[0-9a-f]{40}$ || ${#inputs[@]} -ne 1 || ! -f "$appimage" || -L "$appimage" ]]; then
+            echo "Signing input must be exactly one regular AppImage for validated tag ${RELEASE_TAG}"
+            exit 1
+          fi
+          before=$(sha256sum "$appimage")
+          "${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$appimage"
+          # Signature verification must not inherit production signing credentials.
+          unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          after=$(sha256sum "$appimage")
+          verify_dir=$(mktemp -d)
+          trap 'rm -rf "$verify_dir"' EXIT
+          printf '%s' "$UPDATER_PUBLIC_KEY" | base64 --decode > "$verify_dir/updater.pub"
+          base64 --decode < "${appimage}.sig" > "$verify_dir/appimage.minisig"
+          if [[ "$before" != "$after" || ! -s "${appimage}.sig" ]] ||
+             ! "${RUNNER_TEMP}/bin/minisign" -Vm "$appimage" -x "$verify_dir/appimage.minisig" \
+               -p "$verify_dir/updater.pub"; then
+            echo "Signing must preserve the finalized AppImage bytes and create its signature"
+            exit 1
+          fi
+          mkdir -p dist/linux-app/release dist/linux-app/signatures
+          cp "$appimage" "dist/linux-app/release/OpenClaw-${version}-amd64.AppImage"
+          cp "${appimage}.sig" \
+            "dist/linux-app/signatures/OpenClaw-${version}-amd64.AppImage.sig"
+
+      - name: Upload signed AppImage
+        id: upload_signed_appimage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-app-release-signed-appimage
           path: dist/linux-app
           if-no-files-found: error
 
@@ -164,44 +479,53 @@ jobs:
   # Users must bypass Gatekeeper or SmartScreen before running them.
   build_macos:
     name: Build unsigned macOS test bundles
-    if: ${{ inputs['desktop-test-bundles'] }}
+    if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
     needs: validate_release
     # macos-15, not macos-14: tauri-plugin-notifications' Swift sources use
     # typed throws (`throws(FFIResult)`), which needs Swift 6. The macos-14
     # image still ships Swift 5.x, so this job could not build the plugin.
     runs-on: macos-15
     timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      dmg_artifact_id: ${{ steps.upload_dmg.outputs.artifact-id }}
+      unsigned_updater_artifact_id: ${{ steps.upload_updater.outputs.artifact-id }}
     steps:
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
+      - name: Install selected-tag dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --prefer-offline \
+            --config.ignore-scripts=false --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Build macOS test bundles
         working-directory: apps/linux/src-tauri
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           pnpm dlx @tauri-apps/cli@2.11.4 build --bundles app,dmg \
-            --config "{\"version\":\"${version}\"}"
+            --config "{\"version\":\"${version}\",\"bundle\":{\"createUpdaterArtifacts\":false}}"
 
-      - name: Verify and rename macOS bundles
+      - name: Verify and stage unsigned macOS bundles
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -209,8 +533,9 @@ jobs:
           apps=(apps/linux/src-tauri/target/release/bundle/macos/*.app)
           archives=(apps/linux/src-tauri/target/release/bundle/macos/*.app.tar.gz)
           dmgs=(apps/linux/src-tauri/target/release/bundle/dmg/*.dmg)
-          if [[ ${#apps[@]} -ne 1 || ${#archives[@]} -ne 1 || ${#dmgs[@]} -ne 1 || ! -f "${archives[0]}.sig" ]]; then
-            echo "Expected one app, updater archive, updater signature, and dmg"
+          signatures=(apps/linux/src-tauri/target/release/bundle/macos/*.sig)
+          if [[ ${#apps[@]} -ne 1 || ${#archives[@]} -ne 0 || ${#dmgs[@]} -ne 1 || ${#signatures[@]} -ne 0 ]]; then
+            echo "Expected one app, one dmg, and no updater artifacts from the keyless build"
             exit 1
           fi
           bundle_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
@@ -219,59 +544,78 @@ jobs:
             echo "macOS bundle version '${bundle_version}' does not match release version '${version}'"
             exit 1
           fi
-          mkdir -p dist/macos-app/release dist/macos-app/signatures
+          archive="dist/macos-app/unsigned/OpenClaw-${version}-darwin-aarch64.app.tar.gz"
+          mkdir -p dist/macos-app/release dist/macos-app/unsigned
           cp "${dmgs[0]}" "dist/macos-app/release/OpenClaw-${version}-darwin-aarch64.dmg"
-          cp "${archives[0]}" \
-            "dist/macos-app/release/OpenClaw-${version}-darwin-aarch64.app.tar.gz"
-          cp "${archives[0]}.sig" \
-            "dist/macos-app/signatures/OpenClaw-${version}-darwin-aarch64.app.tar.gz.sig"
+          # Match Tauri's updater archive contract: one .app root, gzip,
+          # symlinks preserved rather than followed.
+          tar -czf "$archive" -C "$(dirname "${apps[0]}")" "$(basename "${apps[0]}")"
+          [[ -s "$archive" ]]
 
-      - name: Upload macOS test bundles
+      - name: Upload macOS DMG
+        id: upload_dmg
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: macos-app-release
-          path: dist/macos-app
+          name: macos-app-release-dmg
+          path: dist/macos-app/release/*.dmg
+          if-no-files-found: error
+
+      - name: Upload unsigned macOS updater archive
+        id: upload_updater
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-app-release-unsigned-updater
+          path: dist/macos-app/unsigned/*.app.tar.gz
           if-no-files-found: error
 
   build_windows:
     name: Build unsigned Windows test bundle
-    if: ${{ inputs['desktop-test-bundles'] }}
+    if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
     needs: validate_release
     runs-on: windows-2022
     timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      unsigned_updater_artifact_id: ${{ steps.upload_updater.outputs.artifact-id }}
     steps:
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
+      - name: Install selected-tag dependencies
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --prefer-offline \
+            --config.ignore-scripts=false --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Build Windows test bundle
         working-directory: apps/linux/src-tauri
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis \
-            --config "{\"version\":\"${version}\"}"
+            --config "{\"version\":\"${version}\",\"bundle\":{\"createUpdaterArtifacts\":false}}"
 
-      - name: Verify and rename Windows bundle
+      - name: Verify and stage unsigned Windows bundle
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           $ErrorActionPreference = "Stop"
           $version = $env:RELEASE_TAG.Substring(1)
@@ -280,22 +624,141 @@ jobs:
             throw "Expected one NSIS installer; found $($installers.Count)"
           }
           $installer = $installers[0]
-          $signature = "$($installer.FullName).sig"
-          if (-not (Test-Path -LiteralPath $signature)) {
-            throw "Missing NSIS updater signature: $signature"
+          $signatures = @(Get-ChildItem "apps/linux/src-tauri/target/release/bundle/nsis/*.sig" -ErrorAction SilentlyContinue)
+          if ($signatures.Count -ne 0) {
+            throw "Expected no updater signatures from the keyless build; found $($signatures.Count)"
           }
           if (-not $installer.VersionInfo.ProductVersion.StartsWith($version)) {
             throw "Windows bundle version '$($installer.VersionInfo.ProductVersion)' does not match release version '$version'"
           }
-          New-Item -ItemType Directory -Force -Path "dist/windows-app/release", "dist/windows-app/signatures" | Out-Null
-          Copy-Item -LiteralPath $installer.FullName -Destination "dist/windows-app/release/OpenClaw-$version-windows-x86_64.exe"
-          Copy-Item -LiteralPath $signature -Destination "dist/windows-app/signatures/OpenClaw-$version-windows-x86_64.exe.sig"
+          New-Item -ItemType Directory -Force -Path "dist/windows-app/unsigned" | Out-Null
+          Copy-Item -LiteralPath $installer.FullName -Destination "dist/windows-app/unsigned/OpenClaw-$version-windows-x86_64.exe"
 
-      - name: Upload Windows test bundle
+      - name: Upload unsigned Windows updater installer
+        id: upload_updater
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: windows-app-release
-          path: dist/windows-app
+          name: windows-app-release-unsigned-updater
+          path: dist/windows-app/unsigned/*.exe
+          if-no-files-found: error
+
+  # Optional desktop bundles use the production updater trust root, so their
+  # selected-tag build jobs must cross the same artifact-only signing boundary.
+  sign_desktop:
+    name: Sign finalized desktop updater bundles
+    if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
+    needs:
+      - validate_release
+      - build_macos
+      - build_windows
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions: {}
+    outputs:
+      signed_desktop_artifact_id: ${{ steps.upload_signed_desktop.outputs.artifact-id }}
+    steps:
+      - name: Install trusted signing tools
+        run: |
+          set -euo pipefail
+          minisign_archive="${RUNNER_TEMP}/minisign-0.12-linux.tar.gz"
+          tauri_archive="${RUNNER_TEMP}/cargo-tauri-x86_64-unknown-linux-gnu.tgz"
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            --output "$minisign_archive" "$MINISIGN_URL"
+          printf '%s  %s\n' "$MINISIGN_ARCHIVE_SHA256" "$minisign_archive" | sha256sum --check -
+          tar -xzf "$minisign_archive" -C "${RUNNER_TEMP}/bin" --strip-components=2 \
+            minisign-linux/x86_64/minisign
+          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |
+            sha256sum --check -
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            --output "$tauri_archive" "$TAURI_CLI_URL"
+          printf '%s  %s\n' "$TAURI_CLI_ARCHIVE_SHA256" "$tauri_archive" | sha256sum --check -
+          tar -xzf "$tauri_archive" -C "${RUNNER_TEMP}/bin" cargo-tauri
+          printf '%s  %s\n' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |
+            sha256sum --check -
+          chmod 0555 "${RUNNER_TEMP}/bin/cargo-tauri" "${RUNNER_TEMP}/bin/minisign"
+          "${RUNNER_TEMP}/bin/cargo-tauri" --version
+          "${RUNNER_TEMP}/bin/minisign" -v
+
+      - name: Download finalized macOS updater archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.build_macos.outputs.unsigned_updater_artifact_id }}
+          path: dist/signing-input/macos
+
+      - name: Download finalized Windows updater installer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}
+          path: dist/signing-input/windows
+
+      - name: Sign finalized desktop updater bundles
+        env:
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          UPDATER_PUBLIC_KEY: ${{ needs.validate_release.outputs.updater_pubkey }}
+        run: |
+          set -euo pipefail
+          # Artifact download follows installation; revalidate exact tool bytes before using credentials.
+          printf '%s  %s\n' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |
+            sha256sum --check -
+          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |
+            sha256sum --check -
+          version="${RELEASE_TAG#v}"
+          macos="dist/signing-input/macos/OpenClaw-${version}-darwin-aarch64.app.tar.gz"
+          windows="dist/signing-input/windows/OpenClaw-${version}-windows-x86_64.exe"
+          mapfile -d '' inputs < <(find dist/signing-input -type f -print0)
+          if [[ ! "${TAG_SHA}" =~ ^[0-9a-f]{40}$ || ${#inputs[@]} -ne 2 ||
+                ! -f "$macos" || -L "$macos" || ! -f "$windows" || -L "$windows" ]]; then
+            echo "Signing input must be exactly the validated macOS archive and Windows installer for ${RELEASE_TAG}"
+            exit 1
+          fi
+          macos_before=$(sha256sum "$macos")
+          windows_before=$(sha256sum "$windows")
+          "${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$macos"
+          "${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$windows"
+          # Signature verification must not inherit production signing credentials.
+          unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          macos_after=$(sha256sum "$macos")
+          windows_after=$(sha256sum "$windows")
+          verify_dir=$(mktemp -d)
+          trap 'rm -rf "$verify_dir"' EXIT
+          printf '%s' "$UPDATER_PUBLIC_KEY" | base64 --decode > "$verify_dir/updater.pub"
+          base64 --decode < "${macos}.sig" > "$verify_dir/macos.minisig"
+          base64 --decode < "${windows}.sig" > "$verify_dir/windows.minisig"
+          if [[ "$macos_before" != "$macos_after" || "$windows_before" != "$windows_after" ||
+                ! -s "${macos}.sig" || ! -s "${windows}.sig" ]] ||
+             ! "${RUNNER_TEMP}/bin/minisign" -Vm "$macos" -x "$verify_dir/macos.minisig" \
+               -p "$verify_dir/updater.pub" ||
+             ! "${RUNNER_TEMP}/bin/minisign" -Vm "$windows" -x "$verify_dir/windows.minisig" \
+               -p "$verify_dir/updater.pub"; then
+            echo "Signing must preserve finalized desktop updater bytes and create both signatures"
+            exit 1
+          fi
+          mkdir -p \
+            dist/desktop-test/macos/release \
+            dist/desktop-test/macos/signatures \
+            dist/desktop-test/windows/release \
+            dist/desktop-test/windows/signatures
+          cp "$macos" \
+            "dist/desktop-test/macos/release/OpenClaw-${version}-darwin-aarch64.app.tar.gz"
+          cp "${macos}.sig" \
+            "dist/desktop-test/macos/signatures/OpenClaw-${version}-darwin-aarch64.app.tar.gz.sig"
+          cp "$windows" \
+            "dist/desktop-test/windows/release/OpenClaw-${version}-windows-x86_64.exe"
+          cp "${windows}.sig" \
+            "dist/desktop-test/windows/signatures/OpenClaw-${version}-windows-x86_64.exe.sig"
+
+      - name: Upload signed desktop updater bundles
+        id: upload_signed_desktop
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: desktop-test-release-signed-updaters
+          path: dist/desktop-test
           if-no-files-found: error
 
   publish:
@@ -304,46 +767,59 @@ jobs:
       ${{
         always() &&
         needs.build_linux.result == 'success' &&
-        (!inputs['desktop-test-bundles'] ||
-          (needs.build_macos.result == 'success' && needs.build_windows.result == 'success'))
+        needs.sign_linux.result == 'success' &&
+        (needs.validate_release.outputs.desktop_test_bundles != 'true' ||
+          (needs.build_macos.result == 'success' &&
+            needs.build_windows.result == 'success' &&
+            needs.sign_desktop.result == 'success'))
       }}
     needs:
       - validate_release
       - build_linux
+      - sign_linux
       - build_macos
       - build_windows
+      - sign_desktop
     # One shared desktop-test channel asset must not race across release tags.
     concurrency:
       group: linux-app-release-publish
       cancel-in-progress: false
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
-      - name: Download Linux bundles
+      - name: Download Debian bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: linux-app-release
+          artifact-ids: ${{ needs.build_linux.outputs.deb_artifact_id }}
+          path: dist/input/linux/release
+
+      - name: Download signed AppImage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.sign_linux.outputs.signed_appimage_artifact_id }}
           path: dist/input/linux
 
-      - name: Download macOS test bundles
-        if: ${{ inputs['desktop-test-bundles'] }}
+      - name: Download macOS test DMG
+        if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: macos-app-release
-          path: dist/input/macos
+          artifact-ids: ${{ needs.build_macos.outputs.dmg_artifact_id }}
+          path: dist/input/macos/release
 
-      - name: Download Windows test bundle
-        if: ${{ inputs['desktop-test-bundles'] }}
+      - name: Download signed desktop updater bundles
+        if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: windows-app-release
-          path: dist/input/windows
+          artifact-ids: ${{ needs.sign_desktop.outputs.signed_desktop_artifact_id }}
+          path: dist/input
 
       - name: Assemble release assets and updater manifest
         env:
-          DESKTOP_TEST_BUNDLES: ${{ inputs['desktop-test-bundles'] }}
+          DESKTOP_TEST_BUNDLES: ${{ needs.validate_release.outputs.desktop_test_bundles }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
@@ -396,7 +872,7 @@ jobs:
       - name: Attach bundles to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           gh release upload "${RELEASE_TAG}" \
@@ -405,11 +881,11 @@ jobs:
             dist/release/*
 
       - name: Publish desktop test update channel
-        if: ${{ inputs['desktop-test-bundles'] }}
+        if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
         env:
           DESKTOP_TEST_CHANNEL_TAG: desktop-test
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
           TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
         run: |
           set -euo pipefail

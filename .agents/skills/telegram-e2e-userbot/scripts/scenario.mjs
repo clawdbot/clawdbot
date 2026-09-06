@@ -9,7 +9,7 @@ const ACTION_KEYS = {
   restartGateway: new Set(["type", "atMs", "graceMs"]),
   patchConfig: new Set(["type", "atMs", "patch"]),
   systemEvent: new Set(["type", "atMs", "text"]),
-  cron: new Set(["type", "atMs", "message"]),
+  cron: new Set(["type", "atMs", "message", "bestEffort"]),
   command: new Set(["type", "atMs", "argv", "cwd", "timeoutMs"]),
   telegramApiHold: new Set(["type", "atMs", "method", "skip"]),
   telegramApiWaitHeld: new Set(["type", "atMs", "method", "timeoutMs"]),
@@ -77,10 +77,14 @@ export function parseScenario(value) {
       return { type: action.type, atMs, text: nonEmptyString(action.text, `${label}.text`) };
     }
     if (action.type === "cron") {
+      if (action.bestEffort !== undefined && typeof action.bestEffort !== "boolean") {
+        throw new Error(`${label}.bestEffort must be a boolean.`);
+      }
       return {
         type: action.type,
         atMs,
         message: nonEmptyString(action.message, `${label}.message`),
+        ...(action.bestEffort === true ? { bestEffort: true } : {}),
       };
     }
     if (action.type === "command") {

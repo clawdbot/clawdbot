@@ -269,6 +269,7 @@ type CreateTelegramIngressMonitorParams = {
   adoptionStallTimeoutMs?: number;
   pollIntervalMs?: number;
   dispatch: TelegramIngressDrainDispatch;
+  onDurableAdmission?: (update: unknown, context: { isNew: boolean }) => void | Promise<void>;
   onLog?: (message: string) => void;
   onError?: (error: unknown) => void;
   abortSignal?: AbortSignal;
@@ -480,6 +481,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     admissionMode: "while-running",
     createStoppedError: () => new Error("Telegram ingress monitor is stopped."),
+    ...(params.onDurableAdmission ? { onDurableAdmission: params.onDurableAdmission } : {}),
     ...(params.onError ? { onError: params.onError } : {}),
   });
 }

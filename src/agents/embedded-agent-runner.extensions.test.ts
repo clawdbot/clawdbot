@@ -62,6 +62,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         result: {
           content: [{ type: "text" as const, text: "middleware-observed" }],
           details: { observedTool: event.toolName },
+          terminate: true,
         },
       }),
     );
@@ -127,6 +128,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(result).toMatchObject({
       content: [{ type: "text", text: "middleware-observed" }],
       details: { observedTool: "read" },
+      terminate: true,
     });
   });
 

@@ -29,8 +29,8 @@ export const testModel: Model = {
   reasoning: false,
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 100,
-  maxTokens: 100,
+  contextWindow: 32_768,
+  maxTokens: 8_192,
 };
 
 const sessions: AgentSession[] = [];
@@ -82,10 +82,21 @@ export function createAssistantResultStream(message: AssistantMessage) {
   return stream;
 }
 
-export const createOverflowAssistant = (activeModel: Model) => ({
-  ...createAssistant(activeModel, [{ type: "text", text: "truncated answer" }], "length", 100),
-  usage: { ...createUsage(100), output: 0 },
-});
+export function createOverflowAssistant(activeModel: Model) {
+  const contextWindow = activeModel.contextWindow;
+  if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow) || contextWindow <= 0) {
+    throw new Error("Overflow fixture requires a finite positive model context window");
+  }
+  return {
+    ...createAssistant(
+      activeModel,
+      [{ type: "text", text: "truncated answer" }],
+      "length",
+      contextWindow,
+    ),
+    usage: { ...createUsage(contextWindow), output: 0 },
+  };
+}
 
 export const createAutoCompactionSettings = () =>
   SettingsManager.inMemory({

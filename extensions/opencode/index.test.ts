@@ -161,6 +161,17 @@ describe("opencode provider plugin", () => {
       throw new Error("expected registered OpenCode Zen static provider");
     }
     expectSeedModels(result.provider.models);
+    // Official public-feed snapshot, 2026-08-30; connected pricing refreshes independently.
+    expect(result.provider.models.find((model) => model.id === "gpt-5.6-sol")?.cost).toEqual({
+      input: 2,
+      output: 10,
+      cacheRead: 0.2,
+      cacheWrite: 2.5,
+      tieredPricing: [
+        { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, range: [0, 272_000] },
+        { input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5, range: [272_000] },
+      ],
+    });
     expectSeedModels(manifest.modelCatalog.providers.opencode.models);
     for (const modelId of OFFLINE_MODEL_IDS) {
       expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({ id: modelId });
@@ -327,13 +338,15 @@ describe("opencode provider plugin", () => {
       .spyOn(globalThis, "fetch")
       .mockRejectedValue(new Error("unexpected fetch"));
     const provider = await registerSingleProviderPlugin(plugin);
+    const resolveProviderApiKey = vi.fn((providerId: string) =>
+      providerId === "opencode"
+        ? { apiKey: NON_ENV_SECRETREF_MARKER, discoveryApiKey: undefined }
+        : { apiKey: "shared-opencode-key", discoveryApiKey: "shared-opencode-key" },
+    );
     const result = await provider.catalog?.run({
       config: {},
       env: {},
-      resolveProviderApiKey: (providerId: string) =>
-        providerId === "opencode"
-          ? { apiKey: NON_ENV_SECRETREF_MARKER, discoveryApiKey: undefined }
-          : { apiKey: "shared-opencode-key", discoveryApiKey: "shared-opencode-key" },
+      resolveProviderApiKey,
       resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
     } as never);
 
@@ -342,8 +355,92 @@ describe("opencode provider plugin", () => {
     }
     expect(result.provider.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
     expectSeedModels(result.provider.models);
+    expect(resolveProviderApiKey).toHaveBeenCalledExactlyOnceWith("opencode");
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { authProvider: "opencode", apiKey: NON_ENV_SECRETREF_MARKER },
+    { authProvider: "opencode-go", apiKey: NON_ENV_SECRETREF_MARKER },
+    { authProvider: "opencode", apiKey: undefined },
+  ])("keeps $authProvider catalog credentials and profile together ($apiKey)", async (fixture) => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("unexpected fetch"));
+    const liveCatalog = vi
+      .spyOn(await import("./provider-catalog.js"), "buildOpencodeZenLiveProviderConfig")
+      .mockImplementation(async (params = {}) => ({
+        baseUrl: "https://opencode.ai/zen/v1",
+        apiKey: params.apiKey,
+        models: [],
+      }));
+    const auth = {
+      apiKey: fixture.apiKey,
+      discoveryApiKey: "selected-discovery-key",
+      profileId: `${fixture.authProvider}:selected`,
+      mode: "api_key" as const,
+    };
+    const resolveProviderApiKey = vi.fn((providerId?: string) => {
+      if (providerId === fixture.authProvider) {
+        return auth;
+      }
+      if (providerId === "opencode") {
+        return { apiKey: undefined, profileId: "opencode:unconfigured" };
+      }
+      throw new Error("Unused sibling credentials must not be resolved");
+    });
+
+    await expect(
+      provider.catalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey,
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      }),
+    ).resolves.toEqual({
+      provider: {
+        baseUrl: "https://opencode.ai/zen/v1",
+        apiKey: auth.apiKey ?? auth.discoveryApiKey,
+        models: [],
+      },
+      outcomes: [{ provider: "opencode", profileId: auth.profileId, status: "ready" }],
+    });
+    expect(liveCatalog).toHaveBeenCalledExactlyOnceWith({
+      apiKey: auth.apiKey ?? auth.discoveryApiKey,
+      discoveryApiKey: auth.discoveryApiKey,
+    });
+    expect(resolveProviderApiKey.mock.calls).toEqual(
+      fixture.authProvider === "opencode" ? [["opencode"]] : [["opencode"], ["opencode-go"]],
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["opencode", "opencode-go"])(
+    "propagates %s credential lookup failures without selecting another account",
+    async (failedProvider) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const failure = new Error("Selected account credentials are unavailable");
+      const resolveProviderApiKey = vi.fn((providerId?: string) => {
+        if (providerId === failedProvider) {
+          throw failure;
+        }
+        return { apiKey: undefined };
+      });
+
+      await expect(
+        provider.catalog?.run({
+          config: {},
+          env: {},
+          resolveProviderApiKey,
+          resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+        }),
+      ).rejects.toBe(failure);
+      expect(resolveProviderApiKey.mock.calls).toEqual(
+        failedProvider === "opencode" ? [["opencode"]] : [["opencode"], ["opencode-go"]],
+      );
+    },
+  );
 
   it("discovers previously unknown trusted models and their upstream-owned transport", async () => {
     const fetchGuard = createCatalogFetchGuard({
@@ -507,22 +604,21 @@ describe("opencode provider plugin", () => {
     ]);
   });
 
-  it("retains the compact offline seed when discovery fails", async () => {
+  it("reports failed discovery instead of returning the offline seed", async () => {
     const fetchGuard = vi.fn(async () => {
       throw new Error("network unavailable");
     });
-    const fallback = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "runtime-key",
-      discoveryApiKey: "discovery-key",
-      fetchGuard,
-    });
-
-    expect(fallback.apiKey).toBe("runtime-key");
-    expectSeedModels(fallback.models);
+    await expect(
+      buildOpencodeZenLiveProviderConfig({
+        apiKey: "runtime-key",
+        discoveryApiKey: "discovery-key",
+        fetchGuard,
+      }),
+    ).rejects.toThrow("network unavailable");
   });
 
   it.each(["failed", "filtered"] as const)(
-    "uses refreshed lifecycle on the first fallback after %s model advertising",
+    "keeps refreshed metadata separate from %s model advertising",
     async (advertising) => {
       const retiredId = "big-pickle";
       const provider = await registerSingleProviderPlugin(plugin);
@@ -538,16 +634,17 @@ describe("opencode provider plugin", () => {
 
       try {
         expectSeedModels((await buildOpencodeZenLiveProviderConfig()).models);
-        const fallback = await buildOpencodeZenLiveProviderConfig({
+        const discovery = buildOpencodeZenLiveProviderConfig({
           apiKey: "runtime-key",
           discoveryApiKey: "discovery-key",
           fetchGuard,
         });
 
-        expect(fallback.apiKey).toBe("runtime-key");
-        expect(fallback.models.map((model) => model.id)).toEqual(
-          OFFLINE_MODEL_IDS.filter((id) => id !== retiredId),
-        );
+        if (advertising === "failed") {
+          await expect(discovery).rejects.toThrow("model advertising unavailable");
+        } else {
+          await expect(discovery).resolves.toMatchObject({ models: [] });
+        }
         expect(provider.resolveDynamicModel?.({ modelId: retiredId } as never)).toMatchObject({
           id: retiredId,
         });

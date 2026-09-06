@@ -17,7 +17,7 @@ function observerFixture() {
       reply = socket.send;
       return {
         onMessage: receive,
-        onClose: () => {
+        onClose: async () => {
           count--;
           socket.close();
         },
@@ -65,7 +65,7 @@ describe("bootstrap diagnostic observation", () => {
     expect(bridge.attachCdpClientSocket).toBe(original);
   });
 
-  it("caps flood output but retains the action outcome and teardown", () => {
+  it("caps flood output but retains the action outcome and teardown", async () => {
     const output = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const diagnostic = createBootstrapDiagnostic();
     const { bridge, reply } = observerFixture();
@@ -82,7 +82,7 @@ describe("bootstrap diagnostic observation", () => {
     }
     diagnostic.mark("navigate.status", 500);
     diagnostic.flush();
-    callbacks.onClose();
+    await callbacks.onClose();
     diagnostic.mark("relay.closed", true);
     diagnostic.flush();
     diagnostic.flush();

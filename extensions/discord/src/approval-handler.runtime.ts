@@ -77,6 +77,7 @@ class ExecApprovalContainer extends DiscordUiContainer {
     accountId: string;
     title: string;
     description?: string;
+    commandLabel?: string;
     commandPreview: string;
     commandSecondaryPreview?: string | null;
     metadataLines?: string[];
@@ -91,7 +92,11 @@ class ExecApprovalContainer extends DiscordUiContainer {
       components.push(new TextDisplay(params.description));
     }
     components.push(new Separator({ divider: true, spacing: "small" }));
-    components.push(new TextDisplay(`### Command\n\`\`\`\n${params.commandPreview}\n\`\`\``));
+    components.push(
+      new TextDisplay(
+        `### ${params.commandLabel ?? "Command"}\n\`\`\`\n${params.commandPreview}\n\`\`\``,
+      ),
+    );
     if (params.commandSecondaryPreview) {
       components.push(
         new TextDisplay(`### Shell Preview\n\`\`\`\n${params.commandSecondaryPreview}\n\`\`\``),
@@ -246,8 +251,9 @@ function createApprovalContainer(params: {
 }): ExecApprovalContainer {
   const { view } = params;
   const plugin = view.approvalKind === "plugin";
+  const systemAgent = view.approvalKind === "system-agent";
   const pending = view.phase === "pending";
-  const approvalLabel = plugin ? "Plugin" : "Exec";
+  const approvalLabel = plugin ? "Plugin" : systemAgent ? "OpenClaw Change" : "Exec";
   const { commandPreview, commandSecondaryPreview } = plugin
     ? {
         commandPreview: formatCommandPreview(view.title, 700),
@@ -262,18 +268,26 @@ function createApprovalContainer(params: {
   const decisionLabel =
     view.phase !== "resolved"
       ? undefined
-      : view.decision === "allow-once"
-        ? "Allowed (once)"
-        : view.decision === "allow-always"
-          ? "Allowed (always)"
-          : "Denied";
+      : systemAgent && view.terminalStatus === "cancelled"
+        ? "Cancelled"
+        : systemAgent && view.applicationStatus === "applied"
+          ? "Applied"
+          : systemAgent && view.applicationStatus === "not-applied"
+            ? "Not applied"
+            : view.decision === "allow-once"
+              ? "Allowed (once)"
+              : view.decision === "allow-always"
+                ? "Allowed (always)"
+                : "Denied";
   const title = pending
     ? `${approvalLabel} Approval Required`
     : `${approvalLabel} Approval: ${view.phase === "expired" ? "Expired" : decisionLabel}`;
   const description = pending
     ? plugin
       ? "A plugin action needs your approval."
-      : "A command needs your approval."
+      : systemAgent
+        ? "An OpenClaw change needs your approval."
+        : "A command needs your approval."
     : view.phase === "expired"
       ? "This approval request has expired."
       : view.resolvedBy
@@ -305,6 +319,7 @@ function createApprovalContainer(params: {
     accountId: params.accountId,
     title,
     description,
+    commandLabel: systemAgent ? "Change" : "Command",
     commandPreview,
     commandSecondaryPreview,
     metadataLines: buildApprovalMetadataLines(view.metadata),
@@ -376,7 +391,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
   PendingApproval,
   never
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: (params) => {
       const resolved = resolveHandlerContext(params);

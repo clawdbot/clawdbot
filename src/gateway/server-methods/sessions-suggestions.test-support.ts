@@ -9,7 +9,7 @@ export const sessionKey = "agent:main:main";
 const defaultSuggestionSession = {
   sessionId: "session-main",
   updatedAt: 1,
-  createdActor: { type: "human", id: "owner" },
+  createdActor: { type: "human", source: "profile", id: "owner" },
   visibility: "suggest",
 } as const;
 

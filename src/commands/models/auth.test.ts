@@ -14,7 +14,6 @@ type AuthRunCall = {
 };
 
 type ResolvePluginProvidersCall = {
-  activate?: boolean;
   config?: unknown;
   includeUntrustedWorkspacePlugins?: boolean;
   providerRefs?: string[];
@@ -25,6 +24,8 @@ type UpsertAuthProfileCall = {
   agentDir?: string;
   credential?: {
     provider?: string;
+    token?: string;
+    tokenRef?: unknown;
     type?: string;
   };
   profileId?: string;
@@ -66,6 +67,18 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   resolvePluginSetupProviderCore: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
+  readSecretStoreValue: vi.fn(() => ({
+    ok: false as const,
+    error: { code: "SECRET_STORE_NOT_FOUND", message: "missing" },
+  })),
+  writeSecretStoreEntry: vi.fn(),
+  deleteSecretStoreEntry: vi.fn(),
+}));
+
+vi.mock("../../secrets/store/secret-store.js", () => ({
+  readSecretStoreValue: mocks.readSecretStoreValue,
+  writeSecretStoreEntry: mocks.writeSecretStoreEntry,
+  deleteSecretStoreEntry: mocks.deleteSecretStoreEntry,
 }));
 
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
@@ -369,6 +382,10 @@ describe("modelsAuthLoginCommand", () => {
     mocks.upsertAuthProfileAfterLoginWithLock.mockReset();
     mocks.upsertAuthProfileAfterLoginWithLock.mockResolvedValue(undefined);
     mocks.promoteAuthProfileInOrder.mockReset();
+    mocks.promoteAuthProfileInOrder.mockResolvedValue({
+      ok: true,
+      value: { version: 1, profiles: {} },
+    });
     mocks.removeProviderAuthProfilesWithLock.mockReset();
     mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
 
@@ -482,6 +499,85 @@ describe("modelsAuthLoginCommand", () => {
       params: { refresh: true, agentId: "main" },
       timeoutMs: 3000,
     });
+  });
+
+  it("persists a provider-minted Copilot token through the protected store", async () => {
+    const runtime = createRuntime();
+    runProviderAuth.mockResolvedValueOnce({
+      profiles: [
+        {
+          profileId: "github-copilot:github",
+          credential: {
+            type: "token",
+            provider: "github-copilot",
+            token: "synthetic-device-token",
+          },
+          secretStorage: {
+            kind: "store",
+            namePrefix: "GITHUB_COPILOT_TOKEN",
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      createProvider({
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
+      }),
+    ]);
+
+    await modelsAuthLoginCommand({ provider: "github-copilot" }, runtime);
+
+    expect(mocks.writeSecretStoreEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ value: "synthetic-device-token" }),
+    );
+    const upsertCall = readMockCallArg(
+      mocks.upsertAuthProfileAfterLoginWithLock,
+    ) as UpsertAuthProfileCall;
+    expect(upsertCall.credential).not.toHaveProperty("token");
+    expect(upsertCall.credential?.tokenRef).toEqual({
+      source: "store",
+      provider: "default",
+      id: expect.stringMatching(/^GITHUB_COPILOT_TOKEN_[A-F0-9]{24}$/),
+    });
+  });
+
+  it("keeps the prior auth profile when protected storage is unavailable", async () => {
+    const runtime = createRuntime();
+    runProviderAuth.mockResolvedValueOnce({
+      profiles: [
+        {
+          profileId: "github-copilot:github",
+          credential: {
+            type: "token",
+            provider: "github-copilot",
+            token: "synthetic-device-token",
+          },
+          secretStorage: {
+            kind: "store",
+            namePrefix: "GITHUB_COPILOT_TOKEN",
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      createProvider({
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
+      }),
+    ]);
+    mocks.writeSecretStoreEntry.mockImplementationOnce(() => {
+      throw new Error("read-only database");
+    });
+
+    await expect(modelsAuthLoginCommand({ provider: "github-copilot" }, runtime)).rejects.toThrow(
+      "Could not write the protected secret store",
+    );
+
+    expect(mocks.upsertAuthProfileAfterLoginWithLock).not.toHaveBeenCalled();
+    expect(mocks.promoteAuthProfileInOrder).not.toHaveBeenCalled();
   });
 
   it("keeps login successful when the running gateway cannot refresh auth state", async () => {
@@ -751,12 +847,26 @@ describe("modelsAuthLoginCommand", () => {
     expect(runCliAuth).toHaveBeenCalledOnce();
   });
 
-  it("uses the requested agent store for provider auth login", async () => {
+  it("shows local agent scope before provider auth login", async () => {
     const runtime = createRuntime();
     const originalConfig = useCoderAgentConfig();
+    const note = vi.fn(async () => {});
+    mocks.createClackPrompter.mockReturnValue({ note, select: vi.fn() });
 
     await modelsAuthLoginCommand({ provider: "openai", agent: "coder" }, runtime);
 
+    expect(note).toHaveBeenCalledWith(
+      [
+        "Scope: System / agent",
+        "Agent: coder",
+        "Location: the machine running OpenClaw",
+        "For personal model accounts on a Gateway, run openclaw models accounts login --help.",
+      ].join("\n"),
+      "Provider sign-in",
+    );
+    expect(note.mock.invocationCallOrder[0]).toBeLessThan(
+      runProviderAuth.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
     const authRunCall = readMockCallArg(runProviderAuth) as AuthRunCall;
@@ -844,8 +954,8 @@ describe("modelsAuthLoginCommand", () => {
       },
     });
     mocks.resolvePluginProvidersCore.mockImplementation(
-      (params: { activate?: boolean; providerRefs?: string[] } | undefined) =>
-        params?.activate === true && params?.providerRefs?.[0] === "anthropic"
+      (params: ResolvePluginProvidersCall | undefined) =>
+        params?.providerRefs?.[0] === "anthropic"
           ? [
               {
                 id: "anthropic",
@@ -875,7 +985,6 @@ describe("modelsAuthLoginCommand", () => {
     expect(providerResolutionCall.workspaceDir).toBe("/tmp/openclaw/workspace");
     expect(providerResolutionCall.includeUntrustedWorkspacePlugins).toBe(false);
     expect(providerResolutionCall.providerRefs).toEqual(["anthropic"]);
-    expect(providerResolutionCall.activate).toBe(true);
     expect(runClaudeCliMigration).toHaveBeenCalledOnce();
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
     expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
@@ -1029,12 +1138,17 @@ describe("modelsAuthLoginCommand", () => {
     expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual(existingModels);
   });
 
-  it("keeps an existing primary when login omits --set-default and the patch recommends another", async () => {
+  it.each([
+    { name: "an absent model", model: undefined },
+    { name: "a model string", model: "openai/gpt-5.4" },
+    { name: "a primary and fallbacks", model: { primary: "openai/gpt-5.4", fallbacks: [] } },
+    { name: "fallbacks without a primary", model: { fallbacks: ["openai/gpt-5.4"] } },
+  ])("preserves $name when login omits --set-default", async ({ model }) => {
     const runtime = createRuntime();
     currentConfig = {
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.4", fallbacks: [] },
+          ...(model === undefined ? {} : { model }),
           models: {
             "openai/gpt-5.4": {},
             "anthropic/claude-sonnet-4-6": {},
@@ -1069,10 +1183,10 @@ describe("modelsAuthLoginCommand", () => {
 
     await modelsAuthLoginCommand({ provider: "openai" }, runtime);
 
-    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.4",
-      fallbacks: [],
-    });
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual(model);
+    if (model === undefined) {
+      expect(lastUpdatedConfig?.agents?.defaults).not.toHaveProperty("model");
+    }
     expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
       "openai/gpt-5.4": {},
       "anthropic/claude-sonnet-4-6": {},
@@ -1194,7 +1308,7 @@ describe("modelsAuthLoginCommand", () => {
     await expect(
       modelsAuthLoginCommand({ provider: "openai", force: true }, runtime),
     ).rejects.toThrow(
-      'Could not clear cached profiles for "openai" before re-login: profile store update failed',
+      'Could not clear cached profiles for "openai" before re-login: auth store is busy; close other OpenClaw commands using this state directory and retry',
     );
 
     expect(runtime.error).not.toHaveBeenCalled();
@@ -1278,7 +1392,7 @@ describe("modelsAuthLoginCommand", () => {
     expect(runProviderAuth).toHaveBeenCalledOnce();
     expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ providerRefs: ["claude-cli"], activate: true }),
+      expect.objectContaining({ providerRefs: ["claude-cli"] }),
     );
     expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
       2,

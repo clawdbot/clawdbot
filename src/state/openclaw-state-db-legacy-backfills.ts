@@ -2,13 +2,17 @@ import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber, asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "../acp/event-ledger-bytes.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
+import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { compactLegacyDeliveryQueueFailures } from "./openclaw-state-db-delivery-queue-backfill.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
 export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   if (!tableExists(db, "operator_approvals")) {
@@ -131,6 +135,52 @@ type LegacyRetainedResultRow = {
   payload_json: string;
   pending_final_delivery_payload_json?: string | null;
 };
+
+/** Recover the task owner lost by stable steer replacements before runtime hydration. */
+export function repairLegacySubagentTaskBindings(db: DatabaseSync): void {
+  if (!tableExists(db, "subagent_runs") || !tableExists(db, "task_runs")) {
+    return;
+  }
+  // v2026.6.34 replaced runId/createdAt but retained sessionStartedAt. A reused
+  // child session is not an owner: require one task/run, matching requester and
+  // timing, and no competing binding. Running replacements need repair too.
+  db.exec(`
+    WITH runs AS MATERIALIZED (
+      SELECT run_id, child_session_key, requester_session_key, created_at,
+        CASE WHEN json_valid(payload_json) THEN payload_json ELSE 'null' END AS payload
+      FROM subagent_runs
+    ), bindings AS MATERIALIZED (
+      SELECT run.run_id, task.run_id AS task_run_id
+      FROM runs AS run JOIN task_runs AS task
+        ON task.child_session_key = run.child_session_key
+      WHERE task.runtime = 'subagent'
+        AND task.requester_session_key = run.requester_session_key
+        AND task.run_id <> '' AND trim(task.run_id) = task.run_id
+        AND json_type(run.payload, '$.taskRunId') IS NULL
+        AND json_type(run.payload, '$.completion.required') = 'true'
+        AND json_type(run.payload, '$.sessionStartedAt') IN ('integer', 'real')
+        AND json_extract(run.payload, '$.sessionStartedAt') < run.created_at
+        AND task.created_at BETWEEN json_extract(run.payload, '$.sessionStartedAt')
+          AND run.created_at
+        AND (SELECT count(*) FROM runs AS sibling
+          WHERE sibling.child_session_key = run.child_session_key) = 1
+        AND (SELECT count(*) FROM task_runs AS sibling
+          WHERE sibling.runtime = 'subagent'
+            AND sibling.child_session_key = run.child_session_key) = 1
+        AND (SELECT count(*) FROM task_runs AS sibling
+          WHERE sibling.run_id = task.run_id) = 1
+        AND NOT EXISTS (SELECT 1 FROM runs AS sibling
+          WHERE json_type(sibling.payload) <> 'object' OR coalesce(
+            CASE WHEN json_type(sibling.payload, '$.taskRunId') = 'text'
+              THEN nullif(trim(json_extract(sibling.payload, '$.taskRunId')), '') END,
+            sibling.run_id
+          ) = task.run_id)
+    )
+    UPDATE subagent_runs SET payload_json = json_set(payload_json, '$.taskRunId',
+      (SELECT task_run_id FROM bindings WHERE bindings.run_id = subagent_runs.run_id))
+    WHERE run_id IN (SELECT run_id FROM bindings);
+  `);
+}
 
 function nullableTextValue(record: Record<string, unknown> | null, key: string) {
   if (!record || !Object.hasOwn(record, key)) {
@@ -307,26 +357,61 @@ export function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
   ) {
     return;
   }
-  const pendingEvent = db
-    .prepare("SELECT 1 FROM acp_replay_events WHERE estimated_bytes = 0 LIMIT 1")
-    .get();
-  const pendingSession = db
-    .prepare("SELECT 1 FROM acp_replay_sessions WHERE estimated_bytes = 0 LIMIT 1")
-    .get();
-  if (!pendingEvent && !pendingSession) {
-    return;
+  // The schema/Doctor owner holds the transaction. Stream canonical text in Node
+  // so UTF-16 databases, NUL and existing JSON formatting use the writer's units.
+  const replayDb =
+    getNodeSqliteKysely<
+      Pick<OpenClawStateKyselyDatabase, "acp_replay_events" | "acp_replay_sessions">
+    >(db);
+  const updateEvent = db.prepare(
+    "UPDATE acp_replay_events SET estimated_bytes = ? WHERE session_id = ? AND seq = ?",
+  );
+  for (const row of iterateSqliteQuerySync(
+    db,
+    replayDb
+      .selectFrom("acp_replay_events")
+      .select(["session_id", "seq", "session_key", "run_id", "update_json", "estimated_bytes"]),
+  )) {
+    const expected = estimateAcpEventRowBytes({
+      sessionId: row.session_id,
+      sessionKey: row.session_key,
+      runId: row.run_id,
+      updateJson: row.update_json,
+    });
+    if (sqliteNumber(row.estimated_bytes) !== expected) {
+      updateEvent.run(expected, row.session_id, row.seq);
+    }
   }
-  db.exec(`
-    UPDATE acp_replay_events
-       SET estimated_bytes = length(session_id) + length(session_key) + length(update_json)
-             + COALESCE(length(run_id), 0) + 32
-     WHERE estimated_bytes = 0;
-    UPDATE acp_replay_sessions
-       SET estimated_bytes = length(session_id) + length(session_key) + length(cwd) + 32
-             + COALESCE((SELECT SUM(e.estimated_bytes) FROM acp_replay_events e
-                          WHERE e.session_id = acp_replay_sessions.session_id), 0)
-     WHERE estimated_bytes = 0;
-  `);
+  const updateSession = db.prepare(
+    "UPDATE acp_replay_sessions SET estimated_bytes = ? WHERE session_id = ?",
+  );
+  for (const row of iterateSqliteQuerySync(
+    db,
+    replayDb
+      .selectFrom("acp_replay_sessions as s")
+      .select(["s.session_id", "s.session_key", "s.cwd", "s.estimated_bytes"])
+      .select((eb) =>
+        eb.fn
+          .coalesce(
+            eb
+              .selectFrom("acp_replay_events as e")
+              .select((events) => events.fn.sum<number>("e.estimated_bytes").as("total"))
+              .whereRef("e.session_id", "=", "s.session_id"),
+            eb.val(0),
+          )
+          .as("event_bytes"),
+      ),
+  )) {
+    const expected =
+      estimateAcpSessionRowBytes({
+        sessionId: row.session_id,
+        sessionKey: row.session_key,
+        cwd: row.cwd,
+      }) + sqliteNumber(row.event_bytes);
+    if (sqliteNumber(row.estimated_bytes) !== expected) {
+      updateSession.run(expected, row.session_id);
+    }
+  }
 }
 
 export function backfillCronRunLogEntryJson(db: DatabaseSync): void {
@@ -355,7 +440,7 @@ export function backfillCronRunLogEntryJson(db: DatabaseSync): void {
   );
   for (const row of rows) {
     update.run(
-      JSON.stringify({ ts: Number(row.ts), jobId: row.job_id, action: "finished" }),
+      JSON.stringify({ ts: sqliteNumber(row.ts), jobId: row.job_id, action: "finished" }),
       row.store_key,
       row.job_id,
       row.seq,
@@ -442,7 +527,7 @@ export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
       job.enabled === false ? 0 : 1,
       textField(job, "agentId"),
       payloadKind,
-      numberField(job, "updatedAtMs") ?? (Number(row.updated_at) || 0),
+      numberField(job, "updatedAtMs") ?? (sqliteNumber(row.updated_at) || 0),
       row.store_key,
       row.job_id,
     );

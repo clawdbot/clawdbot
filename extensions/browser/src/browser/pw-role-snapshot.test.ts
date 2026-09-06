@@ -104,6 +104,15 @@ describe("pw-role-snapshot", () => {
     expect(result.refs).toEqual({ f1e1: { role: "button", name: "Real" } });
   });
 
+  it.each([
+    ["role", buildRoleSnapshotFromAriaSnapshot],
+    ["AI", buildRoleSnapshotFromAiSnapshot],
+  ] as const)("keeps an explicit empty result for compact %s snapshots", (_mode, build) => {
+    const result = build("", { compact: true });
+    expect(result.snapshot).toBe("(empty)");
+    expect(result.refs).toEqual({});
+  });
+
   it("adds refs for interactive elements", () => {
     const aria = [
       '- heading "Example" [level=1]',

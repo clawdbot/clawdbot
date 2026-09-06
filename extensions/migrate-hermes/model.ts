@@ -335,20 +335,11 @@ export function resolveHermesModelRef(
   return rootModel ? joinHermesProviderModel(config, rootProvider, rootModel, env) : undefined;
 }
 
-function resolveDefaultAgentModelState(config: MigrationProviderContext["config"]): {
-  agentId: string;
-  effectivePrimary?: string;
-} {
-  const agentId = resolveDefaultAgentId(config);
-  const effectivePrimary = resolveAgentEffectiveModelPrimary(config, agentId);
-  return {
-    agentId,
-    effectivePrimary,
-  };
-}
-
 export function resolveCurrentModelRef(ctx: MigrationProviderContext): string | undefined {
-  return resolveDefaultAgentModelState(ctx.config).effectivePrimary;
+  return resolveAgentEffectiveModelPrimary(
+    ctx.config,
+    ctx.targetAgentId ?? resolveDefaultAgentId(ctx.config),
+  );
 }
 
 class ModelApplyAbortError extends Error {
@@ -374,27 +365,32 @@ export async function applyModelItem(
     if (!configApi?.current || !configApi.mutateConfigFile) {
       return hermesItemError(item, HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE);
     }
-    const currentState = resolveDefaultAgentModelState(
+    const agentId = ctx.targetAgentId ?? resolveDefaultAgentId(ctx.config);
+    const currentModel = resolveAgentEffectiveModelPrimary(
       configApi.current() as MigrationProviderContext["config"],
+      agentId,
     );
-    if (currentState.effectivePrimary === details.model) {
+    if (currentModel === details.model) {
       return hermesItemSkipped(item, HERMES_REASON_ALREADY_CONFIGURED);
     }
-    if (currentState.effectivePrimary && !ctx.overwrite) {
+    if (currentModel && !ctx.overwrite) {
       return hermesItemConflict(item, HERMES_REASON_DEFAULT_MODEL_CONFIGURED);
     }
     await configApi.mutateConfigFile({
       base: "runtime",
       afterWrite: { mode: "auto" },
       mutate(draft) {
-        const mutationState = resolveDefaultAgentModelState(draft);
-        if (mutationState.effectivePrimary === details.model) {
+        const mutationModel = resolveAgentEffectiveModelPrimary(draft, agentId);
+        if (mutationModel === details.model) {
           throw new ModelApplyAbortError("skipped", HERMES_REASON_ALREADY_CONFIGURED);
         }
-        if (mutationState.effectivePrimary && !ctx.overwrite) {
+        if (mutationModel && !ctx.overwrite) {
           throw new ModelApplyAbortError("conflict", HERMES_REASON_DEFAULT_MODEL_CONFIGURED);
         }
-        setAgentEffectiveModelPrimary(draft, mutationState.agentId, details.model);
+        // An explicit migration owner must not rewrite shared defaults when its model is inherited.
+        setAgentEffectiveModelPrimary(draft, agentId, details.model, {
+          forceAgent: Boolean(ctx.targetAgentId),
+        });
       },
     });
     return { ...item, status: "migrated" };

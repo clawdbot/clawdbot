@@ -12,7 +12,7 @@ import {
   workerSshOptions,
   workerSshRemoteCommand,
 } from "./ssh.js";
-import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncRequest } from "./tunnel-contract.js";
+import type { WorkerWorkspaceCommand, WorkerLocalWorkspaceSyncRequest } from "./tunnel-contract.js";
 import {
   parseRemoteWorkspaceManifestEnvelope,
   recordRemoteWorkspaceHashMetrics,
@@ -299,7 +299,7 @@ export async function probeWorkspaceGitMode(params: {
 }
 
 export async function resolveWorkerWorkspaceGitAuthor(
-  request: Pick<WorkerWorkspaceSyncRequest, "localPath" | "gitAuthor">,
+  request: Pick<WorkerLocalWorkspaceSyncRequest, "localPath" | "gitAuthor">,
   runTask: (argv: string[]) => Promise<SpawnResult>,
 ): Promise<{ name: string; email: string }> {
   const git = ["git", "-C", request.localPath, "config", "--get"];
@@ -318,7 +318,7 @@ export function stableWorkerPathComponent(value: string, length: number): string
   return createHash("sha256").update(value).digest("hex").slice(0, length);
 }
 
-export function validateWorkspaceSyncRequest(request: WorkerWorkspaceSyncRequest): void {
+export function validateWorkspaceSyncRequest(request: WorkerLocalWorkspaceSyncRequest): void {
   if (!request.sessionId.trim()) {
     throw new Error("Worker workspace session id must be non-empty");
   }

@@ -108,6 +108,8 @@ function scenarioConfig(scenario: string, options: TestStateOptions = {}) {
         mode: "local",
         port: Number(options.port || 18789),
         bind: "loopback",
+        // Only the updater or test service manager may restart the survivor Gateway.
+        reload: { mode: "off" },
         auth: {
           mode: "token",
           token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
@@ -445,6 +447,9 @@ OPENCLAW_TEST_STATE_JSON
     "mode": "local",
     "port": 18789,
     "bind": "loopback",
+    "reload": {
+      "mode": "off"
+    },
     "auth": {
       "mode": "token",
       "token": {

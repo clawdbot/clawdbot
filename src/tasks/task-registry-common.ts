@@ -8,7 +8,6 @@ import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
 import { ensureTaskFlowRegistryReady, getTaskFlowById } from "./task-flow-runtime-internal.js";
 import type {
-  TaskDeliveryState,
   TaskDeliveryStatus,
   TaskEventKind,
   TaskEventRecord,
@@ -19,12 +18,6 @@ import type {
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
-
-export type TaskDeliveryOwner = {
-  sessionKey?: string;
-  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  flowId?: string;
-};
 
 type ParentFlowLinkErrorCode =
   | "scope_kind_not_session"

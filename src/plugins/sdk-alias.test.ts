@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   buildPluginLoaderAliasMap,
   createPluginLoaderModuleCacheKey,
@@ -1293,6 +1294,11 @@ describe("plugin sdk alias helpers", () => {
       ["@openclaw/net-policy/ip", "net-policy", "ip"],
       ["@openclaw/net-policy/url-protocol", "net-policy", "url-protocol"],
       ["@openclaw/model-catalog-core/provider-id", "model-catalog-core", "provider-id"],
+      [
+        "@openclaw/model-catalog-core/model-catalog-pricing",
+        "model-catalog-core",
+        "model-catalog-pricing",
+      ],
     ]);
     for (const entry of workspaceAliases) {
       fs.rmSync(entry.distFile);
@@ -1345,6 +1351,11 @@ describe("plugin sdk alias helpers", () => {
         "@openclaw/model-catalog-core/provider-model-id-normalize",
         "model-catalog-core",
         "provider-model-id-normalize",
+      ],
+      [
+        "@openclaw/model-catalog-core/model-catalog-pricing",
+        "model-catalog-core",
+        "model-catalog-pricing",
       ],
     ]);
     const sourcePluginEntry = writePluginEntry(
@@ -1680,6 +1691,30 @@ describe("plugin sdk alias helpers", () => {
     expect(second).toBe(first);
   });
 
+  it("retains missing SDK targets until a new generation, including deferred complete maps", () => {
+    const { fixture, distPluginEntryPath } = createPluginSdkAliasTargetFixture();
+    const owner = createPluginCache();
+    const other = createPluginCache();
+    const params = {
+      modulePath: writePluginEntry(fixture.root, bundledDistPluginFile("demo", "index.js")),
+      pluginSdkResolution: "dist" as const,
+    };
+    fs.unlinkSync(distPluginEntryPath);
+    fs.unlinkSync(path.join(fixture.root, "src", "plugin-sdk", "plugin-entry.ts"));
+    const prepared = withPluginCache(owner, () => preparePluginLoaderAliases(params));
+    expect(prepared.resolveAlias("openclaw/plugin-sdk/plugin-entry")).toBeUndefined();
+    fs.writeFileSync(distPluginEntryPath, "export const marker = 'new-generation';\n", "utf8");
+
+    withPluginCache(other, () => {
+      expect(prepared.resolveAlias("openclaw/plugin-sdk/plugin-entry")).toBeUndefined();
+      expect(prepared.getAliasMap()["openclaw/plugin-sdk/plugin-entry"]).toBeUndefined();
+      const fresh = preparePluginLoaderAliases(params);
+      expect(fs.realpathSync(fresh.resolveAlias("openclaw/plugin-sdk/plugin-entry") ?? "")).toBe(
+        fs.realpathSync(distPluginEntryPath),
+      );
+    });
+  });
+
   it("scopes prepared alias authority by effective resolution", () => {
     const { fixture, sourceChannelRuntimePath, distChannelRuntimePath } =
       createPluginSdkAliasTargetFixture();
@@ -1718,6 +1753,21 @@ describe("plugin sdk alias helpers", () => {
       fs.realpathSync(dist.getAliasMap()["openclaw/plugin-sdk/channel-runtime-context"] ?? ""),
     ).toBe(fs.realpathSync(distChannelRuntimePath));
   });
+
+  it.each(["dist", "dist-runtime"])(
+    "keeps compiled %s plugin SDK aliases on the built module graph in test mode",
+    (outputDir) => {
+      const { fixture, distChannelRuntimePath } = createPluginSdkAliasTargetFixture();
+      const pluginEntry = writePluginEntry(
+        fixture.root,
+        path.join(outputDir, "extensions", "demo", "index.js"),
+      );
+
+      const aliases = withEnv({ NODE_ENV: "test" }, () => buildPluginLoaderAliasMap(pluginEntry));
+
+      expectPluginSdkAliasTargets(aliases, { channelRuntimePath: distChannelRuntimePath });
+    },
+  );
 
   it("loads source runtime shims through the non-native module loading boundary", async () => {
     const copiedExtensionRoot = path.join(makeTempDir(), bundledPluginRoot("discord"));
@@ -1780,6 +1830,13 @@ export const syntheticRuntimeMarker = {
     {
       name: "prefers dist plugin runtime module when loader runs from dist",
       modulePath: (root: string) => path.join(root, "dist", "plugins", "loader.js"),
+      expected: "dist" as const,
+    },
+    {
+      name: "prefers dist plugin runtime module for dist-runtime plugins in test mode",
+      modulePath: (root: string) =>
+        path.join(root, "dist-runtime", "extensions", "demo", "index.js"),
+      env: { NODE_ENV: "test" },
       expected: "dist" as const,
     },
     {

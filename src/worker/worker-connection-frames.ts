@@ -2,9 +2,6 @@ import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import { WebSocket } from "ws";
 import {
-  type WorkerGitHubPublishParams,
-  type WorkerGitHubPublishResponseFrame,
-  WorkerGitHubPublishResponseFrameSchema,
   type WorkerConnectParams,
   type WorkerHeartbeatParams,
   type WorkerHeartbeatResponseFrame,
@@ -27,6 +24,11 @@ import {
   WorkerTranscriptCommitResponseFrameSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
+  type WorkerComputerParams,
+  type WorkerComputerResponseFrame,
+  WorkerComputerResponseFrameSchema,
+} from "../../packages/gateway-protocol/src/schema/worker-computer.js";
+import {
   type WorkerInferenceCancelParams,
   type WorkerInferenceCancelResponseFrame,
   WorkerInferenceCancelResponseFrameSchema,
@@ -39,6 +41,12 @@ import {
   validateWorkerInferenceEventFrame,
   validateWorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WorkerSkillWorkshopResponseFrameSchema,
+  type WorkerSkillWorkshopParams,
+  type WorkerSkillWorkshopResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
+import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { notifyListeners } from "../shared/listeners.js";
 import {
   createPendingRequestRegistry,
@@ -50,6 +58,10 @@ import {
 } from "./worker-connection-contract.js";
 
 const WORKER_REQUEST_SPECS = {
+  "skill-workshop": {
+    method: "worker.skill-workshop",
+    responseSchema: WorkerSkillWorkshopResponseFrameSchema,
+  },
   heartbeat: {
     method: "worker.heartbeat",
     responseSchema: WorkerHeartbeatResponseFrameSchema,
@@ -70,13 +82,13 @@ const WORKER_REQUEST_SPECS = {
     method: "worker.sessions.send",
     responseSchema: WorkerSessionsSendResponseFrameSchema,
   },
-  "github-publish": {
-    method: "worker.github.publish",
-    responseSchema: WorkerGitHubPublishResponseFrameSchema,
-  },
   portal: {
     method: "worker.portal",
     responseSchema: WorkerPortalResponseFrameSchema,
+  },
+  computer: {
+    method: "worker.computer",
+    responseSchema: WorkerComputerResponseFrameSchema,
   },
   "inference-start": {
     method: "worker.inference.start",
@@ -90,24 +102,26 @@ const WORKER_REQUEST_SPECS = {
 
 type WorkerRequestKind = keyof typeof WORKER_REQUEST_SPECS;
 type WorkerRequestParams = {
+  "skill-workshop": WorkerSkillWorkshopParams;
   heartbeat: WorkerHeartbeatParams;
   transcript: WorkerTranscriptCommitParams;
   "live-event": WorkerLiveEventParams;
   "sessions-spawn": WorkerSessionsSpawnParams;
   "sessions-send": WorkerSessionsSendParams;
-  "github-publish": WorkerGitHubPublishParams;
   portal: WorkerPortalParams;
+  computer: WorkerComputerParams;
   "inference-start": WorkerInferenceStartParams;
   "inference-cancel": WorkerInferenceCancelParams;
 };
 type WorkerResponseFrames = {
+  "skill-workshop": WorkerSkillWorkshopResponseFrame;
   heartbeat: WorkerHeartbeatResponseFrame;
   transcript: WorkerTranscriptCommitResponseFrame;
   "live-event": WorkerLiveEventResponseFrame;
   "sessions-spawn": WorkerSessionsSpawnResponseFrame;
   "sessions-send": WorkerSessionsSendResponseFrame;
-  "github-publish": WorkerGitHubPublishResponseFrame;
   portal: WorkerPortalResponseFrame;
+  computer: WorkerComputerResponseFrame;
   "inference-start": WorkerInferenceStartResponseFrame;
   "inference-cancel": WorkerInferenceCancelResponseFrame;
 };
@@ -214,6 +228,18 @@ export class WorkerConnectionFrameDispatcher {
     const id = randomUUID();
     const spec = WORKER_REQUEST_SPECS[kind];
     const frame = { type: "req", id, method: spec.method, params };
+    if (
+      kind === "transcript" &&
+      !isWorkerTranscriptFrameWithinBudget({
+        type: "req",
+        id,
+        method: "worker.transcript.commit",
+        // SAFETY: The generic request kind selects its matching WorkerRequestParams member.
+        params: params as WorkerTranscriptCommitParams,
+      })
+    ) {
+      return Promise.reject(new Error("worker transcript exceeds the protocol payload limit"));
+    }
     const wrappedBeforeResolve = beforeResolve
       ? (response: WorkerResponseFrame) => beforeResolve(response as WorkerResponseFrames[K])
       : undefined;
@@ -265,7 +291,7 @@ export class WorkerConnectionFrameDispatcher {
       return Promise.reject(toWorkerConnectionError(error));
     }
     const payloadLimit =
-      value.kind === "inference-start"
+      value.kind === "inference-start" || value.kind === "transcript"
         ? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES
         : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
     if (Buffer.byteLength(encoded, "utf8") > payloadLimit) {

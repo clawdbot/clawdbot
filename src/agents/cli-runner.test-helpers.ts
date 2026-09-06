@@ -18,6 +18,7 @@ import {
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { resolveCliExecutionTarget } from "./cli-runner/execution-target.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
 type CliProvider = "claude-cli" | "codex-cli" | "google-gemini-cli";
@@ -86,9 +87,7 @@ export function createTestMcpLoopbackClientGrant(params: {
   return { token: "loopback-token", context: structuredClone(params.context) };
 }
 
-export async function createTestMcpLoopbackServer(port = 0) {
-  return { port, close: vi.fn(async () => undefined) };
-}
+export async function createTestMcpLoopbackServer(): Promise<void> {}
 
 export function buildDefaultTestCliBackend(
   params: TestCliBackendParams = {},
@@ -239,6 +238,10 @@ export function buildPreparedCliRunContext(
         (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
       runtimeArtifact: overrides.runtimeArtifact,
     },
+    executionTarget: resolveCliExecutionTarget({
+      params: { sessionEntry: overrides.sessionEntry },
+      backendId: provider,
+    }),
     preparedBackend: {
       backend,
       env: overrides.preparedEnv ?? {},
@@ -397,7 +400,7 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
         now: Date.parse(entry.timestamp),
         message: entry.message,
       });
-      if (!appended) {
+      if (!appended.ok || !appended.value) {
         throw new Error("Could not append CLI fixture transcript message");
       }
     },

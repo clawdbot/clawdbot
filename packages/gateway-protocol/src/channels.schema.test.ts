@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ChannelsStatusResultSchema,
   TalkSessionCancelOutputResultSchema,
+  WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
 } from "./schema/channels.js";
 
@@ -35,6 +36,23 @@ describe("WebLoginWaitParamsSchema", () => {
       }),
     ).toBe(false);
   });
+
+  it("accepts an explicit channel and opaque login session key", () => {
+    expect(
+      validate.Check({
+        channel: "openclaw-weixin",
+        sessionKey: "2d3c49c2-5a88-4e90-9a36-264834875ecc",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("WebLoginStartParamsSchema", () => {
+  const validate = Compile(WebLoginStartParamsSchema);
+
+  it("accepts an explicit QR-login channel", () => {
+    expect(validate.Check({ channel: "openclaw-weixin" })).toBe(true);
+  });
 });
 
 describe("TalkSessionCancelOutputResultSchema", () => {
@@ -63,7 +81,7 @@ describe("TalkSessionCancelOutputResultSchema", () => {
 });
 
 describe("ChannelsStatusResultSchema", () => {
-  /** Compiled status validator for channel docking diagnostics. */
+  /** Compiled validator for channel status diagnostics. */
   const validate = Compile(ChannelsStatusResultSchema);
 
   it("accepts gateway event-loop diagnostics emitted by channels.status", () => {

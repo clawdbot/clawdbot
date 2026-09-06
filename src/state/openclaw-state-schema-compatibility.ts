@@ -98,9 +98,6 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
     "current_conversation_bindings.conversation_kind": [
       "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
     ],
-    "current_conversation_bindings.target_agent_id": [
-      "target_agent_id TEXT NOT NULL DEFAULT 'main'",
-    ],
     "operator_approvals.resolution_ref": ["resolution_ref TEXT"],
     "worker_environments.desktop_json": ["desktop_json TEXT"],
     "worker_environments.bootstrap_install_kind": ["bootstrap_install_kind TEXT"],

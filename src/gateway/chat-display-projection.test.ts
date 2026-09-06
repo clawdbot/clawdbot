@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
@@ -22,7 +23,85 @@ function projectHistoryTransports(message: Record<string, unknown>) {
   return [websocket, sse];
 }
 
+describe("private yield context in chat history", () => {
+  it.each(["embedded", "native"])(
+    "hides the %s yield input without changing private provenance",
+    (runtime) => {
+      const privateContext = "PRIVATE_YIELD_CONTEXT";
+      const yieldArguments = Object.freeze({
+        message: privateContext,
+        acknowledgment: "Waiting for the background task.",
+      });
+      const message = {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "yield-1",
+            name: "sessions_yield",
+            arguments: yieldArguments,
+            ...(runtime === "native" ? { input: yieldArguments } : {}),
+          },
+          {
+            type: "toolCall",
+            id: "send-1",
+            name: "message",
+            arguments: { message: "Public reply" },
+          },
+        ],
+      };
+
+      for (const messages of projectHistoryTransports(message)) {
+        expect(messages).toEqual([
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "yield-1",
+                name: "sessions_yield",
+                arguments: { acknowledgment: "Waiting for the background task." },
+                ...(runtime === "native"
+                  ? { input: { acknowledgment: "Waiting for the background task." } }
+                  : {}),
+              },
+              {
+                type: "toolCall",
+                id: "send-1",
+                name: "message",
+                arguments: { message: "Public reply" },
+              },
+            ],
+          },
+        ]);
+      }
+      expect(yieldArguments.message).toBe(privateContext);
+    },
+  );
+});
+
 describe("managed document chat history", () => {
+  it("projects durable display content without dropping canonical assistant blocks", () => {
+    const canonical = [
+      { type: "text", text: "Slides ready" },
+      { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+    ];
+    const attachment = {
+      type: "attachment",
+      attachment: { kind: "document", label: "slides.pptx" },
+    };
+    const message = {
+      role: "assistant",
+      content: canonical,
+      openclawDisplayContent: [...canonical, attachment],
+    };
+
+    for (const messages of projectHistoryTransports(message)) {
+      expect(messages).toEqual([{ role: "assistant", content: [...canonical, attachment] }]);
+    }
+    expect(message.content).toBe(canonical);
+  });
+
   it("keeps the attachment envelope while stripping URL capabilities", () => {
     const message = {
       role: "assistant",
@@ -927,5 +1006,39 @@ describe("chat display message-tool projection", () => {
         }),
       }),
     );
+  });
+});
+
+describe("TTS supplement matching", () => {
+  it("matches later audio against the text left by an earlier supplement", () => {
+    const marker = { textSha256: createHash("sha256").update("same").digest("hex") };
+    const firstAudio = { type: "audio", url: "https://example.test/first.mp3" };
+    const secondAudio = { type: "audio", url: "https://example.test/second.mp3" };
+    const caption = { type: "input_text", text: "caption" };
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: "same" }], timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "same" }], timestamp: 2 },
+      {
+        role: "assistant",
+        content: [caption, firstAudio],
+        openclawTtsSupplement: marker,
+      },
+      { role: "assistant", content: [secondAudio], openclawTtsSupplement: marker },
+    ];
+    const original = structuredClone(messages);
+
+    expect(projectChatDisplayMessages(messages)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "same" }, secondAudio],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "same" }, caption, firstAudio],
+        timestamp: 2,
+      },
+    ]);
+    expect(messages).toEqual(original);
   });
 });

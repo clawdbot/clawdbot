@@ -292,9 +292,7 @@ describe("session permission filesystem tools", () => {
             input:
               "*** Begin Patch\n*** Update File: ../../shared.txt\n@@\n-shared\n+patched\n*** End Patch",
           });
-          await expect(fs.readFile(path.join(root, "shared.txt"), "utf8")).resolves.toBe(
-            "patched\n",
-          );
+          await expect(fs.readFile(path.join(root, "shared.txt"), "utf8")).resolves.toBe("patched");
           await expect(readTool.execute("outside-read", { path: outside })).rejects.toThrow(
             /sandbox root/i,
           );
@@ -342,24 +340,86 @@ describe("session permission filesystem tools", () => {
     });
   });
 
-  it("keeps full mode filesystem access unrestricted", async () => {
-    await withTempDir("openclaw-permission-full-", async (root) => {
-      const outside = path.join(path.dirname(root), `outside-${path.basename(root)}.txt`);
-      await fs.writeFile(outside, "outside", "utf8");
-      try {
-        const tools = createOpenClawCodingTools({
-          workspaceDir: root,
-          sessionPermissionPolicy: { root, mode: "full" },
-        });
-        const { readTool, writeTool } = expectReadWriteEditTools(tools);
-        expect(getTextContent(await readTool.execute("full-read", { path: outside }))).toContain(
-          "outside",
-        );
-        await writeTool.execute("full-write", { path: outside, content: "changed" });
-        await expect(fs.readFile(outside, "utf8")).resolves.toBe("changed");
-      } finally {
-        await fs.rm(outside, { force: true });
+  it("denies exec when a turn tightens the dispatch-provided full mode", async () => {
+    await withTempDir("openclaw-permission-exec-", async (root) => {
+      const tools = createOpenClawCodingTools({
+        workspaceDir: root,
+        sessionPermissionPolicy: { root, mode: "full" },
+        exec: { host: "gateway", mode: "full", security: "deny", ask: "off" },
+      });
+      const exec = tools.find((tool) => tool.name === "exec");
+      if (!exec) {
+        throw new Error("expected exec tool");
       }
+      await expect(
+        exec.execute("tightened-exec", { command: "echo exec-policy-proof" }),
+      ).rejects.toThrow(/security=deny/);
+    });
+  });
+
+  describe.each([undefined, true] as const)("full mode with required root=%s", (required) => {
+    it("lists directories without granting access beyond a required root", async () => {
+      await withTempDir("openclaw-listing-root-", async (parent) => {
+        const root = path.join(await fs.realpath(parent), "workspace");
+        const outside = path.join(await fs.realpath(parent), "other-agent");
+        await fs.mkdir(path.join(root, "nested"), { recursive: true });
+        await fs.mkdir(outside);
+        await fs.writeFile(path.join(outside, "private.txt"), "private");
+        const ls = createOpenClawCodingTools({
+          workspaceDir: root,
+          requireWorkspaceOnly: required,
+          sessionPermissionPolicy: { root, mode: "full" },
+        }).find((tool) => tool.name === "ls");
+        if (!ls) {
+          throw new Error("Expected directory discovery tool.");
+        }
+        expect(getTextContent(await ls.execute("inside", { path: "." }))).toBe('"nested/"');
+        if (required) {
+          await expect(ls.execute("outside", { path: outside })).rejects.toThrow(/sandbox root/i);
+        } else {
+          expect(getTextContent(await ls.execute("outside", { path: outside }))).toBe(
+            '"private.txt"',
+          );
+        }
+      });
+    });
+
+    it.each(fileToolCases)("preserves $name authority and final file effects", async (testCase) => {
+      await withTempDir("openclaw-permission-full-", async (parent) => {
+        const root = path.join(await fs.realpath(parent), "workshop");
+        const inside = path.join(root, "proof.txt");
+        const outside = path.join(parent, "other-agent.txt");
+        await fs.mkdir(root);
+        await fs.writeFile(outside, "original\n");
+        if (testCase.initial !== undefined) {
+          await fs.writeFile(inside, testCase.initial);
+        }
+        const tool = createOpenClawCodingTools({
+          workspaceDir: root,
+          requireWorkspaceOnly: required,
+          sessionPermissionPolicy: { root, mode: "full" },
+        }).find((entry) => entry.name === testCase.name);
+        if (!tool) {
+          throw new Error(`expected ${testCase.name} tool`);
+        }
+        const result = await tool.execute("inside", testCase.args(inside));
+        if (testCase.name === "read") {
+          expect(getTextContent(result)).toContain(testCase.expected);
+        }
+        await expect(fs.readFile(inside, "utf8")).resolves.toBe(testCase.expected);
+        if (required) {
+          await expect(tool.execute("outside", testCase.args(outside))).rejects.toThrow(
+            /sandbox root/i,
+          );
+          await expect(fs.readFile(outside, "utf8")).resolves.toBe("original\n");
+        } else {
+          const outsideResult = await tool.execute("outside", testCase.args(outside));
+          if (testCase.name === "read") {
+            expect(getTextContent(outsideResult)).toContain(testCase.expected);
+          }
+          await expect(fs.readFile(outside, "utf8")).resolves.toBe(testCase.expected);
+        }
+      });
     });
   });
 });

@@ -32,6 +32,7 @@ enum OpenClawProcessEntrypoint {
 }
 
 struct OpenClawApp: App {
+    // periphery:ignore - SwiftUI installs the application delegate through this property wrapper.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @Environment(\.openWindow) private var openWindow
     @State private var state: AppState
@@ -69,15 +70,19 @@ struct OpenClawApp: App {
     }
 
     var body: some Scene {
-        Window("OpenClaw Settings", id: SettingsWindowOpener.windowID) {
-            SettingsRootView(state: self.state, updater: self.delegate.updaterController)
-                .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
+        // Register before any window is opened, including connection recovery from the dashboard.
+        let openWindow = self.openWindow
+        ConnectionWindowOpener.shared.register {
+            openWindow(id: ConnectionWindowOpener.windowID)
+        }
+        return Window("OpenClaw Connection", id: ConnectionWindowOpener.windowID) {
+            ConnectionWindow(state: self.state)
                 .environment(self.tailscaleService)
-                .background(SettingsWindowOpenRegistrar())
         }
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
-        .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
+        // Keep this a preferred size so the content can fit smaller displays.
+        .defaultSize(width: ConnectionWindow.width, height: ConnectionWindow.height)
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -92,12 +97,20 @@ struct OpenClawApp: App {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
-                    self.openWindow(id: SettingsWindowOpener.windowID)
+                Button("Settings…") {
+                    AppNavigationActions.openSettings()
                 }
                 .keyboardShortcut(",", modifiers: .command)
+
+                Button("Connection…") {
+                    AppNavigationActions.openConnection()
+                }
             }
-            DashboardGatewayCommands(dashboardManager: DashboardManager.shared)
+            CommandGroup(replacing: .appInfo) {
+                Button("About OpenClaw") {
+                    AppNavigationActions.openAbout()
+                }
+            }
             SidebarCommands()
             CommandMenu("Navigate") {
                 Button("Back") {
@@ -117,6 +130,7 @@ struct OpenClawApp: App {
                 }
                 .keyboardShortcut("k", modifiers: .command)
             }
+            DashboardGatewayCommands()
         }
     }
 
@@ -127,21 +141,6 @@ struct OpenClawApp: App {
             return
         }
         self.logger.info("attach-only flag enabled")
-    }
-}
-
-struct SettingsWindowOpenRegistrar: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .onAppear {
-                let openWindow = self.openWindow
-                SettingsWindowOpener.shared.register {
-                    openWindow(id: SettingsWindowOpener.windowID)
-                }
-            }
     }
 }
 
@@ -159,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Start tunnel retirement before helper drains can consume the quit deadline.
         async let tunnelCleanup: Void = RemoteTunnelManager.shared.shutdown()
         async let gatewayCleanup: Void = GatewayConnection.shared.shutdown()
-        async let profileCleanup: Void = MacGatewayConnectionFleet.shared.shutdown()
+        async let profileCleanup = MacGatewayConnectionFleet.shared.shutdown()
         // CUA must drain its worker before the node closes the daemon socket.
         if AppLaunchRuntimePlan.current.allowsCuaComputerControl {
             await CuaDriverHostCoordinator.shared.shutdown()
@@ -340,13 +339,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await ConnectionModeCoordinator.shared.apply(
                     mode: state.connectionMode,
                     paused: state.isPaused)
-                guard shouldWaitForConnection, launchPlan.allowsAutomaticPresentation else { return }
-                await self.scheduleFirstRunOnboardingIfNeeded()
+                guard launchPlan.allowsAutomaticPresentation else { return }
+                if shouldWaitForConnection {
+                    await self.scheduleFirstRunOnboardingIfNeeded()
+                }
+                // Attachment must settle before deciding whether this app needs to install a CLI.
+                if !PostUpdateController.shared.startIfNeeded() {
+                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+                }
             }
         }
         TerminationSignalWatcher.shared.start()
         MacNodeModeCoordinator.shared.start()
         if launchPlan.allowsInteractiveServices {
+            GatewaysMainMenu.shared.install()
+            BackgroundSessionNotifications.shared.start()
             NodePairingApprovalPrompter.shared.start()
             DevicePairingApprovalPrompter.shared.start()
             ExecApprovalsPromptServer.shared.start()
@@ -361,13 +368,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.reapOrphanedTunnels() }
         AppStateStore.shared.applyComputerControlHostState()
-        if launchPlan.allowsAutomaticPresentation {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                if !PostUpdateController.shared.startIfNeeded() {
-                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
-                }
-            }
-        }
         if launchPlan.allowsAutomaticPresentation {
             Task {
                 try? await Task.sleep(for: .seconds(2))
@@ -388,10 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
         if launchPlan.shouldAutoOpenChat(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
-            Task { @MainActor in
-                let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                WebChatManager.shared.show(sessionKey: sessionKey)
-            }
+            WebChatManager.shared.show()
         }
         if launchPlan.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
@@ -400,6 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
+        BackgroundSessionNotifications.shared.stop()
         self.statusMenuController?.stop()
         QuickChatController.shared.stop()
         PresenceReporter.shared.stop()
@@ -428,6 +426,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard self.terminationCleanupTask == nil else {
             return .terminateLater
         }
+        // AppKit will not tear down onboarding while its sheet remains attached.
+        // Retire it before terminateLater starts the asynchronous cleanup loop.
+        OnboardingController.shared.close()
         self.terminationCleanupTask = Task { @MainActor [weak self] in
             async let processCleanupResult: Void = Self.cleanUpProcesses()
             async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()

@@ -37,6 +37,7 @@ describe("worker environment service", () => {
       validateWorkerTurn: vi.fn(() => true),
       isWorkerTurnToolAuthorized: vi.fn(() => true),
       updateAckCursors: vi.fn(),
+      prepareWorkspaceResultOwnerRevocation: vi.fn(),
       registerTurnClaimClosedHandler: vi.fn(() => () => {}),
     };
     const workerService = support.createService(support.createProvider(), {

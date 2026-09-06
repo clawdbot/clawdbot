@@ -37,7 +37,9 @@ function setupFixture(
   const selectedHarness =
     mode === "override" ? path.join(root, "operator's $& pnpm harness") : harness;
   copyDockerSchedulerHarness(harness);
-  if (selectedHarness !== harness) mkdirSync(selectedHarness, { recursive: true });
+  if (selectedHarness !== harness) {
+    mkdirSync(selectedHarness, { recursive: true });
+  }
   const marker = path.join(root, "calls.jsonl");
   const poison = path.join(root, "target-ran");
   const toolchainMarker = path.join(root, "toolchains.jsonl");
@@ -53,6 +55,7 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
   lane: process.env.OPENCLAW_DOCKER_ALL_LANE_NAME,
   cwd: process.cwd(),
   phase: process.argv[2],
+  skipDockerBuild: process.env.OPENCLAW_SKIP_DOCKER_BUILD,
   registry: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
   registryVersion: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION,
   registrySha256: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256,
@@ -95,6 +98,7 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
           ? {}
           : {
               "test:docker:gateway-network": "node marker.cjs",
+              "test:docker:package-install": "node marker.cjs",
               "test:docker:e2e-build": "node marker.cjs package-image",
               "test:docker:cleanup": "node marker.cjs cleanup",
               "test:docker:all": `node ${quote(path.join(harness, "scripts/test-docker-all.mjs"))}`,
@@ -222,6 +226,93 @@ function runFixture(
 }
 
 describe("Docker scheduler trusted harness execution", () => {
+  posixIt(
+    "preserves prepared core dependencies without shared builds for a package-only lane",
+    () => {
+      const fixture = setupFixture("split", false, true);
+      const { result } = runFixture(fixture, "split", ["docker-package-install"], {
+        env: {
+          OPENCLAW_CURRENT_PACKAGE_VERSION: "",
+          OPENCLAW_CURRENT_PACKAGE_SHA256: "",
+          OPENCLAW_DOCKER_ALL_BUILD: "1",
+        },
+      });
+
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const calls = readFileSync(fixture.marker, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        lane: "docker-package-install",
+        package: fixture.tarball,
+        registry: fixture.registry,
+        registryVersion: "2026.8.1",
+        registrySha256: fixture.registrySha256,
+        skipDockerBuild: "0",
+      });
+    },
+  );
+
+  posixIt.each([
+    { failure: "timeout", attempts: 1, passed: false },
+    { failure: "deterministic failure", attempts: 1, passed: false },
+    { failure: "rate limited", attempts: 2, passed: true },
+  ])("retries only diagnosed transient failures: $failure", ({ failure, attempts, passed }) => {
+    const fixture = setupFixture("split");
+    const catalog = path.join(fixture.harness, "scripts/lib/docker-e2e-scenarios.mts");
+    // Keep the real scheduler and catalog policy, with a short fixture-only deadline.
+    writeFileSync(
+      catalog,
+      readFileSync(catalog, "utf8").replace(
+        "const LIVE_PROFILE_TIMEOUT_MS = 30 * 60 * 1000;",
+        "const LIVE_PROFILE_TIMEOUT_MS = 1_000;",
+      ),
+    );
+    const attemptLog = path.join(fixture.root, "attempts");
+    const command = path.join(fixture.root, "live-attempt.cjs");
+    writeFileSync(
+      command,
+      `const fs = require("node:fs");
+const attemptLog = ${JSON.stringify(attemptLog)};
+fs.appendFileSync(attemptLog, "attempt\\n");
+const attempt = fs.readFileSync(attemptLog, "utf8").trim().split("\\n").length;
+if (${JSON.stringify(failure)} === "timeout") {
+  setInterval(() => {}, 1000);
+} else if (attempt === 1) {
+  console.error(${JSON.stringify(failure)});
+  process.exitCode = 1;
+}
+`,
+    );
+    writeFileSync(
+      path.join(fixture.harness, "scripts/test-live-models-docker.sh"),
+      `#!/usr/bin/env bash\nexec ${quote(process.execPath)} ${quote(command)}\n`,
+    );
+    const { result, logDir } = runFixture(
+      fixture,
+      "split",
+      ["live-models", "gateway-concurrency"],
+      {
+        env: {
+          OPENCLAW_DOCKER_ALL_LIVE_RETRIES: "1",
+          OPENCLAW_DOCKER_ALL_FAIL_FAST: "0",
+          OPENCLAW_DOCKER_ALL_PARALLELISM: "1",
+        },
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(passed ? 0 : 1);
+    expect(readFileSync(attemptLog, "utf8").trim().split("\n")).toHaveLength(attempts);
+    const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
+    const live = summary.lanes.find((lane: { name: string }) => lane.name === "live-models");
+    expect(live.attempts).toHaveLength(attempts);
+    expect(live.timedOut).toBe(failure === "timeout");
+    expect(
+      summary.lanes.find((lane: { name: string }) => lane.name === "gateway-concurrency").status,
+    ).toBe(0);
+  });
+
   posixIt.each(["split", "override", "local"] as const)(
     "executes current scripts with the frozen candidate in %s mode",
     (mode) => {
@@ -239,7 +330,9 @@ describe("Docker scheduler trusted harness execution", () => {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
-      expect(calls.map((call) => call.lane).sort()).toEqual([...laneNames].sort());
+      expect(calls.map((call) => call.lane).toSorted((a, b) => a.localeCompare(b))).toEqual(
+        laneNames.toSorted((a, b) => a.localeCompare(b)),
+      );
       for (const call of calls) {
         expect(call).toMatchObject({
           target: fixture.target,

@@ -1,13 +1,14 @@
 /** Tests configured ACP binding lifecycle behavior. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AcpSessionResolution } from "./control-plane/manager.types.js";
 import {
   buildConfiguredAcpSessionKey,
   type ConfiguredAcpBindingSpec,
 } from "./persistent-bindings.types.js";
 
 const managerMocks = vi.hoisted(() => ({
-  resolveSession: vi.fn(),
+  resolveSession: vi.fn<(params: { sessionKey: string }) => AcpSessionResolution>(),
   closeSession: vi.fn(),
   initializeSession: vi.fn(),
   setSessionConfigOption: vi.fn(),
@@ -33,7 +34,9 @@ let ensureConfiguredAcpBindingSession: typeof import("./persistent-bindings.life
 
 beforeEach(async () => {
   vi.resetModules();
-  managerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
+  managerMocks.resolveSession
+    .mockReset()
+    .mockImplementation(({ sessionKey }) => ({ kind: "none", sessionKey }));
   managerMocks.closeSession.mockReset().mockResolvedValue({
     runtimeClosed: true,
     metaCleared: false,
@@ -67,6 +70,7 @@ function mockReadySession(params: {
   managerMocks.resolveSession.mockReturnValue({
     kind: "ready",
     sessionKey,
+    agentId: params.spec.agentId,
     meta: {
       backend: "acpx",
       agent: params.spec.acpAgentId ?? params.spec.agentId,
@@ -143,7 +147,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(ensured).toEqual({ ok: true, sessionKey });
     expect(managerMocks.setSessionConfigOption.mock.calls).toEqual(
       Object.entries(runtimeOptions).map(([key, value]) => [
-        { cfg: baseCfg, sessionKey, key, value },
+        { cfg: baseCfg, sessionKey, agentId: spec.agentId, key, value },
       ]),
     );
     expect(managerMocks.closeSession).not.toHaveBeenCalled();
@@ -231,7 +235,6 @@ describe("ensureConfiguredAcpBindingSession", () => {
       acpAgentId: "codex",
       model: "anthropic/claude-sonnet-4-6",
     });
-    managerMocks.resolveSession.mockReturnValue({ kind: "none" });
 
     const ensured = await ensureConfiguredAcpBindingSession({
       cfg: baseCfg,
@@ -252,7 +255,6 @@ describe("ensureConfiguredAcpBindingSession", () => {
       model: "ollama-cloud/glm-5.2:cloud",
       thinking: "off",
     });
-    managerMocks.resolveSession.mockReturnValue({ kind: "none" });
 
     const ensured = await ensureConfiguredAcpBindingSession({
       cfg: baseCfg,
@@ -283,6 +285,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(managerMocks.setSessionConfigOption).toHaveBeenCalledWith({
       cfg: baseCfg,
       sessionKey,
+      agentId: spec.agentId,
       key: "thinking",
       value: "off",
     });

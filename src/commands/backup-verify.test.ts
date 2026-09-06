@@ -8,10 +8,18 @@ import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
+import * as diskSpace from "../infra/disk-space.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildBackupArchivePath, buildBackupArchiveRoot } from "./backup-shared.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
-import { backupVerifyCommand, testApi, verifyBackupArchive } from "./backup-verify.js";
+import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
+
+vi.mock("tar", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tar")>();
+  return { ...actual, t: vi.fn(actual.t), x: vi.fn(actual.x) };
+});
+
+const actualTar = await vi.importActual<typeof import("tar")>("tar");
 
 const TEST_ARCHIVE_ROOT = "2026-03-09T00-00-00.000Z-openclaw-backup";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -200,6 +208,8 @@ async function createSqlitePayload(setup: (database: DatabaseSync) => void): Pro
 describe("backupVerifyCommand", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.mocked(tar.t).mockReset().mockImplementation(actualTar.t);
+    vi.mocked(tar.x).mockReset().mockImplementation(actualTar.x);
   });
 
   it("verifies a valid backup archive", async () => {
@@ -282,6 +292,50 @@ describe("backupVerifyCommand", () => {
       `Backup archive verification failed: ${archivePath}. ${detail}`,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    { name: "missing link target", type: "SymbolicLink" as const, detail: "linkpath required" },
+    { name: "missing path", type: "File" as const, detail: "path is required" },
+    { name: "forbidden link target", type: "File" as const, detail: "linkpath forbidden" },
+    { name: "bad checksum", type: "File" as const, detail: "checksum failure" },
+  ])("rejects a $name header after valid backup entries", async ({ name, type, detail }) => {
+    const tempDir = tempDirs.make("openclaw-backup-verify-invalid-header-");
+    const archivePath = path.join(tempDir, "invalid.tar.gz");
+    const payloadPath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/note.txt`;
+    const invalidEntry = encodeTarEntry({
+      path: name === "missing path" ? "" : `${TEST_ARCHIVE_ROOT}/payload/invalid`,
+      type,
+      ...(name === "forbidden link target" ? { linkpath: "note.txt" } : {}),
+    });
+    if (name === "bad checksum") {
+      invalidEntry.writeUInt8(invalidEntry.readUInt8(0) ^ 1, 0);
+    }
+    await fs.writeFile(
+      archivePath,
+      gzipSync(
+        Buffer.concat([
+          encodeTarEntry({
+            path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+            contents: JSON.stringify(createBackupManifest(payloadPath)),
+          }),
+          encodeTarEntry({ path: payloadPath, contents: "retained payload\n" }),
+          invalidEntry,
+          Buffer.alloc(1024),
+        ]),
+      ),
+    );
+    const runtime = createBackupVerifyRuntime();
+
+    await runCommandWithRuntime(runtime, async () => {
+      await backupVerifyCommand(runtime, { archive: archivePath });
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Backup archive verification failed: ${archivePath}. Archive is not a valid OpenClaw backup. ${detail}. Choose another archive or create a new one with \`openclaw backup create\`.`,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("verifies SQLite integrity and the canonical shared-state role", async () => {
@@ -1096,46 +1150,87 @@ describe("backupVerifyCommand", () => {
     );
   });
 
-  it("rejects SQLite extraction before writing when temporary space is insufficient", () => {
-    expect(() =>
-      testApi.assertSqliteExtractionBudget({
-        entries: [
-          {
-            raw: "backup/payload/state/openclaw.sqlite",
-            normalized: "backup/payload/state/openclaw.sqlite",
-            stateAssetRoot: "backup/payload",
-            type: "File",
-            size: 2 * 1024 * 1024,
-          },
-        ],
-        tempRoot: "/tmp",
-        readDiskSpace: () => ({
-          targetPath: "/tmp",
-          checkedPath: "/tmp",
-          availableBytes: 128 * 1024 * 1024,
-          totalBytes: 1024 * 1024 * 1024,
-        }),
-      }),
-    ).toThrow(/only 128 MiB is available/iu);
-  });
+  it.each([
+    {
+      name: "temporary space is insufficient",
+      availableBytes: 128 * 1024 * 1024,
+      simulatedSize: undefined,
+      error: /only 128 MiB is available/iu,
+    },
+    {
+      name: "the simulated snapshot size exceeds the hard limit",
+      availableBytes: null,
+      simulatedSize: 64 * 1024 * 1024 * 1024 + 1,
+      error: /verification limit is 64 GiB/iu,
+    },
+  ])(
+    "rejects SQLite extraction before writing when $name",
+    async ({ availableBytes, simulatedSize, error }) => {
+      const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+      const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+      const sqlitePayload = await createSqlitePayload((database) => {
+        database.exec(`
+          CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL);
+          INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
+        `);
+      });
 
-  it("rejects SQLite extraction beyond the verification hard limit", () => {
-    expect(() =>
-      testApi.assertSqliteExtractionBudget({
-        entries: [
-          {
-            raw: "backup/payload/state/openclaw.sqlite",
-            normalized: "backup/payload/state/openclaw.sqlite",
-            stateAssetRoot: "backup/payload",
-            type: "File",
-            size: 64 * 1024 * 1024 * 1024 + 1,
-          },
-        ],
-        tempRoot: "/tmp",
-        readDiskSpace: () => null,
-      }),
-    ).toThrow(/verification limit is 64 GiB/iu);
-  });
+      await withBrokenArchiveFixture(
+        {
+          tempPrefix: "openclaw-backup-extraction-budget-",
+          manifestAssetArchivePath: stateAssetArchivePath,
+          payloads: [
+            {
+              fileName: "openclaw.sqlite",
+              contents: sqlitePayload,
+              archivePath: sqliteArchivePath,
+            },
+          ],
+        },
+        async (archivePath) => {
+          vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) =>
+            availableBytes === null
+              ? null
+              : {
+                  targetPath,
+                  checkedPath: targetPath,
+                  availableBytes,
+                  totalBytes: 1024 * 1024 * 1024,
+                },
+          );
+          if (simulatedSize !== undefined) {
+            vi.mocked(tar.t).mockImplementation((options) => {
+              if (options.filter) {
+                return actualTar.t(options);
+              }
+              return actualTar.t({
+                ...options,
+                onReadEntry: (entry) => {
+                  const originalSize = entry.size;
+                  if (entry.path === sqliteArchivePath) {
+                    entry.size = simulatedSize;
+                  }
+                  try {
+                    options.onReadEntry?.(entry);
+                  } finally {
+                    entry.size = originalSize;
+                  }
+                },
+              });
+            });
+          }
+          const mkdtemp = vi.spyOn(fs, "mkdtemp");
+          const extract = vi.mocked(tar.x).mockClear();
+
+          await expect(
+            backupVerifyCommand(createBackupVerifyRuntime(), { archive: archivePath }),
+          ).rejects.toThrow(error);
+          expect(mkdtemp).not.toHaveBeenCalled();
+          expect(extract).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
 
   it("ignores package-owned and transient SQLite-shaped state files", async () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
@@ -1171,6 +1266,26 @@ describe("backupVerifyCommand", () => {
             fileName: "reindex-lock.sqlite-wal",
             contents: invalidSqlite,
             archivePath: `${stateAssetArchivePath}/memory/main.sqlite.reindex-lock.sqlite-wal`,
+          },
+          {
+            fileName: "generation-writer.sqlite",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-writer.sqlite`,
+          },
+          {
+            fileName: "generation-writer.sqlite-shm",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-writer.sqlite-shm`,
+          },
+          {
+            fileName: "generation-lock.sqlite",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-lock.sqlite`,
+          },
+          {
+            fileName: "generation-lock.sqlite-journal",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-lock.sqlite-journal`,
           },
           {
             fileName: "reindex-tmp",

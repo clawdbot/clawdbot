@@ -1,8 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
+  type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -11,10 +13,18 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { materializeProjectClone } from "../../projects/project-clone.js";
 import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { githubApiToken } from "../control-ui-github-api.js";
-import { prepareWorktreeSessionTitle } from "../dashboard-session-title.js";
+import {
+  generateWorktreeSessionTitle,
+  hasExplicitSessionName,
+  resolveExplicitSessionName,
+} from "../dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
+import type {
+  PrepareGatewaySessionLifecycle,
+  PreparedGatewaySessionLifecycle,
+} from "../session-lifecycle-preparation.js";
 import { prepareSessionWorktree } from "../session-worktree-preparation.js";
 import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
@@ -26,6 +36,118 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 const SESSION_PROJECT_OWNERSHIP_ERROR =
   "Session changed while preparing its project; retry the task.";
 const workspacePreparations = new KeyedAsyncQueue();
+
+type RepositorySource = NonNullable<SessionsCreateParams["repository"]>;
+
+export function resolveSessionRepositoryCreation(
+  params: SessionsCreateParams,
+  hasInitialTurn: boolean,
+): Result<RepositorySource | undefined, ErrorShape> {
+  if (!params.repository) {
+    return ok(undefined);
+  }
+  const url = normalizeSessionProjectGitUrl(params.repository.url);
+  const ref = params.repository.ref?.trim();
+  if (!url || (ref !== undefined && (!ref || ref.startsWith("-") || /\s|\0/u.test(ref)))) {
+    return err(
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Use a GitHub repository URL and a nonempty branch, tag, or commit ref.",
+      ),
+    );
+  }
+  if (
+    params.cwd ||
+    params.execNode ||
+    params.projectId ||
+    params.projectGitUrl ||
+    params.worktree !== undefined ||
+    params.worktreeBaseRef ||
+    params.worktreeName ||
+    params.catalogId
+  ) {
+    return err(
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "sessions.create repository cannot be combined with local workspace or catalog options.",
+      ),
+    );
+  }
+  if (hasInitialTurn) {
+    return err(
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Create the repository session without an initial turn, dispatch it with sessions.dispatch, then send the message with sessions.send.",
+      ),
+    );
+  }
+  return ok({ url, ...(ref ? { ref } : {}) });
+}
+
+export function prepareSessionRepositoryWorkspace(
+  repository: RepositorySource,
+  options: { runSetupScript: boolean; assertCurrent: () => void },
+): PrepareGatewaySessionLifecycle {
+  const { assertCurrent } = options;
+  return async (target) => {
+    const store = getSessionRepositoryWorkspaceStore();
+    const existing = store.find({ agentId: target.agentId, sessionKey: target.key });
+    if (
+      target.entry &&
+      (!target.entry.repositoryWorkspaceId ||
+        target.entry.repositoryWorkspaceId !== existing?.workspaceId)
+    ) {
+      return err(
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "repository source requires a new repository session",
+        ),
+      );
+    }
+    if (
+      existing &&
+      (existing.url !== repository.url || existing.requestedRef !== (repository.ref ?? null))
+    ) {
+      return err(
+        errorShape(ErrorCodes.INVALID_REQUEST, "session repository source cannot be changed"),
+      );
+    }
+    assertCurrent();
+    const workspace = store.create({
+      agentId: target.agentId,
+      sessionKey: target.key,
+      url: repository.url,
+      requestedRef: repository.ref,
+      runSetupScript: options.runSetupScript,
+      assertCurrent,
+    });
+    return ok({
+      repositoryWorkspaceId: workspace.workspaceId,
+      ...(!existing
+        ? {
+            rollback: async () => {
+              // Creation still holds the session lifecycle lock. Cleanup owns only the
+              // untouched row it allocated, even when the initiating caller has gone away.
+              await store.delete({
+                workspaceId: workspace.workspaceId,
+                assertCurrent: () => {
+                  const current = store.get(workspace.workspaceId);
+                  if (
+                    current &&
+                    (current.agentId !== target.agentId ||
+                      current.sessionKey !== target.key ||
+                      current.revision !== workspace.revision)
+                  ) {
+                    throw new Error("Repository preparation changed before rollback");
+                  }
+                },
+              });
+            },
+          }
+        : {}),
+    });
+  };
+}
 
 export function normalizeSessionProjectGitUrl(value: unknown): string | undefined {
   return typeof value === "string" && value.length <= 2048
@@ -161,19 +283,26 @@ export async function prepareSessionWorkspace(params: {
       assertRunOwnership();
       emitAgentRunStatusEvent({ runId: clientRunId, sessionKey, agentId, phase });
     };
-    const needsTitle = pending && !pending.name && !saved.label && !saved.displayName;
+    const needsTitle = pending && !pending.name && !hasExplicitSessionName(saved);
     if (needsTitle) {
       status("naming_worktree");
     }
-    const title = needsTitle
-      ? prepareWorktreeSessionTitle({
-          cfg,
-          agentId,
-          entry: saved,
-          userMessage: pending.titleSource,
-          onError: (error) => context.logGateway.warn(`worktree title failed: ${String(error)}`),
-        })
-      : undefined;
+    const title =
+      pending && !pending.name
+        ? await generateWorktreeSessionTitle({
+            cfg,
+            agentId,
+            entry: saved,
+            sessionId: saved.sessionId,
+            sessionKey,
+            storePath,
+            userMessage: pending.titleSource,
+            commitGuard: assertRunOwnership,
+            onPersisted: () =>
+              emitSessionsChanged(context, { sessionKey, agentId, reason: "chat.title" }),
+            onError: (error) => context.logGateway.warn(`worktree title failed: ${String(error)}`),
+          })
+        : undefined;
     let prepared: PreparedGatewaySessionLifecycle = {
       spawnedCwd: root.value.sessionCwd,
       sessionRoot: root.value.sessionRoot,
@@ -185,8 +314,7 @@ export async function prepareSessionWorkspace(params: {
         workspace: directory,
         name: pending.name,
         baseRef: pending.baseRef,
-        label: saved.label ?? saved.displayName,
-        title,
+        label: title ?? resolveExplicitSessionName(saved) ?? pending.titleSource,
         runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         signal,
         commitGuard: assertRunOwnership,
@@ -240,9 +368,6 @@ export async function prepareSessionWorkspace(params: {
     delete entry.pendingWorktree;
     assertRunOwnership();
     emitSessionsChanged(context, { sessionKey, agentId, reason: "project" });
-    if (await title?.persist(agentId, entry, sessionKey, storePath)) {
-      emitSessionsChanged(context, { sessionKey, agentId, reason: "chat.title" });
-    }
   });
   assertRunOwnership();
   return assertRunOwnership;

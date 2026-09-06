@@ -1,7 +1,5 @@
 // Shared Gateway service CLI helpers: status styles, env filtering, port parsing, and hints.
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
-import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
-import { createConfigIO } from "../../config/io.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -10,13 +8,9 @@ import {
 } from "../../daemon/constants.js";
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
-import {
-  buildPlatformRuntimeLogHints,
-  buildPlatformServiceStartHints,
-} from "../../daemon/runtime-hints.js";
-import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import { resolveGatewayService } from "../../daemon/service.js";
-import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
+import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
+import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-exec.js";
+import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
@@ -33,16 +27,36 @@ export function createDaemonInstallActionContext(jsonFlag: unknown) {
   };
 }
 
-/** Block service installation in Nix mode, where managed service install is unsupported. */
-export function failIfNixDaemonInstallMode(
-  fail: (message: string, hints?: string[]) => void,
+/** Resolve installation refusal before service or state inspection. */
+export function resolveDaemonInstallBlockMessage(
+  service: "gateway" | "node",
   env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  if (!resolveIsNixMode(env)) {
-    return false;
+): string | undefined {
+  if (resolveIsNixMode(env)) {
+    return "Nix mode detected; service install is disabled.";
   }
-  fail("Nix mode detected; service install is disabled.");
-  return true;
+  // Node installation shares the Nix gate, not Gateway ownership policy.
+  if (service === "node") {
+    return undefined;
+  }
+  const mutationError = resolveGatewayServiceMutationError(
+    "install or rewrite the gateway service",
+    env,
+  );
+  if (mutationError) {
+    return `Gateway install blocked: ${String(mutationError)}`;
+  }
+  if (process.platform === "linux" && hasSudoToRootSystemdUserManagerMismatch(env)) {
+    return (
+      "Gateway install blocked: Refusing a sudo-to-root systemd user-service install because " +
+      "OpenClaw state and service files would belong to root while systemctl targets the " +
+      "invoking user's manager. Rerun the same command without sudo. If [unsafe-permissions] " +
+      "blocked the non-sudo command, repair the reported directory with `chmod go-w <path>` " +
+      "and retry; do not use sudo or --force to bypass it. " +
+      "See https://docs.openclaw.ai/cli/gateway#install-identity."
+    );
+  }
+  return undefined;
 }
 
 /** Build terminal style helpers for status output with no-color fallback. */
@@ -130,85 +144,23 @@ export function normalizeListenerAddress(raw: string): string {
   return value.trim();
 }
 
-/** Render platform-specific hints for missing/stopped Gateway runtimes. */
-export function renderRuntimeHints(
-  runtime:
-    | {
-        missingUnit?: boolean;
-        missingSupervision?: boolean;
-        missingGuiSession?: boolean;
-        status?: string;
-      }
-    | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-  logFile?: string | null,
-): string[] {
-  if (!runtime) {
-    return [];
-  }
-  const hints: string[] = [];
-  const fileLog = logFile ?? null;
-  if (runtime.missingUnit) {
-    hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
-  }
-  if (runtime.missingGuiSession) {
-    hints.push(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
-    );
-    hints.push(
-      `Sign in to the macOS desktop as this user, then run: ${formatCliCommand("openclaw gateway restart", env)}`,
-    );
-    hints.push(
-      "For headless VM setups, enable auto-login for the target user or use a custom LaunchDaemon (not shipped).",
-    );
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
-  }
-  if (runtime.missingSupervision) {
-    hints.push(
-      `LaunchAgent installed but not loaded. Run: ${formatCliCommand("openclaw gateway restart", env)}`,
-    );
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
-  }
-  if (runtime.status === "stopped") {
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    hints.push(
-      ...buildPlatformRuntimeLogHints({
-        env,
-        systemdServiceName: resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE),
-        windowsTaskName: resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE),
-      }),
-    );
-  }
-  return hints;
-}
-
 /** Render install/start hints for the current service platform/container context. */
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  const profile = env.OPENCLAW_PROFILE;
   const container = resolveDaemonContainerContext(env);
-  const hints = buildPlatformServiceStartHints({
-    installCommand: formatCliCommand("openclaw gateway install", env),
+  if (container) {
+    return [`Restart the container or the service that manages it for ${container}.`];
+  }
+  const profile = env.OPENCLAW_PROFILE;
+  const installHint =
+    resolveDaemonInstallBlockMessage("gateway", env) ??
+    formatCliCommand("openclaw gateway install", env);
+  return buildPlatformServiceStartHints({
+    installHint,
     startCommand: formatCliCommand("openclaw gateway start", env),
     launchAgentPlistPath: `~/Library/LaunchAgents/${resolveGatewayLaunchAgentLabel(profile)}.plist`,
     systemdServiceName: resolveGatewaySystemdServiceName(profile),
     windowsTaskName: resolveGatewayWindowsTaskName(profile),
   });
-  if (!container) {
-    return hints;
-  }
-  return [`Restart the container or the service that manages it for ${container}.`];
 }
 
 /** Drop generic systemd hints when a container-specific hint is clearer. */
@@ -224,34 +176,4 @@ export function filterContainerGenericHints(
       !hint.includes("If you're in a container, run the gateway in the foreground instead of") &&
       !hint.includes("systemd user services are unavailable; install/enable systemd"),
   );
-}
-
-export async function resolveGatewayLifecycleContext(
-  service = resolveGatewayService(),
-  requireEffective = false,
-) {
-  const command = requireEffective
-    ? await service.readCommand(process.env, { requireEffective: true })
-    : await service.readCommand(process.env).catch(() => null);
-  if (requireEffective && !command) {
-    throw new Error(
-      "Updated gateway service could not be inspected; run `openclaw gateway status --deep`.",
-    );
-  }
-  const env = mergeGatewayServiceEnv(process.env, command);
-  const config = await createConfigIO({
-    env,
-    observe: false,
-    pluginValidation: "skip",
-    suppressFutureVersionWarning: true,
-  })
-    .readBestEffortConfig()
-    .catch(() => undefined);
-  const port = parseTcpPortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
-  return { port, env, command };
-}
-
-export async function resolveGatewayConfigPorts() {
-  const config = await readBestEffortConfig({ observe: false }).catch(() => undefined);
-  return { explicit: config?.gateway?.port, fallback: resolveGatewayPort(config, process.env) };
 }

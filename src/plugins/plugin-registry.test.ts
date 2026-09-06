@@ -404,6 +404,16 @@ describe("plugin registry facade", () => {
         ]);
       }
     }
+
+    const withoutInstalledOwners = {
+      lookUpTable: { ...lookUpTable, index: { ...index, plugins: [] } },
+      contribution: "modelCatalogProviders" as const,
+      includeDisabled: true,
+    };
+    expect(listPluginContributionIds(withoutInstalledOwners)).toEqual([]);
+    for (const matches of ["demo-alias", (id: string) => id === "demo-alias"]) {
+      expect(resolvePluginContributionOwners({ ...withoutInstalledOwners, matches })).toEqual([]);
+    }
   });
 
   it("normalizes plugin config ids through registry contribution aliases", () => {

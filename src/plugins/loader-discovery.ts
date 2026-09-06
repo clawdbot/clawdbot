@@ -3,10 +3,9 @@ import {
   type PluginCandidate,
   type PluginDiscoveryResult,
 } from "./discovery.js";
-import { pluginLoaderCacheState } from "./loader-cache.js";
 import type { PluginLoadCacheContext } from "./loader-load-context.js";
 import { buildProvenanceIndex, warnWhenAllowlistIsOpen } from "./loader-provenance.js";
-import { createPluginCandidatesFromManifestRegistry, pushDiagnostics } from "./loader-shared.js";
+import { createPluginCandidatesFromManifestRegistry } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
   loadPluginManifestRegistryCore,
@@ -14,6 +13,7 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import type { PluginLogger } from "./types.js";
 
 type ResolvedPluginLoadDiscovery = {
@@ -62,7 +62,7 @@ export function resolvePluginLoadDiscovery(params: {
       installRecords:
         Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
     });
-  pushDiagnostics(params.diagnostics, manifestRegistry.diagnostics);
+  params.diagnostics.push(...manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
     emitWarning: params.emitWarning,
     logger: params.logger,

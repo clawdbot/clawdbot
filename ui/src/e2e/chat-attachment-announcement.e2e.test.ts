@@ -1,12 +1,18 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Attachment failure announcements" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts/control-ui-e2e/attachment-announcement");
+let proofDir: string;
+beforeEach(() => {
+  if (captureProof) {
+    proofDir = createControlUiE2eArtifactDir("attachment-announcement");
+  }
+});
 
 suite.define(() => {
   it.each(["ordinary", "completed"])(
@@ -39,7 +45,6 @@ suite.define(() => {
           expect(await announcement.getAttribute("aria-atomic")).toBe("true");
           expect(await announcement.textContent()).toBe("");
           if (captureProof) {
-            await mkdir(proofDir, { recursive: true });
             await page.screenshot({ path: path.join(proofDir, `${flow}-initial.png`) });
           }
 
@@ -51,7 +56,7 @@ suite.define(() => {
             await page.getByRole("button", { name: "Send message" }).click();
             const request = await gateway.waitForRequest("chat.send");
             expect(request.params).toMatchObject({
-              sessionKey: "main",
+              sessionKey: "agent:main:main",
               message: "Send the summary PDF",
               deliver: false,
               idempotencyKey: expect.any(String),
@@ -70,7 +75,7 @@ suite.define(() => {
             await gateway.emitGatewayEvent("chat", {
               message: reply,
               runId,
-              sessionKey: "main",
+              sessionKey: "agent:main:main",
               state: "final",
             });
           } else {
@@ -78,7 +83,7 @@ suite.define(() => {
               message: reply,
               messageId: "appended-reply",
               messageSeq: 3,
-              sessionKey: "main",
+              sessionKey: "agent:main:main",
               activeRunIds: [],
               hasActiveRun: false,
             });

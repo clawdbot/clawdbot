@@ -9,6 +9,7 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import { deleteAgentProvenanceForAgent, ensureAgentProvenanceSchema } from "./agent-provenance.js";
 import type {
   OpenClawStateDatabase,
@@ -29,6 +30,7 @@ type AgentDeletionDatabase = Pick<
 
 type AgentDeletionPathFenceSnapshot = {
   claimAgentId: string;
+  claimPath: string;
   fenceAgentId?: string;
   targetPaths: string[];
   entries: Array<{
@@ -57,7 +59,7 @@ export type AgentDeletionJournalCleanupPath = {
   note?: string;
 };
 
-export function assertAgentDeletionIdentityClaimAllowed(
+function assertAgentDeletionIdentityClaimAllowed(
   claimAgentId: string,
   deletedAgentId: string | undefined,
 ): void {
@@ -117,6 +119,7 @@ export function prepareAgentDeletionPathFence(
   const env = options.env ?? process.env;
   return {
     claimAgentId: normalizeAgentId(claim.agentId),
+    claimPath: path.resolve(claim.path),
     ...(claim.fenceAgentId ? { fenceAgentId: normalizeAgentId(claim.fenceAgentId) } : {}),
     // targetPaths is a pre-open realpath snapshot. A co-equal same-user
     // process could retarget a symlink between snapshot and open; that actor
@@ -150,9 +153,10 @@ export function prepareAgentDeletionPathFence(
 
 /** Refuse database claims beneath paths still owned by an unfinished deletion. */
 export function assertAgentDeletionPathFence(
-  database: OpenClawStateDatabase["db"],
+  state: OpenClawStateDatabase,
   snapshot: AgentDeletionPathFenceSnapshot,
 ): void {
+  const database = state.db;
   ensureAgentDeletionJournalSchema(database);
   const db = getNodeSqliteKysely<AgentDeletionDatabase>(database);
   const journalRows = executeSqliteQuerySync(
@@ -205,8 +209,27 @@ export function assertAgentDeletionPathFence(
   if (snapshotJournal.join("\n") !== currentJournal.join("\n")) {
     throw new Error("Agent deletion journal changed while preparing a database claim.");
   }
+  // Existing foreign leases remain blockers even inside the deletion's cleanup scope.
+  const cleanup = snapshot.fenceAgentId
+    ? undefined
+    : getAgentDeletionDatabaseCleanup({
+        agentId: snapshot.claimAgentId,
+        path: snapshot.claimPath,
+        statePath: state.path,
+      });
+  const cleanupAgentId = cleanup?.assertJournal(
+    state.path,
+    journalRows.map((row) => ({
+      agentId: row.agent_id,
+      operationId: row.operation_id,
+      cleanupCompleted: row.cleanup_completed === 1,
+    })),
+  );
   for (const row of journalRows) {
     if (snapshot.fenceAgentId && snapshot.fenceAgentId !== row.agent_id) {
+      continue;
+    }
+    if (row.agent_id === cleanupAgentId) {
       continue;
     }
     assertAgentDeletionIdentityClaimAllowed(snapshot.claimAgentId, row.agent_id);
@@ -421,7 +444,6 @@ export function beginAgentDeletionJournal(
         cleanupCompleted: false,
         deleteFiles: normalized.deleteFiles,
       };
-      deleteAgentProvenanceForAgent(database.db, normalized.agentId);
       return;
     }
     const createdAt = Date.now();
@@ -441,7 +463,6 @@ export function beginAgentDeletionJournal(
       }),
     );
     persisted = { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false };
-    deleteAgentProvenanceForAgent(database.db, normalized.agentId);
   }, options);
   if (!persisted) {
     throw new Error(`Failed to record deletion journal for agent ${normalized.agentId}.`);
@@ -505,21 +526,35 @@ export function completeAgentDeletionJournal(
   operationId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): boolean {
+  return runOpenClawStateWriteTransaction(
+    (database) => completeAgentDeletionJournalInDatabase(database, agentId, operationId),
+    options,
+  );
+}
+
+/** Complete a deletion journal inside a caller-owned shared-state transaction. */
+export function completeAgentDeletionJournalInDatabase(
+  database: OpenClawStateDatabase,
+  agentId: string,
+  operationId: string,
+): boolean {
   const id = normalizeAgentId(agentId);
-  let completed = false;
-  runOpenClawStateWriteTransaction((database) => {
-    ensureAgentDeletionJournalSchema(database.db);
-    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("agent_deletion_journal")
-        .set({ cleanup_completed: 1 })
-        .where("agent_id", "=", id)
-        .where("operation_id", "=", operationId),
-    );
-    completed = Number(result.numAffectedRows ?? 0) > 0;
-  }, options);
+  ensureAgentDeletionJournalSchema(database.db);
+  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+  const result = executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("agent_deletion_journal")
+      .set({ cleanup_completed: 1 })
+      .where("agent_id", "=", id)
+      .where("operation_id", "=", operationId),
+  );
+  const completed = Number(result.numAffectedRows ?? 0) > 0;
+  // The journal already fences authority. Keep creation history through refusals and
+  // partial cleanup, and remove it only when this exact deletion owner completes.
+  if (completed) {
+    deleteAgentProvenanceForAgent(database.db, id);
+  }
   return completed;
 }
 

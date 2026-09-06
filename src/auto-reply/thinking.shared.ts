@@ -31,6 +31,7 @@ export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
   api?: string;
+  baseUrl?: string;
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;

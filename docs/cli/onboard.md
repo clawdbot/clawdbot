@@ -8,7 +8,7 @@ title: "Onboard"
 # `openclaw onboard`
 
 Guided setup that establishes inference first: it detects existing AI access,
-requires a live completion, persists only the working route, and then starts
+waits for your provider choice, verifies that connection, persists only the working route, and then starts
 OpenClaw to configure the rest. `openclaw setup` reaches this flow on fresh
 systems or whenever an onboarding option is present; configured systems use
 bare `openclaw setup` for system-agent chat. `openclaw setup --baseline` only
@@ -109,22 +109,23 @@ AI apps, keys, and local runtimes automatically) or **ask first** (setup asks
 once before looking around, or lets you configure manually). The
 choice persists as `wizard.accessMode`. With discovery allowed, onboarding
 detects AI access already available through configured models, API-key
-environment variables, and supported local CLIs, then tests the recommended
-candidate with a real completion. If a candidate fails, onboarding quietly
-tries the next usable one and summarizes anything that did not respond in a
-single line; the working route is announced with a one-keystroke option to see
-everything else instead.
+environment variables, and supported local CLIs. Detection only presents choices;
+it does not run live inference, install plugins, choose a model, or persist credentials.
+Choose a detected connection or any supported provider in the shared picker.
+The selected connection runs a real completion. If it fails, the error is shown
+and the picker waits for your next choice. Cancellation stops the attempt without
+trying another provider.
 
-If automatic detection is exhausted, the provider picker shows OpenAI,
-Anthropic, xAI (Grok), Google, and OpenRouter first. Choose **More…** for every
-other supported provider, grouped by provider; regions, plans, and auth methods
+The provider picker includes installed and installable official providers.
+Choose **More…** for additional provider groups; regions, plans, and auth methods
 then appear in a second menu. Supported browser or device sign-in and masked
 API-key or token methods use the same live completion path. OpenClaw persists
 only the verified model route and its credential after the test succeeds; a
 failed candidate does not replace the configured model or save the attempted
-credential. Choose **Skip for now** to exit without starting OpenClaw and
-rerun `openclaw onboard` when you are ready. Workspace and Gateway setup remain
-unchanged until OpenClaw starts.
+credential. In local onboarding, **Skip for now** prepares the named agent's
+workspace and local Gateway configuration, then exits without starting the Gateway
+or AI chat. Rerun `openclaw onboard` when you are ready to connect AI; interrupted
+baseline setup resumes under its existing onboarding owner.
 
 In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
@@ -171,11 +172,11 @@ credential collection to a masked terminal wizard. To change the model
 provider or its authentication, exit OpenClaw and run `openclaw onboard`;
 OpenClaw does not open the guided or classic provider flows.
 
-On a configured install, running `openclaw onboard` again verifies the current
-default model first, so the same flow acts as a verification and repair pass —
-it does not re-apply setup, reinstall, or restart the Gateway service.
-If that check fails, the configured model is never replaced automatically —
-onboarding stops and asks how to continue. The check runs outside your
+On a configured install, running `openclaw onboard` again offers the current
+default model in the detected-connections group. Choose it for a verification
+pass that does not re-apply setup, reinstall, or restart the Gateway service.
+If that check fails, the configured model stays unchanged and the picker waits
+for your next choice. The check runs outside your
 workspace, so a model provided by a workspace plugin can fail here while still
 working in the agent.
 Use `openclaw onboard --classic` for provider-specific auth, channels, skills,
@@ -197,6 +198,20 @@ state:
   configured Gateway with an agent and model goes directly to that UI without
   onboarding or OpenClaw. On a configured install, reach OpenClaw with
   `/openclaw` inside the TUI or `openclaw setup`.
+
+Remote setup reuses device pairing for the selected Gateway, including a
+configured remote connection forwarded through loopback. Its readiness probes
+do not create new device pairings. Setup chat keeps a stable authenticated
+caller across replies, including on loopback connections.
+
+When interactive remote setup activates inference and the Gateway requires a
+restart, onboarding waits up to 45 seconds for a new Gateway boot and a successful
+inference check before opening setup chat. A healthy connection to the old
+Gateway does not count. If the restart wait expires or boot identity is missing,
+onboarding reports that the settings were saved and stops rather than trying
+another provider. Check the remote Gateway, then rerun bare `openclaw` in the
+connected terminal. If the error says the Gateway did not provide a boot identity,
+update and restart that Gateway first.
 
 Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
 

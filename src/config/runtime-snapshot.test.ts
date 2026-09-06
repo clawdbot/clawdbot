@@ -1,12 +1,14 @@
 // Verifies runtime config snapshots preserve normalized public settings.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  cloneConfigWithResolutionFacts,
   createConfigResolutionFacts,
   getAuthoredConfigSecretRef,
   getConfigResolutionFacts,
   setConfigResolutionFacts,
 } from "./resolution-facts.js";
 import {
+  createRuntimeConfigReader,
   finalizeRuntimeSnapshotWrite,
   getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
@@ -139,31 +141,64 @@ describe("runtime snapshot state", () => {
     expect(hashRuntimeConfigValue({ logging: { level: "info" } })).toBe(first);
   });
 
-  it("selects runtime config only when input still matches the runtime source", () => {
-    const sourceConfig = createProviderConfigFixture();
-    const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
-    const scopedResolvedConfig: OpenClawConfig = {
-      ...runtimeConfig,
-      tools: {
-        updatePlan: true,
-      },
-    };
+  it.each([false, true])(
+    "selects and retains only matching runtime sources (resolution facts: %s)",
+    (withFacts) => {
+      const sourceConfig = createProviderConfigFixture();
+      if (withFacts) {
+        setConfigResolutionFacts(sourceConfig, createConfigResolutionFacts([]));
+      }
+      const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
+      const scopedResolvedConfig: OpenClawConfig = {
+        ...runtimeConfig,
+        tools: {
+          updatePlan: true,
+        },
+      };
 
-    expect(
-      selectApplicableRuntimeConfig({
-        inputConfig: structuredClone(sourceConfig),
-        runtimeConfig,
-        runtimeSourceConfig: sourceConfig,
-      }),
-    ).toBe(runtimeConfig);
-    expect(
-      selectApplicableRuntimeConfig({
-        inputConfig: scopedResolvedConfig,
-        runtimeConfig,
-        runtimeSourceConfig: sourceConfig,
-      }),
-    ).toBe(scopedResolvedConfig);
-  });
+      const readUnbound = createRuntimeConfigReader(scopedResolvedConfig);
+
+      expect(
+        selectApplicableRuntimeConfig({
+          inputConfig: cloneConfigWithResolutionFacts(sourceConfig),
+          runtimeConfig,
+          runtimeSourceConfig: sourceConfig,
+        }),
+      ).toBe(runtimeConfig);
+      expect(
+        selectApplicableRuntimeConfig({
+          inputConfig: scopedResolvedConfig,
+          runtimeConfig,
+          runtimeSourceConfig: sourceConfig,
+        }),
+      ).toBe(scopedResolvedConfig);
+      const foreignConfig = cloneConfigWithResolutionFacts(sourceConfig);
+      setConfigResolutionFacts(
+        foreignConfig,
+        createConfigResolutionFacts(
+          [],
+          new Map([["models.providers.openai.apiKey", "OTHER_PROVIDER_KEY"]]),
+        ),
+      );
+      expect(
+        selectApplicableRuntimeConfig({
+          inputConfig: foreignConfig,
+          runtimeConfig,
+          runtimeSourceConfig: sourceConfig,
+        }),
+      ).toBe(foreignConfig);
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+      const readRuntime = createRuntimeConfigReader(cloneConfigWithResolutionFacts(sourceConfig));
+      const readScoped = createRuntimeConfigReader(scopedResolvedConfig);
+      const readForeign = createRuntimeConfigReader(foreignConfig);
+      const nextConfig = { ...runtimeConfig, messages: { ackReactionScope: "all" as const } };
+      setRuntimeConfigSnapshot(nextConfig, nextConfig);
+      expect(readRuntime()).toBe(nextConfig);
+      expect(readScoped()).toBe(scopedResolvedConfig);
+      expect(readForeign()).toBe(foreignConfig);
+      expect(readUnbound()).toBe(scopedResolvedConfig);
+    },
+  );
 
   it("clears runtime source snapshot when runtime snapshot is cleared", () => {
     setRuntimeConfigSnapshot({ gateway: { port: 18789 } }, { gateway: { port: 18789 } });

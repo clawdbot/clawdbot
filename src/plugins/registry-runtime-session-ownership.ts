@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
+import { resolveInitialEmbeddedRunModel } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   parseSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesTarget,
@@ -18,6 +20,7 @@ import {
 import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
+  resolveSessionPinnedHarnessId,
 } from "../sessions/agent-harness-session-key.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -120,12 +123,17 @@ export function createPluginSessionOwnership(state: PluginRegistryState, pluginI
     if (entry.modelSelectionLocked !== true) {
       return undefined;
     }
-    const harnessId = normalizeOptionalAgentRuntimeId(entry.agentHarnessId);
-    if (!harnessId) {
-      const pluginOwnerId = normalizeOptionalString(entry.pluginOwnerId);
-      if (pluginOwnerId) {
-        return { ownerPluginId: pluginOwnerId };
+    const pluginOwnerId = normalizeOptionalString(entry.pluginOwnerId);
+    if (pluginOwnerId) {
+      if (isAgentHarnessSessionKey(sessionKey)) {
+        throw new Error(
+          `Locked session "${sessionKey}" mixes plugin and reserved harness ownership.`,
+        );
       }
+      return { ownerPluginId: pluginOwnerId };
+    }
+    const harnessId = resolveSessionPinnedHarnessId(entry);
+    if (!harnessId) {
       throw new Error(
         `Plugin "${pluginId}" must provide a registered agent harness id to ${action} locked sessions.`,
       );
@@ -344,9 +352,9 @@ export function createPluginSessionOwnership(state: PluginRegistryState, pluginI
       }
     }
   };
-  const resolveRunSessionExecutionOwner = (
+  const prepareRunSessionExecution = (
     params: Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0],
-  ): string | undefined => {
+  ): { ownerPluginId?: string; agentHarnessRuntimeOverride?: string } => {
     const target = params.sessionTarget;
     const targetSessionKey = normalizeOptionalString(target?.sessionKey);
     const directSessionKey = normalizeOptionalString(params.sessionKey);
@@ -444,7 +452,7 @@ export function createPluginSessionOwnership(state: PluginRegistryState, pluginI
           `Plugin "${pluginId}" may execute locked session "${sessionKey}" only with its exact persisted identity and harness.`,
         );
       }
-      return ownerPluginId;
+      return { ownerPluginId };
     }
     assertSessionIdentitiesOwned({
       action: "run",
@@ -454,7 +462,31 @@ export function createPluginSessionOwnership(state: PluginRegistryState, pluginI
       sessionKeys: [target?.sessionKey ?? params.sessionKey],
       storePath: ownershipStorePath,
     });
-    return undefined;
+    // Reuse the authorized snapshot, but never manufacture a native pin or replace
+    // a turn-local request (including auto). Detached and raw-model runs own their selection.
+    if (
+      !entry?.agentRuntimeOverride ||
+      params.agentHarnessRuntimeOverride !== undefined ||
+      params.sessionPersistence === "detached" ||
+      params.modelRun ||
+      resolveSessionPinnedHarnessId(entry)
+    ) {
+      return {};
+    }
+    const cfg = params.config ?? currentSessionConfig();
+    const { provider } = resolveInitialEmbeddedRunModel({
+      config: cfg,
+      agentId: ownershipAgentId,
+      provider: params.provider,
+      model: params.model,
+    });
+    return {
+      agentHarnessRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
+        provider,
+        entry,
+        cfg,
+      }),
+    };
   };
   const assertGatewaySessionRequestOwned = (
     method: string,
@@ -522,7 +554,7 @@ export function createPluginSessionOwnership(state: PluginRegistryState, pluginI
     assertStoredSessionEntryOwned,
     assertStoreEntryOwned,
     resolveStoredSessionExecutionOwner,
-    resolveRunSessionExecutionOwner,
+    prepareRunSessionExecution,
     assertGatewaySessionRequestOwned,
     assertSessionIdentitiesOwned,
   };

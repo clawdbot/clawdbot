@@ -6,7 +6,6 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import type { AgentPlanStep } from "../channels/streaming.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
@@ -14,10 +13,6 @@ import {
   parseJsonMessageParam,
 } from "../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
-import {
-  normalizeProgressCardInput,
-  ProgressCardInputError,
-} from "../session-cards/progress-card-input.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -31,6 +26,7 @@ import { extractToolResultText, truncateLiveExecOutput } from "./embedded-agent-
 import type { ProcessTerminalDiagnostic } from "./tool-error-summary.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 
@@ -57,24 +53,6 @@ export function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
   const created = createToolTerminalObserver(ctx.params.runId);
   fallbackToolTerminalObservers.set(ctx.state, created);
   return created;
-}
-
-export function readProgressCardPlanInput(args: unknown): { steps: AgentPlanStep[] } | undefined {
-  const params = readRecordField(args);
-  if (!params) {
-    return undefined;
-  }
-  try {
-    return {
-      steps:
-        normalizeProgressCardInput({ markdown: params.markdown, plan: params.plan }).steps ?? [],
-    };
-  } catch (error) {
-    if (error instanceof ProgressCardInputError) {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 export function isMiddlewareToolResultError(result: unknown): boolean {
@@ -460,6 +438,7 @@ function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: NonNullable<ReturnType<typeof extractToolResultMediaArtifact>>,
   allowedMediaUrls: string[],
+  autoDeliveryMediaUrls: ReadonlySet<string>,
 ) {
   const indexByUrl = new Map(
     ctx.state.pendingToolMediaUrls.map((url, index) => [url.trim(), index]),
@@ -479,6 +458,12 @@ function queuePendingToolMedia(
       ctx.state.pendingToolMediaTrustByUrl.set(normalized, true);
     } else if (!ctx.state.pendingToolMediaTrustByUrl.has(normalized)) {
       ctx.state.pendingToolMediaTrustByUrl.set(normalized, false);
+    }
+    if (autoDeliveryMediaUrls.has(normalized)) {
+      ctx.state.toolAutoDeliveryMediaUrls.add(normalized);
+    } else {
+      // One shared URL with mixed provenance must never inherit auto-delivery.
+      ctx.state.toolAutoDeliveryMediaUrls.delete(normalized);
     }
     const attachment = attachmentsByUrl.get(normalized);
     const existingIndex = indexByUrl.get(normalized);
@@ -676,7 +661,6 @@ export async function emitToolResultOutput(params: {
     return;
   }
 
-  const outputText = extractToolResultText(sanitizedResult);
   const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
   const mediaUrls = mediaReply
     ? filterToolResultMediaUrls(
@@ -695,6 +679,7 @@ export async function emitToolResultOutput(params: {
       builtinToolNames: ctx.builtinToolNames,
     }) && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
+    const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(rawToolName, meta, outputText, hasStructuredMedia ? undefined : result);
     }
@@ -713,5 +698,8 @@ export async function emitToolResultOutput(params: {
   if (mediaUrls.length === 0) {
     return;
   }
-  queuePendingToolMedia(ctx, mediaReply, mediaUrls);
+  const autoDeliveryMediaUrls = new Set(
+    mediaReply.trustedLocalMedia === true ? getCoreTtsToolResultMediaUrls(result) : [],
+  );
+  queuePendingToolMedia(ctx, mediaReply, mediaUrls, autoDeliveryMediaUrls);
 }

@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { APNG_BYTES } from "./http-image.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
@@ -216,27 +217,33 @@ describe("handleWorkspaceIconHttpRequest", () => {
   const iconRoute = (sessionKey: string) =>
     `http://127.0.0.1:${port}/__openclaw__/workspace-icon/${encodeURIComponent(sessionKey)}`;
 
-  it("serves the session workspace icon with sandboxed asset headers", async () => {
-    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
+  it.each([
+    { label: "ICO", file: "public/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
+    { label: "APNG", file: "public/favicon.png", body: APNG_BYTES, contentType: "image/png" },
+  ])(
+    "serves the session workspace $label with sandboxed asset headers",
+    async ({ file, body, contentType }) => {
+      const root = await makeWorkspace({ [file]: body });
+      mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+      await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
 
-    const response = await fetch(iconRoute("agent:main:one"));
-    expect(mocks.resolveLocalSessionWorkspaceRoot).toHaveBeenCalledWith({
-      sessionKey: "agent:main:one",
-    });
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("image/x-icon");
-    expect(response.headers.get("content-length")).toBe(String(ICO_BYTES.byteLength));
-    expect(response.headers.get("cache-control")).toBe("private, max-age=3600");
-    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
-    expect(response.headers.get("content-disposition")).toBe(
-      'attachment; filename="workspace-icon"',
-    );
-    expect(response.headers.get("content-security-policy")).toContain("sandbox");
-    expect(Buffer.from(await response.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
-  });
+      const response = await fetch(iconRoute("agent:main:one"));
+      expect(mocks.resolveLocalSessionWorkspaceRoot).toHaveBeenCalledWith({
+        sessionKey: "agent:main:one",
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe(contentType);
+      expect(response.headers.get("content-length")).toBe(String(body.byteLength));
+      expect(response.headers.get("cache-control")).toBe("private, max-age=3600");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+      expect(response.headers.get("content-disposition")).toBe(
+        'attachment; filename="workspace-icon"',
+      );
+      expect(response.headers.get("content-security-policy")).toContain("sandbox");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(body);
+    },
+  );
 
   it("revalidates an unchanged icon without resending its bytes", async () => {
     const root = await makeWorkspace({ "favicon.png": PNG_BYTES });

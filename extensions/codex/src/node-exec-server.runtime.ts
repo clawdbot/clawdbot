@@ -138,7 +138,7 @@ function createNodeExecServerProcessOwner(
         if (process.platform === "win32" && child.pid) {
           killProcessTree(child.pid, { graceMs: CODEX_EXEC_SERVER_TERMINATION_GRACE_MS });
         }
-        const exited = await closeCodexAppServerTransportAndWait(child, {
+        const { exited } = await closeCodexAppServerTransportAndWait(child, {
           forceKillDelayMs: CODEX_EXEC_SERVER_TERMINATION_GRACE_MS,
           exitTimeoutMs: CODEX_EXEC_SERVER_REAP_TIMEOUT_MS,
         });
@@ -209,7 +209,7 @@ export async function runCodexNodeExecServer(params: {
         }
         // Awaited setup is complete; policy and invocation closure win at spawn.
         params.assertExecAuthorized();
-        const child = createStdioTransport(
+        const child = await createStdioTransport(
           {
             transport: "stdio",
             command: native,
@@ -225,6 +225,12 @@ export async function runCodexNodeExecServer(params: {
             clearEnv: ["NODE_OPTIONS"],
           },
           baseEnv,
+          () => {
+            if (io.signal.aborted) {
+              throw nodeExecServerAbortError(io.signal);
+            }
+            params.assertExecAuthorized();
+          },
         );
         child.stdin.on("error", (error) => {
           rejectDisconnected(error);

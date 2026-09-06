@@ -30,6 +30,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
@@ -92,6 +93,7 @@ export type PreparedAgentRunDispatch = {
 };
 
 export async function prepareAgentRunDispatch(params: {
+  assertAdmissionCurrent?: () => void;
   promptedAt: number;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
@@ -227,6 +229,7 @@ export async function prepareAgentRunDispatch(params: {
     ? loadSessionEntry(params.resolvedSessionKey, {
         ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
         clone: false,
+        projection: "list",
       }).storePath
     : `agent:${params.activeSessionAgentId}`;
   let operationalRunInstance: OperationalRunInstanceRef | undefined;
@@ -234,6 +237,9 @@ export async function prepareAgentRunDispatch(params: {
     await params.acquireGatewayWorkAdmission(lifecycleStorePath);
     params.assertGatewayWorkAdmissionAllowed();
     if (!params.hasGatewayAdmissionOutcome()) {
+      // Close may finish its cancellation sweep while session acquisition waits.
+      // Reject before publishing a controller that the closing Gateway cannot cancel.
+      params.context.requestEntryLifetime?.signal.throwIfAborted();
       operationalRunInstance = createOperationalRunInstanceRef(params.runId);
       const now = Date.now();
       params.setAdmittedRunAbort(
@@ -284,7 +290,7 @@ export async function prepareAgentRunDispatch(params: {
   }
   const activeRunAbort = params.getAdmittedRunAbort();
   if (!activeRunAbort || !operationalRunInstance) {
-    activeRunAbort?.cleanup({ force: true });
+    activeRunAbort?.cleanup();
     activeGatewayWorkAdmission.release();
     params.io.emitAcceptance([
       false,
@@ -332,6 +338,7 @@ export async function prepareAgentRunDispatch(params: {
             },
       );
     }
+    params.io.emitStartOwner?.(params.runId, activeRunAbort.entry);
   }
 
   const workspaceOverride = resolveIngressWorkspaceOverrideForSessionRun({
@@ -343,7 +350,7 @@ export async function prepareAgentRunDispatch(params: {
   const cleanupPreaccept = (admissionReleased = false) => {
     preparedModelRuntimeLease?.release();
     preparedModelRuntimeLease = undefined;
-    activeRunAbort.cleanup({ force: true });
+    activeRunAbort.cleanup();
     if (!admissionReleased) {
       activeGatewayWorkAdmission.release();
     }
@@ -395,6 +402,13 @@ export async function prepareAgentRunDispatch(params: {
         agentDir: replyDispatchRuntime.agentDir,
         allowGatewaySubagentBinding: true,
         workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,
+        runtimePluginSelections: [
+          {
+            provider: resolvedRuntime.provider,
+            modelId: resolvedRuntime.model,
+            runtime: resolvedRuntime.harness,
+          },
+        ],
       },
       {
         catalogMode: "static",
@@ -405,6 +419,10 @@ export async function prepareAgentRunDispatch(params: {
     if (!revalidateAdmission()) {
       return undefined;
     }
+    replyDispatchRuntime = Object.freeze({
+      ...replyDispatchRuntime,
+      pluginGeneration: preparedModelRuntimeLease.pluginGeneration,
+    });
   } catch (err) {
     if (!revalidateAdmission()) {
       return undefined;
@@ -540,9 +558,24 @@ export async function prepareAgentRunDispatch(params: {
       return rejectPreaccept(errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   }
+  let assertInputAdmissionCurrent = params.assertAdmissionCurrent;
   let userTurn: PreparedAgentRunUserTurn;
   try {
     userTurn = await prepareAgentRunUserTurn({
+      assertCurrent: () => {
+        assertInputAdmissionCurrent?.();
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        activeRunAbort.controller.signal.throwIfAborted();
+        const entry = params.context.chatAbortControllers.get(params.runId);
+        if (
+          !entry ||
+          entry !== activeRunAbort.entry ||
+          entry.operationalRunInstance !== operationalRunInstance ||
+          entry.registrationCleanupRequested
+        ) {
+          throw new Error("agent input admission no longer owns this run");
+        }
+      },
       request: params.request,
       cfg: params.cfg,
       cfgForAgent: params.cfgForAgent,
@@ -567,8 +600,8 @@ export async function prepareAgentRunDispatch(params: {
       context: params.context,
     });
     if (userTurn.recorder) {
-      // The recorder already persisted the media references, so later admission
-      // rejection must preserve the files now owned by durable history.
+      // Accepted input owns these media references before it enters the transcript.
+      // Later admission rejection must preserve the files retained by that custody.
       params.onUserTurnMediaPersisted();
     }
   } catch (err) {
@@ -602,6 +635,9 @@ export async function prepareAgentRunDispatch(params: {
       },
     },
   });
+  // Pending input outlives admission; only the child controller and lifecycle
+  // may reject its execution after this synchronous ownership transfer.
+  assertInputAdmissionCurrent = undefined;
   params.io.emitAcceptance([true, accepted, undefined], { runId: params.runId });
   const participant = resolveGatewayInputParticipant(params.client, params.inputProvenance);
   if (

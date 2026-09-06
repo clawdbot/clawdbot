@@ -1,7 +1,7 @@
 // Blocks runtime use while retired exec approval state still awaits Doctor import.
-import fs from "node:fs";
 import path from "node:path";
 import { resolveExecApprovalsPath } from "./exec-approvals-config.js";
+import { pathMayExistSync } from "./path-existence.js";
 
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 // Doctor usually runs in another process, so cache only the steady-state absence;
@@ -30,15 +30,6 @@ export class ExecApprovalsMigrationRequiredError extends Error {
   }
 }
 
-function pathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
 /** Refuse runtime access until Doctor owns the one-time legacy import. */
 export function assertNoPendingLegacyExecApprovals(
   options: { pathMayExist?: (filePath: string) => boolean } = {},
@@ -47,7 +38,7 @@ export function assertNoPendingLegacyExecApprovals(
   if (legacyAbsenceCache.has(sourcePath)) {
     return;
   }
-  const probe = options.pathMayExist ?? pathMayExist;
+  const probe = options.pathMayExist ?? pathMayExistSync;
   // Bound both Doctor rename directions: source -> claim and claim -> source.
   const sourceBefore = probe(sourcePath);
   const claim = probe(`${sourcePath}${DOCTOR_CLAIM_SUFFIX}`);

@@ -67,19 +67,17 @@ export type SidebarRecentSession = {
   createdActor?: SessionCreatedActor;
   owner?: SessionOwner;
   participants?: SessionParticipant[];
+  expandedParticipants?: SessionParticipant[];
   participantCount?: number;
   archivedBy?: SessionCreatedActor;
   label: string;
-  /**
-   * Stored user label, undecorated. `label` above is the resolved display name
-   * and can carry a derived account or channel; rename edits this one so a
-   * derived string never lands back in persisted state.
-   */
+  /** Stored user label, separate from generated titles and display decoration. */
   userLabel?: string;
+  /** Editable session name prepared before the display name gains decoration. */
+  renameValue: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
   workContext?: SessionWorkContext;
-  href: string;
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
@@ -94,6 +92,7 @@ export type SidebarRecentSession = {
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
+  color?: string;
   channelAvatarUrl?: string;
   boardFace?: BoardFace;
   channel?: string;
@@ -104,6 +103,8 @@ export type SidebarRecentSession = {
   worktreeId?: string;
   execNode?: string;
   placementState?: SessionPlacementState;
+  placementProviderId?: string;
+  placementProfileId?: string;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
   cloudWorkerStopAction: CloudWorkerStopAction | null;
@@ -144,12 +145,17 @@ export type SidebarSessionHovercardRow = Pick<
   | "createdActor"
   | "createdAt"
   | "channelAvatarUrl"
+  | "color"
   | "endedAt"
   | "hasAutomation"
+  | "hasActiveRun"
   | "label"
   | "lastMessagePreview"
+  | "expandedParticipants"
   | "participantCount"
   | "participants"
+  | "placementProviderId"
+  | "placementProfileId"
   | "status"
   | "startedAt"
   | "updatedAt"
@@ -239,6 +245,7 @@ export type SidebarSessionPatch = {
   unread?: boolean;
   label?: string | null;
   icon?: string | null;
+  color?: string | null;
   category?: string | null;
 };
 
@@ -258,6 +265,7 @@ const SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:
 const SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY = "openclaw:sidebar:sessions:show-preview";
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY = "openclaw:sidebar:sessions:show-system";
+const SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY = "openclaw:sidebar:sessions:hide-empty-groups";
 const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
 const SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY = "openclaw:sidebar:sessions:sort-mode";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
@@ -290,6 +298,10 @@ export function loadStoredSidebarSessionsShowPreview(): boolean {
 
 export function loadStoredSidebarSessionsShowSystem(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY) === "true";
+}
+
+export function loadStoredSidebarSessionsHideEmptyGroups(): boolean {
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY) === "true";
 }
 
 export function loadStoredSidebarSessionStatusFilter(): SidebarSessionStatusFilter {
@@ -379,6 +391,10 @@ export function storeSidebarSessionsShowPreview(show: boolean) {
 
 export function storeSidebarSessionsShowSystem(show: boolean) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY, String(show));
+}
+
+export function storeSidebarSessionsHideEmptyGroups(hide: boolean) {
+  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY, String(hide));
 }
 
 export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {

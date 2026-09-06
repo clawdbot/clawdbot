@@ -6,6 +6,10 @@ import {
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../../state/openclaw-agent-progress-card-schema.js";
 import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
+import {
+  copySessionPendingInputsForRepair,
+  deleteSessionPendingInputs,
+} from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { mergeParticipantAggregate } from "./session-participant-identity.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -43,6 +47,7 @@ export function copySessionNodeArtifactsForRepair(
   if (keys.length === 0) {
     return;
   }
+  copySessionPendingInputsForRepair(source, destination, keys, canonicalKey);
   const sourceDb = getSessionKysely(source.db);
   const destinationDb = getSessionKysely(destination.db);
   const sourceKeyReferences = new Set(keys.flatMap((key) => [key, key.trim()]));
@@ -320,6 +325,7 @@ export function deleteSessionNodeArtifacts(
   database: OpenClawAgentDatabase,
   sessionKey: string,
 ): void {
+  deleteSessionPendingInputs(database, sessionKey);
   const db = getSessionKysely(database.db);
   const presentTables = readSessionNodeArtifactTables(database);
   if (presentTables.has("board_tabs") && presentTables.has("board_widgets")) {

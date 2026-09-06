@@ -1,4 +1,3 @@
-import { createConfigIO } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultGatewayBindMode, resolveGatewayRequiredListenHosts } from "../gateway/net.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
@@ -13,6 +12,7 @@ export async function resolveGatewayServiceProbeHosts(params: {
 }): Promise<readonly string[]> {
   const baseEnv = params.env ?? process.env;
   const mergedEnv = mergeGatewayServiceEnv(baseEnv, params.command ?? null);
+  const { createConfigIO } = await import("../config/io.runtime.js");
   const cfg = await createConfigIO({
     env: mergedEnv,
     pluginValidation: "skip",

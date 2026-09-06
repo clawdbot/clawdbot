@@ -2,6 +2,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
+import { showToast } from "../lib/toast.ts";
 import "./login-gate.ts";
 
 type LoginGateElement = HTMLElement & {
@@ -9,18 +11,21 @@ type LoginGateElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-async function mountFailure(lastError: string, lastErrorCode: string | null) {
+async function mountFailure(
+  lastError: string,
+  lastErrorCode: string | null,
+  credentials = { token: "", password: "" },
+) {
   const element = document.createElement("openclaw-login-gate") as LoginGateElement;
   element.props = {
     resourceBasePath: "",
     connected: false,
     lastError,
     lastErrorCode,
-    hasToken: false,
-    hasPassword: false,
+    hasToken: Boolean(credentials.token),
+    hasPassword: Boolean(credentials.password),
     gatewayUrl: "ws://127.0.0.1:18789",
-    token: "",
-    password: "",
+    ...credentials,
     showGatewayToken: false,
     showGatewayPassword: false,
     onGatewayUrlChange: vi.fn(),
@@ -43,6 +48,79 @@ afterEach(() => {
 });
 
 describe("login gate failure recovery", () => {
+  it("explains how to reconnect with a verified user identity", async () => {
+    const element = await mountFailure(
+      "operator role policies require a verified user identity for this authentication method",
+      ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+    const steps = failure?.querySelector(".login-gate__failure-steps")?.textContent;
+
+    expect(failure?.getAttribute("data-kind")).toBe("verified-user-required");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "Verified identity required",
+    );
+    expect(steps).toMatch(/trusted proxy or Tailscale/iu);
+    expect(steps).toMatch(/shared Gateway token or password/iu);
+    expect(failure?.querySelector(".login-gate__failure-docs")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/operator-scopes",
+    );
+  });
+
+  it.each([
+    { name: "empty", token: "", password: "" },
+    { name: "populated", token: "test-token", password: "test-password" },
+  ])("explains missing identity headers with $name credentials", async ({ token, password }) => {
+    const element = await mountFailure(
+      "unauthorized",
+      ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+      { token, password },
+    );
+    const failure = element.querySelector(".login-gate__failure");
+    const steps = failure?.querySelector(".login-gate__failure-steps")?.textContent;
+
+    expect(failure?.getAttribute("data-kind")).toBe("trusted-proxy");
+    expect(steps).toMatch(/(?:open|use|sign in).*?(?:authenticated proxy|SSO).*?URL/iu);
+    expect(steps).toMatch(/configured/iu);
+    expect(failure?.textContent).toMatch(
+      /missing.*?identity[- ]headers?|identity[- ]headers?.*?missing/iu,
+    );
+    expect(steps).toMatch(/forward/iu);
+    expect(steps).toMatch(/WebSocket upgrade/iu);
+    expect(failure?.querySelector(".login-gate__failure-docs")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
+    );
+    expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe("unauthorized");
+    expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
+    expect(steps).not.toMatch(/generate.*?token|replace.*?(?:token|password)|Gateway is running/iu);
+  });
+
+  it.each([
+    "Authenticated profile verification is unavailable; retry the request.",
+    "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.",
+  ])(
+    "explains profile verification failures without credential or network recovery: %s",
+    async (error) => {
+      const element = await mountFailure(
+        error,
+        ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE,
+      );
+      const failure = element.querySelector(".login-gate__failure");
+
+      expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
+      expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+        "Profile verification unavailable",
+      );
+      expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(error);
+      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
+      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
+        "Gateway administrator",
+      );
+      expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
+      expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
+    },
+  );
+
   it("renders every auth recovery command exactly once", async () => {
     const element = await mountFailure(
       "unauthorized: gateway token required",
@@ -75,6 +153,42 @@ describe("login gate failure recovery", () => {
 
     refresh?.click();
     expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("shows an explicit recovery choice when reconnect leaves unsaved starts behind the login gate", async () => {
+    const element = await mountFailure(
+      "protocol mismatch",
+      ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+    );
+    const reload = vi.fn();
+    const discard = vi.fn();
+    vi.stubGlobal("window", { location: { reload } });
+    const release = registerControlUiReloadGuard(
+      () => false,
+      () => {
+        showToast({
+          message: "Recovery needs a reload. Unsaved starts will be lost.",
+          actionLabel: "Discard unsaved starts and reload",
+          onAction: discard,
+        });
+      },
+    );
+    try {
+      element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")?.click();
+      expect(reload).not.toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(element.querySelector(".app-toast__message")?.textContent).toContain(
+          "Unsaved starts will be lost.",
+        );
+      });
+      const action = element.querySelector<HTMLButtonElement>(".app-toast__action");
+      expect(action?.textContent?.trim()).toBe("Discard unsaved starts and reload");
+      expect(discard).not.toHaveBeenCalled();
+      action?.click();
+      expect(discard).toHaveBeenCalledOnce();
+    } finally {
+      release();
+    }
   });
 
   it.each([

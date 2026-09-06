@@ -57,7 +57,7 @@ export class SidebarPeopleRuntime {
   handleEvent(event: Event, bootstrapStartedAt?: number): void {
     const row =
       event.target instanceof Element
-        ? event.target.closest<HTMLElement>(".sidebar-online__row")
+        ? event.target.closest<HTMLElement>("[data-person-card]")
         : null;
     if (event.type === "keydown" && event instanceof KeyboardEvent) {
       if (event.key === "Tab" && !event.shiftKey && event.target === this.active?.trigger) {
@@ -110,7 +110,7 @@ export class SidebarPeopleRuntime {
       if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) {
         return;
       }
-      this.portal.schedulePointerExit(event, row);
+      this.portal.schedulePointerExit();
     } else if (event.type === "focusin" && !this.suppressFocus) {
       this.activate(row, 0);
       this.portal.focusInside = true;
@@ -130,9 +130,9 @@ export class SidebarPeopleRuntime {
   }
 
   private activate(row: HTMLElement, delay: number): void {
-    const id = row.querySelector<HTMLElement>("[data-online-user-key]")?.dataset.onlineUserKey;
-    const trigger = row.querySelector<HTMLElement>(".sidebar-online__person");
-    if (!id || !trigger || !this.host.connected) {
+    const trigger = row.querySelector<HTMLElement>("[data-person-card-trigger]") ?? row;
+    const id = trigger.dataset.personCardKey;
+    if (!id || !this.host.connected) {
       return;
     }
     if (this.active?.id === id && this.active.row === row) {
@@ -175,7 +175,8 @@ export class SidebarPeopleRuntime {
       active.client === gateway.snapshot.client &&
       active.scope === this.scope() &&
       this.host.contains(active.row) &&
-      !this.host.collapsedSessionSections.has("online"),
+      (active.row.dataset.personCardSection === undefined ||
+        !this.host.collapsedSessionSections.has(active.row.dataset.personCardSection)),
     );
   }
 
@@ -200,11 +201,31 @@ export class SidebarPeopleRuntime {
       presenceEntries: readPresenceEntries(data.presencePayload),
       presenceInstanceId: data.presenceInstanceId,
     });
-    const user = projectOnlinePresenceViewers(
+    let user = projectOnlinePresenceViewers(
       data.presencePayload,
       self,
       data.presenceInstanceId,
     ).find((person) => presenceUserKey(person) === active.id);
+    if (!user && active.id.startsWith("profile:")) {
+      const profileId = active.id.slice("profile:".length);
+      const actor = [data.sessionsResult, ...Object.values(data.sessionResultsByAgent)]
+        .flatMap((result) => result?.sessions ?? [])
+        .flatMap((row) => [row.owner?.actor, row.createdActor])
+        .find(
+          (candidate) =>
+            candidate?.identity?.type === "profile" && candidate.identity.id === profileId,
+        );
+      if (actor) {
+        user = {
+          id: profileId,
+          identity: { type: "profile", id: profileId },
+          name: actor.label,
+          avatarUrl: actor.avatarUrl,
+          watchedSessions: [],
+          entries: [],
+        };
+      }
+    }
     if (!user) {
       this.close();
       return;

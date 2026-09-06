@@ -8,6 +8,7 @@ import {
 import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
+import { resolveLineAccount } from "./accounts.js";
 import { linePlugin } from "./channel.js";
 import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js";
 import { lineConfigAdapter } from "./config-adapter.js";
@@ -617,7 +618,7 @@ describe("line outbound sendPayload", () => {
     );
   });
 
-  it("keeps generic media payloads on the image-only send path", async () => {
+  it("forwards generic media payloads to the shared send path unresolved", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
@@ -745,7 +746,7 @@ describe("line outbound sendPayload", () => {
     );
   });
 
-  it("keeps generic quick-reply media on the validated image route", async () => {
+  it("keeps generic quick-reply media on the validated media route", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
@@ -754,7 +755,7 @@ describe("line outbound sendPayload", () => {
       to: "line:user:U123",
       text: "",
       payload: {
-        mediaUrl: "https://example.com/clip.mp4",
+        mediaUrl: "https://example.com/photo.png",
         channelData: { line: { quickReplies: ["One"] } },
       },
       accountId: "default",
@@ -766,8 +767,8 @@ describe("line outbound sendPayload", () => {
       [
         {
           type: "image",
-          originalContentUrl: "https://example.com/clip.mp4",
-          previewImageUrl: "https://example.com/clip.mp4",
+          originalContentUrl: "https://example.com/photo.png",
+          previewImageUrl: "https://example.com/photo.png",
           quickReply: { items: ["One"] },
         },
       ],
@@ -776,6 +777,38 @@ describe("line outbound sendPayload", () => {
     expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com", {
       policy: { allowPrivateNetwork: false },
     });
+  });
+
+  it("sends inline quick-reply media as the kind its URL proves", async () => {
+    // The inline batch used to force every generic media URL onto the image
+    // route, so an audio clip arrived as an empty image bubble.
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:U123",
+      text: "",
+      payload: {
+        mediaUrl: "https://example.com/voice.m4a",
+        channelData: { line: { quickReplies: ["One"] } },
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:U123",
+      [
+        {
+          type: "audio",
+          originalContentUrl: "https://example.com/voice.m4a",
+          duration: 60000,
+          quickReply: { items: ["One"] },
+        },
+      ],
+      { verbose: false, accountId: "default", cfg },
+    );
   });
 
   it("rejects insecure generic media before quick-reply batch sends", async () => {
@@ -938,6 +971,48 @@ describe("line outbound sendPayload", () => {
     );
     expect(proofResults.find((result) => result.policy === "after_agent_dispatch")?.status).toBe(
       "not_declared",
+    );
+  });
+});
+
+describe("linePlugin pairing.notifyApproval", () => {
+  const pairingCfg = {
+    channels: {
+      line: {
+        defaultAccount: "alpha",
+        accounts: {
+          alpha: { channelAccessToken: "token-alpha" },
+          beta: { channelAccessToken: "token-beta" },
+        },
+      },
+    },
+  } as OpenClawConfig;
+
+  it.each([
+    { name: "the approved account", accountId: "beta", channelAccessToken: "token-beta" },
+    {
+      name: "the default account when no account was approved",
+      accountId: undefined,
+      channelAccessToken: "token-alpha",
+    },
+  ])("pushes the approval from $name", async ({ accountId, channelAccessToken }) => {
+    const { runtime, mocks } = createRuntime();
+    mocks.resolveLineAccount.mockImplementation(resolveLineAccount);
+    setLineRuntime(runtime);
+
+    await linePlugin.pairing!.notifyApproval!({
+      cfg: pairingCfg,
+      id: "U-paired",
+      ...(accountId ? { accountId } : {}),
+    });
+
+    expect(mocks.pushMessageLine).toHaveBeenCalledExactlyOnceWith(
+      "U-paired",
+      expect.any(String),
+      expect.objectContaining({
+        accountId: accountId ?? "alpha",
+        channelAccessToken,
+      }),
     );
   });
 });

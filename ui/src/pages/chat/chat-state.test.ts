@@ -3,21 +3,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import { invalidateModelCatalogCache } from "../../lib/model-catalog-store.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { removeQueuedMessage } from "./chat-queue.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
+  applySelectedChatAgent,
   refreshChatMetadata,
   refreshChatModelCatalogOnDemand,
   refreshChatModelAuthStatus,
@@ -83,6 +89,7 @@ describe("canonical session message recovery", () => {
       streamSegments: state.chatStreamSegments,
       stream: state.chatStream,
       streamStartedAt: state.chatStreamStartedAt,
+      queue: state.chatQueue,
       showToolCalls: true,
     }).flatMap((item) => {
       if (item.kind === "group") {
@@ -848,6 +855,119 @@ describe("canonical session message recovery", () => {
     ]);
   });
 
+  it("keeps the owned local prompt before an early durable reply after placement abandonment", () => {
+    const runId = "local-placement-run-2";
+    const promptText = "Resume locally 2.";
+    const replyText = "Exactly one local Gateway response 2.";
+    const originalPrompt = {
+      role: "user",
+      content: [{ type: "text", text: "Continue interrupted work 2." }],
+      timestamp: 1_700_000_000_000,
+      __openclaw: {
+        id: "placement-user-2",
+        idempotencyKey: "abandoned-placement-run-2:user",
+        seq: 1,
+      },
+    };
+    const abandonedPartial = {
+      role: "assistant",
+      content: [{ type: "text", text: "Gateway-synced device response 2." }],
+      timestamp: 1_700_000_000_001,
+      __openclaw: { id: "placement-aborted-assistant-2", seq: 2 },
+      idempotencyKey: "abandoned-placement-run-2:assistant",
+      openclawAbort: {
+        aborted: true,
+        origin: "placement-abandon",
+        runId: "abandoned-placement-run-2",
+      },
+      stopReason: "stop",
+    };
+    const localUser = {
+      role: "user",
+      content: [{ type: "text", text: promptText }],
+      timestamp: 1_700_000_000_002,
+      __openclaw: { id: "placement-local-user-2", idempotencyKey: `${runId}:user`, seq: 3 },
+    };
+    const localFinalIdentity = { id: "placement-local-final-2", seq: 4 };
+    const localFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: replyText }],
+      timestamp: 1_700_000_000_003,
+      __openclaw: localFinalIdentity,
+    };
+    // Begin at the settled abandonment snapshot; the new prompt still belongs
+    // to the outbox, not history. Keep the original fixture's Gateway timestamps.
+    const { state, request } = createSessionEventState({
+      chatMessages: [originalPrompt, abandonedPartial],
+      chatRunId: runId,
+      chatQueue: [
+        {
+          id: "placement-local-send-2",
+          text: promptText,
+          createdAt: Date.now(),
+          sendState: "sending",
+          sendRunId: runId,
+          sendAttempts: 1,
+        },
+      ],
+    });
+    const expected = [originalPrompt, abandonedPartial, localUser, localFinal].map((message) => ({
+      role: message.role,
+      text: extractText(message),
+    }));
+
+    try {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          seq: 5,
+          state: "delta",
+          deltaText: replyText,
+          message: {
+            role: "assistant",
+            content: localFinal.content,
+            timestamp: localFinal.timestamp,
+          },
+        },
+      });
+      expect(renderedTranscript(state)).toEqual(expected);
+
+      // setHistoryMessages in the browser fixture changes only future responses;
+      // it does not deliver a user persistence event before this assistant row.
+      request.mockResolvedValue({
+        messages: [originalPrompt, abandonedPartial, localUser, localFinal],
+        sessionId: state.currentSessionId,
+      });
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          activeRunIds: null,
+          hasActiveRun: true,
+          messageId: localFinalIdentity.id,
+          messageSeq: localFinalIdentity.seq,
+          message: localFinal,
+        },
+      });
+      expect(state.chatMessages.map(extractText)).toEqual([
+        extractText(originalPrompt),
+        extractText(abandonedPartial),
+        replyText,
+      ]);
+      expect(request).not.toHaveBeenCalled();
+      // Full terminal/outbox retirement and reload use the real browser lifecycle
+      // in session-placement.move.e2e.test.ts; this boundary is before either.
+      expect(renderedTranscript(state)).toEqual(expected);
+    } finally {
+      removeQueuedMessage(state, "placement-local-send-2");
+    }
+  });
+
   it.each([
     { name: "omitted", terminalMessage: undefined, startsActive: true, pendingReload: false },
     { name: "null", terminalMessage: null, startsActive: true, pendingReload: false },
@@ -919,9 +1039,9 @@ describe("canonical session message recovery", () => {
       ]);
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith("chat.history", {
-          agentId: "main",
           sessionKey: state.sessionKey,
-          limit: 100,
+          limit: 80,
+          maxBytes: 256 * 1024,
         }),
       );
       await vi.waitFor(() => expect(state.chatLoading).toBe(false));
@@ -1299,9 +1419,7 @@ describe("canonical session message recovery", () => {
         },
       });
       expect(state.chatRunId).toBeNull();
-      expect(
-        getChatSessionProjection(state, state.chatMessages).runs[replacementRunId]?.status,
-      ).toBe("completed");
+      expect(getChatSessionProjection(state).runs[replacementRunId]?.status).toBe("completed");
 
       await vi.advanceTimersByTimeAsync(100);
       expect(request).toHaveBeenCalledTimes(1);
@@ -1310,70 +1428,118 @@ describe("canonical session message recovery", () => {
     }
   });
 
-  it("continues terminal recovery when history backfills another run", async () => {
-    vi.useFakeTimers();
-    try {
-      const runId = "run-after-history-backfill";
-      const historicalRunId = "older-run-from-history";
-      const prompt = {
-        role: "user",
-        content: [{ type: "text", text: "Finish after loading older history" }],
-        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 2 },
-      };
-      const historicalReply = {
-        role: "assistant",
-        content: [{ type: "text", text: "An older durable reply." }],
-        __openclaw: { id: "historical-reply", runId: historicalRunId, seq: 1 },
-      };
-      const persistedReply = {
-        role: "assistant",
-        content: [{ type: "text", text: "The current reply is now durable." }],
-        stopReason: "stop",
-        __openclaw: { id: "current-reply", runId, seq: 3 },
-      };
-      const sessionInfo = {
-        key: "agent:main:main",
-        kind: "direct" as const,
-        updatedAt: 3,
-        hasActiveRun: false,
-        activeRunIds: [],
-        status: "done" as const,
-      };
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce({
-          messages: [historicalReply, prompt],
-          sessionId: "selected-session",
-          sessionInfo,
-        })
-        .mockResolvedValueOnce({
-          messages: [historicalReply, prompt, persistedReply],
-          sessionId: "selected-session",
-          sessionInfo,
+  it.each(["another-run", "nested-tool-only"] as const)(
+    "continues terminal recovery when history backfills %s",
+    async (historyKind) => {
+      vi.useFakeTimers();
+      try {
+        const runId = "run-after-history-backfill";
+        const historicalRunId = "older-run-from-history";
+        const prompt = {
+          role: "user",
+          content: [{ type: "text", text: "Finish after loading older history" }],
+          __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 2 },
+        };
+        const historicalReply = {
+          role: "assistant",
+          content: [{ type: "text", text: "An older durable reply." }],
+          __openclaw: { id: "historical-reply", runId: historicalRunId, seq: 1 },
+        };
+        // Public history projects tool blocks, not the stored empty-content activity fact.
+        const nestedActivity = {
+          role: "custom",
+          customType: "openclaw.nested-tool.v1",
+          display: true,
+          excludeFromContext: true,
+          runId,
+          timestamp: 2,
+          content: [
+            {
+              type: "toolCall",
+              id: "nested-read",
+              runId,
+              name: "read",
+              arguments: { path: "note.txt" },
+              parentToolCallId: "outer-exec",
+              timestamp: 2,
+            },
+            {
+              type: "toolResult",
+              role: "toolResult",
+              runId,
+              scopeId: "attempt-1",
+              afterEntryId: "prompt-1",
+              startOrder: 0,
+              parentToolCallId: "outer-exec",
+              toolCallId: "nested-read",
+              toolName: "read",
+              isError: false,
+              startedAt: 2,
+              timestamp: 3,
+              content: [{ type: "text", text: "Nested read completed." }],
+            },
+          ],
+          __openclaw: { id: "nested-activity-1", seq: 3 },
+        };
+        const precedingRow = historyKind === "another-run" ? historicalReply : nestedActivity;
+        const beforeFinal =
+          historyKind === "another-run" ? [historicalReply, prompt] : [prompt, nestedActivity];
+        const replyText = "The current reply is now durable.";
+        const persistedReply = {
+          role: "assistant",
+          content: [{ type: "text", text: replyText }],
+          stopReason: "stop",
+          __openclaw: { id: "current-reply", runId, seq: historyKind === "another-run" ? 3 : 4 },
+        };
+        const sessionInfo = {
+          key: "agent:main:main",
+          kind: "direct" as const,
+          updatedAt: 3,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done" as const,
+        };
+        const request = vi
+          .fn()
+          .mockResolvedValueOnce({
+            messages: beforeFinal,
+            sessionId: "selected-session",
+            sessionInfo,
+          })
+          .mockResolvedValueOnce({
+            messages: [...beforeFinal, persistedReply],
+            sessionId: "selected-session",
+            sessionInfo,
+          });
+        const { state } = createSessionEventState({
+          chatMessages: [prompt],
+          chatHistoryPagination: { hasMore: false },
+          chatRunId: runId,
+          client: { request } as unknown as GatewayBrowserClient,
         });
-      const { state } = createSessionEventState({
-        chatMessages: [prompt],
-        chatHistoryPagination: { hasMore: false },
-        chatRunId: runId,
-        client: { request } as unknown as GatewayBrowserClient,
-      });
 
-      handlePageGatewayEvent(state, {
-        type: "event",
-        event: "chat",
-        payload: { sessionKey: state.sessionKey, runId, state: "final" },
-      });
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: { sessionKey: state.sessionKey, runId, state: "final" },
+        });
 
-      await vi.advanceTimersByTimeAsync(0);
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(state.chatMessages).toContainEqual(historicalReply);
-      await vi.advanceTimersByTimeAsync(100);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(state.chatMessages).toContainEqual(persistedReply);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(state.chatMessages).toContainEqual(precedingRow);
+        expect(state.chatMessages).not.toContainEqual(persistedReply);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(state.chatMessages.filter((message) => extractText(message) === replyText)).toEqual([
+          persistedReply,
+        ]);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(request).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     { name: "without a pending session-message reload", pendingReload: false },
@@ -1663,9 +1829,7 @@ describe("canonical session message recovery", () => {
       { role: "assistant", text: "Active reply. Final suffix." },
       { role: "user", text: "Queued follow-up" },
     ]);
-    expect(getChatSessionProjection(state, state.chatMessages).messages).toEqual(
-      state.chatMessages,
-    );
+    expect(getChatSessionProjection(state).messages).toEqual(state.chatMessages);
   });
 
   it("does not rebind an unrelated run from a persisted steer", () => {
@@ -2180,9 +2344,9 @@ describe("canonical session message recovery", () => {
 
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith("chat.history", {
-        agentId: "main",
         sessionKey: state.sessionKey,
-        limit: 100,
+        limit: 80,
+        maxBytes: 256 * 1024,
       });
     });
     expect(state.chatRunId).toBe("active-run");
@@ -2299,6 +2463,7 @@ describe("ChatStateController render lifecycle", () => {
       assistantAgentId: "main",
       agentsList: { defaultId: "main" },
       chatRunId: null,
+      chatMessages: [],
       observerDigest: null,
       renderLifecycle: { invalidate: requestUpdate },
       requestUpdate,
@@ -2386,10 +2551,9 @@ describe("ChatStateController render lifecycle", () => {
           allowExternalEmbedUrls: false,
           assistantIdentity: { name: "Assistant" },
           embedSandboxMode: "scripts",
-          localMediaPreviewRoots: [],
         },
       },
-      initialUserMessage: createInitialUserMessageHandoff(),
+      chatSubmissions: createChatSubmissions(),
       sessions: {},
     } as unknown as ApplicationContext;
   }
@@ -2399,6 +2563,7 @@ describe("ChatStateController render lifecycle", () => {
       createPageContext(),
       { invalidate: vi.fn(), afterCommit: () => () => {} },
       {
+        dispatchEvent: () => true,
         getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
         querySelector: () => null,
       },
@@ -2949,7 +3114,7 @@ describe("ChatStateController render lifecycle", () => {
 
   it("forces one PR-chips refresh per PR link seen in the live stream", () => {
     vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1);
-    const refreshSessionPullRequests = vi.fn(() => Promise.resolve());
+    const refreshSessionPullRequests = vi.fn(() => true);
     const state = createStreamEventState({
       refreshSessionPullRequests,
     });
@@ -3048,6 +3213,7 @@ describe("ChatStateController render lifecycle", () => {
     controller.hostConnected();
     const renderLifecycle = controller.createRenderLifecycle();
     const state = createPageState(createPageContext(), renderLifecycle, {
+      dispatchEvent: () => true,
       querySelector: () => null,
     });
     const stop = vi.fn(() => {
@@ -3288,7 +3454,7 @@ describe("session pull request refresh", () => {
     },
   ])("$name", ({ text, activeRunId, runId, stream, sessionKey, refresh }) => {
     vi.useFakeTimers();
-    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const refreshSessionPullRequests = vi.fn(() => true);
     const state = createFinalReplyState(refreshSessionPullRequests);
     if (activeRunId) {
       state.chatRunId = activeRunId;
@@ -3327,16 +3493,15 @@ describe("image lightbox lifecycle", () => {
           allowExternalEmbedUrls: false,
           assistantIdentity: { name: "Assistant" },
           embedSandboxMode: "scripts",
-          localMediaPreviewRoots: [],
         },
       },
-      initialUserMessage: createInitialUserMessageHandoff(),
+      chatSubmissions: createChatSubmissions(),
       sessions: {},
     } as unknown as ApplicationContext;
     const state = createPageState(
       context,
       { invalidate: vi.fn(), afterCommit: () => () => {} },
-      { querySelector: () => null },
+      { dispatchEvent: () => true, querySelector: () => null },
     );
 
     const source = "data:video/mp4;base64,AAAA";
@@ -3378,10 +3543,9 @@ describe("image lightbox lifecycle", () => {
           allowExternalEmbedUrls: false,
           assistantIdentity: { name: "Assistant" },
           embedSandboxMode: "scripts",
-          localMediaPreviewRoots: [],
         },
       },
-      initialUserMessage: createInitialUserMessageHandoff(),
+      chatSubmissions: createChatSubmissions(),
       sessions: {},
     } as unknown as ApplicationContext;
     const state = createPageState(
@@ -3390,7 +3554,7 @@ describe("image lightbox lifecycle", () => {
         invalidate,
         afterCommit: () => () => {},
       },
-      { querySelector: () => null },
+      { dispatchEvent: () => true, querySelector: () => null },
     );
     const release = vi.fn();
     state.imageLightbox = {
@@ -3424,11 +3588,17 @@ describe("resolveChatAvatarUrl", () => {
 describe("loadPageAssistantIdentity", () => {
   it("memoizes identity by agent while fetching a cross-agent switch", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
-      name: params?.agentId === "other" ? "Other Agent" : "Main Agent",
-      agentId: params?.agentId ?? "main",
-    }));
+    const request = vi.fn(
+      async (_method: string, params?: { agentId?: string }): Promise<unknown> => ({
+        name: params?.agentId === "other" ? "Other Agent" : "Main Agent",
+        agentId: params?.agentId ?? "main",
+      }),
+    );
     const client = { request } as unknown as GatewayBrowserClient;
+    const identities = createAgentIdentityCapability({
+      snapshot: { client, phase: "connected" },
+      subscribe: () => () => undefined,
+    });
     const context = {
       agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
       agentSelection: { state: { selectedId: "main" } },
@@ -3439,17 +3609,16 @@ describe("loadPageAssistantIdentity", () => {
           assistantIdentity: { name: "Assistant" },
           chatMessageMaxWidth: null,
           embedSandboxMode: "scripts",
-          localMediaPreviewRoots: [],
         },
       },
       gateway: { snapshot: { client, connected: true, hello: null } },
-      initialUserMessage: createInitialUserMessageHandoff(),
-      sessions: {},
+      chatSubmissions: createChatSubmissions(),
+      sessions: { refresh: vi.fn().mockResolvedValue(undefined) },
     } as unknown as ApplicationContext;
     const state = createPageState(
       context,
       { invalidate: vi.fn(), afterCommit: () => () => {} },
-      { querySelector: () => null },
+      { dispatchEvent: () => true, querySelector: () => null },
     );
     state.client = client;
     state.connected = true;
@@ -3476,7 +3645,43 @@ describe("loadPageAssistantIdentity", () => {
     state.sessionKey = "agent:main:third";
     await state.loadAssistantIdentity();
     expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenLastCalledWith("agent.identity.get", { agentId: "main" });
+
+    const staleIdentity = createDeferred<{ name: string; agentId: string }>();
+    identities.invalidate(["main"]);
+    let holdMainIdentity = true;
+    request.mockImplementation((method: string, params?: { agentId?: string }) => {
+      if (method === "chat.metadata") {
+        return Promise.resolve({ commands: [], models: [] });
+      }
+      if (method === "models.authStatus") {
+        return Promise.resolve({ ts: 1, providers: [] });
+      }
+      if (params?.agentId === "main" && holdMainIdentity) {
+        holdMainIdentity = false;
+        return staleIdentity.promise;
+      }
+      return Promise.resolve({
+        name: params?.agentId === "work" ? "Work Agent" : "Main Agent",
+        agentId: params?.agentId ?? "main",
+      });
+    });
+    state.agentsList = {
+      agents: [{ id: "main" }, { id: "work" }],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+    };
+    state.sessionKey = "global";
+    state.assistantAgentId = "main";
+
+    const pendingMainIdentity = state.loadAssistantIdentity();
+    applySelectedChatAgent(state, "work");
+    staleIdentity.resolve({ name: "Stale Main Agent", agentId: "main" });
+    await pendingMainIdentity;
+
+    await vi.waitFor(() => expect(state.assistantName).toBe("Work Agent"));
+    expect(state.assistantAgentId).toBe("work");
+    expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "work" });
   });
 });
 
@@ -3498,6 +3703,84 @@ describe("refreshChatMetadata", () => {
     } as unknown as ChatPageHost;
   }
 
+  it.each(["metadata", "picker"] as const)(
+    "fences a late %s result across same-client reconnect",
+    async (kind) => {
+      const old = createDeferred<{
+        commands: never[];
+        models: typeof state.chatModelCatalog;
+        accountSelection: NonNullable<ChatPageHost["chatAccountSelection"]>;
+      }>();
+      const ready = { id: "model", name: "Model", provider: "test", available: true };
+      const accountSelection: NonNullable<ChatPageHost["chatAccountSelection"]> = {
+        kind: "personal",
+        label: "Current owner's account",
+        authProfileId: "test:current",
+        source: "user",
+      };
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(old.promise)
+        .mockResolvedValue({ commands: [], models: [ready], accountSelection });
+      const state = createMetadataState(request);
+      state.chatAccountSelection = { kind: "automatic", label: "Automatic account selection" };
+      const pending =
+        kind === "picker" ? refreshChatModelCatalogOnDemand(state) : refreshChatMetadata(state);
+      state.connected = false;
+      retireChatMetadataRequests(state);
+      invalidateModelCatalogCache(state.client!);
+      invalidateChatMetadataStore(state.client!);
+      expect(state.chatModelCatalog).toEqual([]);
+      expect(state.chatAccountSelection).toBeNull();
+      state.connectionEpoch += 1;
+      state.connected = true;
+      await refreshChatMetadata(state);
+      old.resolve({
+        commands: [],
+        models: [{ ...ready, available: false, unavailableReason: "missing-auth" }],
+        accountSelection: {
+          kind: "shared",
+          label: "Old connection's account",
+          authProfileId: "test:old",
+        },
+      });
+      await pending;
+      expect(state.chatModelCatalog).toEqual([ready]);
+      expect(state.chatAccountSelection).toEqual(accountSelection);
+      expect(state.chatModelCatalogError).toBeNull();
+      retireChatMetadataRequests(state);
+    },
+  );
+
+  it.each(["command-metadata", "patch"])(
+    "refreshes only the matching session for %s, not streaming updates",
+    async (reason) => {
+      const request = vi.fn().mockResolvedValue({ commands: [], models: [] });
+      const state = createMetadataState(request);
+      await refreshChatMetadata(state);
+      for (const [key, eventReason] of [
+        ["agent:work:other", reason],
+        [state.sessionKey, "message"],
+      ]) {
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "sessions.changed",
+          payload: { key, agentId: "work", reason: eventReason },
+        });
+      }
+      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(1);
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "sessions.changed",
+        payload: { key: state.sessionKey, agentId: "work", reason },
+      });
+      await vi.waitFor(() =>
+        expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2),
+      );
+      retireChatMetadataRequests(state);
+    },
+  );
+
   it.each([
     {
       label: "warm",
@@ -3512,8 +3795,11 @@ describe("refreshChatMetadata", () => {
         models: Array<{ id: string; name: string; provider: string; reasoning: boolean }>;
       }>();
       const request = vi.fn((method: string, params?: unknown) => {
-        expect(method).toBe("models.list");
-        expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
+        expect(params).toEqual(
+          method === "models.list"
+            ? { view: "configured", agentId: "work", refresh: true }
+            : { agentId: "work", sessionKey: "agent:work:main" },
+        );
         return discovery.promise;
       });
       const state = createMetadataState(request, {
@@ -3544,7 +3830,7 @@ describe("refreshChatMetadata", () => {
     },
   );
 
-  it("applies agent-scoped metadata after a same-agent session switch", async () => {
+  it("does not apply session metadata after a same-agent session switch", async () => {
     let resolveMetadata:
       | ((value: {
           commands: never[];
@@ -3564,7 +3850,7 @@ describe("refreshChatMetadata", () => {
     });
     const request = vi.fn(async (method: string, params?: unknown) => {
       expect(method).toBe("chat.metadata");
-      expect(params).toEqual({ agentId: "work" });
+      expect(params).toEqual({ agentId: "work", sessionKey: "agent:work:main" });
       return await metadata;
     });
     const state = createMetadataState(request);
@@ -3577,13 +3863,11 @@ describe("refreshChatMetadata", () => {
     });
     await refresh;
 
-    expect(state.chatModelCatalog).toEqual([
-      { id: "work-model", name: "Work Model", provider: "openai", available: true },
-    ]);
+    expect(state.chatModelCatalog).toEqual([]);
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses same-agent metadata and fetches a cross-agent catalog", async () => {
+  it("isolates metadata across sessions and agents", async () => {
     const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
       commands: [],
       models: [
@@ -3599,12 +3883,15 @@ describe("refreshChatMetadata", () => {
     await refreshChatMetadata(state);
     state.sessionKey = "agent:work:second";
     await refreshChatMetadata(state);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
 
     state.sessionKey = "agent:other:main";
     await refreshChatMetadata(state);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("chat.metadata", { agentId: "other" });
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenLastCalledWith("chat.metadata", {
+      agentId: "other",
+      sessionKey: "agent:other:main",
+    });
   });
 
   it("ignores metadata after switching to a different agent", async () => {
@@ -3710,7 +3997,7 @@ describe("refreshChatMetadata", () => {
     });
     await refresh;
 
-    expect(state.chatModelCatalog).toBe(existingCatalog);
+    expect(state.chatModelCatalog).toEqual([]);
   });
 
   it("keeps the seeded catalog and reports chat metadata failures without model fallback", async () => {
@@ -3767,22 +4054,105 @@ describe("refreshChatMetadata", () => {
 });
 
 describe("refreshChatModelAuthStatus", () => {
-  it("scopes auth status to the selected session agent", async () => {
-    const request = vi.fn(async () => ({ ts: 1, providers: [] }));
-    const state = {
-      client: { request },
-      connected: true,
-      connectionEpoch: 1,
-      sessionKey: "agent:work:dashboard:current",
-      assistantAgentId: "main",
-      modelAuthStatusResult: null,
-      modelAuthStatusError: null,
-    } as unknown as ChatPageHost;
+  it.each([
+    undefined,
+    {
+      code: "PREPARED_MODEL_AUTH_UNAVAILABLE" as const,
+      message: "Model authentication status is unavailable. Refresh Models after setup finishes.",
+    },
+  ])(
+    "scopes auth status to the fixed session agent and records unavailable health: %j",
+    async (unavailable) => {
+      const result = { ts: 1, providers: [], ...(unavailable ? { unavailable } : {}) };
+      const request = vi.fn(async () => result);
+      const state = {
+        client: { request },
+        connected: true,
+        connectionEpoch: 1,
+        sessionKey: "agent:work:dashboard:current",
+        assistantAgentId: "main",
+        modelAuthStatusRequestVersion: 0,
+        modelAuthStatusResult: null,
+        modelAuthStatusError: null,
+      } as unknown as ChatPageHost;
 
-    await refreshChatModelAuthStatus(state);
+      await refreshChatModelAuthStatus(state);
+      applySelectedChatAgent(state, "research");
 
-    expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "work" });
-  });
+      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "work" });
+      expect(request).toHaveBeenCalledOnce();
+      expect(state.assistantAgentId).toBe("main");
+      expect(state.modelAuthStatusResult).toBe(result);
+      expect(state.modelAuthStatusError).toBe(unavailable?.message ?? null);
+      expect(state.connected).toBe(true);
+    },
+  );
+
+  it.each(["success", "failure"] as const)(
+    "rebinds selected-global auth and rejects the superseded Main %s",
+    async (outcome) => {
+      const mainResponse = createDeferred<{ ts: number; providers: never[] }>();
+      const workResponse = createDeferred<{ ts: number; providers: never[] }>();
+      const request = vi.fn((method: string, params?: { agentId?: string }) => {
+        if (method === "chat.metadata") {
+          return Promise.resolve({ commands: [], models: [] });
+        }
+        return (params?.agentId === "work" ? workResponse : mainResponse).promise;
+      });
+      const staleMainStatus = { ts: 1, providers: [] };
+      const workStatus = { ts: 2, providers: [] };
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
+      const state = {
+        client: { request },
+        connected: true,
+        connectionEpoch: 1,
+        sessionKey: "global",
+        assistantAgentId: "main",
+        assistantIdentityRequestVersion: 0,
+        modelAuthStatusRequestVersion: 0,
+        modelAuthStatusResult: staleMainStatus,
+        modelAuthStatusError: "stale Main error",
+        loadAssistantIdentity: vi.fn(async () => undefined),
+        requestUpdate: vi.fn(),
+        chatModelSwitchPromises: {},
+        chatModelCatalog: [],
+        chatModelCatalogError: null,
+        chatModelsLoading: false,
+        sessions: {
+          state: { modelOverrides: {} },
+          retireModelOverride: vi.fn(),
+          refresh: refreshSessions,
+        },
+      } as unknown as ChatPageHost;
+
+      const mainRefresh = refreshChatModelAuthStatus(state);
+      applySelectedChatAgent(state, "work");
+
+      expect(state.assistantAgentId).toBe("work");
+      expect(state.modelAuthStatusResult).toBeNull();
+      expect(state.modelAuthStatusError).toBeNull();
+      expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toEqual([
+        ["models.authStatus", { agentId: "main" }],
+        ["models.authStatus", { agentId: "work" }],
+      ]);
+      expect(refreshSessions).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "work", force: true }),
+      );
+
+      workResponse.resolve(workStatus);
+      await vi.waitFor(() => expect(state.modelAuthStatusResult).toBe(workStatus));
+
+      if (outcome === "success") {
+        mainResponse.resolve({ ts: 3, providers: [] });
+      } else {
+        mainResponse.reject(new Error("stale Main auth status"));
+      }
+      await mainRefresh;
+
+      expect(state.modelAuthStatusResult).toBe(workStatus);
+      expect(state.modelAuthStatusError).toBeNull();
+    },
+  );
 
   it.each(["success", "failure"] as const)(
     "ignores a stale auth status %s after reconnecting the same client",
@@ -3799,6 +4169,7 @@ describe("refreshChatModelAuthStatus", () => {
         client: { request },
         connected: true,
         connectionEpoch: 1,
+        modelAuthStatusRequestVersion: 0,
         modelAuthStatusResult: currentStatus,
         modelAuthStatusError: null,
       } as unknown as ChatPageHost;

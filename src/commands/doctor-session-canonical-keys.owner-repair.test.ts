@@ -65,13 +65,17 @@ describe("doctor transcript owner repair", () => {
       };
       const canonicalStamp = {
         createdVia: "operator" as const,
-        createdActor: { type: "human" as const, id: "profile-canonical" },
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "profile-canonical",
+        },
         createdAt: 10,
         ...(fixture.requiredCanonical ? { sandbox: "required" as const } : {}),
       };
       const aliasStamp = {
         createdVia: "channel" as const,
-        createdActor: { type: "human" as const, id: "profile-alias" },
+        createdActor: { type: "human" as const, source: "channel" as const, id: "profile-alias" },
         createdAt: 20,
         ...(fixture.requiredAlias ? { sandbox: "required" as const } : {}),
       };

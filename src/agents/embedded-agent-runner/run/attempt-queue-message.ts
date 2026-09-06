@@ -4,6 +4,7 @@
 import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
+import { hasPromptImageInput } from "../../../media/prompt-image-input.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import {
@@ -295,6 +296,25 @@ async function steerAndWaitForTranscriptCommit(
   });
 }
 
+function resolveQuestionAuthority(
+  canInject: (() => boolean) | undefined,
+  authority: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
+) {
+  return (
+    authority ??
+    (canInject
+      ? {
+          kind: "run" as const,
+          assertCurrent: () => {
+            if (!canInject()) {
+              throw new Error("active session is finalizing");
+            }
+          },
+        }
+      : undefined)
+  );
+}
+
 /**
  * Steers the active session directly or waits for transcript commitment when a
  * caller needs delivery proof before returning.
@@ -305,13 +325,24 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   options: EmbeddedAgentQueueMessageOptions | undefined,
   sessionKey?: string,
   canInject?: () => boolean,
+  authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
-  const isPlainTextAnswer = !options?.images?.length;
+  const isPlainTextAnswer = !hasPromptImageInput(options);
   if (isInboundUserMessage && !isPlainTextAnswer) {
     try {
-      await cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy: "image-reply" });
+      await cancelPendingAgentQuestionForSession({
+        sessionKey,
+        resolvedBy: "image-reply",
+        authority: resolveQuestionAuthority(canInject, authority),
+      });
     } catch (error) {
+      if (canInject && !canInject()) {
+        throw error;
+      }
+      if (error instanceof Error && error.name === "QuestionDispatchRefusedError") {
+        throw error;
+      }
       log.warn(`failed to cancel ask_user before image steering: ${String(error)}`);
     }
   }
@@ -320,7 +351,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   if (
     isInboundUserMessage &&
     isPlainTextAnswer &&
-    (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey))
+    (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey, canInject, authority))
   ) {
     options?.onQueueAccepted?.(true);
     return;
@@ -370,18 +401,17 @@ export async function claimEmbeddedPendingUserInputAnswer(
   text: string,
   options: EmbeddedAgentQueueMessageOptions | undefined,
   sessionKey?: string,
+  canInject?: () => boolean,
+  authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
 ): Promise<boolean> {
-  if (options?.isInboundUserMessage !== true || options.images?.length) {
+  if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
     return false;
   }
   const claimed = await claimPendingAgentQuestionAnswer({
     sessionKey,
     text,
-    persist: options.userTurnTranscriptRecorder
-      ? async () => {
-          await options.userTurnTranscriptRecorder?.persistApproved();
-        }
-      : undefined,
+    authority: resolveQuestionAuthority(canInject, authority),
+    sourceRecorder: options.userTurnTranscriptRecorder,
   });
   return claimed;
 }

@@ -66,6 +66,7 @@ function createState(token: string, existing?: ExtensionRelayHandle) {
 
 function createHandle(token: string, port = RELAY_PORT): ExtensionRelayHandle {
   return {
+    ownership: "owned",
     port,
     token,
     allowLegacyAuth: true,
@@ -88,6 +89,7 @@ describe("extension relay lifecycle", () => {
     vi.clearAllMocks();
     ensureExtensionRelayTokenMock.mockResolvedValue(ROTATED_TOKEN);
     startExtensionRelayServerMock.mockImplementation(async ({ port, token, allowLegacyAuth }) => ({
+      ownership: "owned",
       port,
       token,
       allowLegacyAuth,
@@ -108,6 +110,7 @@ describe("extension relay lifecycle", () => {
     expect(oldRelay.close).toHaveBeenCalledOnce();
     expect(startExtensionRelayServerMock).toHaveBeenCalledWith({
       port: RELAY_PORT,
+      profileName: PROFILE_NAME,
       token: ROTATED_TOKEN,
       allowLegacyAuth: true,
     });

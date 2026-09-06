@@ -70,10 +70,7 @@ function normalizeHostHookStringList(value: unknown): string[] | undefined | nul
 }
 
 export function createHostRegistrars(state: PluginRegistryState) {
-  const { registry, registryParams, pushDiagnostic } = state;
-  const reportRegistrationError = (record: PluginRecord, message: string) => {
-    pushDiagnostic({ level: "error", pluginId: record.id, source: record.source, message });
-  };
+  const { registry, registryParams, pushDiagnostic, reportRegistrationError } = state;
 
   const validateSessionActionSchema = (
     record: PluginRecord,

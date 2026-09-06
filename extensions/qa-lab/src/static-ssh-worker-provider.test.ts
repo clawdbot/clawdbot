@@ -43,6 +43,12 @@ describe("QA Lab static-SSH worker provider", () => {
       },
     });
     expect(replay).toStrictEqual(first);
+    // Cleanup needs only the logical operation identity, even without usable SSH settings.
+    const allocation = await provider.resolveAllocation({}, "operation-123");
+    expect(allocation).toEqual({ leaseId: first.leaseId, sharedHost: true });
+    await expect(
+      provider.destroy({ leaseId: allocation.leaseId, profile: {} }),
+    ).resolves.toBeUndefined();
   });
 
   it("preserves an explicit positive SSH port", async () => {

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -28,15 +29,49 @@ describe("resolveAssistantIdentity", () => {
     expect(identity.avatar).toBe("W");
   });
 
-  it("uses the first roster entry for presentation on an explicit fleet", () => {
-    const identity = resolveAssistantIdentity({
+  it.each<{
+    name: string;
+    cfg: OpenClawConfig;
+    agentId?: string;
+    expected: string;
+  }>([
+    { name: "implicit main", cfg: {}, expected: "main" },
+    { name: "sole agent", cfg: { agents: { entries: { research: {} } } }, expected: "research" },
+    {
+      name: "first explicit roster entry, not the ambient system owner",
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
+          defaults: { systemAgent: { agentId: "research" } },
+        },
+      },
+      expected: "ops",
+    },
+    {
+      name: "retained legacy owner",
+      cfg: retainLegacyDefaultAgentId(
+        { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
+        "research",
+      ),
+      expected: "research",
+    },
+    {
+      name: "normalized explicit selection",
       cfg: { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
+      agentId: "RESEARCH",
+      expected: "research",
+    },
+  ])("uses $name for presentation", ({ cfg, agentId, expected }) => {
+    const identity = resolveAssistantIdentity({
+      cfg,
+      agentId,
       workspaceDir: "",
     });
 
     expect(identity).toEqual({
       ...DEFAULT_ASSISTANT_IDENTITY,
-      agentId: "ops",
+      agentId: expected,
       nameSource: "default",
     });
   });

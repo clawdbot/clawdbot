@@ -16,6 +16,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { CRON_DIRECT_DELIVERY_CONTEXT_KIND } from "../../shared/transcript-only-openclaw-assistant.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import type { CronResolvedDeliveryState } from "../types.js";
@@ -505,14 +506,17 @@ export async function dispatchCronDelivery(
         delivery,
         deliveryBestEffort: params.deliveryBestEffort,
       });
+      const targetSessionAwarenessText =
+        !params.deliveryBestEffort &&
+        (shouldQueueAwarenessForDelivery ||
+          !isSameSessionKey(deliverySessionKey, awarenessMainSessionKey))
+          ? deliveryAwarenessText
+          : undefined;
       // For explicit isolated deliveries that resolve to the main session, the
       // awareness queue is the intentional main-session record on the next turn;
       // adding an immediate assistant mirror would make the cron text appear twice.
-      const awarenessText = shouldQueueAwarenessForDelivery ? deliveryAwarenessText : undefined;
       const deliveryWillReachAwarenessMainSession =
-        mirrorTargetsAwarenessMainSession &&
-        shouldQueueAwarenessForDelivery &&
-        Boolean(awarenessText);
+        mirrorTargetsAwarenessMainSession && Boolean(targetSessionAwarenessText);
       // Implicit/default isolated delivery must not create main-session awareness.
       const mirrorWouldBypassIsolatedAwarenessPolicy =
         mirrorTargetsAwarenessMainSession &&
@@ -557,6 +561,10 @@ export async function dispatchCronDelivery(
             agentId: params.agentId,
           }),
           idempotencyKey: deliveryIdempotencyKey,
+          // The durable marker is a fallback only when target awareness is absent.
+          ...(targetSessionAwarenessText === undefined
+            ? { deliveryMirror: { kind: CRON_DIRECT_DELIVERY_CONTEXT_KIND } }
+            : {}),
           config: params.cfgWithAgentDefaults,
         };
         if (mirrorTargetsDeletingRunSession) {
@@ -569,20 +577,14 @@ export async function dispatchCronDelivery(
           });
         }
       }
-      if (
-        deliveryState.delivered &&
-        !params.deliveryBestEffort &&
-        deliveryAwarenessText &&
-        (shouldQueueAwarenessForDelivery ||
-          !isSameSessionKey(deliverySessionKey, awarenessMainSessionKey))
-      ) {
+      if (deliveryState.delivered && targetSessionAwarenessText) {
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,
           agentId: params.agentId,
           deliveryIdempotencyKey,
           queueMainSession: shouldQueueAwarenessForDelivery,
-          text: deliveryAwarenessText,
+          text: targetSessionAwarenessText,
           targetSessionKey: deliverySessionKey,
         });
       }
@@ -698,7 +700,11 @@ export async function dispatchCronDelivery(
     }
     if (requiresCurrentSessionCompletion) {
       deliveryAttempted = true;
-      const completion = await commitCurrentSessionCronCompletion(params, synthesizedText);
+      // Descendant finalization may replace interim media with a text-only reply.
+      const completion = await commitCurrentSessionCronCompletion(
+        { ...params, deliveryPayloads },
+        synthesizedText,
+      );
       if (!completion.ok) {
         recordDelivery("not-delivered", completion.reason);
         return failDeliveryTarget(completion.reason);

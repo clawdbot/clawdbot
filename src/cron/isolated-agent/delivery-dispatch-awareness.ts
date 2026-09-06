@@ -1,7 +1,7 @@
 /** Session awareness and transcript mirroring for direct cron delivery. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import {
   canonicalizeMainSessionAlias,
@@ -21,6 +21,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { parseThreadSessionSuffix } from "../../routing/session-key.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { CRON_DIRECT_DELIVERY_CONTEXT_KIND } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { CronJob } from "../types.js";
 import {
   buildDirectCronDeliveryIdempotencyKey,
@@ -44,6 +45,7 @@ export type DirectCronTranscriptMirror = {
   mediaUrls?: string[];
   storePath?: string;
   idempotencyKey: string;
+  deliveryMirror?: { kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND };
   config: OpenClawConfig;
 };
 
@@ -230,11 +232,11 @@ export function buildDirectCronTranscriptMirrorPayloads(
       spokenText: _spokenText,
       ...rest
     } = payload;
-    return {
+    return copyReplyPayloadMetadata(payload, {
       ...rest,
       text: spokenText,
       ...(mediaUrls.length ? { mediaUrls } : {}),
-    };
+    });
   });
 }
 

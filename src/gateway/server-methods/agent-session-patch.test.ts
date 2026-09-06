@@ -83,8 +83,7 @@ describe("agent session patch", () => {
     expect(Object.hasOwn(buildPatch(false), "agentStatus")).toBe(false);
   });
 
-  // Subagent spawn labels rely on run-start persistence; there is no post-run
-  // label patch anymore (see subagent-announce.ts).
+  // Public agent RPC labels retain their run-start contract; native spawn labels are creation-owned.
   it("persists the request label at run start", () => {
     expect(buildPatch(false, { requestLabel: "Fix flaky auth test" }).label).toBe(
       "Fix flaky auth test",

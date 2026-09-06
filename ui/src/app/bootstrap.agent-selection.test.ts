@@ -1,10 +1,60 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { expect, it, vi } from "vitest";
 import type { RouteId } from "../app-routes.ts";
+import { startModelSetupFirstRunRedirectAfterLocation } from "../pages/model-setup/first-run.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { loadGatewaySessionSelection, loadSettings, saveSettings } from "./settings.ts";
+
+it.each([
+  { agentId: "main", savedAgentId: "work", basePath: "", suffix: "" },
+  { agentId: "work", savedAgentId: "main", basePath: "", suffix: "" },
+  { agentId: "main", savedAgentId: "work", basePath: "/openclaw", suffix: "/" },
+  { agentId: "work", savedAgentId: "main", basePath: "/openclaw", suffix: "/" },
+])(
+  "keeps cold explicit $agentId over saved $savedAgentId at $basePath (suffix '$suffix')",
+  async ({ agentId, savedAgentId, basePath, suffix }) => {
+    const pathname = buildControlUiSessionPath({
+      namespace: "chat",
+      sessionKey: `agent:${agentId}:main`,
+      exactKey: true,
+      basePath,
+    });
+    expect(pathname).toBe(`${basePath}/chat/${agentId}`);
+    const requested = { pathname: `${pathname}${suffix}`, search: "?draft=keep", hash: "#pane" };
+    let currentLocation: RouteLocation = requested;
+    const replace = vi.fn((location: RouteLocation) => {
+      currentLocation = location;
+    });
+    const gateway = {
+      snapshot: { phase: "connecting", client: null, hello: null },
+      subscribe: vi.fn(() => () => undefined),
+    } as unknown as ApplicationContext<RouteId>["gateway"];
+    const initialLocationReady = resolveInitialApplicationLocation({
+      location: requested,
+      basePath,
+      sessionKey: `agent:${savedAgentId}:main`,
+      selectedAgentId: savedAgentId,
+      gateway,
+      agentsList: () => null,
+      signal: new AbortController().signal,
+    });
+
+    await startModelSetupFirstRunRedirectAfterLocation({
+      context: { gateway } as ApplicationContext<RouteId>,
+      enabled: false,
+      history: { location: () => currentLocation, replace },
+      initialLocationReady,
+    });
+
+    expect(currentLocation).toEqual(requested);
+    expect(replace).not.toHaveBeenCalled();
+    expect(gateway.subscribe).not.toHaveBeenCalled();
+  },
+);
 
 it("routes a canonical global session through its persisted agent owner", async () => {
   const subscribe = vi.fn(() => () => undefined);
@@ -114,9 +164,7 @@ it.each([
     };
     window.history.replaceState({}, "", "/settings/appearance");
 
-    runtime = bootstrapApplication({
-      sessionPathBuilderReady: new Promise<void>(() => {}),
-    });
+    runtime = bootstrapApplication();
 
     expect(runtime.context.gateway.connection.gatewayUrl).toBe(targetGatewayUrl);
     expect(runtime.context.gateway.snapshot.sessionKey).toBe("global");

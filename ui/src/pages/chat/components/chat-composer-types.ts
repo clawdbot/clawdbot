@@ -1,7 +1,11 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import type {
@@ -9,8 +13,10 @@ import type {
   ChatGoalDraft,
   ChatGoalDraftMode,
   ChatQueueItem,
+  HumanMention,
 } from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
+import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
@@ -21,8 +27,9 @@ import type { RealtimeTalkCameraDevice } from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
+import type { FallbackStatus } from "../tool-stream-contract.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachments.ts";
+import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.ts";
 import type {
   ChatComposerCapabilityMenuProps,
   ChatComposerPlusMenuView,
@@ -32,12 +39,14 @@ import type { SlashMenuState } from "./chat-composer-slash-menu.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
 
 /** One shape for queued-row edit state and actions. */
-export type ChatQueuedEditProps = {
+type ChatQueuedEditProps = {
   /** Id of the row with an inline draft, or null when no row is being edited. */
   editingId: string | null;
   editingText?: string;
+  editingMentions?: readonly HumanMention[];
+  source?: ChatQueueItem;
   onEdit?: (id: string) => void;
-  onEditChange?: (text: string) => void;
+  onEditChange?: (text: string, mentions?: readonly HumanMention[]) => void;
   onEditSubmit?: () => void;
   onCancel: () => void;
 };
@@ -70,25 +79,33 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   canSend: boolean;
   disabledReason: string | null;
   disabledReasonTone?: "info" | "danger";
+  disabledReasonBusy?: boolean;
   disabledBanner?: ChatComposerDisabledBanner;
   runError?: { summary: string } | null;
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
   waitingApproval?: boolean;
-  compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
-  progressCardHasActiveRun?: boolean;
+  runActive?: boolean;
+  collapseTaskProgress?: boolean;
+  runId?: string | null;
   onDismissProgressCard?: (card: ProgressCard) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   messages: unknown[];
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
+  mentions?: readonly HumanMention[];
+  getMentions?: () => readonly HumanMention[];
+  mentionDirectory?: HumanMentionDirectory;
+  mentionsUnsupported?: boolean;
   modelCatalog: readonly ModelCatalogEntry[];
   modelSwitching: boolean;
   sessions: SessionsListResult | null;
+  /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
+  selectedSession?: GatewaySessionRow;
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: CapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;
@@ -115,6 +132,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   realtimeTalkCameraError?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
+  realtimeTalkInputDeviceId?: string;
   onComposerHoldToRecordChange?: (enabled: boolean) => void;
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
@@ -124,15 +142,19 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   composerControls?: TemplateResult | typeof nothing;
   anchoredNotices?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
-  onDraftChange: (next: string) => void;
+  onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
   onSlashCommand?: (command: string) => void;
-  onSend: (followUpModeOverride?: ChatFollowUpMode, submissionAction?: Event) => void;
+  onSend: (
+    followUpModeOverride?: ChatFollowUpMode,
+    submissionAction?: Event,
+  ) => void | Promise<boolean | void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
+  onUseSystemDefaultMicrophone?: () => Promise<void>;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
@@ -163,6 +185,8 @@ type ComposingDraft = {
 export type ChatComposerState = SkillMenuState &
   SlashMenuState & {
     composerComposing: boolean;
+    mentionMenu: HumanMentionMenu;
+    mentionInput?: HumanMentionInput;
     composingDraft: ComposingDraft | null;
     composerInputIntentKey: string | null;
     pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;

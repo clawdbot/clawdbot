@@ -79,6 +79,8 @@ COPY patches ./patches
 COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
 COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
+COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
+COPY scripts/docker/verify-fs-safe-native.mjs ./scripts/docker/verify-fs-safe-native.mjs
 COPY scripts/docker/verify-native-addons.sh ./scripts/docker/verify-native-addons.sh
 
 COPY --from=workspace-deps /out/packages/ ./packages/
@@ -119,6 +121,7 @@ RUN sh scripts/docker/verify-native-addons.sh
 # these after the dependency layer so a new timestamp does not invalidate install.
 ARG GIT_COMMIT=""
 ARG OPENCLAW_BUILD_TIMESTAMP=""
+ARG OPENCLAW_DOCKER_BUILD_VERSION=""
 ENV GIT_COMMIT=${GIT_COMMIT} \
     OPENCLAW_BUILD_TIMESTAMP=${OPENCLAW_BUILD_TIMESTAMP}
 
@@ -148,8 +151,13 @@ RUN pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle || \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
+# Correction-release sources keep the base package version; official images
+# stamp the complete release version before generating their build metadata.
 RUN set -eu; \
     selected_plugin_dirs="$(cat /tmp/openclaw-selected-plugin-dirs)"; \
+    if [ -n "$OPENCLAW_DOCKER_BUILD_VERSION" ]; then \
+      pnpm pkg set "version=$OPENCLAW_DOCKER_BUILD_VERSION"; \
+    fi; \
     if [ -z "$OPENCLAW_BUILD_TIMESTAMP" ]; then \
       OPENCLAW_BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
       export OPENCLAW_BUILD_TIMESTAMP; \
@@ -166,19 +174,25 @@ RUN if grep -qx 'qa-lab' /tmp/openclaw-selected-plugin-dirs; then \
       cp -R extensions/qa-lab/web/dist dist/extensions/qa-lab/web/dist; \
     fi
 
-# Replace build dependencies without asking pnpm to mutate inherited directories.
-# Preserve compiled workspace output; copy all production workspace installs and
-# pnpm metadata together so nested dependencies and lifecycle outputs survive.
-FROM build AS runtime-assets
+# Keep compiled workspaces and generated plugin assets, but omit development
+# dependency trees before merging the build output into the production install.
+FROM build AS runtime-build-output
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 RUN rm -rf node_modules ui/node_modules && \
     find packages "${OPENCLAW_BUNDLED_PLUGIN_DIR}" -name node_modules -prune -exec rm -rf {} +
-COPY --from=production-deps /app/ ./
 
-# Prune omitted plugins and build metadata. Keep SDK-native binaries only for
+# Inherit production dependencies instead of copying their full tree again.
+# The build overlay also carries the stamped release package.json.
+FROM production-deps AS runtime-assets
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+COPY --from=runtime-build-output /app/ ./
+
+# Prune omitted plugins and build metadata, then link the selected plugins'
+# plugin-local dependencies under dist/extensions/<id> after package lifecycle
+# cleanup so the packaged roots keep them. Keep SDK-native binaries only for
 # selected plugins that explicitly require them.
-RUN OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
-    node scripts/postinstall-bundled-plugins.mjs && \
+RUN node scripts/postinstall-bundled-plugins.mjs && \
+    OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
     if [ -L /app/node_modules/@openclaw/ai ]; then \
       ai_runtime_target="$(readlink -f /app/node_modules/@openclaw/ai)" && \
@@ -222,7 +236,7 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
 
 WORKDIR /app
 
-# Install runtime system utilities missing from bookworm-slim.
+# Install missing runtime utilities and the OpenMP library required by llama-server.
 # `ca-certificates` ships in `bookworm` (full) but not in `bookworm-slim`,
 # so it must be installed explicitly here. Without it `/etc/ssl/certs/`
 # stays empty and every HTTPS outbound dies at TLS handshake with
@@ -236,7 +250,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git hostname lsof openssh-client openssl procps python3 tini && \
+      ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3 tini && \
     update-ca-certificates
 
 # Keep npm as an operator-facing capability while replacing the base image's
@@ -263,6 +277,16 @@ COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
+RUN --mount=from=dependency-inputs,source=/app/scripts/docker/verify-fs-safe-native.mjs,target=/tmp/verify-fs-safe-native.mjs \
+    node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require
+
+# Validate the three version surfaces in every release-built runtime variant.
+ARG OPENCLAW_DOCKER_BUILD_VERSION
+RUN if [ -n "$OPENCLAW_DOCKER_BUILD_VERSION" ]; then \
+      test "$(node -p "require(\"/app/package.json\").version")" = "$OPENCLAW_DOCKER_BUILD_VERSION"; \
+      test "$(node -p "require(\"/app/dist/build-info.json\").version")" = "$OPENCLAW_DOCKER_BUILD_VERSION"; \
+      test "$(node /app/openclaw.mjs --version | cut -d ' ' -f 2)" = "$OPENCLAW_DOCKER_BUILD_VERSION"; \
+    fi
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
@@ -323,6 +347,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
+      install -d -m 0755 -o node -g node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" && \
       mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
       chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \

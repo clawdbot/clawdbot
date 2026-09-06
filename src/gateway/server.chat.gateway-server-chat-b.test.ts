@@ -4,10 +4,12 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { bindActiveOperatorTurnAuthority } from "../agents/cron-creator-authority-context.js";
 import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -18,7 +20,7 @@ import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
-import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
 import { resolveSessionRoutingContract } from "../config/sessions/main-session.js";
 import {
   appendTranscriptEvent,
@@ -29,8 +31,8 @@ import {
   patchSessionEntryCore,
   replaceTranscriptEvents,
   replaceSessionEntry,
-  withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
@@ -39,6 +41,7 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { getMediaDir } from "../media/store.js";
 import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -49,6 +52,7 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -136,7 +140,8 @@ vi.mock(
   },
 );
 
-vi.mock("../plugins/provider-thinking.js", () => ({
+vi.mock("../plugins/provider-thinking.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-thinking.js")>()),
   resolveEffectiveThinkingProfile: (params: { context?: { reasoning?: boolean } }) => {
     const offOnly =
       params.context?.reasoning === false ||
@@ -219,6 +224,7 @@ function createGatewayPluginMetadataSnapshot(config: OpenClawConfig): PluginMeta
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -268,22 +274,6 @@ afterAll(async () => {
   await harness.close();
 });
 
-const sendReq = (
-  ws: { send: (payload: string) => void },
-  id: string,
-  method: string,
-  params: unknown,
-) => {
-  ws.send(
-    JSON.stringify({
-      type: "req",
-      id,
-      method,
-      params,
-    }),
-  );
-};
-
 async function withGatewayChatHarness(
   run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
   options?: { headers?: Record<string, string> },
@@ -297,8 +287,8 @@ async function withGatewayChatHarness(
     if (process.env.OPENCLAW_CONFIG_PATH) {
       await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
     }
-    clearConfigCache();
     testState.sessionStorePath = undefined;
+    resetConfigRuntimeState();
     ws.close();
   }
 }
@@ -337,7 +327,7 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   }
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 async function writeMainSessionTranscript(
@@ -400,7 +390,7 @@ function openDirectChatSession() {
 function resetDirectChatSession() {
   dispatchInboundMessageMock.mockReset();
   testState.sessionStorePath = undefined;
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 async function writeStoredMainSession(entry: StoredSessionEntry = {}) {
@@ -421,8 +411,8 @@ async function callDirectChatHandler(
   method: DirectChatMethod,
   options: GatewayRequestHandlerOptions,
 ) {
-  const { chatHandlers } = await import("./server-methods/chat.js");
-  await expectDefined(chatHandlers[method], `${method} test invariant`)(options);
+  const { coreGatewayHandlers } = await import("./server-methods.js");
+  await expectDefined(coreGatewayHandlers[method], `${method} test invariant`)(options);
 }
 
 type DirectChatCallOptions = Omit<
@@ -570,6 +560,7 @@ async function sendControlUiChat(params: {
   message: string;
   respond: RespondFn;
   onAdmissionOwned?: () => Promise<boolean>;
+  localClient?: boolean;
 }): Promise<void> {
   const requestParams = makeChatSendParams({
     message: params.message,
@@ -587,6 +578,7 @@ async function sendControlUiChat(params: {
     },
     params: requestParams,
     client: createControlUiClient(undefined, {
+      ...(params.localClient ? { internal: { isLocalClient: true } } : {}),
       ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
       ...(params.authenticatedUserProfile
         ? { authenticatedUserProfile: params.authenticatedUserProfile }
@@ -649,6 +641,7 @@ test("chat.send replays a cached result after the session is archived", async ()
 });
 
 async function readTimelineEvents(filePath: string): Promise<Array<Record<string, unknown>>> {
+  flushDiagnosticsTimeline();
   const raw = await fs.readFile(filePath, "utf-8");
   return raw
     .trim()
@@ -897,7 +890,6 @@ describe("gateway server chat", () => {
         ).toMatchObject({ state: "active", environmentId: "env-placement" });
       } finally {
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -947,7 +939,6 @@ describe("gateway server chat", () => {
         });
       } finally {
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1132,7 +1123,6 @@ describe("gateway server chat", () => {
       } finally {
         clearActiveEmbeddedRun("sess-main", handle, "main");
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1192,7 +1182,6 @@ describe("gateway server chat", () => {
       } finally {
         testState.sessionConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1398,7 +1387,6 @@ describe("gateway server chat", () => {
       } finally {
         handler.dispose();
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1744,7 +1732,6 @@ describe("gateway server chat", () => {
       } finally {
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -2035,7 +2022,6 @@ describe("gateway server chat", () => {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
-      clearConfigCache();
     }
   });
 
@@ -2080,7 +2066,6 @@ describe("gateway server chat", () => {
             talk: { agentId: "main" },
           };
           await state.writeConfig(config);
-          clearConfigCache();
           const pluginMetadataSnapshot = createGatewayPluginMetadataSnapshot(config);
           assertPluginMetadataSnapshotConsistency(pluginMetadataSnapshot);
           releasePluginMetadata = installTemporaryCurrentPluginMetadataSnapshot(
@@ -2268,7 +2253,7 @@ describe("gateway server chat", () => {
               preparedAuthStore: requirePreparedAuthStore(agentId),
               ...(profileId ? { preferredProfileId: profileId } : {}),
               ...(profileId && (profileSource === "user" || legacyUserProfile)
-                ? { lockedProfileId: profileId }
+                ? { pinnedProfileId: profileId }
                 : {}),
             });
             const projection = Promise.all([
@@ -2508,7 +2493,6 @@ describe("gateway server chat", () => {
           testState.agentsConfig = previousAgentsConfig;
           testState.sessionStorePath = undefined;
           releasePluginMetadata();
-          clearConfigCache();
         }
       },
     );
@@ -3751,7 +3735,6 @@ describe("gateway server chat", () => {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -4104,41 +4087,43 @@ describe("gateway server chat", () => {
   test.each([
     { caseName: "tombstones an explicit abort", retryable: false, stopReason: "rpc" },
     { caseName: "retains a restart interruption", retryable: true, stopReason: "restart" },
-  ])("chat.send $caseName during SQLite admission", async ({ retryable, stopReason }) => {
+  ])("chat.send $caseName after SQLite admission commits", async ({ retryable, stopReason }) => {
     const { storePath } = openDirectChatSession();
     const runId = `idem-restart-safe-abort-${stopReason}`;
-    const lockEntered = createDeferred();
-    const releaseLock = createDeferred();
-    let lockPromise: Promise<void> | undefined;
+    let stopListening: (() => void) | undefined;
     try {
       await writeStoredMainSession(makeDoneSessionEntry());
       const scope = makeMainSessionScope(storePath);
-      lockPromise = withTranscriptWriteLock(scope, async () => {
-        lockEntered.resolve(undefined);
-        await releaseLock.promise;
-      });
-      await lockEntered.promise;
       const context = createDirectChatContext();
+      const abortCommittedTurn = vi.fn(() => {
+        const activeRun = expectDefined(
+          context.chatAbortControllers.get(runId),
+          "expected admitted chat run",
+        );
+        activeRun.abortStopReason = stopReason;
+        activeRun.controller.abort();
+      });
+      // The transcript notification follows the atomic user-turn and recovery-claim commit.
+      stopListening = onSessionTranscriptUpdate((update) => {
+        if (
+          update.target.sessionKey === scope.sessionKey &&
+          update.target.sessionId === scope.sessionId &&
+          isRecord(update.message) &&
+          update.message.role === "user" &&
+          update.message.idempotencyKey === `${runId}:user`
+        ) {
+          abortCommittedTurn();
+        }
+      });
       const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-      const sendPromise = sendControlUiChat({
+      await sendControlUiChat({
         context,
         idempotencyKey: runId,
         message: "persist, then stop",
         respond: captureChatResult(responses),
       });
-      await waitForFast(
-        () => expect(context.chatAbortControllers.get(runId)).toBeDefined(),
-        FAST_WAIT_OPTS,
-      );
-      const activeRun = context.chatAbortControllers.get(runId);
-      if (!activeRun) {
-        throw new Error("expected admitted chat run");
-      }
-      activeRun.abortStopReason = stopReason;
-      activeRun.controller.abort();
-      releaseLock.resolve(undefined);
-      await Promise.all([sendPromise, lockPromise]);
-
+      stopListening();
+      expect(abortCommittedTurn).toHaveBeenCalledOnce();
       expect(responses).toEqual([
         {
           ok: true,
@@ -4244,8 +4229,7 @@ describe("gateway server chat", () => {
         }),
       ).toHaveLength(1);
     } finally {
-      releaseLock.resolve(undefined);
-      await lockPromise?.catch(() => undefined);
+      stopListening?.();
       resetDirectChatSession();
     }
   });
@@ -4541,6 +4525,110 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send retries a transient post-admission projection failure under the same run", async () => {
+    const { storePath } = openDirectChatSession();
+    const runId = "idem-restart-safe-projection-retry";
+    try {
+      await writeStoredMainSession(makeDoneSessionEntry());
+      const context = createDirectChatContext();
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      const agentStarts = vi.fn();
+      let recoveredAuthority: ReturnType<typeof bindActiveOperatorTurnAuthority> = undefined;
+      dispatchInboundMessageMock
+        .mockRejectedValueOnce(new SessionTranscriptProjectionUnavailableError("sess-main"))
+        .mockImplementationOnce(async (params: unknown) => {
+          recoveredAuthority = bindActiveOperatorTurnAuthority(runId);
+          recoveredAuthority?.assertActive();
+          const options = (params as { replyOptions?: GetReplyOptions }).replyOptions;
+          options?.onAgentRunStart?.(runId);
+          agentStarts();
+          return {};
+        });
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        localClient: true,
+        message: "retry projection before starting the model",
+        respond: captureChatResult(responses),
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({ runId, status: "started" }),
+        },
+      ]);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(agentStarts).toHaveBeenCalledOnce();
+      expect(recoveredAuthority).toMatchObject({ source: "local" });
+      expect(context.broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+        expect.anything(),
+      );
+      expect(
+        dispatchInboundMessageMock.mock.calls.map(
+          ([params]) => (params as { replyOptions?: GetReplyOptions }).replyOptions?.runId,
+        ),
+      ).toEqual([runId, runId]);
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: runId,
+      });
+    } finally {
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send terminalizes a retryable projection failure only after bounded exhaustion", async () => {
+    const { storePath } = openDirectChatSession();
+    const runId = "idem-restart-safe-projection-exhaustion";
+    try {
+      await writeStoredMainSession(makeDoneSessionEntry());
+      const context = createDirectChatContext();
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      dispatchInboundMessageMock.mockRejectedValue(
+        new SessionTranscriptProjectionUnavailableError("sess-main"),
+      );
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "exhaust projection retries",
+        respond: captureChatResult(responses),
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({ runId, status: "started" }),
+        },
+      ]);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
+      expect(context.broadcast).toHaveBeenCalledTimes(1);
+      expect(context.broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+        { sessionKeys: ["agent:main:main"] },
+      );
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        abortedLastRun: false,
+        status: "failed",
+      });
+    } finally {
+      resetDirectChatSession();
+    }
+  });
+
   test("chat.send releases an unadopted durable claim after dispatch rejection", async () => {
     const { storePath } = openDirectChatSession();
     const runId = "idem-restart-safe-dispatch-error";
@@ -4676,11 +4764,10 @@ describe("gateway server chat", () => {
           scope: initialRuntimeConfig.session?.scope === "global" ? "per-sender" : "global",
         },
       } as const;
-      context.getRuntimeConfig = vi
-        .fn()
-        .mockReturnValueOnce(initialRuntimeConfig)
-        .mockReturnValueOnce(initialRuntimeConfig)
-        .mockReturnValue(changedRuntimeConfig);
+      context.getRuntimeConfig = () =>
+        loadSessionEntry(makeMainSessionScope(storePath))?.restartRecoveryDeliveryRunId === runId
+          ? changedRuntimeConfig
+          : initialRuntimeConfig;
       const responses: Array<{ ok: boolean; payload?: unknown }> = [];
 
       await sendControlUiChat({
@@ -6277,6 +6364,7 @@ describe("gateway server chat", () => {
         },
       );
     } finally {
+      flushDiagnosticsTimeline();
       if (previousDiagnostics === undefined) {
         delete process.env.OPENCLAW_DIAGNOSTICS;
       } else {
@@ -6946,13 +7034,17 @@ describe("gateway server chat", () => {
       expect(assistantMessage.role).toBe("assistant");
       expect(messages[1]).toMatchObject({
         role: "assistant",
-        content: [{ type: "text", text: "I will clean that up now." }],
-        openclawStreamFallback: {
-          replacementText: "I will clean that up now.",
-          source: "segment",
-          itemId: "msg-progress",
-        },
+        timestamp: 2,
       });
+      expect(messages[1]).toHaveProperty("content", [
+        { type: "text", text: "I will clean that up now." },
+      ]);
+      expect(messages[1]).toHaveProperty("openclawStreamFallback", {
+        replacementText: "I will clean that up now.",
+        source: "segment",
+        itemId: "msg-progress",
+      });
+      expect(messages.slice(1, 3).map(readOpenClawSeq)).toEqual([2, 2]);
       expect(assistantMessage.content).toEqual([
         { type: "thinking", thinking: "private reasoning" },
         {
@@ -8060,18 +8152,16 @@ describe("gateway server chat", () => {
         return undefined;
       });
 
-      const sendResP = onceMessage(ws, (o) => o.type === "res" && o.id === "send-abort-1", 2_000);
-      sendReq(
+      const sendRes = await rpcReq(
         ws,
-        "send-abort-1",
         "chat.send",
         makeChatSendParams({
           idempotencyKey: "idem-abort-1",
           timeoutMs: 30_000,
         }),
+        2_000,
       );
 
-      const sendRes = await sendResP;
       expect(sendRes.ok).toBe(true);
       await waitForFast(() => {
         expect(spy.mock.calls.length).toBeGreaterThan(0);

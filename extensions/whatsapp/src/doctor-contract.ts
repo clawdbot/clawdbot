@@ -26,8 +26,22 @@ const streamingAliasMigration = defineChannelAliasMigration({
 const hasExposeErrorText = (value: unknown): boolean =>
   Object.hasOwn(asObjectRecord(value) ?? {}, "exposeErrorText");
 
+const hasAckReaction = (value: unknown): boolean =>
+  Boolean(asObjectRecord(asObjectRecord(value)?.ackReaction));
+
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
+  {
+    path: ["channels", "whatsapp", "ackReaction"],
+    message:
+      'channels.whatsapp.ackReaction moved to global message acknowledgement settings. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["channels", "whatsapp", "accounts"],
+    message:
+      'channels.whatsapp.accounts.<id>.ackReaction moved to global message acknowledgement settings. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasAckReaction),
+  },
   {
     path: ["channels", "whatsapp", "exposeErrorText"],
     message:

@@ -37,3 +37,14 @@ export function selectVisibleTranscriptEvents<T>(events: readonly T[]): T[] {
 export function resolveVisibleTranscriptAppendParentId(events: readonly unknown[]): string | null {
   return scanSessionTranscriptTree(events).appendParentId;
 }
+
+/** Checks membership in the normalized selected path, not raw storage ancestry. */
+export function isTranscriptEntryOnVisiblePath(
+  events: readonly unknown[],
+  entryId: string,
+): boolean {
+  const tree = scanSessionTranscriptTree(events);
+  return selectSessionTranscriptTreePathNodes(tree, tree.leafId).some(
+    (node) => node.id === entryId,
+  );
+}

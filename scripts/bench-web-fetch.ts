@@ -2,11 +2,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { extractBasicHtmlContent } from "../src/agents/tools/web-fetch-utils.js";
-import { createWebFetchTool } from "../src/agents/tools/web-fetch.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { LookupFn } from "../src/infra/net/ssrf.js";
-import { extractReadableContent } from "../src/web-fetch/content-extractors.runtime.js";
 import * as cliArgs from "./lib/arg-utils.mts";
 
 type BenchmarkCaseId =
@@ -266,109 +263,115 @@ async function withOfflineProviderEnv<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-function createTool() {
-  const tool = createWebFetchTool({
-    config: toolConfig,
-    lookupFn,
-    sandboxed: false,
-  });
-  if (!tool?.execute) {
-    throw new Error("web_fetch tool was not created");
-  }
-  return tool;
-}
+async function loadCaseFactory(): Promise<() => Record<BenchmarkCaseId, BenchmarkCase>> {
+  const { extractBasicHtmlContent } = await import("../src/agents/tools/web-fetch-utils.js");
+  const { createWebFetchTool } = await import("../src/agents/tools/web-fetch.js");
+  const { extractReadableContent } = await import("../src/web-fetch/content-extractors.runtime.js");
 
-function createCases(): Record<BenchmarkCaseId, BenchmarkCase> {
-  const textTool = createTool();
-  const markdownTool = createTool();
-  const articleTool = createTool();
-  const articleTextTool = createTool();
-  const shellTool = createTool();
-  return {
-    "tool-create": {
-      id: "tool-create",
-      label: "create web_fetch tool",
-      run: () => {
-        createTool();
+  function createTool() {
+    const tool = createWebFetchTool({
+      config: toolConfig,
+      lookupFn,
+      sandboxed: false,
+    });
+    if (!tool?.execute) {
+      throw new Error("web_fetch tool was not created");
+    }
+    return tool;
+  }
+
+  return () => {
+    const textTool = createTool();
+    const markdownTool = createTool();
+    const articleTool = createTool();
+    const articleTextTool = createTool();
+    const shellTool = createTool();
+    return {
+      "tool-create": {
+        id: "tool-create",
+        label: "create web_fetch tool",
+        run: () => {
+          createTool();
+        },
       },
-    },
-    "tool-text": {
-      id: "tool-text",
-      label: "execute text/plain fetch",
-      run: async () => {
-        installMockFetch({ body: TEXT_BODY, contentType: "text/plain; charset=utf-8" });
-        await textTool.execute("bench", { url: "https://example.com/plain" });
+      "tool-text": {
+        id: "tool-text",
+        label: "execute text/plain fetch",
+        run: async () => {
+          installMockFetch({ body: TEXT_BODY, contentType: "text/plain; charset=utf-8" });
+          await textTool.execute("bench", { url: "https://example.com/plain" });
+        },
       },
-    },
-    "tool-markdown": {
-      id: "tool-markdown",
-      label: "execute text/markdown fetch",
-      run: async () => {
-        installMockFetch({ body: MARKDOWN_BODY, contentType: "text/markdown; charset=utf-8" });
-        await markdownTool.execute("bench", { url: "https://example.com/markdown" });
+      "tool-markdown": {
+        id: "tool-markdown",
+        label: "execute text/markdown fetch",
+        run: async () => {
+          installMockFetch({ body: MARKDOWN_BODY, contentType: "text/markdown; charset=utf-8" });
+          await markdownTool.execute("bench", { url: "https://example.com/markdown" });
+        },
       },
-    },
-    "tool-html-article": {
-      id: "tool-html-article",
-      label: "execute article HTML fetch",
-      run: async () => {
-        installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
-        await articleTool.execute("bench", { url: "https://example.com/article" });
+      "tool-html-article": {
+        id: "tool-html-article",
+        label: "execute article HTML fetch",
+        run: async () => {
+          installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
+          await articleTool.execute("bench", { url: "https://example.com/article" });
+        },
       },
-    },
-    "tool-html-article-text": {
-      id: "tool-html-article-text",
-      label: "execute article HTML fetch as text",
-      run: async () => {
-        installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
-        await articleTextTool.execute("bench", {
-          url: "https://example.com/article-text",
-          extractMode: "text",
-        });
+      "tool-html-article-text": {
+        id: "tool-html-article-text",
+        label: "execute article HTML fetch as text",
+        run: async () => {
+          installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
+          await articleTextTool.execute("bench", {
+            url: "https://example.com/article-text",
+            extractMode: "text",
+          });
+        },
       },
-    },
-    "tool-html-shell": {
-      id: "tool-html-shell",
-      label: "execute shell HTML fallback fetch",
-      run: async () => {
-        installMockFetch({ body: SHELL_HTML, contentType: "text/html; charset=utf-8" });
-        await shellTool.execute("bench", { url: "https://example.com/shell" });
+      "tool-html-shell": {
+        id: "tool-html-shell",
+        label: "execute shell HTML fallback fetch",
+        run: async () => {
+          installMockFetch({ body: SHELL_HTML, contentType: "text/html; charset=utf-8" });
+          await shellTool.execute("bench", { url: "https://example.com/shell" });
+        },
       },
-    },
-    "extract-readable-article": {
-      id: "extract-readable-article",
-      label: "extract readable article HTML",
-      run: async () => {
-        await extractReadableContent({
-          html: ARTICLE_HTML,
-          url: "https://example.com/article",
-          extractMode: "markdown",
-          config: toolConfig,
-        });
+      "extract-readable-article": {
+        id: "extract-readable-article",
+        label: "extract readable article HTML",
+        run: async () => {
+          await extractReadableContent({
+            html: ARTICLE_HTML,
+            url: "https://example.com/article",
+            extractMode: "markdown",
+            config: toolConfig,
+          });
+        },
       },
-    },
-    "extract-readable-article-text": {
-      id: "extract-readable-article-text",
-      label: "extract readable article HTML as text",
-      run: async () => {
-        await extractReadableContent({
-          html: ARTICLE_HTML,
-          url: "https://example.com/article-text",
-          extractMode: "text",
-          config: toolConfig,
-        });
+      "extract-readable-article-text": {
+        id: "extract-readable-article-text",
+        label: "extract readable article HTML as text",
+        run: async () => {
+          await extractReadableContent({
+            html: ARTICLE_HTML,
+            url: "https://example.com/article-text",
+            extractMode: "text",
+            config: toolConfig,
+          });
+        },
       },
-    },
-    "extract-basic-shell": {
-      id: "extract-basic-shell",
-      label: "extract basic shell HTML",
-      run: async () => {
-        await extractBasicHtmlContent({
-          html: SHELL_HTML,
-          extractMode: "markdown",
-        });
+      "extract-basic-shell": {
+        id: "extract-basic-shell",
+        label: "extract basic shell HTML",
+        run: async () => {
+          await extractBasicHtmlContent({
+            html: SHELL_HTML,
+            extractMode: "markdown",
+          });
+        },
       },
-    },
+    };
   };
 }
 
@@ -407,6 +410,8 @@ async function main(): Promise<void> {
     return;
   }
   const options = parseOptions(args);
+  // Preserve runtime import environment, then construct tools inside the offline scope.
+  const createCases = await loadCaseFactory();
   const report = await withOfflineProviderEnv(async () => {
     const casesById = createCases();
     const cases: CaseReport[] = [];

@@ -28,8 +28,14 @@ You can answer from any supported conversation surface:
   resolving the question.
 - Discord and Slack render native buttons for a single-choice, single-question
   prompt.
-- A plain-text reply works on any channel. Reply with a number, an option label,
-  or your own answer. For multi-select questions, separate choices with commas.
+- For a question created by an active OpenClaw run, a plain-text reply works on
+  any channel when your current permissions match the creator's. Reply with a
+  number, an option label, or your own answer. For multi-select questions,
+  separate choices with commas.
+
+Questions from a standalone [attached MCP client](/cli/attach) do not carry an
+OpenClaw run's creator binding. Answer those using the question controls in the
+Control UI or native app, not an ordinary channel message.
 
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
@@ -53,7 +59,9 @@ channels. The Control UI keeps the full structured stepper.
 ## Timeout and no answer
 
 The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
-30 through 3600 seconds.
+30 through 3600 seconds. This is a maximum human wait, subject to earlier agent
+run cancellation or the overall run timeout. A pending question does not extend
+an explicit run budget.
 
 If the question expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.

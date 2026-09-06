@@ -14,9 +14,11 @@ import {
   hashControlUiAssetManifestEntries,
   type ControlUiAssetManifestEntry,
 } from "../src/gateway/control-ui-asset-manifest.ts";
+import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../src/gateway/control-ui-root-assets.ts";
 import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -314,6 +316,7 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
     sourcePackageAlias("normalization-core", "agent-id"),
+    sourcePackageAlias("normalization-core", "code-points"),
     sourcePackageAlias("normalization-core", "json-schema"),
     sourcePackageAlias("normalization-core", "markdown-plain-text"),
     sourcePackageAlias("normalization-core", "number-coercion"),
@@ -325,6 +328,8 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
     sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract", "share-build"),
+    sourcePackageAlias("session-url-contract", "public-share"),
     sourcePackageAlias("session-url-contract"),
     sourcePackageAlias("workboard-contract"),
   ];
@@ -393,11 +398,40 @@ export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
   };
 }
 
-function controlUiServiceWorkerBuildIdPlugin(buildId: string, buildOutDir: string): Plugin {
+function controlUiBuildOutputPlugin(buildId: string, buildOutDir: string): Plugin {
+  let publicAssets: ControlUiAssetManifestEntry[] = [];
+  let cacheId: string | undefined;
   return {
-    name: "control-ui-service-worker-build-id",
+    name: "control-ui-build-output",
     apply: "build",
-    closeBundle() {
+    configResolved(config) {
+      const publicDir = config.build.copyPublicDir && config.publicDir;
+      publicAssets = publicDir
+        ? collectControlUiAssetManifestEntries(publicDir, publicDir).filter(
+            (entry) => entry.path !== "sw.js",
+          )
+        : [];
+      // Public bytes can change during same-commit source rebuilds; the runtime
+      // build identity stays separate from this immutable URL namespace.
+      cacheId = publicDir
+        ? `${buildId}-${hashControlUiAssetManifestEntries(publicAssets)}`
+        : undefined;
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(html) {
+        // Vite recreates the module entry tag from a fixed attribute set. Finalize every script
+        // after synthesis so Cloudflare Rocket Loader cannot defer the Control UI boot sequence.
+        const marked = html.replace(
+          /<script\b(?![^>]*\bdata-cfasync\s*=)/giu,
+          '<script data-cfasync="false"',
+        );
+        return cacheId
+          ? marked.replace(/<html\b/iu, `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${cacheId}"`)
+          : marked;
+      },
+    },
+    writeBundle() {
       const swPath = path.join(buildOutDir, "sw.js");
       const publicSwPath = path.join(here, "public/sw.js");
       const source = fs.readFileSync(publicSwPath, "utf8");
@@ -408,6 +442,28 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string, buildOutDir: strin
       }
       fs.mkdirSync(buildOutDir, { recursive: true });
       fs.writeFileSync(swPath, updated);
+      for (const asset of publicAssets) {
+        const fontStylesheet = asset.path.startsWith("fonts/") && asset.path.endsWith(".css");
+        if (!fontStylesheet && asset.path !== "manifest.webmanifest") {
+          continue;
+        }
+        const filePath = path.join(buildOutDir, asset.path);
+        const assetSource = fs.readFileSync(filePath, "utf8");
+        if (fontStylesheet) {
+          // Relative CSS URLs do not inherit their parent stylesheet's query.
+          const versioned = assetSource.replace(
+            /url\("([^"/?#]+\.woff2)"\)/gu,
+            `url("$1?v=${cacheId}")`,
+          );
+          fs.writeFileSync(filePath, versioned);
+        } else {
+          const manifest = JSON.parse(assetSource) as { icons: Array<{ src: string }> };
+          for (const icon of manifest.icons) {
+            icon.src += `?v=${cacheId}`;
+          }
+          fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
+        }
+      }
     },
   };
 }
@@ -417,21 +473,44 @@ function controlUiPrecompressedAssetsPlugin(buildOutDir: string): Plugin {
     name: "control-ui-precompressed-assets",
     apply: "build",
     writeBundle(_options, bundle) {
+      const logger = this.environment.logger;
+      let completed = 0;
+      let sidecars = 0;
+      let lastProgressAt = performance.now();
+      logger.info("Control UI precompression: starting");
       for (const output of Object.values(bundle)) {
         // Vite's post-build import analysis rewrites lazy preload markers in a
         // later generateBundle hook. Read from disk here so sidecars always
         // encode the exact final bytes that the identity response serves.
         const source = fs.readFileSync(path.join(buildOutDir, output.fileName));
-        for (const variant of createControlUiPrecompressedAssetVariants(output.fileName, source)) {
+        const variants = createControlUiPrecompressedAssetVariants(output.fileName, source);
+        if (variants.length === 0) {
+          continue;
+        }
+        for (const variant of variants) {
           fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
         }
+        // Only completed writes renew activity; a blocked compression/write must
+        // remain silent so the caller's existing watchdog can still terminate it.
+        completed++;
+        sidecars += variants.length;
+        const now = performance.now();
+        if (now - lastProgressAt >= 10_000) {
+          logger.info(
+            `Control UI precompression: ${completed} assets (${sidecars} sidecars) written`,
+          );
+          lastProgressAt = now;
+        }
       }
+      logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
     },
   };
 }
 
-function collectControlUiAssetManifestEntries(buildOutDir: string): ControlUiAssetManifestEntry[] {
-  const assetsRoot = path.join(buildOutDir, "assets");
+function collectControlUiAssetManifestEntries(
+  buildOutDir: string,
+  assetsRoot = path.join(buildOutDir, "assets"),
+): ControlUiAssetManifestEntry[] {
   const entries: ControlUiAssetManifestEntry[] = [];
   const visit = (directory: string) => {
     for (const entry of fs
@@ -465,7 +544,9 @@ function controlUiAssetManifestPlugin(buildOutDir: string): Plugin {
   return {
     name: "control-ui-asset-manifest",
     apply: "build",
-    closeBundle() {
+    // Rolldown runs writeBundle hooks sequentially; this plugin follows precompression.
+    // closeBundle can run again without an error after a failed build, masking its diagnostic.
+    writeBundle() {
       const assets = collectControlUiAssetManifestEntries(buildOutDir);
       const manifest = {
         version: CONTROL_UI_ASSET_MANIFEST_VERSION,
@@ -536,10 +617,11 @@ export default function controlUiViteConfig(options: { outDir?: string } = {}): 
       strictPort: true,
     },
     plugins: [
+      controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
       controlUiPrecompressedAssetsPlugin(buildOutDir),
-      controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId, buildOutDir),
+      controlUiBuildOutputPlugin(buildInfo.buildId, buildOutDir),
       controlUiAssetManifestPlugin(buildOutDir),
       {
         name: "control-ui-dev-stubs",

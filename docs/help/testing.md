@@ -290,20 +290,16 @@ inside every shard.
     validation. The package runner promotes the selected RTT scenario once to
     the first position before the remaining taxonomy-backed fail-fast release
     scenarios.
-  - Uses the same Telegram env credentials or Convex credential source as
-    `pnpm openclaw qa telegram`. For CI/release automation, set
-    `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
-    `OPENCLAW_QA_CONVEX_SITE_URL` and a role secret. If
-    `OPENCLAW_QA_CONVEX_SITE_URL` and a Convex role secret are present in
-    CI, the Docker wrapper selects Convex automatically.
-  - The wrapper validates Telegram or Convex credential env on the host
-    before Docker build/install work. Set
+  - Uses the same Convex-leased Test Server userbot credentials as
+    `pnpm openclaw qa telegram`. Set `OPENCLAW_QA_CONVEX_SITE_URL` and the
+    secret for the selected role. The Docker wrapper selects Convex by default.
+  - The wrapper validates Convex credential env on the host before Docker
+    build/install work. Set
     `OPENCLAW_NPM_TELEGRAM_SKIP_CREDENTIAL_PREFLIGHT=1` only when
     deliberately debugging pre-credential setup.
   - `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=ci|maintainer` overrides the
-    shared `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only. When Convex
-    credentials are selected and no role is set, the wrapper uses `ci` in CI
-    and `maintainer` outside CI.
+    shared `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only. With no role, the
+    wrapper uses `ci` in CI and `maintainer` outside CI.
   - GitHub Actions exposes this lane as the manual maintainer workflow
     `NPM Telegram Beta E2E`. It does not run on merge. The workflow uses the
     `qa-live-shared` environment and Convex CI credential leases. Set its
@@ -432,15 +428,11 @@ gh workflow run package-acceptance.yml --ref main \
   - Full CLI, profile/scenario catalog, env vars, and artifact layout:
     [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-live-lane).
 - `pnpm openclaw qa telegram`
-  - Runs the Telegram live QA lane against a real private group using the
-    driver and SUT bot tokens from env.
-  - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`,
-    `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and
-    `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric
-    Telegram chat id.
-  - Supports `--credential-source convex` for shared pooled credentials.
-    Use env mode by default, or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`
-    to opt into pooled leases.
+  - Runs the Telegram live QA lane on Telegram's Test Server with one
+    Convex-leased SUT bot and one independent TDLib user session.
+  - Uses `--credential-source convex` by default and rejects `env`. Provide
+    `OPENCLAW_QA_CONVEX_SITE_URL` and the secret for the selected
+    `--credential-role`.
   - Defaults cover canary, mention gating, command addressing, `/status`,
     bot-to-bot mentioned replies, and core native command replies.
     `mock-openai` defaults also cover deterministic reply-chain and
@@ -448,11 +440,8 @@ gh workflow run package-acceptance.yml --ref main \
     for optional probes such as `session_status`.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
     artifacts without a failing exit code.
-  - Requires two distinct bots in the same private group, with the SUT bot
-    exposing a Telegram username.
-  - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode
-    in `@BotFather` for both bots and ensure the driver bot can observe
-    group bot traffic.
+  - The leased user drives and observes the shared Test Server group. No
+    production Telegram account or bot-to-bot observer is used.
   - Writes a Telegram QA report, summary, and `qa-evidence.json` under
     `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send
     request to observed SUT reply.
@@ -467,8 +456,9 @@ drift; the per-lane coverage matrix lives in
 When `--credential-source convex` (or `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`)
 is enabled for live transport QA, QA lab acquires an exclusive lease from a
 Convex-backed pool, heartbeats that lease while the lane is running, and
-releases the lease on shutdown. The section name predates Buzz, Discord, Slack,
-and WhatsApp support; the lease contract is shared across kinds.
+releases the lease on shutdown. Telegram always uses this source. The section
+name predates Buzz, Discord, Slack, and WhatsApp support; the lease contract is
+shared across kinds.
 
 Reference Convex project scaffold: `qa/convex-credential-broker/`
 
@@ -715,7 +705,10 @@ Native dependency policy:
     - `pnpm test:perf:profile:main` writes a main-thread CPU profile for
       Vitest/Vite startup and transform overhead.
     - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for
-      the unit suite with file parallelism disabled.
+      the unit suite with file parallelism disabled. Profiles span each worker's
+      files and finish before teardown acknowledgement, including failed runs.
+      Both commands print their output directory; see [Test performance tooling](/reference/test#test-performance-tooling)
+      for output selection, capture boundaries, and supported runners.
 
   </Accordion>
 </AccordionGroup>
@@ -768,15 +761,19 @@ Native dependency policy:
 
 - Command: `pnpm test:ui:e2e`
 - Config: `test/vitest/vitest.ui-e2e.config.ts`
-- Files: `ui/src/**/*.e2e.test.ts`
+- Files: `ui/src/**/*.e2e.test.ts` and the QA Lab media-transcript real-Gateway suite
 - Scope:
-  - Starts the Vite Control UI
-  - Drives a real Chromium page through Playwright
-  - Replaces the Gateway WebSocket with deterministic in-browser mocks
+  - Uses four resource groups in two execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` share the parallel phase (at most two workers total); `ui-e2e-serial` and `ui-e2e-serial-standalone` share the later single-worker phase
+  - The two bundle-consuming projects lazily acquire one temporary UI bundle/preview per invocation; standalone projects own their fixture, source, or custom-build servers
+  - Selecting only standalone suites skips the shared bundle build; new E2E files default to bundled ownership
+  - Every selected project discovers Chromium and drives real pages through Playwright; the root config retains the complete discovery inventory
+  - Most suites replace the Gateway WebSocket with deterministic in-browser mocks; some start isolated real Gateways
 - Expectations:
-  - Runs in CI as part of `pnpm test:e2e`
-  - No real Gateway, agents, or provider keys required
+  - Runs in CI as part of `pnpm test:e2e`; the resource groups add no CI jobs
+  - No provider keys required; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes real-Gateway suites
   - Browser dependency must be present (`pnpm --dir ui exec playwright install chromium`)
+
+The dedicated real-Gateway CI job uses `test/vitest/vitest.ui-e2e-prebuilt.config.ts` after `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build:ci-artifacts` completes in a clean checkout. Keep source and built outputs unchanged until all workers and children finish. MCP conformance runs serially first, then the other 13 files share at most two workers in the same invocation, with no extra jobs or shards. Readiness failures stop execution without rebuilding or falling back. The ordinary local config keeps real-Gateway files serial; frozen targets without the prebuilt config keep their original serial command. See [CI](/ci) for the resource policy and bounded timing evidence.
 
 ### E2E: OpenShell backend smoke
 
@@ -857,7 +854,7 @@ These Docker runners split into two buckets:
   or the gateway env vars when you explicitly want a smaller cap or larger scan.
 - `test:docker:all` builds the live Docker image once via `test:docker:live-build`, packs OpenClaw once as an npm tarball through `scripts/package-openclaw-for-docker.mjs`, then builds/reuses two `scripts/e2e/Dockerfile` images. The bare image is only the Node/Git runner for install/update/plugin-dependency lanes; those lanes mount the prebuilt tarball. The functional image installs the same tarball into `/app` for built-app functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mts`; planner logic lives in `scripts/lib/docker-e2e-plan.mts`; `scripts/test-docker-all.mjs` executes the selected plan. The aggregate uses a weighted local scheduler: `OPENCLAW_DOCKER_ALL_PARALLELISM` controls process slots, while resource caps keep heavy live, npm-install, and multi-service lanes from all starting at once. If a single lane is heavier than the active caps, the scheduler can still start it when the pool is empty and then keeps it running alone until capacity is available again. Defaults are 10 slots, `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=5`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; tune `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` (and other `OPENCLAW_DOCKER_ALL_<RESOURCE>_LIMIT` overrides) only when the Docker host has more headroom. The runner performs a Docker preflight by default, removes stale OpenClaw E2E containers, prints status every 30 seconds, stores successful lane timings in `.artifacts/docker-tests/lane-timings.json`, and uses those timings to start longer lanes first on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the weighted lane manifest without building or running Docker, or `node scripts/test-docker-all.mjs --plan-json` to print the CI plan for selected lanes, package/image needs, and credentials.
 - `Package Acceptance` is the GitHub-native package gate for "does this installable tarball work as a product?" It resolves one candidate package from `source=npm`, `source=ref`, `source=url`, `source=trusted-url`, or `source=artifact`, uploads it as `package-under-test`, then runs the reusable Docker E2E lanes against that exact tarball instead of repacking the selected ref. Profiles are ordered by breadth: `smoke`, `package`, `product`, and `full` (plus `custom` for an explicit lane list). See [Testing updates and plugins](/help/testing-updates-plugins) for the package/update/plugin contract, published-upgrade survivor matrix, release defaults, and failure triage.
-- Build and release checks run `scripts/check-cli-bootstrap-imports.mts` after tsdown. The guard walks the static built graph from `dist/entry.js` and `dist/cli/run-main.js` and fails if that pre-dispatch bootstrap graph statically imports any external package (Commander, prompt UI, undici, logging, and similar startup-heavy deps all count) before command dispatch; it also caps the bundled gateway run chunk at 70 KB and rejects static imports of known cold gateway paths (`control-ui-assets`, `diagnostic-stability-bundle`, `onboard-helpers`, `process-respawn`, `restart-sentinel`, `server-close`, `server-reload-handlers`) from that chunk. `scripts/release-check.ts` separately smoke-tests the packed CLI with `--help`, `onboard --help`, `doctor --help`, `status --json --timeout 1`, `config schema`, and `models list --provider openai`.
+- Build and release checks run `scripts/check-cli-bootstrap-imports.mts` after tsdown. The guard walks the static built graph from `dist/entry.js` and `dist/cli/run-main.js` and fails if that pre-dispatch bootstrap graph statically imports any external package (Commander, prompt UI, undici, logging, and similar startup-heavy deps all count) before command dispatch; it also caps the bundled gateway run chunk at 70 KB and rejects static imports of known cold gateway paths (`control-ui-assets`, `diagnostic-stability-bundle`, `onboard-helpers`, `process-respawn`, `restart-sentinel`, `server-close`, `server-reload-handlers`) from that chunk. Current builds locate the gateway chunk through hash-checked metadata emitted by tsdown, so discovery does not scan unrelated JavaScript under `dist`. Missing or stale metadata requires rebuilding; trusted release tooling retains source scanning only for frozen targets that predate the locator. Standalone workers still receive independent JavaScript dependency checks. `scripts/release-check.ts` separately smoke-tests the packed CLI with `--help`, `onboard --help`, `doctor --help`, `status --json --timeout 1`, `config schema`, and `models list --provider openai`.
 - Package Acceptance legacy compatibility is capped at `2026.4.25` (`2026.4.25-beta.*` included). Through that cutoff, the harness tolerates only shipped-package metadata gaps: omitted private QA inventory entries, missing `gateway install --wrapper`, missing patch files in the tarball-derived git fixture, missing persisted `update.channel`, legacy plugin install-record locations, missing marketplace install-record persistence, and config metadata migration during `plugins update`. For packages after `2026.4.25`, those paths are strict failures.
 - Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:npm-onboard-channel-agent`, `test:docker:release-user-journey`, `test:docker:release-typed-onboarding`, `test:docker:release-media-memory`, `test:docker:release-upgrade-user-journey`, `test:docker:release-plugin-marketplace`, `test:docker:skill-install`, `test:docker:update-channel-switch`, `test:docker:upgrade-survivor`, `test:docker:published-upgrade-survivor`, `test:docker:session-runtime-context`, `test:docker:agents-delete-shared-workspace`, `test:docker:gateway-network`, `test:docker:browser-cdp-snapshot`, `test:docker:mcp-channels`, `test:docker:agent-bundle-mcp-tools`, `test:docker:cron-mcp-cleanup`, `test:docker:plugins`, `test:docker:plugin-update`, `test:docker:plugin-lifecycle-matrix`, and `test:docker:config-reload` boot one or more real containers and verify higher-level integration paths.
 - Docker/Bash E2E lanes that install the packed OpenClaw tarball through `scripts/lib/openclaw-e2e-instance.sh` cap `npm install` at `OPENCLAW_E2E_NPM_INSTALL_TIMEOUT` (default `600s`; set `0` to disable the wrapper for debugging).
@@ -880,12 +877,12 @@ without mutating the host auth store:
 - Release user journey smoke: `pnpm test:docker:release-user-journey` installs the packed OpenClaw tarball globally in a clean Docker home, runs onboarding, configures a mocked OpenAI provider, runs an agent turn, installs/uninstalls external plugins, configures ClickClack against a local fixture, verifies outbound/inbound messaging, restarts Gateway, and runs doctor.
 - Release typed onboarding smoke: `pnpm test:docker:release-typed-onboarding` installs the packed tarball, drives `openclaw onboard` through a real TTY, configures OpenAI as an env-ref provider, verifies no raw key persistence, and runs a mocked agent turn.
 - Release media/memory smoke: `pnpm test:docker:release-media-memory` installs the packed tarball, verifies image understanding from a PNG attachment, OpenAI-compatible image generation output, memory search recall, and recall survival across Gateway restart.
-- Release upgrade user journey smoke: `pnpm test:docker:release-upgrade-user-journey` installs the newest published baseline older than the candidate tarball by default, configures provider/plugin/ClickClack state on the published package, upgrades to the candidate tarball, then reruns the core agent/plugin/channel journey. If no older published baseline exists, it reuses the candidate version. Override the baseline with `OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC=openclaw@<version>`.
+- Release upgrade user journey smoke: `pnpm test:docker:release-upgrade-user-journey` installs the newest published stable baseline older than the candidate tarball by default, onboards and installs a CLI plugin on the published package, then replaces the package and runs the documented Doctor migration step. It verifies the existing plugin still works and configures candidate-compatible mock provider/ClickClack settings for the agent/channel journey. If no older stable baseline exists, it reuses the candidate version only when that version is published and stable; otherwise it fails and requires an explicit baseline. Override the baseline with `OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC=openclaw@<version>`.
 - Release plugin marketplace smoke: `pnpm test:docker:release-plugin-marketplace` installs from a local fixture marketplace, updates the installed plugin, uninstalls it, and verifies the plugin CLI disappears with install metadata pruned.
 - Skill install smoke: `pnpm test:docker:skill-install` installs the packed OpenClaw tarball globally in Docker, disables uploaded archive installs in config, resolves the current live ClawHub skill slug from search, installs it with `openclaw skills install`, and verifies the installed skill plus `.clawhub` origin/lock metadata.
 - Update channel switch smoke: `pnpm test:docker:update-channel-switch` installs the packed OpenClaw tarball globally in Docker, switches from package `stable` to git `dev`, verifies the persisted channel and plugin post-update work, then switches back to package `stable` and checks update status.
 - Upgrade survivor smoke: `pnpm test:docker:upgrade-survivor` installs the packed OpenClaw tarball over a dirty old-user fixture with agents, channel config, plugin allowlists, stale plugin dependency state, and existing workspace/session files. It runs package update plus non-interactive doctor without live provider or channel keys, then starts a loopback Gateway and checks config/state preservation plus startup/status budgets.
-- Published upgrade survivor smoke: `pnpm test:docker:published-upgrade-survivor` installs `openclaw@latest` by default, seeds realistic existing-user files, configures that baseline with a baked command recipe, validates the resulting config, updates that published install to the candidate tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, then starts a loopback Gateway and checks configured intents, state preservation, startup, `/healthz`, `/readyz`, and RPC status budgets. Override one baseline with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, ask the aggregate scheduler to expand exact local baselines with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS` such as `openclaw@2026.5.2 openclaw@2026.4.23 openclaw@2026.4.15`, and expand issue-shaped fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` such as `reported-issues`; the reported-issues set includes `configured-plugin-installs` for automatic external OpenClaw plugin install repair. Package Acceptance exposes those as `published_upgrade_survivor_baseline`, `published_upgrade_survivor_baselines`, and `published_upgrade_survivor_scenarios`, resolves meta baseline tokens such as `last-stable-4` or `all-since-2026.4.23`, and Full Release Validation expands the release-soak package gate to `last-stable-4 2026.4.23 2026.5.2 2026.4.15` plus `reported-issues`.
+- Published upgrade survivor smoke: `pnpm test:docker:published-upgrade-survivor` installs `openclaw@latest` by default, seeds realistic existing-user files, configures that baseline with a baked command recipe, validates the resulting config, updates that published install to the candidate tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, then starts a loopback Gateway and checks configured intents, state preservation, startup, `/healthz`, `/readyz`, and RPC status budgets. Override one baseline with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, ask the aggregate scheduler to expand exact local baselines with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS` such as `openclaw@2026.5.2 openclaw@2026.4.23 openclaw@2026.4.15`, and expand issue-shaped fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` such as `reported-issues`; the reported-issues set includes `configured-plugin-installs` for automatic external OpenClaw plugin install repair. Package Acceptance exposes those as `published_upgrade_survivor_baseline`, `published_upgrade_survivor_baselines`, and `published_upgrade_survivor_scenarios`, resolves meta baseline tokens such as `last-stable-4` or `all-since-2026.4.23`, and Full Release Validation runs all `reported-issues` scenarios against the latest stable baseline, resolved once to an exact package before fanout. Historical matrices remain explicit manual overrides.
 - Session runtime context smoke: `pnpm test:docker:session-runtime-context` verifies hidden runtime context transcript persistence plus doctor repair of affected duplicated prompt-rewrite branches.
 - Bun global install and runtime smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g --trust` in an isolated home, verifies OpenClaw's lifecycle scripts ran, and executes the installed package with Bun 1.4 or newer. It checks representative CLI state, bundled image providers, a mocked local agent turn, Gateway readiness and health, and a mocked agent turn through the Bun-hosted Gateway. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
 - Installer Docker smoke: `bash scripts/test-install-sh-docker.sh` shares one npm cache across its root, update, and direct-npm containers. Update smoke defaults to npm `latest` as the stable baseline before upgrading to the candidate tarball. Override with `OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE=2026.4.22` locally, or with the Install Smoke workflow's `update_baseline_version` input on GitHub. Non-root installer checks keep an isolated npm cache so root-owned cache entries do not mask user-local install behavior. Set `OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR=/path/to/cache` to reuse the root/update/direct-npm cache across local reruns.
@@ -990,7 +987,8 @@ Useful env vars:
 ## Docs sanity
 
 Run docs checks after doc edits: `pnpm check:docs`.
-Run full Mintlify anchor validation when you need in-page heading checks too: `pnpm docs:check-links:anchors`.
+Run the shared publishing parser's anchor audit when you need in-page heading checks too: `pnpm docs:check-links:anchors`.
+Diagnostics show `unknown` when a reliable source line is unavailable.
 
 ## Offline regression (CI-safe)
 

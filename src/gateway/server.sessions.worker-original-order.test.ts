@@ -311,6 +311,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
   const events = runner.events;
   const provider: WorkerProvider = {
     id: "ordered-fallback",
+    resolveAllocation: async () => ({ leaseId: "lease-original-order", sharedHost: false }),
     supportedExecutionModes: ["remote-exec"],
     provision: async () => {
       events.push("provider:provision");
@@ -413,15 +414,17 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     runnerAvailability: { read: () => undefined, version: () => 0 },
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-    runRecoveryBarrier: async ({ run }) => await run(localWorkspace),
+    runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: localWorkspace }),
     runActivationBarrier: async ({ activate }) => activate(),
     runMoveBarrier: async ({ begin }) => begin(),
     resolveMoveDestination: async () => undefined,
-    runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(localWorkspace, begin()),
+    runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
+    runReclaimBarrier: async ({ begin, reclaim }) =>
+      await reclaim({ kind: "local", path: localWorkspace }, begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-    resolveWorkspacePath: async () => localWorkspace,
+    resolveWorkspace: async () => ({ kind: "local", path: localWorkspace }),
     reportWorkspaceResultConflict: async () => {},
-    resolveWorkspaceResultConflict: async () => undefined,
+    resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
   });
 
   const active = await dispatch.dispatch({

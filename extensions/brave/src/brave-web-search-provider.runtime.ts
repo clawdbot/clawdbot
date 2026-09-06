@@ -55,7 +55,7 @@ type BraveSearchResult = {
   title?: string;
   url?: string;
   description?: string;
-  age?: string;
+  page_age?: string;
 };
 
 type BraveSearchResponse = {
@@ -262,12 +262,7 @@ async function runBraveJsonRequest<T>(
 }
 
 async function runBraveLlmContextSearch(params: BraveSearchRequestParams): Promise<{
-  results: Array<{
-    url: string;
-    title: string;
-    snippets: string[];
-    siteName?: string;
-  }>;
+  results: ReturnType<typeof mapBraveLlmContextResults>;
   sources?: BraveLlmContextResponse["sources"];
 }> {
   const data = await runBraveJsonRequest<BraveLlmContextResponse>(
@@ -317,7 +312,7 @@ async function runBraveWebSearch(
       title: title ? wrapWebContent(title, "web_search") : "",
       url,
       description: description ? wrapWebContent(description, "web_search") : "",
-      published: entry.age || undefined,
+      published: entry.page_age || undefined,
       siteName: resolveSiteName(url) || undefined,
     };
   });
@@ -502,6 +497,7 @@ export async function executeBraveSearch(
             url: entry.url,
             snippets: entry.snippets.map((snippet) => wrapWebContent(snippet, "web_search")),
             siteName: entry.siteName,
+            published: entry.published,
           }))
         : response.results;
     const payload = {

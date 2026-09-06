@@ -1538,7 +1538,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
     });
   });
 
-  it("does not ambient-start source-discovered external plugins from onStartup alone", () => {
+  it("does not ambient-start external startup or hook-capability plugins", () => {
     expectStartupPluginIds({
       config: createStartupConfig({
         noConfiguredChannels: true,
@@ -1616,14 +1616,6 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
   });
 
   it("loads startup-lazy bundled plugins only when their activation config is present", () => {
-    expectStartupPluginIds({
-      config: createStartupConfig({
-        noConfiguredChannels: true,
-        memorySlot: "none",
-      }),
-      expected: ["browser"],
-    });
-
     expectStartupPluginIds({
       config: {
         channels: {},
@@ -1766,16 +1758,6 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         memorySlot: "none",
       }),
       expected: ["external-hook-capability"],
-    });
-  });
-
-  it("does not ambient-load hook-capability plugins at startup", () => {
-    expectStartupPluginIds({
-      config: createStartupConfig({
-        noConfiguredChannels: true,
-        memorySlot: "none",
-      }),
-      expected: ["browser"],
     });
   });
 

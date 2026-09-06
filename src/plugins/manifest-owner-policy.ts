@@ -8,7 +8,8 @@ import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 type OwnerPlugin = Pick<
   PluginManifestRecord,
   "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
->;
+> &
+  Partial<Pick<PluginManifestRecord, "channels">>;
 
 type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfig>;
 
@@ -85,6 +86,7 @@ export function isActivatedManifestOwner(params: {
   return resolveEffectivePluginActivationState({
     id: params.plugin.id,
     origin: params.plugin.origin,
+    channelIds: params.plugin.channels,
     config: params.normalizedConfig,
     rootConfig: params.rootConfig,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),

@@ -35,7 +35,9 @@ export class PluginsMcpController {
   private servers: McpServerSummary[] | null = null;
   private message: PluginRowMessage | null = null;
   private busy = false;
+  private busyKey: string | null = null;
   private formOpen = false;
+  private feedbackGeneration = 0;
   private readonly configTask: Task<
     readonly [
       ApplicationContext["gateway"]["snapshot"]["client"],
@@ -71,7 +73,11 @@ export class PluginsMcpController {
       () => this.host.getContext()?.runtimeConfig,
       (runtimeConfig) => {
         this.syncServers();
-        return runtimeConfig.subscribe(() => this.syncServers());
+        const unsubscribe = runtimeConfig.subscribe(() => this.syncServers());
+        return () => {
+          this.resetFeedback();
+          unsubscribe();
+        };
       },
     );
   }
@@ -121,13 +127,14 @@ export class PluginsMcpController {
     this.host.element.requestUpdate();
   }
 
-  resetMessage(): void {
-    this.message = null;
-    this.host.element.requestUpdate();
-  }
-
-  resetBusy(): void {
+  resetFeedback(): void {
+    this.feedbackGeneration += 1;
     this.busy = false;
+    this.message = null;
+    if (this.busyKey) {
+      this.host.setRowBusy(this.busyKey, false);
+      this.busyKey = null;
+    }
     this.host.element.requestUpdate();
   }
 
@@ -241,45 +248,42 @@ export class PluginsMcpController {
     if (!this.host.canMutate() || this.busy) {
       return false;
     }
+    const generation = this.feedbackGeneration;
     const runtimeConfig = this.host.getContext().runtimeConfig;
     this.busy = true;
+    this.busyKey = params.busyKey ?? null;
     if (params.busyKey) {
       this.host.setRowBusy(params.busyKey, true);
       this.host.setRowMessage(params.busyKey, null);
     }
     this.message = null;
     this.host.element.requestUpdate();
+    const result = await patchMcpServers(runtimeConfig, {
+      buildPatch: params.buildPatch,
+      note: params.note,
+    });
+    if (generation !== this.feedbackGeneration) {
+      return false;
+    }
+    this.busy = false;
+    this.busyKey = null;
+    if (params.busyKey) {
+      this.host.setRowBusy(params.busyKey, false);
+    }
     // Failures surface where the action started: on the triggering card when
     // one exists (Discover connectors), otherwise in the MCP section.
-    const fail = (text: string) => {
+    if (!result.ok) {
       if (params.busyKey) {
-        this.host.setRowMessage(params.busyKey, { kind: "error", text });
+        this.host.setRowMessage(params.busyKey, { kind: "error", text: result.error });
       } else {
-        this.message = { kind: "error", text };
-        this.host.element.requestUpdate();
+        this.message = { kind: "error", text: result.error };
       }
+      this.host.element.requestUpdate();
       return false;
-    };
-    try {
-      const result = await patchMcpServers(runtimeConfig, {
-        buildPatch: params.buildPatch,
-        note: params.note,
-      });
-      if (!result.ok) {
-        return fail(result.error);
-      }
-      this.syncServers();
-      this.message = { kind: "success", text: params.successText };
-      this.host.element.requestUpdate();
-      return true;
-    } catch (error) {
-      return fail(formatUiError(error));
-    } finally {
-      this.busy = false;
-      this.host.element.requestUpdate();
-      if (params.busyKey) {
-        this.host.setRowBusy(params.busyKey, false);
-      }
     }
+    this.syncServers();
+    this.message = { kind: "success", text: params.successText };
+    this.host.element.requestUpdate();
+    return true;
   }
 }

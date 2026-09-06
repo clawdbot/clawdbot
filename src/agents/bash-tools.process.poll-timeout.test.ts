@@ -16,6 +16,7 @@ import { createProcessSessionFixture } from "./bash-process-registry.test-helper
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { processSchema } from "./bash-tools.schemas.js";
+import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -278,6 +279,8 @@ test("waiting poll retains terminal state and its receipt after indexed cleanup"
       type: "text",
       text: expect.stringContaining("done after cleanup"),
     });
+    expect(remove).not.toHaveBeenCalled();
+    acknowledgeInternalToolResult(poll);
     expect(remove).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
@@ -323,6 +326,8 @@ test("waiting poll does not adopt a same-id successor after removal", async () =
       status: "completed",
       aggregated: expect.stringContaining("successor output"),
     });
+    expect(successorRemove).not.toHaveBeenCalled();
+    acknowledgeInternalToolResult(successorPoll);
     expect(successorRemove).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
@@ -373,6 +378,8 @@ test("waiting poll never recommends successor logs for omitted original output",
     expect(originalText).not.toContain("successor output");
     expect(originalText).not.toContain("use action=log");
     expect(originalText).toContain("omitted output is no longer available through action=log");
+    expect(originalRemove).not.toHaveBeenCalled();
+    acknowledgeInternalToolResult(original);
     expect(originalRemove).toHaveBeenCalledOnce();
     expect(successorRemove).not.toHaveBeenCalled();
 
@@ -456,15 +463,15 @@ test("terminal polls compact tiny stream chunks and never reopen frozen output",
   const terminal = await pollSession(processTool, "compact-first", sessionId);
   expect(terminal.content[0]).toMatchObject({
     text:
+      "[earlier output was discarded at the retention cap and cannot be recovered]\n\n" +
+      "[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]\n\n" +
       "oe".repeat(1_000) +
-      "\n\n[earlier output was discarded at the retention cap and cannot be recovered]" +
-      "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]" +
       "\n\nProcess exited with code 0.",
   });
   appendOutput(session, "stderr", "late".repeat(1_000));
   const repeated = await pollSession(processTool, "compact-second", sessionId);
   expect(repeated.content[0]).toMatchObject({
-    text: "(no new output)\n\n[earlier output was discarded at the retention cap and cannot be recovered]\n\nProcess exited with code 0.",
+    text: "[earlier output was discarded at the retention cap and cannot be recovered]\n\n(no new output)\n\nProcess exited with code 0.",
   });
   expect(session.totalOutputChars).toBe(4_000);
   expect(session.pendingOutput).toBe("");
@@ -472,8 +479,8 @@ test("terminal polls compact tiny stream chunks and never reopen frozen output",
   const log = await processTool.execute("compact-log", { action: "log", sessionId });
   expect(log.content[0]).toMatchObject({
     text:
-      "oe".repeat(1_500) +
-      "\n\n[earlier output was discarded at the retention cap and cannot be recovered]",
+      "[earlier output was discarded at the retention cap and cannot be recovered]\n\n" +
+      "oe".repeat(1_500),
   });
 });
 
@@ -753,6 +760,11 @@ test.each([
     expect(runningLogText).toContain("discarded at the retention cap and cannot be recovered");
     expect(runningPollText).toContain("discarded at the retention cap and cannot be recovered");
     expect(finishedLogText).toContain("discarded at the retention cap and cannot be recovered");
+    for (const resultText of [text, runningLogText, runningPollText, finishedLogText]) {
+      expect(resultText).toMatch(
+        /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
+      );
+    }
     expect(text).not.toContain("action=log with offset and limit");
   },
 );
@@ -848,7 +860,7 @@ test.each([
     timedOut: false,
   },
 ] as const)(
-  "process log and poll preserve authoritative $name without log consuming the completion",
+  "process list, log, and poll preserve authoritative $name without consuming the completion",
   async ({ name, exitCode, exitSignal, status, exitReason, timedOut, ...optional }) => {
     const sessionId = `sess-terminal-${name.replaceAll(" ", "-")}`;
     const { processTool, session } = createProcessSessionHarness(sessionId);
@@ -857,6 +869,22 @@ test.each([
     appendOutput(session, "stderr", "terminal output\n");
     markExited(session, exitCode, exitSignal, status, exitReason, optional.noOutputTimedOut);
     recordNotifyOnExitRemoval(session, remove);
+
+    const list = await processTool.execute("toolcall-terminal-list", { action: "list" });
+    const listedSessions = (list.details as { sessions?: Array<{ sessionId?: string }> }).sessions;
+    const listed = listedSessions?.find((candidate) => candidate.sessionId === sessionId);
+    expect(listed).toMatchObject({
+      status,
+      sessionId,
+      exitCode: exitCode ?? undefined,
+      exitReason,
+      timedOut,
+      ...optional,
+    });
+    const listText = list.content[0]?.type === "text" ? list.content[0].text : "";
+    expect(listText).toContain(sessionId);
+    expect(listText.includes(`[${exitReason}]`)).toBe(timedOut);
+    expect(remove).not.toHaveBeenCalled();
 
     const log = await processTool.execute("toolcall-terminal-log", {
       action: "log",
@@ -888,6 +916,8 @@ test.each([
     const pollText = poll.content[0]?.type === "text" ? poll.content[0].text : "";
     expect(pollText).toContain("terminal output");
     expect(pollText.includes("Verify the resulting state before retrying")).toBe(timedOut);
+    expect(remove).not.toHaveBeenCalled();
+    acknowledgeInternalToolResult(poll);
     expect(remove).toHaveBeenCalledOnce();
   },
 );

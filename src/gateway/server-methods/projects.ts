@@ -18,6 +18,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listRegistryWorktrees } from "../../agents/worktrees/registry.js";
 import { managedWorktrees, type ManagedWorktreeService } from "../../agents/worktrees/service.js";
+import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { ProjectCloneError } from "../../projects/project-clone-runtime.js";
@@ -34,6 +35,7 @@ import {
 } from "../../projects/project-registry.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { listProfiles, resolveUserProfileId } from "../../state/user-profiles.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
@@ -87,7 +89,7 @@ const PROJECTS_LIST_MAX_RAW_CANDIDATES = Math.max(
 
 function folderDisplayName(folder: string): string {
   const trimmed = folder.replace(/[\\/]+$/u, "");
-  return path.posix.basename(trimmed) || path.win32.basename(trimmed) || folder;
+  return trimmed.split(/[\\/]/u).at(-1) || folder;
 }
 
 function checkoutName(checkoutPath: string): string {
@@ -181,8 +183,8 @@ function listProjectRecents(
   const candidates = Object.entries(store)
     .filter(
       ([, entry]) =>
-        entry.createdActor?.type === "human" &&
-        Boolean(entry.createdActor.id && profileIds.has(entry.createdActor.id)),
+        Boolean(sessionCreatorProfileId(entry.createdActor)) &&
+        Boolean(entry.createdActor?.id && profileIds.has(entry.createdActor.id)),
     )
     .toSorted(
       ([leftKey, left], [rightKey, right]) =>
@@ -192,6 +194,28 @@ function listProjectRecents(
   const seen = new Set<string>();
   const recents: ProjectRecent[] = [];
   for (const [sessionKey, entry] of candidates) {
+    if (entry.repositoryWorkspaceId) {
+      const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
+      const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+      if (
+        !repository ||
+        repository.sessionKey !== sessionKey ||
+        (sessionAgentId && repository.agentId !== sessionAgentId) ||
+        seen.has(repository.url)
+      ) {
+        continue;
+      }
+      seen.add(repository.url);
+      recents.push({
+        kind: "repository",
+        url: repository.url,
+        displayName: path.posix.basename(repository.url, ".git"),
+      });
+      if (recents.length === 8) {
+        break;
+      }
+      continue;
+    }
     const projectId = normalizeOptionalString(entry.projectId);
     const explicitProject = projectId ? projectsById.get(projectId) : undefined;
     const worktreeRoot = normalizeOptionalString(entry.worktree?.repoRoot);

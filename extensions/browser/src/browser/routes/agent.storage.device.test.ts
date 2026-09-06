@@ -8,15 +8,14 @@ const routeState = vi.hoisted(() => ({
   cookiesSetManyViaPlaywright: vi.fn(async () => ({ added: 2 })),
   setDeviceViaPlaywright: vi.fn(async () => {}),
   setHttpCredentialsViaPlaywright: vi.fn(async () => {}),
+  storageSetViaPlaywright: vi.fn(async () => {}),
+  storageClearViaPlaywright: vi.fn(async () => {}),
   withPlaywrightRouteContext: vi.fn(),
 }));
 
-vi.mock("./agent.shared.js", () => ({
-  readBody: (req: BrowserRequest) => req.body ?? {},
+vi.mock("./agent.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent.shared.js")>()),
   resolveProfileContext: () => ({ profile: { driver: routeState.driver } }),
-  resolveTargetIdFromBody: (body: Record<string, unknown>) =>
-    typeof body.targetId === "string" ? body.targetId : undefined,
-  resolveTargetIdFromQuery: () => undefined,
   withPlaywrightRouteContext: routeState.withPlaywrightRouteContext,
 }));
 
@@ -33,6 +32,8 @@ type PlaywrightRouteParams = {
       cookiesSetManyViaPlaywright: typeof routeState.cookiesSetManyViaPlaywright;
       setDeviceViaPlaywright: typeof routeState.setDeviceViaPlaywright;
       setHttpCredentialsViaPlaywright: typeof routeState.setHttpCredentialsViaPlaywright;
+      storageSetViaPlaywright: typeof routeState.storageSetViaPlaywright;
+      storageClearViaPlaywright: typeof routeState.storageClearViaPlaywright;
     };
   }) => Promise<unknown>;
 };
@@ -180,6 +181,66 @@ describe("browser cookie batch route", () => {
 });
 
 describe("browser storage route boundaries", () => {
+  it.each([
+    { kind: "local", operation: "set", value: "  preserved  " },
+    { kind: "session", operation: "set", value: "" },
+    { kind: "local", operation: "clear", value: undefined },
+    { kind: "session", operation: "clear", value: undefined },
+  ] as const)(
+    "parses $kind storage $operation before dispatch",
+    async ({ kind, operation, value }) => {
+      const response = createBrowserRouteResponse();
+      await getPostHandler(`/storage/:kind/${operation}`)?.(
+        {
+          params: { kind: ` ${kind} ` },
+          query: {},
+          body: { targetId: " requested-tab ", key: " key ", value },
+        },
+        response.res,
+      );
+
+      expect(routeState.withPlaywrightRouteContext).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ targetId: "requested-tab", feature: `storage ${operation}` }),
+      );
+      const mutation =
+        operation === "set"
+          ? routeState.storageSetViaPlaywright
+          : routeState.storageClearViaPlaywright;
+      expect(mutation).toHaveBeenCalledExactlyOnceWith({
+        cdpUrl: "http://127.0.0.1:18800",
+        targetId: "tab-1",
+        kind,
+        ...(operation === "set" ? { key: "key", value } : {}),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toEqual({ ok: true, targetId: "tab-1" });
+    },
+  );
+
+  it.each(["set", "clear"])(
+    "rejects an invalid storage kind before %s dispatch",
+    async (operation) => {
+      const response = createBrowserRouteResponse();
+      await getPostHandler(`/storage/:kind/${operation}`)?.(
+        {
+          params: { kind: "invalid" },
+          query: {},
+          body: {
+            key: "",
+            targetId: " requested-tab ",
+          },
+        },
+        response.res,
+      );
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toEqual({ error: "kind must be local|session" });
+      expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
+      expect(routeState.storageSetViaPlaywright).not.toHaveBeenCalled();
+      expect(routeState.storageClearViaPlaywright).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps cookie reads behind the current-tab URL guard", async () => {
     const { app, getHandlers } = createBrowserRouteApp();
     registerBrowserAgentStorageRoutes(app, {} as never);

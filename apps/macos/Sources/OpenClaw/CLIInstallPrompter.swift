@@ -20,11 +20,16 @@ final class CLIInstallPrompter {
     private func checkAndPromptIfNeededAsync(reason: String) async {
         guard AppStateStore.shared.onboardingSeen else { return }
         let connectionMode = AppStateStore.shared.connectionMode
-        guard Self.shouldManageCLI(connectionMode: connectionMode) else { return }
+        guard connectionMode == .local else { return }
+        await GatewayProcessManager.shared.waitForStartupAttempt()
+        guard GatewayProcessManager.shared.installation == .managed else { return }
         guard let version = Self.appVersion() else { return }
         let status = await CLIInstaller.status()
         let managedStatus = await CLIInstaller.managedStatus()
-        guard AppStateStore.shared.onboardingSeen else { return }
+        guard AppStateStore.shared.onboardingSeen,
+              AppStateStore.shared.connectionMode == .local,
+              GatewayProcessManager.shared.installation == .managed
+        else { return }
         let shouldRepairManaged = Self.shouldAutomaticallyRepair(
             status: managedStatus,
             launchAgentUsesManagedCLI: Self.launchAgentUsesManagedCLI(
@@ -45,9 +50,7 @@ final class CLIInstallPrompter {
             if await self.installCLI(
                 target: .exact(version),
                 showCompletionAlert: false,
-                restartManagedGateway: Self.shouldRestartManagedGateway(
-                    requested: !AppStateStore.shared.isPaused,
-                    connectionMode: connectionMode))
+                restartManagedGateway: !AppStateStore.shared.isPaused)
             {
                 return
             }
@@ -79,7 +82,7 @@ final class CLIInstallPrompter {
             guard confirmStable else { return target }
             let alert = NSAlert()
             alert.messageText = "Install OpenClaw CLI?"
-            alert.informativeText = "The Mac node needs the matching CLI runtime."
+            alert.informativeText = "The app-managed local Gateway needs an external CLI runtime."
             alert.addButton(withTitle: "Install CLI")
             alert.addButton(withTitle: "Not Now")
             alert.addButton(withTitle: "Open Settings")
@@ -87,7 +90,7 @@ final class CLIInstallPrompter {
             case .alertFirstButtonReturn:
                 return target
             case .alertThirdButtonReturn:
-                self.openSettings(tab: .connection)
+                AppNavigationActions.openConnection()
                 return nil
             default:
                 return nil
@@ -135,11 +138,11 @@ final class CLIInstallPrompter {
         showCompletionAlert: Bool = true,
         restartManagedGateway: Bool = false) async -> Bool
     {
+        guard AppStateStore.shared.connectionMode == .local,
+              GatewayProcessManager.shared.installation == .managed
+        else { return false }
         let status = StatusBox()
-        let usesLocalGateway = AppStateStore.shared.connectionMode == .local
-        let shouldRestartManagedGateway = Self.shouldRestartManagedGateway(
-            requested: restartManagedGateway,
-            connectionMode: AppStateStore.shared.connectionMode)
+        let shouldRestartManagedGateway = restartManagedGateway
         let previousPID = shouldRestartManagedGateway
             ? await GatewayLaunchAgentManager.runningGatewayPID()
             : nil
@@ -164,16 +167,11 @@ final class CLIInstallPrompter {
                     return false
                 }
             }
-            let activation: CLIInstaller.LocalGatewayActivation?
-            if usesLocalGateway {
-                await status.set("Starting OpenClaw Gateway…")
-                if !showCompletionAlert {
-                    self.logger.info("managed CLI repair: Starting OpenClaw Gateway…")
-                }
-                activation = await CLIInstaller.activateLocalGateway()
-            } else {
-                activation = nil
+            await status.set("Starting OpenClaw Gateway…")
+            if !showCompletionAlert {
+                self.logger.info("managed CLI repair: Starting OpenClaw Gateway…")
             }
+            let activation = await CLIInstaller.activateLocalGateway()
             if case .failed = activation { activated = false } else { activated = true }
             if shouldRestartManagedGateway {
                 // Only proven gateway health closes the recovery loop; the
@@ -192,8 +190,6 @@ final class CLIInstallPrompter {
                 "OpenClaw is installed. The Gateway will start when This Mac is active and resumed."
             case .failed:
                 "OpenClaw was installed, but the Gateway did not start. Open Settings to retry."
-            case nil:
-                "OpenClaw CLI is ready for the Mac node."
             }
             await status.set(message)
             if !showCompletionAlert {
@@ -248,17 +244,6 @@ final class CLIInstallPrompter {
         AppDefaults.standard.removeObject(forKey: cliManagedRestartPendingKey)
     }
 
-    static func shouldManageCLI(connectionMode: AppState.ConnectionMode) -> Bool {
-        connectionMode == .local || connectionMode == .remote
-    }
-
-    static func shouldRestartManagedGateway(
-        requested: Bool,
-        connectionMode: AppState.ConnectionMode) -> Bool
-    {
-        requested && connectionMode == .local
-    }
-
     private func ensureManagedGatewayRestarted(previousPID: Int32?, status: StatusBox) async -> Bool {
         guard previousPID != nil else {
             await GatewayConnection.shared.shutdown()
@@ -293,14 +278,6 @@ final class CLIInstallPrompter {
             try? await Task.sleep(nanoseconds: 150_000_000)
         }
         return false
-    }
-
-    private func openSettings(tab: SettingsTab) {
-        SettingsTabRouter.request(tab)
-        SettingsWindowOpener.shared.open()
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
-        }
     }
 
     private static func appVersion() -> String? {

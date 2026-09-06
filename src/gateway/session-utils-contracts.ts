@@ -20,7 +20,6 @@ export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { k
 
 export type SessionListRowContext = {
   subagentRuns: SubagentRunReadIndex<SubagentRunReadRecord>;
-  storeChildSessionsByKey: Map<string, string[]>;
   selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
   thinkingMetadataByModelRef: Map<string, GatewayModelThinkingProfile>;
   displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;
@@ -49,3 +48,9 @@ export function createSessionRowModelCacheKey(
 ) {
   return `${normalizeLowercaseStringOrEmpty(provider)}\0${normalizeOptionalString(model) ?? ""}`;
 }
+
+export type SessionListActiveRunProjector = (
+  key: string,
+  entry: SessionEntry,
+  agentId: string,
+) => { active: boolean; status?: "queued" };

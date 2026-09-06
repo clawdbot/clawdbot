@@ -339,7 +339,7 @@ const grammySpies = vi.hoisted(() => ({
   stopSpy: vi.fn(),
   commandSpy: vi.fn(),
   botCtorSpy: vi.fn(
-    (_: string, __?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => undefined,
+    (_token: string, __?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => undefined,
   ),
   answerCallbackQuerySpy: vi.fn(async () => undefined) as AnyAsyncMock,
   sendChatActionSpy: vi.fn(),

@@ -3,17 +3,13 @@ import crypto from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  ChannelDoctorConfigMutation,
-  ChannelDoctorLegacyConfigRule,
-} from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   archiveLegacyStateSource,
-  defineChannelAliasMigration,
   type PluginDoctorStateMigration,
   type PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStoredConversationId } from "./src/conversation-store-helpers.js";
 import {
@@ -61,23 +57,7 @@ import {
   type MSTeamsSsoStoredToken,
 } from "./src/sso-token-store.js";
 
-const streamingAliasMigration = defineChannelAliasMigration({
-  channelId: "msteams",
-  // Teams previews default to partial streaming, matching the runtime default
-  // in reply-dispatcher when no mode is configured.
-  streaming: { defaultMode: "partial" },
-});
-
-export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] =
-  streamingAliasMigration.legacyConfigRules;
-
-export function normalizeCompatibilityConfig({
-  cfg,
-}: {
-  cfg: OpenClawConfig;
-}): ChannelDoctorConfigMutation {
-  return streamingAliasMigration.normalizeChannelConfig({ cfg });
-}
+export { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
 
 type FeedbackLearningEntry = {
   sessionKey: string;
@@ -164,13 +144,10 @@ function listAgentIds(config: OpenClawConfig): string[] {
   return [...ids];
 }
 
-async function listCandidateStorePaths(params: {
+function listCandidateStorePaths(params: {
   config: Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0]["config"];
   env: NodeJS.ProcessEnv;
-}): Promise<string[]> {
-  // Doctor enumeration cold-loads this closure; session-store-runtime pulls the
-  // session-accessor/kysely graph, so it stays behind a lazy import here.
-  const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
+}): string[] {
   const paths = new Set<string>();
   for (const agentId of listAgentIds(params.config)) {
     paths.add(resolveStorePath(params.config.session?.store, { agentId, env: params.env }));
@@ -636,9 +613,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async detectLegacyState(params) {
       const files = (
         await Promise.all(
-          (
-            await listCandidateStorePaths(params)
-          ).map((storePath) => listLegacyLearningFiles(storePath)),
+          listCandidateStorePaths(params).map((storePath) => listLegacyLearningFiles(storePath)),
         )
       ).flat();
       if (files.length === 0) {
@@ -655,9 +630,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const warnings: string[] = [];
       const files = (
         await Promise.all(
-          (
-            await listCandidateStorePaths(params)
-          ).map((storePath) => listLegacyLearningFiles(storePath)),
+          listCandidateStorePaths(params).map((storePath) => listLegacyLearningFiles(storePath)),
         )
       ).flat();
       const store = params.context.openPluginStateKeyedStore<FeedbackLearningEntry>({

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseStandalonePlainTextToolCallBlocks } from "./payload.js";
 import {
   normalizePlainTextToolCallStreamEvents,
@@ -1068,15 +1068,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   });
 
   it("keeps a large preceding block's prefix check bounded across many later candidates (#122513)", async () => {
-    // codex review: hasUntrackedPrecedingContext's deep (same-length) check materialized
-    // the tracked prefix via materializeProtectionPrefix, which joins EVERY chunk ever
-    // pushed -- including the current, still-growing block's own chunks -- before
-    // slicing. Doing that once per candidate made a large preceding block followed by a
-    // bracket-dense later block Theta(precedingBlockSize x candidateCount) again. This
-    // must stay bounded: derive it once per block (cached) using a prefix-bounded
-    // accumulator, not a full join, on every one of the many candidates that follow.
-    // Keep the prefix exactly 200,000 characters while ending its line so the next
-    // block's delimiter is a real CommonMark fence, not a mid-line backtick run.
+    // End the preceding line so the next block opens a CommonMark fence.
     const precedingBlock = `${"x".repeat(199_999)}\n`;
     const fenced = [
       "```toml",
@@ -1099,23 +1091,37 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     ];
 
     let resolverCalls = 0;
-    const start = performance.now();
-    const normalized = await collectNormalizedEvents(events, {
-      matcher,
-      createPromotedToolCallEvents: () => [],
-      normalizeTerminalMessage: () => undefined,
-      protectedRangesFenceCompatible: true,
-      resolveProtectedRanges: (text) => {
-        resolverCalls += 1;
-        return resolveTestFenceRanges(text);
-      },
-    });
-    const elapsedMs = performance.now() - start;
+    let precedingPrefixSlices = 0;
+    // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted string receiver.
+    const originalSlice = String.prototype.slice;
+    const sliceSpy = vi
+      .spyOn(String.prototype, "slice")
+      .mockImplementation(function (this: string, start, end) {
+        if (start === 0 && end === precedingBlock.length && this.length >= end) {
+          precedingPrefixSlices += 1;
+        }
+        return originalSlice.call(this, start, end);
+      });
+    let normalized: Record<string, unknown>[];
+    try {
+      normalized = await collectNormalizedEvents(events, {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => undefined,
+        protectedRangesFenceCompatible: true,
+        resolveProtectedRanges: (text) => {
+          resolverCalls += 1;
+          return resolveTestFenceRanges(text);
+        },
+      });
+    } finally {
+      sliceSpy.mockRestore();
+    }
 
     expect(resolverCalls).toBeLessThanOrEqual(3);
-    // A large preceding block re-materialized per candidate would push this into the
-    // hundreds of milliseconds; bounded (cached) prefix validation stays well under it.
-    expect(elapsedMs).toBeLessThan(200);
+    // Rechecking the entire preceding block for every candidate makes work quadratic.
+    // Count full-prefix operations so this bound does not depend on runner speed.
+    expect(precedingPrefixSlices).toBeLessThanOrEqual(4);
     expect(textDeltas(normalized).join("")).toBe(precedingBlock + fenced);
   });
 
