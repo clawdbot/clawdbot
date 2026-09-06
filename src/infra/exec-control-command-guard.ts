@@ -261,11 +261,22 @@ function targetsLiveStateSqliteDatabase(
   });
 }
 
+// Mirrors POSIX shell parsing: an odd-count backslash run before a LF is a line
+// continuation (removed before word splitting); an even-count run is literal
+// backslashes followed by a real newline separator. Backslash-CR-LF is not a
+// continuation, so it is left untouched.
+function removeShellLineContinuations(command: string): string {
+  return command.replace(/\\+\n/g, (match) => {
+    const backslashes = match.length - 1;
+    return backslashes % 2 === 1 ? "\\".repeat((backslashes - 1) / 2) : match;
+  });
+}
+
 export async function detectUnsafeExecControlShellCommand(
   command: string,
   context: ExecControlShellCommandContext = {},
 ): Promise<UnsafeExecControlShellCommandKind | null> {
-  const rawCommand = command.trim();
+  const rawCommand = removeShellLineContinuations(command).trim();
   let explanation: CommandExplanation | null = null;
   try {
     explanation = await explainShellCommand(rawCommand);
