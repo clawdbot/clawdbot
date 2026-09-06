@@ -37,10 +37,8 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { summarizeUpdateStepFailure, type UpdateRunStep } from "../../infra/update-run-record.js";
-import {
-  assertNoPendingUpdateRecovery,
-  loadUpdateRecovery,
-} from "../../infra/update-run-recovery.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
@@ -85,7 +83,7 @@ export async function admitUpdateCommandRun(params: {
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
   // An inherited diagnostic run ID is not a durable continuation claim.
-  assertNoPendingUpdateRecovery({ env });
+  await assertUpdateRecoveryAdmission({ env });
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(env),
     env,
