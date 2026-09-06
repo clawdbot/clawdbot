@@ -2964,6 +2964,59 @@ describe("installPluginFromNpmSpec", () => {
     },
   );
 
+  describe.each(["install", "update"] as const)("host dependency during %s", (mode) => {
+    it.each(["direct", "peer", "both"] as const)(
+      "preserves the canonical host for a %s declaration",
+      async (declaration) => {
+        const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+        const packageName = "host-dependency-plugin";
+        const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+        if (mode === "update") {
+          writeInstalledNpmPlugin({
+            npmRoot: npmProjectRoot,
+            packageName,
+            version: "0.9.0",
+          });
+          fs.writeFileSync(path.join(npmProjectRoot, "package.json"), '{"private":true}\n');
+        }
+        mockNpmViewAndInstall({
+          spec: `${packageName}@1.0.0`,
+          packageName,
+          version: "1.0.0",
+          npmRoot,
+          ...(declaration !== "peer" ? { dependency: { name: "openclaw", version: "*" } } : {}),
+          ...(declaration !== "direct" ? { peerDependencies: { openclaw: "*" } } : {}),
+        });
+        const onBeforePluginArtifactCommit = vi.fn(async () => {});
+
+        const result = await installPluginFromNpmSpec({
+          spec: `${packageName}@1.0.0`,
+          npmDir: npmRoot,
+          mode,
+          onBeforePluginArtifactCommit,
+          logger: { info: () => {}, warn: () => {} },
+        });
+
+        expect(result).toMatchObject({ ok: true, pluginId: packageName });
+        expect(onBeforePluginArtifactCommit).toHaveBeenCalledOnce();
+        const hostLink = path.join(
+          resolveTestPluginPackageDir(npmRoot, packageName),
+          "node_modules",
+          "openclaw",
+        );
+        expect(fs.lstatSync(hostLink).isSymbolicLink()).toBe(true);
+        expect(fs.realpathSync(hostLink)).toBe(
+          fs.realpathSync(resolveOpenClawPackageRootSyncMock.mock.results[0]?.value),
+        );
+        expectNpmInstallIntoProject({
+          calls: runCommandWithTimeoutMock.mock.calls,
+          npmRoot,
+          packageName,
+        });
+      },
+    );
+  });
+
   it("rolls back the managed npm root when npm install fails", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const npmProjectRoot = resolvePluginNpmProjectDir({
