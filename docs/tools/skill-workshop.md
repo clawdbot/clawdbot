@@ -512,7 +512,8 @@ Review transcript and session metadata stay detached from foreground work.
 In `propose` mode, only `skill_workshop` executes and the reviewer can stage one
 pending mutation. In `auto` mode, ordinary file tools can inspect, edit, and
 verify several connected files in the Workshop directory. The review inherits
-source permissions and shell approvals, but cannot control foreground processes.
+source permissions and shell approvals. Its `process` tool cannot control
+foreground jobs; the Workshop file root is not a shell sandbox.
 A failed review is recorded after one attempt; completed direct edits remain.
 
 See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
