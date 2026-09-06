@@ -3481,8 +3481,7 @@ src/plugins/setup-registry-loader-state.ts	1
 src/plugins/setup-registry.ts	12
 src/plugins/slots.ts	3
 src/plugins/toggle-config.ts	3
-src/plugins/tool-descriptor-cache.ts	4
-src/plugins/tools.ts	8
+src/plugins/tools.ts	3
 src/plugins/trusted-tool-policy.ts	1
 src/plugins/uninstall-config.ts	3
 src/plugins/uninstall-package-config.ts	2
