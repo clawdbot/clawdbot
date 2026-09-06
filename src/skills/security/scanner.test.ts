@@ -439,6 +439,9 @@ run("node a.js"); run("node b.js");
       });
     }
     expectRulePresence(scanSource("eval(payload)", "SKILL.md"), "dynamic-code-execution", true);
+    // Only the hyphen reads as prose: a spaced call keeps its parenthesis boundary.
+    expectRulePresence(scanSource("eval (1 + 2)", "SKILL.md"), "dynamic-code-execution", true);
+    expectRulePresence(scanSource("x - eval (1 + 2)", "SKILL.md"), "dynamic-code-execution", true);
   });
 
   it("keeps the source eval rule for Markdown code", () => {
@@ -460,6 +463,9 @@ run("node a.js"); run("node b.js");
       "dynamic-code-execution",
       true,
     );
+    // Indented code is a code region too, so it must not fall back to prose.
+    const indented = ["Example:", "", "    const r = foo-eval (payload);", "", "Done."].join("\n");
+    expectRulePresence(scanSource(indented, "SKILL.md"), "dynamic-code-execution", true);
   });
 
   it("does not flag child_process import without exec/spawn call", () => {
