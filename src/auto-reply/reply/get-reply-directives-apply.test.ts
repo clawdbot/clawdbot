@@ -426,6 +426,7 @@ describe("directive.rejected diagnostic trace", () => {
         OriginatingChannel: "webchat",
         MessageSidFull: "msg-123",
       });
+      const sessionEntry = { sessionId: "session-1", updatedAt: 1 };
       const result = await resolveReplyDirectives({
         ctx,
         cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
@@ -434,11 +435,11 @@ describe("directive.rejected diagnostic trace", () => {
         workspaceDir: "/tmp/workspace",
         agentCfg: {},
         sessionCtx: ctx,
-        sessionEntry: { sessionId: "session-1", updatedAt: 1 },
+        sessionEntry,
         sessionStore: {},
         sessionKey: "agent:main:main",
         sessionScope: undefined,
-        groupResolution: undefined,
+        conversation: prepareReplyConversation({ ctx, sessionEntry }),
         isGroup: false,
         triggerBodyNormalized: "/model openai/gpt-5.5 -a -g",
         resetTriggered: false,
