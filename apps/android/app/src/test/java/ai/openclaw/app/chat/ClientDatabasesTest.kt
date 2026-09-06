@@ -4,6 +4,7 @@ import ai.openclaw.app.ui.chat.buildChatTimeline
 import ai.openclaw.app.ui.chat.readerPosition
 import ai.openclaw.app.ui.chat.restoredChatReaderTransition
 import android.database.sqlite.SQLiteDatabase
+import androidx.room3.Room
 import androidx.room3.RoomDatabase
 import androidx.room3.executeSQL
 import androidx.room3.useReaderConnection
@@ -17,6 +18,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -523,6 +525,42 @@ class ClientDatabasesTest {
     }
 
   @Test
+  @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+  fun exactDeletionRetiresUncachedBookmarkWithoutRetiringOtherSessions() =
+    runTest {
+      val names = databaseNames()
+      withCleanDatabases(names) { databases ->
+        val readers = databases.readerPositionStore()
+        val oldScope = readerScope("gateway-a", "older-chat", sessionId = "retired-id")
+        val replacement = readerScope("gateway-a", "other-chat", sessionId = "replacement-id")
+        readers.save(readers.bind(oldScope), ChatReaderPosition("old-entry", 17))
+        readers.save(readers.bind(replacement), ChatReaderPosition("replacement-entry", 23))
+        assertEquals(ChatReaderPosition("old-entry", 17), readers.bind(oldScope).position)
+        assertTrue(databases.transcriptCache().loadSessions("gateway-a", "main").isEmpty())
+        val callbacks = mutableListOf<ChatSessionDeletion>()
+        val controller =
+          createChatController(
+            transcriptCache = databases.transcriptCache(),
+            cacheScope = { ChatCacheScope("gateway-a", 1) },
+            onSessionDeleted = { deletion ->
+              callbacks += deletion
+              val id = requireNotNull(deletion.sessionId)
+              launch { readers.deleteSession(oldScope.copy(sessionId = id)) }
+            },
+          )
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"reason":"delete","sessionKey":"older-chat","agentId":"main","sessionId":"retired-id"}""",
+        )
+        advanceUntilIdle()
+
+        assertNull(readers.bind(oldScope).position)
+        assertEquals(ChatReaderPosition("replacement-entry", 23), readers.bind(replacement).position)
+        assertEquals(listOf(false), callbacks.map { it.clearLocalInput })
+      }
+    }
+
+  @Test
   fun readerMetadataKeepsV1SchemaAndKnownStateWritable() =
     runTest {
       val names = databaseNames()
@@ -574,6 +612,97 @@ class ClientDatabasesTest {
           reopened.readerPositionStore().bind(readerScope("gateway-a", "main")).position,
         )
         assertEquals(listOf("preserve outbox"), reopened.commandOutbox().load("gateway-a").map { it.text })
+      }
+    }
+
+  @Test
+  fun cacheV3UpgradeAndRollbackPreserveDurableStateAndBindNewTranscripts() =
+    runTest {
+      val names = databaseNames()
+      val context = RuntimeEnvironment.getApplication()
+
+      suspend fun withV3(block: suspend (GatewayCacheV3Fixture) -> Unit) {
+        val database =
+          Room
+            .databaseBuilder(context, GatewayCacheV3Fixture::class.java, names.cache)
+            .fallbackToDestructiveMigration(true)
+            .build()
+        try {
+          assertEquals(3, database.userVersion())
+          database.useReaderConnection { connection ->
+            connection.usePrepared("SELECT identity_hash FROM room_master_table WHERE id = 42") { statement ->
+              assertTrue(statement.step())
+              assertEquals("91c4751bb9eea08d40d3322e5af1c1ab", statement.getText(0))
+            }
+          }
+          block(database)
+        } finally {
+          database.close()
+        }
+      }
+
+      suspend fun GatewayCacheV3Fixture.seed(text: String) {
+        useWriterConnection { connection ->
+          connection.executeSQL(
+            "INSERT INTO cached_sessions (gatewayId, agentId, sessionKey, displayName, hasRunMetadata, rowOrder) " +
+              "VALUES ('gateway-a', 'main', 'main', 'Offline session', 0, 0)",
+          )
+          connection.usePrepared(
+            "INSERT INTO cached_messages (gatewayId, agentId, sessionKey, rowOrder, role, textPartsJson) " +
+              "VALUES ('gateway-a', 'main', 'main', 0, 'assistant', ?)",
+          ) { statement ->
+            statement.bindText(1, "[\"$text\"]")
+            statement.step()
+          }
+          connection.executeSQL("INSERT INTO cached_gateway_owners (gatewayId, agentId) VALUES ('gateway-a', 'main')")
+        }
+      }
+      try {
+        withV3 { it.seed("before upgrade") }
+        withDatabases(names) { upgraded ->
+          val cache = upgraded.transcriptCache()
+          assertEquals(4, upgraded.gatewayCacheDatabase().userVersion())
+          assertEquals("main", cache.loadLastDefaultAgentId("gateway-a"))
+          assertEquals("Offline session", cache.loadSessions("gateway-a", "main").single().displayName)
+          assertNull(cache.loadSessionId("gateway-a", "main", "main"))
+          // A migrated, unidentified projection cannot be assigned to a deletion by its key.
+          cache.deleteSession("gateway-a", "main", "main", expectedSessionId = "live-id")
+          assertEquals(listOf("before upgrade"), cache.loadTranscript("gateway-a", "main", "main").map { it.content.single().text })
+          cache.saveTranscript("gateway-a", "main", "main", listOf(cachedMessage("live transcript")), sessionId = "live-id")
+          upgraded.enqueue("gateway-a", "preserve input")
+          val readers = upgraded.readerPositionStore()
+          readers.save(readers.bind(readerScope("gateway-a", "main")), ChatReaderPosition("saved-row", 23))
+        }
+        withDatabases(names) { reopened ->
+          val cache = reopened.transcriptCache()
+          assertEquals("live-id", cache.loadSessionId("gateway-a", "main", "main"))
+          assertNull(cache.loadSessions("gateway-a", "main").single().sessionId)
+          assertEquals(listOf("live transcript"), cache.loadTranscript("gateway-a", "main", "main").map { it.content.single().text })
+        }
+        withV3 { rollback ->
+          // The previous opener rebuilds only the disposable cache on downgrade.
+          rollback.useReaderConnection { connection ->
+            connection.usePrepared("SELECT COUNT(*) FROM cached_messages") { statement ->
+              assertTrue(statement.step())
+              assertEquals(0L, statement.getLong(0))
+            }
+          }
+          rollback.seed("after rollback")
+        }
+        withDatabases(names) { upgradedAgain ->
+          val cache = upgradedAgain.transcriptCache()
+          assertEquals(4, upgradedAgain.gatewayCacheDatabase().userVersion())
+          assertNull(cache.loadSessionId("gateway-a", "main", "main"))
+          assertEquals(listOf("after rollback"), cache.loadTranscript("gateway-a", "main", "main").map { it.content.single().text })
+          assertEquals(1, upgradedAgain.clientStateDatabase().userVersion())
+          assertEquals(listOf("preserve input"), upgradedAgain.commandOutbox().load("gateway-a").map { it.text })
+          assertEquals(
+            ChatReaderPosition("saved-row", 23),
+            upgradedAgain.readerPositionStore().bind(readerScope("gateway-a", "main")).position,
+          )
+        }
+      } finally {
+        delete(names)
       }
     }
 
@@ -633,7 +762,7 @@ class ClientDatabasesTest {
       createV2Fixture(context.getDatabasePath(names.legacy).path)
 
       withCleanDatabases(names, setOf("gateway-test")) { databases ->
-        assertEquals(3, databases.gatewayCacheDatabase().userVersion())
+        assertEquals(4, databases.gatewayCacheDatabase().userVersion())
         assertEquals(1, databases.clientStateDatabase().userVersion())
 
         val rows = databases.commandOutbox().load("gateway-test").associateBy { it.id }

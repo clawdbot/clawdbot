@@ -1609,15 +1609,9 @@ class MainViewModel private constructor(
     key: String,
     ownerAgentId: String?,
   ) {
-    val deleted = ensureRuntime().deleteChatSession(key, ownerAgentId) ?: return
-    deleted.gatewayId?.let { gatewayId ->
-      clearChatComposerSession(
-        gatewayStableId = gatewayId,
-        agentId = deleted.agentId,
-        sessionKey = deleted.sessionKey,
-        mainSessionKey = deleted.mainSessionKey,
-      )
-    }
+    // The controller-owned callback retires only input still covered by this deletion.
+    // A successful RPC alone must not clear a replacement draft after navigation or refresh.
+    ensureRuntime().deleteChatSession(key, ownerAgentId)
   }
 
   /** Remembers a custom session group locally so it renders as an empty section. */

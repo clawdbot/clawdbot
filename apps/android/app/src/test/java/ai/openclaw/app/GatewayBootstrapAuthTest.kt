@@ -1579,6 +1579,12 @@ class GatewayBootstrapAuthTest {
       agentId: String,
     ): List<ChatSessionEntry> = emptyList()
 
+    override suspend fun loadSessionId(
+      gatewayId: String,
+      agentId: String,
+      sessionKey: String,
+    ): String? = null
+
     override suspend fun loadTranscript(
       gatewayId: String,
       agentId: String,
@@ -1597,12 +1603,14 @@ class GatewayBootstrapAuthTest {
       agentId: String,
       sessionKey: String,
       messages: List<ChatMessage>,
+      sessionId: String?,
     ) = Unit
 
     override suspend fun deleteSession(
       gatewayId: String,
       agentId: String,
       sessionKey: String,
+      expectedSessionId: String?,
     ) = Unit
 
     override suspend fun clearGateway(gatewayId: String) {

@@ -872,6 +872,8 @@ class ChatControllerModelSelectionTest {
         val (controller, requests) =
           chatControllerTestSetup {
             cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) }
+            // Deletion must identify the same instance as the loaded transcript, not just its row.
+            respond("chat.history", """{"sessionId":"conversation-id","messages":[]}""")
             respond("sessions.list") {
               if (deleted) {
                 """{"sessions":[]}"""
@@ -891,6 +893,7 @@ class ChatControllerModelSelectionTest {
           }
         controller.load(sessionKey, ownerAgentId = "main")
         advanceUntilIdle()
+        assertEquals("conversation-id", controller.sessionId.value)
         val first = async { controller.setSessionModelAwait(sessionKey, "synthetic/first") }
         patchStarted.await()
         val queued = async { controller.setSessionModelAwait(sessionKey, "synthetic/queued") }

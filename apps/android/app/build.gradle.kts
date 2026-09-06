@@ -376,6 +376,8 @@ dependencies {
   // Unicast DNS-SD (Wide-Area Bonjour) for tailnet discovery domains.
   implementation(libs.dnsjava)
 
+  // Generate the frozen Room database used by upgrade/downgrade boundary tests.
+  add("kspTest", libs.androidx.room.compiler)
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.kotest.runner.junit5)

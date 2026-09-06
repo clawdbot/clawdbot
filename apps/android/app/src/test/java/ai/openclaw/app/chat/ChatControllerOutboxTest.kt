@@ -1507,6 +1507,27 @@ class ChatControllerOutboxTest {
       )
       advanceUntilIdle()
 
+      // A key-only event cannot identify which instance owns unlisted durable input.
+      assertTrue(outbox.deletedSessions.isEmpty())
+      assertEquals(listOf("doomed-session-row"), chat.outboxItems.value.map { it.id })
+
+      gateway.online = true
+      chat.load("agent:old:main")
+      advanceUntilIdle()
+      assertEquals("session-1", chat.sessionId.value)
+      chat.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"delete","sessionKey":"agent:old:main","sessionId":"retired-instance"}""",
+      )
+      advanceUntilIdle()
+      assertTrue(outbox.deletedSessions.isEmpty())
+      assertEquals(listOf("doomed-session-row"), chat.outboxItems.value.map { it.id })
+
+      chat.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"delete","sessionKey":"agent:old:main","sessionId":"session-1"}""",
+      )
+      advanceUntilIdle()
       assertEquals(listOf("agent:old:main"), outbox.deletedSessions)
       assertTrue(chat.outboxItems.value.isEmpty())
     }

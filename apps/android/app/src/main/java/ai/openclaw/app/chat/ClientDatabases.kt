@@ -81,13 +81,21 @@ internal interface ClientStateControlDao {
 /** Disposable gateway-derived projections. Schema mismatches and corruption rebuild this file. */
 @Database(
   entities = [CachedSessionEntity::class, CachedMessageEntity::class, CachedGatewayOwnerEntity::class],
-  version = 3,
+  version = 4,
   exportSchema = true,
 )
 internal abstract class GatewayCacheDatabase : RoomDatabase() {
   abstract fun dao(): ChatCacheDao
 
   companion object {
+    internal val MIGRATION_3_4 =
+      object : Migration(3, 4) {
+        override suspend fun migrate(connection: SQLiteConnection) {
+          // Old rows remain readable; a live response must establish their instance identity.
+          connection.execSQL("ALTER TABLE cached_sessions ADD COLUMN sessionId TEXT")
+        }
+      }
+
     suspend fun open(
       context: Context,
       name: String = GATEWAY_CACHE_DB_NAME,
@@ -97,6 +105,7 @@ internal abstract class GatewayCacheDatabase : RoomDatabase() {
       fun build(): GatewayCacheDatabase =
         Room
           .databaseBuilder(appContext, GatewayCacheDatabase::class.java, name)
+          .addMigrations(MIGRATION_3_4)
           // Cache rows are gateway-owned projections. A missing migration means rebuild, and
           // dropAllTables also removes obsolete cache tables left by older formats.
           .fallbackToDestructiveMigration(true)
@@ -621,6 +630,12 @@ private class DeferredChatTranscriptCache(
     agentId: String,
   ): List<ChatSessionEntry> = ready().transcriptCache.loadSessions(gatewayId, agentId)
 
+  override suspend fun loadSessionId(
+    gatewayId: String,
+    agentId: String,
+    sessionKey: String,
+  ): String? = ready().transcriptCache.loadSessionId(gatewayId, agentId, sessionKey)
+
   override suspend fun loadTranscript(
     gatewayId: String,
     agentId: String,
@@ -639,13 +654,15 @@ private class DeferredChatTranscriptCache(
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
-  ) = ready().transcriptCache.saveTranscript(gatewayId, agentId, sessionKey, messages)
+    sessionId: String?,
+  ) = ready().transcriptCache.saveTranscript(gatewayId, agentId, sessionKey, messages, sessionId)
 
   override suspend fun deleteSession(
     gatewayId: String,
     agentId: String,
     sessionKey: String,
-  ) = ready().transcriptCache.deleteSession(gatewayId, agentId, sessionKey)
+    expectedSessionId: String?,
+  ) = ready().transcriptCache.deleteSession(gatewayId, agentId, sessionKey, expectedSessionId)
 
   override suspend fun clearGateway(gatewayId: String) = ready().transcriptCache.clearGateway(gatewayId)
 }

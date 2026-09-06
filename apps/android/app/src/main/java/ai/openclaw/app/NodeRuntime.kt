@@ -2091,7 +2091,7 @@ class NodeRuntime private constructor(
   }
 
   private fun publishChatSessionDeletion(deletion: ChatSessionDeletion) {
-    synchronized(gatewayDataScopeLock) { chatSelectionSeq.incrementAndGet() }
+    if (deletion.clearLocalInput) synchronized(gatewayDataScopeLock) { chatSelectionSeq.incrementAndGet() }
     val readerScope =
       deletion.gatewayId?.let { gatewayId ->
         deletion.sessionId?.let { sessionId ->
@@ -2107,7 +2107,8 @@ class NodeRuntime private constructor(
         runCatching { chatReaderPositionStore.deleteSession(readerPositionScope) }
       }
     }
-    chatSessionDeletionListeners.values.forEach { listener -> listener(deletion) }
+    // Composer ownership is key-scoped; a cached instance alone cannot retire its drafts.
+    if (deletion.clearLocalInput) chatSessionDeletionListeners.values.forEach { listener -> listener(deletion) }
   }
 
   private val chat: ChatController =

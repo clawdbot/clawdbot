@@ -63,6 +63,7 @@ class ChatControllerTranscriptCacheTest {
   private class FakeTranscriptCache : ChatTranscriptCache {
     val lastDefaultAgents = mutableMapOf<String, String>()
     val transcripts = mutableMapOf<TranscriptKey, List<ChatMessage>>()
+    private val transcriptSessionIds = mutableMapOf<TranscriptKey, String?>()
     var sessions: List<ChatSessionEntry> = emptyList()
     val sessionsByOwner = mutableMapOf<Pair<String, String>, List<ChatSessionEntry>>()
     val savedTranscripts = mutableListOf<SavedTranscript>()
@@ -97,6 +98,12 @@ class ChatControllerTranscriptCacheTest {
       return cached
     }
 
+    override suspend fun loadSessionId(
+      gatewayId: String,
+      agentId: String,
+      sessionKey: String,
+    ): String? = transcriptSessionIds[TranscriptKey(gatewayId, agentId, sessionKey)]
+
     override suspend fun loadTranscript(
       gatewayId: String,
       agentId: String,
@@ -118,7 +125,9 @@ class ChatControllerTranscriptCacheTest {
       agentId: String,
       sessionKey: String,
       messages: List<ChatMessage>,
+      sessionId: String?,
     ) {
+      transcriptSessionIds[TranscriptKey(gatewayId, agentId, sessionKey)] = sessionId
       savedTranscripts += SavedTranscript(gatewayId, agentId, sessionKey, messages)
     }
 
@@ -126,6 +135,7 @@ class ChatControllerTranscriptCacheTest {
       gatewayId: String,
       agentId: String,
       sessionKey: String,
+      expectedSessionId: String?,
     ) {
       beforeSessionDelete()
       deletedSessions += Triple(gatewayId, agentId, sessionKey)
@@ -134,6 +144,7 @@ class ChatControllerTranscriptCacheTest {
     override suspend fun clearGateway(gatewayId: String) {
       lastDefaultAgents.remove(gatewayId)
       transcripts.keys.removeAll { it.gatewayId == gatewayId }
+      transcriptSessionIds.keys.removeAll { it.gatewayId == gatewayId }
       sessionsByOwner.keys.removeAll { it.first == gatewayId }
       savedTranscripts.removeAll { it.gatewayId == gatewayId }
       savedSessions.removeAll { it.gatewayId == gatewayId }
@@ -454,6 +465,7 @@ class ChatControllerTranscriptCacheTest {
     runTest {
       val cache = FakeTranscriptCache()
       val deletions = mutableListOf<ChatSessionDeletion>()
+      cache.saveTranscript("gateway-a", "old", "agent:old:main", emptyList(), "deleted-id")
       val controller =
         createCachedController(
           cache,
@@ -468,7 +480,7 @@ class ChatControllerTranscriptCacheTest {
 
       assertEquals(listOf(Triple("gateway-a", "old", "agent:old:main")), cache.deletedSessions)
       assertEquals(
-        listOf(ChatSessionDeletion("gateway-a", "old", "agent:old:main", "deleted-id", "main")),
+        listOf(ChatSessionDeletion("gateway-a", "old", "agent:old:main", "deleted-id", "main", clearLocalInput = false)),
         deletions,
       )
     }
@@ -522,7 +534,10 @@ class ChatControllerTranscriptCacheTest {
           .sessionId,
       )
       assertTrue(cache.deletedSessions.isEmpty())
-      assertTrue(deletions.isEmpty())
+      assertEquals(
+        listOf(ChatSessionDeletion("gateway-a", "owner-a", "global", "retired-id", "main", clearLocalInput = false)),
+        deletions,
+      )
 
       replacementText = "replacement after invalidation"
       controller.handleGatewayEvent(
@@ -548,7 +563,10 @@ class ChatControllerTranscriptCacheTest {
           .sessionId,
       )
       assertTrue(cache.deletedSessions.isEmpty())
-      assertTrue(deletions.isEmpty())
+      assertEquals(
+        listOf(ChatSessionDeletion("gateway-a", "owner-a", "global", "retired-id", "main", clearLocalInput = false)),
+        deletions,
+      )
     }
 
   @Test
@@ -805,6 +823,9 @@ class ChatControllerTranscriptCacheTest {
               val sessionId = if (ownerA) "owner-a-id" else "owner-b-id"
               """{"sessions":[{"key":"global","sessionId":"$sessionId"}]}"""
             }
+          } else if (method == "chat.history") {
+            val owner = if (params.orEmpty().contains("\"agentId\":\"owner-b\"")) "owner-b" else "owner-a"
+            """{"sessionId":"$owner-id","sessionInfo":{"key":"global","agentId":"$owner","sessionId":"$owner-id"},"messages":[]}"""
           } else {
             emptyChatGatewayResponse(method)
           }
@@ -856,6 +877,7 @@ class ChatControllerTranscriptCacheTest {
   fun deleteEventForAnotherOwnerDoesNotMutateTheVisibleSessionList() =
     runTest {
       val cache = FakeTranscriptCache()
+      cache.saveTranscript("gateway-a", "owner-a", "custom", emptyList(), sessionId = "owner-a-id")
       val controller =
         createCachedController(
           cache,
@@ -869,6 +891,14 @@ class ChatControllerTranscriptCacheTest {
       controller.handleGatewayEvent(
         "sessions.changed",
         """{"reason":"delete","sessionKey":"custom","agentId":"owner-a"}""",
+      )
+      advanceUntilIdle()
+
+      assertEquals(listOf("custom"), controller.sessions.value.map { it.key })
+      assertTrue(cache.deletedSessions.isEmpty())
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"delete","sessionKey":"custom","agentId":"owner-a","sessionId":"owner-a-id"}""",
       )
       advanceUntilIdle()
 
