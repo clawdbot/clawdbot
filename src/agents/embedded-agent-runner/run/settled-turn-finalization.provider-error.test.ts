@@ -102,24 +102,33 @@ describe("prepared provider errors after settled tools", () => {
     },
   );
 
-  it("preserves a structured provider refusal even with stale transient context", () => {
-    const attempt = createSettledProviderFailureAttempt();
-    const assistant = attempt.currentAttemptCompletedAssistant;
-    if (!assistant) {
-      throw new Error("Missing failed assistant");
-    }
-    assistant.diagnostics = [
-      { type: "provider_refusal", timestamp: 0, details: { provider: "openai" } },
-    ];
-    const request = prepareRequest(attempt);
-    expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
-    expect(request.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("refused this request"),
-      }),
-    ]);
-  });
+  it.each(["provider refusal", "permanent WebSocket close"])(
+    "preserves %s even with stale transient context",
+    (failure) => {
+      const attempt = createSettledProviderFailureAttempt();
+      const assistant = attempt.currentAttemptCompletedAssistant;
+      if (!assistant) {
+        throw new Error("Missing failed assistant");
+      }
+      if (failure === "provider refusal") {
+        assistant.diagnostics = [
+          { type: "provider_refusal", timestamp: 0, details: { provider: "openai" } },
+        ];
+      } else {
+        assistant.errorCode = "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE";
+      }
+      const request = prepareRequest(attempt);
+      expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
+      expect(request.payloadsWithToolMedia).toEqual([
+        expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining(
+            failure === "provider refusal" ? "refused this request" : "connection refused",
+          ),
+        }),
+      ]);
+    },
+  );
 
   it("preserves a cron tool-authored silent outcome after discounting the error", () => {
     const attempt = createSettledProviderFailureAttempt();
