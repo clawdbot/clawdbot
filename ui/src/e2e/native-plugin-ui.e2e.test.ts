@@ -38,7 +38,6 @@ type NativePluginWindow = Window & {
   };
 };
 
-
 async function selectView(page: Page, label: string, value: string) {
   await openCustomizeUi(page);
   await page.getByRole("combobox", { name: label, exact: true }).selectOption(value);
