@@ -58,12 +58,21 @@ export type UpdateCheckpointRestoreResult = UpdateCheckpointRestoreObservation &
 function matchesOwnedFile(
   left: RestoreResource["before"],
   right: RestoreResource["before"],
+  renamed = false,
 ): boolean {
   return (
     checkpointContentMatches(left, right) &&
+    (left?.kind !== "directory" ||
+      (left.descendantIdentitySha256 !== undefined &&
+        left.descendantIdentitySha256 === right?.descendantIdentitySha256)) &&
     (left === null ||
       right === null ||
-      (left.identity.dev === right.identity.dev && left.identity.ino === right.identity.ino))
+      (left.identity.dev === right.identity.dev &&
+        left.identity.ino === right.identity.ino &&
+        left.identity.size === right.identity.size &&
+        left.identity.mtimeMs === right.identity.mtimeMs &&
+        // Only a verified displacement/publication path may change root ctime.
+        (renamed || left.identity.ctimeMs === right.identity.ctimeMs)))
   );
 }
 
@@ -189,8 +198,10 @@ async function observeResource(
     return { observed, current, displaced, staged };
   }
   if (
-    matchesOwnedFile(current, resource.after) &&
-    (resource.before === null ? displaced === null : matchesOwnedFile(displaced, resource.before))
+    matchesOwnedFile(current, resource.after, true) &&
+    (resource.before === null
+      ? displaced === null
+      : matchesOwnedFile(displaced, resource.before, true))
   ) {
     observed = "after";
   } else if (
@@ -198,7 +209,7 @@ async function observeResource(
     ((matchesOwnedFile(current, resource.before) && displaced === null) ||
       (resource.before !== null &&
         current === null &&
-        matchesOwnedFile(displaced, resource.before)))
+        matchesOwnedFile(displaced, resource.before, true)))
   ) {
     observed = "before";
   }

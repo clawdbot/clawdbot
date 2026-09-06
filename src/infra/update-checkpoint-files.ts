@@ -8,6 +8,8 @@ export type CheckpointFileState = {
   kind: "file" | "directory";
   sha256: string;
   mode: number;
+  /** Physical identities of descendant directory entries; separate from portable content. */
+  descendantIdentitySha256?: string;
   identity: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
 };
 
@@ -26,8 +28,16 @@ export async function inspectCheckpointFile(file: string): Promise<CheckpointFil
     throw new Error(`Checkpoint resource must be a regular file or directory: ${file}`);
   }
   const hash = createHash("sha256");
+  const identities = createHash("sha256");
   const visit = async (entryPath: string, relative: string): Promise<void> => {
     const entry = await fs.lstat(entryPath);
+    // Root rename changes ctime during publication. Descendant identities do
+    // not change, and must remain bound independently of portable tree bytes.
+    if (relative) {
+      identities.update(
+        JSON.stringify([relative, entry.dev, entry.ino, entry.size, entry.mtimeMs, entry.ctimeMs]),
+      );
+    }
     if (entry.isSymbolicLink()) {
       hash.update(JSON.stringify([relative, "link", await fs.readlink(entryPath)]));
     } else if (entry.isDirectory()) {
@@ -57,6 +67,7 @@ export async function inspectCheckpointFile(file: string): Promise<CheckpointFil
   return {
     kind: stat.isDirectory() ? "directory" : "file",
     sha256: hash.digest("hex"),
+    descendantIdentitySha256: identities.digest("hex"),
     mode: stat.mode & 0o777,
     identity: {
       dev: stat.dev,

@@ -79,13 +79,28 @@ async function fixture(
     },
     assertQuiescent: fence.assertCurrent,
   };
-  const capture = () =>
+  const capture = async () =>
     captureUpdateCheckpoint({
       ...access,
       exclusions: [],
+      expectedSources: [
+        { sourcePath: configPath, state: await inspectCheckpointFile(configPath) },
+        ...(failure === "late-unavailable"
+          ? [{ sourcePath: path.join(stateDir, "service.env"), state: null }]
+          : []),
+      ],
       resources: [
         { sourcePath: configPath, kind: "config", restore: "replace" },
         { sourcePath: file, kind: "sqlite", restore: "replace" },
+        ...(failure === "late-unavailable"
+          ? [
+              {
+                sourcePath: path.join(stateDir, "service.env"),
+                kind: "service" as const,
+                restore: "replace" as const,
+              },
+            ]
+          : []),
       ],
     });
   const checkpointRef = await capture();
@@ -134,13 +149,16 @@ async function fixture(
     },
   };
   if (failure === "late-unavailable") {
-    await fs.writeFile(configPath, "new operator edit");
+    const conflict = path.join(stateDir, "service.env");
+    await fs.writeFile(conflict, "new operator edit");
     expect(await prepareUpdateCheckpointRestore(preparing)).toEqual({
       status: "unavailable",
-      resource: configPath,
+      resource: conflict,
     });
     expect(loadUpdateRecovery(record.runId, options)?.restore).toBeNull();
-    await fs.writeFile(configPath, "candidate config"); // Operator resolves its conflict.
+    // The operator removes its newly created file: the original bound absence
+    // is restored. Rewriting candidate bytes would not restore file identity.
+    await fs.unlink(conflict);
   }
   let resumeIdentity;
   let priorPlanRef;

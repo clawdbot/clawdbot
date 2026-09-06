@@ -32,6 +32,7 @@ export const CheckpointFileStateSchema = z
   .object({
     kind: z.enum(["file", "directory"]),
     sha256: digest,
+    descendantIdentitySha256: digest.optional(),
     mode: z.number().int(),
     identity: z
       .object({
@@ -75,6 +76,10 @@ const manifestSchema = z
             .regex(/^resource-[0-9]+$/u)
             .nullable(),
           captured: CheckpointFileStateSchema.nullable(),
+          // Older artifacts remain inspectable, but cannot authorize file replacement.
+          sourceState: CheckpointFileStateSchema.nullable().optional(),
+          // Records validation of owner-supplied facts, never live mutation authority.
+          sourceBindingValidated: z.boolean().optional(),
           userVersion: z.number().int().nullable(),
         })
         .strict(),
@@ -83,6 +88,11 @@ const manifestSchema = z
   .strict();
 
 export type UpdateCheckpointBinding = z.infer<typeof bindingSchema>;
+/** Facts retained by a mutation owner at its write boundary, not sampled during rollback. */
+export type UpdateCheckpointSourceBinding = {
+  sourcePath: string;
+  state: CheckpointFileState | null;
+};
 export type UpdateCheckpointResource = z.infer<typeof resourceSchema>;
 export type UpdateCheckpointManifest = z.infer<typeof manifestSchema>;
 /** A locator, never serialized authority. Reopen against a fresh binding and artifact root. */
@@ -206,11 +216,37 @@ export async function captureUpdateCheckpoint(
   params: UpdateCheckpointAccess & {
     resources: readonly UpdateCheckpointResource[];
     exclusions: readonly string[];
+    /** When supplied, bind every replaceable non-SQLite source, including absence.
+     * These facts do not grant authority; assertQuiescent must still be current.
+     * SQLite row provenance remains the owner's exclusive before/after boundary.
+     */
+    expectedSources?: readonly UpdateCheckpointSourceBinding[];
   },
 ): Promise<UpdateCheckpointRef> {
   const binding = bindingSchema.parse(params.binding);
   absolutePath.parse(params.artifactRoot);
   assertResourceBoundaries(params.resources, params.artifactRoot);
+  const expectedSources = new Map<string, CheckpointFileState | null>();
+  if (params.expectedSources) {
+    const files = params.resources.filter(
+      (resource) => resource.restore === "replace" && resource.kind !== "sqlite",
+    );
+    for (const expected of params.expectedSources) {
+      if (
+        expectedSources.has(expected.sourcePath) ||
+        !files.some((resource) => resource.sourcePath === expected.sourcePath)
+      ) {
+        throw new Error("Invalid checkpoint source binding coverage");
+      }
+      expectedSources.set(
+        expected.sourcePath,
+        CheckpointFileStateSchema.nullable().parse(expected.state),
+      );
+    }
+    if (expectedSources.size !== files.length) {
+      throw new Error("Incomplete checkpoint source binding coverage");
+    }
+  }
   params.assertQuiescent();
   const checkpointId = randomUUID();
   const root = await ensureDurableDirectory({ directoryPath: params.artifactRoot, mode: 0o700 });
@@ -228,6 +264,12 @@ export async function captureUpdateCheckpoint(
   for (const [index, resource] of params.resources.entries()) {
     params.assertQuiescent();
     const before = await inspectCheckpointFile(resource.sourcePath);
+    if (
+      expectedSources.has(resource.sourcePath) &&
+      !isDeepStrictEqual(before, expectedSources.get(resource.sourcePath))
+    ) {
+      throw new Error(`Checkpoint source binding changed: ${resource.sourcePath}`);
+    }
     sourceStates.set(resource.sourcePath, before);
     const artifact = before ? `resource-${index}` : null;
     let captured = before;
@@ -250,7 +292,14 @@ export async function captureUpdateCheckpoint(
         captured = await copyCheckpointFile(resource.sourcePath, targetPath, before);
       }
     }
-    manifest.resources.push({ ...resource, artifact, captured, userVersion });
+    manifest.resources.push({
+      ...resource,
+      artifact,
+      captured,
+      sourceState: before,
+      sourceBindingValidated: expectedSources.has(resource.sourcePath),
+      userVersion,
+    });
   }
   // An earlier preimage can become stale while later resources are copied.
   // Bind absence and physical identity as well as bytes before publishing any

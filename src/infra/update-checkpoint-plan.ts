@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { sha256Hex } from "./crypto-digest.js";
 import { checkpointContentMatches } from "./update-checkpoint-files.js";
@@ -110,6 +111,7 @@ export async function reopenUpdateCheckpointRestorePlan(
     throw new Error("Restore plan identity mismatch");
   }
   const checkpoint = await reopenUpdateCheckpoint(plan.checkpointRef, access);
+  const afterUpdate = await reopenUpdateCheckpoint(plan.afterUpdateRef, access);
   const remaining = new Set(
     checkpoint.manifest.resources
       .filter((entry) => entry.restore === "replace")
@@ -142,8 +144,22 @@ export async function reopenUpdateCheckpointRestorePlan(
     ) {
       throw new Error("Restore recovery binding mismatch");
     }
-    if (!resource.sqlite && !checkpointContentMatches(resource.after, captured.captured)) {
-      throw new Error("Restore target does not match checkpoint");
+    if (!resource.sqlite) {
+      const mutation = afterUpdate.manifest.resources.find(
+        (entry) => entry.sourcePath === captured.sourcePath && entry.kind === captured.kind,
+      );
+      // Replays bypass preparation. Validate the owner-bound source facts here
+      // too; a digest-valid older plan must not adopt a late observed after-image.
+      if (
+        mutation?.sourceBindingValidated !== true ||
+        (!isDeepStrictEqual(resource.before, mutation.sourceState) &&
+          !isDeepStrictEqual(resource.before, captured.sourceState))
+      ) {
+        throw new Error("Restore plan lacks an owner-bound after-image");
+      }
+      if (!checkpointContentMatches(resource.after, captured.captured)) {
+        throw new Error("Restore target does not match checkpoint");
+      }
     }
   }
   if (remaining.size !== 0) {

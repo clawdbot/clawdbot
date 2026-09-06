@@ -4,6 +4,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
+import { sha256Hex } from "./crypto-digest.js";
+import { inspectCheckpointFile } from "./update-checkpoint-files.js";
 import {
   inspectUpdateCheckpointRestoreResource,
   prepareUpdateCheckpointRestore,
@@ -52,11 +54,21 @@ async function fixture() {
   const resources: UpdateCheckpointResource[] = [
     { sourcePath: configPath, kind: "config", restore: "replace" },
   ];
-  const capture = () =>
+  // This disposable fixture owns every mutation and captures its output facts
+  // before tests permit independent operator/agent work.
+  const capture = async () =>
     captureUpdateCheckpoint({
       ...access,
       resources,
       exclusions: ["workspace files are retained, never restored"],
+      expectedSources: await Promise.all(
+        resources
+          .filter((resource) => resource.restore === "replace" && resource.kind !== "sqlite")
+          .map(async ({ sourcePath }) => ({
+            sourcePath,
+            state: await inspectCheckpointFile(sourcePath),
+          })),
+      ),
     });
   return { access, resources, capture, stateDir, configPath };
 }
@@ -80,7 +92,21 @@ describe("update checkpoint artifacts and publication", () => {
     await fs.writeFile(f.configPath, '{"after":true}');
     await fs.writeFile(service, "candidate service");
     await fs.writeFile(path.join(plugin, "index.js"), "after");
-    const afterUpdateRef = await f.capture();
+    // This fixture is the mutation owner: retain outputs before ordinary work.
+    const expectedSources = await Promise.all(
+      f.resources
+        .filter((resource) => resource.restore === "replace")
+        .map(async ({ sourcePath }) => ({
+          sourcePath,
+          state: await inspectCheckpointFile(sourcePath),
+        })),
+    );
+    const afterUpdateRef = await captureUpdateCheckpoint({
+      ...f.access,
+      resources: f.resources,
+      exclusions: [],
+      expectedSources,
+    });
     await fs.writeFile(work, "new agent work");
     const prepared = await prepareUpdateCheckpointRestore({
       ...f.access,
@@ -186,35 +212,181 @@ describe("update checkpoint artifacts and publication", () => {
     expect(await fs.readFile(f.configPath, "utf8")).toBe("operator edit");
   });
 
-  it.each(["before", "after"])(
-    "refuses a same-content replacement with a different %s file identity",
+  it("refuses a late after-image captured without the mutation owner's bindings", async () => {
+    const f = await fixture();
+    const checkpointRef = await f.capture();
+    await fs.writeFile(f.configPath, "candidate output");
+    await fs.writeFile(f.configPath, "newer operator work");
+    const afterUpdateRef = await captureUpdateCheckpoint({
+      ...f.access,
+      resources: f.resources,
+      exclusions: [],
+    });
+    expect(
+      await prepareUpdateCheckpointRestore({
+        ...f.access,
+        checkpointRef,
+        afterUpdateRef,
+        prepareSharedDatabase() {},
+      }),
+    ).toEqual({ status: "unavailable", resource: f.configPath });
+    expect(await fs.readFile(f.configPath, "utf8")).toBe("newer operator work");
+  });
+
+  it.each(["present", "absent", "plugin descendant"])(
+    "does not replace an owner-bound %s after-image with a later observation",
+    async (kind) => {
+      const f = await fixture();
+      const sourcePath = path.join(f.stateDir, "mutation-output");
+      let target = sourcePath;
+      if (kind === "plugin descendant") {
+        await fs.mkdir(sourcePath);
+        target = path.join(sourcePath, "index.js");
+      }
+      if (kind !== "absent") {
+        await fs.writeFile(target, "owner output");
+      }
+      const expectedSources = [{ sourcePath, state: await inspectCheckpointFile(sourcePath) }];
+      if (kind !== "absent") {
+        await fs.rename(target, path.join(f.stateDir, "saved-owner-output"));
+      }
+      await fs.writeFile(target, "owner output");
+      const current = await inspectCheckpointFile(sourcePath);
+      const request = {
+        ...f.access,
+        resources: [{ sourcePath, kind: "service" as const, restore: "replace" as const }],
+        exclusions: [],
+        expectedSources,
+      };
+      await expect(captureUpdateCheckpoint(request)).rejects.toThrow(/source binding/u);
+      expect(await inspectCheckpointFile(sourcePath)).toEqual(current);
+    },
+  );
+
+  it.each(["candidate", "checkpoint", "plugin child"])(
+    "rejects a recreated %s identity before restore preparation",
     async (phase) => {
       const f = await fixture();
+      const plugin = path.join(f.stateDir, "plugin");
+      await fs.mkdir(plugin);
+      const child = path.join(plugin, "index.js");
+      await fs.writeFile(child, "original");
+      f.resources.push({ sourcePath: plugin, kind: "plugin", restore: "replace" });
       const checkpointRef = await f.capture();
-      await fs.writeFile(f.configPath, "candidate config");
+      await fs.writeFile(f.configPath, "candidate");
+      await fs.writeFile(child, "candidate plugin");
       const afterUpdateRef = await f.capture();
-      const prepared = await prepareUpdateCheckpointRestore({
+      const target = phase === "plugin child" ? child : f.configPath;
+      const saved = path.join(f.stateDir, "operator-saved");
+      await fs.rename(target, saved);
+      await fs.copyFile(saved, target);
+      if (phase === "checkpoint") {
+        await fs.writeFile(target, '{"before":true}');
+      }
+      const expected = await inspectCheckpointFile(target);
+      const result = await prepareUpdateCheckpointRestore({
         ...f.access,
         checkpointRef,
         afterUpdateRef,
         prepareSharedDatabase() {},
       });
-      expect(prepared.status).toBe("ready");
-      if (prepared.status !== "ready") {
-        return;
-      }
-      const request = { ...f.access, planRef: prepared.planRef, resourceCursor: 0 };
-      if (phase === "after") {
-        await restoreUpdateCheckpointResource(request);
-      }
-      // Retain the original inode so the replacement cannot coincidentally reuse it.
-      const saved = `${f.configPath}.operator-saved`;
-      await fs.rename(f.configPath, saved);
-      await fs.copyFile(saved, f.configPath);
-      expect((await restoreUpdateCheckpointResource(request)).status).toBe("conflict");
-      expect(await fs.readFile(f.configPath, "utf8")).toBe(await fs.readFile(saved, "utf8"));
+      expect(result).toEqual({
+        status: "unavailable",
+        resource: phase === "plugin child" ? plugin : f.configPath,
+      });
+      expect(await inspectCheckpointFile(target)).toEqual(expected);
     },
   );
+
+  it.each([
+    ["file", "before", "replace"],
+    ["file", "after", "replace"],
+    ["plugin", "before", "replace"],
+    ["plugin", "after", "replace"],
+    ["file", "before", "rewrite"],
+    ["file", "after", "rewrite"],
+  ])("refuses a same-content %s %s identity change by %s", async (kind, phase, operation) => {
+    const f = await fixture();
+    const plugin = path.join(f.stateDir, "plugin");
+    await fs.mkdir(plugin);
+    const child = path.join(plugin, "index.js");
+    await fs.writeFile(child, "plugin before");
+    f.resources.push({ sourcePath: plugin, kind: "plugin", restore: "replace" });
+    const checkpointRef = await f.capture();
+    await fs.writeFile(f.configPath, "candidate config");
+    await fs.writeFile(child, "plugin after");
+    const afterUpdateRef = await f.capture();
+    const prepared = await prepareUpdateCheckpointRestore({
+      ...f.access,
+      checkpointRef,
+      afterUpdateRef,
+      prepareSharedDatabase() {},
+    });
+    expect(prepared.status).toBe("ready");
+    if (prepared.status !== "ready") {
+      return;
+    }
+    const request = {
+      ...f.access,
+      planRef: prepared.planRef,
+      resourceCursor: kind === "plugin" ? 1 : 0,
+    };
+    if (phase === "after") {
+      await restoreUpdateCheckpointResource(request);
+    }
+    // Retain the original inode so the replacement cannot coincidentally reuse it.
+    const target = kind === "plugin" ? child : f.configPath;
+    const saved = path.join(f.stateDir, "operator-saved");
+    if (operation === "replace") {
+      await fs.rename(target, saved);
+      await fs.copyFile(saved, target);
+    } else {
+      await fs.copyFile(target, saved);
+      const stamp = await fs.stat(target);
+      await fs.writeFile(target, await fs.readFile(target));
+      // A deterministic newer write, without relying on timestamp resolution.
+      await fs.utimes(target, stamp.atime, new Date(stamp.mtimeMs + 1000));
+    }
+    expect((await restoreUpdateCheckpointResource(request)).status).toBe("conflict");
+    expect(await fs.readFile(target, "utf8")).toBe(await fs.readFile(saved, "utf8"));
+  });
+
+  it("refuses replay of a sealed legacy plan with an unbound after-image", async () => {
+    const f = await fixture();
+    const checkpointRef = await f.capture();
+    await fs.writeFile(f.configPath, "newer operator work");
+    const afterUpdateRef = await f.capture();
+    const prepared = await prepareUpdateCheckpointRestore({
+      ...f.access,
+      checkpointRef,
+      afterUpdateRef,
+      prepareSharedDatabase() {},
+    });
+    if (prepared.status !== "ready") {
+      throw new Error("fixture preparation unavailable");
+    }
+    const { plan } = await reopenUpdateCheckpointRestorePlan(prepared.planRef, f.access);
+    const { manifest } = await reopenUpdateCheckpoint(afterUpdateRef, f.access);
+    // Reproduce the older durable encoding, which had no checked owner binding.
+    // Both digests are internally consistent; this is not a tamper-only test.
+    for (const resource of manifest.resources) {
+      delete resource.sourceBindingValidated;
+    }
+    const manifestBytes = JSON.stringify(manifest);
+    await fs.writeFile(afterUpdateRef.manifestPath, manifestBytes);
+    plan.afterUpdateRef = { ...afterUpdateRef, manifestSha256: sha256Hex(manifestBytes) };
+    const planBytes = JSON.stringify(plan);
+    await fs.writeFile(prepared.planRef.planPath, planBytes);
+    const planRef = { ...prepared.planRef, planSha256: sha256Hex(planBytes) };
+    await expect(
+      restoreUpdateCheckpointResource({
+        ...f.access,
+        planRef,
+        resourceCursor: 0,
+      }),
+    ).rejects.toThrow(/owner-bound after-image/u);
+    expect(await fs.readFile(f.configPath, "utf8")).toBe("newer operator work");
+  });
 
   it.each(["displaced", "published"])(
     "reconciles a crash after the resource was %s without a runtime write",

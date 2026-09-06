@@ -3,13 +3,13 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import type { z } from "zod";
 import { sha256Hex } from "./crypto-digest.js";
 import { requireDirectorySync, syncDirectory, syncDirectorySync } from "./directory-durability.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
-  checkpointContentMatches,
   copyCheckpointFile,
   inspectCheckpointFile,
   syncCheckpointTree,
@@ -135,8 +135,9 @@ export async function prepareUpdateCheckpointRestore(
       }
       if (
         !sqlite &&
-        !checkpointContentMatches(before, mutation.captured) &&
-        !checkpointContentMatches(before, resource.captured)
+        (mutation.sourceBindingValidated !== true ||
+          (!isDeepStrictEqual(before, mutation.sourceState) &&
+            !isDeepStrictEqual(before, resource.sourceState)))
       ) {
         throw new UpdateCheckpointPreservationUnavailable(resource.sourcePath);
       }
