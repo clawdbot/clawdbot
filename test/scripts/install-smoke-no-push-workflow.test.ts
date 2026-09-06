@@ -243,6 +243,12 @@ describe("install smoke no-push root image transport", () => {
     );
     expect(manifest.run).not.toContain("event_name");
     expect(manifest.run).not.toContain("workflow_call");
+    expect(manifest.run).toContain(
+      "refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*",
+    );
+    expect(
+      manifest.run.indexOf("git fetch --quiet --unshallow --no-tags --filter=blob:none origin"),
+    ).toBeLessThan(manifest.run.indexOf("resolve-fs-safe-native-contract.mjs"));
 
     const text = readFileSync(INSTALL_SMOKE_REUSABLE, "utf8");
     expect(text).not.toContain("packages: write");
