@@ -215,7 +215,8 @@ async function readSkillWorkshopInstalledSkill(
         return record.status === "applied" &&
           record.target.source === "openclaw-workshop" &&
           record.target.skillKey === result.skillKey &&
-          record.target.skillName === result.name
+          (record.kind === "create" ? record.target.skillKey : record.target.skillName) ===
+            result.name
           ? [
               {
                 key: record.id,

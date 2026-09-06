@@ -39,6 +39,20 @@ describe("Workshop installed comparisons", () => {
       shortened: true,
       lateOnly: true,
     },
+    {
+      previous: Array.from({ length: 700 }, (_, index) => `Check release item ${index + 1}.`).join(
+        "\n",
+      ),
+      current: Array.from({ length: 700 }, (_, index) =>
+        index === 9
+          ? "Early instruction change."
+          : index === 649
+            ? "Mixed late instruction change."
+            : `Check release item ${index + 1}.`,
+      ).join("\n"),
+      shortened: true,
+      lateOnly: false,
+    },
   ])(
     "opens the differing saved comparison (shortened=$shortened, lateOnly=$lateOnly)",
     async ({ previous, current, shortened, lateOnly }) => {
@@ -112,7 +126,7 @@ describe("Workshop installed comparisons", () => {
             ? "Check release item 1."
             : "Check rollback before release.",
       );
-      expect(reader?.querySelector(".sidebar-markdown") !== null).toBe(lateOnly);
+      expect(reader?.querySelector(".sidebar-markdown") !== null).toBe(shortened);
       expect(
         reader?.textContent?.includes("This diff is shortened. Some changes may not be shown."),
       ).toBe(shortened);

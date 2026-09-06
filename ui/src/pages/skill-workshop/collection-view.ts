@@ -201,6 +201,14 @@ function renderReader(props: SkillWorkshopProps) {
 
   const skill = props.installedSkills.find((entry) => entry.name === selection.name);
   const changed = changedSkillWorkshopVersion(selection);
+  const incompleteVersions = new Set(
+    selection.savedVersions.filter(
+      ({ diff }) =>
+        diff.kind === "truncated" ||
+        diff.stat.added + diff.stat.removed >
+          diff.lines.filter((line) => line.kind === "add" || line.kind === "del").length,
+    ),
+  );
   const unchanged =
     !selection.savedVersionsError &&
     selection.savedVersions.length > 0 &&
@@ -265,11 +273,7 @@ function renderReader(props: SkillWorkshopProps) {
                               </p>`
                             : html`
                                 ${
-                                  diff.kind === "truncated" ||
-                                  diff.stat.added + diff.stat.removed >
-                                    diff.lines.filter(
-                                      (line) => line.kind === "add" || line.kind === "del",
-                                    ).length
+                                  incompleteVersions.has(version)
                                     ? html`<p class="sw-muted">
                                         ${t("skillWorkshop.collection.diffTruncated")}
                                       </p>`
@@ -284,8 +288,7 @@ function renderReader(props: SkillWorkshopProps) {
             }
           </div>
           ${
-            changed &&
-            !changed.diff.lines.some((line) => line.kind === "add" || line.kind === "del")
+            changed && incompleteVersions.size > 0
               ? renderSkillDocument(selection.content)
               : nothing
           }

@@ -185,7 +185,7 @@ describe("Skill Workshop proposal RPCs", () => {
           id: proposalId,
           appliedAt: ISO_NOW,
           target: {
-            skillName: installed.name,
+            skillName: "Inbox Cleaner",
             skillKey: installed.skillKey,
             source: proposalId === "workshop" ? "openclaw-workshop" : "openclaw-workspace",
           },

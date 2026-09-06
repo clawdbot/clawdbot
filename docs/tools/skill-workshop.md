@@ -111,7 +111,7 @@ Comparisons use retained applied versions, not a complete edit timeline.
 Relative dates identify the saved baseline, not when later edits occurred.
 Supporting files and frontmatter are not compared. Missing versions and shortened
 diffs are labeled; no historical content is reconstructed.
-If the preview omits every changed line, the current instructions remain readable.
+If the preview omits changed lines, the current instructions remain readable.
 
 Removing an installed skill does not remove its proposal history. Reading a
 historical draft does not restore or reinstall it. Handwritten and externally
