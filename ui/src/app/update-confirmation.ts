@@ -1,8 +1,5 @@
-// Canonical confirmation gate for the Control UI's disruptive update action.
-// Every affordance that can start an update routes its first click here, so no
-// surface dispatches an unconfirmed update or drifts from the shared policy.
-// The dialog itself loads lazily: startup pays nothing for a confirmation the
-// operator has not opened.
+// Every update affordance shares this confirmation gate; the dialog stays lazy
+// until an operator opens it.
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 

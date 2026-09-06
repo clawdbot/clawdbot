@@ -1,12 +1,5 @@
-// Implementation of the Control UI's disruptive-update dialog. It stays behind
-// the `update-confirmation.ts` lazy boundary because nothing here runs until an
-// operator clicks an update affordance, and the startup bundle has no room for
-// a dialog nobody has opened yet.
-//
-// The dialog is the operator's primary surface for the whole update: it opens
-// as a confirmation, becomes a progress report on confirm, and reports a
-// failure in place. It is mounted on `document.body`, outside the shell, so the
-// Gateway restart that tears down the connection cannot unmount it.
+// Keep this dialog behind the lazy confirmation entry and outside the shell so
+// it survives the Gateway restart.
 import { html, nothing, render } from "lit";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
@@ -52,12 +45,6 @@ function formatInstalledAndAvailable(
     });
   }
   return installed ?? available ?? undefined;
-}
-
-function workingMessage(connected: boolean): string {
-  // A disconnect alone does not prove a restart. Keep update recovery guidance
-  // separate from flows that have an explicit restart result.
-  return connected ? t("updates.dialog.installing") : t("updates.dialog.disconnected");
 }
 
 export async function confirmAndStartUpdateRuntime(
@@ -151,13 +138,14 @@ export async function confirmAndStartUpdateRuntime(
         current.kind === "failed" ||
         (run !== null && run.status !== "running" && run.status !== "succeeded");
       const finished = run !== null && run.status !== "running";
+      // A disconnect alone does not prove a restart; keep its recovery guidance separate.
       const body =
         current.kind === "run"
           ? (readError ?? "")
           : current.kind === "failed"
             ? current.message
             : current.kind === "working"
-              ? workingMessage(current.connected)
+              ? t(current.connected ? "updates.dialog.installing" : "updates.dialog.disconnected")
               : `${route.message} ${t("updates.confirm.impact")}`;
       render(
         html`
@@ -175,9 +163,9 @@ export async function confirmAndStartUpdateRuntime(
                   : nothing
               }
               ${
-                run && current.kind === "run"
+                current.kind === "run"
                   ? html`<openclaw-update-run-view
-                      .run=${run}
+                      .run=${current.run}
                       .connected=${current.connected}
                     ></openclaw-update-run-view>`
                   : nothing
@@ -266,11 +254,9 @@ export async function confirmAndStartUpdateRuntime(
       }
       phase = { kind: "working", connected: true };
       draw();
-      // Start before subscribing: an accepted run clears the retained banner
-      // synchronously, before its first await. Producers then emit that fresh
-      // snapshot as the subscribe-time emit, so a failure still present on it
-      // belongs to the previous attempt and is not this update's outcome —
-      // a refused request is reported by the accept timer below instead.
+      // Accepted starts clear the retained banner synchronously before subscribe emits.
+      // Any failure in that first snapshot belongs to the previous attempt;
+      // the accept timer reports a refused request.
       params.startGatewayUpdate();
       let retainedEmit = true;
       watchProgress(watch, (progress) => {
