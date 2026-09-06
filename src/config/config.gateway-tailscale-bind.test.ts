@@ -3,18 +3,15 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("gateway tailscale bind validation", () => {
-  it("rejects the retired resetOnExit key from canonical config", () => {
+  it.each([true, false])("accepts legacy resetOnExit=%s until Doctor removes it", (resetOnExit) => {
     const res = validateConfigObject({
       gateway: {
         bind: "loopback",
-        tailscale: { mode: "serve", resetOnExit: true },
+        tailscale: { mode: "serve", resetOnExit },
       },
     });
 
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues.map((issue) => issue.path)).toContain("gateway.tailscale");
-    }
+    expect(res.ok).toBe(true);
   });
 
   it("accepts loopback bind when tailscale serve/funnel is enabled", () => {

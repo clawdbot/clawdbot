@@ -183,6 +183,8 @@ export const GatewayConfigSchema = z
     tailscale: z
       .strictObject({
         mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
+        // Shipped legacy input. Runtime ignores it; Doctor removes it.
+        resetOnExit: z.boolean().optional(),
         preserveFunnel: z.boolean().optional(),
       })
       .optional(),
