@@ -163,7 +163,7 @@ echo "Injecting ${dylib}"
 echo "Target ${target_name} PID: ${target_pid}"
 
 lldb -p "${target_pid}" \
-  -o "expr -- (int)({ void *h = dlopen(\"${dylib}\", 2); int *ready = h ? (int *)dlsym(h, \"OpenClawFaceTimeHelperInitialized\") : 0; ready && *ready == 1; })" \
+  -o "expr -- (int)({ void *h = (void *)dlopen(\"${dylib}\", 2); int *ready = h ? (int *)(void *)dlsym(h, \"OpenClawFaceTimeHelperInitialized\") : 0; ready && *ready == 1; })" \
   -o detach \
   -o quit >"${lldb_log}" 2>&1 &
 lldb_pid=$!
