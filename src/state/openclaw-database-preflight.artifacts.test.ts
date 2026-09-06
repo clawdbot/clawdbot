@@ -4,10 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  checkTargetDatabaseSchemas,
+  captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
 } from "../cli/update-cli/schema-preflight.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import * as snapshots from "../infra/sqlite-readonly-location.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -30,6 +31,17 @@ const supportedVersions = {
   state: OPENCLAW_STATE_SCHEMA_VERSION,
   agent: OPENCLAW_AGENT_SCHEMA_VERSION,
 };
+
+// Exercise the production capture/union entry points, not a test-only export.
+async function checkTargetDatabaseSchemas(
+  versions: typeof supportedVersions,
+  env: NodeJS.ProcessEnv,
+  config?: OpenClawConfig,
+) {
+  const context = config ? { config, env } : await captureTargetDatabaseSchemaContext(env);
+  return checkTargetDatabaseSchemasForContexts(versions, [context]);
+}
+
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -222,7 +234,7 @@ describe("schema preflight source artifacts", () => {
     },
   );
 
-  it("refuses unreadable config without changing stores, but preserves the legacy metadata-free path", async () => {
+  it("refuses unreadable config during capture and preserves metadata-free schema checks", async () => {
     const fixture = createFixture();
     const configPath = path.join(fixture.env.OPENCLAW_STATE_DIR, "openclaw.json");
     fs.writeFileSync(configPath, "{ invalid synthetic config");
@@ -232,7 +244,9 @@ describe("schema preflight source artifacts", () => {
     await expect(checkTargetDatabaseSchemas(supportedVersions, fixture.env)).rejects.toMatchObject({
       reason: "database-schema-preflight",
     });
-    expect(await checkTargetDatabaseSchemas(undefined, fixture.env)).toEqual({
+    expect(
+      await checkTargetDatabaseSchemasForContexts(undefined, [{ env: fixture.env, config: {} }]),
+    ).toEqual({
       incompatible: [],
       indeterminate: [],
     });

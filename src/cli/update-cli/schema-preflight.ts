@@ -42,17 +42,10 @@ export function formatSchemaRefusalLines(
   ];
 }
 
-export async function checkTargetDatabaseSchemas(
-  supportedVersions: OpenClawSchemaVersions | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-  capturedConfig?: OpenClawConfig,
+async function checkTargetDatabaseSchemas(
+  supportedVersions: OpenClawSchemaVersions,
+  context: TargetDatabaseSchemaContext,
 ): Promise<OpenClawDatabaseSchemaPreflight> {
-  if (!supportedVersions) {
-    return { incompatible: [], indeterminate: [] };
-  }
-  const context = capturedConfig
-    ? { env, config: capturedConfig }
-    : await captureTargetDatabaseSchemaContext(env);
   let configuredAgentDatabaseCandidatePaths: string[];
   try {
     configuredAgentDatabaseCandidatePaths = resolveConfiguredAgentDatabaseCandidatePaths(
@@ -124,7 +117,7 @@ export async function checkTargetDatabaseSchemasForContexts(
   const incompatible = new Map<string, IncompatibleOpenClawDatabase>();
   const indeterminate = new Map<string, IndeterminateOpenClawDatabase>();
   for (const context of contexts) {
-    const result = await checkTargetDatabaseSchemas(supportedVersions, context.env, context.config);
+    const result = await checkTargetDatabaseSchemas(supportedVersions, context);
     for (const database of result.incompatible) {
       const identity = canonicalDatabaseIdentity(database);
       incompatible.set(identity, incompatible.get(identity) ?? database);

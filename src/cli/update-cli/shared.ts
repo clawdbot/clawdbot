@@ -246,7 +246,11 @@ type GitCheckoutResult = {
   step: UpdateStepResult | null;
 };
 
-type StagedGitCheckout = (root: string, publish: () => Promise<string>) => Promise<void>;
+type StagedGitCheckout = (
+  root: string,
+  publish: () => Promise<string>,
+  targetRoot: string,
+) => Promise<void>;
 
 async function cloneGitCheckoutTransactionally(params: {
   dir: string;
@@ -339,7 +343,7 @@ async function cloneGitCheckoutTransactionally(params: {
       return targetDir;
     };
     if (params.useStagedCheckout) {
-      await params.useStagedCheckout(stagingDir, publish);
+      await params.useStagedCheckout(stagingDir, publish, targetDir);
     } else {
       await publish();
     }

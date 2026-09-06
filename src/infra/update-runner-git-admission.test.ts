@@ -35,6 +35,8 @@ function fixture(relativeRemote = false) {
   git(source, "init", "-b", "main");
   git(source, "config", "user.name", "Update fixture");
   git(source, "config", "user.email", "fixture@example.invalid");
+  fs.writeFileSync(path.join(source, ".gitignore"), "node_modules/\ndist/\n.artifacts/\n*.tmp\n");
+  fs.writeFileSync(path.join(source, "openclaw.mjs"), "export {};\n");
   const commit = (version: string, agentSchema: number) => {
     fs.writeFileSync(
       path.join(source, "package.json"),
@@ -45,7 +47,7 @@ function fixture(relativeRemote = false) {
         openclaw: { schemaVersions: { state: 5, agent: agentSchema } },
       }),
     );
-    git(source, "add", "package.json");
+    git(source, "add", ".");
     git(source, "commit", "-m", "isolated fixture");
     git(source, "tag", `v${version}`);
     return git(source, "rev-parse", "HEAD");
@@ -59,6 +61,18 @@ function fixture(relativeRemote = false) {
   const target = commit("2026.7.2", 14);
   const calls: string[][] = [];
   const runCommand: CommandRunner = async (argv, options) => {
+    if (argv[0] === process.execPath && argv.includes("doctor")) {
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (argv[0] === "pnpm") {
+      if (argv.includes("build")) {
+        const dist = path.join(options.cwd!, "dist");
+        fs.mkdirSync(path.join(dist, "control-ui"), { recursive: true });
+        fs.writeFileSync(path.join(dist, "entry.js"), "export {};\n");
+        fs.writeFileSync(path.join(dist, "control-ui", "index.html"), "ready\n");
+      }
+      return { code: 0, stdout: argv.includes("--version") ? "12.1.0\n" : "", stderr: "" };
+    }
     expect(argv[0]).toBe("git");
     calls.push(argv);
     const result = spawnSync("git", argv.slice(1), {
@@ -76,7 +90,7 @@ function fixture(relativeRemote = false) {
       defaultCommandEnv: env,
       timeoutMs: 15_000,
       startedAt: Date.now(),
-      opts: { channel: "stable", ...options },
+      opts: { channel: "stable", inspectGitTarget: async () => undefined, ...options },
     });
   return { root, source, install, globalConfig, git, commit, target, calls, runCommand, run };
 }
@@ -104,23 +118,23 @@ describe("Git database admission", () => {
     state.git(state.install, "checkout", "-b", "maintenance");
     state.git(state.install, "branch", "-D", "main");
     state.git(state.install, "update-ref", "-d", "refs/remotes/upstream.with.dots/main");
-    const complete = new Error("stop after restoring the selected upstream");
+    let restoredUpstream = false;
     const command: CommandRunner = async (argv, options) => {
-      if (argv[0] !== "git") {
-        return { code: 0, stdout: argv.includes("--version") ? "12.1.0\n" : "", stderr: "" };
-      }
       const result = await state.runCommand(argv, options);
       if (argv[2] === state.install && argv[3] === "branch" && argv[4] === "--set-upstream-to") {
         expect(result.code, result.stderr).toBe(0);
         expect(state.git(state.install, "rev-parse", "HEAD")).toBe(state.target);
         expect(state.git(state.install, "rev-parse", "main@{upstream}")).toBe(state.target);
-        throw complete;
+        restoredUpstream = true;
       }
       return result;
     };
-    await expect(
-      state.run({ channel: "dev", beforeGitMutation: async () => undefined }, command),
-    ).rejects.toBe(complete);
+    const result = await state.run(
+      { channel: "dev", beforeGitMutation: async () => undefined },
+      command,
+    );
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    expect(restoredUpstream).toBe(true);
   });
 
   it.each(
@@ -131,15 +145,12 @@ describe("Git database admission", () => {
     "rechecks admission after transport ($channel, admitted=$admitted)",
     async ({ channel, admitted }) => {
       const state = fixture();
-      const complete = new Error("stop at installed checkout boundary");
+      let checkoutObserved = false;
       let admissionFinished = false;
       let admissionFresh = false;
       const remoteFetches: boolean[] = [];
       const command: CommandRunner = async (argv, options) => {
-        if (argv[0] !== "git") {
-          return { code: 0, stdout: argv.includes("--version") ? "12.1.0\n" : "", stderr: "" };
-        }
-        if (argv[2] === state.install && argv[3] === "fetch" && argv.includes("--all")) {
+        if (argv[2] === state.install && argv[3] === "fetch") {
           remoteFetches.push(admissionFinished);
           admissionFresh = false;
         }
@@ -151,31 +162,31 @@ describe("Git database admission", () => {
           expect(state.git(state.install, "show", `${state.target}:package.json`)).toContain(
             '"agent":14',
           );
-          throw complete;
+          checkoutObserved = true;
         }
         return state.runCommand(argv, options);
       };
-      await expect(
-        state.run(
-          {
-            channel,
-            ...(admitted
-              ? {
-                  beforeGitMutation: async () => {
-                    admissionFinished = true;
+      const result = await state.run(
+        {
+          channel,
+          ...(admitted
+            ? {
+                beforeGitMutation: async () => {
+                  admissionFinished = true;
+                  admissionFresh = true;
+                },
+                inspectGitTarget: async () => {
+                  if (admissionFinished) {
                     admissionFresh = true;
-                  },
-                  inspectGitTarget: async () => {
-                    if (admissionFinished) {
-                      admissionFresh = true;
-                    }
-                  },
-                }
-              : {}),
-          },
-          command,
-        ),
-      ).rejects.toBe(complete);
+                  }
+                },
+              }
+            : {}),
+        },
+        command,
+      );
+      expect(result.status, JSON.stringify(result)).toBe("ok");
+      expect(checkoutObserved).toBe(true);
     },
   );
 
@@ -215,7 +226,7 @@ describe("Git database admission", () => {
         ...captured,
         timeoutMs: 15_000,
         startedAt: Date.now(),
-        opts: { channel: "stable", beforeGitMutation: admission },
+        opts: { channel: "stable", inspectGitTarget: admission },
       });
       if (configured) {
         await expect(result).rejects.toBe(refused);
@@ -232,6 +243,7 @@ describe("Git database admission", () => {
     "checks development admission before target scripts, refuseFirst=%s",
     async (refuseFirst) => {
       const state = fixture();
+      state.commit("2026.7.3", 15);
       const before = snapshotTree(state.install);
       const refused = new Error("fallback database refusal");
       const builds: string[] = [];
@@ -245,11 +257,11 @@ describe("Git database admission", () => {
             fs.readFileSync(path.join(options.cwd!, "package.json"), "utf8"),
           );
           builds.push(manifest.version);
-          if (!refuseFirst && manifest.version === "2026.7.2") {
+          if (!refuseFirst && manifest.version === "2026.7.3") {
             return { code: 1, stdout: "", stderr: "synthetic candidate build failure" };
           }
         }
-        return { code: 0, stdout: argv.includes("--version") ? "12.1.0\n" : "", stderr: "" };
+        return state.runCommand(argv, options);
       };
       await expect(
         state.run(
@@ -258,13 +270,13 @@ describe("Git database admission", () => {
             inspectGitTarget: async (target) => {
               inspected.push(target.schemaVersions!.agent);
               if (refuseFirst) {
-                expect(target).toEqual({ schemaVersions: { state: 5, agent: 14 } });
+                expect(target).toEqual({ schemaVersions: { state: 5, agent: 15 } });
                 throw refused;
               }
             },
             beforeGitMutation: async (target) => {
               expect(target).toEqual({
-                schemaVersions: { state: 5, agent: refuseFirst ? 14 : 13 },
+                schemaVersions: { state: 5, agent: 14 },
               });
               throw refused;
             },
@@ -272,8 +284,8 @@ describe("Git database admission", () => {
           runCommand,
         ),
       ).rejects.toBe(refused);
-      expect(builds).toEqual(refuseFirst ? [] : ["2026.7.2", "2026.7.1"]);
-      expect(inspected).toEqual(refuseFirst ? [14] : [14, 13]);
+      expect(builds).toEqual(refuseFirst ? [] : ["2026.7.3", "2026.7.2"]);
+      expect([...new Set(inspected)]).toEqual(refuseFirst ? [15] : [15, 14]);
       expect(snapshotTree(state.install)).toEqual(before);
     },
   );
@@ -313,7 +325,7 @@ process.exit(result.status ?? 93);
     const refused = new Error("stop after real SSH transport and target admission");
     await expect(
       state.run({
-        beforeGitMutation: async () => {
+        inspectGitTarget: async () => {
           throw refused;
         },
       }),
@@ -330,29 +342,32 @@ process.exit(result.status ?? 93);
 
   it("keeps the admitted target pinned when its remote advances", async () => {
     const state = fixture();
-    const complete = new Error("stop before checkout");
+    let checkoutObserved = false;
     const admission = vi.fn(async (target) => {
       expect(target).toEqual({ schemaVersions: { state: 5, agent: 14 } });
       state.commit("2026.7.3", 15);
     });
     const command: CommandRunner = async (argv, options) => {
-      if (argv[0] === "git" && argv[3] === "checkout") {
+      if (argv[0] === "git" && argv[2] === state.install && argv[3] === "checkout") {
         expect(argv.at(-1)).toBe(state.target);
         expect(state.git(state.install, "show", `${state.target}:package.json`)).toContain(
           '"agent":14',
         );
-        throw complete;
+        checkoutObserved = true;
       }
       return state.runCommand(argv, options);
     };
-    await expect(state.run({ beforeGitMutation: admission }, command)).rejects.toBe(complete);
+    const result = await state.run({ beforeGitMutation: admission }, command);
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    expect(checkoutObserved).toBe(true);
+    expect(state.git(state.install, "rev-parse", "HEAD")).toBe(state.target);
     expect(admission).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])("publishes only an admitted checkout (refuse=%s)", async (refuse) => {
     const state = fixture();
     const published = path.join(state.root, "published");
-    const complete = new Error("stop at publication boundary");
+    const complete = new Error("refuse publication");
     const publish = vi.fn(async () => {
       expect(state.git(state.install, "show", `${state.target}:package.json`)).toContain(
         '"agent":14',
@@ -360,27 +375,25 @@ process.exit(result.status ?? 93);
       fs.renameSync(state.install, published);
       return published;
     });
-    const command: CommandRunner = async (argv, options) => {
-      if (argv[0] === "git" && argv[2] === published) {
-        throw complete;
-      }
-      return state.runCommand(argv, options);
-    };
-    await expect(
-      state.run(
-        {
-          beforeGitMutation: async (target) => {
-            expect(fs.existsSync(published)).toBe(false);
-            expect(target).toEqual({ schemaVersions: { state: 5, agent: 14 } });
-            if (refuse) {
-              throw complete;
-            }
-          },
-          publishGitCheckout: publish,
-        },
-        command,
-      ),
-    ).rejects.toBe(complete);
+    const result = state.run({
+      beforeGitMutation: async (target) => {
+        expect(fs.existsSync(published)).toBe(false);
+        expect(target).toEqual({ schemaVersions: { state: 5, agent: 14 } });
+        if (refuse) {
+          throw complete;
+        }
+      },
+      publishGitCheckout: publish,
+    });
+    if (refuse) {
+      await expect(result).rejects.toBe(complete);
+    } else {
+      await expect(result).resolves.toMatchObject({
+        status: "ok",
+        root: published,
+        after: { sha: state.target },
+      });
+    }
     expect(publish).toHaveBeenCalledTimes(refuse ? 0 : 1);
     expect(fs.existsSync(published)).toBe(!refuse);
   });
@@ -396,7 +409,7 @@ process.exit(result.status ?? 93);
         expect(target).toEqual({ schemaVersions: { state: 5, agent: 14 } });
         throw refusal;
       });
-      await expect(state.run({ beforeGitMutation: inspect })).rejects.toBe(refusal);
+      await expect(state.run({ inspectGitTarget: inspect })).rejects.toBe(refusal);
       expect(inspect).toHaveBeenCalledOnce();
       expect(snapshotTree(state.install)).toEqual(before);
       const mirror = state.calls.find((argv) => argv.includes("clone"))?.at(-1);

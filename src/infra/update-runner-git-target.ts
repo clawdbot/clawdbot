@@ -8,7 +8,7 @@ import {
 } from "../state/openclaw-schema-versions.js";
 import { isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
-import { runGitDevPreflight } from "./update-runner-git-preflight.js";
+import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
 
 function quoteGitConfig(value: string): string {
@@ -59,7 +59,7 @@ export async function withGitTargetInspectionRoot<T>(
         "--includes",
         "--null",
         "--get-regexp",
-        "^((remote|branch|url|http|credential|protocol|filter|fetch|transfer|ssh)\\.|core\\.(sshcommand|gitproxy|askpass)$)",
+        "^((remote|branch|url|http|credential|protocol|filter|fetch|transfer|ssh|user|author|committer|gpg)\\.|commit\\.gpgsign$|core\\.(sshcommand|gitproxy|askpass)$)",
       ],
       true,
     );
@@ -76,7 +76,17 @@ export async function withGitTargetInspectionRoot<T>(
         argv[0] === "git" && argv[1] === "-C" && argv[2] === inspectionRoot
           ? // Keep relative remote URLs rooted at the original checkout, but direct
             // all Git metadata writes to the private mirror's independent Git dir.
-            ["git", "-C", params.root, `--git-dir=${inspectionRoot}`, ...argv.slice(3)]
+            [
+              "git",
+              "-C",
+              // Publication may move a new checkout after validation. Cleanup
+              // owns only the private Git dir and needs no source-relative transport.
+              argv[3] === "worktree" && (argv[4] === "remove" || argv[4] === "prune")
+                ? inspectionRoot
+                : params.root,
+              `--git-dir=${inspectionRoot}`,
+              ...argv.slice(3),
+            ]
           : argv,
         argv[0] === "git"
           ? {
@@ -154,57 +164,24 @@ export async function prepareGitMutation(params: {
 }
 
 export async function selectGitInspectionTarget(
-  params: Parameters<typeof runGitDevPreflight>[0] & {
+  params: Parameters<typeof runGitCandidatePreflight>[0] & {
     channel: UpdateChannel;
     beforeCandidate: (revision: string) => Promise<void>;
   },
 ) {
-  const {
-    gitRoot: inspectionRoot,
-    runCommand: runInspectionCommand,
-    step: inspectionStep,
-    channel,
-    devTarget,
-    needsCheckoutMain,
-    timeoutMs,
-    defaultCommandEnv,
-    steps,
-    beforeCandidate: inspectTarget,
-  } = params;
-  let selectedDevPreflight: Awaited<ReturnType<typeof runGitDevPreflight>> | undefined;
-  let revision: string;
-  if (channel === "dev") {
-    selectedDevPreflight = await runGitDevPreflight({
-      gitRoot: inspectionRoot,
-      devTarget,
-      needsCheckoutMain,
-      runCommand: runInspectionCommand,
-      timeoutMs,
-      defaultCommandEnv,
-      steps,
-      step: inspectionStep,
-      beforeCandidate: inspectTarget,
-    });
-    if (selectedDevPreflight.status !== "ok") {
-      return selectedDevPreflight;
-    }
-    revision = selectedDevPreflight.selectedSha;
-  } else {
-    const tag = await resolveChannelTag(runInspectionCommand, inspectionRoot, timeoutMs, channel);
-    if (!tag) {
-      return { status: "error" as const, reason: "no-release-tag" };
-    }
-    const resolved = await runInspectionCommand(
-      ["git", "-C", inspectionRoot, "rev-parse", `${tag}^{commit}`],
-      { cwd: inspectionRoot, timeoutMs },
-    );
-    revision = resolved.stdout.trim();
-    if (resolved.code !== 0 || !/^[0-9a-f]{40,64}$/iu.test(revision)) {
-      return { status: "error" as const, reason: "no-target-sha" };
-    }
-    await inspectTarget(revision);
+  const tag =
+    params.channel === "dev"
+      ? undefined
+      : await resolveChannelTag(
+          params.runCommand,
+          params.gitRoot,
+          params.timeoutMs,
+          params.channel,
+        );
+  if (params.channel !== "dev" && !tag) {
+    return { status: "error" as const, reason: "no-release-tag" };
   }
-  return { status: "ok" as const, revision, devPreflight: selectedDevPreflight };
+  return runGitCandidatePreflight({ ...params, targetRevision: tag ?? undefined });
 }
 
 export async function readBranchName(
