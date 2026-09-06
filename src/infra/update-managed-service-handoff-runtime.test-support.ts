@@ -78,8 +78,7 @@ export async function prepareManagedServiceRuntimeFixture(params: {
           }
         }
         return true;`
-            : `${sourceRuntimeImport}
-        const runtime = await import(${JSON.stringify(new URL("../cli/daemon-cli/lifecycle-context.ts", import.meta.url).href)});
+            : `const runtime = await import(${JSON.stringify(new URL("../../dist/cli/daemon-cli.js", import.meta.url).href)});
         return runtime.isManagedUpdateRequesterOwner(requester);`
         }
       }

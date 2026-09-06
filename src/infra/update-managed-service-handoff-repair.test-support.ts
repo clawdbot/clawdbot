@@ -88,6 +88,11 @@ function managedRepairSpawnPreload(root: string): string {
     const childProcess = require("node:child_process");
     const spawn = childProcess.spawn;
     childProcess.spawn = function(command, args, options) {
+      // Rehearsal strips NODE_OPTIONS; carry the recorder only to its owned supervisor workers.
+      if (command === process.execPath && Array.isArray(args) && args.length === 1 &&
+          ${JSON.stringify([runtimeProcessEntrypoints.serviceChildRelay, runtimeProcessEntrypoints.serviceChildGroupAnchor].map((entry) => path.resolve("dist", entry.distWorkerPath)))}.includes(args[0])) {
+        args = ["--require", __filename, ...args];
+      }
       // Source orchestration consumes the packaged SQLite worker from the completed build.
       if (Array.isArray(args) && args.length === 3 && args[0] === "--import" && args[1] === "tsx" &&
           args[2] === ${JSON.stringify(path.resolve("src/infra/update-candidate-state.worker.ts"))}) {

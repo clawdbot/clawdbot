@@ -255,7 +255,7 @@ describe("managed service update handoff", () => {
         await runManagedRepairAuthorityBoundary(runManagedServiceManagerBoundary, phase, revoke);
       expect(commands).toEqual([]);
       expect(parentSignal).toBeNull();
-      expect(repairEffects).toEqual({
+      expect(repairEffects, log).toEqual({
         firstSpawn: true,
         secondSpawn: !revoke,
         firstExec: true,
