@@ -32,27 +32,36 @@ describe("resolveBranchLanding", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("resolves an unpublished branch without reading an unused HEAD", async () => {
-    const base = await sha("HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("commit", "-am", "unpublished work");
-    const runGit = vi.spyOn(worktreeGit, "runGit");
+  it.each([
+    { scenario: "no merged PRs", mergedHeads: [] },
+    {
+      scenario: "a merge into another base without a propagation commit",
+      mergedHeads: [{ sha: "1".repeat(40), baseRef: "release" }],
+    },
+  ])(
+    "resolves an unpublished branch with $scenario without reading an unused HEAD",
+    async ({ mergedHeads }) => {
+      const base = await sha("HEAD");
+      await git("checkout", "-b", "feature");
+      await fs.appendFile(path.join(root, "a.txt"), "two\n");
+      await git("commit", "-am", "unpublished work");
+      const runGit = vi.spyOn(worktreeGit, "runGit");
 
-    expect(
-      await resolveBranchLanding(root, {
-        branch: "feature",
-        defaultBranch: "main",
-        mergedHeads: [],
-      }),
-    ).toEqual({
-      pushedSha: null,
-      statsBase: base,
-      hasLandedPullRequest: false,
-      provenNewPushedWork: false,
-    });
-    expect(runGit).not.toHaveBeenCalledWith(root, ["rev-parse", "HEAD"]);
-  });
+      expect(
+        await resolveBranchLanding(root, {
+          branch: "feature",
+          defaultBranch: "main",
+          mergedHeads,
+        }),
+      ).toEqual({
+        pushedSha: null,
+        statsBase: base,
+        hasLandedPullRequest: false,
+        provenNewPushedWork: false,
+      });
+      expect(runGit).not.toHaveBeenCalledWith(root, ["rev-parse", "HEAD"]);
+    },
+  );
 
   it("marks a squash-landed tip and bases stats on the merged head", async () => {
     await git("checkout", "-b", "feature");
