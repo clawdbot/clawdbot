@@ -850,6 +850,15 @@ function lastNodeSendCall(context: ChatContext) {
     | undefined;
 }
 
+// A wait keyed only on array length can be satisfied by a foreign update left over
+// from a prior test's detached background work; correlate on this test's own
+// dispatched session instead so a foreign update can never resolve the wait.
+function hasEmittedTranscriptUpdateForSession(sessionId: string): boolean {
+  return mockState.emittedTranscriptUpdates.some(
+    (update) => update.target?.sessionId === sessionId,
+  );
+}
+
 function findAssistantTranscriptUpdates() {
   return mockState.emittedTranscriptUpdates
     .filter(
@@ -1595,6 +1604,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       parentId: "background-compaction",
     });
     const before = loadTranscriptEventsSync(transcriptScope());
+    const ownSessionId = mockState.sessionId;
 
     await send({
       idempotencyKey: `idem-active-ancestor-${sessionId}`,
@@ -1613,6 +1623,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(accepted ? 1 : 0);
     if (accepted) {
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
+      // The started run delivers and persists its reply in the background; wait for
+      // that delivery to land here, correlated to this test's own session, so it
+      // cannot be satisfied by a foreign update landing during a later test instead.
+      await waitForAssertion(() =>
+        expect(hasEmittedTranscriptUpdateForSession(ownSessionId)).toBe(true),
+      );
     } else {
       expect(response[2]).toEqual(
         expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
@@ -1790,6 +1806,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-stale-steer-no-owner-",
     );
+    const ownSessionId = mockState.sessionId;
     await appendTestTranscriptMessage({
       eventId: "current-leaf",
       role: "assistant",
@@ -1815,6 +1832,62 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     await waitForAssertion(() => expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("hello"));
     expect(context.addChatRun).toHaveBeenCalledOnce();
+    // lastDispatchCtx is set before the run's reply is delivered and persisted in
+    // the background; wait for that delivery, correlated to this test's own
+    // session, so it cannot be satisfied by a foreign update from a later test.
+    await waitForAssertion(() =>
+      expect(hasEmittedTranscriptUpdateForSession(ownSessionId)).toBe(true),
+    );
+  });
+
+  it("does not resolve a background-delivery wait on a foreign session's leftover update", async () => {
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-foreign-update-order-",
+    );
+    const ownSessionId = mockState.sessionId;
+    await appendTestTranscriptMessage({
+      eventId: "current-leaf",
+      role: "assistant",
+      content: "finished",
+      now: 1,
+      parentId: null,
+    });
+    // Simulates a prior test's detached background delivery landing late into the
+    // shared array, for a different session, before this test's own send runs. A
+    // length-only wait (`emittedTranscriptUpdates.length > baseline`) would already
+    // be satisfied by this push alone.
+    mockState.emittedTranscriptUpdates.push({
+      target: { agentId: "main", sessionId: "foreign-session-id", sessionKey: "agent:main:main" },
+      message: { role: "assistant", content: [{ type: "text", text: "leaked from another test" }] },
+    });
+    expect(hasEmittedTranscriptUpdateForSession(ownSessionId)).toBe(false);
+
+    await send({
+      idempotencyKey: "idem-foreign-update-order",
+      requestParams: {
+        expectedLeafEntryId: "current-leaf",
+        queueMode: "steer",
+      },
+      waitFor: "none",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(context.addChatRun).toHaveBeenCalledOnce();
+    // The foreign update above must never satisfy this wait; it only resolves once
+    // this test's own dispatched run emits its own correlated update.
+    await waitForAssertion(() =>
+      expect(hasEmittedTranscriptUpdateForSession(ownSessionId)).toBe(true),
+    );
+    expect(
+      mockState.emittedTranscriptUpdates.some(
+        (update) => update.target?.sessionId === "foreign-session-id",
+      ),
+    ).toBe(true);
   });
 
   it("injects targetless steer into the exact direct owner without a client run id", async () => {
@@ -1823,6 +1896,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     const queueMessage = vi.fn(async () => {});
     const operation = beginMessageInjectionOperation({ queueMessage });
+    const ownSessionId = mockState.sessionId;
 
     try {
       await send({
@@ -1843,6 +1917,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(queueMessage).toHaveBeenCalledOnce();
     expect(context.addChatRun).toHaveBeenCalledOnce();
     expect(mockState.lastDispatchCtx).toBeUndefined();
+    // The accepted injection persists the user turn in the background; wait for
+    // that persistence, correlated to this test's own session, so it cannot be
+    // satisfied by a foreign update landing during a later test instead.
+    await waitForAssertion(() =>
+      expect(hasEmittedTranscriptUpdateForSession(ownSessionId)).toBe(true),
+    );
   });
 
   it.each([
@@ -1987,6 +2067,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       queueMessage,
     });
     const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target-1" } };
+    const ownSessionId = mockState.sessionId;
 
     try {
       await send({
@@ -2025,6 +2106,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       await waitForAssertion(() =>
         expect(mockState.lastDispatchCtx?.GatewayRunToolBindings).toEqual(toolBindings),
       );
+      // lastDispatchCtx is set before the run's reply is delivered and persisted in
+      // the background; wait for that delivery, correlated to this test's own
+      // session, so it cannot be satisfied by a foreign update from a later test.
+      await waitForAssertion(() =>
+        expect(hasEmittedTranscriptUpdateForSession(ownSessionId)).toBe(true),
+      );
     } finally {
       operation.complete();
     }
@@ -2045,6 +2132,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const successorQueue = vi.fn(async () => {});
     const successorCancel = vi.fn();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
+    const ownSessionId = mockState.sessionId;
     const original = beginMessageInjectionOperation({
       originatingLeafEntryId: "current-leaf",
       queueMessage: originalQueue,
@@ -2106,6 +2194,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(successorCancel).not.toHaveBeenCalled();
     expect(context.addChatRun).toHaveBeenCalledOnce();
     expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
+    // The dispatch call above only proves the run started; its reply delivers and
+    // persists in the background, correlated to this test's own session, so wait
+    // for that too or a foreign update from a later test could satisfy this instead.
+    await waitForAssertion(() =>
+      expect(hasEmittedTranscriptUpdateForSession(ownSessionId)).toBe(true),
+    );
   });
 
   it("starts captured-operation injection before ACK and does not dispatch after owner clear", async () => {
@@ -3342,6 +3436,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       releaseDispatch = resolve;
     });
     const { context, send } = createChatRequestFixture();
+    const ownSessionId = mockState.sessionId;
 
     const pending = send({
       sessionKey: "agent:work:main",
@@ -3357,6 +3452,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     releaseDispatch?.();
     await pending;
+    // `pending` only resolves admission; releasing dispatchWait lets the run's
+    // reply deliver and persist in the background, correlated to this test's own
+    // session, so wait for that too or a foreign update could land during a later test.
+    await waitForAssertion(() =>
+      expect(hasEmittedTranscriptUpdateForSession(ownSessionId)).toBe(true),
+    );
   });
 
   it("scopes chat history global aliases before loading session state", async () => {
@@ -6614,6 +6715,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createReadyChatTranscript("openclaw-chat-send-text-only-attachments-");
     useChatTestModel("text-only");
     const { send } = createChatRequestFixture();
+    const ownSessionId = mockState.sessionId;
 
     await send({
       idempotencyKey: "idem-text-only-attachments",
@@ -6646,6 +6748,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         size: mockState.savedMediaCalls[0]?.size ?? 0,
       },
     ]);
+    // lastDispatchCtx is set before the run's reply is delivered and persisted in
+    // the background; wait for that delivery, correlated to this test's own
+    // session, so it cannot be satisfied by a foreign update from a later test.
+    await waitForAssertion(() =>
+      expect(hasEmittedTranscriptUpdateForSession(ownSessionId)).toBe(true),
+    );
   });
 
   it("keeps image attachments inline for configured custom vision models", async () => {
@@ -6750,6 +6858,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     ];
     const { send } = createChatRequestFixture();
+    const ownSessionId = mockState.sessionId;
 
     await send({
       sessionKey: "agent:writer:main",
@@ -6783,6 +6892,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         size: mockState.savedMediaCalls[0]?.size ?? 0,
       },
     ]);
+    // lastDispatchCtx is set before the run's reply is delivered and persisted in
+    // the background; wait for that delivery, correlated to this test's own
+    // session, so it cannot be satisfied by a foreign update from a later test.
+    await waitForAssertion(() =>
+      expect(hasEmittedTranscriptUpdateForSession(ownSessionId)).toBe(true),
+    );
   });
 
   it("routes non-image offloaded refs into media facts for chat.send", async () => {
