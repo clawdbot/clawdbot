@@ -355,6 +355,10 @@ async function listHosts(
       query.onHost?.(host);
     }
   }
+  // Local-only pages do not depend on pairing-store discovery or its latency.
+  if (query.hostIds && !query.hostIds.some((hostId) => hostId.startsWith("node:"))) {
+    return hosts;
+  }
   let nodes: CatalogNode[];
   try {
     nodes = (await (query.listNodes?.() ?? options.runtime.nodes.list())).nodes;
