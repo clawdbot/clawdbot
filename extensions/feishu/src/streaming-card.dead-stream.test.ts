@@ -320,7 +320,7 @@ describe("FeishuStreamingSession dead-stream handling", () => {
     await session.closeWithResult("final text");
 
     expect(patchMock).toHaveBeenCalledTimes(1);
-    const fallbackContent = JSON.parse(patchMock.mock.calls[0][0].data.content as string);
+    const fallbackContent = JSON.parse(patchMock.mock.calls[0]![0]!.data.content as string);
     expect(fallbackContent.header).toEqual({
       title: { tag: "plain_text", content: "Agent Run" },
       template: "green",
