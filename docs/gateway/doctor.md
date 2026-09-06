@@ -604,9 +604,9 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="11b. Bootstrap file size">
-    Doctor checks whether workspace bootstrap files (for example `AGENTS.md`, `CLAUDE.md`, or other injected context files) are near or over the configured character budget. It reports per-file raw vs. injected character counts, truncation percentage, truncation cause (`max/file` or `max/total`), and total injected characters as a fraction of the total budget. When files are truncated or near the limit, doctor prints tips for tuning `agents.defaults.bootstrapMaxChars` and `agents.defaults.bootstrapTotalMaxChars`.
+    Doctor checks whether workspace bootstrap files are near or over the configured character budget. The candidates are the six root files `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, and `MEMORY.md`, subject to the same filtering the runtime applies (for example, root `BOOTSTRAP.md` is dropped once workspace setup has completed). It reports per-file raw vs. injected character counts, truncation percentage, truncation cause (`max/file` or `max/total`), and total injected characters as a fraction of the total budget. When files are truncated or near the limit, doctor prints tips for tuning `agents.defaults.bootstrapMaxChars` and `agents.defaults.bootstrapTotalMaxChars`.
 
-    This includes files declared by the bundled `bootstrap-extra-files` hook when a fresh Gateway startup would select it. Doctor uses each agent's workspace and limits without importing or running custom hook handlers. It predicts fresh-start selection, not the previous handler generation that a running Gateway can retain after a failed hook reload.
+    This includes files declared by the bundled `bootstrap-extra-files` hook when a fresh Gateway startup would select it, as long as each matched file carries one of those six filenames (for example a nested `packages/core/AGENTS.md`); other matches are ignored. Doctor uses each agent's workspace and limits without importing or running custom hook handlers. It predicts fresh-start selection, not the previous handler generation that a running Gateway can retain after a failed hook reload.
 
   </Accordion>
   <Accordion title="11c. Shell completion">
