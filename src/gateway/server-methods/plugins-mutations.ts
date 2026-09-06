@@ -1,166 +1,119 @@
-// Gateway handlers for durable plugin lifecycle mutations.
-import { buildCapabilityConsentErrorDetails } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
-  buildClawHubTrustErrorDetails,
-  ErrorCodes,
-  errorShape,
-  isClawHubTrustErrorCode,
   validatePluginsInstallParams,
+  validatePluginsRefreshParams,
+  validatePluginsReloadParams,
   validatePluginsSetEnabledParams,
   validatePluginsUninstallParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  PluginsInstallResult,
+  PluginsUninstallResult,
+} from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import {
-  INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
-  readInstallPolicyWarningErrorDetails,
-} from "../../../packages/gateway-protocol/src/install-policy-warning-error-details.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
+  capturePluginRuntimeApplications,
+  type PluginRuntimeApplication,
+} from "../../plugins/lifecycle.js";
 import {
   installManagedPlugin,
+  refreshManagedPlugins,
+  reloadManagedPlugin,
   setManagedPluginEnabled,
   uninstallManagedPlugin,
 } from "../../plugins/management-mutations.js";
-import { buildGatewayReloadPlan } from "../config-reload-plan.js";
-import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
-import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { pluginLifecycleError } from "./plugins-lifecycle-error.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams, type Validator } from "./validation.js";
 
-function pluginPolicyRestartRequired(params: {
-  config: OpenClawConfig;
-  changedPaths: readonly string[];
-}): boolean {
-  const plan = buildGatewayReloadPlan([...params.changedPaths]);
-  const mode = resolveGatewayReloadSettings(params.config).mode;
-  return plan.restartGateway || mode === "off";
+type PluginLifecycleResult = Partial<
+  Pick<PluginsInstallResult, "plugin" | "warnings"> &
+    Pick<PluginsUninstallResult, "pluginId" | "removed">
+> & { application?: PluginRuntimeApplication };
+
+type PluginLifecycleOptions = Required<
+  Pick<Parameters<typeof installManagedPlugin>[0], "applyRuntime" | "beforePersistentApply">
+> & { signal?: AbortSignal };
+
+function lifecycleHandler<T>(
+  method: string,
+  validate: Validator<T>,
+  run: (params: T, lifecycle: PluginLifecycleOptions) => Promise<PluginLifecycleResult>,
+): GatewayRequestHandler {
+  return async ({ params, respond, context, signal, sessionMutationCommitGuard }) => {
+    if (!assertValidParams(params, validate, method, respond)) {
+      return;
+    }
+    let captured: ReturnType<typeof capturePluginRuntimeApplications> | undefined;
+    try {
+      const applyRuntime = context.applyPluginLifecycleChange;
+      if (!applyRuntime) {
+        throw new Error("Plugin lifecycle changes require a running Gateway.");
+      }
+      const beforePersistentApply = () => {
+        signal?.throwIfAborted();
+        sessionMutationCommitGuard?.();
+      };
+      beforePersistentApply();
+      captured = capturePluginRuntimeApplications((change) => {
+        beforePersistentApply();
+        return applyRuntime({
+          ...change,
+          assertInvokerOwned: () => {
+            beforePersistentApply();
+            change.assertInvokerOwned?.();
+          },
+        });
+      });
+      const { application, plugin, pluginId, removed, warnings } = await run(params, {
+        applyRuntime: captured.applyRuntime,
+        beforePersistentApply,
+        ...(signal ? { signal } : {}),
+      });
+      if (!application) {
+        throw new Error("Plugin lifecycle did not return a runtime application receipt.");
+      }
+      respond(
+        true,
+        {
+          ok: true,
+          restartRequired: false,
+          runtime: application,
+          ...(plugin ? { plugin } : {}),
+          ...(pluginId ? { pluginId } : {}),
+          ...(removed ? { removed } : {}),
+          ...(warnings ? { warnings } : {}),
+        },
+        undefined,
+      );
+    } catch (error) {
+      respond(false, undefined, pluginLifecycleError(error, captured?.application));
+    }
+  };
 }
 
 export const pluginMutationHandlers: GatewayRequestHandlers = {
-  "plugins.install": async ({ params, respond }) => {
-    if (!assertValidParams(params, validatePluginsInstallParams, "plugins.install", respond)) {
-      return;
-    }
-    try {
-      const result = await installManagedPlugin({ request: params });
-      respond(
-        true,
-        {
-          ok: true,
-          plugin: result.plugin,
-          restartRequired: true,
-          ...(result.warnings ? { warnings: result.warnings } : {}),
-        },
-        undefined,
-      );
-    } catch (error) {
-      const lifecycleError = error instanceof ManagedPluginLifecycleError ? error : undefined;
-      const trustCode =
-        lifecycleError?.code && isClawHubTrustErrorCode(lifecycleError.code)
-          ? lifecycleError.code
-          : undefined;
-      const trustDetails = lifecycleError
-        ? buildClawHubTrustErrorDetails({
-            ...(trustCode ? { code: trustCode } : {}),
-            ...(lifecycleError.version ? { version: lifecycleError.version } : {}),
-            ...(lifecycleError.warning ? { warning: lifecycleError.warning } : {}),
-          })
-        : undefined;
-      const installPolicyDetails = lifecycleError?.installPolicyWarning
-        ? readInstallPolicyWarningErrorDetails({
-            installPolicyCode: INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
-            ...lifecycleError.installPolicyWarning,
-          })
-        : undefined;
-      const capabilityConsentDetails = lifecycleError?.capabilityConsent
-        ? buildCapabilityConsentErrorDetails(lifecycleError.capabilityConsent)
-        : undefined;
-      const details = capabilityConsentDetails ?? installPolicyDetails ?? trustDetails;
-      respond(
-        false,
-        undefined,
-        errorShape(
-          lifecycleError?.kind === "invalid-request"
-            ? ErrorCodes.INVALID_REQUEST
-            : ErrorCodes.UNAVAILABLE,
-          formatErrorMessage(error),
-          details ? { details } : undefined,
-        ),
-      );
-    }
-  },
-  "plugins.uninstall": async ({ params, respond }) => {
-    if (!assertValidParams(params, validatePluginsUninstallParams, "plugins.uninstall", respond)) {
-      return;
-    }
-    try {
-      const result = await uninstallManagedPlugin({ pluginId: params.pluginId });
-      respond(
-        true,
-        {
-          ok: true,
-          pluginId: result.pluginId,
-          restartRequired: true,
-          removed: result.removed,
-          ...(result.warnings ? { warnings: result.warnings } : {}),
-        },
-        undefined,
-      );
-    } catch (error) {
-      const lifecycleError = error instanceof ManagedPluginLifecycleError ? error : undefined;
-      respond(
-        false,
-        undefined,
-        errorShape(
-          lifecycleError?.kind === "invalid-request"
-            ? ErrorCodes.INVALID_REQUEST
-            : ErrorCodes.UNAVAILABLE,
-          formatErrorMessage(error),
-        ),
-      );
-    }
-  },
-  "plugins.setEnabled": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(params, validatePluginsSetEnabledParams, "plugins.setEnabled", respond)
-    ) {
-      return;
-    }
-    try {
-      const result = await setManagedPluginEnabled({
-        pluginId: params.pluginId,
-        enabled: params.enabled,
-        ...(params.acknowledgeCapabilities
-          ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
-          : {}),
-      });
-      respond(
-        true,
-        {
-          ok: true,
-          plugin: result.plugin,
-          restartRequired: pluginPolicyRestartRequired({
-            config: context.getRuntimeConfig(),
-            changedPaths: result.changedPaths,
-          }),
-          ...(result.warnings ? { warnings: result.warnings } : {}),
-        },
-        undefined,
-      );
-    } catch (error) {
-      const lifecycleError = error instanceof ManagedPluginLifecycleError ? error : undefined;
-      respond(
-        false,
-        undefined,
-        errorShape(
-          lifecycleError?.kind === "invalid-request"
-            ? ErrorCodes.INVALID_REQUEST
-            : ErrorCodes.UNAVAILABLE,
-          formatErrorMessage(error),
-          lifecycleError?.capabilityConsent
-            ? { details: buildCapabilityConsentErrorDetails(lifecycleError.capabilityConsent) }
-            : undefined,
-        ),
-      );
-    }
-  },
+  "plugins.refresh": lifecycleHandler(
+    "plugins.refresh",
+    validatePluginsRefreshParams,
+    (_params, lifecycle) => refreshManagedPlugins(lifecycle),
+  ),
+  "plugins.reload": lifecycleHandler(
+    "plugins.reload",
+    validatePluginsReloadParams,
+    (params, lifecycle) => reloadManagedPlugin({ ...params, ...lifecycle }),
+  ),
+  "plugins.install": lifecycleHandler(
+    "plugins.install",
+    validatePluginsInstallParams,
+    (params, lifecycle) => installManagedPlugin({ request: params, ...lifecycle }),
+  ),
+  "plugins.uninstall": lifecycleHandler(
+    "plugins.uninstall",
+    validatePluginsUninstallParams,
+    (params, lifecycle) => uninstallManagedPlugin({ ...params, ...lifecycle }),
+  ),
+  "plugins.setEnabled": lifecycleHandler(
+    "plugins.setEnabled",
+    validatePluginsSetEnabledParams,
+    (params, lifecycle) => setManagedPluginEnabled({ ...params, ...lifecycle }),
+  ),
 };

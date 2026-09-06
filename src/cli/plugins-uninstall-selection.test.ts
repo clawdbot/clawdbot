@@ -1,7 +1,7 @@
 // Plugin uninstall selection tests cover CLI uninstall target matching.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolvePluginUninstallId } from "./plugins-uninstall-selection.js";
+import { resolvePluginUninstallId } from "../plugins/uninstall-selection.js";
 
 describe("resolvePluginUninstallId", () => {
   it("prefers an exact plugin id over an earlier plugin display name", () => {

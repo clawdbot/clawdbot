@@ -23,7 +23,8 @@ bundled Zalo Bot/webhook integration - see [Zalo](/channels/zalo).
 ## Where it runs
 
 This plugin runs **inside the Gateway process**. For a remote Gateway,
-install/configure it on that host, then restart the Gateway.
+install and configure it on that host. Apply direct config changes with
+`openclaw plugins reload zalouser`.
 
 ## Install
 
@@ -34,18 +35,19 @@ openclaw plugins install @openclaw/zalouser
 ```
 
 Use the bare package to follow the current official release tag; pin an exact
-version only when you need a reproducible install. Restart the Gateway
-afterwards.
+version only when you need a reproducible install. Installation applies to the
+running Gateway without restarting it.
 
 ### From a local folder (dev)
 
 ```bash
 PLUGIN_SRC=./path/to/local/zalouser-plugin
+pnpm --dir "$PLUGIN_SRC" install
 openclaw plugins install "$PLUGIN_SRC"
-cd "$PLUGIN_SRC" && pnpm install
 ```
 
-Restart the Gateway afterwards.
+Local-folder installs copy the source. To reload directly from source after edits,
+install with `--link` and run `openclaw plugins reload zalouser`.
 
 ## Config
 

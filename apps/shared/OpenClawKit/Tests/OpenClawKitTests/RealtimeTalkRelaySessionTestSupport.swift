@@ -176,26 +176,38 @@ final class RealtimeRelayTestSignal<Value: Sendable>: @unchecked Sendable {
 @MainActor
 final class IndexedPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     private(set) var activePlaybackIndexes: Set<Int> = []
+    private(set) var playbackFrames: [Int: [Data]] = [:]
+    private(set) var playCount = 0
     private var continuations: [Int: CheckedContinuation<StreamingPlaybackResult, Never>] = [:]
     private var isShutdown = false
     private let playbackStarted = RealtimeRelayTestSignal<Int>()
+    private let frameReceived = RealtimeRelayTestSignal<Int>()
     private let mainActorCheckpoint = RealtimeRelayTestSignal<Int>()
-    private var nextPlaybackIndex = 0
 
     func play(
-        stream _: AsyncThrowingStream<Data, Error>,
+        stream: AsyncThrowingStream<Data, Error>,
         sampleRate _: Double) async -> StreamingPlaybackResult
     {
         guard !self.isShutdown else {
             return StreamingPlaybackResult(finished: false, interruptedAt: nil)
         }
-        let index = self.nextPlaybackIndex
-        self.nextPlaybackIndex += 1
+        let index = self.playCount
+        self.playCount += 1
         self.activePlaybackIndexes.insert(index)
+        let consumer = Task { @MainActor in
+            do {
+                for try await frame in stream {
+                    self.playbackFrames[index, default: []].append(frame)
+                    self.frameReceived.send(index)
+                }
+            } catch {}
+        }
         let result = await withCheckedContinuation { continuation in
             self.continuations[index] = continuation
             self.playbackStarted.send(index)
         }
+        consumer.cancel()
+        await consumer.value
         self.mainActorCheckpoint.send(index)
         return result
     }
@@ -218,6 +230,12 @@ final class IndexedPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
         let index = try await self.playbackStarted.next("playback \(expectedIndex) to start")
         guard index == expectedIndex else {
             throw RealtimeRelayTestTimeout(operation: "playback \(expectedIndex), got \(index)")
+        }
+    }
+
+    func waitForFrames(_ expectedCount: Int, playbackIndex: Int) async throws {
+        while self.playbackFrames[playbackIndex, default: []].count < expectedCount {
+            _ = try await self.frameReceived.next("\(expectedCount) frames for playback \(playbackIndex)")
         }
     }
 

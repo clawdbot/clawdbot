@@ -105,15 +105,11 @@ function createResolvedBundledSource(params: {
   pluginId: string;
   localPath: string;
   npmSpec?: string;
-  configSchema?: Record<string, unknown>;
-  requiresConfig?: boolean;
 }) {
   return {
     pluginId: params.pluginId,
     localPath: params.localPath,
     npmSpec: params.npmSpec ?? `@openclaw/${params.pluginId}`,
-    ...(params.configSchema ? { configSchema: params.configSchema } : {}),
-    requiresConfig: params.requiresConfig ?? false,
   };
 }
 
@@ -174,7 +170,7 @@ describe("bundled plugin sources", () => {
     const second = getProcessBundledPluginSources();
 
     expect([...first.values()]).toEqual([
-      { pluginId: "feishu", localPath: appBundledPluginRoot("feishu"), requiresConfig: false },
+      { pluginId: "feishu", localPath: appBundledPluginRoot("feishu") },
     ]);
     expect(second).toEqual(first);
     expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
@@ -270,33 +266,6 @@ describe("bundled plugin sources", () => {
       workspaceDir: "/workspace",
       env,
     });
-  });
-
-  it("marks bundled sources that require plugin config before activation", () => {
-    setBundledDiscoveryCandidates([
-      createBundledCandidate({
-        rootDir: appBundledPluginRoot("memory-lancedb"),
-        packageName: "@openclaw/memory-lancedb",
-      }),
-    ]);
-    setBundledManifestIdsByRoot({
-      [appBundledPluginRoot("memory-lancedb")]: {
-        id: "memory-lancedb",
-        required: ["embedding"],
-      },
-    });
-
-    expect(resolveBundledPluginSources({}).get("memory-lancedb")).toEqual(
-      createResolvedBundledSource({
-        pluginId: "memory-lancedb",
-        localPath: appBundledPluginRoot("memory-lancedb"),
-        configSchema: {
-          type: "object",
-          required: ["embedding"],
-        },
-        requiresConfig: true,
-      }),
-    );
   });
 
   it("reuses a pre-resolved bundled map for repeated lookups", () => {

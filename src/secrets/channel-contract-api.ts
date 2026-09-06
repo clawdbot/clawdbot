@@ -83,10 +83,9 @@ function resolvePluginContractApiPath(rootDir: string): string | null {
   return null;
 }
 
-function loadPluginContractModule(modulePath: string, rootDir: string): BundledChannelContractApi {
+function loadPluginContractModule(modulePath: string): BundledChannelContractApi {
   return getCachedPluginModuleLoader({
     modulePath,
-    rootDir,
     importerUrl: import.meta.url,
   })(modulePath) as BundledChannelContractApi;
 }
@@ -131,7 +130,7 @@ function loadExternalChannelSecretContractFromRecord(
     return undefined;
   }
   try {
-    const mod = loadPluginContractModule(validated.modulePath, record.rootDir);
+    const mod = loadPluginContractModule(validated.modulePath);
     if (mod.collectRuntimeConfigAssignments || mod.secretTargetRegistryEntries) {
       return mod;
     }

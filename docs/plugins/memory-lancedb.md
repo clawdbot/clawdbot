@@ -65,11 +65,11 @@ with the current memory provider.
 }
 ```
 
-Restart the Gateway after installation, then verify it loaded:
+After saving the configuration, enable the plugin and inspect its registrations:
 
 ```bash
-openclaw gateway restart
-openclaw plugins list
+openclaw plugins enable memory-lancedb
+openclaw plugins inspect memory-lancedb --runtime
 ```
 
 ## Embedding config
@@ -104,10 +104,10 @@ remain unchanged.
 
 <Warning>
 `embedding.provider`, `embedding.model`, and `embedding.dimensions` define the
-persisted LanceDB index identity and do not change live. Before restarting with
-a new identity, plan a LanceDB re-embedding or rebuild so every stored row uses
-the new vector space and dimensions. The plugin does not re-embed existing rows
-automatically.
+persisted LanceDB index identity and stay fixed within a running plugin instance.
+Before reloading the plugin with a new identity, plan a LanceDB re-embedding or
+rebuild so every stored row uses the new vector space and dimensions. The plugin
+does not re-embed existing rows automatically.
 </Warning>
 
 OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
@@ -354,7 +354,13 @@ completed; other agents never inherit the old shared rows.
 `@lancedb/lancedb-*` packages as optional dependencies, so installation selects
 the matching binary for the host platform. Gateway startup does not repair
 plugin dependencies; if the native dependency is missing or fails to load,
-reinstall or update the plugin package and restart the Gateway.
+reinstall or update the plugin package. Managed installs and updates apply to
+the running Gateway. After repairing package files directly, run
+`openclaw plugins reload memory-lancedb`.
+
+Changing Node.js or the host platform still requires a Gateway restart with
+compatible native dependencies. Plugin reload does not change the running
+process or its ABI.
 
 `@lancedb/lancedb` does not publish a native build for `darwin-x64` (Intel
 Mac). On that platform the plugin logs that LanceDB is unavailable at load

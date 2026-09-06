@@ -1,5 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolvePluginNpmProjectDir } from "./install-paths.js";
+import { capturePluginRuntimeApplications, type PluginLifecycleRuntimeApply } from "./lifecycle.js";
 import {
   configSnapshot,
   emptyMetadataSnapshot,
@@ -25,7 +31,6 @@ const mocks = vi.hoisted(() => ({
   refreshRegistry: vi.fn(),
   replaceConfig: vi.fn(),
   planUninstall: vi.fn(),
-  selectWriteOptions: vi.fn((writeOptions: unknown) => writeOptions),
   slotSelection: vi.fn((config: unknown): { config: unknown; warnings: string[] } => ({
     config,
     warnings: [],
@@ -42,11 +47,10 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
 
-vi.mock("./install-persistence.js", () => ({
+vi.mock("./install-persistence.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-persistence.js")>()),
   persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
   resolveInstallConfigMutationPreflights: (...args: unknown[]) => mocks.preflight(...args),
-  selectInstallMutationWriteOptions: (writeOptions: unknown) =>
-    mocks.selectWriteOptions(writeOptions),
 }));
 
 vi.mock("./slot-selection.js", () => ({
@@ -119,7 +123,12 @@ function mockHostedOfficialCatalog(entries: unknown[]) {
   });
 }
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("plugin management service", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   beforeEach(() => {
     clearManagedPluginOfficialCatalogCache();
     for (const mock of Object.values(mocks)) {
@@ -127,7 +136,6 @@ describe("plugin management service", () => {
         mock.mockReset();
       }
     }
-    mocks.selectWriteOptions.mockImplementation((writeOptions) => writeOptions);
     mocks.preflight.mockReturnValue({
       hookMutation: { mode: "allowed" },
       pluginMutation: { mode: "allowed" },
@@ -497,7 +505,14 @@ describe("plugin management service", () => {
     expect(mocks.replaceConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         baseHash: "base-hash",
-        writeOptions: prepared.writeOptions,
+        writeOptions: {
+          ...prepared.writeOptions,
+          auditOrigin: "plugin-install",
+          assertConfigPathForWrite: expect.any(Function),
+          ownedConfigPathForWrite: undefined,
+          envSnapshotForRestore: undefined,
+          explicitSetPaths: [["plugins", "entries", "workboard"]],
+        },
       }),
     );
     expect(mocks.refreshRegistry).toHaveBeenCalledWith(
@@ -512,6 +527,43 @@ describe("plugin management service", () => {
       changedPaths: ["plugins"],
     });
   });
+
+  it.each([true, false])(
+    "applies the committed enablement receipt (enabled=%s)",
+    async (enabled) => {
+      const prepared = configSnapshot({
+        plugins: { entries: { workboard: { enabled: !enabled } } },
+      });
+      const write = {
+        persistedHash: "committed-enablement",
+        persistedSourceConfig: {
+          plugins: { entries: { workboard: { enabled } } },
+          meta: { lastTouchedVersion: "writer-version" },
+        },
+      };
+      mocks.readConfig.mockResolvedValue(prepared);
+      mocks.metadata.mockReturnValue(metadataSnapshot({ enabled }));
+      mocks.replaceConfig.mockResolvedValue(write);
+      const application = { operationId: "toggle", generation: 2, pluginIds: ["workboard"] };
+      const applyRuntime = vi.fn(async () => application);
+
+      const result = await setManagedPluginEnabled({
+        pluginId: "workboard",
+        enabled,
+        applyRuntime,
+        env: {},
+      });
+
+      expect(applyRuntime).toHaveBeenCalledWith({
+        config: { plugins: { entries: { workboard: { enabled } } } },
+        write,
+        pluginIds: ["workboard"],
+        reason: enabled ? "enable" : "disable",
+        assertInvokerOwned: expect.any(Function),
+      });
+      expect(result.application).toBe(application);
+    },
+  );
 
   it("adds an admin-selected plugin to an existing restrictive allowlist", async () => {
     const config = {
@@ -654,92 +706,244 @@ describe("plugin management service", () => {
     expect(bundled.plugins[0]).toMatchObject({ id: "workboard", removable: false });
   });
 
-  it("uninstalls an external plugin through commit, file removal, and registry refresh", async () => {
-    const env = { HOME: "/tmp/openclaw-managed-uninstall-home" };
-    const installRecord = {
-      source: "clawhub",
-      spec: "clawhub:@openclaw/diffs",
-      installPath: "/tmp/extensions/diffs",
-    };
-    const prepared = configSnapshot({
-      agents: { defaults: { workspace: "~/managed-uninstall-workspace" } },
-      plugins: { entries: { diffs: { enabled: true } } },
-    });
-    mocks.readConfig.mockResolvedValue(prepared);
-    mocks.installRecords.mockResolvedValue({ diffs: installRecord });
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        enabled: true,
-        id: "diffs",
-        name: "Diffs",
-        origin: "global",
-        installRecord,
-      }),
-    );
-    mocks.planUninstall.mockReturnValue({
-      ok: true,
-      config: { plugins: { installs: { diffs: installRecord } } },
-      pluginId: "diffs",
-      actions: {
-        entry: true,
-        install: true,
-        allowlist: false,
-        denylist: false,
-        loadPath: false,
-        memorySlot: false,
-        contextEngineSlot: false,
-        channelConfig: false,
-        directory: false,
-      },
-      directoryRemoval: { target: "/tmp/extensions/diffs" },
-    });
-    mocks.commitRecords.mockResolvedValue(undefined);
-    mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
-    mocks.clawReferenceWarnings.mockReturnValue([
-      'Warning: plugin "diffs" is referenced by Claw: @acme/review.',
-    ]);
-    mocks.refreshRegistry.mockResolvedValue(undefined);
+  it.each(["live", "closed-after-stop", "closed-during-npm-probe"] as const)(
+    "uninstalls an external plugin with %s authority through the mutation boundaries",
+    async (authority) => {
+      const env = { HOME: "/tmp/openclaw-managed-uninstall-home" };
+      const npmRoot =
+        authority === "closed-during-npm-probe"
+          ? resolvePluginNpmProjectDir({
+              packageName: "@openclaw/diffs",
+              npmDir: path.join(tempDirs.make("openclaw-managed-uninstall-authority-"), "npm"),
+            })
+          : undefined;
+      const installPath = npmRoot
+        ? path.join(npmRoot, "node_modules", "@openclaw", "diffs")
+        : "/tmp/extensions/diffs";
+      const installRecord = {
+        source: npmRoot ? "npm" : "clawhub",
+        spec: npmRoot ? "@openclaw/diffs@1.0.0" : "clawhub:@openclaw/diffs",
+        installPath,
+      };
+      if (npmRoot) {
+        await fs.mkdir(installPath, { recursive: true });
+        await fs.writeFile(
+          path.join(npmRoot, "package.json"),
+          JSON.stringify({
+            private: true,
+            dependencies: { "@openclaw/diffs": "1.0.0" },
+          }),
+        );
+        await fs.writeFile(path.join(installPath, "sentinel"), "installed plugin source");
+      }
+      const prepared = configSnapshot({
+        agents: { defaults: { workspace: "~/managed-uninstall-workspace" } },
+        plugins: { entries: { diffs: { enabled: true } } },
+      });
+      mocks.readConfig.mockResolvedValue(prepared);
+      mocks.installRecords.mockResolvedValue({ diffs: installRecord });
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          enabled: true,
+          id: "diffs",
+          name: "Diffs",
+          origin: "global",
+          installRecord,
+        }),
+      );
+      mocks.planUninstall.mockReturnValue({
+        ok: true,
+        config: { plugins: { installs: { diffs: installRecord } } },
+        pluginId: "diffs",
+        actions: {
+          entry: true,
+          install: true,
+          allowlist: false,
+          denylist: false,
+          loadPath: false,
+          memorySlot: false,
+          contextEngineSlot: false,
+          channelConfig: false,
+          directory: false,
+        },
+        directoryRemoval: {
+          target: installPath,
+          ...(npmRoot
+            ? {
+                cleanup: {
+                  kind: "npm",
+                  npmRoot,
+                  packageName: "@openclaw/diffs",
+                  rootKind: "isolated-project",
+                },
+              }
+            : {}),
+        },
+      });
+      const conflict = new Error("delegated authority closed");
+      let authorityOpen = true;
+      const beforePersistentApply = () => {
+        if (!authorityOpen) {
+          throw conflict;
+        }
+      };
+      const disabledWrite = {
+        persistedHash: "disabled-write",
+        persistedSourceConfig: { plugins: { entries: { diffs: { enabled: false } } } },
+      };
+      const removedWrite = { persistedHash: "removed-write", persistedSourceConfig: {} };
+      mocks.replaceConfig.mockImplementation(
+        async (params: { writeOptions?: { assertConfigPathForWrite?: () => void } }) => {
+          await Promise.resolve();
+          params.writeOptions?.assertConfigPathForWrite?.();
+          return disabledWrite;
+        },
+      );
+      mocks.commitRecords.mockImplementation(
+        async (params: { writeOptions?: { assertConfigPathForWrite?: () => void } }) => {
+          await Promise.resolve();
+          params.writeOptions?.assertConfigPathForWrite?.();
+          return removedWrite;
+        },
+      );
+      mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
+      mocks.clawReferenceWarnings.mockReturnValue([
+        'Warning: plugin "diffs" is referenced by Claw: @acme/review.',
+      ]);
+      mocks.refreshRegistry.mockResolvedValue(undefined);
+      const probeStarted = createDeferred();
+      const resumeProbe = createDeferred();
+      if (npmRoot) {
+        const actual = await vi.importActual<typeof import("./uninstall.js")>("./uninstall.js");
+        mocks.applyUninstall.mockImplementation(actual.applyPluginUninstallDirectoryRemoval);
+        const access = fs.access.bind(fs);
+        vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+          await access(...args);
+          if (args[0] === path.join(npmRoot, "package.json")) {
+            probeStarted.resolve();
+            await resumeProbe.promise;
+          }
+        });
+      }
 
-    const result = await uninstallManagedPlugin({ pluginId: "diffs", env });
+      const writes = [disabledWrite, removedWrite];
+      const applyRuntime = vi.fn(async (params: Parameters<PluginLifecycleRuntimeApply>[0]) => {
+        expect(params.write).toBe(writes.shift());
+        const { pluginIds } = params;
+        await Promise.resolve();
+        if (authority === "closed-after-stop") {
+          authorityOpen = false;
+        }
+        return { operationId: "uninstall", generation: 2, pluginIds: [...pluginIds] };
+      });
+      const captured = capturePluginRuntimeApplications(applyRuntime);
+      const pending = uninstallManagedPlugin({
+        pluginId: "diffs",
+        env,
+        beforePersistentApply,
+        applyRuntime: captured.applyRuntime,
+      });
+      if (npmRoot) {
+        try {
+          expect(
+            await Promise.race([
+              probeStarted.promise.then(() => "paused"),
+              pending.then(
+                () => "completed",
+                () => "rejected",
+              ),
+            ]),
+          ).toBe("paused");
+          authorityOpen = false;
+          resumeProbe.resolve();
+          await expect(pending).rejects.toBe(conflict);
+          await expect(fs.readFile(path.join(installPath, "sentinel"), "utf8")).resolves.toBe(
+            "installed plugin source",
+          );
+          expect(captured.application).toEqual({
+            operationId: "uninstall",
+            generation: 2,
+            pluginIds: ["diffs"],
+          });
+          expect(applyRuntime).toHaveBeenCalledTimes(1);
+          expect(mocks.commitRecords).not.toHaveBeenCalled();
+          expect(mocks.refreshRegistry).not.toHaveBeenCalled();
+        } finally {
+          resumeProbe.resolve();
+          await pending.catch(() => undefined);
+        }
+        return;
+      }
+      if (authority === "closed-after-stop") {
+        await expect(pending).rejects.toBe(conflict);
+        expect(mocks.replaceConfig).toHaveBeenCalledWith(
+          expect.objectContaining({
+            nextConfig: expect.objectContaining({
+              plugins: expect.objectContaining({ entries: { diffs: { enabled: false } } }),
+            }),
+          }),
+        );
+        expect(captured.application).toEqual({
+          operationId: "uninstall",
+          generation: 2,
+          pluginIds: ["diffs"],
+        });
+        expect(mocks.applyUninstall).not.toHaveBeenCalled();
+        expect(mocks.commitRecords).not.toHaveBeenCalled();
+        expect(mocks.refreshRegistry).not.toHaveBeenCalled();
+        return;
+      }
+      const result = await pending;
 
-    expect(mocks.installRecords).toHaveBeenCalledWith({ env });
-    expect(mocks.metadata).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-        workspaceDir: "/tmp/openclaw-managed-uninstall-home/managed-uninstall-workspace",
-      }),
-    );
-    expect(mocks.planUninstall).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginId: "diffs", deleteFiles: true }),
-    );
-    expect(mocks.commitRecords).toHaveBeenCalledWith(
-      expect.objectContaining({
-        previousInstallRecords: { diffs: installRecord },
-        nextInstallRecords: {},
-        baseHash: "base-hash",
-        writeOptions: prepared.writeOptions,
-      }),
-    );
-    expect(
-      expectDefined(
-        mocks.commitRecords.mock.calls[0],
-        "mocks.commitRecords.mock.calls[0] test invariant",
-      )[0].nextConfig.plugins?.installs,
-    ).toBeUndefined();
-    expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: "/tmp/extensions/diffs" });
-    expect(mocks.refreshRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-        reason: "source-changed",
-        installRecords: {},
-      }),
-    );
-    expect(result).toMatchObject({
-      pluginId: "diffs",
-      removed: ["plugin settings", "install record", "directory"],
-      warnings: ['Warning: plugin "diffs" is referenced by Claw: @acme/review.'],
-    });
-  });
+      expect(mocks.installRecords).toHaveBeenCalledWith({ env });
+      expect(mocks.metadata).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env,
+          workspaceDir: "/tmp/openclaw-managed-uninstall-home/managed-uninstall-workspace",
+        }),
+      );
+      expect(mocks.planUninstall).toHaveBeenCalledWith(
+        expect.objectContaining({ pluginId: "diffs", deleteFiles: true }),
+      );
+      expect(mocks.commitRecords).toHaveBeenCalledWith(
+        expect.objectContaining({
+          previousInstallRecords: { diffs: installRecord },
+          nextInstallRecords: {},
+          baseHash: "base-hash",
+          writeOptions: {
+            ...prepared.writeOptions,
+            auditOrigin: "plugin-install",
+            assertConfigPathForWrite: expect.any(Function),
+            allowConfigSizeDrop: true,
+            afterWrite: { mode: "none", reason: "plugin lifecycle applies runtime" },
+          },
+        }),
+      );
+      expect(
+        expectDefined(
+          mocks.commitRecords.mock.calls[0],
+          "mocks.commitRecords.mock.calls[0] test invariant",
+        )[0].nextConfig.plugins?.installs,
+      ).toBeUndefined();
+      expect(mocks.applyUninstall).toHaveBeenCalledWith(
+        { target: "/tmp/extensions/diffs" },
+        expect.any(Function),
+      );
+      expect(mocks.refreshRegistry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env,
+          reason: "source-changed",
+          installRecords: {},
+        }),
+      );
+      expect(result).toMatchObject({
+        pluginId: "diffs",
+        removed: ["plugin settings", "install record", "directory"],
+        application: { operationId: "uninstall", generation: 2, pluginIds: ["diffs"] },
+        warnings: ['Warning: plugin "diffs" is referenced by Claw: @acme/review.'],
+      });
+    },
+  );
 
   it("refuses to uninstall bundled plugins", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());
@@ -753,9 +957,13 @@ describe("plugin management service", () => {
   });
 
   it("surfaces uninstall plan failures as lifecycle errors", async () => {
+    const installRecords = { ghost: { source: "path", installPath: "/tmp/missing-ghost" } };
     mocks.readConfig.mockResolvedValue(configSnapshot());
-    mocks.installRecords.mockResolvedValue({});
-    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+    mocks.installRecords.mockResolvedValue(installRecords);
+    mocks.metadata.mockReturnValue({
+      ...emptyMetadataSnapshot(),
+      index: { plugins: [], installRecords },
+    });
     mocks.planUninstall.mockReturnValue({ ok: false, error: "Plugin not found: ghost" });
 
     await expect(uninstallManagedPlugin({ pluginId: "ghost", env: {} })).rejects.toThrow(

@@ -143,24 +143,19 @@ struct LowCoverageHelperTests {
     }
 
     @Test func `port guardian remote mode does not kill docker`() {
-        let port = GatewayEnvironment.gatewayPort()
-
         #expect(PortGuardian._testIsExpected(
             command: "com.docker.backend",
             fullCommand: "com.docker.backend",
-            port: port,
             mode: .remote) == true)
 
         #expect(PortGuardian._testIsExpected(
             command: "ssh",
-            fullCommand: "ssh -L \(port):localhost:\(port) user@host",
-            port: port,
+            fullCommand: "ssh -L 18789:localhost:18789 user@host",
             mode: .remote) == true)
 
         #expect(PortGuardian._testIsExpected(
             command: "podman",
             fullCommand: "podman",
-            port: port,
             mode: .remote) == true)
     }
 
@@ -168,25 +163,21 @@ struct LowCoverageHelperTests {
         #expect(PortGuardian._testIsExpected(
             command: "com.docker.backend",
             fullCommand: "com.docker.backend",
-            port: 18789,
             mode: .local) == false)
 
         #expect(PortGuardian._testIsExpected(
             command: "python",
             fullCommand: "python server.py",
-            port: 18789,
             mode: .local) == false)
 
         #expect(PortGuardian._testIsExpected(
             command: "node",
             fullCommand: "openclaw-gateway",
-            port: 18789,
             mode: .local) == true)
 
         #expect(PortGuardian._testIsExpected(
             command: "node",
             fullCommand: "node /path/to/gateway-daemon",
-            port: 18789,
             mode: .local) == true)
     }
 

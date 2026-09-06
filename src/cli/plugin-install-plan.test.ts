@@ -4,16 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import {
+  resolveBundledInstallPlanForCatalogEntry,
+  resolveBundledInstallPlanForNpmFailure,
+  resolvePluginInstallSourcePlan,
+} from "../plugins/install-source-plan.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import {
   resolveCatalogOfficialExternalInstallPlan,
   resolveCatalogOfficialExternalNpmPackageTrust,
 } from "../plugins/official-external-install-trust.js";
-import {
-  resolveBundledInstallPlanForCatalogEntry,
-  resolveBundledInstallPlanForNpmFailure,
-  resolvePluginInstallSourcePlan,
-} from "./plugin-install-plan.js";
 
 function createSourceCheckoutPlugin(pluginId: string): {
   packageRoot: string;
@@ -45,12 +45,16 @@ describe("plugin install plan helpers", () => {
     });
   });
 
-  it.each(["clawhub:demo", "CLAWHUB:demo", "clawhub:@scope/pkg@1.2.3"])(
+  it.each([
+    ["clawhub:demo", "demo", undefined],
+    ["CLAWHUB:demo", "demo", undefined],
+    ["clawhub:@scope/pkg@1.2.3", "@scope/pkg", "1.2.3"],
+  ] as const)(
     "keeps the valid explicit ClawHub selector %s on the ClawHub install path",
-    (raw) => {
+    (raw, packageName, version) => {
       expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toMatchObject({
         ok: true,
-        request: { source: "clawhub", spec: raw },
+        request: { source: "clawhub", packageName, version },
       });
     },
   );

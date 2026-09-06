@@ -114,7 +114,7 @@ metadata-only while the setup module contributes other setup hooks.
 
 ### Plugin cache boundary
 
-One `PluginCache` owns plugin facts from first access until Gateway shutdown.
+One `PluginCache` owns plugin facts for each published metadata generation.
 CLI preflight and startup progressively fill the same cache; later access fills
 only facts not yet acquired. Its immutable metadata snapshot combines the installed index, manifests, owner maps, and available
 discovery facts from every configured agent workspace. Disabled plugins remain
@@ -135,11 +135,12 @@ they do not cache trust decisions or credentials. Callers supplying a partial
 manifest view keep fresh per-call projection rather than sharing mutable metadata.
 
 Explicit install, update, registry refresh, and doctor operations use isolated
-generations of the same cache type, acquired after their lifecycle lease. They may inspect changed files and rebuild the persisted
-installed index, but cannot clear or replace the running Gateway's inventory.
-The new inventory takes effect after restart. The `plugins.refresh` RPC reports
-`restartRequired: true`; with reload disabled, it leaves the running inventory
-in place until a manual restart.
+generations of the same cache type, acquired after their lifecycle lease. They
+may inspect changed files and rebuild the persisted installed index. The Gateway
+lifecycle owner prepares the candidate runtime and publishes its metadata and
+registry together. `plugins.refresh` reports the applied generation and
+`restartRequired: false`; explicit management operations apply even when automatic
+config reload is disabled.
 
 The shared cache owns checked file contents, parsed package and manifest data,
 bundle MCP/LSP/settings files, plugin skill paths, discovery paths, installed-index
@@ -170,8 +171,10 @@ actual write begins.
 Registered services, hooks, tools, session MCP overlays, generated skill-link
 publication, and activation state remain runtime-owned.
 An active registry pins its chosen artifact binding so source and built modules
-cannot split its registrations. Native ESM module lifetime still follows Node's
-module loader. Manifest-derived questions such as "which plugin owns this
+cannot split its registrations. Installed plugin JavaScript and TypeScript use
+an instance-owned captured module graph, as do source TypeScript entries from
+bundled plugins; compiled host libraries and native
+addons retain their process identity. Manifest-derived questions such as "which plugin owns this
 provider?" use the metadata snapshot without executing plugin code. The persisted
 installed index belongs to management and startup; it is not a freshness signal
 for runtime readers.

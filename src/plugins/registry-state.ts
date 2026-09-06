@@ -12,10 +12,6 @@ export type PluginTypedHookPolicy = {
   timeouts?: Record<string, number>;
 };
 
-export type PluginSideEffectGuard = {
-  active: boolean;
-};
-
 type PluginRegistrationCapabilities = {
   /** Broad registry writes that discovery and live activation both need. */
   capabilityHandlers: boolean;
@@ -56,6 +52,16 @@ export function resolveTypedHookTimeoutMs(params: {
   );
 }
 
+function createRegistration<T extends object>(record: PluginRecord, contribution: T) {
+  return {
+    pluginId: record.id,
+    pluginName: record.name,
+    ...contribution,
+    source: record.source,
+    rootDir: record.rootDir,
+  };
+}
+
 export function createPluginRegistryState(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   bindPluginRegistryRuntime(registry, registryParams.runtime);
@@ -87,7 +93,7 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     coreGatewayMethods,
     getHostCronService: () => registryParams.hostServices?.cron,
     pluginsWithChannelRegistrationConflict: new Set<string>(),
-    pluginSideEffectGuards: new Map<string, Set<PluginSideEffectGuard>>(),
+    createRegistration,
     pushDiagnostic,
     reportRegistrationError,
     reportRegistrationWarning,

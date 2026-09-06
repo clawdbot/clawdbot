@@ -7,17 +7,18 @@ import { access } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { CodexAppServerStartOptions, CodexManagedCommandOrder } from "./config.js";
 import { resolveMacOSDesktopCodexAppServerCommandCandidates } from "./desktop-app-paths.js";
 import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
-// Registration and lazy runtime artifacts can load separate module copies.
-// They must resolve dependencies from the same loader-owned plugin root.
-const registeredCodexPlugin = resolveGlobalSingleton<{ root?: string }>(
-  Symbol.for("openclaw.codexManagedPluginRoot"),
-  () => ({}),
-);
+// Registration and lazy artifacts share a root within the invoking plugin
+// instance; preparing a replacement must not change the active owner's launcher.
+const registeredCodexPlugin = createPluginRuntimeStore<string>({
+  key: "openclaw.codexManagedPluginRoot",
+  errorMessage:
+    "Codex plugin root is unavailable. Load the Codex plugin before starting its managed app-server.",
+});
 
 type ResolveManagedCodexAppServerOptions = {
   platform?: NodeJS.Platform;
@@ -32,9 +33,13 @@ type ResolveManagedCodexNativeCommandOptions = {
   resolvePackageJson?: (packageName: string, root: string) => string | undefined;
 };
 
-/** Records the process-stable plugin root prepared by OpenClaw's plugin loader. */
+/** Records the plugin root for this loader-owned instance. */
 export function setManagedCodexPluginRoot(pluginRoot: string | undefined): void {
-  registeredCodexPlugin.root = pluginRoot;
+  if (pluginRoot) {
+    registeredCodexPlugin.setRuntime(pluginRoot);
+  } else {
+    registeredCodexPlugin.clearRuntime();
+  }
 }
 
 /** Rewrites managed stdio start options to point at an executable Codex binary path. */
@@ -46,12 +51,7 @@ export async function resolveManagedCodexAppServerStartOptions(
     return startOptions;
   }
 
-  const pluginRoot = options.pluginRoot ?? registeredCodexPlugin.root;
-  if (!pluginRoot) {
-    throw new Error(
-      "Codex plugin root is unavailable. Load the Codex plugin before starting its managed app-server.",
-    );
-  }
+  const pluginRoot = options.pluginRoot ?? registeredCodexPlugin.getRuntime();
   const platform = options.platform ?? process.platform;
   const candidateCommandPaths = resolveManagedCodexAppServerCommandCandidates(
     pluginRoot,

@@ -2,7 +2,6 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
-import { getActivePluginRegistry } from "../../../src/plugins/runtime.ts";
 import type { SessionCatalogProvider } from "../../../src/plugins/session-catalog.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
@@ -39,12 +38,11 @@ suite.define(() => {
         OPENCLAW_SKIP_CRON: "1",
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
         VITEST: "1",
       },
     });
     let gateway: GatewayServer | undefined;
-    let removeCatalogRegistration: (() => void) | undefined;
     try {
       const mainWorkspace = state.path("workspace-main");
       const writerWorkspace = state.path("workspace-writer");
@@ -52,6 +50,46 @@ suite.define(() => {
         mkdir(mainWorkspace, { recursive: true }),
         mkdir(writerWorkspace, { recursive: true }),
       ]);
+      const pluginId = "catalog-progress-fixture";
+      const hosts: Awaited<ReturnType<SessionCatalogProvider["list"]>> = [
+        {
+          hostId: "gateway:local",
+          label: "Local Codex",
+          kind: "gateway",
+          connected: true,
+          sessions: [
+            {
+              threadId,
+              name: "Native catalog progress",
+              cwd: writerWorkspace,
+              status: "idle",
+              archived: false,
+              canContinue: false,
+              canArchive: false,
+            },
+          ],
+        },
+      ];
+      await state.writeJson(`${pluginId}/openclaw.plugin.json`, {
+        id: pluginId,
+        activation: { onStartup: true },
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      });
+      await state.writeText(
+        `${pluginId}/index.cjs`,
+        `module.exports = {
+  id: ${JSON.stringify(pluginId)},
+  register(api) {
+    api.registerSessionCatalog({
+      id: "codex",
+      label: "Codex",
+      supportsProcessHomeIsolation: true,
+      list: async () => ${JSON.stringify(hosts)},
+      read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+    });
+  },
+};`,
+      );
       await state.writeConfig({
         agents: {
           defaults: { workspace: mainWorkspace },
@@ -60,6 +98,12 @@ suite.define(() => {
             main: { name: "Main", workspace: mainWorkspace },
             [routeAgentId]: { name: "Writer", workspace: writerWorkspace },
           },
+        },
+        plugins: {
+          allow: [pluginId],
+          entries: { [pluginId]: { enabled: true } },
+          load: { paths: [state.statePath(pluginId)] },
+          slots: { memory: "none" },
         },
         gateway: {
           auth: { mode: "none" },
@@ -78,48 +122,6 @@ suite.define(() => {
         controlUiEnabled: false,
         sidecarStartup: "start",
       });
-      const provider: SessionCatalogProvider = {
-        id: "codex",
-        label: "Codex",
-        list: async () => [
-          {
-            hostId: "gateway:local",
-            label: "Local Codex",
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId,
-                name: "Native catalog progress",
-                cwd: writerWorkspace,
-                status: "idle",
-                archived: false,
-                canContinue: false,
-                canArchive: false,
-              },
-            ],
-          },
-        ],
-        read: async ({ hostId, threadId: requestedThreadId }) => ({
-          hostId,
-          threadId: requestedThreadId,
-          items: [],
-        }),
-      };
-      const activeRegistry = getActivePluginRegistry();
-      if (!activeRegistry) {
-        throw new Error("Gateway plugin registry is unavailable");
-      }
-      // The real Gateway advertises catalog methods from this startup-owned registry object.
-      const registration = { pluginId: "codex", provider, source: import.meta.url };
-      activeRegistry.sessionCatalogs.push(registration);
-      removeCatalogRegistration = () => {
-        const index = activeRegistry.sessionCatalogs.indexOf(registration);
-        if (index >= 0) {
-          activeRegistry.sessionCatalogs.splice(index, 1);
-        }
-      };
-
       const artifactDir = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? suite.artifactDir : null;
       await suite.withPage(
         {
@@ -196,7 +198,6 @@ suite.define(() => {
         },
       );
     } finally {
-      removeCatalogRegistration?.();
       try {
         await gateway?.close({ reason: "catalog progress hovercard e2e cleanup" });
       } finally {

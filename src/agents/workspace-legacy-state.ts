@@ -162,8 +162,9 @@ function hasUnmigratedWorkspaceSources(sources: LegacyWorkspaceSourcePaths): boo
 }
 
 function workspaceMigrationError(workspaceDirs: string[], env?: NodeJS.ProcessEnv): Error {
+  // Recovery must survive bounded RPC errors even when workspace paths are long.
   return new Error(
-    `Legacy workspace setup state requires migration for ${workspaceDirs.join(", ")}; run ${formatCliCommand("openclaw doctor --fix", env)}.`,
+    `Legacy workspace setup state requires migration; run ${formatCliCommand("openclaw doctor --fix", env)}. Workspaces: ${workspaceDirs.join(", ")}.`,
   );
 }
 

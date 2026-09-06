@@ -4,6 +4,7 @@ import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { PluginLifecycleRuntimeApply } from "../plugins/lifecycle.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -197,6 +198,7 @@ export type ExecuteOptions = {
   operatorApprovalOnly?: boolean;
   deps?: SystemAgentCommandDeps;
   auditDetails?: Record<string, unknown>;
+  applyPluginRuntime?: PluginLifecycleRuntimeApply;
   /**
    * Authority check used by the guarded commit seam for host-approved writes.
    * A multi-step operation may invoke it more than once; every invocation is
@@ -700,7 +702,9 @@ export async function executeSetDefaultModel(
  * terminal-only operation. Every other plugin is uninstallable behind the
  * standard approval gate — matching what the operator can do from the UI/CLI.
  */
-export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Promise<boolean> {
+export async function isPluginBackingDefaultInferenceRoute(
+  ...pluginIds: string[]
+): Promise<boolean> {
   const { readConfigFileSnapshot } = await loadConfigModule();
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid) {
@@ -722,7 +726,7 @@ export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Pr
     modelId: route.model,
     agentId: route.agentId,
   }).policy?.id;
-  const normalizedPluginId = pluginId.trim().toLowerCase();
+  const normalizedPluginIds = new Set(pluginIds.map((id) => id.trim().toLowerCase()));
   const components = [
     route.provider,
     runtimePolicyId,
@@ -731,13 +735,13 @@ export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Pr
     .map((component) => component?.trim().toLowerCase())
     .filter((component): component is string => Boolean(component));
   // Same-name convention covers components with no resolvable plugin metadata.
-  if (components.includes(normalizedPluginId)) {
+  if (components.some((component) => normalizedPluginIds.has(component))) {
     return true;
   }
   const { resolveOwningPluginIdsForProviderRef } = await import("../plugins/providers.js");
   return components.some((component) =>
-    (resolveOwningPluginIdsForProviderRef({ provider: component, config }) ?? []).some(
-      (owner) => owner.trim().toLowerCase() === normalizedPluginId,
+    (resolveOwningPluginIdsForProviderRef({ provider: component, config }) ?? []).some((owner) =>
+      normalizedPluginIds.has(owner.trim().toLowerCase()),
     ),
   );
 }

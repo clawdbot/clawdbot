@@ -1,10 +1,16 @@
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import {
   resolvePluginInstallRequestContext,
   type PluginInstallRequestContext,
-} from "../cli/plugin-install-config-policy.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+} from "./install-request-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+
+function loadCurrentInstallRecords() {
+  // Claw lifecycle checks can follow a Gateway RPC; the caller's inventory predates that commit.
+  return withPluginCache(createPluginCache(), () => loadInstalledPluginIndexInstallRecords());
+}
 
 type PluginInstallPreflightResult =
   | { ok: true; action: "install"; request: PluginInstallRequestContext }
@@ -41,7 +47,7 @@ export async function resolveInstalledClawHubPlugin(params: {
   clawhubPackage: string;
   loadInstallRecords?: typeof loadInstalledPluginIndexInstallRecords;
 }): Promise<InstalledClawHubPluginResolution> {
-  const records = await (params.loadInstallRecords ?? loadInstalledPluginIndexInstallRecords)();
+  const records = await (params.loadInstallRecords ?? loadCurrentInstallRecords)();
   const matches = Object.entries(records).filter(
     ([, record]) =>
       (record.clawhubPackage ??
@@ -83,7 +89,7 @@ export async function preflightPluginInstall(params: {
     return { ok: false, code: "invalid_plugin_spec", error: resolved.error };
   }
 
-  const records = await (params.loadInstallRecords ?? loadInstalledPluginIndexInstallRecords)();
+  const records = await (params.loadInstallRecords ?? loadCurrentInstallRecords)();
   const installedEntry = Object.entries(records).find(
     ([, record]) =>
       (record.clawhubPackage ?? parseClawHubPluginSpec(record.spec ?? "")?.name) ===

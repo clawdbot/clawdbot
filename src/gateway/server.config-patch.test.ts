@@ -1585,8 +1585,8 @@ describe("gateway config schema lookup", () => {
       hintPath: "plugins.entries.*.enabled",
     });
     const description = res.payload?.schema?.description;
-    expect(description).toMatch(/default hybrid reload mode/i);
-    expect(description).toMatch(/hot-reload the plugin runtime/i);
+    expect(description).toMatch(/apply changes without restarting a running Gateway/i);
+    expect(description).toMatch(/Raw config edits follow the Gateway reload policy/i);
     expect(description).not.toMatch(/restart required/i);
     expect(res.payload?.hint?.help).toBe(description);
   });

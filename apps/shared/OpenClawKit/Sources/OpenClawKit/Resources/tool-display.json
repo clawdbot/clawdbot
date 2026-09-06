@@ -31,6 +31,7 @@
     "skill_workshop": {"emoji":"🧰","title":"Skill Workshop","detailKeys":["action","name","proposal_id"]},
     "openclaw": {"emoji":"🦀","title":"OpenClaw","detailKeys":["action","path","model"]},
     "gateway": {"emoji":"🔌","title":"Gateway","detailKeys":["action","path"]},
+    "plugins": {"emoji":"🧩","title":"Plugins","detailKeys":["action","pluginId","packageName","path","query"]},
     "exec": {"emoji":"🛠️","title":"Exec","detailKeys":["command"]},
     "tool_call": {"emoji":"🧰","title":"Tool Call","detailKeys":[]},
     "tool_call_update": {"emoji":"🧰","title":"Tool Call","detailKeys":[]},

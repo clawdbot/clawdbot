@@ -15,7 +15,7 @@ import {
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { cleanupReplacedPluginHostRegistry, runPluginHostCleanup } from "../host-hook-cleanup.js";
+import { createPluginHostRegistryRetirement, runPluginHostCleanup } from "../host-hook-cleanup.js";
 import { clearPluginHostRuntimeState } from "../host-hook-runtime.js";
 import { patchPluginSessionExtension } from "../host-hook-state.js";
 import type { PluginJsonValue } from "../host-hooks.js";
@@ -649,11 +649,11 @@ describe("plugin session extension SessionEntry projection", () => {
         );
 
         await expectNoCleanupFailures(
-          cleanupReplacedPluginHostRegistry({
+          createPluginHostRegistryRetirement({
             cfg: tempConfig as never,
             previousRegistry: previousFixture.registry.registry,
             nextRegistry: nextFixture.registry.registry,
-          }),
+          })(),
           "restart cleanup result",
         );
 
@@ -739,11 +739,11 @@ describe("plugin session extension SessionEntry projection", () => {
         );
 
         await expectNoCleanupFailures(
-          cleanupReplacedPluginHostRegistry({
+          createPluginHostRegistryRetirement({
             cfg: tempConfig as never,
             previousRegistry: previousFixture.registry.registry,
             nextRegistry: nextFixture.registry.registry,
-          }),
+          })(),
           "mixed restart cleanup result",
         );
 
@@ -816,11 +816,11 @@ describe("plugin session extension SessionEntry projection", () => {
         );
 
         await expectNoCleanupFailures(
-          cleanupReplacedPluginHostRegistry({
+          createPluginHostRegistryRetirement({
             cfg: tempConfig as never,
             previousRegistry: previousFixture.registry.registry,
             nextRegistry: nextFixture.registry.registry,
-          }),
+          })(),
           "preserved restart cleanup result",
         );
 

@@ -19,7 +19,7 @@ Media Streams).
 <Note>
 The Voice Call plugin runs **inside the Gateway process**. If you use a
 remote Gateway, install and configure the plugin on the machine running the
-Gateway, then restart the Gateway to load it.
+Gateway. Plugin enablement and config reload apply without restarting it.
 </Note>
 
 ## Quick start
@@ -35,15 +35,16 @@ Gateway, then restart the Gateway to load it.
       <Tab title="From a local folder (dev)">
         ```bash
         PLUGIN_SRC=./path/to/local/voice-call-plugin
+        pnpm --dir "$PLUGIN_SRC" install
         openclaw plugins install "$PLUGIN_SRC"
-        cd "$PLUGIN_SRC" && pnpm install
         ```
       </Tab>
     </Tabs>
 
     Use the bare package to follow the current release tag. Pin an exact
-    version only when you need a reproducible install. Restart the Gateway
-    afterwards so the plugin loads.
+    version only when you need a reproducible install. Installation does not
+    require a Gateway restart. Local-folder installs copy the source; use
+    `--link` during development to reload directly from source after edits.
 
   </Step>
   <Step title="Configure provider and webhook">
@@ -60,6 +61,7 @@ Gateway, then restart the Gateway to load it.
   </Step>
   <Step title="Verify setup">
     ```bash
+    openclaw plugins enable voice-call
     openclaw voicecall setup
     openclaw voicecall setup --json
     ```
@@ -181,8 +183,9 @@ a multi-agent fleet. Per-number routes may choose different agents for inbound
 calls, but do not replace the plugin's startup owner.
 
 If startup reports that Voice Call has no explicit owner, list your agents with
-`openclaw agents list`, set the existing `agentId` field, and rerun
-`openclaw voicecall setup`. Restart the Gateway after updating its configuration.
+`openclaw agents list` and set the existing `agentId` field. Apply the updated
+configuration with `openclaw plugins reload voice-call`, then rerun
+`openclaw voicecall setup`.
 Existing legacy default-agent selection is preserved; new multi-agent setups
 should use an explicit owner. See [Agent configuration](/gateway/config-agents).
 
@@ -941,9 +944,10 @@ Use one public exposure path:
 }
 ```
 
-After changing config, restart or reload the Gateway, then run:
+After changing config, reload the plugin and verify setup:
 
 ```bash
+openclaw plugins reload voice-call
 openclaw voicecall setup
 openclaw voicecall smoke
 ```

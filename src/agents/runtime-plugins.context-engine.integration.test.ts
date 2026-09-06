@@ -1,4 +1,6 @@
 // Verifies prepared agent turns retain their selected runtime context-engine owner.
+import fs from "node:fs";
+import path from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
 import { resetContextEngineRuntimeQuarantineForTests } from "../context-engine/registry.test-support.js";
 import { loadAndActivateRootPluginRegistry, loadPluginRegistryHandle } from "../plugins/loader.js";
@@ -9,31 +11,24 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { disposePluginRegistryInstances, getActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createContextEngineLogicalTurnLease } from "./harness/context-engine-logical-turn.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
-import { getSandboxBackendFactory, registerSandboxBackend } from "./sandbox/backend.js";
+import { getSandboxBackendFactory } from "./sandbox/backend.js";
 
 const SANDBOX_PROBE_ID = "scoped-load-probe";
-const REGISTER_SANDBOX_BACKEND = Symbol.for("openclaw.test.registerSandboxBackend");
-const REGISTRATION_MODES = Symbol.for("openclaw.test.pluginRegistrationModes");
 
-type ProbeGlobal = typeof globalThis & {
-  [REGISTER_SANDBOX_BACKEND]?: typeof registerSandboxBackend;
-  [REGISTRATION_MODES]?: Array<{ id: string; mode: string }>;
-};
-
-const restoreSandboxBackends: Array<() => void> = [];
-
-afterEach(() => {
-  while (restoreSandboxBackends.length > 0) {
-    restoreSandboxBackends.pop()?.();
+afterEach(async () => {
+  const registry = getActivePluginRegistry();
+  try {
+    if (registry) {
+      await disposePluginRegistryInstances(registry);
+    }
+  } finally {
+    resetContextEngineRuntimeQuarantineForTests();
+    resetPluginLoaderTestStateForTest();
   }
-  delete (globalThis as ProbeGlobal)[REGISTER_SANDBOX_BACKEND];
-  delete (globalThis as ProbeGlobal)[REGISTRATION_MODES];
-  resetContextEngineRuntimeQuarantineForTests();
-  resetPluginLoaderTestStateForTest();
 });
 
 afterAll(() => {
@@ -93,20 +88,19 @@ it("keeps the configured context engine active in a prepared agent registry", as
 
 it("selects a full-mode-only context engine on caller-owned handles without full-only global setup", async () => {
   useNoBundledPlugins();
-  const probe = globalThis as ProbeGlobal;
-  probe[REGISTRATION_MODES] = [];
-  probe[REGISTER_SANDBOX_BACKEND] = (id, registration) => {
-    const restore = registerSandboxBackend(id, registration);
-    restoreSandboxBackends.push(restore);
-    return restore;
-  };
+  const registrationLog = path.join(makePluginLoaderTempDir(), "registration-modes.jsonl");
+  const readRegistrationModes = () =>
+    fs
+      .readFileSync(registrationLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id: string; mode: string });
   const contextEngine = writePlugin({
     id: "ce-probe",
     body: `module.exports = {
   id: "ce-probe",
   register(api) {
-    const seen = globalThis[Symbol.for("openclaw.test.pluginRegistrationModes")];
-    seen.push({ id: "ce-probe", mode: api.registrationMode });
+    require("node:fs").appendFileSync(${JSON.stringify(registrationLog)}, JSON.stringify({ id: "ce-probe", mode: api.registrationMode }) + "\\n");
     if (api.registrationMode === "full") {
       api.registerContextEngine("ce-probe", async () => ({
         info: { id: "ce-probe", name: "CE Probe" },
@@ -124,15 +118,14 @@ it("selects a full-mode-only context engine on caller-owned handles without full
     body: `module.exports = {
   id: "sandbox-probe",
   register(api) {
-    const seen = globalThis[Symbol.for("openclaw.test.pluginRegistrationModes")];
-    seen.push({ id: "sandbox-probe", mode: api.registrationMode });
+    require("node:fs").appendFileSync(${JSON.stringify(registrationLog)}, JSON.stringify({ id: "sandbox-probe", mode: api.registrationMode }) + "\\n");
     if (api.registrationMode !== "full") {
       return;
     }
-    const registerSandboxBackend = globalThis[Symbol.for("openclaw.test.registerSandboxBackend")];
-    registerSandboxBackend(${JSON.stringify(SANDBOX_PROBE_ID)}, async () => {
+    const { registerSandboxBackend } = require("openclaw/plugin-sdk/sandbox");
+    api.lifecycle.onDispose(registerSandboxBackend(${JSON.stringify(SANDBOX_PROBE_ID)}, async () => {
       throw new Error("sandbox probe backend should not run");
-    });
+    }));
   },
 };`,
   });
@@ -154,7 +147,9 @@ it("selects a full-mode-only context engine on caller-owned handles without full
     onlyPluginIds: ["ce-probe", "sandbox-probe"],
   });
   const rootSandboxFactory = getSandboxBackendFactory(SANDBOX_PROBE_ID);
-  const sandboxRegistrationsAfterRoot = restoreSandboxBackends.length;
+  const sandboxRegistrationsAfterRoot = readRegistrationModes().filter(
+    (entry) => entry.id === "sandbox-probe" && entry.mode === "full",
+  ).length;
 
   expect(getActivePluginRegistry()).toBe(root);
   expect(root.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
@@ -176,10 +171,12 @@ it("selects a full-mode-only context engine on caller-owned handles without full
   expect(getActivePluginRegistry()).toBe(root);
   expect(handle.plugins.find((plugin) => plugin.id === "sandbox-probe")?.status).toBe("loaded");
   expect(getSandboxBackendFactory(SANDBOX_PROBE_ID)).toBe(rootSandboxFactory);
-  expect(restoreSandboxBackends.length).toBe(sandboxRegistrationsAfterRoot);
   expect(discovery.contextEngines.get("ce-probe")).toBeUndefined();
   expect(handle.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
-  const registrationModes = probe[REGISTRATION_MODES] ?? [];
+  const registrationModes = readRegistrationModes();
+  expect(
+    registrationModes.filter((entry) => entry.id === "sandbox-probe" && entry.mode === "full"),
+  ).toHaveLength(sandboxRegistrationsAfterRoot);
   expect(registrationModes.filter((entry) => entry.mode === "full")).toHaveLength(2);
   expect(
     new Set(registrationModes.filter((entry) => entry.mode === "full").map((entry) => entry.id)),

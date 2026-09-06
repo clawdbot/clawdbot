@@ -156,15 +156,15 @@ describe.skipIf(process.platform === "win32")("POSIX secret input ownership", ()
   it("closes both untransferred ends when spawning throws", () => {
     const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];
     const createData = vi.fn(() => Buffer.from("not-delivered"));
-    let original: ReturnType<typeof fstatSync>;
+    const prepared = prepareSecretInputStdio(stdio, { fd: 3, createData });
+    const original = fstatSync(stdio[3] as number);
     expect(() => {
-      using prepared = prepareSecretInputStdio(stdio, { fd: 3, createData });
-      void prepared;
-      original = fstatSync(stdio[3] as number);
+      using secretInput = prepared;
+      void secretInput;
       spawn("", [], { stdio });
     }).toThrow();
     expect(createData).not.toHaveBeenCalled();
-    expectDescriptorReleased(stdio[3] as number, original!);
+    expectDescriptorReleased(stdio[3] as number, original);
   });
   it("closes the writer without delivering bytes when credential creation throws", async () => {
     const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];

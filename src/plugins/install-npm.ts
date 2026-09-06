@@ -10,11 +10,7 @@ import {
   parseRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
-import {
-  resolveManagedNpmGenerationUseForInstall,
-  resolveManagedNpmRootForInstall,
-  resolveManagedNpmRootPackageDir,
-} from "./install-managed-npm-state.js";
+import { resolveManagedNpmInstallTarget } from "./install-managed-npm-state.js";
 import { installPluginFromManagedNpmRoot } from "./install-managed-npm.js";
 import {
   canResolveAroundCompatibilityError,
@@ -32,7 +28,6 @@ import {
   defaultLogger,
   emitSuccessfulPluginInstallSecurityEvent,
   loadPluginInstallRuntime,
-  resolveEffectiveInstallMode,
   runInstallSourceScan,
 } from "./install-shared.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
@@ -43,7 +38,6 @@ import {
   type PluginInstallLogger,
   type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
-import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 
 export async function installPluginFromNpmSpec(
   params: InstallSafetyOverrides & {
@@ -60,6 +54,7 @@ export async function installPluginFromNpmSpec(
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
     onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -183,34 +178,12 @@ export async function installPluginFromNpmSpec(
     return { ok: false, error: driftResult.error };
   }
   const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
-  const generationUse = await resolveManagedNpmGenerationUseForInstall({
+  const { mode: policyMode } = await resolveManagedNpmInstallTarget({
     runtime,
     npmBaseDir,
     packageName: parsedSpec.name,
     requestedMode: mode,
-    npmResolution,
   });
-  const npmRoot = resolveManagedNpmRootForInstall({
-    npmBaseDir,
-    packageName: parsedSpec.name,
-    npmResolution,
-    useGeneration: generationUse !== "none",
-  });
-  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, parsedSpec.name);
-  const targetMode =
-    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)
-      ? "update"
-      : await resolveEffectiveInstallMode({
-          runtime,
-          requestedMode: mode,
-          targetPath: installRoot,
-        });
-  const policyMode =
-    generationUse === "update"
-      ? "update"
-      : generationUse === "retained-install"
-        ? "install"
-        : targetMode;
 
   const policyTempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-policy-"));
   try {
@@ -283,6 +256,7 @@ export async function installPluginFromNpmSpec(
       expectedPluginId,
       expectedReplacementPluginId: params.expectedReplacementPluginId,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+      beforePersistentApply: params.beforePersistentApply,
       npmResolution,
       ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),

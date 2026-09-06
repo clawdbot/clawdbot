@@ -4,33 +4,6 @@ import {
   type NpmSpecResolution as NpmResolutionMetadata,
 } from "../infra/install-source-utils.js";
 
-/** Build the npm section of a plugin install record. */
-function buildNpmInstallRecordFields(params: {
-  spec: string;
-  installPath: string;
-  version?: string;
-  resolution?: NpmResolutionMetadata;
-}): {
-  source: "npm";
-  spec: string;
-  installPath: string;
-  version?: string;
-  resolvedName?: string;
-  resolvedVersion?: string;
-  resolvedSpec?: string;
-  integrity?: string;
-  shasum?: string;
-  resolvedAt?: string;
-} {
-  return {
-    source: "npm",
-    spec: params.spec,
-    installPath: params.installPath,
-    version: params.version,
-    ...buildNpmResolutionFields(params.resolution),
-  };
-}
-
 /** CLI adapter for npm install-record pinning with styled warning output. */
 export function resolvePinnedNpmInstallRecordForCli(
   rawSpec: string,
@@ -40,7 +13,7 @@ export function resolvePinnedNpmInstallRecordForCli(
   resolution: NpmResolutionMetadata | undefined,
   log: (message: string) => void,
   warnFormat: (message: string) => string,
-): ReturnType<typeof buildNpmInstallRecordFields> {
+) {
   const resolvedSpec = resolution?.resolvedSpec;
   const recordSpec = pin && resolvedSpec ? resolvedSpec : rawSpec;
   if (pin) {
@@ -50,10 +23,11 @@ export function resolvePinnedNpmInstallRecordForCli(
       log(warnFormat("Could not resolve exact npm version for --pin; storing original npm spec."));
     }
   }
-  return buildNpmInstallRecordFields({
+  return {
+    source: "npm" as const,
     spec: recordSpec,
     installPath,
     version,
-    resolution,
-  });
+    ...buildNpmResolutionFields(resolution),
+  };
 }

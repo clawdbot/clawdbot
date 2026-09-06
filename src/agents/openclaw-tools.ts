@@ -68,6 +68,7 @@ import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
+import { createPluginsTool } from "./tools/plugins-tool.js";
 import { createPortalTool } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
 import { createScreenTool } from "./tools/screen-tool.js";
@@ -456,6 +457,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             senderIsOwner: options?.senderIsOwner,
             requesterSenderId: options?.requesterSenderId,
           }),
+          createPluginsTool(),
           ...createOpenClawDelegateToolsForRun({ ...options, sessionAgentId }),
         ]),
     createAgentsListTool({

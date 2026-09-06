@@ -1,13 +1,8 @@
-/**
- * Loaded channel plugin registry view.
- *
- * Normalizes and sorts active plugin runtime state for channel registry callers.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
-  ActiveChannelPluginRuntimeShape,
+  ActiveChannelPluginRuntimeShape as LoadedChannelPlugin,
   ActivePluginChannelRegistry,
-  ActivePluginChannelRegistration,
+  ActivePluginChannelRegistration as LoadedChannelPluginEntry,
 } from "../../plugins/channel-registry-state.types.js";
 import {
   getActivePluginChannelRegistrySnapshotFromState,
@@ -16,20 +11,6 @@ import {
 import { CHAT_CHANNEL_ORDER } from "../registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
-
-/**
- * Loaded channel plugin shape after id/meta normalization.
- */
-type LoadedChannelPlugin = ChannelPlugin & {
-  meta: NonNullable<ChannelPlugin["meta"]>;
-};
-
-/**
- * Loaded channel registry entry with a normalized plugin payload.
- */
-type LoadedChannelPluginEntry = ActivePluginChannelRegistration & {
-  plugin: LoadedChannelPlugin;
-};
 
 type ChannelPluginView = {
   snapshot: ActivePluginChannelRegistrySnapshot;
@@ -41,7 +22,7 @@ type ChannelPluginView = {
 let cachedChannelPluginView: ChannelPluginView | undefined;
 
 function coerceLoadedChannelPlugin(
-  plugin: ActiveChannelPluginRuntimeShape | null | undefined,
+  plugin: LoadedChannelPlugin | null | undefined,
 ): LoadedChannelPlugin | null {
   const id = normalizeOptionalString(plugin?.id) ?? "";
   if (!plugin || !id) {
@@ -75,7 +56,7 @@ function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelP
       // provenance together so a colliding plugin cannot borrow its authority.
       seen.add(id);
       byId.set(plugin.id, plugin);
-      entriesById.set(plugin.id, { ...entry, plugin });
+      entriesById.set(plugin.id, entry);
     }
   }
 

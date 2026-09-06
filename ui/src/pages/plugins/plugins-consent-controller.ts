@@ -1,15 +1,18 @@
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import type {
+  PluginsReloadParams,
+  PluginsReloadResult,
+  PluginsUninstallResult,
+} from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import {
   inspectPlugin,
   readPluginCapabilityConsentError,
 } from "../../lib/plugins/capability-consent-error.ts";
 import {
-  installPlugin,
   runPluginConfigMutation,
   setPluginEnabled,
   type PluginInstallRequest,
@@ -20,14 +23,12 @@ import {
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.ts";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
-import { confirmPluginInstall } from "./plugin-lifecycle-confirmation.ts";
 import { pluginRowKey, type PluginRowMessage } from "./view.ts";
 
 type PluginMutationSuccess<Result> = (
   result: Result,
   refreshError: string | null,
   client: GatewayBrowserClient,
-  isCurrent: () => boolean,
   isLatest: () => boolean,
 ) => Promise<void>;
 
@@ -51,19 +52,18 @@ type PluginsConsentControllerHost = {
   requestUpdate: () => void;
 };
 
-function committedMutationMessage(
-  action: "installed" | "enabled" | "disabled",
-  result: PluginMutationResult,
+export function committedMutationMessage(
+  action: "installed" | "enabled" | "disabled" | "reloaded" | "removed",
+  result: PluginMutationResult | PluginsReloadResult | PluginsUninstallResult,
   refreshError: string | null,
 ): PluginRowMessage {
-  const key = result.restartRequired
-    ? `pluginsPage.${action}Restart`
-    : `pluginsPage.${action}Success`;
   const warnings = "warnings" in result ? (result.warnings ?? []) : [];
   return {
     kind: "success",
     text: [
-      t(key, { name: result.plugin.name }),
+      t(`pluginsPage.${action}Success`, {
+        name: "plugin" in result ? result.plugin.name : result.pluginId,
+      }),
       ...warnings.map((warning) => formatUiExternalText(warning)),
       refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
     ]
@@ -80,16 +80,12 @@ export class PluginsConsentController {
 
   private mutationToken = 0;
   private readonly mutationTokens = new Map<string, number>();
-  // Server reviews continue one confirmed install only while its Gateway epoch survives.
-  // Reconnect reset drops the scope before a surviving row warning can be acknowledged.
-  private readonly confirmedInstallScopes = new Map<string, GatewayConnectionScope>();
 
   constructor(private readonly host: PluginsConsentControllerHost) {}
 
   reset(): void {
     this.close();
     this.mutationTokens.clear();
-    this.confirmedInstallScopes.clear();
   }
 
   async runMutation<Result>(
@@ -97,7 +93,7 @@ export class PluginsConsentController {
     mutate: (client: GatewayBrowserClient) => Promise<Result>,
     onSuccess: PluginMutationSuccess<Result>,
     options: PluginMutationOptions = {},
-    onError: (error: unknown, scope: GatewayConnectionScope) => void = (error) => {
+    onError: (error: unknown) => void = (error) => {
       this.host.setMessage(rowKey, { kind: "error", text: formatUiError(error) });
     },
   ): Promise<void> {
@@ -133,11 +129,11 @@ export class PluginsConsentController {
         { canDispatch: () => isCurrent() && this.host.canMutate() },
       );
       if (isCurrent()) {
-        await onSuccess(mutation.value, mutation.refreshError, scope.client, isCurrent, isLatest);
+        await onSuccess(mutation.value, mutation.refreshError, scope.client, isLatest);
       }
     } catch (error) {
       if (isCurrent()) {
-        onError(error, scope);
+        onError(error);
       }
     } finally {
       if (this.mutationTokens.get(rowKey) === mutationToken) {
@@ -223,6 +219,10 @@ export class PluginsConsentController {
         },
         intent.installIdentity,
       );
+    } else if (intent.kind === "reload") {
+      void this.reload(intent.pluginId, intent.rowKey, {
+        acknowledgeCapabilities: { reviewToken },
+      });
     } else {
       void this.updateEnabled(intent.pluginId, true, intent.rowKey, {
         acknowledgeCapabilities: { reviewToken },
@@ -231,18 +231,11 @@ export class PluginsConsentController {
   }
 
   async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
-    const confirmedScope = this.confirmedInstallScopes.get(installIdentity);
-    this.confirmedInstallScopes.delete(installIdentity);
-    const isConfirmedContinuation =
-      (request.acknowledgeInstallPolicyWarning === true ||
-        request.acknowledgeCapabilities !== undefined) &&
-      confirmedScope &&
-      this.host.gateway.isCurrent(confirmedScope);
     // The server stages and inspects the requested artifact before asking for consent.
     // Catalog/search metadata cannot authorize that artifact's capabilities.
     await this.runMutation(
       installIdentity,
-      (client) => installPlugin(client, request),
+      (client) => client.request<PluginMutationResult>("plugins.install", request),
       async (result, refreshError, client) => {
         const installedPluginKey = pluginRowKey(result.plugin.id);
         this.host.applyMutationResult(result);
@@ -256,13 +249,11 @@ export class PluginsConsentController {
         await this.host.refreshCatalogAfterMutation(client);
       },
       {
-        confirm: isConfirmedContinuation ? undefined : () => confirmPluginInstall(request),
         preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
       },
-      (error, scope) => {
+      (error) => {
         const consentDetails = readPluginCapabilityConsentError(error);
         if (consentDetails) {
-          this.confirmedInstallScopes.set(installIdentity, scope);
           this.open(
             { kind: "install", request, installIdentity },
             consentDetails.pluginId,
@@ -272,7 +263,6 @@ export class PluginsConsentController {
         }
         const policyWarning = readPluginInstallPolicyWarning(error);
         if (policyWarning) {
-          this.confirmedInstallScopes.set(installIdentity, scope);
           this.host.setMessage(installIdentity, {
             kind: "warning",
             text: policyWarning.reason,
@@ -295,17 +285,13 @@ export class PluginsConsentController {
     await this.runMutation(
       key,
       (client) => setPluginEnabled(client, pluginId, enabled, options),
-      async (result, refreshError, client, isCurrent) => {
+      async (result, refreshError, client) => {
         this.host.applyMutationResult(result);
         this.host.setMessage(
           key,
           committedMutationMessage(enabled ? "enabled" : "disabled", result, refreshError),
         );
         await this.host.refreshCatalogAfterMutation(client);
-        if (isCurrent() && !result.restartRequired) {
-          // Plugin tabs come from hello; reconnect after the registry refresh.
-          this.host.getContext().gateway.connect();
-        }
       },
       {},
       (error) => {
@@ -315,6 +301,30 @@ export class PluginsConsentController {
           return;
         }
         this.host.setMessage(key, { kind: "error", text: formatUiError(error) });
+      },
+    );
+  }
+
+  async reload(
+    pluginId: string,
+    rowKey = pluginRowKey(pluginId),
+    options: Pick<PluginsReloadParams, "acknowledgeCapabilities"> = {},
+  ): Promise<void> {
+    await this.runMutation(
+      rowKey,
+      (client) => client.request<PluginsReloadResult>("plugins.reload", { pluginId, ...options }),
+      async (result, refreshError, client) => {
+        this.host.setMessage(rowKey, committedMutationMessage("reloaded", result, refreshError));
+        await this.host.refreshCatalogAfterMutation(client);
+      },
+      {},
+      (error) => {
+        const details = readPluginCapabilityConsentError(error);
+        if (details) {
+          this.open({ kind: "reload", pluginId, rowKey }, details.pluginId, details);
+        } else {
+          this.host.setMessage(rowKey, { kind: "error", text: formatUiError(error) });
+        }
       },
     );
   }

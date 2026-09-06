@@ -1,4 +1,5 @@
 /** Keyed routing for all turn traffic on one shared Codex app-server client. */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { CodexAppServerClient } from "./client.js";
@@ -292,7 +293,14 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     if (!handlers.onNotification && !handlers.onRequest) {
       throw new Error("codex app-server thread route requires a notification or request handler");
     }
-    route.handlers = handlers;
+    // The physical transport outlives attempts; callbacks retain only the
+    // invocation that activated this route, including its plugin drain lease.
+    route.handlers = {
+      onNotificationReceived:
+        handlers.onNotificationReceived && AsyncLocalStorage.bind(handlers.onNotificationReceived),
+      onNotification: handlers.onNotification && AsyncLocalStorage.bind(handlers.onNotification),
+      onRequest: handlers.onRequest && AsyncLocalStorage.bind(handlers.onRequest),
+    };
     if (!handlers.onNotification) {
       route.pending.length = 0;
     } else if (route.gate !== "armed") {

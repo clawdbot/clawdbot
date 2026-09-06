@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   PUBLIC_SURFACE_SOURCE_EXTENSIONS,
-  normalizeBundledPluginArtifactSubpath,
   resolveBundledPluginPublicSurfacePath,
   resolveBundledPluginSourcePublicSurfacePath,
 } from "./public-surface-runtime.js";
@@ -212,30 +211,39 @@ describe("bundled plugin public surface runtime", () => {
   });
 
   it("allows plugin-local nested artifact paths", () => {
-    expect(normalizeBundledPluginArtifactSubpath("src/outbound-adapter.js")).toBe(
-      "src/outbound-adapter.js",
-    );
-    expect(normalizeBundledPluginArtifactSubpath("./test-api.js")).toBe("test-api.js");
+    const sourceRoot = tempDirs.make("openclaw-local-public-surface-");
+    for (const artifactBasename of ["src/outbound-adapter.js", "./test-api.js"]) {
+      const modulePath = path.resolve(sourceRoot, "demo", artifactBasename);
+      fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+      fs.writeFileSync(modulePath, "export {};\n");
+
+      expect(
+        resolveBundledPluginSourcePublicSurfacePath({
+          sourceRoot,
+          dirName: "demo",
+          artifactBasename,
+        }),
+      ).toBe(modulePath);
+    }
   });
 
   it("rejects artifact paths that escape the plugin root", () => {
-    expect(() => normalizeBundledPluginArtifactSubpath("../outside.js")).toThrow(
-      /must stay plugin-local/,
-    );
-    expect(() => normalizeBundledPluginArtifactSubpath("src/../outside.js")).toThrow(
-      /must stay plugin-local/,
-    );
-    expect(() => normalizeBundledPluginArtifactSubpath("/tmp/outside.js")).toThrow(
-      /must stay plugin-local/,
-    );
-    expect(() => normalizeBundledPluginArtifactSubpath("..\\outside.js")).toThrow(
-      /must stay plugin-local/,
-    );
-    expect(() => normalizeBundledPluginArtifactSubpath("C:outside.js")).toThrow(
-      /must stay plugin-local/,
-    );
-    expect(() => normalizeBundledPluginArtifactSubpath("src/C:outside.js")).toThrow(
-      /must stay plugin-local/,
-    );
+    const sourceRoot = tempDirs.make("openclaw-local-public-surface-");
+    for (const artifactBasename of [
+      "../outside.js",
+      "src/../outside.js",
+      "/tmp/outside.js",
+      "..\\outside.js",
+      "C:outside.js",
+      "src/C:outside.js",
+    ]) {
+      expect(() =>
+        resolveBundledPluginSourcePublicSurfacePath({
+          sourceRoot,
+          dirName: "demo",
+          artifactBasename,
+        }),
+      ).toThrow(/must stay plugin-local/);
+    }
   });
 });

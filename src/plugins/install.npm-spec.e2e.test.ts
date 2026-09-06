@@ -215,7 +215,8 @@ describe("installPluginFromNpmSpec e2e", () => {
         import fs from "node:fs/promises";
         import path from "node:path";
         import { randomUUID } from "node:crypto";
-        import { runPluginInstallCommand } from ${JSON.stringify(new URL("../cli/plugins-install-command.ts", import.meta.url).href)};
+        import { installPluginWithHookFallback } from ${JSON.stringify(new URL("../cli/plugins-install-hook-fallback.ts", import.meta.url).href)};
+        import { loadConfigForInstall } from ${JSON.stringify(new URL("./install-config.ts", import.meta.url).href)};
         import { writeConfigFile } from ${JSON.stringify(new URL("../config/config.ts", import.meta.url).href)};
         import { readHookInstalls } from ${JSON.stringify(new URL("../hooks/installs.ts", import.meta.url).href)};
         import { readPersistedInstalledPluginIndexInstallRecords } from ${JSON.stringify(new URL("./installed-plugin-index-records.ts", import.meta.url).href)};
@@ -248,10 +249,10 @@ describe("installPluginFromNpmSpec e2e", () => {
               })().catch((error) => errors.push(String(error)))
             : Promise.resolve();
           try {
-            await runPluginInstallCommand({
-              raw: "npm:" + packageName + "@1.0.0",
-              opts: { force: true, acceptCapabilities: true },
-              allowInstallPolicyWarningPrompt: false,
+            const result = await installPluginWithHookFallback({
+              request: { source: "npm", spec: packageName + "@1.0.0", mode: "update" },
+              snapshot: await loadConfigForInstall(),
+              onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
               beforePersistentApply: () => {
                 if (!validateAgentRunDelegatedAuthority(authority)) {
                   throw new Error("Delegated install authority closed");
@@ -263,6 +264,10 @@ describe("installPluginFromNpmSpec e2e", () => {
                 exit: (code) => { exitCode = code; },
               },
             });
+            if (!result.ok) {
+              exitCode = 1;
+              errors.push(result.error);
+            }
           } catch (error) {
             exitCode = 1;
             errors.push(String(error));

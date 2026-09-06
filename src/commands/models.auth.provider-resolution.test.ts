@@ -11,7 +11,7 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
+import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -76,7 +76,7 @@ describe("models auth login --force", () => {
       },
     });
     try {
-      pluginLoaderCacheState.clear();
+      getPluginLoaderCacheState().clear();
       resetPluginRuntimeStateForTest();
       const provider = "authstore-proof";
       const freshId = `${provider}:fresh`;
@@ -167,7 +167,7 @@ describe("models auth login --force", () => {
       );
       expect(runtime.log).toHaveBeenCalledWith(`Auth profile: ${freshId} (${provider}/token)`);
     } finally {
-      pluginLoaderCacheState.clear();
+      getPluginLoaderCacheState().clear();
       resetPluginRuntimeStateForTest();
       clearRuntimeAuthProfileStoreSnapshots();
       clearAuthProfileMigrationDiagnostics();

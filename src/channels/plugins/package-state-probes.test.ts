@@ -7,6 +7,7 @@ import type { PluginChannelCatalogEntry } from "../../plugins/channel-catalog-re
 import {
   collectBundledChannelPackageStateLoadFailures,
   hasBundledChannelPackageState,
+  hasChannelPackageState,
   listBundledChannelIdsForPackageState,
 } from "./package-state-probes.js";
 
@@ -152,6 +153,43 @@ describe("channel package-state probes", () => {
         env,
       }),
     ).toBe(configured);
+  });
+
+  it.each([
+    { location: "inside", specifier: "./checker.ts", allowed: true },
+    { location: "outside", specifier: "../checker.ts", allowed: false },
+  ])("keeps TypeScript state probes inside their plugin root ($location)", (fixture) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-probe-"));
+    tempDirs.push(root);
+    const pluginRoot = path.join(root, "plugin");
+    const marker = path.join(root, "evaluated");
+    fs.mkdirSync(pluginRoot);
+    fs.writeFileSync(
+      path.resolve(pluginRoot, fixture.specifier),
+      [
+        'import { writeFileSync } from "node:fs";',
+        `writeFileSync(${JSON.stringify(marker)}, "evaluated");`,
+        "export function isConfigured(): boolean { return true; }",
+      ].join("\n"),
+    );
+    const configured = hasChannelPackageState({
+      entry: {
+        pluginId: "source-chat",
+        origin: "global",
+        rootDir: pluginRoot,
+        channel: {
+          id: "source-chat",
+          configuredState: { specifier: fixture.specifier, exportName: "isConfigured" },
+        },
+      },
+      metadataKey: "configuredState",
+      cfg: {},
+    });
+
+    expect({ configured, evaluated: fs.existsSync(marker) }).toEqual({
+      configured: fixture.allowed,
+      evaluated: fixture.allowed,
+    });
   });
 
   it("prefers built bundled package-state probes when the catalog root is source", () => {

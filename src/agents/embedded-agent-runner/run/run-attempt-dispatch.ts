@@ -13,6 +13,7 @@ import { agentHarnessBuildsOpenClawTools } from "../../harness/selection.js";
 import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
+import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
@@ -372,6 +373,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     },
   });
   const attemptParams: EmbeddedRunAttemptInternalParams = {
+    pluginRuntimeRefreshPending: captureAgentPluginRuntimeRefresh().isPending,
+    pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,

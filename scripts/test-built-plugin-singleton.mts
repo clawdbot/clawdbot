@@ -296,11 +296,13 @@ for (const toolDiscovery of [false, true]) {
   }
 }
 
-// Implicit built-host policy leaves installed source alone; explicit true can
-// use its package-local output. Neither cache call order may contaminate the other.
-for (const [orderIndex, preferences] of [
-  [undefined, true],
-  [true, undefined],
+// Built hosts prefer bundled output; installed source entries remain authoritative.
+// Neither cache call order may contaminate a later artifact policy.
+for (const [orderIndex, { origin, preferences }] of [
+  { origin: "bundled", preferences: [undefined, false] },
+  { origin: "bundled", preferences: [false, undefined] },
+  { origin: "global", preferences: [undefined, true] },
+  { origin: "global", preferences: [true, undefined] },
 ].entries()) {
   const options = {
     config: artifactConfig,
@@ -308,7 +310,7 @@ for (const [orderIndex, preferences] of [
     workspaceDir: path.join(tempRoot, `cache-order-${orderIndex}`),
     manifestRegistry: {
       ...artifactManifestRegistry,
-      plugins: [{ ...artifactManifest, origin: "global" }],
+      plugins: [{ ...artifactManifest, origin }],
     },
     installRecords: {},
     onlyPluginIds: [artifactPluginId],
@@ -317,7 +319,8 @@ for (const [orderIndex, preferences] of [
   };
   const registries = preferences.map((preferBuiltPluginArtifacts) => {
     const selected = loadOpenClawPlugins({ ...options, preferBuiltPluginArtifacts });
-    const label = preferBuiltPluginArtifacts ? "package-local" : "source";
+    const label =
+      origin === "bundled" && preferBuiltPluginArtifacts !== false ? "compiled" : "source";
     assert.equal(selected.plugins[0]?.status, "loaded", selected.plugins[0]?.error);
     assert.equal(selected.providers[0]?.provider.label, label, `cache call order ${orderIndex}`);
     assert.equal(selected.tools[0]?.factory({ config: artifactConfig })?.description, label);

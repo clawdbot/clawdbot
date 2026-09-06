@@ -4,8 +4,8 @@ import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mts";
+import { loadFacadeModuleAtLocationSync } from "../plugin-sdk/facade-loader.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { loadPluginBoundaryModule } from "./runtime/runtime-plugin-boundary.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 type LightModule = {
@@ -124,15 +124,16 @@ function createExternalTypeScriptRuntimePackageFixture() {
 }
 
 function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
+  const loaderOptions = (artifact: string) => ({
+    location: {
+      modulePath: path.join(runtimePluginDir, artifact),
+      boundaryRoot: runtimePluginDir,
+    },
+    boundary: { boundaryLabel: "bundled plugin root", rejectHardlinks: false },
+  });
   return {
-    light: loadPluginBoundaryModule<LightModule>(
-      path.join(runtimePluginDir, "light-runtime-api.js"),
-      { origin: "bundled", rootDir: runtimePluginDir },
-    ),
-    heavy: loadPluginBoundaryModule<HeavyModule>(path.join(runtimePluginDir, "runtime-api.js"), {
-      origin: "bundled",
-      rootDir: runtimePluginDir,
-    }),
+    light: loadFacadeModuleAtLocationSync<LightModule>(loaderOptions("light-runtime-api.js")),
+    heavy: loadFacadeModuleAtLocationSync<HeavyModule>(loaderOptions("runtime-api.js")),
   };
 }
 
@@ -161,20 +162,11 @@ describe("runtime plugin boundary whatsapp seam", () => {
     expectSharedWhatsAppListenerState(createBundledWhatsAppRuntimeFixture(), "work");
   });
 
-  it("rejects bundled TypeScript runtime modules instead of using the source loader", () => {
-    const rootDir = makeTrackedTempDir("openclaw-bundled-boundary-ts", tempDirs);
-    const modulePath = path.join(rootDir, "runtime-api.ts");
-    writeRuntimeFixtureText(rootDir, "runtime-api.ts", "export const ok = true;\n");
-    expect(() =>
-      loadPluginBoundaryModule<{ ok: boolean }>(modulePath, { origin: "bundled", rootDir }),
-    ).toThrow(/must be built JavaScript/u);
-  });
-
   it("keeps the TypeScript source package fallback available for non-bundled plugins", () => {
     const modulePath = createExternalTypeScriptRuntimePackageFixture();
     expect(
-      loadPluginBoundaryModule<{ ok: boolean; loadedVia: string }>(modulePath, {
-        origin: "workspace",
+      loadFacadeModuleAtLocationSync<{ ok: boolean; loadedVia: string }>({
+        location: { modulePath, boundaryRoot: path.dirname(modulePath) },
       }),
     ).toEqual({ ok: true, loadedVia: "jiti-source-package" });
   });

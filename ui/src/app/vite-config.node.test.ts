@@ -485,6 +485,9 @@ describe("Control UI Vite config", () => {
     expect(flat.get("login.failure.authRequired.title")).toBe("Auth required");
     expect(flat.get("sessionsView.runsOnDevice")).toBe("Runs on device");
     expect(flat.get("pluginConsent.widenedTitle")).toBe("What changed");
+    expect(flat.get("pluginsPage.connectorDescriptions.github")).toBe(
+      "PR review queues, issue triage, and repo Q&A through the official GitHub MCP.",
+    );
     expect(flat.get("configPage.themeImported")).toBe("Imported {name}.");
     expect(flat.get("configView.sections.cron")).toBe("Automations");
     expect(flat.get("updates.page.intro")).toBe(

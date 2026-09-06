@@ -10,27 +10,28 @@ sidebarTitle: "Manage plugins"
 doc-schema-version: 1
 ---
 
-The Control UI covers the common discovery, install, enable, and disable
-workflow. The CLI adds update, uninstall, advanced configuration, and explicit
+The Control UI covers discovery, install, enable, disable, reload, and removal.
+The CLI adds update, advanced configuration, and explicit
 install-source controls. For its full command contract, flags, source-selection
 rules, and edge cases, see [`openclaw plugins`](/cli/plugins).
 
 Typical CLI workflow: find a package, install it from ClawHub, npm, git, or a
-local path, let the managed Gateway auto-restart (or restart it manually), then
+local path, wait for the Gateway to apply the change, then
 verify the plugin's runtime registrations.
 
 ## Use the Control UI
 
 Open **Plugins** in the Control UI, or use `/settings/plugins` relative to the
 configured Control UI base path. For example, a base path of `/openclaw` uses
-`/openclaw/settings/plugins`. The page has two tabs:
+`/openclaw/settings/plugins`. Use the **Installed** and **Discover** tabs to
+manage plugins. The hub also has **Skills** and **Workshop** tabs.
 
 - **Installed** shows the full local inventory grouped by category (channels,
-  model providers, memory, tools). Each row opens a detail view; its overflow
-  (`…`) menu enables or disables the plugin and, for externally installed
-  plugins, offers **Remove**. The tab also lists the configured
-  [MCP servers](/cli/mcp) with the same menu-driven enable, disable, and remove
-  actions, editing `mcp.servers` in the Gateway configuration.
+  model providers, memory, tools). Each row opens a detail view and offers
+  enable, disable, and **Reload** actions. Externally installed plugins also
+  offer **Remove**. The tab lists configured [MCP servers](/cli/mcp) with
+  enable, disable, and remove actions that edit `mcp.servers` in the Gateway
+  configuration.
 - **Discover** is the store: featured plugins included with OpenClaw, official
   external plugins, and a curated connector shelf. Connector cards either add a
   hosted MCP server in one click (GitHub, Notion, Linear, Sentry,
@@ -38,23 +39,23 @@ configured Control UI base path. For example, a base path of `/openclaw` uses
   box queries [ClawHub](https://clawhub.ai/plugins) inline and appends a **From
   ClawHub** section with download counts and source-verification badges.
 
-Included plugins do not need a package install. Their menu action is **Enable**
-or **Disable**. Workboard, for example, is included with OpenClaw and disabled
-by default, so choose **Enable** to turn it on. Bundled plugins cannot be
+Included plugins do not need a package install. Their actions are **Enable**,
+**Disable**, and **Reload**. Workboard, for example, is included with OpenClaw
+and disabled by default, so choose **Enable** to turn it on. Bundled plugins cannot be
 removed, only disabled.
 
 Catalog and search access require `operator.read`. Install, enable, disable,
-remove, and MCP server changes require `operator.admin`. A ClawHub install is
+reload, remove, and MCP server changes require `operator.admin`. A ClawHub install is
 performed by the Gateway and preserves its trust, integrity, and plugin-install
 policy checks. Enabling an installed plugin as an administrator also records
 that explicit trust by adding the selected plugin to an existing restrictive
 `plugins.allow` list. An explicit `plugins.deny` entry remains authoritative and
 must be removed before enabling the plugin.
 
-Installing, updating, or removing plugin code requires a Gateway restart.
-Enablement changes for plugins in the startup inventory can be applied without
-a restart when the plugin and current Gateway runtime support it; otherwise
-the UI tells you a restart is required.
+Plugin management applies changes without restarting the Gateway. **Reload**
+refreshes an installed plugin after source or manifest edits. The page shows
+saved enablement separately from actual runtime state and reports a failed
+replacement or cleanup instead of claiming the plugin is ready.
 OAuth-backed MCP connectors still need a one-time `openclaw mcp login <name>`
 from the CLI after they are added.
 
@@ -101,16 +102,17 @@ are enabled by default; others require `enable` after install.
 
 ## Capability consent
 
-OpenClaw asks you to review a third-party plugin's declared capabilities before
-installing or enabling it. The consent screen identifies the plugin, its
-version and source, artifact integrity, and available trust information. It
+OpenClaw checks a third-party plugin's declared capabilities before installing,
+enabling, or reloading it and asks for review when acceptance is missing or
+stale. The consent screen identifies the plugin, its version and source,
+artifact integrity, and available trust information. It
 also lists declared channels, providers, tools, hooks, MCP servers, CLI
 commands and backends, skills, and dangerous configuration flags, along with
 the operator grants that apply to hooks, model access, and subagents.
 
 Bundled plugins and verified first-party plugins from OpenClaw's official
 catalog do not require this capability review during install, enable, update,
-or Doctor repair. For separately installed first-party plugins, OpenClaw checks
+reload, or Doctor repair. For separately installed first-party plugins, OpenClaw checks
 the actual package identity against its catalog and verified npm source record
 or official-channel record from `https://clawhub.ai`. A matching plugin id or
 package name alone is insufficient: local copies, archives, git installs,
@@ -130,10 +132,11 @@ Reinstalling through `plugins install` also preserves an authored `enabled: fals
 but requires consent before committing the install when no valid acceptance can
 be reused. Run `openclaw plugins enable <plugin-id>` to activate it afterward.
 
-Already-enabled third-party legacy installations remain usable without an initial review;
-disabling and re-enabling them requires consent. Setup rechecks consent when
-saving its final config, so a plugin update during login cannot activate a
-replacement with unaccepted capabilities.
+Already-enabled third-party legacy installations remain usable without an initial review.
+Explicit enable or reload through a running Gateway checks consent before
+applying the plugin. Setup rechecks consent when saving its final config, so a
+plugin update during login cannot activate a replacement with unaccepted
+capabilities.
 
 Declining an update's capability review leaves the previous plugin enabled
 and unchanged. Repairing a missing or damaged artifact requires a fresh review;
@@ -149,13 +152,14 @@ Interactive CLI commands, onboarding, and provider, search, or channel setup
 prompt when consent is required, including automatic installs of required
 runtime plugins. Noninteractive or silent setup cannot approve new capabilities.
 Review and preinstall or enable the plugin with `--accept-capabilities`, then
-retry setup. Noninteractive plugin install, update, and enable commands also
-require the explicit flag when consent is needed:
+retry setup. Noninteractive plugin install, update, enable, and reload commands
+also require the explicit flag when consent is needed:
 
 ```bash
 openclaw plugins install clawhub:<package> --accept-capabilities
 openclaw plugins update <plugin-id> --accept-capabilities
 openclaw plugins enable <plugin-id> --accept-capabilities
+openclaw plugins reload <plugin-id> --accept-capabilities
 ```
 
 Doctor uses the same source checks and review before installing or adopting a replacement plugin.
@@ -163,14 +167,15 @@ Doctor uses the same source checks and review before installing or adopting a re
 noninteractive repair, review and install the plugin with the explicit flag
 above, then rerun doctor.
 
-Chat installs and enablement use the same capability consent. When consent is
-required, review the capabilities in the reply, then rerun the same command
+Chat installs, enablement, and reload use the same capability consent. When
+consent is required, review the capabilities in the reply, then rerun the same command
 with `--accept-capabilities`:
 
 ```text
 /plugins install clawhub:<package> --accept-capabilities
 /plugins install npm:<package> --force --accept-capabilities
 /plugins enable <plugin-id> --accept-capabilities
+/plugins reload <plugin-id> --accept-capabilities
 ```
 
 Plugins discovered directly
@@ -233,28 +238,45 @@ explicitly disabled. Runtime policy remains child-addressable through
 `plugins.entries.<child-id>`, allow/deny lists, channel config, exact child load
 paths, and the `memory` and `contextEngine` slots.
 
-## Restart and inspect
+## Reload and inspect
 
-A running managed Gateway with config reload enabled restarts automatically
-after installing, updating, or uninstalling plugin code. If the Gateway is
-unmanaged or reload is disabled, restart it yourself before checking live
-runtime surfaces:
+Install, update, enable, disable, and uninstall apply through the running local
+Gateway. Explicit management operations also work when automatic config reload
+is disabled. If the Gateway is offline, they save the desired state for its
+next startup. A connection failure to a running Gateway is reported as an error.
+Reload requires a running Gateway. After editing an installed plugin's source
+or manifest, reload it:
 
 ```bash
-openclaw gateway restart
+openclaw plugins reload <plugin-id> --json
 openclaw plugins inspect <plugin-id> --runtime --json
 ```
 
-The Gateway keeps the plugin inventory it discovered at startup. Management
-commands can inspect a newly installed package before restart, but that does
-not make its code or metadata available to the running Gateway. Manifest edits
-and plugins added to an agent workspace also require a restart. Ordinary config,
-enablement, and account changes can still hot-apply against the existing
-inventory.
+Reload captures current source and dependencies, including imported TypeScript
+helpers. It preserves saved enablement and waits for an applied runtime receipt.
+Unchanged plugins keep their instances; affected services and channel accounts
+restart within the same Gateway process. Agents can request this through the
+host-owned `plugins` tool. After the current tool batch and running code cells
+settle, the next model step uses the new registry and the existing conversation.
+Imported or supervised native Codex sessions keep their original tool names and
+schemas. Reload updates existing implementations; use a new session for added
+tools or changed schemas. See [Reload ownership](/plugins/architecture#reload-ownership).
 
-For API clients, `plugins.refresh` reports `restartRequired: true` and requests
-a restart through config reload. With `gateway.reload.mode: "off"`, restart
-manually; refresh does not rescan or replace the running inventory.
+Configured transcript captures stop before their provider is replaced, then
+reconnect if it remains enabled. Captures from unchanged plugins continue running.
+If a capture is still stopping or cleanup fails, reload reports a drain failure.
+Let the provider finish stopping, then retry the reload.
+
+Agent results have a fixed response budget. If an inspection, search, or mutation
+result is too large, the tool reports that its details were omitted and directs
+you to the Control UI for the complete result. Publication outcomes remain
+visible, and a capability review token is returned only with its complete review.
+
+For API clients, `plugins.reload` targets a plugin and `plugins.refresh`
+refreshes the inventory. Their results include the applied runtime generation
+and report `restartRequired: false`. Runtime replacement failures include
+`details.runtime.phase` and `details.runtime.committed`, so callers can
+distinguish a rejected candidate from a cleanup failure after activation.
 
 `inspect --runtime` loads the plugin module and proves it registered runtime
 surfaces (tools, hooks, services, Gateway methods, HTTP routes, plugin-owned
@@ -284,14 +306,18 @@ installed index. Run `openclaw plugins registry --refresh`, inspect
 `openclaw plugins doctor`, and use `openclaw doctor --fix` for repairable legacy
 index state. If the ambiguity remains, reinstall the package before retrying.
 
-`openclaw plugins update --all` is the bulk maintenance path. It still
-respects ordinary tracked install specs, but trusted official OpenClaw
-plugin records sync to the current official catalog target instead of
-staying pinned to a stale exact official package. The canonical channel
-resolver uses both `update.channel` and the installed core version, so an
-installed beta core with no configured channel keeps official plugins on the
-beta release line. Use a targeted `update <plugin-id>` to keep an exact or
-tagged official spec untouched.
+Saved updates apply to the running Gateway without restarting it. If part of
+`update --all` fails, successfully saved updates still apply before the command
+exits with an error. When the Gateway is offline, updates take effect at its
+next startup.
+
+`openclaw plugins update --all` is the bulk maintenance path. It preserves
+ordinary exact pins and explicit tags. Floating trusted official plugin records
+follow the current registry-channel policy while retaining their recorded
+selector. The channel resolver uses both `update.channel` and the installed core
+version, so an installed beta core with no configured channel keeps eligible
+official plugins on that core's beta version. See the
+[pinning rules](/cli/plugins#update) for trusted official plugin ID replacements.
 
 For npm installs, pass an explicit package spec to switch the tracked
 record:
@@ -323,9 +349,9 @@ provider, or channel selections cannot automatically reinstall the package durin
 startup repair. Reinstalling does not silently re-enable it; enabling the plugin
 again replaces the marker. You may address a multi-entry package by any child id;
 the preview names the package owner and all siblings that will be removed. The
-managed install directory is removed once unless you pass `--keep-files`. A
-running managed Gateway restarts automatically when the uninstall changes plugin
-source.
+managed install directory is removed once unless you pass `--keep-files`. The
+Gateway disables and drains the package before its files are removed, then
+publishes the updated inventory.
 
 If an installed Claw references the plugin, preview and uninstall print the
 affected Claw package names. Ordinary plugin uninstall can still proceed and
@@ -334,8 +360,8 @@ Removing a Claw releases its plugin reference but retains the process-wide
 plugin by default.
 
 In Nix mode (`OPENCLAW_NIX_MODE=1`), plugin install, update, uninstall,
-enable, and disable are all disabled; manage those choices in the Nix source
-for the install instead.
+enable, disable, and reload are all disabled; manage those choices in the Nix
+source for the install instead.
 
 ## Choose a source
 
@@ -403,7 +429,7 @@ If the same package is available on both ClawHub and npm, use the explicit
 
 ## Related
 
-- [Plugins](/tools/plugin) - install, configure, restart, and troubleshoot
+- [Plugins](/tools/plugin) - install, configure, reload, and troubleshoot
 - [`openclaw plugins`](/cli/plugins) - full CLI reference
 - [Community plugins](/plugins/community) - public discovery and ClawHub publishing
 - [ClawHub](/clawhub/cli) - registry CLI operations

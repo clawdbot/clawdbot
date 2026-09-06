@@ -1,5 +1,5 @@
 /** Covers non-activating memory registry handles and requesting-agent workspace ownership. */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   LegacyMemoryReadResult,
   MemoryProviderStatus,
@@ -10,8 +10,11 @@ import type {
   MemoryPluginRuntime,
   RegisteredMemorySearchManager,
 } from "./registry-contribution-types.js";
-import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRegistry } from "./registry.js";
+import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { createPluginRuntime } from "./runtime/index.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 type AuthorizeSearchHits = NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>;
 type ClassifyWorkspaceMemoryPaths = NonNullable<
@@ -25,9 +28,10 @@ const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-}));
+vi.mock("../agents/agent-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/agent-scope.js")>();
+  return { ...actual, resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir };
+});
 
 vi.mock("./loader.js", () => ({
   loadPluginRegistryHandle: mocks.loadPluginRegistryHandle,
@@ -64,18 +68,35 @@ function createRuntime() {
 }
 
 type TestRegistry<T extends MemoryPluginRuntime> = {
-  registry: ReturnType<typeof createEmptyPluginRegistry>;
+  registry: ReturnType<typeof createPluginRegistry>["registry"];
   runtime: T;
 };
+
+const registries = new Set<TestRegistry<MemoryPluginRuntime>["registry"]>();
+afterEach(async () => {
+  await Promise.all([...registries].map((registry) => disposePluginRegistryInstances(registry)));
+  registries.clear();
+});
 
 function createRegistry(): TestRegistry<ReturnType<typeof createRuntime>>;
 function createRegistry<T extends MemoryPluginRuntime>(runtime: T): TestRegistry<T>;
 function createRegistry(
   runtime: MemoryPluginRuntime = createRuntime(),
 ): TestRegistry<MemoryPluginRuntime> {
-  const registry = createEmptyPluginRegistry();
-  registry.memoryCapabilities.push({ pluginId: "memory-core", capability: { runtime } });
-  return { registry, runtime };
+  const owner = createPluginRegistry({
+    logger: { info() {}, warn() {}, error() {} },
+    runtime: createPluginRuntime(),
+    activateGlobalSideEffects: false,
+  });
+  const record = createPluginRecord({
+    id: "memory-core",
+    kind: "memory",
+    memorySlotSelected: true,
+  });
+  owner.registry.plugins.push(record);
+  owner.createApi(record, { config: {} }).registerMemoryCapability({ runtime });
+  registries.add(owner.registry);
+  return { registry: owner.registry, runtime };
 }
 
 const memoryConfig = {
@@ -170,6 +191,35 @@ describe("memory runtime handles", () => {
     expect(research.runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
     expect(hasMemoryRuntime()).toBe(false);
   });
+
+  it.each(["all", "agent"] as const)(
+    "closes sibling owners after a synchronous %s cleanup failure",
+    async (scope) => {
+      const first = createRegistry();
+      const sibling = createRegistry();
+      mocks.loadPluginRegistryHandle
+        .mockReturnValueOnce(first.registry)
+        .mockReturnValueOnce(sibling.registry);
+      await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+      await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "research" });
+      const failure = new Error("synchronous cleanup failure");
+      const method = scope === "all" ? "closeAllMemorySearchManagers" : "closeMemorySearchManager";
+      first.runtime[method].mockImplementationOnce(() => {
+        throw failure;
+      });
+      const close = () =>
+        scope === "all"
+          ? closeActiveMemorySearchManagersCore()
+          : closeActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+      await expect(close()).rejects.toBe(failure);
+      expect(first.runtime[method]).toHaveBeenCalledOnce();
+      expect(sibling.runtime[method]).toHaveBeenCalledOnce();
+      expect(hasMemoryRuntime()).toBe(true);
+      await close();
+      expect(first.runtime[method]).toHaveBeenCalledTimes(2);
+      expect(sibling.runtime[method]).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("retains standalone cleanup ownership when manager acquisition or teardown fails", async () => {
     const { registry, runtime } = createRegistry();

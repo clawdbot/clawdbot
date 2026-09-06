@@ -41,6 +41,7 @@ export async function createAgentHarnessHostCapabilitiesForTest(params: {
 }
 
 export { setDefaultChannelPluginRegistryForTests } from "../commands/channel-test-registry.js";
+export { PluginInstance } from "../plugins/plugin-instance.js";
 export {
   createEmptyPluginRegistry,
   createPluginRegistry,

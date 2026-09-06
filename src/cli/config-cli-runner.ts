@@ -223,15 +223,18 @@ function configApplyHintForOperations(
   if (paths.length === 0) {
     return "No gateway restart needed.";
   }
-  if (paths.some((path) => path === "plugins.entries" || path.startsWith("plugins.entries."))) {
-    return "Restart the gateway to apply.";
-  }
-  const plan = buildGatewayReloadPlan(paths, { candidateConfig: afterConfig });
+  const plan = buildGatewayReloadPlan(paths, {
+    previousConfig: beforeConfig,
+    candidateConfig: afterConfig,
+  });
   if (
     plan.restartGateway ||
     (plan.hotReasons.length > 0 && resolveGatewayReloadSettings(afterConfig).mode === "off")
   ) {
     return "Restart the gateway to apply.";
+  }
+  if (plan.reloadPlugins) {
+    return "Plugin changes follow the Gateway reload policy. To reload explicitly, run: openclaw plugins reload <id>.";
   }
   return plan.hotReasons.length > 0
     ? "Change will apply without restarting the gateway."

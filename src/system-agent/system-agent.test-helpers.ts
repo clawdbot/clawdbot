@@ -12,7 +12,7 @@ import {
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -77,9 +77,7 @@ export function installSystemAgentPluginMetadataTestSnapshot(
   config: OpenClawConfig = {},
 ): SystemAgentPluginMetadataTestSnapshot {
   const prepared = resolvePluginMetadataSnapshot({ config, env: process.env });
-  let releaseCurrentSnapshot: () => boolean = () => false;
   const bind = (params: Parameters<typeof resolvePluginMetadataSnapshot>[0]) => {
-    releaseCurrentSnapshot();
     const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
     const index =
       prepared.index.policyHash === policyHash ? prepared.index : { ...prepared.index, policyHash };
@@ -96,11 +94,11 @@ export function installSystemAgentPluginMetadataTestSnapshot(
       }),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     };
-    releaseCurrentSnapshot = installTemporaryCurrentPluginMetadataSnapshot(snapshot, {
+    setCurrentPluginMetadataSnapshot(snapshot, {
       config: params.config,
       env: params.env,
       workspaceDir: params.workspaceDir,
-    }).release;
+    });
     return snapshot;
   };
   const rebindForCurrentEnv = () => {
@@ -112,9 +110,7 @@ export function installSystemAgentPluginMetadataTestSnapshot(
     bindForConfig: (nextConfig, workspaceDir) =>
       bind({ config: nextConfig, env: process.env, workspaceDir }),
     rebindForCurrentEnv,
-    restore: () => {
-      releaseCurrentSnapshot();
-    },
+    restore: () => setCurrentPluginMetadataSnapshot(undefined),
   };
 }
 

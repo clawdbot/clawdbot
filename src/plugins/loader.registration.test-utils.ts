@@ -63,11 +63,7 @@ import {
   registerMemoryPromptSupplement,
   resolveMemoryFlushPlan,
 } from "./memory-state.test-fixtures.js";
-import {
-  activatePluginRecordLifecycleEpoch,
-  isPluginRecordLifecycleEpochActive,
-  isPluginRegistryRetired,
-} from "./registry-lifecycle.js";
+import { capturePluginLifecycleAuthority, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginChannelRegistry,
@@ -406,8 +402,8 @@ describe("loadOpenClawPlugins", () => {
     const priorWorkspaceDir = getActivePluginRegistryWorkspaceDir();
     const priorRecord = priorRegistry.plugins.find((entry) => entry.id === "activation-prior");
     expect(priorRecord).toBeDefined();
-    const priorEpoch = activatePluginRecordLifecycleEpoch(priorRegistry, priorRecord!);
-    expect(priorEpoch).toBeDefined();
+    const priorAuthority = capturePluginLifecycleAuthority(priorRegistry, priorRecord!);
+    expect(priorAuthority).toBeDefined();
 
     const replacement = writePlugin({
       id: "activation-replacement",
@@ -452,14 +448,12 @@ describe("loadOpenClawPlugins", () => {
     expect(getActivePluginRuntimeSubagentMode()).toBe(priorMode);
     expect(getActivePluginRegistryWorkspaceDir()).toBe(priorWorkspaceDir);
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["prior"]);
-    expect(isPluginRecordLifecycleEpochActive(priorRegistry, priorRecord!, priorEpoch!)).toBe(true);
+    expect(priorAuthority!()).toBe(true);
 
     const activated = loadOpenClawPlugins(replacementOptions);
     expect(activated.commands.map((entry) => entry.command.name)).toEqual(["replacement"]);
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["replacement"]);
-    expect(isPluginRecordLifecycleEpochActive(priorRegistry, priorRecord!, priorEpoch!)).toBe(
-      false,
-    );
+    expect(priorAuthority!()).toBe(false);
   });
 
   it("fails plugin registration when a hook is missing its required name", () => {
@@ -1401,16 +1395,13 @@ describe("loadOpenClawPlugins", () => {
 
   it("uses discovery registration mode for non-activating loads", () => {
     useNoBundledPlugins();
-    const marker = "__openclawDiscoveryModeTest";
     const plugin = writePlugin({
       id: "discovery-mode-test",
       filename: "discovery-mode-test.cjs",
       body: `module.exports = {
           id: "discovery-mode-test",
           register(api) {
-            globalThis.${marker} = globalThis.${marker} || [];
-            globalThis.${marker}.push(api.registrationMode);
-            api.registerProvider({ id: "discovery-provider", label: "Discovery Provider", auth: [] });
+            api.registerProvider({ id: "discovery-provider", label: api.registrationMode, auth: [] });
             api.registerTool({
               name: "discovery_tool",
               description: "Discovery tool",
@@ -1434,17 +1425,17 @@ describe("loadOpenClawPlugins", () => {
       workspaceDir: plugin.dir,
       config,
     });
-    expect((globalThis as Record<string, unknown>)[marker]).toEqual(["discovery"]);
+    expect(snapshot.providers.map(({ provider }) => provider.label)).toEqual(["discovery"]);
     expect(snapshot.providers.map((entry) => entry.provider.id)).toEqual(["discovery-provider"]);
     expect(snapshot.tools.flatMap((entry) => entry.names)).toContain("discovery_tool");
 
-    loadOpenClawPlugins({
+    const active = loadOpenClawPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config,
     });
-    expect((globalThis as Record<string, unknown>)[marker]).toEqual(["discovery", "full"]);
-    delete (globalThis as Record<string, unknown>)[marker];
+    expect(active.providers.map(({ provider }) => provider.label)).toEqual(["full"]);
+    expect(active.tools.flatMap((entry) => entry.names)).toContain("discovery_tool");
   });
 
   it("ignores plugin-supplied conversation-read authority claims", () => {
@@ -1568,14 +1559,14 @@ describe("loadOpenClawPlugins", () => {
   it("caches non-activating snapshots without restoring global side effects", () => {
     useNoBundledPlugins();
     clearPluginCommands();
-    const marker = "__openclawSnapshotCacheRegisterCount";
+    const register = vi.fn();
     const plugin = writePlugin({
       id: "snapshot-cache",
       filename: "snapshot-cache.cjs",
       body: `module.exports = {
           id: "snapshot-cache",
           register(api) {
-            globalThis.${marker} = (globalThis.${marker} || 0) + 1;
+            api.logger.info("registered");
             api.registerCommand({
               name: "snapshot-command",
               description: "Snapshot command",
@@ -1594,13 +1585,14 @@ describe("loadOpenClawPlugins", () => {
         },
       },
       onlyPluginIds: ["snapshot-cache"],
+      logger: { info: register, warn: vi.fn(), error: vi.fn() },
     };
 
     const first = loadOpenClawPlugins(options);
     const second = loadOpenClawPlugins(options);
 
     expect(second).toBe(first);
-    expect((globalThis as Record<string, unknown>)[marker]).toBe(1);
+    expect(register).toHaveBeenCalledExactlyOnceWith("registered");
     expect(first.commands.map((entry) => entry.command.name)).toEqual(["snapshot-command"]);
     expect(getPluginCommandSpecs()).toStrictEqual([]);
 
@@ -1608,9 +1600,10 @@ describe("loadOpenClawPlugins", () => {
       workspaceDir: plugin.dir,
       config: options.config,
       onlyPluginIds: ["snapshot-cache"],
+      logger: options.logger,
     });
     expect(active).not.toBe(first);
-    expect((globalThis as Record<string, unknown>)[marker]).toBe(2);
+    expect(register).toHaveBeenCalledTimes(2);
     expect(getPluginCommandSpecs()).toEqual([
       {
         name: "snapshot-command",
@@ -1618,7 +1611,6 @@ describe("loadOpenClawPlugins", () => {
         acceptsArgs: false,
       },
     ]);
-    delete (globalThis as Record<string, unknown>)[marker];
   });
 
   it("re-initializes global hook runner when serving registry from cache", () => {

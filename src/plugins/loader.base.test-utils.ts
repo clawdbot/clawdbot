@@ -110,11 +110,11 @@ describe("loadOpenClawPlugins", () => {
       },
       body: `module.exports = {
   id: "Config-Probe",
-  register(api) { globalThis.mixedCaseConfigProbe = api.pluginConfig; },
+  register(api) {
+    api.registerProvider({ id: "config-probe-provider", label: JSON.stringify(api.pluginConfig), auth: [] });
+  },
 };`,
     });
-    const probe = globalThis as unknown as Record<string, unknown>;
-    delete probe.mixedCaseConfigProbe;
 
     const registry = loadRegistryFromSinglePlugin({
       plugin,
@@ -125,8 +125,9 @@ describe("loadOpenClawPlugins", () => {
     });
 
     expect(registry.plugins.find((entry) => entry.id === "Config-Probe")?.status).toBe("loaded");
-    expect(probe.mixedCaseConfigProbe).toEqual({ token: "ok" });
-    delete probe.mixedCaseConfigProbe;
+    expect(registry.providers.map(({ provider }) => provider.label)).toEqual([
+      JSON.stringify({ token: "ok" }),
+    ]);
   });
 
   it("resolves ${ENV_VAR} references in plugin config before handing config to the plugin", () => {
@@ -144,32 +145,31 @@ describe("loadOpenClawPlugins", () => {
       body: `module.exports = {
     id: "env-config-probe",
     register(api) {
-      globalThis.envConfigProbeResult = api.pluginConfig;
+      api.registerProvider({ id: "env-config-provider", label: JSON.stringify(api.pluginConfig), auth: [] });
     },
   };`,
     });
-    const probe = globalThis as unknown as Record<string, unknown>;
     const entries = {
       "env-config-probe": { config: { apiKey: "${ENV_CONFIG_PROBE_SECRET}" } },
     };
 
     // Case 1: the referenced variable is present in process.env.
-    delete probe.envConfigProbeResult;
-    withEnv({ ENV_CONFIG_PROBE_SECRET: "process-env-secret" }, () => {
+    const processEnvRegistry = withEnv({ ENV_CONFIG_PROBE_SECRET: "process-env-secret" }, () =>
       loadRegistryFromSinglePlugin({
         plugin,
         pluginConfig: { allow: ["env-config-probe"], entries },
         options: { resolveRawConfigEnvVars: true },
-      });
-    });
+      }),
+    );
     // Before the fix, the plugin received the literal "${ENV_CONFIG_PROBE_SECRET}".
-    expect(probe.envConfigProbeResult).toMatchObject({ apiKey: "process-env-secret" });
+    expect(processEnvRegistry.providers.map(({ provider }) => provider.label)).toEqual([
+      JSON.stringify({ apiKey: "process-env-secret" }),
+    ]);
 
     // Case 2: the referenced variable lives only in the loader's explicit env,
     // not in process.env — proving the substitution honors the per-load env.
-    delete probe.envConfigProbeResult;
     expect(process.env.ENV_CONFIG_PROBE_SECRET).toBeUndefined();
-    loadRegistryFromSinglePlugin({
+    const explicitEnvRegistry = loadRegistryFromSinglePlugin({
       plugin,
       pluginConfig: { allow: ["env-config-probe"], entries },
       options: {
@@ -177,11 +177,12 @@ describe("loadOpenClawPlugins", () => {
         resolveRawConfigEnvVars: true,
       },
     });
-    expect(probe.envConfigProbeResult).toMatchObject({ apiKey: "explicit-env-secret" });
+    expect(explicitEnvRegistry.providers.map(({ provider }) => provider.label)).toEqual([
+      JSON.stringify({ apiKey: "explicit-env-secret" }),
+    ]);
 
     // Case 3: config.env.vars participates in the same effective env as config IO.
-    delete probe.envConfigProbeResult;
-    withEnv({ ENV_CONFIG_PROBE_SECRET: undefined }, () => {
+    const configEnvRegistry = withEnv({ ENV_CONFIG_PROBE_SECRET: undefined }, () =>
       loadOpenClawPlugins({
         cache: false,
         workspaceDir: plugin.dir,
@@ -199,31 +200,32 @@ describe("loadOpenClawPlugins", () => {
           },
         },
         resolveRawConfigEnvVars: true,
-      });
-    });
-    expect(probe.envConfigProbeResult).toMatchObject({ apiKey: "config-env-secret" });
+      }),
+    );
+    expect(configEnvRegistry.providers.map(({ provider }) => provider.label)).toEqual([
+      JSON.stringify({ apiKey: "config-env-secret" }),
+    ]);
 
     // Case 4: config that already went through read-time substitution must not
     // be processed again. Escaped placeholders intentionally become literals.
-    delete probe.envConfigProbeResult;
     const resolvedEscapedEntries = resolveConfigEnvVars(
       {
         "env-config-probe": { config: { apiKey: "$${ENV_CONFIG_PROBE_SECRET}" } },
       },
       { ENV_CONFIG_PROBE_SECRET: "should-not-leak" } as NodeJS.ProcessEnv,
     ) as typeof entries;
-    withEnv({ ENV_CONFIG_PROBE_SECRET: "process-env-secret" }, () => {
+    const resolvedConfigRegistry = withEnv({ ENV_CONFIG_PROBE_SECRET: "process-env-secret" }, () =>
       loadRegistryFromSinglePlugin({
         plugin,
         pluginConfig: {
           allow: ["env-config-probe"],
           entries: structuredClone(resolvedEscapedEntries),
         },
-      });
-    });
-    expect(probe.envConfigProbeResult).toMatchObject({
-      apiKey: "${ENV_CONFIG_PROBE_SECRET}",
-    });
+      }),
+    );
+    expect(resolvedConfigRegistry.providers.map(({ provider }) => provider.label)).toEqual([
+      JSON.stringify({ apiKey: "${ENV_CONFIG_PROBE_SECRET}" }),
+    ]);
   });
 
   it("emits loader startup trace failure counts for load and register failures", () => {
@@ -1385,13 +1387,12 @@ describe("loadOpenClawPlugins", () => {
       label: "tracks plugins as imported when module evaluation throws after top-level execution",
       run: () => {
         useNoBundledPlugins();
-        const importMarker = "__openclaw_loader_import_throw_marker";
-        Reflect.deleteProperty(globalThis, importMarker);
+        const importMarker = path.join(makePluginLoaderTempDir(), "imported.txt");
 
         const plugin = writePlugin({
           id: "throws-after-import",
           filename: "throws-after-import.cjs",
-          body: `globalThis.${importMarker} = (globalThis.${importMarker} ?? 0) + 1;
+          body: `require("node:fs").writeFileSync(${JSON.stringify(importMarker)}, "loaded", "utf-8");
   throw new Error("boom after import");
   module.exports = { id: "throws-after-import", register() {} };`,
         });
@@ -1403,14 +1404,12 @@ describe("loadOpenClawPlugins", () => {
           options: { activate: false },
         });
 
-        try {
-          const record = registry.plugins.find((entry) => entry.id === "throws-after-import");
-          expect(record?.status).toBe("error");
-          expect(listImportedRuntimePluginIds()).toContain("throws-after-import");
-          expect(Number(Reflect.get(globalThis, importMarker) ?? 0)).toBeGreaterThan(0);
-        } finally {
-          Reflect.deleteProperty(globalThis, importMarker);
-        }
+        const record = registry.plugins.find((entry) => entry.id === "throws-after-import");
+        expect(record?.status).toBe("error");
+        expect(record?.failurePhase).toBe("load");
+        expect(record?.error).toContain("boom after import");
+        expect(listImportedRuntimePluginIds()).toContain("throws-after-import");
+        expect(fs.readFileSync(importMarker, "utf-8")).toBe("loaded");
       },
     },
     {
@@ -1418,14 +1417,6 @@ describe("loadOpenClawPlugins", () => {
       run: () => {
         useNoBundledPlugins();
         const pluginConfigSentinel = "hunter2-sentinel";
-        const marker = "__openclaw_loader_reentry_error";
-        const reenterFnMarker = "__openclaw_loader_reentry_fn";
-        Reflect.deleteProperty(globalThis, marker);
-        Reflect.set(
-          globalThis,
-          reenterFnMarker,
-          (options: Parameters<typeof loadOpenClawPlugins>[0]) => loadOpenClawPlugins(options),
-        );
         const pluginDir = makePluginLoaderTempDir();
         const pluginFile = path.join(pluginDir, "reentrant-snapshot.cjs");
         const nestedOptions = {
@@ -1453,58 +1444,39 @@ describe("loadOpenClawPlugins", () => {
           },
           body: `module.exports = {
     id: "reentrant-snapshot",
-    register() {
-      try {
-        globalThis.${reenterFnMarker}(${JSON.stringify(nestedOptions)});
-      } catch (error) {
-        globalThis.${marker} = {
-          name: error?.name,
-          message: String(error?.message ?? error),
-        };
-        throw error;
-      }
-    },
+    register(api) { api.logger.info("reenter"); },
   };`,
         });
 
         const cacheKey = resolvePluginRegistryLoadCacheKey(nestedOptions);
         expect(cacheKey).toMatch(/^[a-f0-9]{64}$/);
         expect(cacheKey).not.toContain(pluginConfigSentinel);
-        const registry = loadOpenClawPlugins(nestedOptions);
+        const reenter = vi.fn(() => loadOpenClawPlugins(nestedOptions));
+        const registry = loadOpenClawPlugins({
+          ...nestedOptions,
+          logger: { info: reenter, warn: vi.fn(), error: vi.fn() },
+        });
 
-        try {
-          const reentryError = Reflect.get(globalThis, marker) as
-            | { name?: unknown; message?: unknown }
-            | undefined;
-          expect(reentryError?.name).toBe("PluginLoadReentryError");
-          expect(reentryError?.message).toBe(
-            `plugin load reentry detected for cache key: ${cacheKey}`,
-          );
-          expect(String(reentryError?.message)).not.toContain(pluginConfigSentinel);
-          const record = registry.plugins.find((entry) => entry.id === "reentrant-snapshot");
-          expect(record?.status).toBe("error");
-          expect(record?.error).toContain(cacheKey);
-          expect(record?.error).not.toContain(pluginConfigSentinel);
-          expect(record?.failurePhase).toBe("register");
-        } finally {
-          Reflect.deleteProperty(globalThis, marker);
-          Reflect.deleteProperty(globalThis, reenterFnMarker);
-        }
+        expect(reenter).toHaveBeenCalledExactlyOnceWith("reenter");
+        expect(reenter.mock.results[0]).toMatchObject({
+          type: "throw",
+          value: {
+            name: "PluginLoadReentryError",
+            message: `plugin load reentry detected for cache key: ${cacheKey}`,
+          },
+        });
+        expect(String(reenter.mock.results[0]?.value)).not.toContain(pluginConfigSentinel);
+        const record = registry.plugins.find((entry) => entry.id === "reentrant-snapshot");
+        expect(record?.status).toBe("error");
+        expect(record?.error).toContain(cacheKey);
+        expect(record?.error).not.toContain(pluginConfigSentinel);
+        expect(record?.failurePhase).toBe("register");
       },
     },
     {
       label: "lets resolveRuntimePluginRegistry short-circuit during same snapshot load",
       run: () => {
         useNoBundledPlugins();
-        const marker = "__openclaw_runtime_registry_reentry_marker";
-        const resolverMarker = "__openclaw_runtime_registry_reentry_fn";
-        Reflect.deleteProperty(globalThis, marker);
-        Reflect.set(
-          globalThis,
-          resolverMarker,
-          (options: Parameters<typeof resolveRuntimePluginRegistry>[0]) =>
-            resolveRuntimePluginRegistry(options),
-        );
         const pluginDir = makePluginLoaderTempDir();
         const pluginFile = path.join(pluginDir, "runtime-registry-reentry.cjs");
         const nestedOptions = {
@@ -1524,23 +1496,20 @@ describe("loadOpenClawPlugins", () => {
           filename: "runtime-registry-reentry.cjs",
           body: `module.exports = {
     id: "runtime-registry-reentry",
-    register() {
-      const registry = globalThis.${resolverMarker}(${JSON.stringify(nestedOptions)});
-      globalThis.${marker} = registry === undefined ? "undefined" : "loaded";
-    },
+    register(api) { api.logger.info("resolve"); },
   };`,
         });
 
-        const registry = loadOpenClawPlugins(nestedOptions);
+        const resolve = vi.fn(() => resolveRuntimePluginRegistry(nestedOptions));
+        const registry = loadOpenClawPlugins({
+          ...nestedOptions,
+          logger: { info: resolve, warn: vi.fn(), error: vi.fn() },
+        });
 
-        try {
-          expect(Reflect.get(globalThis, marker)).toBe("undefined");
-          const record = registry.plugins.find((entry) => entry.id === "runtime-registry-reentry");
-          expect(record?.status).toBe("loaded");
-        } finally {
-          Reflect.deleteProperty(globalThis, marker);
-          Reflect.deleteProperty(globalThis, resolverMarker);
-        }
+        expect(resolve).toHaveBeenCalledExactlyOnceWith("resolve");
+        expect(resolve).toHaveReturnedWith(undefined);
+        const record = registry.plugins.find((entry) => entry.id === "runtime-registry-reentry");
+        expect(record?.status).toBe("loaded");
       },
     },
     {

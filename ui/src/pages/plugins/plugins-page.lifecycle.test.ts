@@ -58,56 +58,6 @@ describe("PluginsPage lifecycle confirmation", () => {
     return { harness, queued: queued.promise, release };
   }
 
-  it("does not install on a replacement Gateway after confirmation started", async () => {
-    const available = createPlugin({
-      id: "community-thing",
-      name: "Community Thing",
-      origin: "global",
-      installed: false,
-      enabled: false,
-      state: "not-installed",
-      install: { source: "official", pluginId: "community-thing" },
-    });
-    const { client: initialClient, request: initialRequest } = createClient(async () => {
-      throw new Error("The initial Gateway must not receive a request while confirmation is open.");
-    });
-    const { client: replacementClient, request: replacementRequest } = createClient(
-      async (method) => {
-        if (method === "plugins.list") {
-          return createResult(available);
-        }
-        if (method === "plugins.install") {
-          return {
-            ok: true,
-            plugin: { ...available, installed: true },
-            restartRequired: true,
-          } satisfies PluginMutationResult;
-        }
-        throw new Error(`Unexpected replacement method ${method}`);
-      },
-    );
-    const harness = createGateway(initialClient);
-    const { page } = await mountPage(
-      createContext(harness.gateway),
-      createPluginsRouteData(harness.gateway, createResult(available)),
-    );
-    const request = {
-      source: "official",
-      pluginId: "community-thing",
-    } satisfies PluginInstallRequest;
-    const confirmation = deferred<boolean>();
-    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
-
-    const install = page.consentController.install(request, "plugin:community-thing");
-    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
-    harness.emit(replacementClient, true);
-    confirmation.resolve(true);
-    await install;
-
-    expect(initialRequest).not.toHaveBeenCalledWith("plugins.install", request);
-    expect(replacementRequest).not.toHaveBeenCalledWith("plugins.install", request);
-  });
-
   it("does not uninstall on a replacement Gateway after confirmation started", async () => {
     const removable = createPlugin({
       id: "community-thing",
@@ -162,7 +112,7 @@ describe("PluginsPage lifecycle confirmation", () => {
     });
   });
 
-  it("does not install after its confirmed Gateway source changes while config writes drain", async () => {
+  it("does not install after its Gateway source changes while config writes drain", async () => {
     const available = createPlugin({
       id: "community-thing",
       name: "Community Thing",
@@ -212,7 +162,7 @@ describe("PluginsPage lifecycle confirmation", () => {
     expect(gatewayRequest).not.toHaveBeenCalledWith("plugins.install", request);
   });
 
-  it("does not uninstall after its confirmed Gateway source changes while config writes drain", async () => {
+  it("does not uninstall after its Gateway source changes while config writes drain", async () => {
     const removable = createPlugin({
       id: "community-thing",
       name: "Community Thing",
@@ -264,7 +214,7 @@ describe("PluginsPage lifecycle confirmation", () => {
     });
   });
 
-  it("reconfirms an install-policy retry after a same-client reconnect", async () => {
+  it("keeps install policy review without asking for restart confirmation", async () => {
     const available = createPlugin({
       id: "community-thing",
       name: "Community Thing",
@@ -318,20 +268,14 @@ describe("PluginsPage lifecycle confirmation", () => {
 
     await page.consentController.install(request, "plugin:community-thing");
     expect(installCalls).toBe(1);
-    expect(showConfirmDialog).toHaveBeenCalledOnce();
+    expect(showConfirmDialog).not.toHaveBeenCalled();
     harness.emit(client, false);
     harness.emit(client, true);
     await waitForFast(() =>
       expect(page.querySelector('[data-plugin-id="community-thing"]')).not.toBeNull(),
     );
-    const confirmation = deferred<boolean>();
-    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
-
     await clickRowAction(page, '[data-plugin-id="community-thing"]', "Install anyway");
-    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledTimes(2));
-    expect(installCalls).toBe(1);
-
-    confirmation.resolve(true);
     await waitForFast(() => expect(installCalls).toBe(2));
+    expect(showConfirmDialog).not.toHaveBeenCalled();
   });
 });

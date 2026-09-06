@@ -26,7 +26,6 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import { resetPluginToolDescriptorCacheForTest } from "../plugins/tools.test-fixtures.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
@@ -92,7 +91,7 @@ beforeEach(async () => {
     },
     plugins: {
       allow: ["cold-probe"],
-      // Explicit source entry keeps artifact selection at the runtime owner boundary.
+      // Explicit source stays authoritative even when a package-local build is present.
       load: { paths: [path.join(dir, "index.ts")] },
       slots: { memory: "none" },
       entries: { "cold-probe": { enabled: true } },
@@ -103,7 +102,6 @@ beforeEach(async () => {
 afterEach(async () => {
   clearRuntimeConfigSnapshot();
   clearPluginLoaderCache();
-  resetPluginToolDescriptorCacheForTest();
   clearPluginMetadataLifecycleCaches();
   await state?.cleanup();
 });
@@ -137,7 +135,7 @@ async function executeProbe({ ctx }: HeadlessParams): Promise<CodeModeHeadlessRe
 
 describe("cron preparation plugin ownership", () => {
   it.each(["gateway", "standalone"] as const)(
-    "preserves %s artifact selection through both real preparation loads",
+    "keeps explicit source selection through %s preparation loads",
     async (owner) => {
       const metadataSnapshot = loadPluginMetadataSnapshot({
         config,
@@ -156,7 +154,7 @@ describe("cron preparation plugin ownership", () => {
         },
       };
       const runtime = createCronScriptRuntime(deps);
-      const artifact = owner === "gateway" ? "built" : "source";
+      const artifact = "source";
       const run = (jobId: string, agentId = "main", toolsAllow = ["*"]) =>
         runtime.executePayload({
           jobId,
@@ -230,14 +228,14 @@ describe("cron preparation plugin ownership", () => {
       expect(tools.map((tool) => tool.name)).toEqual(["cold_probe"]);
       await expect(tools[0]!.execute("scoped-call", {})).resolves.toMatchObject({
         details: {
-          artifact: owner === "scoped" ? "built" : "source",
+          artifact: "source",
           agentId: "main",
           sessionKey: "agent:main:cron:scoped:trigger",
         },
       });
       expect(readRegistrations()).toEqual([
-        { artifact: "built", mode: "discovery" },
-        { artifact: owner === "scoped" ? "built" : "source", mode: "tool-discovery" },
+        { artifact: "source", mode: "discovery" },
+        { artifact: "source", mode: "tool-discovery" },
       ]);
     },
   );

@@ -1,4 +1,3 @@
-// Gateway WebSocket connect finalization attaches node/session state and sends hello-ok.
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -73,10 +72,6 @@ type AuthenticatedNodePairingAdmission = NonNullable<
 > & {
   authenticated: { nodeId: string; publicKey: string; token: string };
 };
-
-function isReleasedVersion(version: string): boolean {
-  return RELEASED_VERSION_RE.test(version);
-}
 
 export async function attachAuthenticatedGatewayConnect(
   context: GatewayConnectPhaseContext,
@@ -416,6 +411,7 @@ export async function attachAuthenticatedGatewayConnect(
     connect: connectParams,
     connId,
     connectionKind: "gateway",
+    ...(!usesLegacyNodeProtocol && pluginSurfaceBaseUrl ? { pluginSurfaceBaseUrl } : {}),
     isDeviceTokenAuth: authMethod === "device-token",
     pairedClientId: isBrowserCopilotClient(connectParams.client)
       ? connectParams.client.id
@@ -485,8 +481,8 @@ export async function attachAuthenticatedGatewayConnect(
         clientVersion &&
         gatewayVersion &&
         clientVersion !== gatewayVersion &&
-        isReleasedVersion(gatewayVersion) &&
-        isReleasedVersion(clientVersion)
+        RELEASED_VERSION_RE.test(gatewayVersion) &&
+        RELEASED_VERSION_RE.test(clientVersion)
       ) {
         logWsControl.info(
           `node version mismatch conn=${connId} client=${formatForLog(clientLabel)} clientVersion=${formatForLog(clientVersion)} gatewayVersion=${gatewayVersion}; closing for supervisor restart`,

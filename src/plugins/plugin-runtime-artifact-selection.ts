@@ -183,9 +183,9 @@ export function resolvePreferredBuiltRuntimeArtifact(params: {
   if (!params.preferBuiltPluginArtifacts || params.sourcePreferred) {
     return { source, rootDir };
   }
+  // Installed source entries are authoritative, including explicit developer reloads.
   if (params.origin !== "bundled") {
-    const artifactSource = resolvePackageLocalDistRuntimeArtifact({ ...params, source, rootDir });
-    return artifactSource ? { source: artifactSource, rootDir } : { source, rootDir };
+    return { source, rootDir };
   }
   // Source-external plugins keep source authoritative over package-local output;
   // only the lifecycle-owned canonical root build may replace that pair.

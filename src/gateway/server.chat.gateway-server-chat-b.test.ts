@@ -44,7 +44,7 @@ import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/di
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { getMediaDir } from "../media/store.js";
-import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { rebasePluginMetadataSnapshotManifestRegistry } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -2043,7 +2043,6 @@ describe("gateway server chat", () => {
         },
       },
       async (state) => {
-        let releasePluginMetadata: () => boolean = () => false;
         const previousAgentConfig = testState.agentConfig;
         const previousAgentsConfig = testState.agentsConfig;
         openDirectChatSession();
@@ -2068,14 +2067,11 @@ describe("gateway server chat", () => {
           await state.writeConfig(config);
           const pluginMetadataSnapshot = createGatewayPluginMetadataSnapshot(config);
           assertPluginMetadataSnapshotConsistency(pluginMetadataSnapshot);
-          releasePluginMetadata = installTemporaryCurrentPluginMetadataSnapshot(
-            pluginMetadataSnapshot,
-            {
-              config,
-              compatibleConfigs: [config],
-              env: process.env,
-            },
-          ).release;
+          setCurrentPluginMetadataSnapshot(pluginMetadataSnapshot, {
+            config,
+            compatibleConfigs: [config],
+            env: process.env,
+          });
           const persistedConfig = getRuntimeConfig();
           expect(persistedConfig.auth?.order?.openai).toEqual([
             "openai:api",
@@ -2492,7 +2488,7 @@ describe("gateway server chat", () => {
           testState.agentConfig = previousAgentConfig;
           testState.agentsConfig = previousAgentsConfig;
           testState.sessionStorePath = undefined;
-          releasePluginMetadata();
+          setCurrentPluginMetadataSnapshot(undefined);
         }
       },
     );

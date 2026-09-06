@@ -18,6 +18,7 @@ export type PackageManifest = PluginPackageManifest & {
 };
 
 export const PLUGIN_INSTALL_ERROR_CODE = {
+  CONFIG_MUTATION_BLOCKED: "plugin_config_mutation_blocked",
   INVALID_NPM_SPEC: "invalid_npm_spec",
   INVALID_MIN_HOST_VERSION: "invalid_min_host_version",
   UNKNOWN_HOST_VERSION: "unknown_host_version",

@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import {
@@ -41,7 +40,7 @@ import {
   isProviderAuthProfileConfigured,
   resolveProviderAuthProfileApiKey,
 } from "./provider-auth-availability.js";
-import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
+import { findCapabilityProviderEntry } from "./provider-registry-shared.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import {
@@ -218,45 +217,6 @@ function resolveCapabilityLoadContext(
   }) === context.metadataSnapshot
     ? context
     : undefined;
-}
-
-function findProviderById<K extends CapabilityProviderRegistryKey>(
-  entries: PluginRegistry[K],
-  providerId: string,
-): CapabilityProviderFor<K> | undefined {
-  const normalizedProviderId = normalizeCapabilityProviderId(providerId);
-  if (!normalizedProviderId) {
-    return undefined;
-  }
-  for (const entry of entries) {
-    const provider: unknown = entry.provider;
-    if (!isRecord(provider)) {
-      continue;
-    }
-    if (
-      typeof provider.id === "string" &&
-      normalizeCapabilityProviderId(provider.id) === normalizedProviderId
-    ) {
-      return entry.provider as CapabilityProviderFor<K>;
-    }
-  }
-  for (const entry of entries) {
-    const provider: unknown = entry.provider;
-    if (!isRecord(provider)) {
-      continue;
-    }
-    const aliases = Array.isArray(provider.aliases) ? provider.aliases : [];
-    if (
-      aliases.some(
-        (alias) =>
-          typeof alias === "string" &&
-          normalizeCapabilityProviderId(alias) === normalizedProviderId,
-      )
-    ) {
-      return entry.provider as CapabilityProviderFor<K>;
-    }
-  }
-  return undefined;
 }
 
 function mergeCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
@@ -535,7 +495,10 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
     cfg: params.cfg,
     key: params.key,
   });
-  const activeProvider = findProviderById(activeProviders, params.providerId);
+  const activeProvider = findCapabilityProviderEntry<PluginRegistry[K][number]>(
+    activeProviders,
+    params.providerId,
+  )?.provider;
   if (activeProvider) {
     return activeProvider;
   }
@@ -576,7 +539,8 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
     loadOptions,
     requested: new Set([params.providerId.toLowerCase()]),
   });
-  return findProviderById(loadedProviders, params.providerId);
+  return findCapabilityProviderEntry<PluginRegistry[K][number]>(loadedProviders, params.providerId)
+    ?.provider;
 }
 
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {

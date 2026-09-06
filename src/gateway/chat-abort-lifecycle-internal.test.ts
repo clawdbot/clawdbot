@@ -8,8 +8,8 @@ import {
   abortChatRunById,
   registerChatAbortController,
   removeChatAbortControllerEntry,
-  type ChatAbortControllerEntry,
 } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 
 function registeredRun() {

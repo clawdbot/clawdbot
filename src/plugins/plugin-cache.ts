@@ -13,11 +13,8 @@ import type {
   PluginFileCacheEntry,
   PluginPathCacheEntry,
 } from "./plugin-cache-files.types.js";
-import {
-  createPluginCacheManagement,
-  type PluginCacheManagement,
-} from "./plugin-cache-management.js";
-import { createPluginCacheMetadata, type PluginCacheMetadata } from "./plugin-cache-metadata.js";
+import type { PluginCacheManagement } from "./plugin-cache-management.js";
+import type { PluginCacheMetadata } from "./plugin-cache-metadata.js";
 import { createPluginCacheSdk, type PluginCacheSdk } from "./plugin-cache-sdk.js";
 
 export type PluginRootCacheRecord = ReturnType<typeof createPluginRootArtifacts> & {
@@ -37,26 +34,65 @@ export interface PluginCache
   roots: Map<string, PluginRootCacheRecord>;
   rootAliases: Map<string, string>;
   sdk: PluginCacheSdk;
+  clearRegistryLoads?: () => void;
+  setupModules: Map<
+    string,
+    {
+      pluginId: string;
+      loadModule(source: string): unknown;
+      quiesce(): void;
+      dispose(): Promise<void>;
+    }
+  >;
+  retirement?: Promise<void>;
 }
 
 const state = resolveGlobalSingleton<{
   current?: PluginCache;
   scope: AsyncLocalStorage<PluginCache>;
   snapshotOwners: WeakMap<object, PluginCache>;
+  retirements: Promise<PromiseSettledResult<void>>[];
 }>(Symbol.for("openclaw.pluginCache"), () => ({
   scope: new AsyncLocalStorage<PluginCache>(),
   snapshotOwners: new WeakMap(),
+  retirements: [],
 }));
 
-/** A cache generation owns progressively acquired facts, never mutable activation state. */
+/** Each inventory owns its acquired facts and reusable load results; publication owns activation. */
 export function createPluginCache(options: { kind?: PluginCache["kind"] } = {}): PluginCache {
   return {
     kind: options.kind ?? "operation",
     roots: new Map(),
     rootAliases: new Map(),
     sdk: createPluginCacheSdk(),
-    ...createPluginCacheMetadata(),
-    ...createPluginCacheManagement<PluginCache>(),
+    setupModules: new Map(),
+    metadata: {
+      current: {
+        snapshot: undefined,
+        owner: "operation",
+        configFingerprint: undefined,
+        envFingerprint: undefined,
+        defaultDiscoveryCompatible: false,
+        compatiblePolicyHashes: undefined,
+        compatibleConfigFingerprints: undefined,
+        modelIdNormalizationPolicies: undefined,
+        revision: Symbol("plugin-metadata-snapshot"),
+        configIdentities: new WeakSet(),
+      },
+      snapshots: new Map(),
+      discovery: new Map(),
+      projections: new WeakMap(),
+      projectionSources: new WeakMap(),
+      completions: new WeakMap(),
+      indexFingerprints: new WeakMap(),
+      channelAdapters: new WeakMap(),
+      bundledChannelCatalogs: new Map(),
+      staticCatalogStates: new WeakMap(),
+      modelSuppressionResolvers: new WeakMap(),
+    },
+    installRecords: new Map(),
+    persistedInstalledIndex: new Map(),
+    dependencyStatus: new WeakMap(),
     ...createPluginCacheArtifacts(),
   };
 }
@@ -83,6 +119,10 @@ export function withPluginCache<T>(cache: PluginCache, run: () => T): T {
   return state.scope.run(cache, run);
 }
 
+export function runOutsidePluginCache<T>(run: () => T): T {
+  return state.scope.exit(run);
+}
+
 /** Frozen views retain their producer so deferred access fills the same generation. */
 export function bindPluginMetadataSnapshotCache(snapshot: object, cache = getPluginCache()): void {
   state.snapshotOwners.set(snapshot, cache);
@@ -96,7 +136,60 @@ export function getPluginMetadataSnapshotCache(snapshot: object): PluginCache {
 export function resetPluginCache(): void {
   const previous = state.current;
   state.current = undefined;
-  previous?.disposeModules?.();
+  if (previous) {
+    state.retirements.push(
+      retirePluginCache(previous).then(
+        () => ({ status: "fulfilled", value: undefined }),
+        (reason: unknown) => ({ status: "rejected", reason }),
+      ),
+    );
+  }
+}
+
+/** Stop new setup calls immediately; the owner awaits in-flight calls and graph cleanup. */
+export function retirePluginCache(cache: PluginCache): Promise<void> {
+  // Retained instances keep their captured facts, not cached registries from a retired inventory.
+  cache.clearRegistryLoads?.();
+  for (const resource of cache.setupModules.values()) {
+    resource.quiesce();
+  }
+  return (cache.retirement ??= (async () => {
+    const results = await Promise.allSettled(
+      [...cache.setupModules.values()].map((resource) => resource.dispose()),
+    );
+    cache.setupModules.clear();
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "Plugin cache resources failed to retire");
+    }
+  })());
+}
+
+/** Unchanged setup callbacks keep their exact owner across runtime publication. */
+export function transferPluginCacheSetupModules(
+  previous: PluginCache,
+  next: PluginCache,
+  changedPluginIds: ReadonlySet<string>,
+): void {
+  for (const [key, resource] of previous.setupModules) {
+    if (!changedPluginIds.has(resource.pluginId) && !next.setupModules.has(key)) {
+      next.setupModules.set(key, resource);
+      previous.setupModules.delete(key);
+    }
+  }
+}
+
+/** Consume retirements initiated by synchronous config/setup cache invalidation. */
+export async function waitForPluginCacheRetirement(): Promise<void> {
+  const results = await Promise.all(state.retirements.splice(0));
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length) {
+    throw new AggregateError(failures, "Plugin cache retirement failed");
+  }
 }
 
 export function getPluginCacheRoot(rootDir: string): PluginRootCacheRecord {

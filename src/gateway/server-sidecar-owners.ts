@@ -10,9 +10,7 @@ export function createGatewaySidecarStopOwner(params: {
     if (phase === "sealed") {
       throw new Error("cannot publish a Gateway sidecar after shutdown sealed its owner");
     }
-    params.setRegistered(
-      mergeGatewaySidecarOwners({ registered: params.getRegistered(), published: sidecars }),
-    );
+    params.setRegistered([...new Set([...params.getRegistered(), ...sidecars])]);
     if (phase === "closing") {
       void stop().catch(() => {});
     }
@@ -98,11 +96,4 @@ export function createGatewaySidecarStopOwner(params: {
   };
 
   return { publish, beginClose, stop, sealAndJoin };
-}
-
-function mergeGatewaySidecarOwners(params: {
-  registered: readonly GatewayPostReadySidecarHandle[];
-  published: readonly GatewayPostReadySidecarHandle[];
-}): GatewayPostReadySidecarHandle[] {
-  return [...new Set([...params.registered, ...params.published])];
 }

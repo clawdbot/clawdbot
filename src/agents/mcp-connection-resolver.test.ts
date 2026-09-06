@@ -365,8 +365,7 @@ describe("mcp connection resolver helpers", () => {
         async stopChannel() {},
         releaseChannelRouteHandoffs() {},
         pruneInactiveChannelAccountState() {},
-        async reloadPlugins({ beforeReplace, commitRuntime }) {
-          await beforeReplace(new Set());
+        async reloadPlugins({ commitRuntime }) {
           await commitRuntime();
           attachedRegistry = replacement.registry;
           setActivePluginRegistry(replacement.registry);

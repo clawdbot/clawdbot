@@ -36,6 +36,23 @@ vi.mock("./native-module-require.js", async (importOriginal) => ({
   tryNativeRequireJavaScriptModule: (_modulePath: string) => ({ ok: false }),
 }));
 
+vi.mock("./plugin-module-loader-cache.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-module-loader-cache.js")>();
+  return {
+    ...actual,
+    getCachedPluginModuleLoader: (
+      params: Parameters<typeof actual.getCachedPluginModuleLoader>[0],
+    ) =>
+      actual.getCachedPluginModuleLoader({
+        ...params,
+        createLoader: getRegistryJitiMocks().createJiti,
+      }),
+    bindPluginInstanceModuleLoader: (
+      params: Parameters<typeof actual.bindPluginInstanceModuleLoader>[0],
+    ) => params.instance.bindModuleLoader(params.loadHostModule),
+  };
+});
+
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 
@@ -49,7 +66,6 @@ let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePlug
 let resolvePluginSetupProviderCore: typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
-let setPluginSetupRegistryModuleLoaderFactoryForTest: typeof import("./setup-registry.test-fixtures.js").setPluginSetupRegistryModuleLoaderFactoryForTest;
 
 function forceNodeRuntimeVersionsForTest(): () => void {
   const originalVersions = process.versions;
@@ -217,7 +233,7 @@ function firstRecordArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unkno
 }
 
 afterEach(() => {
-  setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
+  clearPluginSetupRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -239,9 +255,8 @@ describe("setup-registry module loader", () => {
       resolvePluginSetupCliBackend,
       runPluginSetupConfigMigrations,
     } = await import("./setup-registry.js"));
-    ({ clearPluginSetupRegistryCache, setPluginSetupRegistryModuleLoaderFactoryForTest } =
-      await import("./setup-registry.test-fixtures.js"));
-    setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
+    ({ clearPluginSetupRegistryCache } = await import("./setup-registry.test-fixtures.js"));
+    clearPluginSetupRegistryCache();
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -268,13 +283,13 @@ describe("setup-registry module loader", () => {
       filename: mockArg(mocks.createJiti, 0, 0),
       options: requireRecord(mockArg(mocks.createJiti, 0, 1)),
     };
-    setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
+    clearPluginSetupRegistryCache();
   });
 
   beforeEach(() => {
     resetRegistryJitiMocks();
     setupRegistryWarn.mockReset();
-    setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
+    clearPluginSetupRegistryCache();
   });
 
   it("uses the runtime-supported source-transform boundary on Windows for setup-api modules", () => {

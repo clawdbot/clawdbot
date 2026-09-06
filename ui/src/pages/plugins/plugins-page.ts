@@ -3,6 +3,7 @@ import { initialState, Task, TaskStatus } from "@lit/task";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { PluginsUninstallResult } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForPluginsHubTab } from "../../app-route-paths.ts";
 import {
@@ -14,15 +15,14 @@ import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { inspectPlugin } from "../../lib/plugins/capability-consent-error.ts";
-import {
-  uninstallPlugin,
-  type PluginCatalogItem,
-  type PluginListResult,
-  type PluginMutationResult,
-  type PluginSearchResult,
-  type PluginsInspectResult,
+import type {
+  PluginCatalogItem,
+  PluginListResult,
+  PluginMutationResult,
+  PluginSearchResult,
+  PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import {
   GatewayPageController,
@@ -31,7 +31,10 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
 import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
-import { PluginsConsentController } from "./plugins-consent-controller.ts";
+import {
+  committedMutationMessage,
+  PluginsConsentController,
+} from "./plugins-consent-controller.ts";
 import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
 import type { PluginsHubTab } from "./plugins-hub.ts";
 import { PluginsMcpController } from "./plugins-mcp-controller.ts";
@@ -99,6 +102,7 @@ class PluginsPage extends OpenClawLightDomElement {
     { controller: AbortController; timeout: ReturnType<typeof setTimeout> }
   >();
   private iconAuthCandidates: string[] = [];
+  private pluginGeneration: number | undefined;
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
@@ -213,6 +217,9 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private handleGatewaySnapshot(change: GatewayPageChange) {
     const snapshot = change.snapshot;
+    const generation = snapshot.pluginCapabilities?.generation;
+    const pluginsChanged = generation !== undefined && generation !== this.pluginGeneration;
+    this.pluginGeneration = generation;
     const nextIconAuthCandidates = resolveControlUiAuthCandidates({
       hello: snapshot.hello,
       settings: { token: this.context.gateway.connection.token },
@@ -226,7 +233,7 @@ class PluginsPage extends OpenClawLightDomElement {
     this.iconAuthCandidates = nextIconAuthCandidates;
     const shouldRefreshAfterChange =
       !change.initial &&
-      (change.identityChanged || change.connectionChanged || iconAuthChanged) &&
+      (change.identityChanged || change.connectionChanged || iconAuthChanged || pluginsChanged) &&
       snapshot.phase === "connected" &&
       this.routeDataConsumed;
     if (
@@ -643,28 +650,15 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
-  private updateEnabled(pluginId: string, enabled: boolean, key?: string): Promise<void> {
-    return this.consentController.updateEnabled(pluginId, enabled, key);
-  }
-
   private async uninstall(pluginId: string, rowKey: string): Promise<void> {
     const name = this.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
     await this.consentController.runMutation(
       rowKey,
-      (client) => uninstallPlugin(client, pluginId),
-      async (result, refreshError, client, _isCurrent, isLatest) => {
-        // Removal hides its row, so keep the restart reminder on the page.
+      (client) => client.request<PluginsUninstallResult>("plugins.uninstall", { pluginId }),
+      async (result, refreshError, client, isLatest) => {
+        // Removal hides its row, so retain the operation outcome on the page.
         if (isLatest()) {
-          this.pageNotice = {
-            kind: "success",
-            text: [
-              t("pluginsPage.removedRestart", { name: result.pluginId }),
-              ...(result.warnings ?? []).map((warning) => formatUiExternalText(warning)),
-              refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
-            ]
-              .filter(Boolean)
-              .join("\n"),
-          };
+          this.pageNotice = committedMutationMessage("removed", result, refreshError);
         }
         await this.refreshCatalogAfterMutation(client);
       },
@@ -714,7 +708,7 @@ class PluginsPage extends OpenClawLightDomElement {
           onIconError: (pluginId) => this.handlePluginIconError(pluginId),
           onShowDetails: (pluginId) => void this.showDetails(pluginId),
           onSetEnabled: (pluginId, enabled, rowKey) =>
-            void this.updateEnabled(pluginId, enabled, rowKey),
+            void this.consentController.updateEnabled(pluginId, enabled, rowKey),
           onInstall: (request, installIdentity) =>
             void this.consentController.install(request, installIdentity),
           onCancelConsent: () => this.consentController.close(),
@@ -722,6 +716,7 @@ class PluginsPage extends OpenClawLightDomElement {
           onRetryConsentInspection: () => void this.consentController.inspect(),
           onDismissMessage: (rowKey) => this.setMessage(rowKey, null),
           onUninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),
+          onReload: (pluginId, rowKey) => void this.consentController.reload(pluginId, rowKey),
           onSearchClawHub: (query) => this.openClawHubSearch(query),
         })}
       `)}

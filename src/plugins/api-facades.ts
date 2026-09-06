@@ -1,4 +1,4 @@
-// Builds plugin API facades exposed to bundled and external plugins.
+import { pluginInstanceState, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import type { OpenClawPluginApi } from "./types.js";
 
 type PluginApiFacadeFields = Pick<
@@ -57,7 +57,43 @@ export function attachPluginApiFacades<T extends object>(
     clearRunContext: (...args) => api.clearRunContext(...args),
   };
   api.lifecycle = {
+    ...api.lifecycle,
     registerRuntimeLifecycle: (...args) => api.registerRuntimeLifecycle(...args),
   };
   return api as T & PluginApiFacadeFields;
+}
+
+/** Registration callbacks and their API retain the exact admitted instance. */
+export function instrumentPluginInstanceApi(
+  api: OpenClawPluginApi,
+  instance?: PluginInstanceHandle,
+): OpenClawPluginApi {
+  if (!instance) {
+    return api;
+  }
+  api.lifecycle = { ...api.lifecycle, ...instance.lifecycle };
+  const instrumented = attachPluginApiFacades(
+    new Proxy(api, {
+      get: (target, key, receiver) => {
+        const value = Reflect.get(target, key, receiver);
+        if (
+          typeof value !== "function" ||
+          typeof key !== "string" ||
+          (!key.startsWith("register") && key !== "on" && key !== "onConversationBindingResolved")
+        ) {
+          return value;
+        }
+        return (...args: unknown[]) =>
+          instance.run(() =>
+            Reflect.apply(
+              value,
+              target,
+              args.map((arg) => instance.wrap(arg)),
+            ),
+          );
+      },
+    }),
+  );
+  pluginInstanceState.values.set(instrumented, instance);
+  return instrumented;
 }

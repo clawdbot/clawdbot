@@ -772,32 +772,43 @@ describe("config mutate helpers", () => {
     );
   });
 
-  it("returns the canonical persisted config from replace writes", async () => {
-    const snapshot = createSnapshot({
-      hash: "hash-persisted",
-      sourceConfig: { gateway: { auth: { mode: "token" } } },
-    });
-    ioMocks.writeConfigFile.mockResolvedValue({
-      persistedHash: "hash-after",
-      persistedConfig: {
+  it.each(["receipt", "legacy", "void"] as const)(
+    "returns the persisted config and captured source from %s replace writers",
+    async (writer) => {
+      const snapshot = createSnapshot({
+        hash: "hash-persisted",
+        sourceConfig: { gateway: { auth: { mode: "token" } } },
+      });
+      const nextConfig: OpenClawConfig = {
         gateway: { auth: { mode: "token", token: "minted" } },
+      };
+      const persistedConfig: OpenClawConfig = {
+        ...nextConfig,
         meta: { lastTouchedVersion: "test" },
-      },
-    });
+      };
+      const persistedSourceConfig = writer === "receipt" ? persistedConfig : undefined;
+      ioMocks.writeConfigFile.mockResolvedValue(
+        writer === "void"
+          ? undefined
+          : {
+              persistedHash: "hash-after",
+              persistedConfig,
+              ...(persistedSourceConfig ? { persistedSourceConfig } : {}),
+            },
+      );
 
-    const result = await replaceConfigFile({
-      baseHash: snapshot.hash,
-      nextConfig: { gateway: { auth: { mode: "token", token: "minted" } } },
-      snapshot,
-      writeOptions: { expectedConfigPath: snapshot.path },
-    });
+      const result = await replaceConfigFile({
+        baseHash: snapshot.hash,
+        nextConfig,
+        snapshot,
+        writeOptions: { expectedConfigPath: snapshot.path },
+      });
 
-    expect(result.persistedHash).toBe("hash-after");
-    expect(result.nextConfig).toEqual({
-      gateway: { auth: { mode: "token", token: "minted" } },
-      meta: { lastTouchedVersion: "test" },
-    });
-  });
+      expect(result.persistedHash).toBe(writer === "void" ? null : "hash-after");
+      expect(result.persistedSourceConfig).toBe(persistedSourceConfig);
+      expect(result.nextConfig).toEqual(writer === "void" ? nextConfig : persistedConfig);
+    },
+  );
 
   it("refuses guarded include publication before changing config or backups", async () => {
     const home = await suiteRootTracker.make("guarded-include");

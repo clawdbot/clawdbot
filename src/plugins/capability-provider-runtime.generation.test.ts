@@ -26,7 +26,7 @@ import {
   writePlugin,
 } from "./loader.test-fixtures.js";
 import * as manifests from "./manifest-registry.js";
-import { resetPluginCache } from "./plugin-cache.js";
+import { resetPluginCache, waitForPluginCacheRetirement } from "./plugin-cache.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
@@ -42,7 +42,7 @@ vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   initSubagentRegistry() {},
 }));
 
-function withSpeechFixture(run: (fixture: ReturnType<typeof createSpeechFixture>) => void) {
+function withSpeechFixture<T>(run: (fixture: ReturnType<typeof createSpeechFixture>) => T) {
   const fixture = createSpeechFixture();
   return withEnv(
     {
@@ -435,6 +435,74 @@ describe("capability loading from a Gateway generation", () => {
       });
       expect(fs.existsSync(runtimeImported)).toBe(false);
     });
+  });
+
+  it("captures lazy catalog helpers until reload while sharing sibling descriptors", () => {
+    withSpeechFixture((fixture) => {
+      fixture.config.plugins = { enabled: true };
+      const { pluginDir, runtimeImported } = declareCapabilityCatalog(fixture);
+      fs.rmSync(path.join(fixture.root, "dist"), { recursive: true, force: true });
+      const catalogPath = path.join(pluginDir, "capability-catalog.ts");
+      const helperPath = path.join(pluginDir, "catalog-helper.cjs");
+      fs.writeFileSync(helperPath, "module.exports = { ready: true };");
+      fs.writeFileSync(
+        catalogPath,
+        fs
+          .readFileSync(catalogPath, "utf8")
+          .replace(
+            "isConfigured: ({ providerConfig }) => providerConfig.ready === true",
+            'isConfigured: () => require("./catalog-helper.cjs").ready',
+          ),
+      );
+      publishMetadata(fixture);
+      const previous = loadGatewayGeneration(fixture);
+      const first = withPluginRuntimeRegistryScope(
+        previous,
+        () => speechProviders(fixture.config)[0]!,
+      );
+      const context = { cfg: fixture.config, timeoutMs: 1000, providerConfig: {} };
+      fs.writeFileSync(helperPath, "module.exports = { ready: false };");
+      withPluginRuntimeRegistryScope(previous, () => {
+        // This helper is first imported after the edit; the admitted generation owns its old bytes.
+        expect(first.isConfigured(context)).toBe(true);
+        expect(
+          resolvePluginCapabilityProviders({
+            key: "realtimeVoiceProviders",
+            cfg: fixture.config,
+          })[0],
+        ).toBe(first);
+      });
+      resetPluginCache();
+      publishMetadata(fixture);
+      const current = loadGatewayGeneration(fixture);
+      withPluginRuntimeRegistryScope(current, () => {
+        const replacement = speechProviders(fixture.config)[0]!;
+        expect(replacement).not.toBe(first);
+        expect(replacement.isConfigured(context)).toBe(false);
+      });
+      expect(fs.existsSync(runtimeImported)).toBe(false);
+    });
+  });
+
+  it("revokes retained catalog methods when their metadata inventory retires", async () => {
+    const retained = withSpeechFixture((fixture) => {
+      fixture.config.plugins = { enabled: true };
+      const { runtimeImported } = declareCapabilityCatalog(fixture);
+      fs.rmSync(path.join(fixture.root, "dist"), { recursive: true, force: true });
+      publishMetadata(fixture);
+      const registry = loadGatewayGeneration(fixture);
+      const provider = withPluginRuntimeRegistryScope(
+        registry,
+        () => speechProviders(fixture.config)[0]!,
+      );
+      const context = { cfg: fixture.config, timeoutMs: 1000, providerConfig: { ready: true } };
+      expect(provider.isConfigured(context)).toBe(true);
+      expect(fs.existsSync(runtimeImported)).toBe(false);
+      resetPluginCache();
+      return { provider, context };
+    });
+    await waitForPluginCacheRetirement();
+    expect(() => retained.provider.isConfigured(retained.context)).toThrow(/reloaded or disabled/);
   });
 
   it.each(["export default", "module.exports ="])(

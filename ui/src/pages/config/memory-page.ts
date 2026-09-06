@@ -454,14 +454,8 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         },
       );
       const { result, processInstanceId } = mutation.value;
-      const key = enabled ? "pluginsPage.enabledRestart" : "pluginsPage.disabledRestart";
       const warnings = "warnings" in result ? (result.warnings ?? []) : [];
-      const notice = [
-        result.restartRequired ? t(key, { name: result.plugin.name }) : null,
-        ...warnings,
-      ]
-        .filter(Boolean)
-        .join(" ");
+      const notice = warnings.filter(Boolean).join(" ");
       if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
         this.applyPluginRefreshOutcome(connection, mutation.refreshError, pluginId);
         const noticeProcessInstanceId = notice ? await processInstanceId : null;

@@ -359,7 +359,7 @@ describe("CLI process harness cleanup", () => {
     dispatch.run = async () => {
       for (const [index, target] of [registry, second].entries()) {
         await scopes.withPluginRuntimeRegistryScope(target, () =>
-          scopes.withPluginRuntimePluginIdScope(`request-${index}`, async () => {
+          scopes.withPluginRuntimePluginScope({ pluginId: `request-${index}` }, async () => {
             await acquire("shared");
             registryApi.getRegisteredAgentHarness("shared");
             registryApi.listRegisteredAgentHarnesses();
@@ -383,16 +383,17 @@ describe("CLI process harness cleanup", () => {
   });
 
   it("rejects reuse of cleaned registrations without retiring unused cache entries", async () => {
-    const { pluginLoaderCacheState } = await import("../plugins/registry-lifecycle.js");
+    const { getPluginLoaderCacheState } = await import("../plugins/registry-lifecycle.js");
+    const cache = getPluginLoaderCacheState();
     const unused = emptyRegistry.createEmptyPluginRegistry();
-    pluginLoaderCacheState.set("cleanup-unused", unused);
+    cache.set("cleanup-unused", unused);
     const { withCliProcessScope } = await import("./runtime-cleanup-scope.js");
     const { runCli } = await import("./run-main.js");
     for (let invocation = 0; invocation < 2; invocation++) {
       const registry = emptyRegistry.createEmptyPluginRegistry();
       const resource = resourceHarness("sequential");
       registerHarness(registry, resource.harness);
-      pluginLoaderCacheState.set("cleanup-used", registry);
+      cache.set("cleanup-used", registry);
       let retainedLookup:
         | (() => ReturnType<typeof registryApi.getRegisteredAgentHarness>)
         | undefined;
@@ -405,8 +406,8 @@ describe("CLI process harness cleanup", () => {
         });
       try {
         await withCliProcessScope(() => runCli(argv));
-        expect(pluginLoaderCacheState.get("cleanup-used")).toBeUndefined();
-        expect(pluginLoaderCacheState.get("cleanup-unused")).toBe(unused);
+        expect(cache.get("cleanup-used")).toBeUndefined();
+        expect(cache.get("cleanup-unused")).toBe(unused);
         expect(resource.snapshot()).toEqual({ disposeCalls: 1, exitCode: 0, signalCode: null });
         expect(retainedLookup).toBeDefined();
         expect(retainedLookup!()).toBeUndefined();

@@ -146,6 +146,8 @@ function trackSpawnedWorkers(
     }
   };
   workerChannel.subscribe(trackWorker);
+  // A test timeout need not unwind its pending callback.
+  retireAfterTest(() => workerChannel.unsubscribe(trackWorker));
   return run(spawned).finally(() => workerChannel.unsubscribe(trackWorker));
 }
 
@@ -237,6 +239,10 @@ describe("prepared model catalog worker generation mismatch", () => {
     const releaseTermination = createDeferredCore();
     const replacementStarted = createDeferredCore();
     let restoreTermination: (() => void) | undefined;
+    retireAfterTest(() => {
+      releaseTermination.resolve();
+      restoreTermination?.();
+    });
     workerBoundary.fingerprint = DRIFTED_OWNER_FINGERPRINT;
     await trackSpawnedWorkers(
       async (spawned) => {

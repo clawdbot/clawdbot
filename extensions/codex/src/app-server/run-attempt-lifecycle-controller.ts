@@ -134,7 +134,8 @@ export function createCodexAttemptLifecycleController(
     if (
       !state.lifecycleStarted ||
       state.lifecycleTerminalEmitted ||
-      state.permissionChangeRestart
+      state.permissionChangeRestart ||
+      params.pluginRuntimeRefreshPending?.()
     ) {
       return;
     }

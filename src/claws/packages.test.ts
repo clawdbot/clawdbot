@@ -1,8 +1,10 @@
+import { AsyncResource } from "node:async_hooks";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { installClawPackages, preflightClawPackage } from "./packages.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
@@ -498,9 +500,14 @@ describe("installClawPackages", () => {
     );
   });
 
-  it("installs plugins through the shared plugin surface", async () => {
+  it("lets the shared plugin owner acquire its lease in the Gateway request scope", async () => {
     probePlugin.mockClear();
-    const installPlugin = vi.fn().mockResolvedValue(undefined);
+    const gatewayScope = new AsyncResource("claw-plugin-gateway");
+    const installPlugin = vi.fn(() =>
+      gatewayScope.runInAsyncScope(() =>
+        withPluginLifecycleLease({ waitMs: 0 }, async () => undefined),
+      ),
+    );
     const persistPackageRef = vi.fn().mockReturnValue({
       kind: "plugin",
       ref: "@owner/audit",
@@ -529,7 +536,6 @@ describe("installClawPackages", () => {
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           expectedPluginId: "audit",
         },
-        invalidateRuntimeCache: false,
         clawManaged: true,
       }),
     );

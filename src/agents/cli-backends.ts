@@ -294,7 +294,8 @@ export function resolveCliBackendConfig(
   const runtimeTextTransforms = resolveRuntimeTextTransforms();
   const registered = resolveRegisteredBackend(normalized);
   const backend =
-    registered ?? cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized })?.backend;
+    registered ??
+    cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized, config: cfg })?.backend;
   if (!backend) {
     return null;
   }

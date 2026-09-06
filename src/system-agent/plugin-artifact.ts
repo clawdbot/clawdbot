@@ -9,6 +9,10 @@ import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
 import { extractArchive, resolvePackedRootDir } from "../infra/archive.js";
 import { root, type Root } from "../infra/fs-safe.js";
 import { withInstallWorkspace } from "../infra/install-source-utils.js";
+import {
+  capturePluginRuntimeApplications,
+  projectPluginRuntimeFailure,
+} from "../plugins/lifecycle.js";
 import { loadPluginManifest, resolvePackageExtensionEntries } from "../plugins/manifest.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -261,6 +265,8 @@ export async function executePluginArtifactActivation(
   if (!opts.approved) {
     runtime.log(JSON.stringify(await prepareSystemAgentPluginArtifact(operation)));
   }
+  const captured =
+    opts.applyPluginRuntime && capturePluginRuntimeApplications(opts.applyPluginRuntime);
   const result = await applyPersistentOperation({
     auditOperation: "plugin.activateArtifact",
     operation,
@@ -284,9 +290,11 @@ export async function executePluginArtifactActivation(
         verifyArtifactDigest(bytes, operation.sha256);
         return await withVerifiedArtifact(bytes, async ({ archivePath, review }) => {
           const { assertConfigWriteAllowedInCurrentMode } = await import("../config/config.js");
-          const { loadConfigForInstall } = await import("../cli/plugins-install-config.js");
-          const { installManagedPluginSource } = await import("../plugins/management-install.js");
+          const { installManagedPlugin } = await import("../plugins/management-mutations.js");
           assertConfigWriteAllowedInCurrentMode();
+          if (ctx.assertPersistentApply && !captured) {
+            throw new Error("Delegated artifact activation requires the Gateway plugin lifecycle.");
+          }
           const assertPersistentApply = () => {
             ctx.assertPersistentApply?.();
             assertOwned();
@@ -301,12 +309,6 @@ export async function executePluginArtifactActivation(
             assertPersistentApply();
           };
           await assertArtifactConfigPublicationSupported();
-          const snapshot = await loadConfigForInstall({
-            rawSpec: archivePath,
-            normalizedSpec: archivePath,
-            resolvedPath: archivePath,
-            installKind: "plugin",
-          });
           const importPath = `${ARTIFACT_IMPORT_DIR}/${archiveName}`;
           const retainedPath = path.join(files.rootDir, importPath);
           const retained = await files.exists(importPath);
@@ -321,22 +323,21 @@ export async function executePluginArtifactActivation(
             assertOwned();
             await files.remove(pendingPath);
             try {
-              const installed = await installManagedPluginSource({
+              // Stay in the lease-owning process; Gateway RPC would wait on this same lease.
+              const installed = await installManagedPlugin({
                 request: {
                   source: "local",
                   path: archivePath,
-                  recordPath: retainedPath,
-                  recordSource: "archive",
                   mode: "update",
+                  acknowledgeCapabilities: { reviewToken: review.reviewToken },
                 },
-                snapshot,
-                runtime,
-                acknowledgeCapabilities: { reviewToken: review.reviewToken },
+                recordPath: retainedPath,
+                applyRuntime: captured?.applyRuntime,
                 beforePersistentApply: assertPersistentApply,
                 beforePersistentEffect: guard,
               });
-              if (!installed.ok) {
-                throw new Error(installed.error);
+              for (const warning of installed.warnings ?? []) {
+                runtime.log(warning);
               }
             } catch (error) {
               // The installer can throw after committing. Keep its approved source
@@ -357,10 +358,22 @@ export async function executePluginArtifactActivation(
           };
         });
       }),
+  }).catch((error: unknown) => {
+    const failure = projectPluginRuntimeFailure(error, captured?.application);
+    if (failure.runtime?.committed) {
+      runtime.error(
+        `Plugin runtime changes were applied in Gateway generation ${failure.runtime.generation}; artifact activation did not complete.`,
+      );
+    }
+    throw error;
   });
   if (result.applied) {
     runtime.log(
-      "Artifact installed. Restart the Gateway to load backend changes, then inspect the plugin's Control UI activation status.",
+      `Artifact installed${
+        captured?.application
+          ? ` in Gateway generation ${captured.application.generation}`
+          : "; saved for the next Gateway start"
+      }. Inspect the plugin's Control UI activation status.`,
     );
   }
   return result;

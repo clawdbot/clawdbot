@@ -14,6 +14,7 @@ import {
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
+import { listPersistedBundledPluginLocationBridges } from "../../plugins/location-bridges.js";
 import type { MissingPluginInstallPayload } from "../../plugins/payload-verification.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { convergePluginReleaseCohort } from "../../plugins/update-cohort.js";
@@ -24,7 +25,6 @@ import {
 } from "../../plugins/update.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
-import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { readPackageVersion } from "./shared.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,

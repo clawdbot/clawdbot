@@ -330,9 +330,22 @@ describe("MemorySettingsPage catalog state", () => {
 
   it("toggles the requested add-on and refreshes config plus catalog on success", async () => {
     const refresh = vi.fn(() => Promise.resolve());
+    let enabled = true;
     const { element, request } = createPage({
       configObject: {},
-      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
+      listCatalog: () =>
+        Promise.resolve({
+          plugins: [addon("active-memory", enabled), addon("memory-wiki", false)],
+        }),
+      setEnabled: (pluginId, nextEnabled) => {
+        enabled = nextEnabled;
+        return Promise.resolve({
+          ok: true,
+          plugin: addon(pluginId, enabled),
+          restartRequired: false,
+          runtime: { operationId: "memory-enable", generation: 2, pluginIds: [pluginId] },
+        });
+      },
       refresh,
     });
     document.body.append(element);
@@ -343,6 +356,10 @@ describe("MemorySettingsPage catalog state", () => {
       await waitForFast(() => expect(refresh).toHaveBeenCalledOnce());
       expect(setPluginEnabled).toHaveBeenCalledWith(expect.anything(), "active-memory", false);
       expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2);
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(false));
+      expect(element.textContent).not.toContain("Needs attention");
+      expect(element.textContent).not.toContain("Gateway restart");
+      expect(element.textContent).not.toContain("pluginsPage.");
     } finally {
       element.remove();
     }
@@ -446,7 +463,7 @@ describe("MemorySettingsPage catalog state", () => {
     }
   });
 
-  it("surfaces restart-required outcomes from add-on mutations", async () => {
+  it("preserves committed plugin warnings until the Gateway process changes", async () => {
     const initial = [addon("active-memory", true), addon("memory-wiki", false)];
     const updated = [addon("active-memory", true), addon("memory-wiki", true)];
     let mutations = 0;
@@ -458,7 +475,8 @@ describe("MemorySettingsPage catalog state", () => {
           ? Promise.resolve({
               ok: true,
               plugin: addon("memory-wiki", enabled),
-              restartRequired: true,
+              restartRequired: false,
+              warnings: ["memory-wiki enabled with a warning."],
             })
           : Promise.reject(new Error("follow-up rejected")),
       processInstanceIds: [undefined, "process-a", "process-a", "process-a", "process-b"],
@@ -469,32 +487,24 @@ describe("MemorySettingsPage catalog state", () => {
       toggleAddon(element, "Memory wiki", true);
 
       await waitForFast(() => expect(element.textContent).toContain("Needs attention"));
-      expect(element.textContent).toContain(
-        "Enabled memory-wiki. A Gateway restart is required to apply the change.",
-      );
+      expect(element.textContent).toContain("memory-wiki enabled with a warning.");
       expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true);
 
       toggleAddon(element, "Memory wiki", false);
       await waitForFast(() => expect(element.textContent).toContain("follow-up rejected"));
-      expect(element.textContent).toContain(
-        "Enabled memory-wiki. A Gateway restart is required to apply the change.",
-      );
+      expect(element.textContent).toContain("memory-wiki enabled with a warning.");
 
       setPhase("disconnected");
       setPhase("connected");
       await waitForFast(() =>
         expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(4),
       );
-      expect(element.textContent).toContain(
-        "Enabled memory-wiki. A Gateway restart is required to apply the change.",
-      );
+      expect(element.textContent).toContain("memory-wiki enabled with a warning.");
 
       setPhase("disconnected");
       setPhase("connected");
       await waitForFast(() =>
-        expect(element.textContent).not.toContain(
-          "Enabled memory-wiki. A Gateway restart is required to apply the change.",
-        ),
+        expect(element.textContent).not.toContain("memory-wiki enabled with a warning."),
       );
     } finally {
       element.remove();

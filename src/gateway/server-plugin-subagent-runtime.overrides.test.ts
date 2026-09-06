@@ -5,7 +5,7 @@ import {
 } from "../agents/command/model-ref.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withPluginRuntimePluginIdScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   createGatewaySubagentRuntime,
@@ -86,7 +86,7 @@ function run(override: { provider?: string; model?: string }) {
     () => context,
     resolvePluginSubagentOverridePolicies(config),
   );
-  return withPluginRuntimePluginIdScope("override-fixture", () =>
+  return withPluginRuntimePluginScope({ pluginId: "override-fixture" }, () =>
     runtime.run({
       sessionKey: "agent:worker:subagent:override",
       message: "Use the selected model",

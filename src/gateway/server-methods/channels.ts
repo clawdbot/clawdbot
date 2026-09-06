@@ -227,27 +227,31 @@ function resolveRuntimeAccountSnapshot(params: {
   channelId: ChannelId;
   accountId: string;
 }): ChannelAccountSnapshot | undefined {
-  const accounts = params.runtime.channelAccounts[params.channelId];
-  const direct = accounts?.[params.accountId];
-  if (direct) {
-    return direct;
-  }
   const fallback = params.runtime.channels[params.channelId];
-  return fallback?.accountId === params.accountId ? fallback : undefined;
+  return (
+    params.runtime.channelAccounts[params.channelId]?.[params.accountId] ??
+    (fallback?.accountId === params.accountId ? fallback : undefined)
+  );
 }
 
 function resolveChannelGatewayAccountId(params: {
+  channelId: ChannelId;
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
+  context: Pick<GatewayRequestContext, "getRuntimeSnapshot">;
   accountId?: string | null;
 }): string {
-  // Runtime operations use the same account precedence as channel setup:
-  // explicit request, plugin default, first configured account, then fallback.
+  const explicit = normalizeOptionalString(params.accountId);
+  if (explicit) {
+    return explicit;
+  }
+  const runtime = params.context.getRuntimeSnapshot(params.channelId);
   return (
-    normalizeOptionalString(params.accountId) ||
-    params.plugin.config.defaultAccountId?.(params.cfg) ||
-    params.plugin.config.listAccountIds(params.cfg)[0] ||
-    DEFAULT_ACCOUNT_ID
+    (runtime.reloadingChannels?.has(params.channelId)
+      ? runtime.reloadingChannels.get(params.channelId) ||
+        Object.keys(runtime.channelAccounts[params.channelId] ?? {})[0]
+      : params.plugin.config.defaultAccountId?.(params.cfg) ||
+        params.plugin.config.listAccountIds(params.cfg)[0]) || DEFAULT_ACCOUNT_ID
   );
 }
 
@@ -259,7 +263,12 @@ async function logoutChannelAccount(params: {
   context: GatewayRequestContext;
   plugin: ChannelPlugin;
 }): Promise<ChannelLogoutPayload> {
-  const resolvedAccountId = resolveChannelGatewayAccountId(params);
+  // Credential removal follows the validated saved config, not a paused runtime's older inventory.
+  const resolvedAccountId =
+    normalizeOptionalString(params.accountId) ||
+    params.plugin.config.defaultAccountId?.(params.cfg) ||
+    params.plugin.config.listAccountIds(params.cfg)[0] ||
+    DEFAULT_ACCOUNT_ID;
   const account = params.plugin.config.resolveAccount(params.cfg, resolvedAccountId);
   // Stop the runtime before clearing channel-owned auth so no active watcher can
   // immediately reconnect with credentials the user is trying to remove.
@@ -307,7 +316,7 @@ async function startChannelAccount(params: {
       `Channel ${params.channelId} did not report a start outcome for ${resolvedAccountId}`,
     );
   }
-  const runtime = params.context.getRuntimeSnapshot();
+  const runtime = params.context.getRuntimeSnapshot(params.channelId);
   const started =
     resolveRuntimeAccountSnapshot({
       runtime,
@@ -332,7 +341,7 @@ async function stopChannelAccount(params: {
 }): Promise<ChannelStopPayload> {
   const resolvedAccountId = resolveChannelGatewayAccountId(params);
   await params.context.stopChannel(params.channelId, resolvedAccountId);
-  const runtime = params.context.getRuntimeSnapshot();
+  const runtime = params.context.getRuntimeSnapshot(params.channelId);
   const stopped =
     resolveRuntimeAccountSnapshot({
       runtime,
@@ -492,6 +501,18 @@ export const channelsHandlers: GatewayRequestHandlers = {
 
     const buildChannelAccounts = async (plugin: ChannelPlugin) => {
       const channelId = plugin.id;
+      if (runtime.reloadingChannels?.has(channelId)) {
+        const defaultAccount = runtime.channels[channelId];
+        statusWarnings.push(
+          `${channelId}: plugin runtime is paused for reload; reporting recorded account state`,
+        );
+        return {
+          accounts: Object.values(runtime.channelAccounts[channelId] ?? {}),
+          defaultAccountId: runtime.reloadingChannels.get(channelId) ?? DEFAULT_ACCOUNT_ID,
+          defaultAccount,
+          resolvedAccounts: {},
+        };
+      }
       const accountIds = plugin.config.listAccountIds(cfg);
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,

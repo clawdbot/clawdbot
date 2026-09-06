@@ -111,7 +111,7 @@ describe("Memory plugin mutation ownership", () => {
     }
   });
 
-  it("keeps both sibling restart notices when earlier process discovery finishes last", async () => {
+  it("keeps both sibling warnings when earlier process discovery finishes last", async () => {
     const firstProcess = createMemoryTestDeferred<{ processInstanceId: string }>();
     const { element, runExternalMutation } = createMemoryPage({
       configObject: {},
@@ -123,7 +123,8 @@ describe("Memory plugin mutation ownership", () => {
         call === 0 ? firstProcess.promise : Promise.resolve({ processInstanceId: "process-a" }),
       setEnabled: (pluginId, enabled) =>
         Promise.resolve({
-          restartRequired: true,
+          restartRequired: false,
+          warnings: [`${pluginId} ${enabled ? "enabled" : "disabled"} with a warning.`],
           plugin: createMemoryTestAddon(pluginId, enabled),
         }),
     });
@@ -134,19 +135,13 @@ describe("Memory plugin mutation ownership", () => {
       toggleAddon(element, "Memory wiki", true);
 
       await waitForFast(() =>
-        expect(element.textContent).toContain(
-          "Enabled memory-wiki. A Gateway restart is required to apply the change.",
-        ),
+        expect(element.textContent).toContain("memory-wiki enabled with a warning."),
       );
       firstProcess.resolve({ processInstanceId: "process-a" });
 
       await waitForFast(() => {
-        expect(element.textContent).toContain(
-          "Disabled active-memory. A Gateway restart is required to apply the change.",
-        );
-        expect(element.textContent).toContain(
-          "Enabled memory-wiki. A Gateway restart is required to apply the change.",
-        );
+        expect(element.textContent).toContain("active-memory disabled with a warning.");
+        expect(element.textContent).toContain("memory-wiki enabled with a warning.");
       });
     } finally {
       firstProcess.resolve({ processInstanceId: "process-a" });
@@ -163,7 +158,8 @@ describe("Memory plugin mutation ownership", () => {
       pluginId === "active-memory"
         ? firstMutation.promise
         : Promise.resolve({
-            restartRequired: true,
+            restartRequired: false,
+            warnings: [`${pluginId} ${enabled ? "enabled" : "disabled"} with a warning.`],
             plugin: createMemoryTestAddon(pluginId, enabled),
           }),
     );
@@ -192,9 +188,7 @@ describe("Memory plugin mutation ownership", () => {
       firstMutation.resolve({ restartRequired: false });
 
       await waitForFast(() =>
-        expect(element.textContent).toContain(
-          "Enabled memory-wiki. A Gateway restart is required to apply the change.",
-        ),
+        expect(element.textContent).toContain("memory-wiki enabled with a warning."),
       );
       expect(observedProcesses).toContain("process-after-restart");
     } finally {
@@ -326,7 +320,8 @@ describe("Memory plugin mutation ownership", () => {
       setEnabled: (pluginId, nextEnabled) => {
         enabled = nextEnabled;
         return Promise.resolve({
-          restartRequired: true,
+          restartRequired: false,
+          warnings: [`${pluginId} ${nextEnabled ? "enabled" : "disabled"} with a warning.`],
           plugin: createMemoryTestAddon(pluginId, nextEnabled),
         });
       },
@@ -343,8 +338,7 @@ describe("Memory plugin mutation ownership", () => {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(false));
       toggleAddon(element, "Active memory", true);
 
-      const currentNotice =
-        "Enabled active-memory. A Gateway restart is required to apply the change.";
+      const currentNotice = "active-memory enabled with a warning.";
       await waitForFast(() => expect(element.textContent).toContain(currentNotice));
       firstProcess.resolve({ processInstanceId: "process-current" });
       await waitForFast(() =>
@@ -353,7 +347,7 @@ describe("Memory plugin mutation ownership", () => {
       await element.updateComplete;
 
       expect(element.textContent).toContain(currentNotice);
-      expect(element.textContent).not.toContain("Disabled active-memory.");
+      expect(element.textContent).not.toContain("active-memory disabled with a warning.");
     } finally {
       firstProcess.resolve({ processInstanceId: "process-current" });
       await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
@@ -361,7 +355,7 @@ describe("Memory plugin mutation ownership", () => {
     }
   });
 
-  it("drops an obsolete refresh warning while preserving a committed restart notice", async () => {
+  it("drops an obsolete refresh warning while preserving a committed plugin warning", async () => {
     const firstProcess = createMemoryTestDeferred<{ processInstanceId: string }>();
     let failRefresh = true;
     let enabled = true;
@@ -380,7 +374,8 @@ describe("Memory plugin mutation ownership", () => {
       setEnabled: (pluginId, nextEnabled) => {
         enabled = nextEnabled;
         return Promise.resolve({
-          restartRequired: true,
+          restartRequired: false,
+          warnings: [`${pluginId} ${nextEnabled ? "enabled" : "disabled"} with a warning.`],
           plugin: createMemoryTestAddon(pluginId, nextEnabled),
         });
       },
@@ -402,9 +397,7 @@ describe("Memory plugin mutation ownership", () => {
       );
       await element.updateComplete;
 
-      expect(element.textContent).toContain(
-        "Disabled active-memory. A Gateway restart is required to apply the change.",
-      );
+      expect(element.textContent).toContain("active-memory disabled with a warning.");
       expect(element.textContent).not.toContain("old authoritative refresh failed");
       expect(element.textContent).not.toContain("Could not refresh Control UI configuration");
     } finally {
@@ -414,7 +407,7 @@ describe("Memory plugin mutation ownership", () => {
     }
   });
 
-  it("clears a rendered refresh warning after reconnect without losing its restart notice", async () => {
+  it("clears a rendered refresh warning after reconnect without losing its plugin warning", async () => {
     let failRefresh = true;
     let enabled = true;
     const { element, runExternalMutation, setPhase } = createMemoryPage({
@@ -429,7 +422,8 @@ describe("Memory plugin mutation ownership", () => {
       setEnabled: (pluginId, nextEnabled) => {
         enabled = nextEnabled;
         return Promise.resolve({
-          restartRequired: true,
+          restartRequired: false,
+          warnings: [`${pluginId} ${nextEnabled ? "enabled" : "disabled"} with a warning.`],
           plugin: createMemoryTestAddon(pluginId, nextEnabled),
         });
       },
@@ -440,9 +434,7 @@ describe("Memory plugin mutation ownership", () => {
       toggleAddon(element, "Active memory", false);
       await waitForFast(() => {
         expect(element.textContent).toContain("old authoritative refresh failed");
-        expect(element.textContent).toContain(
-          "Disabled active-memory. A Gateway restart is required to apply the change.",
-        );
+        expect(element.textContent).toContain("active-memory disabled with a warning.");
       });
 
       failRefresh = false;
@@ -450,9 +442,7 @@ describe("Memory plugin mutation ownership", () => {
       setPhase("connected");
       await waitForFast(() => {
         expect(element.textContent).not.toContain("old authoritative refresh failed");
-        expect(element.textContent).toContain(
-          "Disabled active-memory. A Gateway restart is required to apply the change.",
-        );
+        expect(element.textContent).toContain("active-memory disabled with a warning.");
       });
     } finally {
       await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
@@ -484,7 +474,11 @@ describe("Memory plugin mutation ownership", () => {
         setEnabled: (pluginId, enabled) =>
           Promise.resolve(
             pluginId === "active-memory"
-              ? { restartRequired: true, plugin: createMemoryTestAddon(pluginId, enabled) }
+              ? {
+                  restartRequired: false,
+                  plugin: createMemoryTestAddon(pluginId, enabled),
+                  warnings: [`${pluginId} ${enabled ? "enabled" : "disabled"} with a warning.`],
+                }
               : {},
           ),
       });
@@ -514,9 +508,7 @@ describe("Memory plugin mutation ownership", () => {
           expect(element.textContent).not.toContain("previous authoritative refresh failed"),
         );
         if (first === "active-memory") {
-          expect(element.textContent).toContain(
-            "Disabled active-memory. A Gateway restart is required to apply the change.",
-          );
+          expect(element.textContent).toContain("active-memory disabled with a warning.");
         }
       } finally {
         await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));

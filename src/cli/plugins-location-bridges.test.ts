@@ -24,7 +24,7 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
 }));
 
 const { listPersistedBundledPluginLocationBridges, listPersistedBundledPluginRecoveryLocations } =
-  await import("./plugins-location-bridges.js");
+  await import("../plugins/location-bridges.js");
 
 function makeIndex(record: InstalledPluginIndex["plugins"][number]): InstalledPluginIndex {
   return {

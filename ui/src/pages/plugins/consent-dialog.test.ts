@@ -242,26 +242,35 @@ describe("renderPluginConsentDialog", () => {
     expect(dialog?.querySelector<HTMLButtonElement>(".btn.primary")?.disabled).toBe(true);
   });
 
-  it("keeps blocked consent confirmation reachable without dispatching it", async () => {
-    const onConfirm = vi.fn();
-    const container = mount({
-      canMutate: false,
-      mutationBlockedReason: "Admin access required.",
-      onConfirm,
-    });
-    const confirm = container.querySelector<HTMLButtonElement>(".btn.primary");
+  it.each(["enable", "reload"] as const)(
+    "keeps blocked %s consent reachable without dispatching it",
+    async (kind) => {
+      const onConfirm = vi.fn();
+      const container = mount({
+        consent: {
+          intent: { kind, pluginId: "workboard", rowKey: "plugin:workboard" },
+          pluginId: "workboard",
+          fallback: { name: "Workboard" },
+        },
+        canMutate: false,
+        mutationBlockedReason: "Admin access required.",
+        onConfirm,
+      });
+      const confirm = container.querySelector<HTMLButtonElement>(".btn.primary");
 
-    expect(confirm?.disabled).toBe(false);
-    expect(confirm?.getAttribute("aria-disabled")).toBe("true");
-    const tooltip = confirm?.closest("openclaw-tooltip") as
-      | (HTMLElement & { content?: string; updateComplete: Promise<unknown> })
-      | null;
-    await tooltip?.updateComplete;
-    expect(tooltip?.content).toBe("Admin access required.");
-    expect(confirm?.getAttribute("aria-describedby")).toBeTruthy();
-    confirm?.focus();
-    expect(document.activeElement).toBe(confirm);
-    confirm?.click();
-    expect(onConfirm).not.toHaveBeenCalled();
-  });
+      expect(normalizedText(confirm)).toBe(kind === "reload" ? "Reload" : "Enable Workboard");
+      expect(confirm?.disabled).toBe(false);
+      expect(confirm?.getAttribute("aria-disabled")).toBe("true");
+      const tooltip = confirm?.closest("openclaw-tooltip") as
+        | (HTMLElement & { content?: string; updateComplete: Promise<unknown> })
+        | null;
+      await tooltip?.updateComplete;
+      expect(tooltip?.content).toBe("Admin access required.");
+      expect(confirm?.getAttribute("aria-describedby")).toBeTruthy();
+      confirm?.focus();
+      expect(document.activeElement).toBe(confirm);
+      confirm?.click();
+      expect(onConfirm).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -298,6 +298,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   }
   const tools = await buildDynamicTools({
     ...commonToolParams,
+    // Native declarations are pinned; binding executors must not load another provider.
+    ignoreRuntimePlan: nativeSpecs !== undefined,
     registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
     cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,

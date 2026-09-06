@@ -1,8 +1,7 @@
-/** Keeps plugin service failures scoped to the registry generation that owns them. */
+/** Health belongs to the exact service instance, including across registry publications. */
 import { formatErrorMessage } from "../infra/errors.js";
 import type { OpenClawPluginServiceHealth } from "./plugin-registration.types.js";
-import type { PluginServiceRegistration } from "./registry-types.js";
-import type { PluginRegistry } from "./registry.js";
+import type { PluginServiceRegistration, PluginRegistry } from "./registry-types.js";
 
 type PluginServiceHealthFailure = {
   pluginId: string;
@@ -11,52 +10,36 @@ type PluginServiceHealthFailure = {
   error: string;
 };
 
-const states = new WeakMap<
-  PluginRegistry,
-  { generation: symbol; failures: Map<string, PluginServiceHealthFailure> }
->();
+const states = new WeakMap<PluginServiceRegistration, { failure?: PluginServiceHealthFailure }>();
 
-export function createPluginServiceHealthGeneration(registry: PluginRegistry) {
-  const generation = Symbol("plugin-service-health-generation");
-  const state = { generation, failures: new Map<string, PluginServiceHealthFailure>() };
-  states.set(registry, state);
-  const ownsGeneration = () => states.get(registry)?.generation === generation;
-
+export function createPluginServiceHealthReporter(service: PluginServiceRegistration): {
+  health: OpenClawPluginServiceHealth;
+  revoke: () => void;
+} {
+  const state: { failure?: PluginServiceHealthFailure } = {};
+  states.set(service, state);
+  let active = true;
+  const canReport = () => active && states.get(service) === state;
   return {
-    createReporter(service: PluginServiceRegistration): {
-      health: OpenClawPluginServiceHealth;
-      revoke: () => void;
-    } {
-      let active = true;
-      const canReport = () => active && ownsGeneration();
-      return {
-        health: {
-          reportFailure: (error) => {
-            if (!canReport()) {
-              return;
-            }
-            state.failures.set(service.service.id, {
-              pluginId: service.pluginId,
-              serviceId: service.service.id,
-              origin: service.origin,
-              error: formatErrorMessage(error),
-            });
-          },
-          clearFailure: () => {
-            if (canReport()) {
-              state.failures.delete(service.service.id);
-            }
-          },
-        },
-        revoke: () => {
-          active = false;
-        },
-      };
+    health: {
+      reportFailure: (error) => {
+        if (canReport()) {
+          state.failure = {
+            pluginId: service.pluginId,
+            serviceId: service.service.id,
+            origin: service.origin,
+            error: formatErrorMessage(error),
+          };
+        }
+      },
+      clearFailure: () => {
+        if (canReport()) {
+          delete state.failure;
+        }
+      },
     },
-    retire: () => {
-      if (ownsGeneration()) {
-        states.delete(registry);
-      }
+    revoke: () => {
+      active = false;
     },
   };
 }
@@ -64,8 +47,14 @@ export function createPluginServiceHealthGeneration(registry: PluginRegistry) {
 export function listPluginServiceHealthFailures(
   registry: PluginRegistry,
 ): PluginServiceHealthFailure[] {
-  return [...(states.get(registry)?.failures.values() ?? [])].toSorted(
-    (left, right) =>
-      left.pluginId.localeCompare(right.pluginId) || left.serviceId.localeCompare(right.serviceId),
-  );
+  return registry.services
+    .flatMap((service) => {
+      const failure = states.get(service)?.failure;
+      return failure ? [failure] : [];
+    })
+    .toSorted(
+      (left, right) =>
+        left.pluginId.localeCompare(right.pluginId) ||
+        left.serviceId.localeCompare(right.serviceId),
+    );
 }

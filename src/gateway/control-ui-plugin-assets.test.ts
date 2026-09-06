@@ -6,6 +6,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   listControlUiPluginCatalog,
@@ -340,6 +341,62 @@ describe("native Control UI browser assets", () => {
     });
   });
 
+  it("retains advertised revisions and receipts only for the exact backend owner", async () => {
+    const fixture = activateFixture();
+    const firstChunk = "export const value = 'first';";
+    fs.writeFileSync(path.join(fixture.directory, "lazy.js"), firstChunk);
+    const first = (await listControlUiPluginCatalog()).plugins[0]!;
+    fs.writeFileSync(path.join(fixture.directory, "index.js"), "export default { version: 2 };");
+    fs.writeFileSync(path.join(fixture.directory, "lazy.js"), "export const value = 'second';");
+    const second = await reloadControlUiPluginCatalog("native-ui");
+    const browser = {};
+    const report = {
+      pluginId: fixture.record.id,
+      revision: second.plugins[0]!.revision,
+      status: "activated" as const,
+    };
+    expect(reportControlUiPluginActivation(browser, report)).toBe(true);
+    const cookie = cookieForGrant();
+    const retained = createEmptyPluginRegistry();
+    retained.plugins.push(fixture.record, createPluginRecord({ id: "unrelated" }));
+    retained.controlUiDescriptors.push(...fixture.registry.controlUiDescriptors);
+    setActivePluginRegistry(retained);
+
+    await withGatewayServer({
+      prefix: "native-ui-owner-transfer-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { controlUiEnabled: true, controlUiBasePath: "" },
+      run: async (server) => {
+        const oldChunk = first.entryUrl.replace(/index\.js$/u, "lazy.js");
+        const read = () => sendRequest(server, { path: oldChunk, headers: { cookie } });
+        const response = await read();
+        expect(response.res.statusCode).toBe(200);
+        expect(response.end.mock.calls[0]?.[0]?.toString()).toBe(firstChunk);
+        const unactivated = createEmptyPluginRegistry();
+        unactivated.plugins.push(fixture.record);
+        for (const registry of [unactivated, fixture.registry]) {
+          await withPluginRuntimeRegistryScope(registry, async () => {
+            expect((await read()).res.statusCode).toBe(404);
+            expect(reportControlUiPluginActivation(browser, report)).toBe(false);
+            expect(listControlUiPluginActivations(browser)).toEqual([]);
+          });
+        }
+        fs.unlinkSync(path.join(fixture.directory, "index.js"));
+        expect(await listControlUiPluginCatalog()).toEqual(second);
+        expect(listControlUiPluginActivations(browser)).toEqual([report]);
+        expect(reportControlUiPluginActivation(browser, report)).toBe(true);
+
+        const replacement = createEmptyPluginRegistry();
+        replacement.plugins.push(createPluginRecord({ ...fixture.record }));
+        replacement.controlUiDescriptors.push(...fixture.registry.controlUiDescriptors);
+        setActivePluginRegistry(replacement);
+        expect((await read()).res.statusCode).toBe(404);
+        expect(listControlUiPluginActivations(browser)).toEqual([]);
+        expect(reportControlUiPluginActivation(browser, report)).toBe(false);
+      },
+    });
+  });
+
   it("runs queued reloads after an earlier reload rejects", async () => {
     const fixture = activateFixture();
     const first = await listControlUiPluginCatalog();
@@ -402,7 +459,10 @@ describe("native Control UI browser assets", () => {
         if (next.diagnostics.length) {
           expect(next.plugins).toEqual(current.plugins);
           expect(next.diagnostics).toEqual([
-            { pluginId: "native-ui", message: expect.stringContaining("Restart the Gateway") },
+            {
+              pluginId: "native-ui",
+              message: expect.stringContaining("Reload this plugin's backend"),
+            },
           ]);
           refused = true;
           break;
@@ -542,7 +602,7 @@ describe("native Control UI browser assets", () => {
     expect(reportControlUiPluginActivation(browser, pending)).toBe(false);
   });
 
-  it("fences a queued reload after registry replacement and rebuilds a reactivated generation", async () => {
+  it("fences a queued reload after registry replacement and builds a fresh backend owner", async () => {
     const fixture = activateFixture();
     const first = await listControlUiPluginCatalog();
     const pending = reloadControlUiPluginCatalog("native-ui");
@@ -550,7 +610,9 @@ describe("native Control UI browser assets", () => {
     await expect(pending).rejects.toThrow("no longer active");
     expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
     fs.writeFileSync(path.join(fixture.directory, "index.js"), "export default {};");
-    setActivePluginRegistry(fixture.registry);
+    const replacement = createEmptyPluginRegistry();
+    replacement.plugins.push(createPluginRecord({ ...fixture.record }));
+    setActivePluginRegistry(replacement);
     const second = await listControlUiPluginCatalog();
     expect(second.plugins[0]!.revision).not.toBe(first.plugins[0]!.revision);
   });

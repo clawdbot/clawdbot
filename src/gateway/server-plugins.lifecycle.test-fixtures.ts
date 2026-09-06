@@ -1,11 +1,20 @@
 // Synthetic plugin fixtures for Gateway instance and channel lifecycle tests.
+import { randomUUID } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 
-export const INSTANCE_BINDING_PROBE_KEY = Symbol.for("openclaw.test.gatewayInstanceBindingProbe");
+const probeSubscriptions: Array<() => void> = [];
+
+export function clearInstanceBindingProbeCoordinators() {
+  for (const unsubscribe of probeSubscriptions.splice(0)) {
+    unsubscribe();
+  }
+}
 export const INSTANCE_BINDING_PROBE_METHOD = "instanceBinding.probe";
 
 export type InstanceBindingProbeResult = {
@@ -30,6 +39,9 @@ export type ChannelBindingProof = {
 };
 
 export type InstanceBindingProbeCoordinator = {
+  channelName: string;
+  channel?: ChannelPlugin;
+  onLifecycleEvent?: (event: { registryId: number; port: number; kind: "start" | "stop" }) => void;
   identify: (value: object) => number;
   nextRegistryId: number;
   runtimes: PluginRuntime[];
@@ -83,7 +95,9 @@ export function installInstanceBindingProbeCoordinator(options?: {
 }): InstanceBindingProbeCoordinator {
   const ids = new WeakMap<object, number>();
   let nextId = 1;
+  const channelName = `openclaw.test.gatewayInstanceBindingProbe.${randomUUID()}`;
   const coordinator: InstanceBindingProbeCoordinator = {
+    channelName,
     identify(value) {
       const existing = ids.get(value);
       if (existing !== undefined) {
@@ -101,11 +115,21 @@ export function installInstanceBindingProbeCoordinator(options?: {
     ...(options?.channels ? { channelProof: { events: [], monitors: [], observations: [] } } : {}),
     ...(options?.serviceStopFailure ? { serviceStopFailure: options.serviceStopFailure } : {}),
   };
-  (globalThis as Record<PropertyKey, unknown>)[INSTANCE_BINDING_PROBE_KEY] = coordinator;
+  const probeChannel = channel(channelName);
+  const supplyCoordinator = (message: unknown) => {
+    (message as { coordinator: InstanceBindingProbeCoordinator }).coordinator = coordinator;
+  };
+  // Native plugin modules and the test runner need not share a global object.
+  probeChannel.subscribe(supplyCoordinator);
+  probeSubscriptions.push(() => probeChannel.unsubscribe(supplyCoordinator));
   return coordinator;
 }
 
-export async function writeInstanceBindingProbePlugin(bundledRoot: string): Promise<void> {
+export async function writeInstanceBindingProbePlugin(
+  bundledRoot: string,
+  channelName: string,
+  channelId?: string,
+): Promise<void> {
   const pluginDir = path.join(bundledRoot, "instance-binding-probe");
   await fs.mkdir(pluginDir, { recursive: true });
   await fs.writeFile(
@@ -123,6 +147,7 @@ export async function writeInstanceBindingProbePlugin(bundledRoot: string): Prom
     `${JSON.stringify({
       id: "instance-binding-probe",
       name: "Startup plugin",
+      ...(channelId ? { channels: [channelId] } : {}),
       activation: { onStartup: true },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     })}\n`,
@@ -132,9 +157,22 @@ export async function writeInstanceBindingProbePlugin(bundledRoot: string): Prom
     `module.exports = {
   id: "instance-binding-probe",
   register(api) {
-    const coordinator = globalThis[Symbol.for("openclaw.test.gatewayInstanceBindingProbe")];
+    const request = {};
+    require("node:diagnostics_channel").channel(${JSON.stringify(channelName)}).publish(request);
+    const coordinator = request.coordinator;
     const registryId = coordinator.nextRegistryId++;
     coordinator.runtimes.push(api.runtime);
+    if (coordinator.channel) {
+      api.registerChannel({ plugin: coordinator.channel });
+    }
+    if (coordinator.onLifecycleEvent) {
+      api.on("gateway_start", (_event, context) => {
+        coordinator.onLifecycleEvent({ registryId, port: context.port, kind: "start" });
+      });
+      api.on("gateway_stop", (_event, context) => {
+        coordinator.onLifecycleEvent({ registryId, port: context.port, kind: "stop" });
+      });
+    }
     if (coordinator.serviceStopFailure) {
       api.registerService({
         id: "instance-binding-service",
@@ -169,6 +207,7 @@ export async function writeInstanceBindingProbePlugin(bundledRoot: string): Prom
 
 export async function writeChannelBindingProbePlugin(
   bundledRoot: string,
+  channelName: string,
   channelIds: readonly string[] = CHANNEL_BINDING_IDS,
 ): Promise<void> {
   const pluginDir = path.join(bundledRoot, "instance-binding-channels");
@@ -197,7 +236,9 @@ export async function writeChannelBindingProbePlugin(
     `module.exports = {
   id: "instance-binding-channels",
   register(api) {
-    const coordinator = globalThis[Symbol.for("openclaw.test.gatewayInstanceBindingProbe")];
+    const request = {};
+    require("node:diagnostics_channel").channel(${JSON.stringify(channelName)}).publish(request);
+    const coordinator = request.coordinator;
     const proof = coordinator.channelProof;
     const runtimeId = coordinator.identify(api.runtime);
     for (const channelId of coordinator.channelIds ?? ${JSON.stringify(CHANNEL_BINDING_IDS)}) {

@@ -374,7 +374,6 @@ export function registerHooksCli(program: Command): void {
         raw,
         opts,
         allowInstallPolicyWarningPrompt: true,
-        invalidateRuntimeCache: false,
       });
     });
 

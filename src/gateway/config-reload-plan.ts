@@ -1,15 +1,11 @@
-// Gateway config reload planner.
-// Maps changed config paths to hot-reload actions, no-ops, or full restarts.
 import {
   type ChannelId,
   type ChannelPlugin,
   listChannelPlugins,
 } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  getActivePluginHttpRouteRegistry,
-  getActivePluginHttpRouteRegistryVersion,
-} from "../plugins/runtime.js";
+import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
+import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 import { isPlainObject } from "../utils.js";
 import { canHotReloadGatewayAuthCredentials } from "./auth-resolve.js";
@@ -30,6 +26,11 @@ export type GatewayReloadPlan = {
   restartHeartbeat: boolean;
   reconcileSystemJobs?: boolean;
   reloadPlugins: boolean;
+  pluginLifecycle?: {
+    pluginIds: readonly string[];
+    reason: PluginLifecycleReason;
+    operationId: string;
+  };
   restartChannels: Set<ChannelKind>;
   restartServices?: Set<string>;
   disposeMcpRuntimes: boolean;
@@ -113,13 +114,7 @@ function expandReloadPolicies(policies: ReloadPolicy[]): ReloadRule[] {
 const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
   { prefixes: ["gateway.remote", "gateway.reload"], kind: "none" },
   {
-    prefixes: [
-      ...AUTH_CREDENTIAL_PATHS,
-      "mcp.apps",
-      "secrets.egressProxy",
-      "plugins.load",
-      "plugins.installs",
-    ],
+    prefixes: [...AUTH_CREDENTIAL_PATHS, "mcp.apps", "secrets.egressProxy"],
     kind: "restart",
   },
   {
@@ -194,6 +189,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     kind: "hot",
     actions: ["reconcileSystemJobs"],
   },
+  { prefixes: ["plugins.load", "plugins.installs"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
   { prefixes: ["mcp", "gateway.publicOrigin"], kind: "hot", actions: ["disposeMcpRuntimes"] },
   // Capability ownership changes replace the plugin generation that owns its routes.
@@ -258,7 +254,7 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
 
 let cachedCatalog:
   | {
-      registry: ReturnType<typeof getActivePluginHttpRouteRegistry>;
+      registry: ReturnType<typeof getActivePluginRegistry>;
       version: number;
       rules: ReloadRule[];
       refinementPrefixes: string[];
@@ -266,8 +262,8 @@ let cachedCatalog:
   | undefined;
 
 function getReloadPolicyCatalog() {
-  const registry = getActivePluginHttpRouteRegistry();
-  const version = getActivePluginHttpRouteRegistryVersion();
+  const registry = getActivePluginRegistry();
+  const version = getActivePluginRegistryVersion();
   // Only process-root registry publication changes plugin/channel policy.
   if (cachedCatalog?.registry === registry && cachedCatalog.version === version) {
     return cachedCatalog;

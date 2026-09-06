@@ -1,32 +1,24 @@
 // Verifies plugin registry behavior with runtime config inputs.
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveUserPath } from "../utils.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
-import { createPluginRegistry } from "./registry.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
+import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
-function createTestRegistry(runtime: PluginRuntime) {
-  return createPluginRegistry({
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
-    runtime,
-    activateGlobalSideEffects: false,
-  });
-}
-
 describe("plugin registry runtime config scope", () => {
   it("rejects a plugin harness that claims the built-in runtime id", () => {
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({
       id: "untrusted-plugin",
       source: "/plugins/untrusted-plugin/index.js",
@@ -69,8 +61,8 @@ describe("plugin registry runtime config scope", () => {
       origin: "global",
       packageName: "@openclaw/codex",
     },
-  ] as const)("binds native compaction to the $label Codex harness", (fixture) => {
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
+  ] as const)("binds native compaction to the $label Codex harness", async (fixture) => {
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({
       id: "codex",
       source: fixture.source,
@@ -81,6 +73,7 @@ describe("plugin registry runtime config scope", () => {
     });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
     const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
+    const options = { nativeCompaction };
 
     api.registerAgentHarness(
       {
@@ -91,18 +84,34 @@ describe("plugin registry runtime config scope", () => {
           throw new Error("must not run");
         },
       },
-      { nativeCompaction },
+      options,
     );
 
     expect(pluginRegistry.registry.agentHarnesses).toHaveLength(1);
-    expect(pluginRegistry.registry.agentHarnesses[0]?.nativeCompaction).toBe(nativeCompaction);
-    expect(pluginRegistry.registry.agentHarnesses[0]?.harness).not.toHaveProperty("compactNative");
+    const registration = expectDefined(
+      pluginRegistry.registry.agentHarnesses[0],
+      "registered harness",
+    );
+    const compact = expectDefined(registration.nativeCompaction, "native compaction callback");
+    const request = {
+      sessionId: "native-compaction-session",
+      sessionFile: "/tmp/native-compaction/session",
+      workspaceDir: "/tmp/native-compaction",
+      nativeCompactionRequest: "required_preflight",
+    } satisfies Parameters<typeof compact>[0];
+    await expect(compact(request)).resolves.toEqual({ ok: true, compacted: true });
+    expect(nativeCompaction).toHaveBeenCalledWith(request);
+    expect(nativeCompaction.mock.contexts[0]).toBe(options);
+    expect(registration.harness).not.toHaveProperty("compactNative");
+    await expectDefined(getPluginInstance(record), "compaction owner").dispose();
+    expect(() => compact(request)).toThrow(/reloaded|disabled|retiring/);
+    expect(nativeCompaction).toHaveBeenCalledTimes(1);
   });
 
   it.each(["config", "global"] as const)(
     "rejects native compaction from a %s Codex impostor",
     (origin) => {
-      const pluginRegistry = createTestRegistry(createPluginRuntime());
+      const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
       const record = createPluginRecord({
         id: "codex",
         source: "/plugins/impostor/index.js",
@@ -137,7 +146,7 @@ describe("plugin registry runtime config scope", () => {
   );
 
   it("rejects native compaction from a foreign harness owner", () => {
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({
       id: "copilot",
       source: "/plugins/copilot/index.js",
@@ -172,7 +181,7 @@ describe("plugin registry runtime config scope", () => {
 
   it("resolves plugin API paths against the plugin root", () => {
     const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({
       id: "path-plugin",
       name: "Path Plugin",
@@ -197,7 +206,7 @@ describe("plugin registry runtime config scope", () => {
         throw new Error("Unable to resolve plugin runtime module; loader=/tmp/openclaw-loader.js");
       },
     });
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "diagnostic-plugin",
       name: "Diagnostic Plugin",
@@ -259,7 +268,7 @@ describe("plugin registry runtime config scope", () => {
     } satisfies PluginRuntime["config"];
     const runtime = createPluginRuntime();
     runtime.config = configRuntime;
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "legacy-plugin",
       name: "Legacy Plugin",
@@ -301,7 +310,7 @@ describe("plugin registry runtime config scope", () => {
       acquireScope = getPluginRuntimeGatewayRequestScope();
       return undefined;
     });
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "memory-provider",
       name: "Memory Provider",
@@ -352,7 +361,7 @@ describe("plugin registry runtime config scope", () => {
         mode === "lazy"
           ? createLazyPluginRuntime({ loadPluginModule, runtimeOptions: { nodes } })
           : createPluginRuntime({ nodes });
-      const pluginRegistry = createTestRegistry(runtime);
+      const pluginRegistry = createRuntimeTestRegistry(runtime);
       const record = createPluginRecord({
         id: "google-meet",
         name: "Google Meet",
@@ -398,7 +407,7 @@ describe("plugin registry runtime config scope", () => {
         return { ok: true } as T;
       },
     };
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "google-meet",
       name: "Google Meet",
@@ -438,7 +447,7 @@ describe("plugin registry runtime config scope", () => {
       },
     );
     runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const ownerRecord = createPluginRecord({
       id: "codex-owner",
       source: "/plugins/codex-owner/index.js",
@@ -507,7 +516,7 @@ describe("plugin registry runtime config scope", () => {
       entry: { sessionId: "session-1", updatedAt: 1 },
     }));
     runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "anthropic",
       source: "/plugins/anthropic/index.js",
@@ -572,7 +581,7 @@ describe("plugin registry runtime config scope", () => {
       entry: { sessionId: "session-1", updatedAt: 1 },
     }));
     runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "opencode",
       source: "/plugins/opencode/index.js",
@@ -616,4 +625,67 @@ describe("plugin registry runtime config scope", () => {
       }),
     ).rejects.toThrow("requires exactly one runtime owner");
   });
+
+  it.each(["patchSessionEntry", "updateSessionStoreEntry"] as const)(
+    "rejects %s writes resumed after their plugin is replaced",
+    async (method) => {
+      let entry: SessionEntry = { sessionId: "session-1", updatedAt: 1, label: "before" };
+      const commitPatch = (patch: Partial<SessionEntry> | null) => {
+        if (patch) {
+          entry = { ...entry, ...patch };
+        }
+        return entry;
+      };
+      const runtime = createPluginRuntime();
+      runtime.agent.session.getSessionEntry = () => ({ ...entry });
+      runtime.agent.session.patchSessionEntry = async (params) =>
+        commitPatch(await params.update({ ...entry }, { existingEntry: { ...entry } }));
+      runtime.agent.session.updateSessionStoreEntry = async (params) =>
+        commitPatch(await params.update({ ...entry }));
+      const pluginRegistry = createRuntimeTestRegistry(runtime);
+      const recordParams = {
+        id: "session-editor",
+        source: "/plugins/session-editor/index.js",
+        origin: "global" as const,
+        enabled: true,
+        configSchema: false,
+      };
+      const record = createPluginRecord(recordParams);
+      const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+      const entered = createDeferredCore();
+      const resume = createDeferredCore<Partial<SessionEntry>>();
+      const scope = { sessionKey: "agent:main:ordinary", storePath: "/tmp/sessions.json" };
+      try {
+        const pending = api.runtime.agent.session[method]({
+          ...scope,
+          update: () => {
+            entered.resolve();
+            return resume.promise;
+          },
+        });
+        await entered.promise;
+        pluginRegistry.rollbackPluginGlobalSideEffects(record.id, record);
+        pluginRegistry.registry.plugins.splice(0, 1);
+        const replacementApi = pluginRegistry.createApi(createPluginRecord(recordParams), {
+          config: {} as OpenClawConfig,
+        });
+        const rejected = expect(pending).rejects.toThrow("runtime is no longer active");
+        resume.resolve({ label: "stale" });
+        await rejected;
+        expect(entry.label).toBe("before");
+
+        await expect(
+          replacementApi.runtime.agent.session[method]({
+            ...scope,
+            update: () => ({ label: "current" }),
+          }),
+        ).resolves.toMatchObject({ label: "current" });
+        expect(entry.label).toBe("current");
+      } finally {
+        resume.resolve({});
+        await getPluginInstance(record)?.dispose();
+        await disposePluginRegistryInstances(pluginRegistry.registry);
+      }
+    },
+  );
 });

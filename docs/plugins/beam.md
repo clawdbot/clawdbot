@@ -19,7 +19,6 @@ Beam ships with OpenClaw but is disabled by default. When enabled, it registers:
 
 ```bash
 openclaw plugins enable beam
-openclaw gateway restart
 ```
 
 Equivalent config:
@@ -34,11 +33,12 @@ Equivalent config:
 }
 ```
 
+After direct config edits, run `openclaw plugins reload beam` to apply them.
+
 Disable the plugin when the ingest route is not needed:
 
 ```bash
 openclaw plugins disable beam
-openclaw gateway restart
 ```
 
 ## Authentication
@@ -167,11 +167,11 @@ Beam can also act as the sender: an opt-in mirror that continuously publishes th
 }
 ```
 
-- `endpoint` (required): the final remote receiver URL. Changing it starts fresh delivery to that receiver, including unchanged active sessions; pending terminal retries for the previous receiver are discarded, leaving its rows to expire normally. Redirect responses (301, 302, 303, 307, and 308) are not followed; configure the destination URL directly. After a redirect, repeated polls are suppressed for the current mirror service instance. A Gateway restart probes the configured endpoint once again so a receiver corrected at the same URL can recover. HTTPS is enforced for non-loopback hosts; plaintext `http://` is accepted only for `localhost`/`127.0.0.1`/`::1` development.
+- `endpoint` (required): the final remote receiver URL. Changing it starts fresh delivery to that receiver, including unchanged active sessions; pending terminal retries for the previous receiver are discarded, leaving its rows to expire normally. Redirect responses (301, 302, 303, 307, and 308) are not followed; configure the destination URL directly. After a redirect, repeated polls are suppressed for the current mirror service instance. Run `openclaw plugins reload beam` to probe the configured endpoint again after correcting a receiver at the same URL. HTTPS is enforced for non-loopback hosts; plaintext `http://` is accepted only for `localhost`/`127.0.0.1`/`::1` development.
 - `token`: Gateway credential for the remote receiver, sent as `Authorization: Bearer`. Accepts a plain string or a secret reference; a configured-but-unresolved token pauses mirroring instead of sending unauthenticated requests. Deployments fronted by an identity-aware proxy need an ingress that accepts this bearer credential.
 - `catalogs` (required): the session catalog ids to mirror, as explicit per-catalog consent — an omitted or empty list mirrors nothing. The local `beam` receiver catalog is always excluded so two mirrored Gateways cannot re-mirror each other's rows.
 - `pollSeconds` (default 30, minimum 10): how often the mirror scans local catalogs.
-- `activeWindowMinutes` (default 180): sessions with newer activity than this window count as live and stay mirrored; when a session goes idle past the window the running mirror service retries its final `completed` update until the receiver accepts it or the seven-day retention window ends. Retry state is process-local: a Gateway restart clears pending terminal retries, so the remote row remains live until its normal seven-day retention expires.
+- `activeWindowMinutes` (default 180): sessions with newer activity than this window count as live and stay mirrored; when a session goes idle past the window the running mirror service retries its final `completed` update until the receiver accepts it or the seven-day retention window ends. Retry state belongs to the mirror service: reloading Beam or restarting the Gateway clears pending terminal retries, so the remote row remains live until its normal seven-day retention expires.
 
 The mirror uploads user and agent message text, replacing structured reasoning, tool calls, tool results, and raw payloads with compact counts. Titles and messages pass through OpenClaw's built-in credential masking and configured `logging.redactPatterns` before clipping, even when log redaction is disabled. The manual beam skill additionally strips setup wrappers, local paths, contact identifiers, and opaque values; automatic mirroring does not apply those additional rules. Enable it only for catalogs whose visible message text you intend to share.
 
@@ -183,7 +183,7 @@ When browsing Claude sessions on paired nodes, update those nodes alongside the 
 
 `404 Not Found`
 
-: The Beam plugin is disabled, the Gateway has not reloaded it since enablement, or the request is reaching another Gateway.
+: The Beam plugin is disabled, failed to activate, or the request is reaching another Gateway. Check the plugin state and any activation error in the Control UI.
 
 `401 Unauthorized`
 
@@ -203,7 +203,7 @@ When browsing Claude sessions on paired nodes, update those nodes alongside the 
 
 `beam mirror upload blocked ... receiver returned redirect`
 
-: The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. A Gateway restart probes the configured endpoint once again.
+: The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. Run `openclaw plugins reload beam` to probe the configured endpoint again.
 
 ## Related
 

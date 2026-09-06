@@ -23,11 +23,3 @@ export type PluginCacheManagement<TCache> = {
   dependencyStatus: WeakMap<PluginManifestRecord, PluginDependencyStatus>;
   officialCatalog?: Promise<HostedOfficialExternalPluginCatalogLoadResult>;
 };
-
-export function createPluginCacheManagement<TCache>(): PluginCacheManagement<TCache> {
-  return {
-    installRecords: new Map(),
-    persistedInstalledIndex: new Map(),
-    dependencyStatus: new WeakMap(),
-  };
-}

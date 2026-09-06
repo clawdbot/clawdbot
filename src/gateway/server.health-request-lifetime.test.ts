@@ -8,13 +8,13 @@ import { resolveStateDir } from "../config/paths.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { HealthSummary } from "./health/types.js";
-import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
   onceMessage,
 } from "./test-helpers.server.js";
+import { observeHeldGatewayWorkDrain } from "./test/server-held-work.test-support.js";
 
 installGatewayTestHooks({ scope: "suite" });
 

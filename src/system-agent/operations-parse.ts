@@ -554,7 +554,7 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
     case "plugin-install":
       return `install plugin ${operation.spec}`;
     case "plugin-activate-artifact":
-      return `install the trusted plugin artifact ${operation.path} (SHA256 ${operation.sha256}), including its declared capabilities and native UI; restart the Gateway to load it`;
+      return `install the trusted plugin artifact ${operation.path} (SHA256 ${operation.sha256}), including its declared capabilities and native UI; apply backend changes through the Gateway plugin lifecycle`;
     case "plugin-uninstall":
       return `uninstall plugin ${operation.pluginId}`;
     case "create-agent":

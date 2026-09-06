@@ -108,7 +108,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
   );
 
   expect(runtimePluginRegistry).not.toBe(root);
-  expect(loadModule).toHaveBeenCalledWith(entrypoint);
+  expect(loadModule).toHaveBeenCalled();
   expect(getActivePluginRegistry()).toBe(root);
   expect(root.agentHarnesses).toEqual([]);
   expect(

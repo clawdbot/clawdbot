@@ -6,11 +6,6 @@ import {
   validateConfigObjectWithPlugins,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  resolvePluginCapabilityConsent,
-  type PluginCapabilityConsentHandler,
-} from "../../plugins/capability-consent.js";
-import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
 
 export class AutoReplyConfigMutationError extends Error {}
 
@@ -72,34 +67,6 @@ export async function setConfigPath(path: string[], value: unknown): Promise<voi
       return { nextConfig: assertValidConfig(next, "set").config };
     },
   });
-}
-
-/** Toggles plugin enablement from a chat command and returns the committed config. */
-export async function setPluginEnabledFromCommand(params: {
-  pluginId: string;
-  enabled: boolean;
-  action: "enable" | "disable";
-  onCapabilityConsent?: PluginCapabilityConsentHandler;
-}): Promise<OpenClawConfig> {
-  const committed = await transformConfigFileWithRetry({
-    afterWrite: { mode: "auto" },
-    transform: async (currentConfig) => {
-      if (params.enabled) {
-        await resolvePluginCapabilityConsent({
-          config: currentConfig,
-          pluginId: params.pluginId,
-          onCapabilityConsent: params.onCapabilityConsent,
-        });
-      }
-      const next = setPluginEnabledInConfig(
-        structuredClone(currentConfig),
-        params.pluginId,
-        params.enabled,
-      );
-      return { nextConfig: assertValidConfig(next, `/plugins ${params.action}`).config };
-    },
-  });
-  return committed.nextConfig;
 }
 
 type AllowlistConfigEditResult =

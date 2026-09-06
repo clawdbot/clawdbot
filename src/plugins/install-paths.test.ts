@@ -6,7 +6,7 @@ import {
   resolveDefaultPluginGitDir,
   resolveDefaultPluginNpmDir,
   resolvePluginNpmGenerationProjectDir,
-  resolvePluginNpmGenerationProjectDirPrefix,
+  resolvePluginNpmProjectDir,
 } from "./install-paths.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import {
@@ -113,7 +113,10 @@ describe("managed npm plugin install paths", () => {
     });
 
     expect(path.basename(projectDir)).toMatch(
-      new RegExp(`^${resolvePluginNpmGenerationProjectDirPrefix(packageName)}`, "u"),
+      new RegExp(
+        `^${path.basename(resolvePluginNpmProjectDir({ npmDir: "/tmp/openclaw/npm", packageName }))}__openclaw-generation__`,
+        "u",
+      ),
     );
   });
 });

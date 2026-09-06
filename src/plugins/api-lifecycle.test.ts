@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
-import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -177,7 +176,13 @@ describe("plugin api lifecycle", () => {
     ["constructor", false],
     ["toString", false],
     ["__proto__", false],
-  ])("classifies late-call eligibility for %j as %s", (methodName, expected) => {
-    expect(isLateCallablePluginApiMethod(methodName)).toBe(expected);
+  ])("enforces post-registration call eligibility for %j as %s", (methodName, expected) => {
+    const handler = vi.fn();
+    const api = captureRegisteredPluginApi({ [methodName]: handler });
+    const method = Reflect.get(api, methodName);
+    const result = typeof method === "function" ? Reflect.apply(method, api, []) : undefined;
+
+    expect(handler).toHaveBeenCalledTimes(expected ? 1 : 0);
+    expect(result).toBeUndefined();
   });
 });

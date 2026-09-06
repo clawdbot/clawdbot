@@ -1,13 +1,36 @@
 // Resolves trusted official external plugin installs from the OpenClaw-owned catalog.
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { resolveDefaultNpmSpec } from "./install-channel-specs.js";
+import { resolveDefaultNpmSpec, type PluginInstallSource } from "./install-channel-specs.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogEntryForPackage,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstallSources,
+  type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
+
+export function resolveOfficialInstallSources(
+  entry: OfficialExternalPluginCatalogEntry,
+  version?: string,
+): PluginInstallSource[] {
+  return resolveOfficialExternalPluginInstallSources(entry).map((source) => {
+    if (!version) {
+      return source;
+    }
+    const name =
+      source.source === "npm"
+        ? parseRegistryNpmSpec(source.spec)?.name
+        : parseClawHubPluginSpec(source.spec)?.name;
+    if (!name) {
+      return source;
+    }
+    const spec = `${source.source === "clawhub" ? "clawhub:" : ""}${name}@${version}`;
+    // Requested latest intent follows each declared identity; a catalog digest
+    // authenticates only its original spec, never a different release target.
+    return spec === source.spec ? source : { source: source.source, spec };
+  });
+}
 
 export function resolveCatalogOfficialExternalInstallPlan(rawSpec: string) {
   const parsed = resolveDefaultNpmSpec(rawSpec);
@@ -18,24 +41,7 @@ export function resolveCatalogOfficialExternalInstallPlan(rawSpec: string) {
     getOfficialExternalPluginCatalogEntry(parsed.name) ??
     getOfficialExternalPluginCatalogEntryForPackage(parsed.name);
   const pluginId = entry && resolveOfficialExternalPluginId(entry);
-  const installSources = (entry ? resolveOfficialExternalPluginInstallSources(entry) : []).map(
-    (source) => {
-      if (!parsed.selector) {
-        return source;
-      }
-      const name =
-        source.source === "npm"
-          ? parseRegistryNpmSpec(source.spec)?.name
-          : parseClawHubPluginSpec(source.spec)?.name;
-      if (!name) {
-        return source;
-      }
-      const spec = `${source.source === "clawhub" ? "clawhub:" : ""}${name}@${parsed.selector}`;
-      // Requested latest intent follows each declared identity; a catalog digest
-      // authenticates only its original spec, never a different release target.
-      return spec === source.spec ? source : { source: source.source, spec };
-    },
-  );
+  const installSources = entry ? resolveOfficialInstallSources(entry, parsed.selector) : [];
   const primary = installSources[0];
   return pluginId && primary ? { pluginId, spec: primary.spec, installSources } : null;
 }

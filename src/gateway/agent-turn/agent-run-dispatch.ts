@@ -44,7 +44,8 @@ import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { bindTaskRunOwner } from "../../tasks/task-run-owner.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
+import { abortChatRunById } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { errorShapeFromError } from "../error-shape.js";
 import {
   tryFinalizeTrackedAgentTask,

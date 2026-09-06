@@ -12,7 +12,7 @@ import type {
   GatewayRequestHandlerOptions,
 } from "../../gateway/server-methods/types.js";
 import { withEnv } from "../../test-utils/env.js";
-import { cleanupReplacedPluginHostRegistry } from "../host-hook-cleanup.js";
+import { createPluginHostRegistryRetirement } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
   cleanupPluginSessionSchedulerJobs,
@@ -933,11 +933,11 @@ describe("plugin scheduled turns", () => {
       },
     });
 
-    const cleanupResult = await cleanupReplacedPluginHostRegistry({
+    const cleanupResult = await createPluginHostRegistryRetirement({
       cfg: previousFixture.config,
       previousRegistry: previousFixture.registry.registry,
       nextRegistry: replacementFixture.registry.registry,
-    });
+    })();
     expect(cleanupResult.failures).toEqual([]);
     expect(removed).toEqual(["old-runtime-job"]);
     expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([
@@ -981,11 +981,11 @@ describe("plugin scheduled turns", () => {
     });
 
     await expect(
-      cleanupReplacedPluginHostRegistry({
+      createPluginHostRegistryRetirement({
         cfg: retiringFixture.config,
         previousRegistry: retiringFixture.registry.registry,
         nextRegistry: replacementFixture.registry.registry,
-      }),
+      })(),
     ).resolves.toMatchObject({ failures: [] });
     expect(removed).toEqual(["retiring-owned-job"]);
     expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([
@@ -998,11 +998,11 @@ describe("plugin scheduled turns", () => {
     ]);
 
     await expect(
-      cleanupReplacedPluginHostRegistry({
+      createPluginHostRegistryRetirement({
         cfg: gatewayFixture.config,
         previousRegistry: gatewayFixture.registry.registry,
         nextRegistry: replacementFixture.registry.registry,
-      }),
+      })(),
     ).resolves.toMatchObject({ failures: [] });
     expect(removed).toEqual(["retiring-owned-job", "gateway-owned-job"]);
     expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([]);

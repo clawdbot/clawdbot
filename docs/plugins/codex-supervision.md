@@ -86,8 +86,8 @@ Enable the `codex` plugin and its supervision capability in `openclaw.json`:
 }
 ```
 
-If `plugins.allow` is present, include `codex`. Restart the Gateway after
-changing plugin activation.
+If `plugins.allow` is present, include `codex`. After saving plugin config,
+run `openclaw plugins reload codex` to apply it to the running Gateway.
 
 With no explicit `appServer` connection settings, supervision uses managed
 stdio connections for the available local Codex stores. The catalog combines
@@ -325,9 +325,9 @@ or local label.
 
 Disabling or uninstalling the `codex` plugin does not release that ownership or
 make the Chat eligible for another model. The locked Chat remains preserved but
-unavailable; reinstall or re-enable the same plugin and restart the Gateway to
-resume it. This deliberate fail-closed behavior prevents retention cleanup or a
-temporary plugin outage from silently orphaning the native binding.
+unavailable; reinstall or re-enable the same plugin to resume it. This deliberate
+fail-closed behavior prevents retention cleanup or a temporary plugin outage
+from silently orphaning the native binding.
 
 The `codex_threads` agent tool follows the same boundary. It cannot attach a
 different fork or archive the Chat's bound native thread. List and metadata-only
@@ -582,8 +582,9 @@ For every supervision config field, see
 
 **No sessions appear:** verify that `@openclaw/codex` is installed, both the
 plugin and `supervision.enabled` are true, the current plugin allowlist permits
-`codex`, and the sessions are not archived. Restart the Gateway or node after
-changing activation.
+`codex`, and the sessions are not archived. After Gateway config changes, run
+`openclaw plugins reload codex`. If you changed plugin activation on a paired
+node, restart that node to refresh its advertised commands.
 
 **Continue is disabled or refused:** an unmapped row is active or in an
 ineligible state, its host is offline, or another action is pending. For a

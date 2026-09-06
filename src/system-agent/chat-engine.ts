@@ -3,6 +3,7 @@ import type {
   SystemAgentWizardCancel,
   WizardAnswer,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { PluginLifecycleRuntimeApply } from "../plugins/lifecycle.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   cleanupSystemAgentSession,
@@ -42,6 +43,7 @@ import {
 export { SystemAgentWizardAnswerError } from "./chat-wizard-host.js";
 
 export type SystemAgentChatEngineOptions = {
+  applyPluginRuntime?: PluginLifecycleRuntimeApply;
   yes?: boolean;
   deps?: SystemAgentCommandDeps;
   planGreeting?: SystemAgentGreetingPlanner;

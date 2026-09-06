@@ -29,7 +29,11 @@ export const PluginControlUiDescriptorSchema = closedObject({
   ]),
   label: NonEmptyString,
   description: Type.Optional(Type.String()),
+  icon: Type.Optional(Type.String()),
+  path: Type.Optional(Type.String()),
   placement: Type.Optional(Type.String()),
+  group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
+  order: Type.Optional(Type.Number()),
   schema: Type.Optional(PluginJsonValueSchema),
   requiredScopes: Type.Optional(Type.Array(NonEmptyString)),
 });
@@ -37,10 +41,34 @@ export const PluginControlUiDescriptorSchema = closedObject({
 /** Empty request payload for listing plugin UI descriptors. */
 export const PluginsUiDescriptorsParamsSchema = closedObject({});
 
+export const ControlUiPluginTabSchema = closedObject({
+  pluginId: NonEmptyString,
+  id: NonEmptyString,
+  label: NonEmptyString,
+  description: Type.Optional(Type.String()),
+  icon: Type.Optional(Type.String()),
+  path: Type.Optional(Type.String()),
+  placement: Type.Optional(Type.String()),
+  requiresGatewayAuth: Type.Optional(Type.Boolean()),
+  group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
+  order: Type.Optional(Type.Number()),
+});
+
+export const ControlUiPluginWidgetKindSchema = closedObject({
+  pluginId: NonEmptyString,
+  kind: NonEmptyString,
+  label: NonEmptyString,
+});
+
 /** Response payload containing all plugin UI descriptors visible to the client. */
 export const PluginsUiDescriptorsResultSchema = closedObject({
   ok: Type.Literal(true),
   descriptors: Type.Array(PluginControlUiDescriptorSchema),
+  generation: Type.Optional(Type.Integer({ minimum: 0 })),
+  methods: Type.Optional(Type.Array(NonEmptyString)),
+  controlUiTabs: Type.Optional(Type.Array(ControlUiPluginTabSchema)),
+  controlUiWidgetKinds: Type.Optional(Type.Array(ControlUiPluginWidgetKindSchema)),
+  pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
 });
 
 /** One immutable browser build owned by an active native plugin. */
@@ -138,7 +166,18 @@ export const PluginCatalogInstallActionSchema = Type.Union([
   PluginCatalogOfficialInstallSchema,
 ]);
 
-/** Cold control-plane representation of an installed or available plugin. */
+/** Observed state of the plugin in the current Gateway runtime generation. */
+export const PluginRuntimeStatusSchema = closedObject({
+  state: Type.Union([
+    Type.Literal("unloaded"),
+    Type.Literal("disabled"),
+    Type.Literal("active"),
+    Type.Literal("service-failed"),
+  ]),
+  error: Type.Optional(Type.String()),
+});
+
+/** Catalog metadata and desired enablement, with optional observed runtime state. */
 export const PluginCatalogEntrySchema = closedObject({
   id: NonEmptyString,
   name: NonEmptyString,
@@ -162,6 +201,7 @@ export const PluginCatalogEntrySchema = closedObject({
   hasIcon: Type.Optional(Type.Boolean()),
   install: Type.Optional(PluginCatalogInstallActionSchema),
   error: Type.Optional(Type.String()),
+  runtime: Type.Optional(PluginRuntimeStatusSchema),
   /** Coarse manifest-derived grouping (channel, provider, memory, ...) for catalog UIs. */
   category: Type.Optional(NonEmptyString),
   /** True when the plugin has an install record and can be removed via plugins.uninstall. */
@@ -173,6 +213,7 @@ export const PluginsListParamsSchema = closedObject({});
 
 /** Installed and curated plugin catalog visible to the current gateway client. */
 export const PluginsListResultSchema = closedObject({
+  generation: Type.Optional(Type.Integer({ minimum: 0 })),
   plugins: Type.Array(PluginCatalogEntrySchema),
   diagnostics: Type.Array(Type.Unknown()),
   mutationAllowed: Type.Boolean(),
@@ -339,28 +380,85 @@ export const PluginsSearchResultSchema = closedObject({
   results: Type.Array(PluginSearchResultEntrySchema),
 });
 
-/** Trusted official-catalog or acknowledged ClawHub install request. */
+const pluginInstallOptions = {
+  clawManaged: Type.Optional(Type.Boolean()),
+  mode: Type.Optional(Type.Union([Type.Literal("install"), Type.Literal("update")])),
+  acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
+  acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
+};
+
+/** Install requests share the same artifact inspection and consent boundary. */
 export const PluginsInstallParamsSchema = Type.Union([
   closedObject({
+    ...pluginInstallOptions,
     source: Type.Literal("clawhub"),
     packageName: NonEmptyString,
     version: Type.Optional(NonEmptyString),
-    acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
-    acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
+    expectedPluginId: Type.Optional(NonEmptyString),
+    expectedIntegrity: Type.Optional(NonEmptyString),
   }),
   closedObject({
+    ...pluginInstallOptions,
     source: Type.Literal("official"),
     pluginId: NonEmptyString,
-    acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
-    acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
+    version: Type.Optional(NonEmptyString),
+    pin: Type.Optional(Type.Boolean()),
+  }),
+  closedObject({
+    ...pluginInstallOptions,
+    source: Type.Literal("bundled"),
+    pluginId: NonEmptyString,
+  }),
+  closedObject({
+    ...pluginInstallOptions,
+    source: Type.Literal("local"),
+    path: NonEmptyString,
+    link: Type.Optional(Type.Boolean()),
+  }),
+  closedObject({
+    ...pluginInstallOptions,
+    source: Type.Literal("npm"),
+    spec: NonEmptyString,
+    pin: Type.Optional(Type.Boolean()),
+    expectedPluginId: Type.Optional(NonEmptyString),
+    expectedIntegrity: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...pluginInstallOptions,
+    source: Type.Literal("git"),
+    spec: NonEmptyString,
+  }),
+  closedObject({
+    ...pluginInstallOptions,
+    source: Type.Literal("npm-pack"),
+    archivePath: NonEmptyString,
+  }),
+  closedObject({
+    ...pluginInstallOptions,
+    source: Type.Literal("marketplace"),
+    marketplace: NonEmptyString,
+    plugin: NonEmptyString,
   }),
 ]);
+
+/** Receipt emitted only after the requested runtime generation was applied. */
+export const PluginRuntimeApplicationSchema = closedObject({
+  operationId: NonEmptyString,
+  generation: Type.Integer({ minimum: 0 }),
+  pluginIds: Type.Array(NonEmptyString),
+  sourceDigests: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+});
+
+export const PluginsChangedEventSchema = closedObject({
+  generation: Type.Integer({ minimum: 0 }),
+});
 
 /** Successful plugin installation result. */
 export const PluginsInstallResultSchema = closedObject({
   ok: Type.Literal(true),
   plugin: PluginCatalogEntrySchema,
-  restartRequired: Type.Literal(true),
+  restartRequired: Type.Boolean(),
+  runtime: Type.Optional(PluginRuntimeApplicationSchema),
   warnings: Type.Optional(Type.Array(Type.String())),
 });
 
@@ -370,18 +468,36 @@ export const PluginsRefreshParamsSchema = closedObject({});
 /** Successful plugin metadata refresh admission. */
 export const PluginsRefreshResultSchema = closedObject({
   ok: Type.Literal(true),
+  restartRequired: Type.Optional(Type.Boolean()),
+  runtime: Type.Optional(PluginRuntimeApplicationSchema),
+});
+
+/** Reload the selected installed source without changing its enabled policy. */
+export const PluginsReloadParamsSchema = closedObject({
+  pluginId: NonEmptyString,
+  acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
+});
+
+export const PluginsReloadResultSchema = closedObject({
+  ok: Type.Literal(true),
+  pluginId: NonEmptyString,
+  restartRequired: Type.Boolean(),
+  runtime: Type.Optional(PluginRuntimeApplicationSchema),
 });
 
 /** Request payload for removing one installed plugin and its managed files. */
 export const PluginsUninstallParamsSchema = closedObject({
   pluginId: NonEmptyString,
+  keepFiles: Type.Optional(Type.Boolean()),
+  clawManaged: Type.Optional(Type.Boolean()),
 });
 
 /** Successful plugin removal result listing the cleanup actions that ran. */
 export const PluginsUninstallResultSchema = closedObject({
   ok: Type.Literal(true),
   pluginId: NonEmptyString,
-  restartRequired: Type.Literal(true),
+  restartRequired: Type.Boolean(),
+  runtime: Type.Optional(PluginRuntimeApplicationSchema),
   removed: Type.Array(Type.String()),
   warnings: Type.Optional(Type.Array(Type.String())),
 });
@@ -398,10 +514,12 @@ export const PluginsSetEnabledResultSchema = closedObject({
   ok: Type.Literal(true),
   plugin: PluginCatalogEntrySchema,
   restartRequired: Type.Boolean(),
+  runtime: Type.Optional(PluginRuntimeApplicationSchema),
   warnings: Type.Optional(Type.Array(Type.String())),
 });
 
 export type PluginCatalogEntry = Static<typeof PluginCatalogEntrySchema>;
+export type PluginRuntimeStatus = Static<typeof PluginRuntimeStatusSchema>;
 export type PluginsListParams = Static<typeof PluginsListParamsSchema>;
 export type PluginsListResult = Static<typeof PluginsListResultSchema>;
 export type PluginsInspectParams = Static<typeof PluginsInspectParamsSchema>;
@@ -417,6 +535,10 @@ export type PluginsInstallParams = Static<typeof PluginsInstallParamsSchema>;
 export type PluginsInstallResult = Static<typeof PluginsInstallResultSchema>;
 export type PluginsRefreshParams = Static<typeof PluginsRefreshParamsSchema>;
 export type PluginsRefreshResult = Static<typeof PluginsRefreshResultSchema>;
+export type PluginsReloadParams = Static<typeof PluginsReloadParamsSchema>;
+export type PluginsReloadResult = Static<typeof PluginsReloadResultSchema>;
+export type PluginRuntimeApplication = Static<typeof PluginRuntimeApplicationSchema>;
+export type PluginsChangedEvent = Static<typeof PluginsChangedEventSchema>;
 export type PluginsUninstallParams = Static<typeof PluginsUninstallParamsSchema>;
 export type PluginsUninstallResult = Static<typeof PluginsUninstallResultSchema>;
 export type PluginsSetEnabledParams = Static<typeof PluginsSetEnabledParamsSchema>;

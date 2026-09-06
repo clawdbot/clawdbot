@@ -317,7 +317,7 @@ user skill directly.
     | --- | --- | --- |
     | `/config show\|get\|set\|unset` | `commands.config: true` | Read or write `openclaw.json`. Owner-only |
     | `/mcp show\|get\|set\|unset` | `commands.mcp: true` | Read or write OpenClaw-managed MCP server config. Owner-only |
-    | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
+    | `/plugins list\|inspect\|show\|get\|install\|enable\|disable\|reload` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
     | `/update` | `commands.restart: true` (default), owner | Update OpenClaw and restart; receive a completion or failure notice in the same chat |
@@ -497,15 +497,16 @@ chat.
 /plugin show context7
 /plugins enable context7
 /plugins disable context7
+/plugins reload context7
 /plugins install clawhub:<package>
 /plugins install npm:@openclaw/<official-package>
 /plugins install npm:<package> --force
 /plugins install git:<repository>@<ref> --force
 ```
 
-`/plugins enable|disable` updates plugin config and hot-reloads the Gateway
-plugin runtime for new agent turns. `/plugins install` restarts managed
-Gateways automatically because plugin source modules changed. Trusted ClawHub
+`/plugins install|enable|disable|reload` applies through the running Gateway
+without restarting its process. Use `/plugins reload <id>` after editing a
+linked TypeScript plugin or its imported helpers. Trusted ClawHub
 and official-catalog installs do not need a provenance acknowledgement. Arbitrary npm,
 git, archive, `npm-pack:`, and local path sources show a provenance warning and
 require a trailing `--force` after you review the source. This flag acknowledges
@@ -516,13 +517,14 @@ Marketplace, linked, and pinned installs remain shell-only.
 
 `/plugins inspect <child>` (also `show` or `get`) and `/plugins inspect all` include the shared package install metadata for multi-entry plugins. Inspection returns `install: null` when package ownership is missing or ambiguous, and preserves its runtime capability report.
 
-When `/plugins install` or `/plugins enable` requires capability consent, it
+When `/plugins install`, `/plugins enable`, or `/plugins reload` requires capability consent, it
 returns the plugin's declared capabilities and an exact retry command. Review
 that reply, then rerun with `--accept-capabilities`:
 
 ```text
 /plugins install clawhub:<package> --accept-capabilities
 /plugins enable <plugin-id> --accept-capabilities
+/plugins reload <plugin-id> --accept-capabilities
 ```
 
 Capability consent also applies to official external plugins and is separate

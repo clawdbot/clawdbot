@@ -100,6 +100,7 @@ describe("openclaw-tools progress_card gating", () => {
       taskSuggestionDeliveryMode: "gateway",
     });
 
+    expect(emittedNames).toContain("plugins");
     expect(
       emittedNames.filter((name) => resolveCoreToolFactoryFamily(name) !== "openclaw"),
     ).toEqual([]);

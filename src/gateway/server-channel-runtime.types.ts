@@ -4,6 +4,8 @@ import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/type
 
 /** Snapshot of channel runtime state keyed by channel and account id. */
 export type ChannelRuntimeSnapshot = {
+  /** Host admission is paused; status must use captured facts without invoking plugin callbacks. */
+  reloadingChannels?: ReadonlyMap<ChannelId, string | undefined>;
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
   channelAccounts: Partial<Record<ChannelId, Record<string, ChannelAccountSnapshot>>>;
 };

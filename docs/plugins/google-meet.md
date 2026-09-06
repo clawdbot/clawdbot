@@ -354,7 +354,7 @@ export GEMINI_API_KEY=...
 
 Use `realtime.provider: "openai"` with `OPENAI_API_KEY` instead if OpenAI is the realtime voice provider.
 
-Restart or reload the Gateway after enabling `voice-call`; plugin config changes do not take effect until reload. Verify:
+Apply plugin config changes with `openclaw plugins reload voice-call`. If you added environment variables to a shell or service configuration, restart the Gateway with that environment. Then verify:
 
 ```bash
 openclaw config validate
@@ -1018,7 +1018,7 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij \
 Expected Twilio state:
 
 - `googlemeet setup` includes green `twilio-voice-call-plugin`, `twilio-voice-call-credentials`, and `twilio-voice-call-webhook` checks.
-- `voicecall` is available in the CLI after Gateway reload.
+- `voicecall` is available in the CLI after the plugin is enabled.
 - The returned session has `transport: "twilio"` and a `twilio.voiceCallId`.
 - `openclaw logs --follow` shows DTMF TwiML served before realtime TwiML, then a realtime bridge with the initial greeting queued.
 - `googlemeet leave <sessionId>` hangs up the delegated voice call.
@@ -1027,10 +1027,11 @@ Expected Twilio state:
 
 ### Agent cannot see the Google Meet tool
 
-Confirm the plugin is enabled and reload the Gateway; the running agent only sees plugin tools registered by the current Gateway process:
+Confirm the plugin is enabled and inspect its runtime registrations. After direct source or config edits, reload the plugin before retrying:
 
 ```bash
-openclaw plugins list | grep google-meet
+openclaw plugins inspect google-meet --runtime
+openclaw plugins reload google-meet
 openclaw googlemeet setup
 ```
 
@@ -1129,7 +1130,7 @@ The equivalent tool action is `recover_current_tab`: it focuses and inspects an 
 
 ### Twilio setup checks fail
 
-`twilio-voice-call-plugin` fails when `voice-call` is not allowed or not enabled: add it to `plugins.allow`, enable `plugins.entries.voice-call`, reload the Gateway.
+`twilio-voice-call-plugin` fails when `voice-call` is not allowed or not enabled: add it to `plugins.allow`, then run `openclaw plugins enable voice-call`.
 
 `twilio-voice-call-credentials` fails when the Twilio backend is missing account SID, auth token, or caller number:
 
@@ -1176,9 +1177,11 @@ For local development, use a tunnel or Tailscale exposure instead of a private h
 }
 ```
 
-Restart or reload the Gateway, then:
+Apply plugin config changes with the command below. New environment variables
+inherited by the Gateway service still require restarting that service.
 
 ```bash
+openclaw plugins reload voice-call
 openclaw googlemeet setup --transport twilio
 openclaw voicecall setup
 openclaw voicecall smoke

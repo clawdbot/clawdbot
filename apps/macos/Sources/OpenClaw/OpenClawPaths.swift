@@ -14,35 +14,17 @@ enum OpenClawEnv {
 }
 
 enum OpenClawPaths {
-    private static let configPathEnv = ["OPENCLAW_CONFIG_PATH"]
-    private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
-
     static var stateDirURL: URL {
-        for key in self.stateDirEnv {
-            if let override = OpenClawEnv.path(key) {
-                return URL(fileURLWithPath: override, isDirectory: true)
-            }
+        if let override = OpenClawEnv.path("OPENCLAW_STATE_DIR") {
+            return URL(fileURLWithPath: override, isDirectory: true)
         }
         return AppProfile.current.stateDirectoryURL()
     }
 
-    private static func resolveConfigCandidate(in dir: URL) -> URL? {
-        let candidates = [
-            dir.appendingPathComponent("openclaw.json"),
-        ]
-        return candidates.first(where: { FileManager().fileExists(atPath: $0.path) })
-    }
-
     static var configURL: URL {
-        for key in self.configPathEnv {
-            if let override = OpenClawEnv.path(key) {
-                return URL(fileURLWithPath: override)
-            }
+        if let override = OpenClawEnv.path("OPENCLAW_CONFIG_PATH") {
+            return URL(fileURLWithPath: override)
         }
-        let stateDir = self.stateDirURL
-        if let existing = self.resolveConfigCandidate(in: stateDir) {
-            return existing
-        }
-        return stateDir.appendingPathComponent("openclaw.json")
+        return self.stateDirURL.appendingPathComponent("openclaw.json")
     }
 }

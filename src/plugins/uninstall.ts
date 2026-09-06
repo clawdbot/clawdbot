@@ -1,4 +1,3 @@
-// Removes installed plugins and updates plugin index records.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -520,6 +519,7 @@ function isOwnedNpmRemoval(removal: PluginUninstallDirectoryRemoval): boolean {
 
 export async function applyPluginUninstallDirectoryRemoval(
   removal: PluginUninstallDirectoryRemoval | null,
+  beforePersistentApply?: () => void,
 ): Promise<{ directoryRemoved: boolean; warnings: string[] }> {
   if (!removal) {
     return { directoryRemoved: false, warnings: [] };
@@ -527,6 +527,22 @@ export async function applyPluginUninstallDirectoryRemoval(
 
   const existed = pluginUninstallTargetExists(removal.target);
   const warnings: string[] = [];
+  let rethrowAuthorityFailure: (() => never) | undefined;
+  const assertPersistentApply = () => {
+    try {
+      beforePersistentApply?.();
+    } catch (error) {
+      rethrowAuthorityFailure = () => {
+        throw error;
+      };
+      throw error;
+    }
+  };
+  const warn = (message: string, error: unknown) => {
+    // Legacy filesystem cleanup is best effort; lost approval is a terminal owner failure.
+    rethrowAuthorityFailure?.();
+    warnings.push(`${message}: ${formatErrorMessage(error)}`);
+  };
   if (!existed && removal.cleanup?.kind !== "npm") {
     return { directoryRemoved: false, warnings };
   }
@@ -552,6 +568,7 @@ export async function applyPluginUninstallDirectoryRemoval(
     return { directoryRemoved: false, warnings: [ownershipWarning] };
   }
   if (removal.cleanup?.kind === "npm" && npmCleanupManifestExists && usesLegacySharedNpmRoot) {
+    assertPersistentApply();
     const uninstall = await runCommandWithTimeout(
       [
         "npm",
@@ -589,13 +606,15 @@ export async function applyPluginUninstallDirectoryRemoval(
         npmRoot: removal.cleanup.npmRoot,
         packageName: removal.cleanup.packageName,
         managedOverrides,
+        beforePersistentApply: assertPersistentApply,
       });
       if (warning) {
         warnings.push(warning);
       }
     } catch (error) {
-      warnings.push(
-        `Failed to sync managed peer dependencies after uninstalling ${removal.cleanup.packageName}: ${formatErrorMessage(error)}`,
+      warn(
+        `Failed to sync managed peer dependencies after uninstalling ${removal.cleanup.packageName}`,
+        error,
       );
     }
     try {
@@ -604,31 +623,21 @@ export async function applyPluginUninstallDirectoryRemoval(
         logger: {
           warn: (message) => warnings.push(message),
         },
+        beforePersistentApply: assertPersistentApply,
       });
     } catch (error) {
-      warnings.push(
-        `Failed to repair managed npm peer links after uninstalling ${removal.cleanup.packageName}: ${formatErrorMessage(error)}`,
+      warn(
+        `Failed to repair managed npm peer links after uninstalling ${removal.cleanup.packageName}`,
+        error,
       );
     }
   }
   if (!isOwnedNpmRemoval(removal) && pluginUninstallTargetExists(removal.target)) {
     return { directoryRemoved: false, warnings: [...warnings, ownershipWarning] };
   }
+  assertPersistentApply();
   try {
     await fs.rm(removal.target, { recursive: true, force: true });
-    if (removal.cleanup?.kind === "git") {
-      try {
-        await fs.rmdir(removal.cleanup.parentDir);
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "ENOENT" && code !== "ENOTEMPTY") {
-          warnings.push(
-            `Failed to remove empty git plugin install parent ${removal.cleanup.parentDir}: ${formatErrorMessage(error)}`,
-          );
-        }
-      }
-    }
-    return { directoryRemoved: existed, warnings };
   } catch (error) {
     return {
       directoryRemoved: false,
@@ -638,4 +647,19 @@ export async function applyPluginUninstallDirectoryRemoval(
       ],
     };
   }
+  if (removal.cleanup?.kind === "git") {
+    assertPersistentApply();
+    try {
+      await fs.rmdir(removal.cleanup.parentDir);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTEMPTY") {
+        warn(
+          `Failed to remove empty git plugin install parent ${removal.cleanup.parentDir}`,
+          error,
+        );
+      }
+    }
+  }
+  return { directoryRemoved: existed, warnings };
 }

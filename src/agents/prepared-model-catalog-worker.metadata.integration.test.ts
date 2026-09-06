@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createPluginCache,
   getPluginMetadataSnapshotCache,
+  retirePluginCache,
   withPluginCache,
 } from "../plugins/plugin-cache.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -102,7 +103,7 @@ describe("prepared catalog parent metadata ownership", () => {
         await waitForWorkers();
       } finally {
         captureSpy.mockRestore();
-        cache.disposeModules?.();
+        await retirePluginCache(cache);
       }
     }
   });

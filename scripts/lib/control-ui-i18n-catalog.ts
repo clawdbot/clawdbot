@@ -12,7 +12,7 @@ import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.t
 import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
 import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
-import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
+import { enPlugins } from "../../ui/src/i18n/locales/en-plugins.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-library.ts";
@@ -39,7 +39,7 @@ const sourceFiles = [
   "en-model-accounts.ts",
   "en-session-placement.ts",
   "en-new-session-setup.ts",
-  "en-plugin-consent.ts",
+  "en-plugins.ts",
   "en-settings.ts",
   "en-skill-library.ts",
   "en-update-actions.ts",
@@ -64,7 +64,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerModelAccountsEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerNewSessionSetupEnglish.catalog,
-    registerPluginConsentEnglish.catalog,
+    enPlugins,
     registerSettingsEnglish.catalog,
     registerUpdateActionsEnglish.catalog,
   );

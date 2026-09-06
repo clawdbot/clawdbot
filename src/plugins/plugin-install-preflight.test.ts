@@ -1,10 +1,57 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsSync,
+} from "./installed-plugin-index-records.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   preflightPluginInstall,
   resolveInstalledClawHubPlugin,
 } from "./plugin-install-preflight.js";
 
+const tempDirs = createTempDirTracker();
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+  tempDirs.cleanup();
+});
+
 describe("preflightPluginInstall", () => {
+  it("reads a Gateway commit after the caller cached its earlier inventory", async () => {
+    const stateDir = tempDirs.make("openclaw-claw-plugin-preflight-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await withPluginCache(createPluginCache(), async () => {
+      expect(await loadInstalledPluginIndexInstallRecords()).toEqual({});
+      withPluginCache(createPluginCache(), () =>
+        writePersistedInstalledPluginIndexInstallRecordsSync(
+          {
+            audit: {
+              source: "clawhub",
+              clawhubPackage: "@acme/audit",
+              resolvedVersion: "1.2.3",
+              integrity: "sha256:committed",
+            },
+          },
+          { stateDir, candidates: [] },
+        ),
+      );
+      expect(await loadInstalledPluginIndexInstallRecords()).toEqual({});
+      expect(
+        await preflightPluginInstall({
+          clawhubPackage: "@acme/audit",
+          rawSpec: "clawhub:@acme/audit@1.2.3",
+          expectedVersion: "1.2.3",
+        }),
+      ).toMatchObject({ ok: true, action: "reuse", installedId: "audit" });
+      expect(await resolveInstalledClawHubPlugin({ clawhubPackage: "@acme/audit" })).toMatchObject({
+        status: "found",
+        record: { integrity: "sha256:committed" },
+      });
+    });
+  });
+
   it("reuses an exact installed version", async () => {
     const result = await preflightPluginInstall({
       clawhubPackage: "@acme/audit",

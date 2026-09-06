@@ -5,17 +5,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHome } from "../plugin-sdk/test-env.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createPluginRecord } from "./loader-records.js";
-import { createPluginRegistry } from "./registry.js";
+import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
-
-function createTestRegistry(runtime: ReturnType<typeof createPluginRuntime>) {
-  return createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime,
-    activateGlobalSideEffects: false,
-  });
-}
 
 describe("plugin registry SQLite session ownership", () => {
   it("does not read runtime config before a logical session requires it", () => {
@@ -25,7 +17,7 @@ describe("plugin registry SQLite session ownership", () => {
     });
     Object.defineProperty(runtime, "config", { configurable: true, get: readConfig });
 
-    expect(() => createTestRegistry(runtime)).not.toThrow();
+    expect(() => createRuntimeTestRegistry(runtime)).not.toThrow();
     expect(readConfig).not.toHaveBeenCalled();
   });
 
@@ -44,7 +36,7 @@ describe("plugin registry SQLite session ownership", () => {
       const runtime = createPluginRuntime({ subagent });
       let runtimeConfig = config;
       runtime.config = { ...runtime.config, current: () => runtimeConfig };
-      const pluginRegistry = createTestRegistry(runtime);
+      const pluginRegistry = createRuntimeTestRegistry(runtime);
       const record = createPluginRecord({
         id: "workboard",
         source: "/plugins/workboard/index.js",
@@ -146,7 +138,7 @@ describe("plugin registry SQLite session ownership", () => {
           configurable: true,
           value: runEmbeddedAgent,
         });
-        const pluginRegistry = createTestRegistry(runtime);
+        const pluginRegistry = createRuntimeTestRegistry(runtime);
         const ownerRecord = createPluginRecord({
           id: "harness-owner",
           source: "/plugins/harness-owner/index.js",

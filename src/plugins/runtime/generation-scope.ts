@@ -1,10 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { withPluginMetadataSnapshotScope } from "../current-plugin-metadata-snapshot.js";
+import {
+  runOutsidePluginMetadataSnapshotScope,
+  withPluginMetadataSnapshotScope,
+} from "../current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
-import { withPluginRuntimeRegistryScope } from "./gateway-request-scope.js";
+import {
+  runOutsidePluginRuntimeRegistryScope,
+  withPluginRuntimeRegistryScope,
+} from "./gateway-request-scope.js";
 
 const PLUGIN_RUNTIME_GENERATION_REGISTRY_SCOPE_KEY: unique symbol = Symbol.for(
   "openclaw.pluginRuntimeGenerationRegistryScope",
@@ -37,4 +43,11 @@ export function withPluginRuntimeGenerationScope<T>(
 /** Exact registry owned by the prepared generation, when one is active. */
 export function getPluginRuntimeGenerationRegistry(): PluginRegistry | undefined {
   return pluginRuntimeGenerationRegistryScope.getStore();
+}
+
+/** Re-admission drops the old generation while retaining the exact Gateway caller. */
+export function runOutsidePluginRuntimeGenerationScope<T>(run: () => T): T {
+  return pluginRuntimeGenerationRegistryScope.exit(() =>
+    runOutsidePluginMetadataSnapshotScope(() => runOutsidePluginRuntimeRegistryScope(run)),
+  );
 }

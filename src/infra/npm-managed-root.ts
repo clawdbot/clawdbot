@@ -12,6 +12,7 @@ import type { NpmSpecResolution } from "./install-source-utils.js";
 import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { replaceFileAtomicSync } from "./replace-file.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
 // Managed npm roots are private package roots used for installed plugins. This
@@ -35,12 +36,6 @@ type ManagedNpmRootOpenClawMetadata = {
   managedOverrides?: string[];
   managedPeerDependencies?: string[];
   [key: string]: unknown;
-};
-
-/** Snapshot of root dependencies that were inserted only for peer satisfaction. */
-export type ManagedNpmRootPeerDependencySnapshot = {
-  dependencies: Record<string, string>;
-  managedPeerDependencies: string[];
 };
 
 /** Installed dependency metadata read from a managed root lockfile. */
@@ -890,74 +885,6 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   }
 }
 
-/** Snapshot managed peer dependencies before a risky install/update operation. */
-export async function readManagedNpmRootPeerDependencySnapshot(params: {
-  npmRoot: string;
-}): Promise<ManagedNpmRootPeerDependencySnapshot> {
-  const manifest = await readManagedNpmRootManifest(path.join(params.npmRoot, "package.json"));
-  const dependencies = readDependencyRecord(manifest.dependencies);
-  const managedPeerDependencies = readManagedPeerDependencyKeys(manifest.openclaw).toSorted();
-  const dependencySnapshot: Record<string, string> = {};
-  for (const packageName of managedPeerDependencies) {
-    const dependencySpec = dependencies[packageName];
-    if (dependencySpec) {
-      dependencySnapshot[packageName] = dependencySpec;
-    }
-  }
-  return {
-    dependencies: dependencySnapshot,
-    managedPeerDependencies,
-  };
-}
-
-/** Restore a previously captured managed peer dependency snapshot. */
-export async function restoreManagedNpmRootPeerDependencySnapshot(params: {
-  npmRoot: string;
-  snapshot: ManagedNpmRootPeerDependencySnapshot;
-}): Promise<void> {
-  const manifestPath = path.join(params.npmRoot, "package.json");
-  const manifest = await readManagedNpmRootManifest(manifestPath);
-  const dependencies = readDependencyRecord(manifest.dependencies);
-  for (const packageName of readManagedPeerDependencyKeys(manifest.openclaw)) {
-    delete dependencies[packageName];
-  }
-  Object.assign(dependencies, params.snapshot.dependencies);
-  const overrides = readOverrideRecord(manifest.overrides);
-  const currentManagedOverrideKeys = readManagedOverrideKeys(manifest.openclaw);
-  // Restored pins predate the overrides currently in the manifest; realign them so a
-  // rollback never persists a root npm rejects with EOVERRIDE.
-  reconcileManagedNpmRootOverrideConflicts({
-    dependencies,
-    overrides,
-    managedDependencyNames: new Set(params.snapshot.managedPeerDependencies),
-    managedOverrideNames: new Set(currentManagedOverrideKeys),
-  });
-  const managedOverrideKeys = currentManagedOverrideKeys
-    .filter((key) => Object.hasOwn(overrides, key))
-    .toSorted();
-  const openclawMetadata = buildManagedOpenClawMetadata({
-    current: manifest.openclaw,
-    managedOverrideKeys,
-    managedPeerDependencyKeys: params.snapshot.managedPeerDependencies.toSorted(),
-  });
-  const next: ManagedNpmRootManifest = {
-    ...manifest,
-    private: true,
-    dependencies,
-  };
-  if (Object.keys(overrides).length > 0) {
-    next.overrides = overrides;
-  } else {
-    delete next.overrides;
-  }
-  if (openclawMetadata) {
-    next.openclaw = openclawMetadata;
-  } else {
-    delete next.openclaw;
-  }
-  await writeJson(manifestPath, next, { trailingNewline: true });
-}
-
 /** Sync package.json with peer dependency pins resolved from npm's lock plan. */
 export async function syncManagedNpmRootPeerDependencies(params: {
   npmRoot: string;
@@ -966,6 +893,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
   signal?: AbortSignal;
+  beforePersistentApply?: () => void;
 }): Promise<boolean> {
   const manifestPath = path.join(params.npmRoot, "package.json");
   const manifest = await readManagedNpmRootManifest(manifestPath);
@@ -1044,7 +972,17 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   }
   const changed = JSON.stringify(next) !== JSON.stringify(manifest);
   if (changed) {
-    await writeJson(manifestPath, next, { trailingNewline: true });
+    // Planning yields. Commit the small manifest without yielding after approval revalidation.
+    params.beforePersistentApply?.();
+    replaceFileAtomicSync({
+      filePath: manifestPath,
+      content: `${JSON.stringify(next, null, 2)}\n`,
+      mode: 0o600,
+      dirMode: 0o777 & ~process.umask(),
+      copyFallbackOnPermissionError: true,
+      syncTempFile: true,
+      syncParentDir: true,
+    });
   }
   return changed;
 }
@@ -1310,23 +1248,4 @@ export async function readManagedNpmRootInstalledDependency(params: {
   };
 }
 
-/** Remove a dependency from the managed root manifest. */
-export async function removeManagedNpmRootDependency(params: {
-  npmRoot: string;
-  packageName: string;
-}): Promise<void> {
-  const manifestPath = path.join(params.npmRoot, "package.json");
-  const manifest = await readManagedNpmRootManifest(manifestPath);
-  const dependencies = readDependencyRecord(manifest.dependencies);
-  if (!(params.packageName in dependencies)) {
-    return;
-  }
-  const { [params.packageName]: _removed, ...nextDependencies } = dependencies;
-  const next: ManagedNpmRootManifest = {
-    ...manifest,
-    private: true,
-    dependencies: nextDependencies,
-  };
-  await writeJson(manifestPath, next, { trailingNewline: true });
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

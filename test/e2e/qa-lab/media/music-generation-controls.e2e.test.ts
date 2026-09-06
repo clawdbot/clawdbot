@@ -10,7 +10,7 @@ import type {
   MusicGenerationRequest,
 } from "../../../../src/music-generation/types.js";
 import { prepareMediaCapabilityProviders } from "../../../../src/plugins/capability-provider-runtime.js";
-import { installTemporaryCurrentPluginMetadataSnapshot } from "../../../../src/plugins/current-plugin-metadata-snapshot.js";
+import { withPluginMetadataSnapshotScope } from "../../../../src/plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginRegistryLoadCacheKey } from "../../../../src/plugins/loader.js";
 import type { PluginManifestRecord } from "../../../../src/plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry.js";
@@ -183,46 +183,44 @@ describe("music generation controls QA product proof", () => {
   it("lists capabilities, falls back in config order, normalizes controls, and persists audio", async () => {
     const fixture = createMusicFixture();
     const activeRegistry = captureActivePluginRegistrySnapshot();
-    const metadataLease = installTemporaryCurrentPluginMetadataSnapshot(
-      fixture.pluginMetadataSnapshot,
-      {
-        config: fixture.config,
-      },
-    );
-    try {
-      const pluginIds = [PLUGIN_ID];
-      const cacheKey = resolvePluginRegistryLoadCacheKey({
-        config: fixture.config,
-        onlyPluginIds: pluginIds,
-        activate: false,
-      });
-      setActivePluginRegistry(fixture.registry, cacheKey);
-      const listed = (await fixture.tool.execute("music-list", {
-        action: "list",
-      })) as ToolResult;
-      const listedProviders = detailsOf(listed).providers as Array<Record<string, unknown>>;
-      const primaryListing = listedProviders.find((entry) => entry.id === fixture.primary.id);
-      const fallbackListing = listedProviders.find((entry) => entry.id === fixture.fallback.id);
+    const listCapabilities = async () => {
+      try {
+        const pluginIds = [PLUGIN_ID];
+        const cacheKey = resolvePluginRegistryLoadCacheKey({
+          config: fixture.config,
+          onlyPluginIds: pluginIds,
+          activate: false,
+        });
+        setActivePluginRegistry(fixture.registry, cacheKey);
+        const listed = (await fixture.tool.execute("music-list", {
+          action: "list",
+        })) as ToolResult;
+        const listedProviders = detailsOf(listed).providers as Array<Record<string, unknown>>;
+        const primaryListing = listedProviders.find((entry) => entry.id === fixture.primary.id);
+        const fallbackListing = listedProviders.find((entry) => entry.id === fixture.fallback.id);
 
-      expect(primaryListing).toMatchObject({
-        configured: true,
-        defaultModel: "song-v1",
-        models: ["song-v1"],
-        modes: ["generate"],
-      });
-      expect(fallbackListing).toMatchObject({
-        configured: true,
-        defaultModel: "beat-v2",
-        models: ["beat-v2"],
-        modes: ["generate"],
-      });
-      expect(textOf(listed)).toContain(
-        "capabilities: modes=generate, maxDurationSeconds=60, lyrics, instrumental, duration, format, supportedFormats=mp3/wav",
-      );
-    } finally {
-      metadataLease.release();
-      restoreActivePluginRegistrySnapshot(activeRegistry);
-    }
+        expect(primaryListing).toMatchObject({
+          configured: true,
+          defaultModel: "song-v1",
+          models: ["song-v1"],
+          modes: ["generate"],
+        });
+        expect(fallbackListing).toMatchObject({
+          configured: true,
+          defaultModel: "beat-v2",
+          models: ["beat-v2"],
+          modes: ["generate"],
+        });
+        expect(textOf(listed)).toContain(
+          "capabilities: modes=generate, maxDurationSeconds=60, lyrics, instrumental, duration, format, supportedFormats=mp3/wav",
+        );
+      } finally {
+        restoreActivePluginRegistrySnapshot(activeRegistry);
+      }
+    };
+    await withPluginMetadataSnapshotScope(fixture.pluginMetadataSnapshot, listCapabilities, {
+      config: fixture.config,
+    });
 
     const stateDir = tempDirs.make("openclaw-qa-music-controls-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {

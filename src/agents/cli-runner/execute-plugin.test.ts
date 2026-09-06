@@ -8,6 +8,7 @@ import type {
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { callGatewayTool } from "../tools/gateway.js";
@@ -113,9 +114,7 @@ function runPlugin(
       ? {
           liveSession: {
             beginCapture: () => {},
-            ...(options.requiredGeneration
-              ? { requiredGeneration: options.requiredGeneration }
-              : {}),
+            requiredGeneration: options.requiredGeneration,
           },
         }
       : {}),
@@ -125,6 +124,19 @@ function runPlugin(
     noOutputTimeoutMs: options.noOutputTimeoutMs ?? 2_000,
     consumeStdout: options.consumeStdout ?? (() => {}),
   });
+}
+
+async function runOwnedPlugin(
+  context: PreparedCliRunContext,
+  execute: CliBackendExecute,
+  options: Parameters<typeof runPlugin>[2] = {},
+) {
+  const instance = new PluginInstance("cli-execution");
+  try {
+    return await runPlugin(context, instance.wrap(execute), options);
+  } finally {
+    await instance.dispose();
+  }
 }
 
 function registerOwnerSession(context: PreparedCliRunContext, generation: string) {
@@ -208,7 +220,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     };
 
     await expect(
-      runPlugin(context, execute, { consumeStdout: output.push.bind(output) }),
+      runOwnedPlugin(context, execute, { consumeStdout: output.push.bind(output) }),
     ).resolves.toMatchObject({ reason: "exit", exitCode: 0, timedOut: false });
 
     expect(output.map((line) => JSON.parse(line))).toEqual([
@@ -792,14 +804,14 @@ describe("plugin-owned CLI execution host boundary", () => {
   ])("rejects $name", async (testCase) => {
     const { context } = await createExecution();
 
-    await expect(runPlugin(context, () => testCase.execute())).rejects.toThrow(testCase.error);
+    await expect(runOwnedPlugin(context, () => testCase.execute())).rejects.toThrow(testCase.error);
   });
 
   it("aborts a silent plugin stream through the host no-output watchdog", async () => {
     vi.useFakeTimers();
     const { context } = await createExecution({ timeoutMs: 5_000 });
     const streamStarted = createDeferred();
-    const run = runPlugin(
+    const run = runOwnedPlugin(
       context,
       async function* (execution) {
         streamStarted.resolve();
@@ -810,14 +822,15 @@ describe("plugin-owned CLI execution host boundary", () => {
     );
     await streamStarted.promise;
 
-    await vi.advanceTimersByTimeAsync(100);
-
-    await expect(run).resolves.toMatchObject({
-      reason: "no-output-timeout",
-      exitCode: null,
-      timedOut: true,
-      noOutputTimedOut: true,
-    });
+    await Promise.all([
+      expect(run).resolves.toMatchObject({
+        reason: "no-output-timeout",
+        exitCode: null,
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+      vi.advanceTimersByTimeAsync(100),
+    ]);
   });
 
   it.each([

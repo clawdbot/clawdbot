@@ -1,5 +1,5 @@
 import { expect, vi } from "vitest";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 
 const sessionRow = vi.hoisted(() => ({

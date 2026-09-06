@@ -552,6 +552,45 @@ describe("occupancy-driven transcript lifecycle", () => {
     });
   });
 
+  it("retains a late watcher after failed shutdown so cleanup can be retried", async () => {
+    const h = harness();
+    const watchEntered = createDeferred();
+    const releaseWatch = createDeferred();
+    let subscribed = false;
+    h.provider.watchOccupancy = async (request) => {
+      h.watches.push(request);
+      watchEntered.resolve();
+      await releaseWatch.promise;
+      subscribed = true;
+      return { ok: true, value: { stop: h.unwatch } };
+    };
+    h.unwatch.mockRejectedValueOnce(new Error("late watcher cleanup unavailable"));
+    h.unwatch.mockImplementation(() => {
+      subscribed = false;
+    });
+    await withPluginRuntimeRegistryScope(h.registry, async () => {
+      const service = h.service();
+      try {
+        service.start();
+        await watchEntered.promise;
+        const stopped = service.stop(new Set([h.provider.id]));
+        const rejected = expect.soft(stopped).rejects.toBeInstanceOf(AggregateError);
+        releaseWatch.resolve();
+        await rejected;
+        expect.soft(h.unwatch).toHaveBeenCalledOnce();
+        expect.soft(subscribed).toBe(true);
+        h.watches[0]!.onOccupied();
+        await service.stop(new Set([h.provider.id]));
+        expect.soft(h.unwatch).toHaveBeenCalledTimes(2);
+        expect.soft(subscribed).toBe(false);
+        expect(h.requests).toHaveLength(0);
+      } finally {
+        releaseWatch.resolve();
+        await service.stop();
+      }
+    });
+  });
+
   it("unsubscribes before stopping capture and cancels pending grace and retained callbacks", async () => {
     const h = harness();
     const order: string[] = [];

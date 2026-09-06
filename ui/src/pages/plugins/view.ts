@@ -125,6 +125,7 @@ type PluginsViewProps = {
   onRetryConsentInspection: () => void;
   onDismissMessage: (rowKey: string) => void;
   onUninstall: (pluginId: string, rowKey: string) => void;
+  onReload: (pluginId: string, rowKey: string) => void;
   onAddConnector: (suggestion: ConnectorSuggestion) => void;
   onSearchClawHub: (query: string) => void;
   onMcpToggle: (name: string, enabled: boolean) => void;
@@ -259,11 +260,11 @@ function installedPlugins(
       }
       switch (filter) {
         case "enabled":
-          return plugin.enabled && plugin.state !== "error";
+          return plugin.enabled && !hasPluginIssue(plugin);
         case "disabled":
-          return !plugin.enabled && plugin.state !== "error";
+          return !plugin.enabled && !hasPluginIssue(plugin);
         case "issues":
-          return plugin.state === "error";
+          return hasPluginIssue(plugin);
         default:
           return true;
       }
@@ -349,10 +350,38 @@ function stateStatus(plugin: PluginCatalogItem) {
   return renderSettingsStatus({ kind, label: stateLabel(plugin) });
 }
 
-/** Rows pair the status with an Enable/Disable button that already implies the
- * healthy states, so only the error status earns a pill next to the actions. */
+function pluginError(plugin: PluginCatalogItem): string | undefined {
+  return plugin.runtime?.error || plugin.error;
+}
+
+function hasPluginIssue(plugin: PluginCatalogItem): boolean {
+  return (
+    plugin.state === "error" ||
+    plugin.runtime?.state === "service-failed" ||
+    Boolean(pluginError(plugin))
+  );
+}
+
+function runtimeStatus(plugin: PluginCatalogItem) {
+  const state = plugin.runtime?.state;
+  if (!state) {
+    return nothing;
+  }
+  const labels = {
+    active: t("pluginsPage.runtimeActive"),
+    disabled: t("pluginsPage.runtimeDisabled"),
+    unloaded: t("pluginsPage.runtimeUnloaded"),
+    "service-failed": t("pluginsPage.runtimeServiceFailed"),
+  };
+  return renderSettingsStatus({
+    kind: state === "service-failed" ? "danger" : state === "active" ? "ok" : "muted",
+    label: labels[state],
+  });
+}
+
+// The toggle describes desired policy; the badge reports the independently observed runtime.
 function rowStateStatus(plugin: PluginCatalogItem) {
-  return plugin.state === "error" ? stateStatus(plugin) : nothing;
+  return html`${runtimeStatus(plugin)}${plugin.state === "error" ? stateStatus(plugin) : nothing}`;
 }
 
 function requestInstall(
@@ -630,27 +659,51 @@ function renderCatalogActions(
   props: PluginsViewProps,
   busy: boolean,
   rowKey: string,
+  layout: "row" | "detail" = "row",
 ) {
-  if (!plugin.installed) {
-    const install = plugin.install;
-    return install
-      ? renderInstallButton(
-          props,
-          busy,
-          plugin.name,
-          install,
-          resolveInstallIdentity(props, install),
-        )
-      : html`<span class="plugins-action-note">${t("pluginsPage.unavailable")}</span>`;
-  }
+  const detail = layout === "detail";
   return html`
-    ${renderToggleButton(props, busy, {
-      enabled: plugin.enabled,
-      onToggle: (enabled) => props.onSetEnabled(plugin.id, enabled, rowKey),
-    })}
     ${
-      plugin.removable
-        ? renderRemoveButton(props, busy, plugin.name, () => props.onUninstall(plugin.id, rowKey))
+      plugin.installed
+        ? renderToggleButton(props, busy, {
+            enabled: plugin.enabled,
+            onToggle: (enabled) => props.onSetEnabled(plugin.id, enabled, rowKey),
+            className: detail ? (plugin.enabled ? "btn" : "btn primary") : "btn btn--sm",
+          })
+        : plugin.install
+          ? renderInstallButton(
+              props,
+              busy,
+              plugin.name,
+              plugin.install,
+              resolveInstallIdentity(props, plugin.install),
+            )
+          : detail
+            ? nothing
+            : html`<span class="plugins-action-note">${t("pluginsPage.unavailable")}</span>`
+    }
+    ${
+      plugin.installed
+        ? renderMutationButton(props, {
+            busy,
+            className: detail ? "btn" : "btn btn--sm",
+            label: t("pluginsPage.reload"),
+            onClick: () => props.onReload(plugin.id, rowKey),
+            stopPropagation: true,
+          })
+        : nothing
+    }
+    ${
+      plugin.removable && (plugin.installed || detail)
+        ? detail
+          ? renderMutationButton(props, {
+              busy,
+              className: "btn plugins-detail__remove",
+              label: html`<span aria-hidden="true">${icons.trash}</span>
+                ${t("pluginsPage.remove")}`,
+              onClick: () => props.onUninstall(plugin.id, rowKey),
+            })
+          : renderRemoveButton(props, busy, plugin.name, () => props.onUninstall(plugin.id, rowKey))
         : nothing
     }
   `;
@@ -661,8 +714,8 @@ function renderCatalogActions(
 /** Segmented filter doubling as the inventory overview: label + live count per state. */
 function renderInstalledFilter(props: PluginsViewProps) {
   const installed = (props.result?.plugins ?? []).filter((plugin) => plugin.installed);
-  const issues = installed.filter((plugin) => plugin.state === "error").length;
-  const enabled = installed.filter((plugin) => plugin.enabled && plugin.state !== "error").length;
+  const issues = installed.filter(hasPluginIssue).length;
+  const enabled = installed.filter((plugin) => plugin.enabled && !hasPluginIssue(plugin)).length;
   const counts: Record<InstalledFilter, number> = {
     all: installed.length,
     enabled,
@@ -741,9 +794,7 @@ function renderPluginRow(
             ${plugin.name}
             ${
               plugin.version
-                ? includePackageName
-                  ? html`<span class="plugins-version">v${plugin.version}</span>`
-                  : html`<span class="plugins-version">v${plugin.version}</span>`
+                ? html`<span class="plugins-version">v${plugin.version}</span>`
                 : nothing
             }
           `,
@@ -764,9 +815,9 @@ function renderPluginRow(
         ${renderCatalogActions(plugin, props, busy, key)}
       </div>
       ${
-        plugin.error
+        pluginError(plugin)
           ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
-              ${formatUiExternalText(plugin.error)}
+              ${formatUiExternalText(pluginError(plugin))}
             </div>`
           : nothing
       }
@@ -1205,46 +1256,18 @@ function renderDetailOverlay(props: PluginsViewProps) {
                 ? html`<span class="plugins-version">v${plugin.version}</span>`
                 : nothing
             }
-            ${stateStatus(plugin)}
+            ${stateStatus(plugin)} ${runtimeStatus(plugin)}
           </div>
           <p class="plugins-detail__description">
             ${plugin.description || t("pluginsPage.optionalCapability")}
           </p>
           <div class="plugins-detail__actions">
-            ${
-              plugin.installed
-                ? renderToggleButton(props, busy, {
-                    enabled: plugin.enabled,
-                    onToggle: (enabled) => props.onSetEnabled(plugin.id, enabled, key),
-                    className: `btn ${plugin.enabled ? "" : "primary"}`,
-                  })
-                : plugin.install
-                  ? renderInstallButton(
-                      props,
-                      busy,
-                      plugin.name,
-                      plugin.install,
-                      resolveInstallIdentity(props, plugin.install),
-                    )
-                  : nothing
-            }
-            ${
-              plugin.removable
-                ? renderMutationButton(props, {
-                    busy,
-                    className: "btn plugins-detail__remove",
-                    label: html`<span aria-hidden="true">${icons.trash}</span> ${t(
-                        "pluginsPage.remove",
-                      )}`,
-                    onClick: () => props.onUninstall(plugin.id, key),
-                  })
-                : nothing
-            }
+            ${renderCatalogActions(plugin, props, busy, key, "detail")}
           </div>
           ${
-            plugin.error
+            pluginError(plugin)
               ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
-                  ${formatUiExternalText(plugin.error)}
+                  ${formatUiExternalText(pluginError(plugin))}
                 </div>`
               : nothing
           }

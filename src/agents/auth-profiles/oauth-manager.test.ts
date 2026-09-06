@@ -6,6 +6,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -213,29 +214,44 @@ describe("OAuthManagerRefreshError", () => {
     expect(surfacedCauseMessage.match(/\[redacted\]/g)?.length).toBe(6);
   });
 
-  it("redacts token-shaped credential secrets before generic masking", () => {
-    const access = "sk-oauthreviewredaction1234567890zzzz";
-    const refresh = "ya29.oauthreviewredaction1234567890yyyy";
-    const error = new OAuthManagerRefreshError({
-      credential: createCredential({ access, refresh }),
-      profileId: "openai:oauth",
-      refreshedStore: { version: 1, profiles: {} },
-      cause: new Error(`refresh rejected ${access} ${refresh}`, {
-        cause: new Error(`nested failure ${access}`),
-      }),
-    });
+  it.each(["host", "plugin VM"])(
+    "redacts %s token-shaped credential secrets before generic masking",
+    (realm) => {
+      const access = "sk-oauthreviewredaction1234567890zzzz";
+      const refresh = "ya29.oauthreviewredaction1234567890yyyy";
+      const cause: Error =
+        realm === "host"
+          ? new Error(`refresh rejected ${access} ${refresh}`, {
+              cause: new Error(`nested failure ${access}`),
+            })
+          : runInNewContext(
+              "new Error(`refresh rejected ${access} ${refresh}`, { cause: new Error(`nested failure ${access}`) })",
+              { access, refresh },
+            );
+      cause.name = "ProviderRefreshFailure";
+      const error = new OAuthManagerRefreshError({
+        credential: createCredential({ access, refresh }),
+        profileId: "openai:oauth",
+        refreshedStore: { version: 1, profiles: {} },
+        cause,
+      });
 
-    const surfacedCauseMessage = formatErrorMessage(error.cause);
-    for (const message of [error.message, surfacedCauseMessage]) {
-      expect(message).not.toContain(access);
-      expect(message).not.toContain(refresh);
-      expect(message).not.toContain("sk-oau");
-      expect(message).not.toContain("zzzz");
-      expect(message).not.toContain("ya29.o");
-      expect(message).not.toContain("yyyy");
-      expect(message.match(/\[redacted\]/g)?.length).toBe(3);
-    }
-  });
+      expect(error.cause).toMatchObject({ name: "ProviderRefreshFailure" });
+      const surfacedCauseMessage = formatErrorMessage(error.cause);
+      for (const message of [error.message, surfacedCauseMessage]) {
+        expect(message).toContain(
+          "refresh rejected [redacted] [redacted] | nested failure [redacted]",
+        );
+        expect(message).not.toContain(access);
+        expect(message).not.toContain(refresh);
+        expect(message).not.toContain("sk-oau");
+        expect(message).not.toContain("zzzz");
+        expect(message).not.toContain("ya29.o");
+        expect(message).not.toContain("yyyy");
+        expect(message.match(/\[redacted\]/g)?.length).toBe(3);
+      }
+    },
+  );
 
   it.each([undefined, Symbol("refresh-failed"), () => "refresh-failed"])(
     "formats non-json refresh failure values without throwing",

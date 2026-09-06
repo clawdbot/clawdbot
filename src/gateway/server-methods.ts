@@ -13,7 +13,7 @@ import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
-import { getActivePluginHttpRouteRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   getPluginRuntimeGatewayNodeAuthorities,
@@ -224,7 +224,7 @@ export function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
   // Attached gateway methods must not be shadowed by agent-scoped registry loads.
-  const gatewayPluginRegistry = getActivePluginHttpRouteRegistry();
+  const gatewayPluginRegistry = getActivePluginRegistry();
   const gatewayPluginHandlers = gatewayPluginRegistry?.gatewayHandlers ?? {};
   const extraHandlerEntries = Object.entries(extraHandlers ?? {});
   const pluginMethodNames = new Set(Object.keys(gatewayPluginHandlers));

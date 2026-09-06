@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { resolveTranscriptsConfig } from "./config.js";
@@ -434,15 +435,18 @@ export async function stopTranscriptProviderCapture(params: {
   const { entry } = params;
   let error: string | undefined;
   try {
-    if (!entry.provider.stop) {
+    const stop = entry.provider.stop;
+    if (!stop) {
       error = `transcripts provider ${entry.providerId} cannot stop live capture`;
     } else {
-      const result = await entry.provider.stop({
-        cfg: params.ctx.config,
-        sessionId: entry.session.sessionId,
-        source: entry.session.source,
-        reason: params.reason,
-      });
+      const result = await runPluginCleanup(stop, () =>
+        stop.call(entry.provider, {
+          cfg: params.ctx.config,
+          sessionId: entry.session.sessionId,
+          source: entry.session.source,
+          reason: params.reason,
+        }),
+      );
       error = result.ok ? undefined : result.error;
     }
   } catch (cause) {

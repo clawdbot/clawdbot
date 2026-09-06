@@ -66,6 +66,11 @@ export function hasRetainedManagedNpmInstallMarker(packageDir: string): boolean 
   return info ? fs.existsSync(info.markerPath) : false;
 }
 
+export function retainedManagedNpmInstallPreservesFiles(packageDir: string): boolean {
+  const info = resolveRetainedManagedNpmInstallPackageInfo(packageDir);
+  return info ? markerPreservesPackageFiles(info.markerPath) : false;
+}
+
 export async function clearRetainedManagedNpmInstallMarker(packageDir: string): Promise<boolean> {
   const info = resolveRetainedManagedNpmInstallPackageInfo(packageDir);
   if (!info) {

@@ -1,3 +1,7 @@
+import {
+  formatErrorMessage as formatSharedErrorMessage,
+  isErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 /**
  * OAuth credential manager.
@@ -91,7 +95,7 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
     // Keep the file-lock cause on structured fields only. Flattening it here
     // exposes local lock paths in user-facing auth diagnostics.
     const surfacedCause =
-      isRefreshContention && params.cause instanceof Error
+      isRefreshContention && isErrorObject(params.cause)
         ? new Error(params.cause.message)
         : params.cause;
     const storedCredential = params.refreshedStore.profiles[params.profileId];
@@ -192,50 +196,16 @@ function redactOAuthCredentialSecrets(message: string, secrets: string[]): strin
   return redacted;
 }
 
-function formatRawErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    let formatted = error.message || error.name || "Error";
-    let cause: unknown = error.cause;
-    const seen = new Set<unknown>([error]);
-    while (cause && !seen.has(cause)) {
-      seen.add(cause);
-      if (cause instanceof Error) {
-        if (cause.message) {
-          formatted += ` | ${cause.message}`;
-        }
-        cause = cause.cause;
-      } else if (typeof cause === "string") {
-        formatted += ` | ${cause}`;
-        break;
-      } else {
-        break;
-      }
-    }
-    return formatted;
-  }
-  if (
-    typeof error === "string" ||
-    typeof error === "number" ||
-    typeof error === "boolean" ||
-    typeof error === "bigint"
-  ) {
-    return String(error);
-  }
-  try {
-    return JSON.stringify(error) ?? String(error);
-  } catch {
-    return Object.prototype.toString.call(error);
-  }
-}
-
 function formatRedactedOAuthRefreshError(error: unknown, secrets: string[]): string {
-  return redactSensitiveText(redactOAuthCredentialSecrets(formatRawErrorMessage(error), secrets));
+  return formatSharedErrorMessage(error, {
+    redact: (message) => redactSensitiveText(redactOAuthCredentialSecrets(message, secrets)),
+  });
 }
 
 function createRedactedOAuthRefreshCause(cause: unknown, secrets: string[]): Error {
   const redacted = formatRedactedOAuthRefreshError(cause, secrets);
   const sanitized = new Error(redacted);
-  if (cause instanceof Error && cause.name) {
+  if (isErrorObject(cause) && cause.name) {
     sanitized.name = cause.name;
   }
   return sanitized;

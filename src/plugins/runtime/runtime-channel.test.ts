@@ -22,6 +22,7 @@ describe("inbound dispatch", () => {
   it("carries the owning runtime reply dispatcher into routed channel turns", async () => {
     const boundReplyDispatch = vi.fn();
     const channel = createRuntimeChannel({ dispatchReplyFromConfig: boundReplyDispatch });
+    expect(channel.reply.dispatchReplyFromConfig).toBe(boundReplyDispatch);
     const turn = { channel: "qa-channel" } as Parameters<typeof channel.inbound.dispatch>[0];
 
     await channel.inbound.dispatch(turn);

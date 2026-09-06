@@ -31,7 +31,7 @@ const updateScreenshots = process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1";
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/plugins");
 const desktopViewport = { height: 1000, width: 1440 };
 const mobileViewport = { height: 852, width: 393 };
-const restartWarningPattern = /restarts the Gateway immediately[\s\S]*interrupts active sessions/u;
+const removalWarningPattern = /active connections and tools will stop/u;
 const pluginMethods = [
   "plugins.list",
   "plugins.inspect",
@@ -172,14 +172,14 @@ const lobsterSearchResponse = {
 const uninstallResult = {
   ok: true,
   pluginId: "calendar-plus",
-  restartRequired: true,
+  restartRequired: false,
   removed: ["config entry", "install record", "directory"],
 };
 
 const installResult = {
   ok: true,
   plugin: calendarPlugin,
-  restartRequired: true,
+  restartRequired: false,
 } satisfies PluginMutationResult;
 
 const installPolicyWarning = {
@@ -371,12 +371,6 @@ async function waitForNextRequest(
 
 async function clickRowAction(page: Page, rowSelector: string, buttonName: string): Promise<void> {
   await page.locator(rowSelector).getByRole("button", { name: buttonName, exact: true }).click();
-}
-
-async function confirmPluginLifecycle(page: Page, action: "Install" | "Remove"): Promise<void> {
-  const dialog = page.locator("openclaw-modal-dialog");
-  await dialog.waitFor({ state: "visible" });
-  await dialog.getByRole("button", { name: action, exact: true }).click();
 }
 
 async function captureScreenshot(page: Page, name: string): Promise<void> {
@@ -599,22 +593,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await captureScreenshot(page, "04-search-desktop.png");
 
       await gateway.deferNext("plugins.install");
-      const installCountBeforeConfirmation = (await gateway.getRequests("plugins.install")).length;
       await searchRow.getByRole("button", { name: "Install Calendar Plus", exact: true }).click();
-      const installRestartConfirm = page.locator("openclaw-modal-dialog");
-      await installRestartConfirm.waitFor({ state: "visible" });
-      expect(await installRestartConfirm.textContent()).toMatch(restartWarningPattern);
-      expect(await gateway.getRequests("plugins.install")).toHaveLength(
-        installCountBeforeConfirmation,
-      );
-      await installRestartConfirm.getByRole("button", { name: "Cancel", exact: true }).click();
-      await installRestartConfirm.waitFor({ state: "detached" });
-      expect(await gateway.getRequests("plugins.install")).toHaveLength(
-        installCountBeforeConfirmation,
-      );
-      await searchRow.getByRole("button", { name: "Install Calendar Plus", exact: true }).click();
-      await installRestartConfirm.waitFor({ state: "visible" });
-      await installRestartConfirm.getByRole("button", { name: "Install", exact: true }).click();
       const firstInstallRequest = await gateway.waitForRequest("plugins.install");
       expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
       expect(requestParams(firstInstallRequest)).toEqual({
@@ -667,7 +646,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(requestParams(postInstallListRequest)).toEqual({});
       await expect.poll(() => searchRow.getAttribute("aria-busy")).toBe("true");
       expect(await searchRow.getByRole("status").textContent()).toContain(
-        "A Gateway restart is required",
+        "Installed Calendar Plus",
       );
       await gateway.resolveDeferred("plugins.list", installedInventory);
       await expect.poll(() => searchRow.getAttribute("aria-busy")).toBe("false");
@@ -701,7 +680,16 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(requestParams(postEnableConfigRequest)).toEqual({});
       await gateway.setMethodResponse("plugins.list", finalInventory);
       await gateway.setMethodResponse("config.get", configSnapshot(true));
-      await gateway.setMethodResponse("connect", enabledWorkboardConnectResponse());
+      const enabledHello = enabledWorkboardConnectResponse();
+      await gateway.setMethodResponse("plugins.uiDescriptors", {
+        ok: true,
+        generation: 2,
+        descriptors: [],
+        methods: enabledHello.features.methods,
+        controlUiTabs: enabledHello.controlUiTabs,
+        controlUiWidgetKinds: [],
+        pluginSurfaceUrls: {},
+      });
       await gateway.resolveDeferred("config.get", configSnapshot(true));
       const postEnableListRequest = await waitForNextRequest(
         gateway,
@@ -710,7 +698,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       );
       expect(requestParams(postEnableListRequest)).toEqual({});
       await gateway.resolveDeferred("plugins.list", finalInventory);
-      await waitForNextRequest(gateway, "connect", connectCountBeforeEnable);
+      await gateway.emitGatewayEvent("plugins.changed", { generation: 2 });
+      await gateway.waitForRequest("plugins.uiDescriptors");
+      expect(await gateway.getRequests("connect")).toHaveLength(connectCountBeforeEnable);
       await expect.poll(() => workboardCard.getAttribute("aria-busy")).toBe("false");
 
       await page
@@ -720,12 +710,12 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await calendarRow.waitFor({ state: "visible" });
       await captureScreenshot(page, "05-enabled-installed-desktop.png");
 
-      // Removable installs disclose the restart before the uninstall request.
+      // Removal discloses the stopped plugin resources before the uninstall request.
       const uninstallCountBefore = (await gateway.getRequests("plugins.uninstall")).length;
       await clickRowAction(page, '[data-plugin-id="calendar-plus"]', "Remove Calendar Plus");
       const uninstallRestartConfirm = page.locator("openclaw-modal-dialog");
       await uninstallRestartConfirm.waitFor({ state: "visible" });
-      expect(await uninstallRestartConfirm.textContent()).toMatch(restartWarningPattern);
+      expect(await uninstallRestartConfirm.textContent()).toMatch(removalWarningPattern);
       expect(await gateway.getRequests("plugins.uninstall")).toHaveLength(uninstallCountBefore);
       await uninstallRestartConfirm.getByRole("button", { name: "Cancel", exact: true }).click();
       await uninstallRestartConfirm.waitFor({ state: "detached" });
@@ -779,7 +769,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await reinstallRow
         .getByRole("button", { name: "Install Calendar Plus", exact: true })
         .click();
-      await confirmPluginLifecycle(page, "Install");
       const reinstallRequest = await waitForNextRequest(
         gateway,
         "plugins.install",
@@ -863,7 +852,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
       await gateway.deferNext("plugins.install");
       await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
-      await confirmPluginLifecycle(page, "Install");
       expect(requestParams(await gateway.waitForRequest("plugins.install"))).toEqual({
         source: "clawhub",
         packageName: "@openclaw/lobster",
@@ -921,7 +909,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const installCountBeforeSecondAttempt = (await gateway.getRequests("plugins.install")).length;
       await gateway.deferNext("plugins.install");
       await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
-      await confirmPluginLifecycle(page, "Install");
       await waitForNextRequest(gateway, "plugins.install", installCountBeforeSecondAttempt);
       await gateway.rejectDeferred("plugins.install", {
         code: "INVALID_REQUEST",
@@ -978,7 +965,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.resolveDeferred("plugins.install", {
         ok: true,
         plugin: installedLobsterPlugin,
-        restartRequired: true,
+        restartRequired: false,
       } satisfies PluginMutationResult);
       await page
         .locator('[data-plugin-id="lobster"][data-plugin-status="enabled"]')

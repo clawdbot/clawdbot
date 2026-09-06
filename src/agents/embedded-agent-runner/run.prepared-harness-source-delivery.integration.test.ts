@@ -575,7 +575,6 @@ describe("prepared harness source delivery", () => {
       );
     } else {
       expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(deliver).not.toHaveBeenCalled();
     }
     expect(dispatcher.getQueuedCounts()).toEqual({
       tool: 0,

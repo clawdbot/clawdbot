@@ -84,7 +84,7 @@ export type TranscriptOccupancyWatchRequest = {
   onEmpty: () => void;
 };
 
-export type TranscriptOccupancyWatchHandle = { stop: () => void };
+export type TranscriptOccupancyWatchHandle = { stop: () => void | Promise<void> };
 
 /**
  * Result from starting a transcript source provider.

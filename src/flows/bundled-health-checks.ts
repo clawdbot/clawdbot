@@ -205,6 +205,7 @@ function registerCodexHealthChecks(
         Required<Pick<BundledHealthApi, "registerCodexManagedAppServerDoctorChecks">>
       >({
         pluginRoot: owner.rootDir,
+        pluginId: owner.id,
         artifactBasename: "api.js",
         origin: owner.origin === "bundled" ? "bundled" : "global",
       }).registerCodexManagedAppServerDoctorChecks({

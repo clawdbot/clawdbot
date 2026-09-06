@@ -260,6 +260,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Gateway",
       detailKeys: ["action", "path"],
     },
+    plugins: {
+      emoji: "🧩",
+      title: "Plugins",
+      detailKeys: ["action", "pluginId", "packageName", "path", "query"],
+    },
     exec: {
       emoji: "🛠️",
       title: "Exec",

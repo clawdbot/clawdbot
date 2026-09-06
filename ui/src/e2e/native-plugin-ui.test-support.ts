@@ -96,3 +96,39 @@ export function pluginModule(revision: string, replacements = true) {
     }
   };`;
 }
+
+export const hungPluginModule = `export default { id:"hung-ui", async activate(host) {
+  await host.request("fixture.peerStarted");
+  await new Promise(resolve => { globalThis.nativePluginProof.release = resolve; });
+  await host.request("fixture.latePeer");
+} };`;
+
+export const actionPluginModule = `export default { id:"ui-fixture", activate(host) {
+  const proof = globalThis.nativeActionProof = { runs: 0 };
+  for (const placement of ["header", "composer", "session"]) {
+    let unregister;
+    const action = {
+      id: placement, label: "Hold " + placement + " action", placement,
+      async run(context) {
+        const invocation = { signal: context.signal, done: false, outcome: "pending" };
+        const gate = new Promise(resolve => { invocation.release = resolve; });
+        invocation.withdraw = () => {
+          unregister();
+          unregister = host.ui.registerAction(action);
+        };
+        proof.current = invocation;
+        proof.runs += 1;
+        try {
+          await gate;
+          await context.host.request("fixture.actionContinuation", { placement });
+          invocation.outcome = "completed";
+        } catch (error) {
+          invocation.outcome = error.message;
+        } finally {
+          invocation.done = true;
+        }
+      },
+    };
+    unregister = host.ui.registerAction(action);
+  }
+} };`;

@@ -159,6 +159,48 @@ describe("renderPlugins", () => {
     expect(onFilterChange).toHaveBeenCalledWith("issues");
   });
 
+  it.each([
+    { state: "active" as const, label: "Running" },
+    { state: "disabled" as const, label: "Stopped" },
+    { state: "unloaded" as const, label: "Not loaded" },
+    { state: "service-failed" as const, label: "Service failed" },
+  ])("shows runtime $state beside the desired enablement action", ({ state, label }) => {
+    const container = mount(
+      createProps({
+        result: createResult([
+          createPlugin({ enabled: true, state: "enabled", runtime: { state } }),
+        ]),
+      }),
+    );
+    const row = expectDefined(
+      container.querySelector('[data-plugin-id="workboard"]'),
+      "plugin row",
+    );
+    expect(normalizedText(row.querySelector(".settings-row__control"))).toContain(label);
+    expect(actionButton(row, "Disable")).not.toBeNull();
+  });
+
+  it("includes runtime service failures in Issues and shows their diagnostic", () => {
+    const container = mount(
+      createProps({
+        installedFilter: "issues",
+        result: createResult([
+          createPlugin({
+            enabled: true,
+            state: "enabled",
+            runtime: { state: "service-failed", error: "background: connection closed" },
+          }),
+          createPlugin({ id: "healthy", runtime: { state: "active" } }),
+        ]),
+      }),
+    );
+    expect(normalizedText(container.querySelector(".settings-segmented"))).toContain("Issues 1");
+    expect(
+      normalizedText(container.querySelector('[data-plugin-id="workboard"] [role="alert"]')),
+    ).toContain("background: connection closed");
+    expect(container.querySelector('[data-plugin-id="healthy"]')).toBeNull();
+  });
+
   it.each(["@openclaw/workboard", "  @OPENCLAW/WORKBOARD  "])(
     "finds an installed plugin by its scoped package name %s",
     (query) => {
@@ -197,8 +239,9 @@ describe("renderPlugins", () => {
     expect(container.querySelector('[data-plugin-id="calendar-runtime"]')).not.toBeNull();
   });
 
-  it("offers enable and remove through direct row actions", () => {
+  it("offers enable, reload, and remove through direct row actions", () => {
     const onSetEnabled = vi.fn();
+    const onReload = vi.fn();
     const onUninstall = vi.fn();
     const removableKey = pluginRowKey("community-thing");
     const plugins = [
@@ -212,11 +255,13 @@ describe("renderPlugins", () => {
       }),
     ];
     const container = mount(
-      createProps({ result: createResult(plugins), onSetEnabled, onUninstall }),
+      createProps({ result: createResult(plugins), onSetEnabled, onReload, onUninstall }),
     );
     const row = container.querySelector<HTMLElement>('[data-plugin-id="community-thing"]')!;
     actionButton(row, "Enable")?.click();
     expect(onSetEnabled).toHaveBeenCalledWith("community-thing", true, removableKey);
+    actionButton(row, "Reload")?.click();
+    expect(onReload).toHaveBeenCalledWith("community-thing", removableKey);
     actionButton(row, "Remove Community Thing")?.click();
     expect(onUninstall).toHaveBeenCalledWith("community-thing", removableKey);
 
@@ -244,19 +289,33 @@ describe("renderPlugins", () => {
     expect(onShowDetails).toHaveBeenCalledTimes(2);
 
     const onSetEnabled = vi.fn();
+    const onReload = vi.fn();
+    const onUninstall = vi.fn();
     const container = mount(
       createProps({
+        result: createResult([createPlugin({ origin: "global", removable: true })]),
         detailPluginId: "workboard",
         onShowDetails,
         onSetEnabled,
+        onReload,
+        onUninstall,
       }),
     );
     const detail = container.querySelector<HTMLElement>(".plugins-detail")!;
     expect(detail.closest("openclaw-modal-dialog")?.getAttribute("label")).toBe("Workboard");
     expect(normalizedText(detail.querySelector(".plugins-detail__title"))).toContain("Workboard");
     expect(normalizedText(detail.querySelector(".plugins-detail__meta"))).toContain("workboard");
-    detail.querySelectorAll<HTMLButtonElement>(".plugins-detail__actions button")[0]?.click();
+    const enable = expectDefined(actionButton(detail, "Enable"), "detail enable action");
+    expect(enable.classList.contains("primary")).toBe(true);
+    enable.click();
     expect(onSetEnabled).toHaveBeenCalledWith("workboard", true, pluginRowKey("workboard"));
+    expectDefined(actionButton(detail, "Reload"), "detail reload action").click();
+    expect(onReload).toHaveBeenCalledWith("workboard", pluginRowKey("workboard"));
+    const remove = expectDefined(actionButton(detail, "Remove"), "detail remove action");
+    expect(remove.classList.contains("plugins-detail__remove")).toBe(true);
+    expect(normalizedText(remove)).toBe("Remove");
+    remove.click();
+    expect(onUninstall).toHaveBeenCalledWith("workboard", pluginRowKey("workboard"));
     detail.querySelector<HTMLButtonElement>(".plugins-detail__close")?.click();
     expect(onShowDetails).toHaveBeenCalledWith(null);
   });
@@ -429,6 +488,7 @@ describe("renderPlugins", () => {
 
     const github = container.querySelector<HTMLElement>('[data-connector-id="github"]');
     expect(normalizedText(github)).toContain("MCP");
+    expect(normalizedText(github)).toContain("PR review queues, issue triage, and repo Q&A");
     github?.querySelector<HTMLButtonElement>(".settings-row__control button")?.click();
     expect(onAddConnector).toHaveBeenCalledWith(
       CONNECTOR_SUGGESTIONS.find((connector) => connector.id === "github"),

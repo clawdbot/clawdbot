@@ -78,16 +78,20 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("approval.resolve");
   });
 
-  it("appends plugin UI methods without changing the complete legacy method prefix", () => {
+  it("appends plugin UI and lifecycle methods without changing the complete legacy prefix", () => {
     const methods = listGatewayMethods();
     const legacyCount = LEGACY_ADVERTISED_GATEWAY_METHODS.length;
 
     expect(methods.slice(0, legacyCount)).toEqual(LEGACY_ADVERTISED_GATEWAY_METHODS);
-    expect(methods.slice(legacyCount, legacyCount + 4)).toEqual([
+    expect(methods.slice(legacyCount, legacyCount + 8)).toEqual([
       "plugins.controlUi.list",
       "plugins.controlUi.reload",
       "plugins.controlUi.report",
       "plugins.controlUi.status",
+      "update.runs.get",
+      "update.runs.list",
+      "gateway.suspend.handoff",
+      "plugins.reload",
     ]);
   });
 

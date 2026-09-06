@@ -1,4 +1,5 @@
 // Tests shared infra error formatting helpers.
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "./error-diagnostics.js";
 import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
@@ -239,17 +240,23 @@ describe("error helpers", () => {
     expect(formatted).not.toContain(tenantToken);
   });
 
-  it("uses message-only formatting for INVALID_CONFIG and stack formatting otherwise", () => {
-    const invalidConfig = Object.assign(new Error("TOKEN=sk-abcdefghijklmnopqrstuv"), {
-      code: "INVALID_CONFIG",
-      stack: "Error: TOKEN=sk-abcdefghijklmnopqrstuv\n    at ignored",
-    });
-    expect(formatUncaughtError(invalidConfig)).not.toContain("at ignored");
+  it.each(["host", "plugin VM"])(
+    "uses message-only formatting for INVALID_CONFIG and stack formatting otherwise in %s",
+    (realm) => {
+      const createError = (message: string): Error =>
+        realm === "host" ? new Error(message) : runInNewContext("new Error(message)", { message });
+      const invalidConfig = Object.assign(createError("TOKEN=sk-abcdefghijklmnopqrstuv"), {
+        code: "INVALID_CONFIG",
+        stack: "Error: TOKEN=sk-abcdefghijklmnopqrstuv\n    at ignored",
+      });
+      expect(formatUncaughtError(invalidConfig)).not.toContain("at ignored");
+      expect(formatUncaughtError(invalidConfig)).toContain("TOKEN=");
 
-    const uncaught = new Error("boom");
-    uncaught.stack = "Error: Authorization: Bearer sk-abcdefghijklmnopqrstuv\n    at runTask";
-    const formatted = formatUncaughtError(uncaught);
-    expect(formatted).toContain("at runTask");
-    expect(formatted).not.toContain("sk-abcdefghijklmnopqrstuv");
-  });
+      const uncaught = createError("boom");
+      uncaught.stack = "Error: Authorization: Bearer sk-abcdefghijklmnopqrstuv\n    at runTask";
+      const formatted = formatUncaughtError(uncaught);
+      expect(formatted).toContain("at runTask");
+      expect(formatted).not.toContain("sk-abcdefghijklmnopqrstuv");
+    },
+  );
 });

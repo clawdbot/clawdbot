@@ -601,7 +601,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
   });
 
-  it("projects thread-bootstrap context only once for a matching context-engine epoch", async () => {
+  it.each([
+    { name: "ordinary continuation", refresh: false },
+    { name: "plugin refresh", refresh: true },
+  ])("projects a matching context-engine epoch for $name only when needed", async ({ refresh }) => {
     const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -619,6 +622,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const firstHarness = createStartedThreadHarness();
     const firstParams = createParams(sessionFile, workspaceDir);
     firstParams.contextEngine = contextEngine;
+    const originalTask = "edit the helper, reload the plugin, and verify the result";
+    if (refresh) {
+      firstParams.prompt = originalTask;
+    }
 
     const firstRun = runCodexAppServerAttempt(firstParams);
     await firstHarness.waitForMethod("turn/start");
@@ -635,7 +642,21 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       fingerprint: undefined,
     });
 
-    const secondRun = runCodexAppServerAttempt(firstParams);
+    const committedReceipt = "committed-receipt-7429";
+    const secondRun = runCodexAppServerAttempt({
+      ...firstParams,
+      ...(refresh
+        ? {
+            prompt:
+              "The plugin runtime has been refreshed. Continue without repeating completed actions.",
+            suppressNextUserMessagePersistence: true,
+            pluginRuntimeRefreshMessages: [
+              userMessage(originalTask, 20),
+              toolResultMessage({ executionId: committedReceipt, status: "completed" }, 21),
+            ],
+          }
+        : {}),
+    });
     await vi.waitFor(() => {
       expect(
         firstHarness.requests.filter((request) => request.method === "turn/start"),
@@ -652,9 +673,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       "turn/start",
     ]);
     const secondInputText = getRequestInputTextAt(firstHarness, 1);
-    expect(secondInputText).not.toContain("OpenClaw assembled context for this turn:");
-    expect(secondInputText).not.toContain("bootstrap-only context");
-    expect(secondInputText).toBe("hello");
+    if (refresh) {
+      expect(secondInputText).toContain("OpenClaw assembled context for this turn:");
+      expect(secondInputText.split(originalTask)).toHaveLength(2);
+      expect(secondInputText.split(committedReceipt)).toHaveLength(2);
+      expect(secondInputText).toContain("call-21");
+      expect(secondInputText).toContain("Continue without repeating completed actions.");
+    } else {
+      expect(secondInputText).not.toContain("OpenClaw assembled context for this turn:");
+      expect(secondInputText).not.toContain("bootstrap-only context");
+      expect(secondInputText).toBe("hello");
+    }
     const projectionLogs = info.mock.calls.filter(
       ([message]) => message === "codex app-server context-engine projection decision",
     );
@@ -681,8 +710,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           epoch: "epoch-1",
           previousThreadId: "thread-1",
           previousEpoch: "epoch-1",
-          projected: false,
-          reason: "matching-thread-bootstrap-binding",
+          projected: refresh,
+          reason: refresh ? "plugin-runtime-refresh" : "matching-thread-bootstrap-binding",
         }),
       ],
     ]);

@@ -2,75 +2,29 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { Type } from "typebox";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { publicPluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import {
-  buildToolPluginManifest,
-  buildToolPluginPackageManifest,
-  loadToolPlugin,
   runPluginsBuildCommand,
   runPluginsInitCommand,
   runPluginsValidateCommand,
-  validateToolPluginProject,
 } from "./plugins-authoring-command.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createDemoMetadata() {
-  const entry = defineToolPlugin({
-    id: "demo-tools",
-    name: "Demo Tools",
-    description: "Demo tool plugin.",
-    tools: (tool) => [
-      tool({
-        name: "demo_echo",
-        description: "Echo input.",
-        parameters: Type.Object({ input: Type.String() }),
-        execute: ({ input }) => ({ input }),
-      }),
-    ],
-  });
-  const metadata = getToolPluginMetadata(entry);
-  if (!metadata) {
-    throw new Error("missing metadata");
-  }
-  return metadata;
-}
-
-function createOptionalDemoMetadata() {
-  const entry = defineToolPlugin({
-    id: "optional-demo-tools",
-    name: "Optional Demo Tools",
-    description: "Optional demo tool plugin.",
-    tools: (tool) => [
-      tool({
-        name: "demo_optional_echo",
-        description: "Echo input.",
-        parameters: Type.Object({ input: Type.String() }),
-        optional: true,
-        execute: ({ input }) => ({ input }),
-      }),
-    ],
-  });
-  const metadata = getToolPluginMetadata(entry);
-  if (!metadata) {
-    throw new Error("missing metadata");
-  }
-  return metadata;
-}
 
 function writeSourceToolPluginProject(params: {
   tmpDir: string;
   packageName: string;
   pluginId: string;
   toolName: string;
+  optional?: boolean;
+  extraToolNames?: string[];
+  configSchemaSource?: string;
 }): string {
   const sourceDir = path.join(params.tmpDir, "src");
   fs.mkdirSync(sourceDir, { recursive: true });
@@ -79,6 +33,7 @@ function writeSourceToolPluginProject(params: {
     JSON.stringify(
       {
         name: params.packageName,
+        version: "1.2.3",
         type: "module",
         openclaw: { extensions: ["./src/index.ts"] },
       },
@@ -95,18 +50,61 @@ export default defineToolPlugin({
   id: ${JSON.stringify(params.pluginId)},
   name: "Source Demo",
   description: "Source demo plugin.",
-  tools: (tool) => [
+  ${params.configSchemaSource ? `configSchema: ${params.configSchemaSource},` : ""}
+  tools: (tool) => ${JSON.stringify([params.toolName, ...(params.extraToolNames ?? [])])}.map((name) =>
     tool({
-      name: ${JSON.stringify(params.toolName)},
+      name,
       description: "Echo input.",
       parameters: { type: "object", additionalProperties: false, properties: {} },
+      optional: ${Boolean(params.optional)},
       execute: async () => ({ ok: true }),
     }),
-  ],
+  ),
 });
 `,
   );
   return entryPath;
+}
+
+function readProjectJson(rootDir: string, file = "openclaw.plugin.json"): Record<string, unknown> {
+  return JSON.parse(fs.readFileSync(path.join(rootDir, file), "utf8")) as Record<string, unknown>;
+}
+
+function writeProjectJson(rootDir: string, file: string, value: unknown): void {
+  fs.writeFileSync(path.join(rootDir, file), `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function expectProjectValidation(rootDir: string, pluginId: string, errors: string[] = []) {
+  const exitError = new Error("validation exited");
+  const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
+    throw exitError;
+  });
+  try {
+    const validation = runPluginsValidateCommand({
+      root: rootDir,
+      entry: "./src/index.ts",
+      json: true,
+    });
+    if (errors.length > 0) {
+      await expect(validation).rejects.toBe(exitError);
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1, { resetStream: process.stderr });
+    } else {
+      await validation;
+      expect(exit).not.toHaveBeenCalled();
+    }
+    expect(writeJson).toHaveBeenCalledExactlyOnceWith({
+      valid: errors.length === 0,
+      pluginId,
+      errors,
+    });
+    expect(error.mock.calls.map(([message]) => message)).toEqual(errors);
+  } finally {
+    writeJson.mockRestore();
+    error.mockRestore();
+    exit.mockRestore();
+  }
 }
 
 describe("plugin authoring commands", () => {
@@ -119,53 +117,52 @@ describe("plugin authoring commands", () => {
         pluginId: "source-warm",
         toolName: "source_warm_echo",
       });
-      await loadToolPlugin({ rootDir: tmpDir, entryPath });
+      await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
     } finally {
       fs.rmSync(tmpDir, { force: true, recursive: true });
     }
   });
 
-  it("generates manifest metadata from defineToolPlugin metadata", () => {
-    const metadata = createDemoMetadata();
+  it.each([false, true])(
+    "builds and validates tool metadata with optional=%s",
+    async (optional) => {
+      const tmpDir = tempDirs.make("openclaw-plugin-generated-manifest-");
+      const entryPath = writeSourceToolPluginProject({
+        tmpDir,
+        packageName: "openclaw-plugin-demo-tools",
+        pluginId: "demo-tools",
+        toolName: "demo_echo",
+        optional,
+      });
+      await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
 
-    expect(buildToolPluginManifest({ metadata, packageManifest: { version: "1.2.3" } })).toEqual({
-      id: "demo-tools",
-      name: "Demo Tools",
-      description: "Demo tool plugin.",
-      version: "1.2.3",
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-      activation: { onStartup: true },
-      contracts: { tools: ["demo_echo"] },
+      expect(readProjectJson(tmpDir)).toEqual({
+        id: "demo-tools",
+        name: "Source Demo",
+        description: "Source demo plugin.",
+        version: "1.2.3",
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+        activation: { onStartup: true },
+        contracts: { tools: ["demo_echo"] },
+        ...(optional ? { toolMetadata: { demo_echo: { optional: true } } } : {}),
+      });
+      await expectProjectValidation(tmpDir, "demo-tools");
+    },
+  );
+
+  it("preserves manifest-owned metadata while updating generated fields", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-manifest-owned-metadata-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-optional-demo-tools",
+      pluginId: "optional-demo-tools",
+      toolName: "demo_optional_echo",
+      optional: true,
     });
-  });
-
-  it("generates optional tool metadata for optional tool plugins", () => {
-    const metadata = createOptionalDemoMetadata();
-
-    expect(buildToolPluginManifest({ metadata, packageManifest: { version: "1.2.3" } })).toEqual({
-      id: "optional-demo-tools",
-      name: "Optional Demo Tools",
-      description: "Optional demo tool plugin.",
-      version: "1.2.3",
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-      activation: { onStartup: true },
-      contracts: { tools: ["demo_optional_echo"] },
-      toolMetadata: {
-        demo_optional_echo: { optional: true },
-      },
-    });
-  });
-
-  it("preserves manifest-owned metadata while updating generated fields", () => {
-    const metadata = createOptionalDemoMetadata();
     const existingManifest = {
       id: "old-id",
       name: "Old name",
@@ -185,15 +182,13 @@ describe("plugin authoring commands", () => {
       },
     };
 
-    const manifest = buildToolPluginManifest({
-      metadata,
-      packageManifest: { version: "1.2.3" },
-      existingManifest,
-    });
+    writeProjectJson(tmpDir, "openclaw.plugin.json", existingManifest);
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+    const manifest = readProjectJson(tmpDir);
 
     expect(manifest).toMatchObject({
       id: "optional-demo-tools",
-      name: "Optional Demo Tools",
+      name: "Source Demo",
       uiHints: { apiKey: { secret: true } },
       contracts: {
         tools: ["demo_optional_echo"],
@@ -208,72 +203,52 @@ describe("plugin authoring commands", () => {
       },
     });
     expect((manifest.toolMetadata as Record<string, unknown>).stale_tool).toBeUndefined();
-    expect(
-      validateToolPluginProject({
-        metadata,
-        entry: "./src/index.ts",
-        manifest,
-        packageManifest: { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } },
-      }),
-    ).toEqual([]);
+    await expectProjectValidation(tmpDir, "optional-demo-tools");
   });
 
-  it("drops stale manifest-owned tool metadata when no generated metadata remains", () => {
-    const metadata = createDemoMetadata();
-    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
-    const manifest = buildToolPluginManifest({
-      metadata,
-      packageManifest,
-      existingManifest: {
-        id: "demo-tools",
-        name: "Demo Tools",
-        toolMetadata: {
-          stale_tool: { optional: true },
-        },
+  it("drops stale manifest-owned tool metadata when no generated metadata remains", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-stale-tool-metadata-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-demo-tools",
+      pluginId: "demo-tools",
+      toolName: "demo_echo",
+    });
+    writeProjectJson(tmpDir, "openclaw.plugin.json", {
+      id: "demo-tools",
+      name: "Demo Tools",
+      toolMetadata: {
+        stale_tool: { optional: true },
       },
     });
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
 
-    expect(manifest.toolMetadata).toBeUndefined();
-    expect(
-      validateToolPluginProject({
-        metadata,
-        entry: "./src/index.ts",
-        manifest,
-        packageManifest,
-      }),
-    ).toEqual([]);
+    expect(readProjectJson(tmpDir).toolMetadata).toBeUndefined();
+    await expectProjectValidation(tmpDir, "demo-tools");
   });
 
-  it("aligns package metadata with the selected runtime extension entry", () => {
-    expect(
-      buildToolPluginPackageManifest({
-        packageManifest: {
-          name: "demo",
-          openclaw: { setupEntry: "./setup.ts", extensions: ["./src/other.ts"] },
-        },
-        entry: "./src/index.ts",
-      }),
-    ).toEqual({
+  it("aligns package metadata with the selected runtime extension entry", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-selected-entry-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "demo",
+      pluginId: "demo-tools",
+      toolName: "demo_echo",
+    });
+    writeProjectJson(tmpDir, "package.json", {
+      name: "demo",
+      openclaw: { setupEntry: "./setup.ts", extensions: ["./src/other.ts"] },
+    });
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+
+    expect(readProjectJson(tmpDir, "package.json")).toEqual({
       name: "demo",
       openclaw: {
         setupEntry: "./setup.ts",
         extensions: ["./src/other.ts", "./src/index.ts"],
       },
     });
-  });
-
-  it("validates manifest tools and package entry metadata", () => {
-    const metadata = createDemoMetadata();
-    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
-
-    expect(
-      validateToolPluginProject({
-        metadata,
-        entry: "./src/index.ts",
-        manifest: buildToolPluginManifest({ metadata, packageManifest }),
-        packageManifest,
-      }),
-    ).toEqual([]);
+    await expectProjectValidation(tmpDir, "demo-tools");
   });
 
   it("emits a stable JSON validation result without human output", async () => {
@@ -400,71 +375,50 @@ describe("plugin authoring commands", () => {
     },
   );
 
-  it("keeps generated contract arrays ordered", () => {
-    const metadata = createDemoMetadata();
-    const extraTool = {
-      ...expectDefined(metadata.tools[0], "demo tool metadata"),
-      name: "demo_extra",
-    };
-    const metadataWithTools = { ...metadata, tools: [...metadata.tools, extraTool] };
-    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
-    const generated = buildToolPluginManifest({ metadata: metadataWithTools, packageManifest });
-    const manifest = {
-      ...generated,
+  it("keeps generated contract arrays ordered", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-contract-order-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-demo-tools",
+      pluginId: "demo-tools",
+      toolName: "demo_echo",
+      extraToolNames: ["demo_extra"],
+    });
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+    writeProjectJson(tmpDir, "openclaw.plugin.json", {
+      ...readProjectJson(tmpDir),
       contracts: { tools: ["demo_extra", "demo_echo"] },
-    };
+    });
 
-    expect(
-      validateToolPluginProject({
-        metadata: metadataWithTools,
-        entry: "./src/index.ts",
-        manifest,
-        packageManifest,
-      }),
-    ).toEqual(["openclaw.plugin.json generated metadata is stale. Run openclaw plugins build."]);
+    await expectProjectValidation(tmpDir, "demo-tools", [
+      "openclaw.plugin.json generated metadata is stale. Run openclaw plugins build.",
+    ]);
   });
 
-  it("projects undefined TypeBox options into the persisted manifest shape", () => {
-    const entry = defineToolPlugin({
-      id: "undefined-schema-options",
-      name: "Undefined Schema Options",
-      description: "Plugin with optional TypeBox schema metadata.",
-      configSchema: Type.Object(
+  it("projects undefined TypeBox options into the persisted manifest shape", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-undefined-schema-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-undefined-schema-options",
+      pluginId: "undefined-schema-options",
+      toolName: "undefined_schema_echo",
+      configSchemaSource: `Type.Object(
         { value: Type.Optional(Type.String({ description: undefined })) },
         { description: undefined },
-      ),
-      tools: (tool) => [
-        tool({
-          name: "undefined_schema_echo",
-          description: "Echo input.",
-          parameters: Type.Object({ input: Type.String() }),
-          execute: ({ input }) => ({ input }),
-        }),
-      ],
+      )`,
     });
-    const metadata = getToolPluginMetadata(entry);
-    if (!metadata) {
-      throw new Error("missing metadata");
-    }
-    const runtimeSchema = metadata.configSchema;
-    const runtimeProperties = runtimeSchema.properties as Record<string, unknown>;
-    expect(Object.hasOwn(runtimeSchema, "description")).toBe(true);
-    expect(Object.hasOwn(runtimeProperties.value as object, "description")).toBe(true);
+    fs.appendFileSync(
+      entryPath,
+      `\nimport { Type } from ${JSON.stringify(fileURLToPath(import.meta.resolve("typebox")))};\n`,
+    );
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
 
-    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
-    const manifest = buildToolPluginManifest({ metadata, packageManifest });
+    const manifest = readProjectJson(tmpDir);
     const persistedSchema = manifest.configSchema as Record<string, unknown>;
     const persistedProperties = persistedSchema.properties as Record<string, unknown>;
     expect(Object.hasOwn(persistedSchema, "description")).toBe(false);
     expect(Object.hasOwn(persistedProperties.value as object, "description")).toBe(false);
-    expect(
-      validateToolPluginProject({
-        metadata,
-        entry: "./src/index.ts",
-        manifest,
-        packageManifest,
-      }),
-    ).toEqual([]);
+    await expectProjectValidation(tmpDir, "undefined-schema-options");
   });
 
   it.each([
@@ -486,53 +440,51 @@ describe("plugin authoring commands", () => {
       actual: '{"__proto__":{}}',
       stale: false,
     },
-  ])("compares $label in generated schemas", ({ expected, actual, stale }) => {
-    const metadata = createDemoMetadata();
-    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
-    const metadataWithSchema = {
-      ...metadata,
-      configSchema: { type: "object", properties: JSON.parse(expected) as Record<string, unknown> },
-    };
-    const generated = buildToolPluginManifest({ metadata: metadataWithSchema, packageManifest });
-    const manifest = {
-      ...generated,
+  ])("compares $label in generated schemas", async ({ expected, actual, stale }) => {
+    const tmpDir = tempDirs.make("openclaw-plugin-schema-own-keys-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-demo-tools",
+      pluginId: "demo-tools",
+      toolName: "demo_echo",
+      configSchemaSource: `{ type: "object", properties: JSON.parse(${JSON.stringify(expected)}) }`,
+    });
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+    writeProjectJson(tmpDir, "openclaw.plugin.json", {
+      ...readProjectJson(tmpDir),
       configSchema: { type: "object", properties: JSON.parse(actual) as Record<string, unknown> },
-    };
+    });
 
-    expect(
-      validateToolPluginProject({
-        metadata: metadataWithSchema,
-        entry: "./src/index.ts",
-        manifest,
-        packageManifest,
-      }),
-    ).toEqual(
+    await expectProjectValidation(
+      tmpDir,
+      "demo-tools",
       stale
         ? ["openclaw.plugin.json generated metadata is stale. Run openclaw plugins build."]
         : [],
     );
   });
 
-  it("still rejects a changed generated config schema", () => {
-    const metadata = createDemoMetadata();
-    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
-    const generated = buildToolPluginManifest({ metadata, packageManifest });
-    const manifest = {
+  it("still rejects a changed generated config schema", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-stale-schema-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-demo-tools",
+      pluginId: "demo-tools",
+      toolName: "demo_echo",
+    });
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+    const generated = readProjectJson(tmpDir);
+    writeProjectJson(tmpDir, "openclaw.plugin.json", {
       ...generated,
       configSchema: {
         ...(generated.configSchema as Record<string, unknown>),
         additionalProperties: true,
       },
-    };
+    });
 
-    expect(
-      validateToolPluginProject({
-        metadata,
-        entry: "./src/index.ts",
-        manifest,
-        packageManifest,
-      }),
-    ).toEqual(["openclaw.plugin.json generated metadata is stale. Run openclaw plugins build."]);
+    await expectProjectValidation(tmpDir, "demo-tools", [
+      "openclaw.plugin.json generated metadata is stale. Run openclaw plugins build.",
+    ]);
   });
 
   it("rejects a missing generated manifest without changing package metadata", async () => {
@@ -565,21 +517,22 @@ describe("plugin authoring commands", () => {
     }
   });
 
-  it("reports stale manifest contracts", () => {
-    const metadata = createDemoMetadata();
+  it("reports stale manifest contracts", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-stale-contracts-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-demo-tools",
+      pluginId: "demo-tools",
+      toolName: "demo_echo",
+    });
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+    writeProjectJson(tmpDir, "openclaw.plugin.json", {
+      ...readProjectJson(tmpDir),
+      configSchema: {},
+      contracts: { tools: ["other_tool"] },
+    });
 
-    expect(
-      validateToolPluginProject({
-        metadata,
-        entry: "./src/index.ts",
-        manifest: {
-          id: "demo-tools",
-          configSchema: {},
-          contracts: { tools: ["other_tool"] },
-        },
-        packageManifest: { openclaw: { extensions: ["./src/index.ts"] } },
-      }),
-    ).toEqual([
+    await expectProjectValidation(tmpDir, "demo-tools", [
       "openclaw.plugin.json generated metadata is stale. Run openclaw plugins build.",
       "openclaw.plugin.json contracts.tools is missing: demo_echo",
       "openclaw.plugin.json contracts.tools has no matching defineToolPlugin tool: other_tool",
@@ -587,10 +540,11 @@ describe("plugin authoring commands", () => {
   });
 
   it("reports missing entries with an author-facing path", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-missing-"));
+    const tmpDir = tempDirs.make("openclaw-plugin-missing-");
+    writeProjectJson(tmpDir, "package.json", {});
 
     await expect(
-      loadToolPlugin({ rootDir: tmpDir, entryPath: path.join(tmpDir, "dist/index.js") }),
+      runPluginsBuildCommand({ root: tmpDir, entry: "./dist/index.js" }),
     ).rejects.toThrow("plugin entry not found: ./dist/index.js");
   });
 
@@ -611,7 +565,7 @@ describe("plugin authoring commands", () => {
   });
 
   it("loads source entries that import the OpenClaw plugin SDK package subpath", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-source-"));
+    const tmpDir = tempDirs.make("openclaw-plugin-source-");
     const entryPath = writeSourceToolPluginProject({
       tmpDir,
       packageName: "openclaw-plugin-source-demo",
@@ -619,13 +573,11 @@ describe("plugin authoring commands", () => {
       toolName: "source_echo",
     });
 
-    const loaded = await loadToolPlugin({
-      rootDir: tmpDir,
-      entryPath,
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+    expect(readProjectJson(tmpDir)).toMatchObject({
+      id: "source-demo",
+      contracts: { tools: ["source_echo"] },
     });
-
-    expect(loaded.metadata.id).toBe("source-demo");
-    expect(loaded.metadata.tools.map((tool) => tool.name)).toEqual(["source_echo"]);
   });
 
   it("finishes a build from an absolute root after the launch directory is removed", async () => {

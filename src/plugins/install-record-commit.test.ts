@@ -1037,6 +1037,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     });
 
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(result.persistedSourceConfig).toBeUndefined();
     expect(result).toEqual({
       config: nextConfig,
       installRecords: {},

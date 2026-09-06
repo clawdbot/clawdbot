@@ -5,6 +5,7 @@ import type {
   PluginInspectSource,
   PluginsInspectResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -41,7 +42,6 @@ import {
   normalizeCatalogMetadata,
   normalizeFeaturedAt,
   derivePluginCategory,
-  firstPluginError,
   compareCatalogEntries,
   resolveInstalledPluginPresentation,
   resolveInstalledHostedOfficialEntry,
@@ -106,12 +106,11 @@ function resolveManagedPluginDiagnostics(
 
 export type ManagedPluginIconSource = { kind: "file"; path: string; rootPath: string };
 
-function resolvePluginIconSource(params: {
-  metadata: PluginMetadataSnapshot;
-  pluginId: string;
-}): ManagedPluginIconSource | undefined {
-  const normalizedPluginId = params.metadata.normalizePluginId(params.pluginId);
-  const manifest = params.metadata.byPluginId.get(normalizedPluginId);
+function resolvePluginIconSource(
+  metadata: PluginMetadataSnapshot,
+  pluginId: string,
+): ManagedPluginIconSource | undefined {
+  const manifest = metadata.byPluginId.get(metadata.normalizePluginId(pluginId));
   const localIconPath = normalizeOptionalString(manifest?.iconPath);
   if (localIconPath && manifest) {
     return { kind: "file", path: localIconPath, rootPath: manifest.rootDir };
@@ -171,7 +170,7 @@ export const resolveManagedPluginIconSource = withManagedPluginCache(
   }): Promise<ManagedPluginIconSource | undefined> => {
     const env = params.env ?? process.env;
     const metadata = resolveManagedPluginMetadata(params.config, env);
-    return resolvePluginIconSource({ metadata, pluginId: params.pluginId });
+    return resolvePluginIconSource(metadata, params.pluginId);
   },
 );
 
@@ -218,15 +217,16 @@ export function resolveManagedSetupCatalogIconUrl(params: {
 /** Build cold installed state merged with the hosted official catalog and bundled curation. */
 export const listManagedPlugins = withManagedPluginCache(
   async (params: {
-    config: OpenClawConfig;
+    config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
     officialCatalog?: OfficialCatalogResult;
     metadata?: PluginMetadataSnapshot;
   }): Promise<ManagedPluginCatalog> => {
     const env = params.env ?? process.env;
-    const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
-    const metadata = params.metadata ?? resolveManagedPluginMetadata(params.config, env);
-    const pluginDiagnostics = resolveManagedPluginDiagnostics(metadata, params.config);
+    const config = params.config ?? (await readConfigFileSnapshotForWrite()).snapshot.sourceConfig;
+    const workspace = resolvePluginControlPlaneWorkspace({ config, env });
+    const metadata = params.metadata ?? resolveManagedPluginMetadata(config, env);
+    const pluginDiagnostics = resolveManagedPluginDiagnostics(metadata, config);
     const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
     // Prepare the merged entry once; display names never add install identities.
     const officialEntries = prepareCatalogEntries(officialCatalog.entries);
@@ -237,11 +237,7 @@ export const listManagedPlugins = withManagedPluginCache(
     const installedClawHubPackages = new Set<string>();
     const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
     // Hosted loading can yield; prepare this phase from the current config.
-    const isEnabled = createInstalledPluginEnabledPredicate(
-      metadata.index.plugins,
-      params.config,
-      env,
-    );
+    const isEnabled = createInstalledPluginEnabledPredicate(metadata.index.plugins, config, env);
     const ownershipResolver = createInstalledPluginOwnershipResolver(metadata.index);
     const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
       const enabled = isEnabled(record.pluginId);
@@ -292,7 +288,9 @@ export const listManagedPlugins = withManagedPluginCache(
           : officialCatalogMetadata
             ? { ...localCatalog, ...officialCatalogMetadata }
             : localCatalog;
-      const error = firstPluginError(pluginDiagnostics, record.pluginId);
+      const error = pluginDiagnostics.find(
+        (diagnostic) => diagnostic.level === "error" && diagnostic.pluginId === record.pluginId,
+      )?.message;
       const kind = normalizeKinds(manifest?.kind);
       const category = derivePluginCategory(manifest);
       // Only externally installed plugins (tracked install record, non-bundled) can be removed.
@@ -309,6 +307,14 @@ export const listManagedPlugins = withManagedPluginCache(
         officialEntry,
         hostedListingAuthoritative,
       });
+      const normalizedPluginId = metadata.normalizePluginId(record.pluginId);
+      // Icon lookup uses the first normalized record, even when that record has no icon.
+      if (!installedIconsById.has(normalizedPluginId)) {
+        installedIconsById.set(
+          normalizedPluginId,
+          resolvePluginIconSource(metadata, record.pluginId),
+        );
+      }
       const plugin: ManagedPluginCatalogEntry = {
         id: record.pluginId,
         name: presentation.name,
@@ -317,47 +323,20 @@ export const listManagedPlugins = withManagedPluginCache(
         state: error ? "error" : enabled ? "enabled" : "disabled",
         removable,
       };
-      if (record.packageName) {
-        plugin.packageName = record.packageName;
-      }
-      if (presentation.description) {
-        plugin.description = presentation.description;
-      }
-      if (presentation.version) {
-        plugin.version = presentation.version;
-      }
-      if (kind) {
-        plugin.kind = kind;
-      }
-      if (record.origin) {
-        plugin.origin = record.origin;
-      }
-      if (catalog?.featured !== undefined) {
-        plugin.featured = catalog.featured;
-      }
-      if (featuredAt !== undefined) {
-        plugin.featuredAt = featuredAt;
-      }
-      if (catalog?.order !== undefined) {
-        plugin.order = catalog.order;
-      }
-      const normalizedPluginId = metadata.normalizePluginId(record.pluginId);
-      // Icon lookup uses the first normalized record, even when that record has no icon.
-      if (!installedIconsById.has(normalizedPluginId)) {
-        installedIconsById.set(
-          normalizedPluginId,
-          resolvePluginIconSource({ metadata, pluginId: record.pluginId }),
-        );
-      }
-      if (installedIconsById.get(normalizedPluginId)) {
-        plugin.hasIcon = true;
-      }
-      if (error) {
-        plugin.error = error;
-      }
-      if (category) {
-        plugin.category = category;
-      }
+      Object.assign(
+        plugin,
+        record.packageName && { packageName: record.packageName },
+        presentation.description && { description: presentation.description },
+        presentation.version && { version: presentation.version },
+        kind && { kind },
+        record.origin && { origin: record.origin },
+        catalog?.featured !== undefined && { featured: catalog.featured },
+        featuredAt !== undefined && { featuredAt },
+        catalog?.order !== undefined && { order: catalog.order },
+        installedIconsById.get(normalizedPluginId) && { hasIcon: true },
+        error && { error },
+        category && { category },
+      );
       return plugin;
     });
     const installedIds = new Set(plugins.map((plugin) => plugin.id));

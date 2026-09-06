@@ -11,6 +11,10 @@ import {
 } from "./plugin-artifact.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
+type ManagedInstallParams = Parameters<
+  typeof import("../plugins/management-mutations.js").installManagedPlugin
+>[0];
+
 const mocks = vi.hoisted(() => ({
   install: vi.fn(),
   audit: vi.fn(),
@@ -33,10 +37,7 @@ vi.mock("./inference-route.js", () => ({
   sameDefaultInferenceRoute: vi.fn(),
 }));
 vi.mock("./audit.js", () => ({ appendSystemAgentAuditEntry: mocks.audit }));
-vi.mock("../cli/plugins-install-config.js", () => ({
-  loadConfigForInstall: async () => ({ config: {}, baseHash: "config", writeOptions: {} }),
-}));
-vi.mock("../plugins/management-install.js", () => ({ installManagedPluginSource: mocks.install }));
+vi.mock("../plugins/management-mutations.js", () => ({ installManagedPlugin: mocks.install }));
 vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
   withPluginLifecycleLease: async (
     _params: unknown,
@@ -52,7 +53,7 @@ describe("exact system-agent plugin artifacts", () => {
     mocks.install.mockReset();
     mocks.audit.mockReset();
     mocks.parsed = {};
-    mocks.install.mockResolvedValue({ ok: true, pluginId: "artifact-demo", config: {} });
+    mocks.install.mockResolvedValue({ plugin: { id: "artifact-demo" } });
   });
   afterEach(async () => {
     vi.unstubAllEnvs();
@@ -110,7 +111,16 @@ describe("exact system-agent plugin artifacts", () => {
     });
     expect(await fs.readFile(review.retainedPath)).toEqual(reviewedBytes);
     await fs.writeFile(operation.path, "source changed after proposal");
-    const beforePersistentApply = vi.fn(() => {});
+    let authorityOpen = true;
+    const beforePersistentApply = vi.fn(() => {
+      if (!authorityOpen) {
+        throw new Error("initiating plugin authority retired");
+      }
+    });
+    const applyPluginRuntime = vi.fn(async () => {
+      authorityOpen = false;
+      return { operationId: "artifact-install", generation: 4, pluginIds: ["artifact-demo"] };
+    });
     const installedPath = path.join(
       fixture,
       "state",
@@ -118,26 +128,52 @@ describe("exact system-agent plugin artifacts", () => {
       "plugins",
       `${operation.sha256}.tgz`,
     );
-    mocks.install.mockImplementation(async (params) => {
+    mocks.install.mockImplementation(async (params: ManagedInstallParams) => {
+      assert.ok(params.request.source === "local");
       expect(params.request.path).not.toBe(review.retainedPath);
-      expect(params.request.recordPath).toBe(installedPath);
+      expect(params.recordPath).toBe(installedPath);
       expect(await fs.readFile(params.request.path)).toEqual(reviewedBytes);
       expect(await fs.readFile(installedPath)).toEqual(reviewedBytes);
-      expect(params.acknowledgeCapabilities).toEqual({ reviewToken: review.reviewToken });
+      expect(params.request).toEqual({
+        source: "local",
+        path: expect.any(String),
+        mode: "update",
+        acknowledgeCapabilities: { reviewToken: review.reviewToken },
+      });
+      assert.ok(params.beforePersistentEffect);
+      assert.ok(params.beforePersistentApply);
+      assert.ok(params.applyRuntime);
       await params.beforePersistentEffect();
       params.beforePersistentApply();
-      return { ok: true, pluginId: "artifact-demo", config: {} };
+      return {
+        plugin: { id: "artifact-demo" },
+        warnings: ["fixture install warning"],
+        application: await params.applyRuntime({
+          config: {},
+          pluginIds: ["artifact-demo"],
+          reason: "install",
+          assertInvokerOwned: params.beforePersistentApply,
+        }),
+      };
     });
     const { runtime, lines } = createSystemAgentTestRuntime();
     expect(
       await executePluginArtifactActivation(operation, runtime, {
         approved: true,
         beforePersistentApply,
+        applyPluginRuntime,
       }),
     ).toMatchObject({ applied: true });
     await expect(fs.access(review.retainedPath)).rejects.toThrow();
     expect(beforePersistentApply).toHaveBeenCalledTimes(3);
-    expect(lines.join("\n")).toContain("Restart the Gateway");
+    expect(applyPluginRuntime).toHaveBeenCalledExactlyOnceWith({
+      config: {},
+      pluginIds: ["artifact-demo"],
+      reason: "install",
+      assertInvokerOwned: expect.any(Function),
+    });
+    expect(lines.join("\n")).toContain("Artifact installed in Gateway generation 4.");
+    expect(lines.join("\n")).toContain("fixture install warning");
     expect(mocks.audit).toHaveBeenCalledWith(
       expect.objectContaining({
         details: expect.objectContaining({
@@ -149,29 +185,71 @@ describe("exact system-agent plugin artifacts", () => {
     );
   });
 
-  it("preserves the approved source when the installer reports a late failure", async () => {
+  it.each(["before", "after"] as const)(
+    "preserves the approved source when installation fails %s runtime publication",
+    async (publication) => {
+      const operation = await pack();
+      const reviewedBytes = await fs.readFile(operation.path);
+      const review = await prepareSystemAgentPluginArtifact(operation);
+      const failure = new Error("registry refresh failed after commit");
+      const applyPluginRuntime = vi.fn(async () => ({
+        operationId: "artifact-install",
+        generation: 5,
+        pluginIds: ["artifact-demo"],
+      }));
+      mocks.install.mockImplementation(async (params: ManagedInstallParams) => {
+        if (publication === "after") {
+          assert.ok(params.applyRuntime);
+          await params.applyRuntime({
+            config: {},
+            pluginIds: ["artifact-demo"],
+            reason: "install",
+          });
+        }
+        throw failure;
+      });
+      const { runtime, lines } = createSystemAgentTestRuntime();
+
+      await expect(
+        executePluginArtifactActivation(operation, runtime, { approved: true, applyPluginRuntime }),
+      ).rejects.toBe(failure);
+      const installCall = mocks.install.mock.calls[0];
+      assert.ok(installCall, "The managed installer must receive the approved archive.");
+      const installedPath = installCall[0].recordPath;
+      expect(await fs.readFile(installedPath)).toEqual(reviewedBytes);
+      await expect(fs.access(review.retainedPath)).rejects.toThrow();
+      expect(lines.join("\n")).toContain("propose the exact artifact again");
+      expect(applyPluginRuntime).toHaveBeenCalledTimes(publication === "after" ? 1 : 0);
+      if (publication === "after") {
+        expect(lines.join("\n")).toContain(
+          "Plugin runtime changes were applied in Gateway generation 5; artifact activation did not complete.",
+        );
+      } else {
+        expect(lines.join("\n")).not.toContain("Gateway generation 5");
+      }
+      expect(mocks.audit).not.toHaveBeenCalled();
+
+      await expect(
+        executePluginArtifactActivation(operation, runtime, { approved: true }),
+      ).rejects.toThrow(/no longer retained.*propose/i);
+      expect(mocks.install).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("retains a delegated review when Gateway lifecycle application is unavailable", async () => {
     const operation = await pack();
-    const reviewedBytes = await fs.readFile(operation.path);
     const review = await prepareSystemAgentPluginArtifact(operation);
-    const failure = new Error("registry refresh failed after commit");
-    mocks.install.mockRejectedValue(failure);
-    const { runtime, lines } = createSystemAgentTestRuntime();
+    const { runtime } = createSystemAgentTestRuntime();
 
     await expect(
-      executePluginArtifactActivation(operation, runtime, { approved: true }),
-    ).rejects.toBe(failure);
-    const installCall = mocks.install.mock.calls[0];
-    assert.ok(installCall, "The managed installer must receive the approved archive.");
-    const installedPath = installCall[0].request.recordPath;
-    expect(await fs.readFile(installedPath)).toEqual(reviewedBytes);
-    await expect(fs.access(review.retainedPath)).rejects.toThrow();
-    expect(lines.join("\n")).toContain("propose the exact artifact again");
+      executePluginArtifactActivation(operation, runtime, {
+        approved: true,
+        beforePersistentApply: () => {},
+      }),
+    ).rejects.toThrow("Delegated artifact activation requires the Gateway plugin lifecycle");
+    expect(await fs.readFile(review.retainedPath)).toEqual(await fs.readFile(operation.path));
+    expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
-
-    await expect(
-      executePluginArtifactActivation(operation, runtime, { approved: true }),
-    ).rejects.toThrow(/no longer retained.*propose/i);
-    expect(mocks.install).toHaveBeenCalledOnce();
   });
 
   it("rejects a changed retained archive before entering the installer", async () => {
@@ -190,11 +268,12 @@ describe("exact system-agent plugin artifacts", () => {
     const operation = await pack();
     const bytes = await fs.readFile(operation.path);
     await prepareSystemAgentPluginArtifact(operation);
-    const { runtime } = createSystemAgentTestRuntime();
+    const { runtime, lines } = createSystemAgentTestRuntime();
     await executePluginArtifactActivation(operation, runtime, { approved: true });
+    expect(lines.join("\n")).toContain("Artifact installed; saved for the next Gateway start.");
     const installCall = mocks.install.mock.calls[0];
     assert.ok(installCall, "The managed installer must receive the approved archive.");
-    const installedPath = installCall[0].request.recordPath;
+    const installedPath = installCall[0].recordPath;
     const pendingDir = path.join(fixture, "state", "imports", "plugins", "pending");
     await fs.mkdir(pendingDir, { recursive: true });
     for (let index = 0; index < 9; index += 1) {

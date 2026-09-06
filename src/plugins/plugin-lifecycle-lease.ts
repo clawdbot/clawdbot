@@ -7,7 +7,12 @@ import {
   withOpenClawStateLease,
   type OpenClawStateLeaseContext,
 } from "../state/openclaw-state-lease.js";
-import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginCache,
+  retirePluginCache,
+  waitForPluginCacheRetirement,
+  withPluginCache,
+} from "./plugin-cache.js";
 
 const PLUGIN_LIFECYCLE_LEASE_SCOPE = "core:plugin-lifecycle";
 const PLUGIN_LIFECYCLE_LEASE_KEY = "global";
@@ -106,9 +111,17 @@ export async function withPluginLifecycleLease<T>(
         assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),
       };
       // Capture fresh facts only after ownership: another process may have committed while we waited.
-      return await activePluginLifecycleLease.run({ databasePath, lease: pluginLease }, () =>
-        withPluginCache(createPluginCache(), () => run(pluginLease)),
-      );
+      const cache = createPluginCache();
+      try {
+        return await activePluginLifecycleLease.run({ databasePath, lease: pluginLease }, () =>
+          withPluginCache(cache, () => run(pluginLease)),
+        );
+      } finally {
+        if (cache.kind === "operation") {
+          await retirePluginCache(cache);
+        }
+        await waitForPluginCacheRetirement();
+      }
     },
   );
 }

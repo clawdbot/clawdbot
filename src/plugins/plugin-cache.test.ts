@@ -12,10 +12,51 @@ import {
   readPluginCacheFile,
   readPluginCacheJsonFile,
 } from "./plugin-cache-files.js";
-import { createPluginCache, getPluginCacheRoot, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginCache,
+  getPluginCacheRoot,
+  retirePluginCache,
+  transferPluginCacheSetupModules,
+  withPluginCache,
+} from "./plugin-cache.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("retires changed setup graphs while preserving unchanged callbacks and immutable runtime facts", async () => {
+  const previous = createPluginCache();
+  const next = createPluginCache();
+  const previousLoads = getPluginLoaderCacheState(previous);
+  const nextLoads = getPluginLoaderCacheState(next);
+  const registry = createEmptyPluginRegistry();
+  previousLoads.set("cached", registry);
+  nextLoads.set("cached", registry);
+  previousLoads.beginLoad("pending");
+  const changed = new PluginInstance("changed");
+  const unchanged = new PluginInstance("unchanged");
+  const changedCall = changed.wrap(() => "old");
+  const unchangedCall = unchanged.wrap(() => "same");
+  previous.setupModules.set("changed", changed);
+  previous.setupModules.set("unchanged", unchanged);
+  previous.moduleLoaders.set("native-sdk", () => "shared SDK");
+  transferPluginCacheSetupModules(previous, next, new Set(["changed"]));
+  await retirePluginCache(previous);
+  expect(previousLoads.get("cached")).toBeUndefined();
+  expect(nextLoads.get("cached")).toBe(registry);
+  expect(() => getPluginLoaderCacheState(previous).beginLoad("pending")).toThrow(
+    "plugin load reentry",
+  );
+  previousLoads.finishLoad("pending");
+  expect(() => changedCall()).toThrow();
+  expect(unchangedCall()).toBe("same");
+  expect(previous.moduleLoaders.get("native-sdk")?.("entry")).toBe("shared SDK");
+  await retirePluginCache(next);
+  expect(nextLoads.get("cached")).toBeUndefined();
+  expect(() => unchangedCall()).toThrow();
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

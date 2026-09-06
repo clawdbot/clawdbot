@@ -88,7 +88,10 @@ async function createSettlementFixture(state: OpenClawTestState) {
           startedAtMs: Date.now(),
         }),
       },
-      runtime: { admittedRunContext, stopRuntimeAuthRefreshTimer: () => {} },
+      runtime: {
+        runAdmission: { preparedRunAdmission: undefined, admittedRunContext },
+        stopRuntimeAuthRefreshTimer: () => {},
+      },
       compaction: {
         state: { autoCompactionCount: 1, currentContextSnapshot: { tokens: 3_000 } },
         session,

@@ -1228,13 +1228,12 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
     findings.push({
       checkId: "security.exposure.open_groups_with_control_plane_tools",
       severity: "critical",
-      title: "Open group/DM policy with gateway/cron control-plane tools exposed",
+      title: "Open group/DM policy with control-plane tools exposed",
       detail:
         `Found inbound policy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
         `Control-plane tool exposure contexts:\n${controlPlaneContexts.map((line) => `- ${line}`).join("\n")}\n` +
-        "Prompt injection in open conversations can trigger persistent gateway config changes or scheduled automation.",
-      remediation:
-        'For open groups or DMs, deny control-plane tools (`gateway`, `cron`) and prefer tools.profile="messaging". Tighten dmPolicy/groupPolicy to pairing or allowlist when possible.',
+        "Prompt injection in open conversations can install plugins or change scheduled automation.",
+      remediation: `For open groups or DMs, deny control-plane tools (${GATEWAY_CONTROL_PLANE_TOOLS.join(", ")}) and prefer tools.profile="messaging". Tighten dmPolicy/groupPolicy to pairing or allowlist when possible.`,
     });
   }
 

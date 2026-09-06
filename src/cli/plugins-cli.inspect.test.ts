@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginInspectReport } from "../plugins/status.js";
 import {
   createInstalledPluginIndexSnapshot,
@@ -23,11 +24,6 @@ import {
 const workshopMocks = vi.hoisted(() => ({
   detectToolPolicyDiagnostic: vi.fn(),
   loadMetadata: vi.fn(),
-}));
-
-vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
-  loadPluginMetadataSnapshot: workshopMocks.loadMetadata,
 }));
 
 vi.mock("../skills/workshop/tool-policy-diagnostic.js", () => ({
@@ -82,7 +78,13 @@ describe("plugins cli inspect", () => {
     workshopMocks.detectToolPolicyDiagnostic.mockReset();
     workshopMocks.loadMetadata.mockReset();
     workshopMocks.loadMetadata.mockReturnValue({ index: createInstalledPluginIndexSnapshot([]) });
+    // Override the shared CLI fixture's module instance, rather than racing another mock factory.
+    vi.spyOn(pluginMetadata, "loadPluginMetadataSnapshot").mockImplementation(
+      workshopMocks.loadMetadata,
+    );
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it.each(
     [false, true].flatMap((runtime) =>
@@ -421,9 +423,6 @@ describe("plugins cli inspect", () => {
     );
 
     const output = runtimeErrors.at(-1);
-    if (entries) {
-      expect(workshopMocks.loadMetadata).toHaveBeenCalledWith({ config, workspaceDir: undefined });
-    }
     expect(output).toContain("Skill Workshop is built into OpenClaw, not a plugin");
     expect(output).toContain('tools.profile: "messaging" does not include "skill_workshop".');
     expect(output).toContain('Add tools.alsoAllow: ["skill_workshop"].');

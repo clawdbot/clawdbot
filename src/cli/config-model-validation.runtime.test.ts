@@ -192,7 +192,7 @@ describe("config model validation with provider runtime", () => {
     {
       modelId: "resolution-error",
       refsChecked: 0,
-      error: "Unable to validate model reference: fixture dynamic resolution failed",
+      error: "Unable to validate model reference: Error: fixture dynamic resolution failed",
     },
   ])(
     "rejects $modelId and releases its isolated runtime owner",

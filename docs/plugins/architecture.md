@@ -114,7 +114,7 @@ OpenClaw's plugin system has four layers:
     Core decides whether a discovered plugin is enabled, disabled, blocked, or selected for an exclusive slot such as memory.
   </Step>
   <Step title="Runtime loading">
-    Native OpenClaw plugins are loaded in-process and register capabilities into a central registry. Packaged JavaScript loads through native `require`; third-party local source TypeScript is the emergency Jiti fallback. Compatible bundles are normalized into registry records without importing runtime code.
+    Native OpenClaw plugins register capabilities into a central registry. Each plugin has an owned runtime instance. Installed JavaScript and TypeScript plugins load from a captured source and dependency graph; bundled host libraries keep their process identity. Compatible bundles are normalized into registry records without importing runtime code.
   </Step>
   <Step title="Surface consumption">
     The rest of OpenClaw reads the registry to expose tools, channels, provider setup, hooks, HTTP routes, CLI commands, and services.
@@ -144,7 +144,7 @@ Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstra
 
 Channel setup catalogs retain the requested workspace and load-path scope, including raw plugin shadows, so trust filtering can select the appropriate installed alternative.
 
-After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing config, account state, or an agent's run workspace does not invalidate it. Plugin installs, updates, removals, manifest edits, and discovery-root changes become visible to the runtime after a Gateway restart.
+Runtime readers reuse the current inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Explicit plugin management operations prepare a fresh metadata snapshot and publish it with the runtime registry. Installing, enabling, disabling, removing, or reloading a plugin does not require a Gateway restart. Source and manifest edits become visible after `openclaw plugins reload <id>`.
 
 Model-id normalization policies are prepared with each snapshot or narrowed view. Model selection, catalogs, and runtime normalization carry that view forward instead of rebuilding policies from its plugin list. An empty view remains authoritative and cannot inherit policies from a broader process snapshot.
 
@@ -158,15 +158,31 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 - plugin config schema and channel config schema validation
 - startup auto-enable decisions
 
-Activation policy and runtime bindings have a separate lifetime. Hot reload can recompute enablement, replace plugin services, and refresh account state using current config against the fixed startup inventory. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
+Activation policy and runtime bindings have a separate lifetime. Reload retains unchanged plugin instances and replaces affected registrations, services, and channels. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
 
-A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then restart the Gateway to load the repaired plugin.
+A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then run `openclaw plugins reload <id>` to load the repaired plugin.
 
 Each plugin service startup attempt owns one cleanup operation, including failed starts. Hot replacement uses a five-second cleanup deadline; a timeout revokes the old service's capabilities and rejects the replacement. Final Gateway shutdown waits up to five seconds before continuing independent teardown, then joins the same cleanup before retiring shared plugin state, registries, secrets, and metadata. It does not invoke the service's stop handler again.
 
-The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.
+The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway readers use one published cache generation, while management prepares its replacement in an isolated generation. There are no wall-clock TTLs for Gateway metadata.
 
-Install, update, registry refresh, and doctor flows may read fresh package metadata to validate their changes. Their snapshots and installed-index writes do not replace the running Gateway's inventory. Runtime flows must use the startup snapshot or its lookup table instead of falling back to those cold management paths.
+Install, update, registry refresh, and doctor flows may read fresh package metadata to validate their changes. The Gateway lifecycle owner coordinates publication; an installed-index write alone does not prove runtime activation. Runtime flows use the current snapshot or its lookup table instead of falling back to cold management paths.
+
+### Reload ownership
+
+Reload prepares and validates a candidate before replacing the active instance. It stops admission to the affected instance, stops its services and channels, drains other admitted work, and publishes the replacement. A call requesting its own reload finishes before its resources are cleaned up. Unchanged plugins retain their instances. Failed preparation leaves the active instance in place; failures during activation or cleanup report the failed phase and whether publication already committed.
+
+Each Gateway owns its current runtime registry. Starting, reloading, or closing another Gateway in the same process does not retire that registry. Failed activation restores the reloading Gateway's retained instances independently of the process-default lookup. The last Gateway releases shared metadata and process lifecycle hooks.
+
+An installed plugin's captured graph includes its source, assets, and declared package dependencies. Lazy imports read that capture even if the original source changes or is removed. Retiring the instance releases its JavaScript module graph, callbacks, and owned resources. Native addons cannot be unloaded from the process; unchanged binary bytes reuse their existing native module. Native binary changes follow the normal update/restart flow. The module realm is a lifecycle boundary for trusted plugin code, not a security sandbox. Components that register custom native module loaders must run in a separate process.
+
+TypeScript entries from a source checkout use the same instance-owned graph. A standalone file captures literal local imports and asset URLs; package-directory plugins also capture inputs selected through computed paths. Compiled bundled JavaScript shares OpenClaw's host libraries and retains process identity. Its registrations and services can reload, but changing those core chunks requires an OpenClaw build/update and Gateway restart.
+
+The host-owned `plugins` agent tool can request reload after editing source. It records the operation result, waits for the current tool batch and running code cells to settle, and prepares the next model step with the new tool and plugin registry while preserving the conversation.
+
+OpenClaw-managed Codex sessions rebuild their native thread from the committed conversation to refresh tool names and schemas. Imported or supervised native sessions preserve their existing thread and its original tool names and schemas. Reload replaces those tools' implementations; newly added names or changed schemas require a new session. Completed tool results carry forward so the agent can continue without repeating actions.
+
+Plugin authors can register asynchronous cleanup through `api.lifecycle.onDispose`; see [Runtime helpers](/plugins/sdk-runtime#instance-lifecycle).
 
 ### Activation planning
 

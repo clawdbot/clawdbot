@@ -3,11 +3,11 @@ import { captureGatewayReplyRunRestartAbort } from "../auto-reply/reply/reply-ru
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   abortChatRunById,
-  type ChatAbortControllerEntry,
   isChatAbortControllerEntryAbortable,
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { abortQueuedChatTurns, type QueuedChatTurnMap } from "./chat-queued-turns.js";
 import {
   createChatAbortMarker,

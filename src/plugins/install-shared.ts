@@ -498,7 +498,7 @@ async function resolvePluginInstallTarget(params: {
   });
 }
 
-export async function resolveEffectiveInstallMode(params: {
+async function resolveEffectiveInstallMode(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   requestedMode: "install" | "update";
   targetPath: string;

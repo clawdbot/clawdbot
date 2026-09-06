@@ -162,7 +162,7 @@ describe("legacy workspace reset cleanup", () => {
         env: context.env,
         homedir: context.homedir,
       }),
-    ).toThrow(`${workspaceDirs.join(", ")}; run openclaw doctor --fix`);
+    ).toThrow(workspaceDirs.join(", "));
     for (const workspaceDir of workspaceDirs) {
       await fs.unlink(path.join(workspaceDir, "openclaw-workspace-state.json"));
     }

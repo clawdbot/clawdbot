@@ -1,4 +1,3 @@
-// Resolves plugin install paths for local and package sources.
 import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
@@ -132,7 +131,7 @@ const PLUGIN_NPM_GENERATION_KEY_DIR_NAME_PATTERN = new RegExp(
 );
 
 /** Resolves the managed npm artifact-generation project directory prefix for a package. */
-export function resolvePluginNpmGenerationProjectDirPrefix(packageName: string): string {
+function resolvePluginNpmGenerationProjectDirPrefix(packageName: string): string {
   return `${encodePluginNpmProjectDirName(packageName)}${PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR}`;
 }
 

@@ -1,5 +1,6 @@
-// Bundled plugin install failures must never be reported as successful commands.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// Bundled plugin install failures must never be reported as successful commands.
+import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
 import {
   findBundledPluginSourceMock,
   resetPluginsCliTestState,
@@ -8,19 +9,19 @@ import {
   configWriteMock,
 } from "./plugins-cli-test-helpers.js";
 
-const { installManagedPluginSourceMock } = vi.hoisted(() => ({
-  installManagedPluginSourceMock: vi.fn(),
+const { installManagedPluginMock } = vi.hoisted(() => ({
+  installManagedPluginMock: vi.fn(),
 }));
 
-vi.mock("../plugins/management-install.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/management-install.js")>()),
-  installManagedPluginSource: installManagedPluginSourceMock,
+vi.mock("../plugins/management-mutations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/management-mutations.js")>()),
+  installManagedPlugin: installManagedPluginMock,
 }));
 
 describe("plugin install bundled failure propagation", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
-    installManagedPluginSourceMock.mockReset();
+    installManagedPluginMock.mockReset();
   });
 
   it("fails when direct bundled source execution fails", async () => {
@@ -28,16 +29,17 @@ describe("plugin install bundled failure propagation", () => {
       pluginId: "bundled-demo",
       localPath: "/app/dist/extensions/bundled-demo",
     });
-    installManagedPluginSourceMock.mockResolvedValue({
-      ok: false,
-      error: "bundled plugin installation failed",
-    });
+    installManagedPluginMock.mockRejectedValue(
+      new ManagedPluginLifecycleError("bundled plugin installation failed", {
+        installRejected: true,
+      }),
+    );
 
     await expect(runPluginsCommand(["plugins", "install", "bundled-demo"])).rejects.toThrow(
       "__exit__:1",
     );
 
-    expect(installManagedPluginSourceMock).toHaveBeenCalledWith(
+    expect(installManagedPluginMock).toHaveBeenCalledWith(
       expect.objectContaining({
         request: expect.objectContaining({ source: "bundled" }),
       }),
@@ -56,31 +58,31 @@ describe("plugin install bundled failure propagation", () => {
           }
         : undefined;
     });
-    installManagedPluginSourceMock.mockImplementation(
-      async ({ request }: { request: { source: string } }) =>
-        request.source === "npm"
-          ? {
-              ok: false,
-              error: "npm package unavailable",
-              code: "npm_package_not_found",
-            }
-          : {
-              ok: false,
-              error: "bundled fallback installation failed",
-            },
+    installManagedPluginMock.mockImplementation(
+      async ({ request }: { request: { source: string } }) => {
+        throw new ManagedPluginLifecycleError(
+          request.source === "npm"
+            ? "npm package unavailable"
+            : "bundled fallback installation failed",
+          {
+            installRejected: true,
+            ...(request.source === "npm" ? { code: "npm_package_not_found" } : {}),
+          },
+        );
+      },
     );
 
     await expect(
       runPluginsCommand(["plugins", "install", "fallback-demo", "--force"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(installManagedPluginSourceMock).toHaveBeenNthCalledWith(
+    expect(installManagedPluginMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         request: expect.objectContaining({ source: "npm" }),
       }),
     );
-    expect(installManagedPluginSourceMock).toHaveBeenNthCalledWith(
+    expect(installManagedPluginMock).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         request: expect.objectContaining({ source: "bundled" }),

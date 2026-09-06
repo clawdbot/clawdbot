@@ -1,6 +1,7 @@
-// Owns hook-pack probing and plugin-to-hook fallback during plugin installation.
+// Owns plugin execution and the shipped local/npm hook-pack fallback.
 import fs from "node:fs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { PluginsInstallParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   installHooksFromNpmSpec,
@@ -14,26 +15,44 @@ import {
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import { findBundledPluginSource } from "../plugins/bundled-sources.js";
-import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
-import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import {
-  installManagedPluginSource,
-  type ManagedPluginSourceInstallRequest,
-} from "../plugins/management-install.js";
+  loadConfigForInstall,
+  PluginInstallConfigError,
+  resolveFullyBlockedConfigMutationReason,
+  type ConfigSnapshotForInstallExecution,
+} from "../plugins/install-config.js";
+import { resolvePluginInstallRequestContext } from "../plugins/install-request-context.js";
+import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
+import { resolveBundledInstallPlanForNpmFailure } from "../plugins/install-source-plan.js";
+import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
+import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
+import { installManagedPlugin } from "../plugins/management-mutations.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { persistHookPackInstall } from "./hook-install-persistence.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
-import { resolveBundledInstallPlanForNpmFailure } from "./plugin-install-plan.js";
 import {
   createHookPackInstallLogger,
-  createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
 } from "./plugins-command-helpers.js";
-import {
-  resolveFullyBlockedConfigMutationReason,
-  type ConfigSnapshotForInstallExecution,
-} from "./plugins-install-config.js";
+
+type HookCompatibleSource = Extract<PluginsInstallParams, { source: "local" | "npm" }>;
+type InstallParams = Parameters<typeof installManagedPlugin>[0] & {
+  snapshot: ConfigSnapshotForInstallExecution;
+  install?: typeof installManagedPlugin;
+  allowBundledFallback?: boolean;
+  runtime?: RuntimeEnv;
+};
+type InstallResult =
+  | { ok: true }
+  | {
+      ok: false;
+      error: string;
+      code?: string;
+      warning?: string;
+      installSource?: ManagedPluginLifecycleError["installSource"];
+    };
 
 export function resolveInstallSafetyOverrides(
   overrides: InstallSafetyOverrides,
@@ -46,339 +65,264 @@ export function resolveInstallSafetyOverrides(
   };
 }
 
-async function probeHookPackFromNpmSpec(
-  params: Parameters<typeof installHooksFromNpmSpec>[0],
+async function attemptHookInstall(
+  source: HookCompatibleSource,
+  params: InstallParams,
+  options?: {
+    inspection?: "package-kind";
+    expectedPackageKind?: "hook-only";
+    beforePersistentApply?: () => void;
+  },
+  assertOwned?: () => void,
 ): Promise<InstallHooksResult> {
-  try {
-    return await installHooksFromNpmSpec(params);
-  } catch (error) {
-    return { ok: false, error: formatErrorMessage(error) };
-  }
-}
-
-export async function probeHookPackFromPath(
-  params: Parameters<typeof installHooksFromPath>[0],
-): Promise<InstallHooksResult> {
-  try {
-    return await installHooksFromPath(params);
-  } catch (error) {
-    return { ok: false, error: formatErrorMessage(error) };
-  }
-}
-
-export function isTerminalPluginInstallFailure(code?: string): boolean {
-  return (
-    code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED ||
-    code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED ||
-    code === PLUGIN_INSTALL_ERROR_CODE.RELEASE_COHORT_UNAVAILABLE ||
-    code === PLUGIN_INSTALL_ERROR_CODE.UNSUPPORTED_PLAIN_FILE_PLUGIN
+  const common = requestDeferredPackageDirInstall(
+    {
+      ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
+      config: params.snapshot.config,
+      mode: source.mode,
+      logger: createHookPackInstallLogger(params.runtime),
+      ...options,
+    },
+    assertOwned,
   );
+  try {
+    return source.source === "local"
+      ? await installHooksFromPath({
+          ...common,
+          path: source.path,
+          ...(source.link ? { dryRun: true } : {}),
+        })
+      : await installHooksFromNpmSpec({
+          ...common,
+          spec: source.spec,
+          ...(source.expectedIntegrity ? { expectedIntegrity: source.expectedIntegrity } : {}),
+        });
+  } catch (error) {
+    return { ok: false, error: formatErrorMessage(error) };
+  }
 }
 
-export async function tryInstallHookPackFromLocalPath(params: {
-  snapshot: ConfigSnapshotForInstallExecution;
-  resolvedPath: string;
-  installMode: "install" | "update";
-  safetyOverrides?: InstallSafetyOverrides;
-  link?: boolean;
-  expectedPackageKind?: "hook-only";
-  runtime?: RuntimeEnv;
-  beforePersistentApply?: () => void;
-  assertOwned: () => void;
-}): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
-  if (params.snapshot.hookMutation.mode === "blocked") {
-    return { ok: false, error: params.snapshot.hookMutation.reason };
-  }
-  if (params.link) {
-    const stat = fs.statSync(params.resolvedPath);
-    if (!stat.isDirectory()) {
+async function installHookPack(
+  source: HookCompatibleSource,
+  params: InstallParams,
+  expectedPackageKind?: "hook-only",
+): Promise<InstallResult> {
+  // Online plugin rejection can precede this fallback; acquire and reread only for the hook write.
+  return await withPluginLifecycleLease({ signal: params.signal }, async (lease) => {
+    const request = resolvePluginInstallRequestContext({
+      rawSpec: source.source === "local" ? source.path : source.spec,
+    });
+    if (!request.ok) {
+      return request;
+    }
+    const snapshot = await loadConfigForInstall(request.request).catch((error: unknown) => {
+      if (
+        expectedPackageKind === "hook-only" &&
+        error instanceof PluginInstallConfigError &&
+        error.blockedSnapshot
+      ) {
+        // A verified hook artifact uses the fresh hook preflight even when
+        // its official package identity independently blocks plugin writes.
+        return error.blockedSnapshot;
+      }
+      throw error;
+    });
+    if (snapshot.hookMutation.mode === "blocked") {
+      return { ok: false, error: snapshot.hookMutation.reason };
+    }
+    const linked = source.source === "local" && source.link;
+    if (linked && !fs.statSync(source.path).isDirectory()) {
       return { ok: false, error: "Linked hook pack paths must be directories." };
     }
-
-    const probe = await installHooksFromPath({
-      ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
-      path: params.resolvedPath,
-      dryRun: true,
-      ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
-    });
-    if (!probe.ok) {
-      return probe;
+    const beforePersistentApply = () => {
+      params.signal?.throwIfAborted();
+      lease.assertOwned();
+      snapshot.writeOptions.assertConfigPathForWrite?.();
+      params.beforePersistentApply?.();
+    };
+    const result = await attemptHookInstall(
+      source,
+      { ...params, snapshot },
+      { expectedPackageKind, beforePersistentApply },
+      lease.assertOwned.bind(lease),
+    );
+    if (!result.ok) {
+      return result;
     }
-
-    const existing = params.snapshot.config.hooks?.internal?.load?.extraDirs ?? [];
-    const merged = uniqueStrings([...existing, params.resolvedPath]);
+    const runtime = params.runtime ?? defaultRuntime;
+    const config = snapshot.config;
+    const pinMessages: string[] = [];
     await persistHookPackInstall({
-      snapshot: {
-        ...params.snapshot,
-        config: {
-          ...params.snapshot.config,
-          hooks: {
-            ...params.snapshot.config.hooks,
-            internal: {
-              ...params.snapshot.config.hooks?.internal,
-              enabled: true,
-              load: {
-                ...params.snapshot.config.hooks?.internal?.load,
-                extraDirs: merged,
+      snapshot: linked
+        ? {
+            ...snapshot,
+            config: {
+              ...config,
+              hooks: {
+                ...config.hooks,
+                internal: {
+                  ...config.hooks?.internal,
+                  load: {
+                    ...config.hooks?.internal?.load,
+                    extraDirs: uniqueStrings([
+                      ...(config.hooks?.internal?.load?.extraDirs ?? []),
+                      source.path,
+                    ]),
+                  },
+                },
               },
             },
-          },
-        },
-      },
-      hookPackId: probe.hookPackId,
-      hooks: probe.hooks,
-      install: {
-        source: "path",
-        sourcePath: params.resolvedPath,
-        installPath: params.resolvedPath,
-        version: probe.version,
-      },
-      successMessage: `Linked hook pack path: ${shortenHomePath(params.resolvedPath)}`,
-      runtime: params.runtime,
-      beforePersistentApply: params.beforePersistentApply,
+          }
+        : snapshot,
+      hookPackId: result.hookPackId,
+      hooks: result.hooks,
+      install:
+        source.source === "local"
+          ? {
+              source: resolveArchiveKind(source.path) ? "archive" : "path",
+              sourcePath: source.path,
+              installPath: linked ? source.path : result.targetDir,
+              version: result.version,
+            }
+          : resolvePinnedNpmInstallRecordForCli(
+              source.spec,
+              Boolean(source.pin),
+              result.targetDir,
+              result.version,
+              result.npmResolution,
+              (message) => pinMessages.push(message),
+              theme.warn,
+            ),
+      ...(linked
+        ? { successMessage: `Linked hook pack path: ${shortenHomePath(source.path)}` }
+        : {}),
+      runtime,
+      beforePersistentApply,
+      payloadTransaction: resolvePackageDirInstallTransaction(result),
     });
+    // Output failures must not strand a payload whose config has not committed.
+    for (const message of pinMessages) {
+      runtime.log(message);
+    }
     return { ok: true };
-  }
-
-  const result = await installHooksFromPath(
-    requestDeferredPackageDirInstall(
-      {
-        ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
-        path: params.resolvedPath,
-        mode: params.installMode,
-        ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
-        logger: createHookPackInstallLogger(params.runtime),
-        beforePersistentApply: params.beforePersistentApply,
-      },
-      params.assertOwned,
-    ),
-  );
-  if (!result.ok) {
-    return result;
-  }
-
-  const source: "archive" | "path" = resolveArchiveKind(params.resolvedPath) ? "archive" : "path";
-  await persistHookPackInstall({
-    snapshot: params.snapshot,
-    hookPackId: result.hookPackId,
-    hooks: result.hooks,
-    install: {
-      source,
-      sourcePath: params.resolvedPath,
-      installPath: result.targetDir,
-      version: result.version,
-    },
-    runtime: params.runtime,
-    beforePersistentApply: params.beforePersistentApply,
-    payloadTransaction: resolvePackageDirInstallTransaction(result),
   });
-  return { ok: true };
 }
 
-async function tryInstallHookPackFromNpmSpec(params: {
-  snapshot: ConfigSnapshotForInstallExecution;
-  installMode: "install" | "update";
-  spec: string;
-  safetyOverrides?: InstallSafetyOverrides;
-  pin?: boolean;
-  expectedIntegrity?: string;
-  expectedPackageKind?: "hook-only";
-  runtime?: RuntimeEnv;
-  beforePersistentApply?: () => void;
-  assertOwned: () => void;
-}): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
-  if (params.snapshot.hookMutation.mode === "blocked") {
-    return { ok: false, error: params.snapshot.hookMutation.reason };
+async function installInspectedHookPack(
+  source: HookCompatibleSource,
+  params: InstallParams,
+): Promise<InstallResult | undefined> {
+  const probe = await attemptHookInstall(source, params, { inspection: "package-kind" });
+  if (!probe.ok || probe.packageKind !== "hook-only") {
+    return undefined;
   }
-  const result = await installHooksFromNpmSpec(
-    requestDeferredPackageDirInstall(
-      {
-        ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
-        config: params.snapshot.config,
-        spec: params.spec,
-        mode: params.installMode,
-        ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
-        ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
-        logger: createHookPackInstallLogger(params.runtime),
-        beforePersistentApply: params.beforePersistentApply,
-      },
-      params.assertOwned,
-    ),
-  );
-  if (!result.ok) {
-    return result;
-  }
-
-  const pinMessages: string[] = [];
-  const installRecord = resolvePinnedNpmInstallRecordForCli(
-    params.spec,
-    Boolean(params.pin),
-    result.targetDir,
-    result.version,
-    result.npmResolution,
-    (message) => pinMessages.push(message),
-    theme.warn,
-  );
-  await persistHookPackInstall({
-    snapshot: params.snapshot,
-    hookPackId: result.hookPackId,
-    hooks: result.hooks,
-    install: installRecord,
-    runtime: params.runtime,
-    beforePersistentApply: params.beforePersistentApply,
-    payloadTransaction: resolvePackageDirInstallTransaction(result),
-  });
-  // Pinning notices follow the commit so output failures cannot strand an owned payload.
-  for (const message of pinMessages) {
-    (params.runtime ?? defaultRuntime).log(message);
-  }
-  return { ok: true };
+  const pinned =
+    source.source !== "local" && probe.npmResolution?.integrity
+      ? { ...source, expectedIntegrity: probe.npmResolution.integrity }
+      : source;
+  return await installHookPack(pinned, params, "hook-only");
 }
 
-/** Preserve npm plugin and hook ownership without executing a blocked mutation. */
-export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
-  snapshot: ConfigSnapshotForInstallExecution;
-  installMode: "install" | "update";
-  spec: string;
-  pin?: boolean;
-  safetyOverrides: InstallSafetyOverrides;
-  capabilityConsent?: import("./plugin-capability-consent.js").PluginCapabilityConsentCliOptions;
-  allowBundledFallback: boolean;
-  expectedPluginId?: string;
-  expectedIntegrity?: string;
-  trustedSourceLinkedOfficialInstall?: boolean;
-  officialRequest?: Extract<ManagedPluginSourceInstallRequest, { source: "official" }>;
-  invalidateRuntimeCache?: boolean;
-  runtime?: RuntimeEnv;
-  beforePersistentApply?: () => void;
-  assertOwned: () => void;
-}): Promise<{ ok: true } | { ok: false }> {
-  const runtime = params.runtime ?? defaultRuntime;
-  const installContext = {
-    snapshot: params.snapshot,
-    runtime,
-    invalidateRuntimeCache: params.invalidateRuntimeCache,
-    beforePersistentApply: params.beforePersistentApply,
-    assertOwned: params.assertOwned,
+/** Every source uses the same plugin executor; hook fallback needs an eligible artifact. */
+export async function installPluginWithHookFallback(params: InstallParams): Promise<InstallResult> {
+  const { request, snapshot } = params;
+  const compatible = request.source === "local" || request.source === "npm" ? request : undefined;
+  const blocked = resolveFullyBlockedConfigMutationReason(snapshot);
+  if (blocked) {
+    return { ok: false, error: blocked };
+  }
+  if (compatible) {
+    if (snapshot.pluginMutation.mode === "blocked" || snapshot.hookMutation.mode === "blocked") {
+      const hook = await installInspectedHookPack(compatible, params);
+      if (hook) {
+        return hook;
+      }
+      if (snapshot.pluginMutation.mode === "blocked") {
+        return { ok: false, error: snapshot.pluginMutation.reason };
+      }
+    }
+  }
+  const install = async (installRequest: PluginsInstallParams): Promise<InstallResult> => {
+    try {
+      const result = await (params.install ?? installManagedPlugin)({
+        ...params,
+        request: installRequest,
+      });
+      const runtime = params.runtime ?? defaultRuntime;
+      for (const warning of result.warnings ?? []) {
+        runtime.log(theme.warn(warning));
+      }
+      runtime.log(
+        installRequest.source === "local" && installRequest.link
+          ? `Linked plugin path: ${shortenHomePath(installRequest.path)}`
+          : `Installed plugin: ${result.plugin.id}`,
+      );
+      runtime.log(
+        result.application
+          ? `Applied in Gateway generation ${result.application.generation}.`
+          : "Saved for the next Gateway start.",
+      );
+      return { ok: true };
+    } catch (error) {
+      if (!(error instanceof ManagedPluginLifecycleError) || !error.installRejected) {
+        throw error;
+      }
+      return {
+        ok: false,
+        error: error.message,
+        code: error.code,
+        warning: error.warning,
+        installSource: error.installSource,
+      };
+    }
   };
-  const fullyBlockedReason = resolveFullyBlockedConfigMutationReason(params.snapshot);
-  if (fullyBlockedReason) {
-    runtime.error(fullyBlockedReason);
-    return { ok: false };
+  const result = await install(request);
+  if (result.ok) {
+    return result;
+  }
+  const selectedSource = result.installSource;
+  // Only the install owner knows which declared artifact failed. A ClawHub
+  // rejection must never probe an npm namesake or the catalog's display id.
+  const hookSource: HookCompatibleSource | undefined =
+    request.source === "official" &&
+    (result.code === PLUGIN_INSTALL_ERROR_CODE.MISSING_OPENCLAW_EXTENSIONS ||
+      result.code === PLUGIN_INSTALL_ERROR_CODE.CONFIG_MUTATION_BLOCKED) &&
+    selectedSource?.source === "npm"
+      ? {
+          source: "npm",
+          spec: selectedSource.spec,
+          expectedIntegrity: selectedSource.expectedIntegrity,
+          mode: request.mode,
+          pin: request.pin,
+        }
+      : compatible;
+  if (result.code === PLUGIN_INSTALL_ERROR_CODE.CONFIG_MUTATION_BLOCKED) {
+    return (hookSource && (await installInspectedHookPack(hookSource, params))) ?? result;
   }
   if (
-    params.snapshot.pluginMutation.mode === "blocked" ||
-    params.snapshot.hookMutation.mode === "blocked"
+    !hookSource ||
+    [
+      PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
+      PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED,
+      PLUGIN_INSTALL_ERROR_CODE.RELEASE_COHORT_UNAVAILABLE,
+      PLUGIN_INSTALL_ERROR_CODE.UNSUPPORTED_PLAIN_FILE_PLUGIN,
+    ].some((code) => code === result.code)
   ) {
-    const hookProbe = await probeHookPackFromNpmSpec({
-      ...resolveInstallSafetyOverrides(params.safetyOverrides),
-      config: params.snapshot.config,
-      spec: params.spec,
-      mode: params.installMode,
-      inspection: "package-kind",
-      ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
-      logger: createHookPackInstallLogger(params.runtime),
+    return result;
+  }
+  if (request.source === "npm" && params.allowBundledFallback) {
+    const fallback = resolveBundledInstallPlanForNpmFailure({
+      rawSpec: request.spec,
+      code: result.code,
+      findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
     });
-    if (hookProbe.ok && hookProbe.packageKind === "hook-only") {
-      if (params.snapshot.hookMutation.mode === "blocked") {
-        runtime.error(params.snapshot.hookMutation.reason);
-        return { ok: false };
-      }
-      const hookFallback = await tryInstallHookPackFromNpmSpec({
-        ...installContext,
-        installMode: params.installMode,
-        spec: params.spec,
-        safetyOverrides: params.safetyOverrides,
-        pin: params.pin,
-        expectedIntegrity: hookProbe.npmResolution?.integrity ?? params.expectedIntegrity,
-        expectedPackageKind: "hook-only",
-      });
-      if (hookFallback.ok) {
-        return { ok: true };
-      }
-      runtime.error(hookFallback.error);
-      return { ok: false };
-    }
-    if (params.snapshot.pluginMutation.mode === "blocked") {
-      runtime.error(params.snapshot.pluginMutation.reason);
-      return { ok: false };
+    if (fallback) {
+      (params.runtime ?? defaultRuntime).log(theme.warn(fallback.warning));
+      return await install({ source: "bundled", pluginId: fallback.bundledSource.pluginId });
     }
   }
-
-  const result = await installManagedPluginSource({
-    request: params.officialRequest ?? {
-      source: "npm",
-      spec: params.spec,
-      mode: params.installMode,
-      pin: params.pin,
-      ...(params.expectedPluginId ? { expectedPluginId: params.expectedPluginId } : {}),
-      ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
-      ...(params.trustedSourceLinkedOfficialInstall
-        ? { trustedSourceLinkedOfficialInstall: true }
-        : {}),
-    },
-    ...installContext,
-    ...params.capabilityConsent,
-    safetyOverrides: params.safetyOverrides,
-    logger: createPluginInstallLogger(params.runtime),
-  });
-  if (!result.ok) {
-    // A declared secondary may have been selected by the install owner. Hook-pack
-    // probing belongs only to the npm artifact, never a failed ClawHub attempt.
-    if (
-      result.installSource?.source === "clawhub" ||
-      (params.officialRequest &&
-        result.code !== PLUGIN_INSTALL_ERROR_CODE.MISSING_OPENCLAW_EXTENSIONS) ||
-      isTerminalPluginInstallFailure(result.code)
-    ) {
-      runtime.error(result.error);
-      return { ok: false };
-    }
-    if (params.allowBundledFallback) {
-      const bundledFallbackPlan = resolveBundledInstallPlanForNpmFailure({
-        rawSpec: params.spec,
-        code: result.code,
-        findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
-      });
-      if (bundledFallbackPlan) {
-        const bundledResult = await installManagedPluginSource({
-          request: {
-            source: "bundled",
-            rawSpec: params.spec,
-            bundledSource: bundledFallbackPlan.bundledSource,
-            warning: bundledFallbackPlan.warning,
-          },
-          ...installContext,
-        });
-        if (!bundledResult.ok) {
-          runtime.error(bundledResult.error);
-          return { ok: false };
-        }
-        return { ok: true };
-      }
-    }
-    const hookFallback = await tryInstallHookPackFromNpmSpec({
-      ...installContext,
-      installMode: params.installMode,
-      spec: params.spec,
-      safetyOverrides: params.safetyOverrides,
-      pin: params.pin,
-      expectedIntegrity: params.expectedIntegrity,
-    });
-    if (hookFallback.ok) {
-      return { ok: true };
-    }
-    runtime.error(formatPluginInstallWithHookFallbackError(result.error, hookFallback));
-    return { ok: false };
-  }
-
-  if (params.pin) {
-    const resolvedSpec = result.npmResolution?.resolvedSpec;
-    runtime.log(
-      resolvedSpec
-        ? `Pinned npm install record to ${resolvedSpec}.`
-        : theme.warn("Could not resolve exact npm version for --pin; storing original npm spec."),
-    );
-  }
-  return { ok: true };
+  const hook = await installHookPack(hookSource, params);
+  return hook.ok
+    ? hook
+    : { ...result, error: formatPluginInstallWithHookFallbackError(result.error, hook) };
 }

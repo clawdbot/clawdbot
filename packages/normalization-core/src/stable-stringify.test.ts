@@ -2,6 +2,7 @@
  * Regression coverage for deterministic unknown-value stringification.
  * Verifies sorted keys, repeated references, cycles, binary data, and errors.
  */
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { stableStringify } from "./stable-stringify.js";
 
@@ -69,23 +70,27 @@ describe("stableStringify", () => {
     expect(stableStringify(malformed, sanitizeSurrogates)).toBe('{"b":1,"ba":2}');
   });
 
-  it("serializes cache-trace edge types deterministically", () => {
-    const error = new Error("boom");
-    error.stack = "Error: boom\n    at test";
+  it.each(["host", "plugin VM"])(
+    "serializes cache-trace edge types from %s deterministically",
+    (realm) => {
+      const error: Error =
+        realm === "host" ? new Error("boom") : runInNewContext("new Error('boom')");
+      error.stack = "Error: boom\n    at test";
 
-    expect(
-      stableStringify({
-        bytes: new Uint8Array([1, 2, 3]),
-        error,
-        finite: 1,
-        infinity: Infinity,
-        nan: Number.NaN,
-        nil: null,
-        token: 123n,
-        undef: undefined,
-      }),
-    ).toBe(
-      '{"bytes":{"data":"AQID","type":"Uint8Array"},"error":{"message":"boom","name":"Error","stack":"Error: boom\\n    at test"},"finite":1,"infinity":"Infinity","nan":"NaN","nil":null,"token":"123","undef":undefined}',
-    );
-  });
+      expect(
+        stableStringify({
+          bytes: new Uint8Array([1, 2, 3]),
+          error,
+          finite: 1,
+          infinity: Infinity,
+          nan: Number.NaN,
+          nil: null,
+          token: 123n,
+          undef: undefined,
+        }),
+      ).toBe(
+        '{"bytes":{"data":"AQID","type":"Uint8Array"},"error":{"message":"boom","name":"Error","stack":"Error: boom\\n    at test"},"finite":1,"infinity":"Infinity","nan":"NaN","nil":null,"token":"123","undef":undefined}',
+      );
+    },
+  );
 });

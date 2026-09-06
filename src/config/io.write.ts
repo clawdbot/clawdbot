@@ -543,6 +543,7 @@ export async function writeConfigFileFromContext(
     return {
       persistedHash: nextHash,
       persistedConfig: stampedOutputConfig,
+      persistedSourceConfig: sourceConfigForPreflight,
       [configWritePostCommitRollback]: () => {
         restoreConfigSnapshotAuditRecord({
           env: deps.env,

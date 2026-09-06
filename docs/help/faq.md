@@ -819,7 +819,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Do nodes run a gateway service?">
     No. Only **one gateway** should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)). Nodes are peripherals that connect to the gateway (iOS/Android nodes, or macOS "node mode" in the menubar app). For headless node hosts and CLI control, see [Node host CLI](/cli/node).
 
-    A full restart is required for `gateway`, `discovery`, and hosted plugin surface changes.
+    Gateway server and discovery settings can require a full restart. Plugin install, enable, disable, reload, and uninstall apply to the running Gateway without restarting it. See [Plugin management](/plugins/manage-plugins).
 
   </Accordion>
 

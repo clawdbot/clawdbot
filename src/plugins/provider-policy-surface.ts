@@ -22,6 +22,7 @@ import {
   loadBundledPluginPublicArtifactModuleSync,
   loadPluginPublicArtifactModuleSync,
 } from "./public-surface-loader.js";
+import { runOutsidePluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
 
@@ -127,7 +128,8 @@ function resolveProviderPolicySurface<T extends ProviderPolicySurface>(params: {
 }): T | null {
   for (const artifactBasename of PROVIDER_POLICY_ARTIFACT_CANDIDATES) {
     try {
-      const mod = params.loadModule(artifactBasename);
+      // Config normalization and doctor inspection may query a disabled provider.
+      const mod = runOutsidePluginRuntimeRegistryScope(() => params.loadModule(artifactBasename));
       const surface = params.extractSurface(mod);
       if (surface) {
         return surface;
@@ -181,6 +183,7 @@ export function resolveTrustedExternalProviderPolicySurface(params: {
     loadModule: (artifactBasename) =>
       loadPluginPublicArtifactModuleSync<Record<string, unknown>>({
         pluginRoot: params.pluginRoot,
+        pluginId: params.pluginId,
         artifactBasename,
       }),
     missingSurfacePrefix: "Unable to resolve plugin public surface ",

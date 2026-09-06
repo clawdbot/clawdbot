@@ -14,10 +14,7 @@ import {
   formatPluginLoadProfileLine,
   shouldProfilePluginLoader,
 } from "../plugins/plugin-load-profile.js";
-import {
-  getCachedPluginSourceModuleLoader,
-  recordPluginModuleRoot,
-} from "../plugins/plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap, resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import type {
@@ -347,7 +344,6 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
     });
     if (opened.ok) {
       fs.closeSync(opened.fd);
-      getPluginCacheSource(opened.path).boundaryRoot = candidate.boundaryRoot;
       resolvedModulePaths.set(cacheKey, { path: opened.path });
       return opened.path;
     }
@@ -389,14 +385,14 @@ function getSourceModuleLoader(
   options: BundledEntryModuleLoadOptions,
   transformOpenClawDependencies = false,
 ) {
-  return getCachedPluginSourceModuleLoader({
+  return getCachedPluginModuleLoader({
     modulePath,
-    rootDir: getPluginCacheSource(modulePath).boundaryRoot,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
     loaderFilename: import.meta.url,
     transformOpenClawDependencies,
     ...(options.createLoaderForTest ? { createLoader: options.createLoaderForTest } : {}),
+    tryNative: false,
   });
 }
 
@@ -421,10 +417,6 @@ function loadBundledEntryModuleSync(
   if (cached) {
     return cached.value;
   }
-  recordPluginModuleRoot(
-    modulePath,
-    source.boundaryRoot ?? resolveEntryBoundaryRoot(importMetaUrl),
-  );
   let loaded: unknown;
   const profile = shouldProfilePluginLoader();
   const loadStartMs = profile ? performance.now() : 0;

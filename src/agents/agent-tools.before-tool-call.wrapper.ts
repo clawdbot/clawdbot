@@ -68,11 +68,7 @@ import {
   validateToolExecutionParams,
 } from "./agent-tools.execution-validation.js";
 import {
-  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
-  BEFORE_TOOL_CALL_WRAPPED,
-  clearBeforeToolCallWrappedMarker,
+  bindBeforeToolCallMetadata,
   getBeforeToolCallDiagnosticOptions,
   getBeforeToolCallHookContext,
   getBeforeToolCallSourceTool,
@@ -80,10 +76,13 @@ import {
 } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import {
+  CODE_MODE_WAIT_TOOL_NAME,
+  isCodeModeControlTool,
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
+import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import {
   appendToolLoopWarning,
   attachInternalToolExecutionPreparer,
@@ -296,6 +295,12 @@ export function wrapToolWithBeforeToolCallHook(
   options: Partial<BeforeToolCallDiagnosticOptions> = {},
 ): AnyAgentTool {
   const execute = tool.execute;
+  const refresh = captureAgentPluginRuntimeRefresh();
+  // Only the exact host wait control may drain work admitted before a reload.
+  const assertAgentPluginRuntimeCurrent =
+    isCodeModeControlTool(tool) && tool.name === CODE_MODE_WAIT_TOOL_NAME
+      ? refresh.assertActive
+      : refresh.assertCurrent;
   if (!execute) {
     return tool;
   }
@@ -310,6 +315,7 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate, ...executionArgs: unknown[]) => {
+      assertAgentPluginRuntimeCurrent();
       const prepareControl = readInternalExecutionControl(executionArgs.at(-1));
       if (prepareControl) {
         executionArgs.pop();
@@ -527,6 +533,7 @@ export function wrapToolWithBeforeToolCallHook(
       // Host capabilities can close while hooks, approval, validation, or
       // steering awaits. Recheck at the final synchronous source boundary.
       signal?.throwIfAborted();
+      assertAgentPluginRuntimeCurrent();
       runAgentToolSourceExecutionGuard(tool);
       admitExecution?.();
       onImplementationStart?.();
@@ -690,11 +697,10 @@ export function wrapToolWithBeforeToolCallHook(
     }
   };
   copyBeforeToolCallWrapperMetadata(tool, wrappedTool);
-  Object.defineProperties(wrappedTool, {
-    [BEFORE_TOOL_CALL_WRAPPED]: { value: true, enumerable: true },
-    [BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS]: { value: hookOptions, enumerable: false },
-    [BEFORE_TOOL_CALL_SOURCE_TOOL]: { value: tool, enumerable: false },
-    [BEFORE_TOOL_CALL_HOOK_CONTEXT]: { value: ctx, enumerable: false },
+  bindBeforeToolCallMetadata(wrappedTool, {
+    options: hookOptions,
+    sourceTool: tool,
+    hookContext: ctx,
   });
   return wrappedTool;
 }
@@ -717,7 +723,6 @@ export function rewrapToolWithBeforeToolCallHook(
     ...tool,
     execute: sourceTool.execute,
   };
-  clearBeforeToolCallWrappedMarker(rewrapSource);
   copyBeforeToolCallWrapperMetadata(tool, rewrapSource);
   copyAgentToolSourceExecutionGuard(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, wrapperOptions);

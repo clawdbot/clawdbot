@@ -500,6 +500,7 @@ export const validateCapabilityConsentErrorDetails = compile(S.CapabilityConsent
 export const validatePluginsListParams = compile(S.PluginsListParamsSchema);
 export const validatePluginsInspectParams = compile(S.PluginsInspectParamsSchema);
 export const validatePluginsRefreshParams = compile(S.PluginsRefreshParamsSchema);
+export const validatePluginsReloadParams = compile(S.PluginsReloadParamsSchema);
 export const validatePluginsSearchParams = compile(S.PluginsSearchParamsSchema);
 export const validatePluginsInstallParams = compile(S.PluginsInstallParamsSchema);
 export const validatePluginsSetEnabledParams = compile(S.PluginsSetEnabledParamsSchema);

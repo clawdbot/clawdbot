@@ -31,7 +31,7 @@ import {
   getPluginCommandEntrySpecs,
   getPluginCommandEntrySpecsFromRegistrations,
 } from "../../plugins/command-specs.js";
-import { getActivePluginGatewayCommandRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { listSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
 
 type SerializedArg = NonNullable<CommandEntry["args"]>[number];
@@ -175,7 +175,7 @@ function buildPluginCommandEntries(params: {
   nameSurface: CommandNameSurface;
   cfg: OpenClawConfig;
 }): CommandEntry[] {
-  const gatewayRegistry = getActivePluginGatewayCommandRegistry();
+  const gatewayRegistry = getActivePluginRegistry();
   const pluginSpecs = gatewayRegistry
     ? getPluginCommandEntrySpecsFromRegistrations(gatewayRegistry.commands, params.provider, {
         config: params.cfg,

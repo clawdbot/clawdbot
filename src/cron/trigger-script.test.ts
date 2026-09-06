@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
-import { BEFORE_TOOL_CALL_HOOK_CONTEXT } from "../agents/before-tool-call-metadata.js";
+import { getBeforeToolCallHookContext } from "../agents/before-tool-call-metadata.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "../agents/code-mode.js";
 import { clearToolSearchCatalog } from "../agents/tool-search.js";
 import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
@@ -16,7 +16,6 @@ type EvaluatorDeps = Parameters<typeof createCronScriptRuntime>[0];
 type HeadlessParams = Parameters<NonNullable<EvaluatorDeps["runHeadless"]>>[0];
 type PrepareParams = Parameters<NonNullable<EvaluatorDeps["prepareRuntime"]>>[0];
 
-const beforeToolCallTesting = { BEFORE_TOOL_CALL_HOOK_CONTEXT };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function completed(params: { value: unknown; output?: unknown[] }): CodeModeHeadlessResult {
@@ -322,11 +321,11 @@ describe("cron trigger script evaluator", () => {
   });
 
   it("uses a fresh hook run scope for each evaluation", async () => {
-    const contexts: Array<Record<symbol, unknown>> = [];
+    const runIds: Array<string | undefined> = [];
     const { evaluate, prepareRuntime } = createEvaluator(
       vi.fn(async (params) => {
         const wrapped = params.ctx.catalogRef?.current?.entries[0]?.tool;
-        contexts.push((wrapped ?? {}) as Record<symbol, unknown>);
+        runIds.push(wrapped ? getBeforeToolCallHookContext(wrapped)?.runId : undefined);
         return completed({ value: { fire: false } });
       }),
     );
@@ -335,10 +334,6 @@ describe("cron trigger script evaluator", () => {
     await evaluate({ jobId: "job-loop-scope", script: "return result", state: null });
 
     expect(prepareRuntime).toHaveBeenCalledOnce();
-    const runIds = contexts.map((tool) => {
-      const context = tool[beforeToolCallTesting.BEFORE_TOOL_CALL_HOOK_CONTEXT];
-      return (context as { runId?: string } | undefined)?.runId;
-    });
     expect(runIds[0]).toMatch(/^cron-trigger:job-loop-scope:/);
     expect(runIds[1]).toMatch(/^cron-trigger:job-loop-scope:/);
     expect(runIds[1]).not.toBe(runIds[0]);

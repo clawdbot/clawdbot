@@ -1,4 +1,3 @@
-// Runtime bridge for plugin-provided migration hooks.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
@@ -7,7 +6,6 @@ import { loadPluginRegistryHandle } from "./loader.js";
 import { resolveManifestContractRuntimePluginResolution } from "./manifest-contract-runtime.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type { MigrationProviderPlugin } from "./types.js";
 
 type MigrationProviderPluginResolution = {
@@ -32,28 +30,6 @@ function findMigrationProviderById(
   providerId: string,
 ): MigrationProviderPlugin | undefined {
   return entries.find((entry) => entry.provider.id === providerId)?.provider;
-}
-
-function bindMigrationProviderToRegistry(
-  provider: MigrationProviderPlugin,
-  registry: PluginRegistry,
-): MigrationProviderPlugin {
-  return {
-    ...provider,
-    ...(provider.detect
-      ? {
-          detect: (ctx) => withPluginRuntimeRegistryScope(registry, () => provider.detect!(ctx)),
-        }
-      : {}),
-    ...(provider.prepareApply
-      ? {
-          prepareApply: (ctx) =>
-            withPluginRuntimeRegistryScope(registry, () => provider.prepareApply!(ctx)),
-        }
-      : {}),
-    plan: (ctx) => withPluginRuntimeRegistryScope(registry, () => provider.plan(ctx)),
-    apply: (ctx, plan) => withPluginRuntimeRegistryScope(registry, () => provider.apply(ctx, plan)),
-  };
 }
 
 function resolveMigrationProviderRegistry(params: { cfg?: OpenClawConfig; pluginIds: string[] }) {
@@ -171,7 +147,7 @@ export function resolvePluginMigrationProvider(params: {
     pluginIds,
   });
   const provider = findMigrationProviderById(registry?.migrationProviders ?? [], params.providerId);
-  return provider && registry ? bindMigrationProviderToRegistry(provider, registry) : undefined;
+  return provider;
 }
 
 export function resolvePluginMigrationProviders(
@@ -190,10 +166,5 @@ export function resolvePluginMigrationProviders(
     cfg: params.cfg,
     pluginIds,
   });
-  const scopedProviders = registry
-    ? registry.migrationProviders.map(({ provider }) => ({
-        provider: bindMigrationProviderToRegistry(provider, registry),
-      }))
-    : [];
-  return mergeMigrationProviders(activeProviders, scopedProviders);
+  return mergeMigrationProviders(activeProviders, registry?.migrationProviders ?? []);
 }

@@ -86,12 +86,16 @@ describe("plugin runtime inspection", () => {
       },
       async () => {
         useNoBundledPlugins();
-        await writeConfigFile({});
+        const pluginId = "first-slot-candidate";
+        await writeConfigFile(
+          testCase.mode === "disabled"
+            ? { plugins: { entries: { [pluginId]: { enabled: false } } } }
+            : {},
+        );
         await withPluginLifecycleLease({}, async () => {
           const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
           // Warm the same empty operation inventory that precedes installer publication.
           loadPluginMetadataSnapshot({ allowCurrent: false, config: snapshot.config });
-          const pluginId = "first-slot-candidate";
           const pluginDir =
             testCase.source === "npm"
               ? path.join(stateDir, "npm", "projects", pluginId, "node_modules", pluginId)
@@ -125,15 +129,14 @@ describe("plugin runtime inspection", () => {
             `module.exports = { id: ${JSON.stringify(pluginId)}, kind: ${JSON.stringify(testCase.kind ?? "memory")}, register() {} };\n`,
           );
 
-          const next = await persistPluginInstall({
+          const { config: next } = await persistPluginInstall({
             snapshot: {
-              config: snapshot.config,
+              config: snapshot.sourceConfig,
               baseHash: snapshot.hash ?? undefined,
               writeOptions,
             },
             pluginId,
             install: { source: testCase.source, installPath: pluginDir, version: "1.0.0" },
-            enable: testCase.mode !== "disabled",
           });
 
           const expectedSlots = testCase.slots.length
@@ -301,7 +304,7 @@ module.exports = { id: ${JSON.stringify(`${pluginId}/${entry}`)}, kind: ${JSON.s
           await expect(
             persistPluginInstall({
               snapshot: {
-                config: snapshot.config,
+                config: snapshot.sourceConfig,
                 baseHash: snapshot.hash ?? undefined,
                 writeOptions,
               },

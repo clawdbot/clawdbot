@@ -18,7 +18,7 @@ describe("source checkout bundled plugin runtime", () => {
     });
 
     const tokenjuice = registry.plugins.find((plugin) => plugin.id === "tokenjuice");
-    expect(tokenjuice?.status).toBe("loaded");
+    expect(tokenjuice?.status, tokenjuice?.error).toBe("loaded");
     expect(tokenjuice?.origin).toBe("bundled");
 
     const expectedRuntime = `${path.sep}extensions${path.sep}tokenjuice${path.sep}index.ts`;

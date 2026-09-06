@@ -15,6 +15,6 @@ export function hasAgentScopeColumn(schema: { fields: Array<{ name: string }> })
 
 export function legacyMemorySchemaError(): Error {
   return new Error(
-    'memory-lancedb: the existing memory table predates per-agent isolation. Run "openclaw doctor --fix" to assign legacy rows to the default agent, then restart OpenClaw.',
+    'memory-lancedb: the existing memory table predates per-agent isolation. Run "openclaw doctor --fix" to assign legacy rows to the default agent, then run "openclaw plugins reload memory-lancedb" if the Gateway is running.',
   );
 }

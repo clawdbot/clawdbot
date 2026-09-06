@@ -1,6 +1,9 @@
 // Plugins CLI policy tests cover plugin command policy checks and warnings.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
@@ -8,10 +11,10 @@ import {
   enablePluginInConfigMock,
   loadPluginManifestRegistryMock,
   pluginCliConfigMock,
+  pluginRegistryRefreshInputs,
   replaceConfigFileMock,
   refreshPluginRegistryMock,
   resetPluginsCliTestState,
-  runtimeErrors,
   pluginsCliRuntimeLogs,
   promptYesNoMock,
   runPluginsCommand,
@@ -24,9 +27,17 @@ const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 
 describe("plugins cli policy mutations", () => {
   const compatibilityPluginIds = [
-    { alias: "google-gemini-cli", pluginId: "google" },
-    { alias: "minimax-portal-auth", pluginId: "minimax" },
-  ] as const;
+    {
+      alias: "google-gemini-cli",
+      pluginId: "google",
+      manifestMetadata: { providers: ["google", "google-gemini-cli"] },
+    },
+    {
+      alias: "minimax-portal-auth",
+      pluginId: "minimax",
+      manifestMetadata: { legacyPluginIds: ["minimax-portal-auth"] },
+    },
+  ];
 
   beforeEach(() => {
     resetPluginsCliTestState();
@@ -40,7 +51,35 @@ describe("plugins cli policy mutations", () => {
     }
   });
 
-  function mockPluginRegistry(ids: string[]) {
+  function mockPluginRegistry(
+    ids: string[],
+    manifestMetadata: Partial<Pick<PluginManifestRecord, "providers" | "legacyPluginIds">> = {},
+  ) {
+    loadPluginManifestRegistryMock.mockImplementation((input: unknown) => {
+      const records =
+        (input as { installRecords?: Record<string, PluginInstallRecord> })?.installRecords ?? {};
+      return {
+        plugins: ids.map((id) => {
+          const install = records[id];
+          const rootDir = install?.installPath ?? install?.sourcePath ?? `/tmp/${id}`;
+          const manifest = {
+            id,
+            rootDir,
+            source: `${rootDir}/index.js`,
+            manifestPath: `${rootDir}/openclaw.plugin.json`,
+            origin: install ? ("global" as const) : ("bundled" as const),
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            ...manifestMetadata,
+          };
+          return install ? recordPluginManifestInstallOwner(manifest, id) : manifest;
+        }),
+        diagnostics: [],
+      };
+    });
     buildPluginRegistrySnapshotReportMock.mockReturnValue({
       plugins: ids.map((id) => ({ id })),
       diagnostics: [],
@@ -95,12 +134,14 @@ describe("plugins cli policy mutations", () => {
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
       nextConfig: enabledConfig,
       baseHash: "mock",
-      writeOptions: {
+      writeOptions: expect.objectContaining({
+        expectedConfigPath: "/tmp/openclaw-config.json5",
+        ownedConfigPathForWrite: "/tmp/openclaw-config.json5",
         explicitSetPaths: [["plugins", "entries", "alpha"]],
-      },
+      }),
     });
     expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
-    expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
+    expect(pluginRegistryRefreshInputs()).toContainEqual({
       config: enabledConfig,
       installRecords: {},
       policyPluginIds: ["alpha"],
@@ -119,9 +160,9 @@ describe("plugins cli policy mutations", () => {
         alpha: { source: "npm", spec: "@acme/alpha", installPath: rootDir },
       });
       mockPluginRegistry(["alpha"]);
-      await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow("__exit__:1");
-
-      expect(runtimeErrors.at(-1)).toContain("--accept-capabilities");
+      await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow(
+        "--accept-capabilities",
+      );
       expect(replaceConfigFileMock).not.toHaveBeenCalled();
       expect(configWriteMock).not.toHaveBeenCalled();
     });
@@ -149,8 +190,6 @@ describe("plugins cli policy mutations", () => {
   ])("$name", async ({ commandArgs, enabled, expectsConsent }) => {
     await withTempDir("openclaw-cli-capability-consent-enabled-", async (rootDir) => {
       const fixture = createColdPluginFixture({ rootDir, pluginId: "alpha" });
-      const { recordPluginManifestInstallOwner } =
-        await import("../plugins/manifest-install-owner.js");
       loadPluginManifestRegistryMock.mockReturnValue({
         plugins: [
           recordPluginManifestInstallOwner(
@@ -217,11 +256,6 @@ describe("plugins cli policy mutations", () => {
       plugins: { deny: ["alpha"] },
       reason: "blocked by denylist",
     },
-    {
-      policy: "a restrictive plugin allowlist",
-      plugins: { allow: ["other-plugin"] },
-      reason: "blocked by allowlist",
-    },
   ])("fails without mutations when $policy blocks enablement", async ({ plugins, reason }) => {
     const sourceConfig = { plugins } as OpenClawConfig;
     pluginCliConfigMock.mockReturnValue(sourceConfig);
@@ -233,12 +267,13 @@ describe("plugins cli policy mutations", () => {
     });
     mockPluginRegistry(["alpha"]);
 
-    await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow("__exit__:1");
+    await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow(
+      `plugin "alpha" could not be enabled (${reason})`,
+    );
 
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
-    expect(runtimeErrors).toContain(`Plugin "alpha" could not be enabled (${reason}).`);
     expect(pluginsCliRuntimeLogs).not.toContain(`Plugin "alpha" could not be enabled (${reason}).`);
   });
 
@@ -261,6 +296,17 @@ describe("plugins cli policy mutations", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
   });
 
+  it("treats explicit enable as trust for the selected installed plugin", async () => {
+    pluginCliConfigMock.mockReturnValue({ plugins: { allow: ["other-plugin"] } });
+    mockPluginRegistry(["alpha"]);
+
+    await runPluginsCommand(["plugins", "enable", "alpha"]);
+
+    expect(configWriteMock).toHaveBeenCalledWith({
+      plugins: { allow: ["other-plugin", "alpha"] },
+    });
+  });
+
   it("refreshes the persisted plugin registry after disabling a plugin", async () => {
     pluginCliConfigMock.mockReturnValue({
       plugins: {
@@ -279,11 +325,13 @@ describe("plugins cli policy mutations", () => {
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
       nextConfig,
       baseHash: "mock",
-      writeOptions: {
+      writeOptions: expect.objectContaining({
+        expectedConfigPath: "/tmp/openclaw-config.json5",
+        ownedConfigPathForWrite: "/tmp/openclaw-config.json5",
         explicitSetPaths: [["plugins", "entries", "alpha"]],
-      },
+      }),
     });
-    expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
+    expect(pluginRegistryRefreshInputs()).toContainEqual({
       config: nextConfig,
       installRecords: {},
       policyPluginIds: ["alpha"],
@@ -293,7 +341,7 @@ describe("plugins cli policy mutations", () => {
 
   it.each(compatibilityPluginIds)(
     "enables compatibility id $alias through canonical plugin $pluginId",
-    async ({ alias, pluginId }) => {
+    async ({ alias, pluginId, manifestMetadata }) => {
       const sourceConfig = {} as OpenClawConfig;
       const enabledConfig = {
         plugins: {
@@ -308,7 +356,7 @@ describe("plugins cli policy mutations", () => {
         enabled: true,
         pluginId,
       });
-      mockPluginRegistry([pluginId]);
+      mockPluginRegistry([pluginId], manifestMetadata);
 
       await runPluginsCommand(["plugins", "enable", alias]);
 
@@ -318,9 +366,11 @@ describe("plugins cli policy mutations", () => {
       expect(replaceConfigFileMock).toHaveBeenCalledWith({
         nextConfig: enabledConfig,
         baseHash: "mock",
-        writeOptions: {
+        writeOptions: expect.objectContaining({
+          expectedConfigPath: "/tmp/openclaw-config.json5",
+          ownedConfigPathForWrite: "/tmp/openclaw-config.json5",
           explicitSetPaths: [["plugins", "entries", pluginId]],
-        },
+        }),
       });
       expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
     },
@@ -328,7 +378,7 @@ describe("plugins cli policy mutations", () => {
 
   it.each(compatibilityPluginIds)(
     "disables compatibility id $alias through canonical plugin $pluginId",
-    async ({ alias, pluginId }) => {
+    async ({ alias, pluginId, manifestMetadata }) => {
       pluginCliConfigMock.mockReturnValue({
         plugins: {
           entries: {
@@ -336,7 +386,7 @@ describe("plugins cli policy mutations", () => {
           },
         },
       } as OpenClawConfig);
-      mockPluginRegistry([pluginId]);
+      mockPluginRegistry([pluginId], manifestMetadata);
 
       await runPluginsCommand(["plugins", "disable", alias]);
 
@@ -347,9 +397,11 @@ describe("plugins cli policy mutations", () => {
       expect(replaceConfigFileMock).toHaveBeenCalledWith({
         nextConfig,
         baseHash: "mock",
-        writeOptions: {
+        writeOptions: expect.objectContaining({
+          expectedConfigPath: "/tmp/openclaw-config.json5",
+          ownedConfigPathForWrite: "/tmp/openclaw-config.json5",
           explicitSetPaths: [["plugins", "entries", pluginId]],
-        },
+        }),
       });
     },
   );
@@ -360,11 +412,7 @@ describe("plugins cli policy mutations", () => {
       mockPluginRegistry(["alpha"]);
 
       await expect(runPluginsCommand(["plugins", command, "missing-plugin"])).rejects.toThrow(
-        "__exit__:1",
-      );
-
-      expect(runtimeErrors).toContain(
-        "Plugin not found: missing-plugin. Run `openclaw plugins list` to see installed plugins, or `openclaw plugins search missing-plugin` to look for installable plugins.",
+        "plugin not installed: missing-plugin",
       );
       expect(enablePluginInConfigMock).not.toHaveBeenCalled();
       expect(configWriteMock).not.toHaveBeenCalled();

@@ -13,7 +13,6 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import type { PluginLogger } from "./types.js";
 
 type ResolvedPluginLoadDiscovery = {
@@ -69,7 +68,7 @@ export function resolvePluginLoadDiscovery(params: {
     pluginsEnabled: context.normalized.enabled,
     allow: context.normalized.allow,
     warningCacheKey: params.warningCacheKey,
-    warningCache: pluginLoaderCacheState,
+    warningCache: context.cacheState,
     explicitlyEnabledPluginIds: new Set(
       Object.entries(context.normalized.entries)
         .filter(([, entry]) => entry.enabled === true)

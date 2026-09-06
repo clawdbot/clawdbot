@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
 async function importHookRunnerGlobalModule() {
   return import("./hook-runner-global.js");
@@ -152,6 +153,36 @@ describe("hook-runner-global", () => {
       await pending.catch(() => undefined);
     }
   });
+
+  it.each([true, false])(
+    "limits explicit Gateway shutdown to its own registry (registered hooks: %s)",
+    async (hasOwnedHooks) => {
+      const ownedStop = vi.fn();
+      const otherStop = vi.fn();
+      const owned = createMockPluginRegistry(
+        hasOwnedHooks ? [{ hookName: "gateway_stop", pluginId: "owned", handler: ownedStop }] : [],
+      );
+      const other = createMockPluginRegistry([
+        { hookName: "gateway_stop", pluginId: "other-gateway", handler: otherStop },
+      ]);
+      const mod = await importHookRunnerGlobalModule();
+      setActivePluginRegistry(other);
+      mod.initializeGlobalHookRunner(other);
+      const event = { reason: "owned Gateway stopping" };
+      const ctx = { port: 19001 };
+
+      await withPluginRuntimeRegistryScope(owned, () =>
+        mod.runGlobalGatewayStopSafely({ registry: owned, event, ctx }),
+      );
+
+      expect(ownedStop).toHaveBeenCalledTimes(hasOwnedHooks ? 1 : 0);
+      expect(otherStop).not.toHaveBeenCalled();
+      expect(mod.getGlobalPluginRegistry()).toBe(other);
+      await mod.runGlobalGatewayStopSafely({ event, ctx });
+      expect(otherStop).toHaveBeenCalledOnce();
+      expect(ownedStop).toHaveBeenCalledTimes(hasOwnedHooks ? 1 : 0);
+    },
+  );
 
   it("bounds gateway_stop handlers and lets shutdown continue", async () => {
     vi.useFakeTimers();

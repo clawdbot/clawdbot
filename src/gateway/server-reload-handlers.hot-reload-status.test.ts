@@ -29,7 +29,6 @@ const hoisted = vi.hoisted(() => ({
   onRuntimeConfigCommitted: undefined as Parameters<
     typeof import("./config-reload.js").startGatewayConfigReloader
   >[0]["onRuntimeConfigCommitted"],
-  notifyPluginMetadataChanged: vi.fn(),
   stop: vi.fn(async () => {}),
 }));
 
@@ -57,7 +56,8 @@ vi.mock("./config-reload.js", async () => {
         return {
           stop: hoisted.stop,
           hotReloadStatus: () => hoisted.hotReloadStatus.current,
-          notifyPluginMetadataChanged: hoisted.notifyPluginMetadataChanged,
+          isReloading: () => false,
+          applyPluginLifecycleChange: vi.fn(),
         };
       },
     ),
@@ -110,6 +110,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       startChannel: vi.fn(async () => new Map()),
       stopChannel: vi.fn(async () => {}),
       reloadPlugins: vi.fn(async (): Promise<GatewayPluginReloadResult> => ({
+        restartChannels: new Set(),
         activeChannels: new Set(),
       })),
       logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },

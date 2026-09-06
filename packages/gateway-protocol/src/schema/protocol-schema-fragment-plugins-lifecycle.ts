@@ -9,6 +9,8 @@ import * as updateRuns from "./update-runs.js";
 
 export const PluginLifecycleProtocolSchemas = {
   CapabilityConsentErrorDetails: plugins.CapabilityConsentErrorDetailsSchema,
+  ControlUiPluginTab: plugins.ControlUiPluginTabSchema,
+  ControlUiPluginWidgetKind: plugins.ControlUiPluginWidgetKindSchema,
   HooksStatusParams: hooks.HooksStatusParamsSchema,
   PluginApprovalRequestParams: pluginApprovals.PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: pluginApprovals.PluginApprovalResolveParamsSchema,
@@ -32,6 +34,8 @@ export const PluginLifecycleProtocolSchemas = {
   PluginInspectSource: plugins.PluginInspectSourceSchema,
   PluginInstallTrust: plugins.PluginInstallTrustSchema,
   PluginOperatorGrants: plugins.PluginOperatorGrantsSchema,
+  PluginRuntimeApplication: plugins.PluginRuntimeApplicationSchema,
+  PluginRuntimeStatus: plugins.PluginRuntimeStatusSchema,
   PluginSearchPackage: plugins.PluginSearchPackageSchema,
   PluginSearchResultEntry: plugins.PluginSearchResultEntrySchema,
   PluginsInspectParams: plugins.PluginsInspectParamsSchema,
@@ -42,6 +46,9 @@ export const PluginLifecycleProtocolSchemas = {
   PluginsListResult: plugins.PluginsListResultSchema,
   PluginsRefreshParams: plugins.PluginsRefreshParamsSchema,
   PluginsRefreshResult: plugins.PluginsRefreshResultSchema,
+  PluginsReloadParams: plugins.PluginsReloadParamsSchema,
+  PluginsReloadResult: plugins.PluginsReloadResultSchema,
+  PluginsChangedEvent: plugins.PluginsChangedEventSchema,
   PluginsSearchParams: plugins.PluginsSearchParamsSchema,
   PluginsSearchResult: plugins.PluginsSearchResultSchema,
   PluginsSessionActionFailureResult: plugins.PluginsSessionActionFailureResultSchema,

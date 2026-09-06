@@ -1,5 +1,7 @@
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../infra/node-commands.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -30,10 +32,14 @@ export async function openGatewayNodeDuplex(options: {
   if (!scope?.pluginId?.trim()) {
     throw new Error("Plugin node duplex commands require an active owning plugin identity.");
   }
-  const registrations = scope.pluginRegistry?.nodeHostCommands.filter(
+  const registry = scope.pluginRegistry;
+  const record = registry?.plugins.find((entry) => entry.id === scope.pluginId);
+  const registrations = registry?.nodeHostCommands.filter(
     (entry) => entry.command.command === params.command,
   );
   if (
+    !registry ||
+    !record ||
     registrations?.length !== 1 ||
     registrations[0]?.pluginId !== scope.pluginId ||
     registrations[0]?.command.duplex !== true
@@ -42,15 +48,21 @@ export async function openGatewayNodeDuplex(options: {
       `Node command "${params.command}" must be registered exactly once by plugin "${scope.pluginId}" and declare duplex: true.`,
     );
   }
+  const isPluginCurrent = capturePluginLifecycleAuthority(registry, record, {
+    scopedRuntime: true,
+  });
   const callerIdentity = scope.client?.internal?.agentRuntimeIdentity;
   const context = getInProcessGatewayRequestContext(resolveGatewayContext);
   if (!context?.nodeRegistry) {
     throw new Error("Plugin node duplex commands require an active Gateway node registry.");
   }
   const controller = new AbortController();
-  const signals = [controller.signal, runtimeLifetime, params.signal].filter(
-    (candidate): candidate is AbortSignal => candidate !== undefined,
-  );
+  const signals = [
+    controller.signal,
+    runtimeLifetime,
+    getPluginInstance(record)?.lifecycle.signal,
+    params.signal,
+  ].filter((candidate): candidate is AbortSignal => candidate !== undefined);
   const signal = AbortSignal.any(signals);
   const abortError = () =>
     signal.reason instanceof Error ? signal.reason : new Error("Node duplex invocation cancelled.");
@@ -61,6 +73,7 @@ export async function openGatewayNodeDuplex(options: {
   let framedReady = false;
   const ready = createDeferredCore();
   const isRuntimeCurrent = () =>
+    isPluginCurrent?.() === true &&
     !signal.aborted &&
     (!resolveGatewayContext || resolveGatewayContext() === context) &&
     (!callerIdentity || context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) === true);
@@ -73,6 +86,7 @@ export async function openGatewayNodeDuplex(options: {
       throw error;
     }
   };
+  assertRuntimeCurrent();
   const endpoint = createNodeDuplexEndpoint({
     requireReady: true,
     maxMessageBytes: params.maxMessageBytes,

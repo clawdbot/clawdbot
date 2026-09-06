@@ -107,7 +107,7 @@ only adds catalog sources.
 
 Only existing directories are included. Equivalent paths are canonicalized and
 deduplicated against the automatic homes, and automatic homes keep priority
-under the 100-source catalog cap. Changes require a Gateway restart.
+under the 100-source catalog cap. Apply changes with `openclaw plugins reload codex`.
 `sessionCatalog.homes` needs the default managed stdio app-server transport;
 Unix and WebSocket transports reject it with a visible error because they
 cannot start a source-bound app-server for each home.

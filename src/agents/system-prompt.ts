@@ -1000,6 +1000,7 @@ export function buildAgentSystemPrompt(params: {
   const hasProcess = availableTools.has("process");
   const hasGateway = availableTools.has("gateway");
   const hasOpenClaw = availableTools.has("openclaw");
+  const hasPlugins = availableTools.has("plugins");
   const messageToolAvailable = availableTools.has("message");
   const hasAutomations = availableTools.has(AUTOMATIONS_TOOL_NAME);
   const readToolName = resolveToolName("read");
@@ -1321,15 +1322,16 @@ export function buildAgentSystemPrompt(params: {
       "",
       "## OpenClaw Control",
       "Do not invent commands.",
+      ...(hasPlugins ? ["Plugin management: use `plugins`."] : []),
       hasOpenClaw
-        ? "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`."
+        ? `Gateway restart, config, channels, ${hasPlugins ? "" : "plugins, "}agents, models/providers: ask \`openclaw\`.`
         : hasGateway
           ? "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human."
           : "",
       [
         hasGateway
           ? "Update OpenClaw: `gateway` action update.run, only on explicit user request; restart and completion notice are automatic."
-          : `${hasOpenClaw ? "Updates" : "System controls unavailable. Updates and restarts"} need the OpenClaw owner: tell the user to run \`openclaw update\` in a terminal or use the Control UI.`,
+          : `${hasOpenClaw ? "Updates" : `${hasPlugins ? "Other system" : "System"} controls unavailable. Updates and restarts`} need the OpenClaw owner: tell the user to run \`openclaw update\` in a terminal or use the Control UI.`,
         `Never run ${hasGateway ? "openclaw update, npm install -g openclaw, or stop/restart" : "npm install -g openclaw or stop"} the gateway service via exec.`,
       ].join(" "),
       "",

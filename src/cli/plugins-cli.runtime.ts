@@ -1,3 +1,4 @@
+import type { PluginsRefreshResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 // Runtime implementations for `openclaw plugins` subcommands. Heavy plugin modules stay
 // lazy-loaded so the base CLI can start without activating the plugin registry.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
@@ -11,7 +12,6 @@ import {
   assertConfigWriteAllowedInCurrentMode,
   getRuntimeConfig,
   readConfigFileSnapshot,
-  replaceConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,7 +21,6 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
-import { formatMissingPluginMessage } from "./error-format.js";
 import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
@@ -42,30 +41,12 @@ type PluginInstallActionOptions = {
   marketplace?: string;
 };
 
-function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
-  let promise: Promise<T> | undefined;
-  return () => (promise ??= load());
-}
-
-const loadPluginsConfigState = createModuleLoader(() => import("../plugins/config-state.js"));
-const loadPluginsStatus = createModuleLoader(() => import("../plugins/status.js"));
-const loadPluginSlotSelection = createModuleLoader(() => import("../plugins/slot-selection.js"));
-const loadPluginsCommandHelpers = createModuleLoader(() => import("./plugins-command-helpers.js"));
-const loadPluginsRegistryRefresh = createModuleLoader(
-  () => import("../plugins/registry-refresh.js"),
-);
-
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
 }
 
 function formatRegistryState(state: "missing" | "fresh" | "stale"): string {
   return state === "fresh" ? theme.success(state) : theme.warn(state);
-}
-
-function reportMissingPlugin(id: string) {
-  defaultRuntime.error(formatMissingPluginMessage({ id, includeSearch: true }));
-  return defaultRuntime.exit(1);
 }
 
 function isConfigSelectedShadowDiagnostic(entry: { level?: string; message?: string }): boolean {
@@ -181,143 +162,63 @@ function collectConfiguredRuntimePluginWarnings(params: {
   });
 }
 
-/** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
-export async function runPluginsEnableCommand(
-  idInput: string,
+export async function runPluginsSetEnabledCommand(
+  pluginId: string,
+  enabled: boolean,
   opts: { acceptCapabilities?: boolean } = {},
 ): Promise<void> {
   assertConfigWriteAllowedInCurrentMode();
-  return await withPluginLifecycleLease(
-    {},
-    async () => await runPluginsEnableCommandUnlocked(idInput, opts),
-  );
-}
-
-async function runPluginsEnableCommandUnlocked(
-  idInput: string,
-  opts: { acceptCapabilities?: boolean },
-): Promise<void> {
-  let id = idInput;
-  assertConfigWriteAllowedInCurrentMode();
-
-  const { enableExplicitlySelectedPluginInConfig } = await import("../plugins/enable.js");
-  const { normalizePluginId } = await loadPluginsConfigState();
-  const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
-  const snapshot = await readConfigFileSnapshot();
-  const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const report = buildPluginRegistrySnapshotReport({ config: cfg });
-  id = normalizePluginId(id);
-  const plugin = report.plugins.find((entry) => entry.id === id);
-  if (!plugin) {
-    return reportMissingPlugin(id);
-  }
-  const enableResult = enableExplicitlySelectedPluginInConfig(cfg, id, {
-    updateChannelConfig: false,
+  const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
+  const { setManagedPluginEnabled } = await import("../plugins/management-mutations.js");
+  const consent = resolvePluginCapabilityConsentCliOptions({
+    ...opts,
+    action: "enable",
+    runtime: defaultRuntime,
   });
-  // A blocked request must not displace the active slot or rewrite persisted state.
-  if (!enableResult.enabled) {
-    defaultRuntime.error(
-      `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
-    );
-    return defaultRuntime.exit(1);
-  }
-  if (!plugin.enabled || opts.acceptCapabilities) {
-    const { resolvePluginCapabilityConsent } = await import("../plugins/capability-consent.js");
-    const { ManagedPluginLifecycleError } =
-      await import("../plugins/management-lifecycle-error.js");
-    const consent = resolvePluginCapabilityConsentCliOptions({
-      acceptCapabilities: opts.acceptCapabilities,
-      action: "enable",
-    });
-    try {
-      await resolvePluginCapabilityConsent({
-        config: cfg,
-        pluginId: id,
+  const gateway = await resolvePluginLifecycleGateway();
+  const result = gateway
+    ? await gateway<Awaited<ReturnType<typeof setManagedPluginEnabled>>>(
+        "plugins.setEnabled",
+        { pluginId, enabled },
+        consent.onCapabilityConsent,
+      )
+    : await setManagedPluginEnabled({
+        pluginId,
+        enabled,
+        requestCapabilityConsent: opts.acceptCapabilities === true,
         ...consent,
       });
-    } catch (error) {
-      if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
-        throw error;
-      }
-      defaultRuntime.error(error.message);
-      return defaultRuntime.exit(1);
-    }
+  for (const warning of result.warnings ?? []) {
+    defaultRuntime.log(theme.warn(warning));
   }
-
-  const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
-  const { logSlotWarnings } = await loadPluginsCommandHelpers();
-  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
-  let next: OpenClawConfig = enableResult.config;
-  const slotResult = applySlotSelectionForPlugin(next, id);
-  next = slotResult.config;
-  await replaceConfigFile({
-    nextConfig: next,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    // Source/runtime projection must retain the explicitly merged canonical
-    // entry; otherwise compatibility-only nested settings are silently lost.
-    writeOptions: {
-      explicitSetPaths: [["plugins", "entries", enableResult.pluginId]],
-    },
-  });
-  await refreshPluginRegistryAfterConfigMutation({
-    config: next,
-    reason: "policy-changed",
-    invalidateRuntimeCache: false,
-    policyPluginIds: [enableResult.pluginId],
-    logger: {
-      warn: (message) => defaultRuntime.log(theme.warn(message)),
-    },
-  });
-  logSlotWarnings(slotResult.warnings);
-  defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
-}
-
-/** Disable a plugin in config and refresh the registry snapshot for the changed policy. */
-export async function runPluginsDisableCommand(idInput: string): Promise<void> {
-  assertConfigWriteAllowedInCurrentMode();
-  return await withPluginLifecycleLease(
-    {},
-    async () => await runPluginsDisableCommandUnlocked(idInput),
+  defaultRuntime.log(
+    `${enabled ? "Enabled" : "Disabled"} plugin "${result.plugin.id}".${gateway ? "" : " Saved for the next Gateway start."}`,
   );
 }
 
-async function runPluginsDisableCommandUnlocked(idInput: string): Promise<void> {
-  let id = idInput;
+export async function runPluginsReloadCommand(
+  pluginId: string,
+  opts: { json?: boolean; acceptCapabilities?: boolean } = {},
+): Promise<void> {
   assertConfigWriteAllowedInCurrentMode();
-
-  const { normalizePluginId } = await loadPluginsConfigState();
-  const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
-  const { setPluginEnabledInConfig } = await import("./plugins-config.js");
-  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
-  const snapshot = await readConfigFileSnapshot();
-  const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const report = buildPluginRegistrySnapshotReport({ config: cfg });
-  id = normalizePluginId(id);
-  if (!report.plugins.some((plugin) => plugin.id === id)) {
-    return reportMissingPlugin(id);
+  const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
+  const gateway = await resolvePluginLifecycleGateway();
+  if (!gateway) {
+    throw new Error("The Gateway is not running. Start it before reloading a plugin.");
   }
-  const next = setPluginEnabledInConfig(cfg, id, false, {
-    updateChannelConfig: false,
-  });
-  await replaceConfigFile({
-    nextConfig: next,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    // `id` was normalized before discovery; persist that same canonical entry
-    // so alias invocations cannot lose settings during source projection.
-    writeOptions: {
-      explicitSetPaths: [["plugins", "entries", id]],
-    },
-  });
-  await refreshPluginRegistryAfterConfigMutation({
-    config: next,
-    reason: "policy-changed",
-    invalidateRuntimeCache: false,
-    policyPluginIds: [id],
-    logger: {
-      warn: (message) => defaultRuntime.log(theme.warn(message)),
-    },
-  });
-  defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
+  const consent = resolvePluginCapabilityConsentCliOptions({ ...opts, action: "reload" });
+  const result = await gateway<{ runtime: { generation: number }; warnings?: string[] }>(
+    "plugins.reload",
+    { pluginId },
+    consent.onCapabilityConsent,
+  );
+  if (opts.json) {
+    return defaultRuntime.writeJson(result);
+  }
+  for (const warning of result.warnings ?? []) {
+    defaultRuntime.log(theme.warn(warning));
+  }
+  defaultRuntime.log(`Reloaded plugin "${pluginId}" (generation ${result.runtime.generation}).`);
 }
 
 export async function runPluginsInstallAction(
@@ -332,7 +233,6 @@ export async function runPluginsInstallAction(
         raw,
         opts,
         allowInstallPolicyWarningPrompt: true,
-        invalidateRuntimeCache: false,
       });
     },
     { command: "install" },
@@ -435,7 +335,7 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
     buildPluginCompatibilityNotices,
     buildPluginDiagnosticsReport,
     formatPluginCompatibilityNotice,
-  } = await loadPluginsStatus();
+  } = await import("../plugins/status.js");
   const {
     collectStalePluginConfigWarnings,
     isStalePluginAutoRepairBlocked,
@@ -505,7 +405,7 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
             `openclaw plugins inspect ${entry.pluginId ?? "<plugin-id>"}`,
             "edit or remove the config-selected plugin source",
             "openclaw plugins registry --refresh",
-            "openclaw gateway restart --force",
+            `openclaw plugins reload ${entry.pluginId ?? "<plugin-id>"}`,
           ],
         };
       }),
@@ -566,7 +466,7 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
       lines.push("    openclaw plugins inspect " + (diag.pluginId ?? "<plugin-id>"));
       lines.push("    edit or remove the config-selected plugin source");
       lines.push("    openclaw plugins registry --refresh");
-      lines.push("    openclaw gateway restart --force");
+      lines.push("    openclaw plugins reload " + (diag.pluginId ?? "<plugin-id>"));
     }
   }
   if (compatibility.length > 0) {
@@ -902,9 +802,6 @@ function formatPinnedMarketplaceRefreshFailure(payload: MarketplaceRefreshPayloa
   return `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`;
 }
 
-const MARKETPLACE_GATEWAY_RESTART_GUIDANCE =
-  'The running Gateway could not refresh its marketplace catalog. Run "openclaw gateway restart" to apply the current catalog state.';
-
 /** List entries from the configured OpenClaw marketplace feed. */
 export async function runPluginMarketplaceEntriesCommand(
   opts: PluginMarketplaceEntriesOptions,
@@ -967,6 +864,8 @@ export async function runPluginMarketplaceEntriesCommand(
 export async function runPluginMarketplaceRefreshCommand(
   opts: PluginMarketplaceRefreshOptions,
 ): Promise<void> {
+  const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
+  const gateway = await resolvePluginLifecycleGateway();
   const { loadConfiguredHostedOfficialExternalPluginCatalogEntries } =
     await import("../plugins/official-external-plugin-catalog.js");
   const cfg = getRuntimeConfig();
@@ -980,13 +879,20 @@ export async function runPluginMarketplaceRefreshCommand(
   const { clearManagedPluginOfficialCatalogCache } =
     await import("../plugins/management-catalog.js");
   clearManagedPluginOfficialCatalogCache();
-  let gatewayRefreshed = true;
   // Reused snapshots can lose install authority as they age, so their Gateway projection is stale too.
-  if (result.source !== "bundled-fallback") {
-    const { notifyGatewayPluginMetadataChanged } =
-      await import("./plugins-update-gateway-signal.js");
-    gatewayRefreshed = await notifyGatewayPluginMetadataChanged(cfg);
+  const applied =
+    gateway && result.source !== "bundled-fallback"
+      ? await gateway<PluginsRefreshResult>("plugins.refresh", {})
+      : undefined;
+  if (applied && !applied.runtime) {
+    throw new Error("Marketplace refresh did not return a runtime application receipt.");
   }
+  const runtime = applied?.runtime;
+  const runtimeNotice = runtime
+    ? `Marketplace catalog applied in Gateway generation ${runtime.generation}.`
+    : result.source !== "bundled-fallback"
+      ? "Marketplace catalog saved for the next Gateway start."
+      : undefined;
   const payload = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
     feedUrl: opts.feedUrl,
   });
@@ -1004,9 +910,9 @@ export async function runPluginMarketplaceRefreshCommand(
   });
 
   if (opts.json) {
-    defaultRuntime.writeJson(payload);
-    if (!gatewayRefreshed) {
-      defaultRuntime.error(MARKETPLACE_GATEWAY_RESTART_GUIDANCE);
+    defaultRuntime.writeJson({ ...payload, ...(runtime ? { runtime } : {}) });
+    if (runtimeNotice && !runtime) {
+      defaultRuntime.error(runtimeNotice);
     }
     if (failedPinnedRefresh) {
       defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
@@ -1016,8 +922,8 @@ export async function runPluginMarketplaceRefreshCommand(
   }
 
   const lines = formatMarketplaceFeedLines(payload, { includeChecksum: true });
-  if (!gatewayRefreshed) {
-    lines.push("", theme.warn(MARKETPLACE_GATEWAY_RESTART_GUIDANCE));
+  if (runtimeNotice) {
+    lines.push("", runtimeNotice);
   }
   defaultRuntime.log(lines.join("\n"));
   if (failedPinnedRefresh) {
@@ -1032,7 +938,8 @@ export async function runPluginMarketplaceListCommand(
   opts: PluginMarketplaceListOptions,
 ): Promise<void> {
   const { listMarketplacePlugins } = await import("../plugins/marketplace.js");
-  const { createPluginInstallLogger, quietPluginJsonLogger } = await loadPluginsCommandHelpers();
+  const { createPluginInstallLogger, quietPluginJsonLogger } =
+    await import("./plugins-command-helpers.js");
   const result = await listMarketplacePlugins({
     marketplace: source,
     logger: opts.json ? quietPluginJsonLogger : createPluginInstallLogger(),

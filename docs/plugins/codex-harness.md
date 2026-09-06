@@ -162,9 +162,9 @@ If your config uses `plugins.allow`, add `codex` there too:
 }
 ```
 
-Restart the gateway after changing plugin config. If a chat already has a
-session, run `/new` or `/reset` first so the next turn resolves the harness
-from current config.
+After changing OpenClaw plugin config, run `openclaw plugins reload codex`.
+If a chat already has a session, run `/new` or `/reset` first so the next turn
+resolves the harness from current config.
 
 ## Run Codex on a paired device
 
@@ -1498,10 +1498,8 @@ Minimal migrated config:
 ```
 
 Thread app config is computed when OpenClaw establishes a Codex harness
-session or replaces a stale Codex thread binding; it is not recomputed on
-every turn. After changing `codexPlugins`, use `/new`, `/reset`, or restart
-the gateway so future Codex harness sessions start with the updated app
-set.
+session or replaces a stale thread binding. For managed Codex conversations,
+changes to `codexPlugins` take effect on your next message.
 
 For migration eligibility, app inventory, destructive action policy,
 elicitations, and native plugin diagnostics, see
@@ -1690,9 +1688,10 @@ OpenClaw Gateway so old threads are dropped and native hook registrations
 are recreated.
 
 **Codex tool calls create too many short-lived hook processes:** set
-`plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay: false`
-and restart the gateway. This disables only the Codex `PreToolUse` subprocess
-used for OpenClaw loop detection and its no-policy marker. Required
+`plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay: false`,
+then run `openclaw plugins reload codex` and start a fresh chat. This disables
+only the Codex `PreToolUse` subprocess used for OpenClaw loop detection and its
+no-policy marker. Required
 `before_tool_call` and trusted-tool policy relays remain enabled.
 
 **A non-Codex model uses the built-in harness:** expected unless provider

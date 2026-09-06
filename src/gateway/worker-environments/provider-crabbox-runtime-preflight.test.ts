@@ -6,7 +6,7 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../plugin-sdk/test-helpers/import-fresh.js";
-import { resolvePluginModuleExport } from "../../plugins/loader-module-runtime.js";
+import { resolvePluginModuleExport } from "../../plugins/module-export.js";
 import * as support from "./service.test-support.js";
 
 const SETUP_ENV = "OPENCLAW_TEST_REPLAY_SETUP";

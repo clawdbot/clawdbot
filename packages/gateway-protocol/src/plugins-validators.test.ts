@@ -12,6 +12,7 @@ import {
   validatePluginsInstallParams,
   validatePluginsListParams,
   validatePluginsRefreshParams,
+  validatePluginsReloadParams,
   validatePluginsSearchParams,
   validatePluginsSetEnabledParams,
   validatePluginsUninstallParams,
@@ -181,6 +182,71 @@ describe("plugin lifecycle protocol validators", () => {
     expect(validatePluginsUninstallParams({ pluginId: "memory-plus" })).toBe(true);
     expect(validatePluginsUninstallParams({ pluginId: "" })).toBe(false);
     expect(validatePluginsUninstallParams({})).toBe(false);
+  });
+
+  it("keeps source install and explicit reload requests closed", () => {
+    for (const request of [
+      { source: "local", path: "/tmp/plugin", link: true },
+      { source: "bundled", pluginId: "notes" },
+      ...["latest", "1.0.0", "beta"].map((version) => ({
+        source: "official",
+        pluginId: "notes",
+        version,
+        pin: true,
+      })),
+      { source: "npm", spec: "@example/plugin", pin: true },
+      { source: "git", spec: "https://example.com/plugin.git" },
+      { source: "npm-pack", archivePath: "/tmp/plugin.tgz" },
+      { source: "marketplace", marketplace: "example", plugin: "notes" },
+    ]) {
+      expect(validatePluginsInstallParams(request)).toBe(true);
+      expect(
+        validatePluginsInstallParams({ ...request, trustedSourceLinkedOfficialInstall: true }),
+      ).toBe(false);
+      if (request.source !== "npm") {
+        expect(validatePluginsInstallParams({ ...request, expectedPluginId: "notes" })).toBe(false);
+        expect(
+          validatePluginsInstallParams({ ...request, expectedIntegrity: "sha512-fixture" }),
+        ).toBe(false);
+      }
+    }
+    for (const request of [
+      { source: "clawhub", packageName: "notes" },
+      { source: "npm", spec: "@example/plugin" },
+    ]) {
+      expect(
+        validatePluginsInstallParams({
+          ...request,
+          expectedPluginId: "notes",
+          expectedIntegrity: "sha512-fixture",
+        }),
+      ).toBe(true);
+    }
+    expect(
+      validatePluginsInstallParams({
+        source: "official",
+        pluginId: "notes",
+        expectedPluginId: "other",
+      }),
+    ).toBe(false);
+    expect(
+      validatePluginsInstallParams({ source: "official", pluginId: "notes", version: "" }),
+    ).toBe(false);
+    expect(
+      validatePluginsInstallParams({
+        source: "official",
+        pluginId: "notes",
+        installSources: [{ source: "npm", spec: "@untrusted/notes" }],
+      }),
+    ).toBe(false);
+    expect(
+      validatePluginsReloadParams({
+        pluginId: "notes",
+        acknowledgeCapabilities: { reviewToken: "reviewed-artifact" },
+      }),
+    ).toBe(true);
+    expect(validatePluginsReloadParams({})).toBe(false);
+    expect(validatePluginsReloadParams({ pluginId: "notes", unexpected: true })).toBe(false);
   });
 
   it("validates enablement mutations", () => {
