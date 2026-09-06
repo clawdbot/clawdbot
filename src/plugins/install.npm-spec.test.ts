@@ -3092,7 +3092,12 @@ describe("installPluginFromNpmSpec", () => {
         async (argv: string[], options?: { cwd?: string }) => {
           const result = await delegate?.(argv, options);
           if (isManagedNpmInstallCommand(argv)) {
-            const pluginDir = resolveTestPluginPackageDir(npmRoot, packageName);
+            const attemptRoot = options?.cwd;
+            if (!attemptRoot) {
+              throw new Error("Expected the managed npm installation directory");
+            }
+            const pluginDir = path.join(attemptRoot, "node_modules", packageName);
+            expect(fs.existsSync(path.join(pluginDir, "package.json"))).toBe(true);
             const dependencyDir = path.join(pluginDir, "node_modules", "required-runtime");
             fs.rmSync(dependencyDir, { recursive: true, force: true });
             if (payload === "empty") {
@@ -3108,7 +3113,7 @@ describe("installPluginFromNpmSpec", () => {
                 fs.symlinkSync(outsideDir, dependencyDir, "junction");
               }
             } else if (payload === "hoisted") {
-              const hoistedDir = path.join(npmProjectRoot, "node_modules", "required-runtime");
+              const hoistedDir = path.join(attemptRoot, "node_modules", "required-runtime");
               fs.mkdirSync(hoistedDir, { recursive: true });
               fs.writeFileSync(
                 path.join(hoistedDir, "package.json"),
