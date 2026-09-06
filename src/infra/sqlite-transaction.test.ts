@@ -7,6 +7,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getNodeSqliteKysely } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
+  deferSqlitePostCommitPublication,
+  stageSqliteTransactionState,
+  withSqlitePostCommitPublications,
+} from "./sqlite-post-commit.js";
+import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
 } from "./sqlite-transaction.js";
@@ -156,6 +161,123 @@ describe("runSqliteImmediateTransactionSync", () => {
 
     expect(readEntries(db)).toEqual(["inner", "outer"]);
   });
+
+  it("preserves SQLITE_FULL and prevents caught nested failures from committing later writes", () => {
+    const tempDir = tempDirs.make("openclaw-sqlite-full-");
+    const databasePath = path.join(tempDir, "full.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    openDatabases.push(db);
+    db.exec("CREATE TABLE entries (id TEXT PRIMARY KEY, value BLOB); PRAGMA max_page_count=3");
+    let primaryError: unknown;
+    let nestedError: unknown;
+    let continuationError: unknown;
+    let stagedValue = "before";
+    const published: string[] = [];
+    const stateEvents: string[] = [];
+    const stage = (value: string) => {
+      const previous = stagedValue;
+      expect(
+        stageSqliteTransactionState(db, {
+          stage: () => {
+            stagedValue = value;
+          },
+          rollback: () => {
+            stagedValue = previous;
+            stateEvents.push(`rollback:${value}`);
+          },
+          commit: () => {
+            stateEvents.push(`commit:${value}`);
+          },
+        }),
+      ).toBe(true);
+      expect(deferSqlitePostCommitPublication(db, () => published.push(value))).toBe(true);
+    };
+    let outerError: unknown;
+    try {
+      withSqlitePostCommitPublications(db, () =>
+        runSqliteImmediateTransactionSync(db, () => {
+          db.prepare("INSERT INTO entries VALUES ('outer', 'kept only on commit')").run();
+          stage("outer");
+          try {
+            withSqlitePostCommitPublications(db, () =>
+              runSqliteImmediateTransactionSync(db, () => {
+                stage("inner");
+                try {
+                  db.prepare("INSERT INTO entries VALUES ('full', zeroblob(65536))").run();
+                } catch (error) {
+                  primaryError = error;
+                  throw error;
+                }
+              }),
+            );
+          } catch (error) {
+            nestedError = error;
+          }
+          // Even a caller that catches the failure cannot publish or autocommit
+          // a continuation after SQLite has aborted the enclosing transaction.
+          expect(stagedValue).toBe("before");
+          try {
+            db.prepare("INSERT INTO entries VALUES ('continuation', 'must not persist')").run();
+          } catch (error) {
+            continuationError = error;
+          }
+        }),
+      );
+    } catch (error) {
+      outerError = error;
+    }
+    expect(primaryError).toMatchObject({ errcode: 13 });
+    expect(nestedError).toBe(primaryError);
+    expect(outerError).toBe(primaryError);
+    expect(continuationError).toBeDefined();
+    expect(db.isOpen).toBe(false);
+    expect(stagedValue).toBe("before");
+    expect(stateEvents).toEqual(["rollback:inner", "rollback:outer"]);
+    expect(published).toEqual([]);
+    let reuseError: unknown;
+    try {
+      runSqliteImmediateTransactionSync(db, () => undefined);
+    } catch (error) {
+      reuseError = error;
+    }
+    expect(reuseError).toBe(primaryError);
+
+    const reopened = new DatabaseSync(databasePath);
+    openDatabases.push(reopened);
+    expect(readEntries(reopened)).toEqual([]);
+    runSqliteImmediateTransactionSync(reopened, () => {
+      reopened.prepare("INSERT INTO entries VALUES ('recovered', 'ok')").run();
+    });
+    expect(readEntries(reopened)).toEqual(["recovered"]);
+    expect(reopened.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  });
+
+  it.each(["ROLLBACK TO SAVEPOINT", "RELEASE SAVEPOINT"])(
+    "closes the handle when nested %s cleanup fails and preserves the operation error",
+    (failedStep) => {
+      const db = createDatabase();
+      const operationError = new Error("nested operation failed");
+      const exec = db.exec.bind(db);
+      vi.spyOn(db, "exec").mockImplementation((sql) => {
+        if (sql.startsWith(failedStep)) {
+          throw new Error("injected cleanup failure");
+        }
+        exec(sql);
+      });
+      expect(() =>
+        runSqliteImmediateTransactionSync(db, () => {
+          expect(() =>
+            runSqliteImmediateTransactionSync(db, () => {
+              db.prepare("INSERT INTO entries VALUES ('inner', 'uncommitted')").run();
+              throw operationError;
+            }),
+          ).toThrow(operationError);
+        }),
+      ).toThrow(operationError);
+      expect(db.isOpen).toBe(false);
+    },
+  );
 
   it("rejects Promise-returning operations and rolls back their synchronous writes", () => {
     const db = createDatabase();
