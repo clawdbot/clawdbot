@@ -28,12 +28,49 @@ describe("Git execution environment", () => {
     });
   });
 
-  it("preserves an existing noglob option and non-Windows environments", () => {
+  it("keeps noglob as the final Windows option and preserves non-Windows environments", () => {
     expect(gitEnvironment({ MSYS: "noglob winsymlinks:native" }, "win32").MSYS).toBe(
-      "noglob winsymlinks:native",
+      "noglob winsymlinks:native noglob",
+    );
+    expect(gitEnvironment({ CYGWIN: "noglob glob:ignorecase" }, "win32").CYGWIN).toBe(
+      "noglob glob:ignorecase noglob",
+    );
+    expect(gitEnvironment({ MSYS: "winsymlinks:native noglob" }, "win32").MSYS).toBe(
+      "winsymlinks:native noglob",
     );
     expect(gitEnvironment({ MSYS: "winsymlinks:native" }, "linux")).toMatchObject({
       MSYS: "winsymlinks:native",
+    });
+  });
+
+  it("restores noglob when a later MSYS option re-enables globbing", () => {
+    expect(gitEnvironment({ MSYS: "noglob winsymlinks:native glob" }, "win32").MSYS).toBe(
+      "noglob winsymlinks:native glob noglob",
+    );
+  });
+
+  it("preserves inherited MSYS options when callers pass partial overrides", () => {
+    expect(
+      gitEnvironment({ GIT_INDEX_FILE: "snapshot.index" }, "win32", {
+        MSYS: "winsymlinks:nativestrict",
+        CYGWIN: "disable_pcon",
+      }),
+    ).toMatchObject({
+      GIT_INDEX_FILE: "snapshot.index",
+      MSYS: "winsymlinks:nativestrict noglob",
+      CYGWIN: "disable_pcon noglob",
+    });
+  });
+
+  it("honors Windows overrides and removal before adding noglob", () => {
+    expect(
+      gitEnvironment({ msys: "winsymlinks:native", CYGWIN: undefined }, "win32", {
+        MSYS: "winsymlinks:nativestrict",
+        CYGWIN: "disable_pcon",
+      }),
+    ).toMatchObject({
+      MSYS: "winsymlinks:native noglob",
+      CYGWIN: "noglob",
     });
   });
 });

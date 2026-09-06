@@ -10,6 +10,7 @@ import {
   requireGitCommandBuffer,
   requireGitCommandRaw,
 } from "../../infra/git-exec.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -19,7 +20,7 @@ type WorktreeListEntry = {
 };
 
 function withNoGlob(value: string | undefined): string {
-  if (value?.split(/\s+/).includes("noglob")) {
+  if (value?.trim().split(/\s+/).at(-1) === "noglob") {
     return value;
   }
   return value ? `${value} noglob` : "noglob";
@@ -35,15 +36,20 @@ function withNoGlob(value: string | undefined): string {
 export function gitEnvironment(
   env?: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
+  inheritedEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const baseEnv = env ?? process.env;
+  const baseEnv = env ?? inheritedEnv;
+  // Callers may supply only Git-specific overrides. Resolve against the inherited
+  // child environment first so adding noglob cannot discard existing runtime policy.
+  const effectiveWindowsEnv =
+    platform === "win32" ? mergeProcessEnv([inheritedEnv, env], platform) : undefined;
   const windowsNoGlob =
     platform === "win32"
       ? {
           // MSYS2/Cygwin expand braces before Git sees argv. Keep revision
           // expressions such as HEAD^{commit} literal within this Git owner.
-          MSYS: withNoGlob(baseEnv.MSYS),
-          CYGWIN: withNoGlob(baseEnv.CYGWIN),
+          MSYS: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "MSYS", platform)),
+          CYGWIN: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "CYGWIN", platform)),
         }
       : {};
   return {
