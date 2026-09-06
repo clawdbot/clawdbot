@@ -299,6 +299,17 @@ describe("Codex app-server user input bridge", () => {
     });
     const response = bridge.handleRequest({ id: 42, params: requestParams() });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    let accessed = false;
+    const accessorParams = { requestId: 42 };
+    Object.defineProperty(accessorParams, "threadId", {
+      get: () => {
+        accessed = true;
+        return "thread-1";
+      },
+    });
+    bridge.handleNotification({ method: "serverRequest/resolved", params: accessorParams });
+    expect(accessed).toBe(false);
+
     bridge.handleNotification({
       method: "serverRequest/resolved",
       params: { threadId: "thread-1", requestId: 42 },

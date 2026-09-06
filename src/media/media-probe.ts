@@ -152,12 +152,11 @@ function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
 }
 
 function isMissingFdProtocolError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const stderr = (error as { stderr?: unknown }).stderr;
+  const stderr = readRecord(error)?.stderr;
   const message = typeof stderr === "string" ? stderr : error instanceof Error ? error.message : "";
-  return /(?:fd:.*protocol not found|protocol not found.*fd|unrecognized option ['"]?fd|option fd not found)/is.test(
+  // ffprobe < 6.0 (no fd: protocol, e.g. 4.4 and 5.1) rejects `-fd` with
+  // "Failed to set value '0' for option 'fd': Option not found".
+  return /(?:fd:.*protocol not found|protocol not found.*fd|unrecognized option ['"]?fd|option ['"]?fd\b.*not found)/is.test(
     message,
   );
 }

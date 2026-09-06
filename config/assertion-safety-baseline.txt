@@ -3231,7 +3231,6 @@ src/media/fetch.ts	2
 src/media/input-files.ts	1
 src/media/local-media-access.ts	1
 src/media/media-facts.ts	16
-src/media/media-probe.ts	1
 src/media/playback-transcode.ts	1
 src/media/runtime-prompt-image-provenance.ts	1
 src/media/store.remote.runtime.ts	1
