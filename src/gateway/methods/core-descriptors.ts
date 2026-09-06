@@ -219,6 +219,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.curator.unpin", "skills", "operator.admin", "<=2026.7"],
   ["skills.curator.restore", "skills", "operator.admin", "<=2026.7"],
   ["skills.proposals.list", "skills", "operator.read", "<=2026.7"],
+  ["skills.workshop.read", "skills", "operator.read", "2026.9"],
   ["skills.proposals.inspect", "skills", "operator.read", "<=2026.7"],
   ["skills.proposals.historyStatus", "skills", "operator.read", "<=2026.7"],
   ["skills.proposals.historyScan", "skills", "operator.admin", "<=2026.7"],

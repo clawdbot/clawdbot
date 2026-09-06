@@ -1,5 +1,5 @@
-// Empty-state renderers for the Workshop board: filtered-queue detail pane
-// and the whole-page no-proposals panel with the self-learning pitch.
+// Empty-state renderers for the Workshop: the Suggestions and History detail
+// panes, plus the whole-page no-proposals panel with the self-learning pitch.
 import { html } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
@@ -8,8 +8,12 @@ import { renderSelfLearningPitch, type SkillWorkshopSelfLearning } from "./self-
 
 type SkillWorkshopEmptyIcon = "search" | "clock" | "check" | "x" | "shield" | "refresh";
 
-export function renderBoardEmptyDetail(query: string, statusFilter: SkillWorkshopStatusFilter) {
-  const empty = resolveBoardEmptyState(query, statusFilter);
+export function renderSkillWorkshopEmptyDetail(params: {
+  section: "suggestions" | "history";
+  query: string;
+  statusFilter: SkillWorkshopStatusFilter;
+}) {
+  const empty = resolveEmptyState(params);
   return html`
     <div class="sw-detail sw-detail--empty">
       <div class="sw-filter-empty">
@@ -21,60 +25,63 @@ export function renderBoardEmptyDetail(query: string, statusFilter: SkillWorksho
   `;
 }
 
-function resolveBoardEmptyState(
-  query: string,
-  statusFilter: SkillWorkshopStatusFilter,
-): {
+function resolveEmptyState(params: {
+  section: "suggestions" | "history";
+  query: string;
+  statusFilter: SkillWorkshopStatusFilter;
+}): {
   icon: SkillWorkshopEmptyIcon;
   title: string;
   body: string;
 } {
-  if (query.trim()) {
+  if (params.query.trim()) {
     return {
       icon: "search",
       title: t("skillWorkshop.empty.searchTitle"),
       body: t("skillWorkshop.empty.searchBody"),
     };
   }
+  if (params.section === "suggestions") {
+    return {
+      icon: "clock",
+      title: t("skillWorkshop.empty.pendingTitle"),
+      body: t("skillWorkshop.empty.pendingBody"),
+    };
+  }
 
-  switch (statusFilter) {
-    case "pending":
-      return {
-        icon: "clock",
-        title: t("skillWorkshop.empty.pendingTitle"),
-        body: t("skillWorkshop.empty.pendingBody"),
-      };
+  switch (params.statusFilter) {
     case "applied":
       return {
         icon: "check",
-        title: t("skillWorkshop.empty.appliedTitle"),
-        body: t("skillWorkshop.empty.appliedBody"),
+        title: t("skillWorkshop.records.emptyAppliedTitle"),
+        body: t("skillWorkshop.records.emptyAppliedBody"),
       };
     case "rejected":
       return {
         icon: "x",
-        title: t("skillWorkshop.empty.rejectedTitle"),
-        body: t("skillWorkshop.empty.rejectedBody"),
+        title: t("skillWorkshop.records.emptyRejectedTitle"),
+        body: t("skillWorkshop.records.emptyRejectedBody"),
       };
     case "quarantined":
       return {
         icon: "shield",
-        title: t("skillWorkshop.empty.quarantinedTitle"),
-        body: t("skillWorkshop.empty.quarantinedBody"),
+        title: t("skillWorkshop.records.emptyQuarantinedTitle"),
+        body: t("skillWorkshop.records.emptyQuarantinedBody"),
       };
     case "stale":
       return {
         icon: "refresh",
-        title: t("skillWorkshop.empty.staleTitle"),
-        body: t("skillWorkshop.empty.staleBody"),
+        title: t("skillWorkshop.records.emptyStaleTitle"),
+        body: t("skillWorkshop.records.emptyStaleBody"),
       };
     case "all":
+    case "pending":
       break;
   }
   return {
-    icon: "search",
-    title: t("skillWorkshop.empty.allTitle"),
-    body: t("skillWorkshop.empty.allBody"),
+    icon: "clock",
+    title: t("skillWorkshop.records.emptyTitle"),
+    body: t("skillWorkshop.records.emptyBody"),
   };
 }
 

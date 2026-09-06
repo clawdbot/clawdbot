@@ -2,6 +2,8 @@ import type {
   SkillWorkshopAction,
   SkillWorkshopActionNotice,
   SkillWorkshopAppliedDiffMode,
+  SkillWorkshopInstalledSkill,
+  SkillWorkshopInstalledSelection,
   SkillWorkshopMode,
   SkillWorkshopProposal,
   SkillWorkshopStatusFilter,
@@ -45,6 +47,8 @@ export type SkillWorkshopState = {
   skillWorkshopError: string | null;
   skillWorkshopInspectingKey: string | null;
   skillWorkshopProposals: SkillWorkshopProposal[];
+  skillWorkshopInstalledSkills: SkillWorkshopInstalledSkill[];
+  skillWorkshopInstalledSelection: SkillWorkshopInstalledSelection;
   skillWorkshopSelectedKey: string | null;
   skillWorkshopAppliedDiffMode: SkillWorkshopAppliedDiffMode;
   skillWorkshopActionBusy: { key: string; action: SkillWorkshopAction } | null;
@@ -69,6 +73,8 @@ export type SkillWorkshopRouteData = Pick<
   | "skillWorkshopError"
   | "skillWorkshopInspectingKey"
   | "skillWorkshopProposals"
+  | "skillWorkshopInstalledSkills"
+  | "skillWorkshopInstalledSelection"
   | "skillWorkshopSelectedKey"
   | "skillWorkshopActionBusy"
   | "skillWorkshopActionNotice"
@@ -85,6 +91,8 @@ export function createSkillWorkshopState(data?: SkillWorkshopRouteData): SkillWo
     skillWorkshopError: data?.skillWorkshopError ?? null,
     skillWorkshopInspectingKey: data?.skillWorkshopInspectingKey ?? null,
     skillWorkshopProposals: data?.skillWorkshopProposals ?? [],
+    skillWorkshopInstalledSkills: data?.skillWorkshopInstalledSkills ?? [],
+    skillWorkshopInstalledSelection: data?.skillWorkshopInstalledSelection ?? { status: "idle" },
     skillWorkshopSelectedKey: data?.skillWorkshopSelectedKey ?? null,
     skillWorkshopAppliedDiffMode: "changes",
     skillWorkshopActionBusy: data?.skillWorkshopActionBusy ?? null,
@@ -92,12 +100,12 @@ export function createSkillWorkshopState(data?: SkillWorkshopRouteData): SkillWo
     skillWorkshopActionNoticeTimer: null,
     skillWorkshopRevisionKey: data?.skillWorkshopRevisionKey ?? null,
     skillWorkshopRevisionDraft: data?.skillWorkshopRevisionDraft ?? "",
-    skillWorkshopStatusFilter: "pending",
+    skillWorkshopStatusFilter: "all",
     skillWorkshopQuery: "",
     skillWorkshopFilePreviewKey: null,
     skillWorkshopFilePreviewQuery: "",
     skillWorkshopQueueWidth: 360,
-    skillWorkshopMode: "today",
+    skillWorkshopMode: "skills",
     skillWorkshopHistoryScan:
       data?.skillWorkshopHistoryScan ?? createSkillWorkshopHistoryScanState(),
   };
@@ -111,6 +119,8 @@ export function skillWorkshopRouteData(state: SkillWorkshopState): SkillWorkshop
     skillWorkshopError: state.skillWorkshopError,
     skillWorkshopInspectingKey: state.skillWorkshopInspectingKey,
     skillWorkshopProposals: state.skillWorkshopProposals,
+    skillWorkshopInstalledSkills: state.skillWorkshopInstalledSkills,
+    skillWorkshopInstalledSelection: state.skillWorkshopInstalledSelection,
     skillWorkshopSelectedKey: state.skillWorkshopSelectedKey,
     skillWorkshopActionBusy: state.skillWorkshopActionBusy,
     skillWorkshopActionNotice: state.skillWorkshopActionNotice,

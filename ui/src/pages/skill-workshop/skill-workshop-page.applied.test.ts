@@ -38,7 +38,7 @@ function createContext(request: ReturnType<typeof vi.fn>): ApplicationContext {
       current: { assistantIdentity: { name: "OpenClaw" } },
       subscribe,
     },
-    agents: { state: { agentsList: null } },
+    agents: { state: { agentsList: null }, subscribe },
     agentSelection: {
       state: { selectedId: "research" },
       subscribe,
@@ -82,7 +82,12 @@ function appliedProposals(): SkillWorkshopProposal[] {
 function inspectRequest() {
   return vi.fn(async (method: string, params?: unknown) => {
     if (method !== "skills.proposals.inspect") {
-      return {};
+      return {
+        schema: "openclaw.skill-workshop.proposals-manifest.v1",
+        updatedAt: new Date(4).toISOString(),
+        proposals: [],
+        installedSkills: [],
+      };
     }
     expect(params).toEqual({ agentId: "research", proposalId: "proposal-1" });
     return {
@@ -125,7 +130,7 @@ async function mountAppliedPage(
   if (!page.state) {
     throw new Error("Expected Skill Workshop state");
   }
-  page.state.skillWorkshopMode = "board";
+  page.state.skillWorkshopMode = "history";
   page.state.skillWorkshopStatusFilter = "applied";
   page.requestUpdate();
   await page.updateComplete;
@@ -147,28 +152,6 @@ afterEach(() => {
 });
 
 describe("Skill Workshop applied history", () => {
-  it.each(["summary", "skill"])("opens applied history from the Today %s link", async (target) => {
-    const proposals = appliedProposals();
-    proposals.push({ ...proposals[3]!, key: "pending", slug: "pending-skill", status: "pending" });
-    const page = await mountAppliedPage(inspectRequest(), proposals);
-    page.state!.skillWorkshopMode = "today";
-    page.state!.skillWorkshopStatusFilter = "pending";
-    page.state!.skillWorkshopQuery = "pending-skill";
-    page.state!.skillWorkshopSelectedKey = "pending";
-    page.requestUpdate();
-    await page.updateComplete;
-
-    expect.soft(page.querySelectorAll(".sw-today__applied-row")).toHaveLength(1);
-    const selector = target === "skill" ? ".sw-today__applied-row" : ".sw-today__link--muted";
-    page.querySelector<HTMLButtonElement>(selector)?.click();
-    await page.updateComplete;
-
-    expect(page.state?.skillWorkshopMode).toBe("board");
-    expect(page.state?.skillWorkshopStatusFilter).toBe("applied");
-    expect(page.state?.skillWorkshopQuery).toBe("");
-    expect(page.querySelector(".sw-row")?.textContent).toContain("release-sanity");
-  });
-
   it("renders skill documents as sanitized Markdown", async () => {
     const proposals = appliedProposals();
     proposals[3]!.body = [
@@ -207,11 +190,11 @@ describe("Skill Workshop applied history", () => {
 
     expect(page.querySelectorAll(".sw-row")).toHaveLength(1);
     expect(page.querySelector(".sw-row")?.textContent).toContain("4 revisions");
-    // The Applied tab counts grouped skills, matching the one-row-per-skill list.
+    // The historical filter counts records even when the list groups their revisions.
     const appliedFilter = [...page.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Applied"),
     );
-    expect(appliedFilter?.querySelector(".settings-count")?.textContent).toBe("1");
+    expect(appliedFilter?.querySelector(".settings-count")?.textContent).toBe("4");
     await vi.waitFor(() => expect(historyItems(page)).toHaveLength(4), { interval: 1 });
     const history = historyItems(page);
     expect(history[0]?.textContent).toContain("Update");

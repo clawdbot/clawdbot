@@ -114,6 +114,8 @@ export const AgentSkillProtocolSchemas = {
   SkillsCuratorStatusResult: agentsModelsSkills.SkillsCuratorStatusResultSchema,
   SkillsProposalsListParams: agentsModelsSkills.SkillsProposalsListParamsSchema,
   SkillsProposalsListResult: agentsModelsSkills.SkillsProposalsListResultSchema,
+  SkillsWorkshopReadParams: agentsModelsSkills.SkillsWorkshopReadParamsSchema,
+  SkillsWorkshopReadResult: agentsModelsSkills.SkillsWorkshopReadResultSchema,
   SkillsProposalEvaluateParams: agentsModelsSkills.SkillsProposalEvaluateParamsSchema,
   SkillsProposalEvaluateResult: agentsModelsSkills.SkillsProposalEvaluateResultSchema,
   SkillsProposalEventsListParams: agentsModelsSkills.SkillsProposalEventsListParamsSchema,

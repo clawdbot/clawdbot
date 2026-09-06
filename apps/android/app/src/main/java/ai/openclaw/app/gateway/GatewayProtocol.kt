@@ -658,6 +658,7 @@ enum class GatewayMethod(
   SkillsCuratorUnpin("skills.curator.unpin"),
   SkillsCuratorRestore("skills.curator.restore"),
   SkillsProposalsList("skills.proposals.list"),
+  SkillsWorkshopRead("skills.workshop.read"),
   SkillsProposalsInspect("skills.proposals.inspect"),
   SkillsProposalsHistoryStatus("skills.proposals.historyStatus"),
   SkillsProposalsHistoryScan("skills.proposals.historyScan"),

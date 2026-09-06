@@ -120,6 +120,7 @@ describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
           methodResponses: {
             "skills.proposals.list": {
               schema: "openclaw.skill-workshop.proposals-manifest.v1",
+              installedSkills: [],
               updatedAt: ISO_NOW,
               proposals: [
                 {
@@ -143,6 +144,7 @@ describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
           },
         });
         await page.goto(`${server.baseUrl}skills/workshop`);
+        await page.locator("#skill-workshop-mode-tab-suggestions").click();
 
         const evaluate = page.getByRole("button", { name: /Evaluate/ });
         await expect.poll(() => evaluate.isVisible()).toBe(true);

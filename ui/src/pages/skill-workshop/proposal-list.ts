@@ -6,20 +6,25 @@ import type {
 } from "../../lib/skill-workshop/index.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
 
-export function renderSkillWorkshopProposalList(
-  props: SkillWorkshopProps,
-  groups: Array<{ label: string; items: SkillWorkshopProposal[] }>,
-  selected: SkillWorkshopProposal | undefined,
-  appliedSkills: SkillWorkshopAppliedSkill[],
-  emptyText: string,
-) {
+export function renderSkillWorkshopProposalList(params: {
+  props: SkillWorkshopProps;
+  groups: Array<{ label: string; items: SkillWorkshopProposal[] }>;
+  selected: SkillWorkshopProposal | undefined;
+  appliedSkills: SkillWorkshopAppliedSkill[];
+  emptyText: string;
+  searchLabel: string;
+  searchPlaceholder: string;
+}) {
+  const { props, groups, selected } = params;
   const total = groups.reduce((sum, group) => sum + group.items.length, 0);
-  const appliedSkillsBySlug = new Map(appliedSkills.map((skill) => [skill.slug, skill]));
+  const appliedSkillsBySlug = new Map(params.appliedSkills.map((skill) => [skill.slug, skill]));
   return html`
-    <aside class="sw-queue">
+    <aside class="sw-queue" aria-label=${params.searchLabel}>
       <div class="sw-queue__search">
         <input
-          placeholder=${t("skillWorkshop.queue.search")}
+          type="search"
+          aria-label=${params.searchLabel}
+          placeholder=${params.searchPlaceholder}
           .value=${props.query}
           @input=${(event: Event) =>
             // SAFETY: handler is bound on the <input> itself, so currentTarget is that element.
@@ -29,7 +34,7 @@ export function renderSkillWorkshopProposalList(
       <div class="sw-queue__body">
         ${
           total === 0
-            ? html`<div class="sw-queue__empty">${emptyText}</div>`
+            ? html`<div class="sw-queue__empty">${params.emptyText}</div>`
             : groups.map(
                 (group) => html`
                   <div class="sw-queue__group">

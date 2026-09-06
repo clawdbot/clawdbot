@@ -44,6 +44,7 @@ export function buildSkillWorkshopMocks(baseTime: number) {
       schema: "openclaw.skill-workshop.proposals-manifest.v1",
       updatedAt: new Date(baseTime - hour).toISOString(),
       proposals,
+      installedSkills: [],
     },
     inspect: {
       cases: proposals.map((proposal) => ({

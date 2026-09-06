@@ -92,6 +92,23 @@ The following lifecycle applies to Workshop proposals:
   complete new one.
 - **Consistent surfaces:** chat, CLI, and Gateway all call the same service.
 
+## Review in the Control UI
+
+Open **Plugins → Workshop** and select the agent whose skills you want to inspect.
+
+- **Skills** opens by default and lists the skills currently installed in that
+  agent's Workshop directory. Select a skill to read its current instructions,
+  including edits made by collection review.
+- **Suggestions** contains pending proposals that you can evaluate, revise,
+  apply, or reject.
+- **History** contains past applied, rejected, quarantined, and stale proposals.
+  These are retained draft records, and their count is separate from the installed
+  skill count. Applied revisions retain their comparisons and supporting files.
+
+Removing an installed skill does not remove its proposal history. Reading a
+historical draft does not restore or reinstall it. Handwritten and externally
+installed skills remain on their owning skills surfaces.
+
 ## Lifecycle
 
 ```text
@@ -532,6 +549,7 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | Method                             | Scope            |
 | ---------------------------------- | ---------------- |
 | `skills.proposals.list`            | `operator.read`  |
+| `skills.workshop.read`             | `operator.read`  |
 | `skills.proposals.inspect`         | `operator.read`  |
 | `skills.proposals.historyStatus`   | `operator.read`  |
 | `skills.proposals.historyScan`     | `operator.admin` |
@@ -546,6 +564,15 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.curator.pin`               | `operator.admin` |
 | `skills.curator.unpin`             | `operator.admin` |
 | `skills.curator.restore`           | `operator.admin` |
+
+`skills.proposals.list` includes `installedSkills`, the current Workshop inventory
+for the selected agent. Each entry contains `name`, `skillKey`, and `description`.
+The separate `proposals` array remains the proposal history and pending queue.
+
+`skills.workshop.read` accepts `name` and optional `agentId`. It returns the
+current installed skill's `name`, `skillKey`, `description`, and complete `content`.
+An unknown agent or a skill outside that agent's Workshop inventory returns an
+error. It never reads a retained proposal as a substitute for a missing skill.
 
 `skills.curator.status` reports live skill usage recorded from trusted
 `skill.used` events, retained pre-cron collection review records, and per-workspace

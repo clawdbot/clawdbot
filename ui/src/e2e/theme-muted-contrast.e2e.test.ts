@@ -396,7 +396,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps the actual Skill Workshop Today view within a 390px mobile viewport", async () => {
+  it("keeps the actual Skill Workshop Suggestions view within a 390px mobile viewport", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -438,6 +438,7 @@ suite.define(() => {
             "skills.proposals.list": {
               proposals: [proposal],
               schema: "openclaw.skill-workshop.proposals-manifest.v1",
+              installedSkills: [],
               updatedAt,
             },
           },
@@ -447,11 +448,11 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
         await gateway.waitForRequest("skills.proposals.list");
 
-        const todayTab = page.locator("#skill-workshop-mode-tab-today");
+        const todayTab = page.locator("#skill-workshop-mode-tab-suggestions");
         await todayTab.waitFor({ state: "visible" });
         await todayTab.click();
 
-        const today = page.locator(".sw-today");
+        const today = page.locator(".sw-triage");
         await today.waitFor({ state: "visible" });
         const rendered = await today.evaluate((element) => {
           const styles = getComputedStyle(element);
@@ -479,13 +480,13 @@ suite.define(() => {
             fullPage: true,
             path: path.join(
               path.join(suite.artifactDir, "theme-muted-contrast"),
-              "skill-workshop-today-mobile.png",
+              "skill-workshop-suggestions-mobile.png",
             ),
           });
           await writeFile(
             path.join(
               path.join(suite.artifactDir, "theme-muted-contrast"),
-              "skill-workshop-today-mobile.json",
+              "skill-workshop-suggestions-mobile.json",
             ),
             `${JSON.stringify(rendered, null, 2)}\n`,
           );

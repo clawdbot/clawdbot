@@ -464,7 +464,7 @@
       "text": "OpenClaw"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/skill-workshop/view.ts",

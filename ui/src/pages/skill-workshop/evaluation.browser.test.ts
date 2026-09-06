@@ -100,6 +100,11 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     error: null,
     inspectingKey: null,
     proposals: [proposal],
+    installedSkills: [],
+    installedSelection: { status: "idle" },
+    onSelectInstalled: vi.fn(),
+    onRetryInstalled: vi.fn(),
+    onShowHistory: vi.fn(),
     selectedKey: proposal.key,
     appliedDiffMode: "changes",
     statusFilter: "pending",
@@ -143,49 +148,32 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
 }
 
 describe("Skill Workshop evaluation results (browser)", () => {
-  it.each(["board", "today"] as const)(
-    "keeps embedded images within the %s proposal card",
-    async (mode) => {
-      const canvas = document.createElement("canvas");
-      canvas.width = 1600;
-      canvas.height = 20;
-      const container = document.createElement("div");
-      container.style.width = mode === "today" ? "390px" : "800px";
-      const props = propsFor(mode);
-      props.proposals = [{ ...proposal, body: `![Diagram](${canvas.toDataURL()})` }];
-      document.body.append(container);
-      try {
-        render(renderSkillWorkshop(props), container);
-        const disclosure = container.querySelector<HTMLDetailsElement>(".sw-today__body");
-        if (mode === "today") {
-          expect(disclosure?.open).toBe(false);
-          disclosure!.querySelector("summary")!.click();
-          expect(disclosure?.open).toBe(true);
-        }
-        const image = container.querySelector<HTMLImageElement>(".sidebar-markdown img")!;
-        await vi.waitFor(() => expect(image.complete).toBe(true));
-        expect(image.naturalWidth).toBe(1600);
-        const card = container
-          .querySelector(mode === "today" ? ".sw-today__hero" : ".sw-body-card")!
-          .getBoundingClientRect();
-        expect(image.getBoundingClientRect().right).toBeLessThanOrEqual(card.right);
-        if (mode === "today") {
-          expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
-          disclosure!.querySelector("summary")!.click();
-          expect(disclosure?.open).toBe(false);
-        }
-      } finally {
-        render(nothing, container);
-        container.remove();
-      }
-    },
-  );
+  it.each([800, 390])("keeps embedded images within the suggestion card at %spx", async (width) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1600;
+    canvas.height = 20;
+    const container = document.createElement("div");
+    container.style.width = `${width}px`;
+    const props = propsFor("suggestions");
+    props.proposals = [{ ...proposal, body: `![Diagram](${canvas.toDataURL()})` }];
+    document.body.append(container);
+    try {
+      render(renderSkillWorkshop(props), container);
+      const image = container.querySelector<HTMLImageElement>(".sidebar-markdown img")!;
+      await vi.waitFor(() => expect(image.complete).toBe(true));
+      expect(image.naturalWidth).toBe(1600);
+      const card = container.querySelector(".sw-body-card")!.getBoundingClientRect();
+      expect(image.getBoundingClientRect().right).toBeLessThanOrEqual(card.right);
+      expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
 
   it.each([
-    ["board", "apply", ".sw-action-bar .sw-btn--primary", "onApply"],
-    ["board", "reject", ".sw-action-bar .sw-btn--danger", "onReject"],
-    ["today", "apply", ".sw-today__big--primary", "onApply"],
-    ["today", "reject", ".sw-today__big--skip", "onReject"],
+    ["suggestions", "apply", ".sw-action-bar .sw-btn--primary", "onApply"],
+    ["suggestions", "reject", ".sw-action-bar .sw-btn--danger", "onReject"],
   ] as const)(
     "captures the rendered revision when %s %s is chosen",
     async (mode, _action, selector, callbackName) => {
@@ -213,14 +201,12 @@ describe("Skill Workshop evaluation results (browser)", () => {
     },
   );
 
-  it.each(["board", "today"] as const)(
-    "renders attributed completed, error, and block results with an Evaluate command in %s",
-    async (mode) => {
+  it.each([800, 390])(
+    "renders attributed evaluator results and an Evaluate command at %spx",
+    async (width) => {
       const container = document.createElement("div");
-      const props = propsFor(mode);
-      if (mode === "today") {
-        container.style.width = "390px";
-      }
+      const props = propsFor("suggestions");
+      container.style.width = `${width}px`;
       document.body.append(container);
 
       try {
@@ -255,9 +241,7 @@ describe("Skill Workshop evaluation results (browser)", () => {
         expect(text).toContain("Policy checks passed.");
         expect(text).toContain("Revise");
         expect(text).toContain("Clarify the activation trigger.");
-        if (mode === "today") {
-          expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
-        }
+        expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
       } finally {
         render(nothing, container);
         container.remove();

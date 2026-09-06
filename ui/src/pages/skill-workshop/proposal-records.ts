@@ -1,4 +1,6 @@
+import type { SkillsProposalsListResultSchema } from "@openclaw/gateway-protocol";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import type { Static } from "typebox";
 import { formatBytes } from "../../lib/agents/display.ts";
 import type {
   SkillWorkshopEvaluation,
@@ -8,26 +10,8 @@ import type {
 
 type SkillProposalStatus = SkillWorkshopProposalStatus;
 type SkillProposalKind = SkillWorkshopProposal["kind"];
-type SkillProposalScanState = "pending" | "clean" | "failed" | "quarantined";
-
-type SkillProposalManifestEntry = {
-  id: string;
-  kind: SkillProposalKind;
-  status: SkillProposalStatus;
-  title: string;
-  description: string;
-  skillName: string;
-  skillKey: string;
-  createdAt: string;
-  updatedAt: string;
-  scanState: SkillProposalScanState;
-};
-
-export type SkillProposalManifest = {
-  schema: "openclaw.skill-workshop.proposals-manifest.v1";
-  updatedAt: string;
-  proposals: SkillProposalManifestEntry[];
-};
+export type SkillProposalManifest = Static<typeof SkillsProposalsListResultSchema>;
+type SkillProposalManifestEntry = SkillProposalManifest["proposals"][number];
 
 type SkillProposalSupportFileRecord = {
   path: string;

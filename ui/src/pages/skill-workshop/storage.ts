@@ -5,9 +5,10 @@ const SKILL_WORKSHOP_MODE_KEY = "openclaw:control-ui:skill-workshop-mode:v1";
 
 export function loadSkillWorkshopMode(): SkillWorkshopMode {
   try {
-    return getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_MODE_KEY) === "board" ? "board" : "today";
+    const mode = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_MODE_KEY);
+    return mode === "suggestions" || mode === "history" ? mode : "skills";
   } catch {
-    return "today";
+    return "skills";
   }
 }
 

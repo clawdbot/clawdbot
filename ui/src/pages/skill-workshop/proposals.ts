@@ -12,8 +12,11 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import {
+  filterSkillWorkshopProposals,
+  filterWorkshopSection,
   findSkillWorkshopAppliedPredecessor,
   type SkillWorkshopAction,
+  type SkillWorkshopInstalledSkill,
   type SkillWorkshopProposal,
   type SkillWorkshopProposalDecision,
   type SkillWorkshopProposalStatus,
@@ -47,10 +50,10 @@ function skillWorkshopAgentParams(context: SkillWorkshopContext): { agentId: str
   const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
   const selectedAgentId = context.agentSelection.state.selectedId;
   return {
-    agentId: sessionAgentId
-      ? normalizeAgentId(sessionAgentId)
-      : selectedAgentId
-        ? normalizeAgentId(selectedAgentId)
+    agentId: selectedAgentId
+      ? normalizeAgentId(selectedAgentId)
+      : sessionAgentId
+        ? normalizeAgentId(sessionAgentId)
         : resolveUiSelectedGlobalAgentId(snapshot),
   };
 }
@@ -72,6 +75,8 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
   state.skillWorkshopAgentId = agentId;
   state.skillWorkshopLoaded = false;
   state.skillWorkshopProposals = [];
+  state.skillWorkshopInstalledSkills = [];
+  state.skillWorkshopInstalledSelection = { status: "idle" };
   state.skillWorkshopSelectedKey = null;
   state.skillWorkshopInspectingKey = null;
   state.skillWorkshopRevisionKey = null;
@@ -134,23 +139,54 @@ function showActionNotice(
 export function countSkillWorkshopProposals(
   proposals: SkillWorkshopProposal[],
 ): Record<"all" | SkillWorkshopProposalStatus, number> {
-  // Applied renders one row per skill, so its tab count is grouped skills;
-  // every other status stays a per-proposal count.
-  const appliedSkills = new Set<string>();
-  const counts = proposals.reduce(
+  return proposals.reduce(
     (accumulated, proposal) => {
       accumulated.all += 1;
-      if (proposal.status === "applied") {
-        appliedSkills.add(proposal.slug);
-      } else {
-        accumulated[proposal.status] += 1;
-      }
+      accumulated[proposal.status] += 1;
       return accumulated;
     },
     { all: 0, pending: 0, applied: 0, rejected: 0, quarantined: 0, stale: 0 },
   );
-  counts.applied = appliedSkills.size;
-  return counts;
+}
+
+export async function selectSkillWorkshopInstalledSkill(
+  state: SkillWorkshopState,
+  context: SkillWorkshopContext,
+  name: string,
+): Promise<void> {
+  const { client, phase } = context.gateway.snapshot;
+  const agentId = loadedSkillWorkshopAgentParams(state, context).agentId;
+  if (!client || phase !== "connected") {
+    return;
+  }
+  const selection = { status: "loading", name } as const;
+  state.skillWorkshopInstalledSelection = selection;
+  const isCurrent = () =>
+    state.skillWorkshopInstalledSelection === selection &&
+    state.skillWorkshopAgentId === agentId &&
+    skillWorkshopAgentParams(context).agentId === agentId;
+  try {
+    const result = await client.request<SkillWorkshopInstalledSkill & { content: string }>(
+      "skills.workshop.read",
+      { agentId, name },
+    );
+    if (isCurrent()) {
+      state.skillWorkshopInstalledSelection = { status: "ready", name, content: result.content };
+      state.skillWorkshopInstalledSkills = state.skillWorkshopInstalledSkills.map((skill) =>
+        skill.name === name
+          ? { name: result.name, skillKey: result.skillKey, description: result.description }
+          : skill,
+      );
+    }
+  } catch (error) {
+    if (isCurrent()) {
+      state.skillWorkshopInstalledSelection = {
+        status: "error",
+        name,
+        error: formatUiError(error),
+      };
+    }
+  }
 }
 
 export async function loadSkillWorkshopProposals(
@@ -189,9 +225,39 @@ export async function loadSkillWorkshopProposals(
       .toSorted((a, b) => parseDateMs(b.updatedAt) - parseDateMs(a.updatedAt))
       .map((entry) => proposalFromManifest(entry, previousByKey.get(entry.id)));
     state.skillWorkshopProposals = proposals;
+    state.skillWorkshopInstalledSkills = result.installedSkills;
     state.skillWorkshopLoaded = true;
-    if (!proposals.some((proposal) => proposal.key === state.skillWorkshopSelectedKey)) {
-      state.skillWorkshopSelectedKey = proposals[0]?.key ?? null;
+    if (state.skillWorkshopMode === "skills") {
+      const selection = state.skillWorkshopInstalledSelection;
+      const selectedSkill =
+        result.installedSkills.find(
+          (skill) => selection.status !== "idle" && skill.name === selection.name,
+        ) ?? result.installedSkills[0];
+      if (selectedSkill) {
+        await selectSkillWorkshopInstalledSkill(state, context, selectedSkill.name);
+      } else {
+        state.skillWorkshopInstalledSelection = { status: "idle" };
+      }
+      return;
+    }
+    const visibleProposals = filterSkillWorkshopProposals(
+      filterWorkshopSection(proposals, state.skillWorkshopMode),
+      state.skillWorkshopStatusFilter,
+      state.skillWorkshopQuery,
+    );
+    const selectedProposal = proposals.find(
+      (proposal) => proposal.key === state.skillWorkshopSelectedKey,
+    );
+    if (
+      !visibleProposals.some(
+        (proposal) =>
+          proposal.key === selectedProposal?.key ||
+          (state.skillWorkshopStatusFilter === "applied" &&
+            selectedProposal?.status === "applied" &&
+            proposal.slug === selectedProposal.slug),
+      )
+    ) {
+      state.skillWorkshopSelectedKey = visibleProposals[0]?.key ?? null;
       // Only a refresh that actually reassigns the pane owns the selection
       // fence; otherwise a background reload would silence an in-flight click.
       if (state.skillWorkshopSelectedKey) {
@@ -212,7 +278,9 @@ export async function loadSkillWorkshopProposals(
       }
     }
   } catch (err) {
-    state.skillWorkshopError = formatUiError(err);
+    if (skillWorkshopAgentParams(context).agentId === requestAgentId) {
+      state.skillWorkshopError = formatUiError(err);
+    }
   } finally {
     state.skillWorkshopLoading = false;
     if (skillWorkshopAgentParams(context).agentId !== requestAgentId) {
