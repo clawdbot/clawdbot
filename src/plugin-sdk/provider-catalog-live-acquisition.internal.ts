@@ -84,7 +84,9 @@ function readDefaultLiveModelCatalogRows(body: unknown): readonly unknown[] {
   if (Array.isArray(body)) {
     return body;
   }
+  // SAFETY: The JSON object guard permits reading an optional unknown data field.
   if (body && typeof body === "object" && Array.isArray((body as { data?: unknown }).data)) {
+    // SAFETY: The array check above narrows the decoded JSON data field.
     return (body as { data: unknown[] }).data;
   }
   throw new Error("Live model catalog response must be an array or { data: [] }");
