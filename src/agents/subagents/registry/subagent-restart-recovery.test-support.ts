@@ -3,34 +3,37 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
-import { resolveAgentIdFromSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
-import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
-import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../../config/sessions.js";
+import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   consumeSessionWorkAdmissionHandoff,
   type SessionWorkAdmissionLease,
-} from "../sessions/session-lifecycle-admission.js";
+} from "../../../sessions/session-lifecycle-admission.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
-} from "../tasks/task-runtime.test-helpers.js";
-import { captureEnv } from "../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+} from "../../../tasks/task-runtime.test-helpers.js";
+import { captureEnv } from "../../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
-} from "./subagent-test-fixtures.test-helpers.js";
+} from "../../subagent-test-fixtures.test-helpers.js";
 import {
   createCanonicalSubagentRunFixture,
   createSubagentRegistryTestDeps,
-} from "./subagents/registry/subagent-registry.persistence.test-support.js";
+} from "./subagent-registry.persistence.test-support.js";
 import {
   activateSubagentRegistry,
   resetSubagentRegistryForTests,
   testing,
-} from "./subagents/registry/subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
+} from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function makeRestartRecoveryRun(
   overrides: Partial<SubagentRunRecordOverrides>,

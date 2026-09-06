@@ -1,44 +1,40 @@
 // Restart-path proof against the real registry sweeper and SQLite session store.
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../config/config.js";
-import { resolveSessionStorePathCore } from "../config/sessions.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { CallGatewayOptions } from "../gateway/call.js";
-import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { getRuntimeConfig } from "../../../config/config.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import type { CallGatewayOptions } from "../../../gateway/call.js";
+import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import {
   getAgentEventLifecycleGeneration,
   onAgentEvent,
   rotateAgentEventLifecycleGeneration,
-} from "../infra/agent-events.js";
+} from "../../../infra/agent-events.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
-} from "../process/gateway-work-admission.js";
+} from "../../../process/gateway-work-admission.js";
 import {
   consumeSessionWorkAdmissionHandoff,
   type SessionWorkAdmissionLease,
-} from "../sessions/session-lifecycle-admission.js";
-import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
-import { findTaskByRunId } from "../tasks/task-registry.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
-import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
-import { createAgentCommandLifecycle } from "./command/lifecycle.js";
-import {
-  makeRestartRecoveryRun as makeRunRecord,
-  useSubagentRestartRecoveryFixture,
-} from "./subagent-restart-recovery.test-support.js";
-import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagents/registry/subagent-registry-state.js";
+} from "../../../sessions/session-lifecycle-admission.js";
+import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
+import { findTaskByRunId } from "../../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
+import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
+import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import {
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
-} from "./subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagents/registry/subagent-registry.store.sqlite.js";
+} from "./subagent-registry.persistence.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -47,9 +43,13 @@ import {
   registerSubagentRun,
   resetSubagentRegistryForTests,
   testing,
-} from "./subagents/registry/subagent-registry.test-helpers.js";
+} from "./subagent-registry.test-helpers.js";
+import {
+  makeRestartRecoveryRun as makeRunRecord,
+  useSubagentRestartRecoveryFixture,
+} from "./subagent-restart-recovery.test-support.js";
 
-vi.mock("../gateway/session-utils.fs.js", () => ({
+vi.mock("../../../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
 }));
 

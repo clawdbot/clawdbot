@@ -35,8 +35,8 @@ import {
   normalizeFiniteTimestamp,
   normalizeStringSet,
   resolveRestartRecoveryStorePaths,
-  captureYieldedMainSessionContinuation,
 } from "./main-session-restart-recovery-shared.js";
+import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
 
 async function markRecoveryStore(params: {
   storePath: string;

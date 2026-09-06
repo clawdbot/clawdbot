@@ -1,39 +1,35 @@
 // Requester continuation and child-batch ownership across Gateway replacement.
 import { describe, expect, it, vi } from "vitest";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
-import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
-import { persistGatewaySessionLifecycleEvent } from "../gateway/session-lifecycle-state.js";
+} from "../../../config/sessions/session-accessor.js";
+import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
+import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
-} from "../infra/agent-events.js";
+} from "../../../infra/agent-events.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
   getSharedGatewayContextResolver,
-} from "../plugins/runtime/gateway-request-scope.js";
-import { transitionMainSessionRecovery } from "./main-session-recovery/main-session-recovery-state.js";
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { transitionMainSessionRecovery } from "../../main-session-recovery/main-session-recovery-state.js";
 import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
-} from "./main-session-recovery/main-session-restart-recovery-marking.js";
-import {
-  makeRestartRecoveryRun as makeRunRecord,
-  useSubagentRestartRecoveryFixture,
-} from "./subagent-restart-recovery.test-support.js";
-import type { SubagentRegistryDeps } from "./subagents/registry/subagent-registry-deps.js";
-import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
-import { settleRequesterTurnAfterSessionSpawns } from "./subagents/registry/subagent-registry-requester-yield.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagents/registry/subagent-registry-state.js";
+} from "../../main-session-recovery/main-session-restart-recovery-marking.js";
+import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
+import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import {
   createSubagentRegistryTestDeps,
   writeSubagentSessionEntry,
-} from "./subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagents/registry/subagent-registry.store.sqlite.js";
+} from "./subagent-registry.persistence.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   activateSubagentRegistry,
@@ -41,10 +37,14 @@ import {
   initSubagentRegistry,
   resetSubagentRegistryForTests,
   testing,
-} from "./subagents/registry/subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
+} from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  makeRestartRecoveryRun as makeRunRecord,
+  useSubagentRestartRecoveryFixture,
+} from "./subagent-restart-recovery.test-support.js";
 
-vi.mock("../gateway/session-utils.fs.js", () => ({
+vi.mock("../../../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
 }));
 

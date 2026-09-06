@@ -215,6 +215,7 @@ describe("Codex app-server steering queue", () => {
           () => "rejected",
         );
       const sibling = mixed ? queue.queue("independent", { debounceMs: 5 }, () => {}) : undefined;
+      let later: ReturnType<typeof queue.queue> | undefined;
       try {
         await vi.advanceTimersByTimeAsync(1_000);
         expect(await first).toBe("rejected");
@@ -227,7 +228,7 @@ describe("Codex app-server steering queue", () => {
           expect(queue.confirmConsumed(frame.params.clientUserMessageId)).toBe(true);
           await sibling;
         }
-        const later = queue.queue("later authorized", { debounceMs: 0 }, () => {});
+        later = queue.queue("later authorized", { debounceMs: 0 }, () => {});
         await vi.advanceTimersByTimeAsync(0);
         const frame = JSON.parse(harness.writes.at(-1)!);
         expect(frame.params.input).toEqual([
@@ -238,6 +239,7 @@ describe("Codex app-server steering queue", () => {
       } finally {
         queue.cancel();
         harness.client.close();
+        await Promise.allSettled([first, sibling, later]);
       }
     },
   );

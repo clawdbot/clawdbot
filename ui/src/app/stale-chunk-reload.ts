@@ -131,6 +131,17 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
     buildId,
   ];
   const attemptsByBuild = recovery[0];
+  const currentTarget = recovery[1];
+  // A generic chunk failure cannot replace the server build already being
+  // recovered. Only the Gateway owns a new target artifact and retry lifetime.
+  if (
+    deps.buildId === undefined &&
+    currentTarget !== null &&
+    currentTarget !== buildId &&
+    (attemptsByBuild.get(currentTarget)?.active ?? 0) > 0
+  ) {
+    return false;
+  }
   for (const [attemptedBuildId, attempt] of attemptsByBuild) {
     if (attempt.active === 0 && now - attempt.attemptedAt >= ATTEMPT_COOLDOWN_MS) {
       attemptsByBuild.delete(attemptedBuildId);
@@ -150,7 +161,7 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   try {
     if (
       !(await waitForReachableControlUiDocument(
-        {},
+        { timeoutMs: deps.buildId === undefined ? 0 : undefined },
         () =>
           deps.canReload?.() !== false && canReloadControlUiDocument() && recovery[1] === buildId,
       ))

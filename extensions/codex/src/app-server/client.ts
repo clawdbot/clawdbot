@@ -691,11 +691,12 @@ export class CodexAppServerClient {
       try {
         // Config-fence waits and overload retries can outlive the caller's
         // ownership. Revalidate before each physical write, without an await.
+        // The guard can narrow params, so serialize only after it returns.
+        options.assertCurrent?.();
         this.writeMessage(
           message,
           (error) => rejectPending(error),
           () => {
-            options.assertCurrent?.();
             mayHaveWritten = true;
             onWriteStateChange?.(true);
           },

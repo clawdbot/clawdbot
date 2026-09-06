@@ -38,6 +38,12 @@ and session admission. The old queue and execution authority are never reused.
 This preserves each browser outbox's order without submitting already-consumed
 messages again. Different browsers can reconnect in a different order.
 
+Accepted Control UI input is committed to its admitted source session before ACP
+execution or question consumption. If the conversation routes to a bound ACP
+session, the source keeps the original request and the bound session owns the ACP
+transcript and reply. An output-persistence failure does not make consumed input
+eligible for automatic resubmission.
+
 If the browser no longer has the matching outbox payload, the saved interrupted
 input remains available for explicit resend. Cancelled input is not replayed.
 Inputs accepted by older versions without resumable custody also require explicit resend.
@@ -46,11 +52,22 @@ or the user chooses to retry it. Recovery of a turn already in the transcript
 does not depend on the browser returning.
 
 When an update replaces the bundled Control UI, an open tab reloads after the
-Gateway reports the new build. Automatic and manual recovery share a bounded
-document-readiness check, so a transient failed probe does not immediately strand
-the tab. The browser still limits automatic navigation to one reload per target
-build. If the Gateway remains unavailable, use the visible reload action once it
-is reachable.
+Gateway reports the new build. Automatic recovery for that reported build and
+manual reloads share a bounded document-readiness check, so a transient failed
+probe does not immediately strand the tab. Generic lazy-chunk failures make one
+automatic probe and leave further recovery to the visible retry action. The
+browser still limits automatic navigation to one reload per target build. If the
+Gateway remains unavailable, use the visible reload action once it is reachable.
+
+Downgrading to `v2026.9.2` preserves newer accepted-input records, but that version
+rejects same-ID retries against retained newer receipts before execution. This
+includes queued or interrupted inputs and consumed collected-input receipts;
+consumed receipts remain excluded from pending counts. Individually consumed
+inputs have already left the pending-input store and retain normal transcript
+idempotency. Upgrading again restores matching unconsumed-input recovery through
+fresh authentication and admission, provided the session and accepted input have
+not been changed or removed. Already-consumed input remains consumed. Do not
+delete receipts or change message IDs merely to bypass a downgrade conflict.
 
 Native Codex recovery reconstructs saved document contents under the current
 attachment policy and context limits. The Codex plugin owns that native input

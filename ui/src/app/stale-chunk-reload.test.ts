@@ -160,6 +160,38 @@ describe("document reload ownership", () => {
 });
 
 describe("scheduleStaleChunkReload", () => {
+  it("keeps generic stale-chunk recovery single-shot after a failed probe", async () => {
+    vi.useFakeTimers();
+    const reload = vi.fn();
+    const fetchMock = stubDocumentFetch(
+      new Response(null, { status: 503 }),
+      new Response(null, { status: 200 }),
+    );
+    const pending = scheduleStaleChunkReload({ storage: memoryStorage(), reload });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(pending).resolves.toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not replace an active Gateway build target with a generic chunk failure", async () => {
+    vi.useFakeTimers();
+    const reload = vi.fn();
+    const storage = memoryStorage();
+    stubDocumentFetch(new Response(null, { status: 503 }), new Response(null, { status: 200 }));
+    const targeted = scheduleStaleChunkReload({
+      buildId: "gateway-target",
+      storage,
+      reload: () => reload("targeted"),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const generic = scheduleStaleChunkReload({ storage, reload: () => reload("generic") });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(Promise.all([targeted, generic])).resolves.toEqual([true, false]);
+    expect(reload).toHaveBeenCalledExactlyOnceWith("targeted");
+    expect(storage.getItem(GUARD_KEY)).toBe("gateway-target");
+  });
+
   it("reloads once the document probe succeeds and records the build guard", async () => {
     const reload = vi.fn();
     const storage = memoryStorage();
@@ -207,7 +239,7 @@ describe("scheduleStaleChunkReload", () => {
     const storage = memoryStorage();
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
-    const pending = scheduleStaleChunkReload({ storage, reload });
+    const pending = scheduleStaleChunkReload({ buildId: "gateway-target", storage, reload });
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(pending).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
@@ -516,7 +548,7 @@ describe("scheduleStaleChunkReload", () => {
     const reload = vi.fn();
     const storage = memoryStorage();
 
-    const automatic = scheduleStaleChunkReload({ storage, reload });
+    const automatic = scheduleStaleChunkReload({ buildId: "gateway-target", storage, reload });
     const manual = retryStaleChunkReloadWhenReachable({ reload, storage, timeoutMs: 0 });
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);

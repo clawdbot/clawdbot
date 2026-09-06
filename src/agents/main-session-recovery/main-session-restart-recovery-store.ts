@@ -51,8 +51,8 @@ import {
   MAX_RECOVERY_RETRIES,
   normalizeStringSet,
   resolveRestartRecoveryTerminalClientRunId,
-  resolveRestartRecoveryDispatchTarget,
 } from "./main-session-restart-recovery-shared.js";
+import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
 
 function pendingFinalRecoveryAction(
   pending: NonNullable<SessionEntry["pendingFinalDelivery"]>,
