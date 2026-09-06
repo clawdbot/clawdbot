@@ -1700,6 +1700,7 @@
                   "providers/opencode",
                   "providers/opencode-go",
                   "providers/openrouter",
+                  "providers/perplexity-agent-api",
                   "providers/perplexity-provider",
                   "providers/pixverse",
                   "providers/qianfan",

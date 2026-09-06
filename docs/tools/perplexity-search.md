@@ -1,14 +1,12 @@
 ---
-summary: "Perplexity Search API and Sonar/OpenRouter compatibility for web_search"
+summary: "Perplexity Search API for web_search"
 read_when:
   - You want to use Perplexity Search for web search
-  - You need PERPLEXITY_API_KEY or OPENROUTER_API_KEY setup
+  - You need PERPLEXITY_API_KEY setup
 title: "Perplexity search"
 ---
 
 OpenClaw supports the Perplexity Search API as a `web_search` provider. It returns structured results with `title`, `url`, and `snippet` fields.
-
-For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter setups. If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `plugins.entries.perplexity.config.webSearch.apiKey`, or set `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, the provider switches to the chat-completions path and returns AI-synthesized answers with citations instead of structured Search API results.
 
 ## Install plugin
 
@@ -25,18 +23,7 @@ openclaw gateway restart
 2. Generate an API key in the dashboard.
 3. Store the key in config or set `PERPLEXITY_API_KEY` in the Gateway environment.
 
-## OpenRouter compatibility
-
-If you were already using OpenRouter for Perplexity Sonar, keep `provider: "perplexity"` and set `OPENROUTER_API_KEY` in the Gateway environment, or store an `sk-or-...` key in `plugins.entries.perplexity.config.webSearch.apiKey`.
-
-Optional compatibility controls:
-
-- `plugins.entries.perplexity.config.webSearch.baseUrl`
-- `plugins.entries.perplexity.config.webSearch.model`
-
-## Config examples
-
-### Native Perplexity Search API
+## Config example
 
 ```json5
 {
@@ -61,7 +48,25 @@ Optional compatibility controls:
 }
 ```
 
-### OpenRouter / Sonar compatibility
+## Where to set the key
+
+**Via config:** run `openclaw configure --section web`. It stores the key in `~/.openclaw/openclaw.json` under `plugins.entries.perplexity.config.webSearch.apiKey`. That field also accepts SecretRef objects.
+
+**Via environment:** set `PERPLEXITY_API_KEY` in the Gateway process environment. For a gateway install, put it in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#env-vars-and-env-loading).
+
+If `provider: "perplexity"` is configured and the Perplexity key SecretRef is unresolved with no env fallback, startup/reload fails fast.
+
+## OpenRouter / Sonar compatibility (legacy)
+
+Existing installs pointed at Perplexity Sonar through OpenRouter continue to work. The provider switches to the Sonar chat-completions transport when any of these is set:
+
+- `OPENROUTER_API_KEY` in the Gateway environment, when no higher-priority credential is available
+- An `sk-or-...` key stored in `plugins.entries.perplexity.config.webSearch.apiKey`
+- `plugins.entries.perplexity.config.webSearch.baseUrl` or `.model`
+
+Credential precedence is `plugins.entries.perplexity.config.webSearch.apiKey`, then `PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`. The first available credential determines endpoint inference unless an explicit `baseUrl` or `model` forces the legacy transport.
+
+In that mode the provider returns one AI-synthesized answer with citations instead of structured Search API results. `count` is accepted for shared-tool compatibility but does not change that one-answer shape. The Search API filter parameters `country`, `language`, `date_after`/`date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page` return a `not supported` error on the chat-completions path; `freshness` still applies as `search_recency_filter`. New setups should use a `pplx-` key against the native Search API.
 
 ```json5
 {
@@ -88,24 +93,14 @@ Optional compatibility controls:
 }
 ```
 
-## Where to set the key
-
-**Via config:** run `openclaw configure --section web`. It stores the key in `~/.openclaw/openclaw.json` under `plugins.entries.perplexity.config.webSearch.apiKey`. That field also accepts SecretRef objects.
-
-**Via environment:** set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY` in the Gateway process environment. For a gateway install, put it in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#env-vars-and-env-loading).
-
-If `provider: "perplexity"` is configured and the Perplexity key SecretRef is unresolved with no env fallback, startup/reload fails fast.
-
 ## Tool parameters
-
-These parameters apply to the native Perplexity Search API path.
 
 <ParamField path="query" type="string" required>
 Search query.
 </ParamField>
 
 <ParamField path="count" type="number" default="5">
-Number of results to return (1-10).
+Native Perplexity Search API only. Number of results to return (1-10). The legacy Sonar/OpenRouter transport accepts this parameter for compatibility but still returns one synthesized answer with citations, not an N-result list.
 </ParamField>
 
 <ParamField path="country" type="string">
@@ -139,12 +134,6 @@ Total content budget (max 1000000).
 <ParamField path="max_tokens_per_page" type="number" default="2048">
 Per-page token limit.
 </ParamField>
-
-For the legacy Sonar/OpenRouter compatibility path:
-
-- `query`, `count`, and `freshness` are accepted.
-- `count` is compatibility-only there; the response is still one synthesized answer with citations rather than an N-result list.
-- Search API-only filters (`country`, `language`, `date_after`, `date_before`, `domain_filter`, `max_tokens`, `max_tokens_per_page`) return explicit errors.
 
 **Examples:**
 
@@ -198,8 +187,6 @@ await web_search({
 ## Notes
 
 - Perplexity Search API returns structured web search results (`title`, `url`, `snippet`).
-- OpenRouter, or an explicit `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, switches Perplexity back to Sonar chat completions for compatibility.
-- Sonar/OpenRouter compatibility returns one synthesized answer with citations, not structured result rows.
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
 
 ## Related
