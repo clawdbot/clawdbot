@@ -5,6 +5,9 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 (() => {
   const output = [];
   const pending = new Map();
+  const queued = [];
+  const maxPending = globalThis.__openclawMaxPendingToolCalls;
+  delete globalThis.__openclawMaxPendingToolCalls;
   const catalogBindings = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
   const apiFiles = Array.isArray(globalThis.__openclawApiFiles) ? globalThis.__openclawApiFiles : [];
   const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
@@ -43,20 +46,31 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     return typeof encoded === "string" ? encoded : String(value);
   }
 
-  function beginRequest(method, args) {
+  function beginRequest(method, args, { queue = false } = {}) {
     const methodName = String(method);
     const sequence = (bridgeSequences.get(methodName) ?? 0) + 1;
     bridgeSequences.set(methodName, sequence);
-    const bridgeId = "bridge:" + methodName + ":" + String(sequence);
-    const id = String(hostRequest(methodName, JSON.stringify(safe(args ?? [])), bridgeId));
-    const promise = new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-    });
+    const id = "bridge:" + methodName + ":" + String(sequence);
+    const argsJson = JSON.stringify(safe(args ?? []));
+    let callbacks;
+    const promise = new Promise((resolve, reject) => { callbacks = { resolve, reject }; });
+    const admit = () => {
+      hostRequest(methodName, argsJson, id);
+      pending.set(id, callbacks);
+    };
+    if (queue && pending.size >= maxPending) queued.push(admit);
+    else admit();
     return { id, promise };
   }
 
-  function request(method, args) {
-    return beginRequest(method, args).promise;
+  // Swarm queues before admission; raw tools retain all-or-nothing overflow rejection.
+  // Closures and stable IDs live in the bounded VM snapshot, never a second host queue.
+  function drainQueuedRequests() {
+    while (queued.length > 0 && pending.size < maxPending) queued.shift()();
+  }
+
+  function request(method, args, options) {
+    return beginRequest(method, args, options).promise;
   }
 
   function scheduleTimer(callback, delay, args) {
@@ -84,6 +98,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     if (!entry) return;
     pending.delete(requestId);
     entry.resolve(null);
+    drainQueuedRequests();
   }
 
   ${CODE_MODE_SWARM_CONTROLLER_SOURCE}
@@ -132,6 +147,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       const error = new Error(typeof parsed === "string" ? parsed : parsed?.message ?? "nested tool failed");
       entry.reject(error);
     }
+    drainQueuedRequests();
     return true;
   }
 

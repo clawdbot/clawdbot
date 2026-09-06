@@ -12,7 +12,11 @@ import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/r
 import type { AgentHarnessV2 } from "../agents/harness/types.js";
 import { getPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
-import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
+import {
+  advancePreparedModelRuntimeConfig,
+  refreshPreparedModelRuntimeSnapshots,
+  registerPreparedModelRuntimePublicationListener,
+} from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -351,6 +355,8 @@ describe("gateway chat metadata lifecycle composition", () => {
     { wildcard: false, invalidate: "dispose" },
     { wildcard: true, invalidate: "dispose" },
     { wildcard: false, invalidate: "registry" },
+    { wildcard: false, invalidate: "stamp" },
+    { wildcard: false, invalidate: "generation" },
   ])(
     "revalidates native observations (wildcard=$wildcard, $invalidate) without rediscovery",
     async ({ wildcard, invalidate }) => {
@@ -391,7 +397,9 @@ describe("gateway chat metadata lifecycle composition", () => {
           provider: "openai",
           modelId: "codex-latest",
         });
-        expect(scope.config).toBe(nativeConfig);
+        if (scope.config !== nativeConfig) {
+          return undefined;
+        }
         return !disposed && observedRevision === revision ? { accountType: "apiKey" } : undefined;
       });
       const harness: AgentHarnessV2 = {
@@ -466,6 +474,9 @@ describe("gateway chat metadata lifecycle composition", () => {
                 metadataSnapshot: owner.metadataSnapshot,
                 preparedAuthStore: { version: 1, profiles: {} },
                 preparedRuntimeAuthModes: owner.authModes,
+                pluginRegistry: owner.pluginRegistry,
+                isCurrent: owner.isCurrent,
+                observationConfig: owner.observationConfig,
               }),
             }),
           ).resolves.toMatchObject(expected);
@@ -513,6 +524,93 @@ describe("gateway chat metadata lifecycle composition", () => {
           defaultModelCatalog: lockedStartup?.defaultModelCatalog,
         });
 
+        if (invalidate === "generation") {
+          const loader: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] = (params) =>
+            loadGatewayModelCatalogSnapshot({ ...params, getConfig: () => currentConfig });
+          registerGatewayModelCatalogPrivateAccess(loader, {
+            loadDeferred: (params) =>
+              loadPreparedGatewayModelCatalogSnapshot({
+                ...params,
+                getConfig: () => currentConfig,
+              }),
+            readPrepared: (params) =>
+              readPreparedGatewayModelCatalogOwnerSnapshot({
+                ...params,
+                getConfig: () => currentConfig,
+              }),
+          });
+          const retained = await prepareModelsListResult({
+            context: { ...nativeContext, loadGatewayModelCatalogSnapshot: loader },
+            agentId: "main",
+            params: { view: "configured", preparedOnly: true },
+          });
+          expect(retained.isCurrent()).toBe(true);
+          expect(retained.read()).toMatchObject({ models: expectedModels(true) });
+          const entered = createDeferredCore();
+          const release = createDeferredCore<{ agentDir: string; wrote: false }>();
+          mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
+            entered.resolve();
+            return await release.promise;
+          });
+          const events: string[] = [];
+          const published = createDeferredCore();
+          const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+            events.push(event.phase);
+            if (event.phase === "published" || event.phase === "failed") {
+              published.resolve();
+            }
+          });
+          let nextRead: ReturnType<typeof lifecycle.read> | undefined;
+          try {
+            expect(mocks.mutationListener).toBeTypeOf("function");
+            mocks.mutationListener!({
+              agentDir: state.agentDir("main"),
+              affectsInheritedStores: false,
+            });
+            expect(events).toEqual(["invalidated"]);
+            let settled = false;
+            nextRead = lifecycle.read({ agentId: "main" });
+            void nextRead.then(
+              () => {
+                settled = true;
+              },
+              () => {
+                settled = true;
+              },
+            );
+            await entered.promise;
+            expect(settled).toBe(false);
+            await expect(
+              lifecycle.readStartup({ agentId: "main", readPolicy: "ready" }),
+            ).resolves.toBeUndefined();
+            const staleCurrent = retained.isCurrent();
+            const staleModels = retained.read().models;
+            release.resolve({ agentDir: state.agentDir("main"), wrote: false });
+            await published.promise;
+            expect(events).toEqual(["invalidated", "published"]);
+            await expect(nextRead).resolves.toMatchObject({ models: expectedModels(true) });
+            const replacement = getPreparedModelCatalogOwnerSnapshot({
+              agentId: "main",
+              config: nativeConfig,
+              readOnly: true,
+              allowGatewaySubagentBinding: true,
+            });
+            expect(replacement).toBeDefined();
+            expect(replacement).not.toBe(owner);
+            expect(replacement?.pluginRegistry).toBe(owner.pluginRegistry);
+            expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+            expect({ current: staleCurrent, models: staleModels }).toMatchObject({
+              current: false,
+              models: expectedModels(false),
+            });
+          } finally {
+            release.resolve({ agentDir: state.agentDir("main"), wrote: false });
+            await Promise.allSettled([nextRead]);
+            unregister();
+          }
+          return;
+        }
+
         currentConfig = { ...nativeConfig };
         await lifecycle.refresh();
         // Equivalent lifecycle facts can retain a generation, but its prepared wrappers
@@ -522,6 +620,24 @@ describe("gateway chat metadata lifecycle composition", () => {
         ).resolves.toBeUndefined();
         await lifecycle.read({ agentId: "main" });
         await expectNativeAvailable(true);
+
+        if (invalidate === "stamp") {
+          advancePreparedModelRuntimeConfig(currentConfig);
+          const advanced = getPreparedModelCatalogOwnerSnapshot({
+            agentId: "main",
+            config: currentConfig,
+            readOnly: true,
+            allowGatewaySubagentBinding: true,
+          });
+          expect(advanced).not.toBe(owner);
+          expect(advanced?.config).toBe(currentConfig);
+          expect(advanced?.pluginRegistry).toBe(owner.pluginRegistry);
+          await lifecycle.refresh();
+          expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+          expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(builds);
+          await expectNativeAvailable(true);
+          return;
+        }
 
         revision += 1;
         await expectNativeAvailable(false);
@@ -535,9 +651,9 @@ describe("gateway chat metadata lifecycle composition", () => {
           setActivePluginRegistry(createEmptyPluginRegistry());
         }
         await expect(racingRead).resolves.toMatchObject({
-          models: expectedModels(false),
+          models: expectedModels(invalidate === "registry"),
         });
-        await expectNativeAvailable(false);
+        await expectNativeAvailable(invalidate === "registry");
         expect(loadModelCatalog).toHaveBeenCalledTimes(2);
         expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(builds);
       } finally {

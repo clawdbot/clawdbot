@@ -64,6 +64,9 @@ final class SettingsWindowLayoutTests: XCTestCase {
         ] {
             state.remoteTransport = transport
             window.setContentSize(size)
+            try await Self.waitForLayout(hosting, stage: "resized detail at \(size)") {
+                Self.detailScrollView(in: hosting) != nil
+            }
             for tab in [SettingsTab.general, .connection, .permissions] {
                 let previous = try XCTUnwrap(Self.detailScrollView(in: hosting))
                 NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)

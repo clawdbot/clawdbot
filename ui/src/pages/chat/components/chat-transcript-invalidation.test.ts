@@ -20,6 +20,7 @@ import {
   observeChatMediaResource,
   releaseChatMediaResourceSubscriber,
 } from "./chat-message-media.ts";
+import * as chatMessage from "./chat-message.ts";
 import { resetTranscriptSession } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
@@ -58,6 +59,94 @@ describe("chat transcript invalidation", () => {
       expect(normalizeSpy.mock.calls.some(([message]) => historicalMessages.has(message))).toBe(
         false,
       );
+    },
+  );
+
+  it.each(["unchanged", "stream-only"] as const)(
+    "keeps settled run frames idle during %s updates",
+    async (update) => {
+      vi.spyOn(Date, "now").mockReturnValue(60_000);
+      const completedRunId = "settled-run";
+      const activeRunId = "active-run";
+      const props = {
+        ...threadProps(`pane-settled-${update}`, "agent:main:dashboard:settled", [
+          {
+            role: "user",
+            content: "Inspect the workspace",
+            timestamp: 1_000,
+            __openclaw: { id: "settled-user", idempotencyKey: `${completedRunId}:user` },
+          },
+          {
+            role: "toolResult",
+            toolCallId: "settled-read",
+            toolName: "read",
+            content: "Read complete",
+            timestamp: 2_000,
+            runId: completedRunId,
+          },
+          {
+            role: "assistant",
+            content: "Workspace checked",
+            phase: "final_answer",
+            stopReason: "stop",
+            timestamp: 3_000,
+            runId: completedRunId,
+            __openclaw: { id: "settled-final" },
+          },
+          {
+            role: "user",
+            content: "Continue with the next task",
+            timestamp: 4_000,
+            __openclaw: { id: "active-user", idempotencyKey: `${activeRunId}:user` },
+          },
+        ]),
+        showToolCalls: true,
+        runId: activeRunId,
+        runActive: true,
+        runWorking: true,
+        stream: "Draft next reply",
+        streamStartedAt: 5_000,
+      };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostUpdated();
+      };
+      try {
+        rerender();
+        transcript.hostConnected();
+        await flushDeferredRowPrune();
+        const finalBubble = expectDefined(
+          container.querySelector('[data-entry-id="settled-final"]'),
+          "settled final reply",
+        );
+        const workToggle = expectDefined(
+          finalBubble.closest(".chat-group")?.querySelector(".chat-work-group button"),
+          "completed work disclosure",
+        );
+        expect(workToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
+          props.stream,
+        );
+        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+        if (update === "stream-only") {
+          props.stream = "Advanced next reply";
+        }
+        rerender();
+
+        expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
+          props.stream,
+        );
+        expect(container.querySelector('[data-entry-id="settled-final"]')).toBe(finalBubble);
+        expect(finalBubble.textContent).toContain("Workspace checked");
+        expect(workToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(renderGroup.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual(
+          [],
+        );
+      } finally {
+        transcript.hostDisconnected();
+      }
     },
   );
 

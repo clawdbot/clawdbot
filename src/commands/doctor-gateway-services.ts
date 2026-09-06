@@ -341,7 +341,7 @@ export function extraGatewayServiceToHealthFinding(service: ExtraGatewayService)
     target: service.label,
     fixHint:
       service.legacy === true
-        ? "Run openclaw doctor --fix to remove legacy gateway services."
+        ? "Run `openclaw doctor` interactively to review legacy gateway services and confirm supported cleanup."
         : "Run a single gateway per machine unless this extra gateway is intentional.",
   };
 }
@@ -568,7 +568,7 @@ export async function maybeRepairGatewayServiceConfig(
   const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
     ? [
         `Gateway service entrypoint resolves to a source checkout: ${serviceLayout.packageRootReal ?? serviceLayout.packageRoot ?? serviceLayout.entrypointReal ?? serviceLayout.entrypoint}.`,
-        "Run `openclaw doctor --fix` from the intended package install, or reinstall the gateway service with `openclaw gateway install --force`.",
+        "Run `openclaw gateway install --force` from the intended package install to replace the gateway service definition.",
       ].join("\n")
     : null;
 
@@ -1031,9 +1031,6 @@ export async function maybeScanExtraGatewayServices(
       }
       if (failed.length > 0) {
         note(failed.map((line) => `- ${line}`).join("\n"), "Legacy gateway cleanup skipped");
-      }
-      if (removed.length > 0) {
-        runtime.log("Legacy gateway services removed. Installing OpenClaw gateway next.");
       }
     }
   }

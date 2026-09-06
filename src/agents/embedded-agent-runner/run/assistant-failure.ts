@@ -91,20 +91,24 @@ export async function handleEmbeddedAssistantFailure(input: {
   agentDir: string;
   isProbeSession: boolean;
 }): Promise<EmbeddedRunAssistantFailureOutcome> {
+  // Successful responses can retain stale error fields. Only current failures
+  // may drive retries, profile health, or failure copy.
+  const failedAssistant =
+    input.attemptAssistant?.stopReason === "error" ? input.attemptAssistant : undefined;
   const { aborted, idleTimedOut, promptError, timedOut } = projectAgentRunAttemptTerminal(
     input.attempt.terminal,
   );
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(input.terminalState.outcome);
   const { signalOwnedInterruption } = input.terminalState;
   const fallbackThinking = pickFallbackThinkingLevel({
-    message: input.attemptAssistant?.errorMessage,
+    message: failedAssistant?.errorMessage,
     attempted: input.attemptedThinking,
   });
-  const authFailure = isAuthAssistantError(input.attemptAssistant);
-  const rateLimitFailure = isRateLimitAssistantError(input.attemptAssistant);
-  const billingFailure = isBillingAssistantError(input.attemptAssistant);
-  const failoverFailure = isFailoverAssistantError(input.attemptAssistant);
-  const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant, {
+  const authFailure = isAuthAssistantError(failedAssistant);
+  const rateLimitFailure = isRateLimitAssistantError(failedAssistant);
+  const billingFailure = isBillingAssistantError(failedAssistant);
+  const failoverFailure = isFailoverAssistantError(failedAssistant);
+  const assistantFailoverReason = classifyAssistantFailoverReason(failedAssistant, {
     providerOwner: input.providerOwner,
   });
   const assistantProviderStarted =
@@ -119,7 +123,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       providerStarted: assistantProviderStarted,
       transientRateLimit:
         assistantProfileFailoverReason === "rate_limit" &&
-        isShortWindowRateLimitMessage(input.attemptAssistant?.errorMessage),
+        isShortWindowRateLimitMessage(failedAssistant?.errorMessage),
     },
   );
   const terminalAssistantError = isTerminalAssistantError(input.attemptAssistant);
@@ -140,7 +144,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     });
   }
   const cloudCodeAssistFormatError = input.attempt.cloudCodeAssistFormatError;
-  const imageDimensionError = parseImageDimensionError(input.attemptAssistant?.errorMessage ?? "");
+  const imageDimensionError = parseImageDimensionError(failedAssistant?.errorMessage ?? "");
   // Classified reasons consult the failover retry controller so a zero-output
   // failure draws from the single transient budget instead of stacking silent
   // retries on top of it; only reasons the controller cannot classify use the
@@ -161,7 +165,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     !promptError &&
     shouldRetrySilentErrorAssistantTurn({
       attempt: input.attempt,
-      assistant: input.attemptAssistant,
+      assistant: failedAssistant,
     });
   if (replaySafeSilentErrorFailure) {
     if (silentControllerConsultReason === null) {
@@ -170,8 +174,8 @@ export async function handleEmbeddedAssistantFailure(input: {
         log.warn(
           `[empty-error-retry] stopReason=error non-visible-output; resubmitting ` +
             `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
-            `provider=${input.attemptAssistant?.provider ?? input.provider} ` +
-            `model=${input.attemptAssistant?.model ?? input.model} ` +
+            `provider=${failedAssistant?.provider ?? input.provider} ` +
+            `model=${failedAssistant?.model ?? input.model} ` +
             `sessionKey=${input.runParams.sessionKey ?? input.runParams.sessionId}`,
         );
         return buildOutcome(input, {
@@ -183,14 +187,14 @@ export async function handleEmbeddedAssistantFailure(input: {
     } else if (
       await input.maybeRetryTransient({
         reason: silentControllerConsultReason,
-        retryAfterMs: resolveRetryAfterMs(input.attemptAssistant?.errorMessage),
+        retryAfterMs: resolveRetryAfterMs(failedAssistant?.errorMessage),
       })
     ) {
       log.warn(
         `[empty-error-retry] stopReason=error non-visible-output; transient ` +
           `reason=${silentControllerConsultReason} retrying same model ` +
-          `provider=${input.attemptAssistant?.provider ?? input.provider} ` +
-          `model=${input.attemptAssistant?.model ?? input.model} ` +
+          `provider=${failedAssistant?.provider ?? input.provider} ` +
+          `model=${failedAssistant?.model ?? input.model} ` +
           `sessionKey=${input.runParams.sessionKey ?? input.runParams.sessionId}`,
       );
       return buildOutcome(input, {
@@ -216,13 +220,13 @@ export async function handleEmbeddedAssistantFailure(input: {
   const logFailoverDecision = createFailoverDecisionLogger({
     stage: "assistant",
     runId: input.runParams.runId,
-    rawError: input.attemptAssistant?.errorMessage?.trim(),
+    rawError: failedAssistant?.errorMessage?.trim(),
     failoverReason: effectiveFailoverReason,
     profileFailureReason: assistantProfileFailureReason,
     provider: input.activeErrorContext.provider,
     model: input.activeErrorContext.model,
-    sourceProvider: input.attemptAssistant?.provider ?? input.provider,
-    sourceModel: input.attemptAssistant?.model ?? input.modelId,
+    sourceProvider: failedAssistant?.provider ?? input.provider,
+    sourceModel: failedAssistant?.model ?? input.modelId,
     profileId: failedProfileId,
     fallbackConfigured: input.fallbackConfigured,
     timedOut,
@@ -235,7 +239,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     !signalOwnedInterruption &&
     authFailure &&
     (await input.maybeRefreshRuntimeAuthForAuthError(
-      input.attemptAssistant?.errorMessage ?? "",
+      failedAssistant?.errorMessage ?? "",
       input.runtimeAuthRetry,
     ))
   ) {
@@ -291,7 +295,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     provider: input.provider,
     providerOwner: input.providerOwner,
     activeErrorContext: input.activeErrorContext,
-    lastAssistant: input.attemptAssistant,
+    lastAssistant: failedAssistant,
     config: input.runParams.config,
     sessionKey: input.runParams.sessionKey ?? input.runParams.sessionId,
     agentId: input.runParams.agentId,

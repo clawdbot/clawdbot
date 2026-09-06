@@ -23,37 +23,6 @@ function testDocumentWithOutlet(animate = vi.fn()) {
 afterEach(() => document.body.replaceChildren());
 
 describe("navigateWithRouteTransition", () => {
-  it("keeps the outgoing view live until the destination is prepared", async () => {
-    let finishPreparation!: () => void;
-    const prepare = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          finishPreparation = resolve;
-        }),
-    );
-    const navigate = vi.fn(async () => undefined);
-    const test = testDocumentWithOutlet();
-    const transition = navigateWithRouteTransition({
-      document: test.document,
-      from: "new-session",
-      to: "chat",
-      navigate,
-      prepare,
-      prefersReducedMotion: false,
-    });
-    await Promise.resolve();
-
-    expect(prepare).toHaveBeenCalledOnce();
-    expect(navigate).not.toHaveBeenCalled();
-
-    finishPreparation();
-    await vi.waitFor(() => expect(navigate).toHaveBeenCalledOnce());
-    document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
-    await transition;
-
-    expect(navigate).toHaveBeenCalledOnce();
-  });
-
   it("animates the rendered chat pane without freezing the outgoing document", async () => {
     const finished = Promise.resolve({} as Animation);
     const animate = vi.fn(() => ({ finished }) as Animation);
@@ -73,7 +42,7 @@ describe("navigateWithRouteTransition", () => {
       navigate,
       prefersReducedMotion: false,
     });
-    await vi.waitFor(() => expect(navigate).toHaveBeenCalledOnce());
+    expect(navigate).toHaveBeenCalledOnce();
     expect(animate).not.toHaveBeenCalled();
     finishNavigation();
     document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
@@ -86,20 +55,22 @@ describe("navigateWithRouteTransition", () => {
     );
   });
 
-  it("navigates directly when destination preparation fails", async () => {
+  it("propagates navigation failure without animating", async () => {
     const test = testDocumentWithOutlet();
-    const navigate = vi.fn(async () => undefined);
-
-    await navigateWithRouteTransition({
-      document: test.document,
-      from: "new-session",
-      to: "chat",
-      navigate,
-      prepare: async () => {
-        throw new Error("preload failed");
-      },
-      prefersReducedMotion: false,
+    const failure = new Error("Chat route failed to load");
+    const navigate = vi.fn(async () => {
+      throw failure;
     });
+
+    await expect(
+      navigateWithRouteTransition({
+        document: test.document,
+        from: "new-session",
+        to: "chat",
+        navigate,
+        prefersReducedMotion: false,
+      }),
+    ).rejects.toBe(failure);
 
     expect(navigate).toHaveBeenCalledOnce();
     expect(test.animate).not.toHaveBeenCalled();

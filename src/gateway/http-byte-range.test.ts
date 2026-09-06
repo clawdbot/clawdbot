@@ -5,11 +5,13 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   createGatewayByteStream,
+  createImmutableFileValidators,
   resolveByteResponse,
   writeByteHeaders,
 } from "./http-byte-range.js";
 
 const FILE = { size: 10, mtimeMs: 1_752_000_000_123.5 };
+const IMMUTABLE_FILE = { file: FILE, validators: createImmutableFileValidators(FILE) };
 const LAST_MODIFIED = new Date(FILE.mtimeMs).toUTCString();
 const HTTP_DATE_VARIANTS = [
   { label: "IMF-fixdate", value: LAST_MODIFIED },
@@ -37,7 +39,7 @@ describe("resolveByteResponse", () => {
   it("resolves an open-ended range", () => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=4-" }),
       }),
@@ -52,7 +54,7 @@ describe("resolveByteResponse", () => {
   it("resolves a suffix range", () => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=-3" }),
       }),
@@ -67,7 +69,7 @@ describe("resolveByteResponse", () => {
   it("resolves an exact range", () => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=2-5" }),
       }),
@@ -81,7 +83,7 @@ describe("resolveByteResponse", () => {
 
   it("returns 416 with the complete file size for an out-of-bounds range", () => {
     const plan = resolveByteResponse({
-      file: FILE,
+      ...IMMUTABLE_FILE,
       method: "GET",
       request: createByteRequest({ range: "bytes=10-20" }),
     });
@@ -104,7 +106,7 @@ describe("resolveByteResponse", () => {
     (rangeHeader) => {
       expect(
         resolveByteResponse({
-          file: FILE,
+          ...IMMUTABLE_FILE,
           method: "GET",
           request: createByteRequest({ range: rangeHeader }),
         }),
@@ -117,10 +119,10 @@ describe("resolveByteResponse", () => {
   );
 
   it("honors a matching If-Range ETag", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
+    const etag = IMMUTABLE_FILE.validators.etag;
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": etag }),
       }),
@@ -130,7 +132,7 @@ describe("resolveByteResponse", () => {
   it("honors an If-Range HTTP-date at the file's fractional modification second", () => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": LAST_MODIFIED }),
       }),
@@ -151,7 +153,7 @@ describe("resolveByteResponse", () => {
     const nowMs = FILE.mtimeMs - 60_000;
     const { rangeHeader, ...rest } = params;
     const plan = resolveByteResponse({
-      file: FILE,
+      ...IMMUTABLE_FILE,
       nowMs,
       ...rest,
       request: createByteRequest({ range: rangeHeader }),
@@ -165,11 +167,13 @@ describe("resolveByteResponse", () => {
     const nowMs = FILE.mtimeMs - 60_000;
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
     try {
-      const future = resolveByteResponse({ file: FILE, method: "GET" });
+      const future = resolveByteResponse({ ...IMMUTABLE_FILE, method: "GET" });
 
       expect(dateNow).toHaveBeenCalledOnce();
       expect(future.lastModified).toBe(new Date(nowMs).toUTCString());
-      expect(future.etag).toBe(resolveByteResponse({ file: FILE, nowMs: FILE.mtimeMs }).etag);
+      expect(future.etag).toBe(
+        resolveByteResponse({ ...IMMUTABLE_FILE, nowMs: FILE.mtimeMs }).etag,
+      );
     } finally {
       dateNow.mockRestore();
     }
@@ -181,7 +185,7 @@ describe("resolveByteResponse", () => {
 
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         nowMs,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": emittedLastModified }),
@@ -189,7 +193,7 @@ describe("resolveByteResponse", () => {
     ).toMatchObject({ kind: "partial", statusCode: 206, lastModified: emittedLastModified });
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         nowMs,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": LAST_MODIFIED }),
@@ -201,11 +205,11 @@ describe("resolveByteResponse", () => {
     "bounds the future Last-Modified validator on %s not-modified responses",
     (method) => {
       const nowMs = FILE.mtimeMs - 60_000;
-      const etag = resolveByteResponse({ file: FILE, nowMs }).etag;
+      const etag = IMMUTABLE_FILE.validators.etag;
 
       expect(
         resolveByteResponse({
-          file: FILE,
+          ...IMMUTABLE_FILE,
           method,
           nowMs,
           request: createByteRequest({ "if-none-match": etag }),
@@ -226,7 +230,7 @@ describe("resolveByteResponse", () => {
   )("revalidates $method using a $label If-Modified-Since date", ({ value, method }) => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method,
         request: createByteRequest({ "if-modified-since": value }),
       }),
@@ -238,7 +242,7 @@ describe("resolveByteResponse", () => {
     (method) => {
       expect(
         resolveByteResponse({
-          file: FILE,
+          ...IMMUTABLE_FILE,
           method,
           request: createByteRequest({
             "if-modified-since": new Date(Date.parse(LAST_MODIFIED) + 1_000).toUTCString(),
@@ -258,7 +262,7 @@ describe("resolveByteResponse", () => {
 
       expect(
         resolveByteResponse({
-          file: FILE,
+          ...IMMUTABLE_FILE,
           nowMs,
           method,
           request: createByteRequest({ "if-modified-since": emittedLastModified }),
@@ -270,7 +274,7 @@ describe("resolveByteResponse", () => {
   it("interprets an obsolete RFC 850 year within the RFC's rolling 50-year window", () => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         nowMs: Date.UTC(2026, 0, 1),
         method: "GET",
         request: createByteRequest({ "if-modified-since": "Sunday, 06-Nov-50 00:00:00 GMT" }),
@@ -281,7 +285,8 @@ describe("resolveByteResponse", () => {
   it("includes a leap second when applying the RFC 850 rolling-year boundary", () => {
     expect(
       resolveByteResponse({
-        file: { size: 10, mtimeMs: Date.UTC(1977, 0, 1) },
+        file: { size: 10 },
+        validators: createImmutableFileValidators({ size: 10, mtimeMs: Date.UTC(1977, 0, 1) }),
         nowMs: Date.UTC(2026, 11, 31, 23, 59, 59),
         method: "GET",
         request: createByteRequest({ "if-modified-since": "Friday, 31-Dec-76 23:59:60 GMT" }),
@@ -292,7 +297,8 @@ describe("resolveByteResponse", () => {
   it("accepts a valid HTTP-date leap second without JavaScript date normalization", () => {
     expect(
       resolveByteResponse({
-        file: { size: 10, mtimeMs: Date.UTC(2017, 0, 1) },
+        file: { size: 10 },
+        validators: createImmutableFileValidators({ size: 10, mtimeMs: Date.UTC(2017, 0, 1) }),
         method: "GET",
         request: createByteRequest({ "if-modified-since": "Sat, 31 Dec 2016 23:59:60 GMT" }),
       }),
@@ -317,7 +323,7 @@ describe("resolveByteResponse", () => {
   ])("ignores $label in If-Modified-Since", ({ value }) => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ "if-modified-since": value }),
       }),
@@ -329,7 +335,7 @@ describe("resolveByteResponse", () => {
     (ifNoneMatch) => {
       expect(
         resolveByteResponse({
-          file: FILE,
+          ...IMMUTABLE_FILE,
           method: "GET",
           request: createByteRequest({
             "if-none-match": ifNoneMatch,
@@ -345,7 +351,7 @@ describe("resolveByteResponse", () => {
 
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: {
           headers,
@@ -363,7 +369,8 @@ describe("resolveByteResponse", () => {
   it("interprets asctime dates as UTC rather than the host's local timezone", () => {
     expect(
       resolveByteResponse({
-        file: { size: 10, mtimeMs: Date.UTC(1994, 10, 6, 12) },
+        file: { size: 10 },
+        validators: createImmutableFileValidators({ size: 10, mtimeMs: Date.UTC(1994, 10, 6, 12) }),
         method: "GET",
         request: createByteRequest({ "if-modified-since": "Sun Nov  6 08:49:37 1994" }),
       }),
@@ -392,12 +399,12 @@ describe("resolveByteResponse", () => {
       header: LAST_MODIFIED.replace("Tue", "tue"),
     },
     { label: "a malformed HTTP-date", header: "not-an-http-date" },
-    { label: "a weak ETag", header: `W/${resolveByteResponse({ file: FILE }).etag}` },
+    { label: "a weak ETag", header: `W/${resolveByteResponse({ ...IMMUTABLE_FILE }).etag}` },
     { label: "multiple validator values", header: [LAST_MODIFIED, LAST_MODIFIED] },
   ])("ignores a range for $label If-Range", ({ header }) => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": header }),
       }),
@@ -407,7 +414,7 @@ describe("resolveByteResponse", () => {
   it("falls back to a full response for a mismatched If-Range ETag", () => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": '"different"' }),
       }),
@@ -421,9 +428,9 @@ describe("resolveByteResponse", () => {
     { label: "list", header: (etag: string) => `"other", ${etag}` },
     { label: "multiple headers", header: (etag: string) => ['"other"', `W/${etag}`] },
   ])("returns 304 for a matching $label If-None-Match validator", ({ header }) => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
+    const etag = IMMUTABLE_FILE.validators.etag;
     const plan = resolveByteResponse({
-      file: FILE,
+      ...IMMUTABLE_FILE,
       method: "GET",
       request: createByteRequest({ "if-none-match": header(etag) }),
     });
@@ -446,11 +453,11 @@ describe("resolveByteResponse", () => {
   it.each(["GET", "HEAD"])(
     "evaluates matching If-None-Match before Range and If-Range for %s",
     (method) => {
-      const etag = resolveByteResponse({ file: FILE }).etag;
+      const etag = IMMUTABLE_FILE.validators.etag;
 
       expect(
         resolveByteResponse({
-          file: FILE,
+          ...IMMUTABLE_FILE,
           method,
           request: createByteRequest({
             range: "bytes=1-2",
@@ -463,11 +470,11 @@ describe("resolveByteResponse", () => {
   );
 
   it("keeps the requested range when If-None-Match does not match", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
+    const etag = IMMUTABLE_FILE.validators.etag;
 
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({
           range: "bytes=1-2",
@@ -486,7 +493,7 @@ describe("resolveByteResponse", () => {
     "emits the same Last-Modified validator on $label responses",
     ({ rangeHeader, statusCode }) => {
       const plan = resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: rangeHeader }),
       });
@@ -501,12 +508,12 @@ describe("resolveByteResponse", () => {
   );
 });
 
-describe("byte ETag generation", () => {
+describe("immutable file validators", () => {
   it("is stable for the same file identity and changes with size or mtime", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
-    expect(resolveByteResponse({ file: { ...FILE } }).etag).toBe(etag);
-    expect(resolveByteResponse({ file: { ...FILE, size: FILE.size + 1 } }).etag).not.toBe(etag);
-    expect(resolveByteResponse({ file: { ...FILE, mtimeMs: FILE.mtimeMs + 1 } }).etag).not.toBe(
+    const etag = IMMUTABLE_FILE.validators.etag;
+    expect(createImmutableFileValidators({ ...FILE }).etag).toBe(etag);
+    expect(createImmutableFileValidators({ ...FILE, size: FILE.size + 1 }).etag).not.toBe(etag);
+    expect(createImmutableFileValidators({ ...FILE, mtimeMs: FILE.mtimeMs + 1 }).etag).not.toBe(
       etag,
     );
     expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
@@ -532,7 +539,7 @@ describe("Gateway byte response descriptor lifecycle", () => {
         response.end("not found");
       });
       const byteResponse = resolveByteResponse({
-        file: { size: body.byteLength, mtimeMs: 1 },
+        file: { size: body.byteLength },
         method: "GET",
       });
       writeByteHeaders(response, byteResponse);
@@ -586,10 +593,7 @@ describe("Gateway byte response descriptor lifecycle", () => {
     const owner = createGatewayByteStream(response, handle, () => {});
 
     try {
-      await owner.pipe(
-        resolveByteResponse({ file: { size: 5, mtimeMs: 1 }, method: "GET" }),
-        "GET",
-      );
+      await owner.pipe(resolveByteResponse({ file: { size: 5 }, method: "GET" }), "GET");
       expect(closeHandle).toHaveBeenCalledOnce();
       expect(handle.fd).toBe(-1);
     } finally {

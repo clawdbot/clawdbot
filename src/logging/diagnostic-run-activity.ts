@@ -85,7 +85,7 @@ type ModelStartedActivityEvent = Pick<
 type RunProgressEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
   "runId" | "sessionId" | "sessionKey" | "reason"
-> & { progressKind?: "semantic" | "liveness" };
+>;
 
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
@@ -665,10 +665,6 @@ export function getDiagnosticEmbeddedRunActivitySequence(): number {
   return embeddedRunSequence;
 }
 
-function markDiagnosticRunProgressForTest(params: RunProgressEvent): void {
-  applyRunProgress(params, params.progressKind === "semantic");
-}
-
 function markDiagnosticModelStartedForTest(params: ModelStartedActivityEvent): void {
   recordModelStarted(params, undefined, true);
 }
@@ -683,7 +679,6 @@ function installDiagnosticRunActivityTestApi(): void {
     Symbol.for("openclaw.diagnosticRunActivityTestApi")
   ] = {
     markDiagnosticModelStartedForTest,
-    markDiagnosticRunProgressForTest,
     markDiagnosticToolStartedForTest: recordToolStarted,
   };
 }

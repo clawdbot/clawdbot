@@ -3,9 +3,9 @@ import {
   ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN,
   ANSI_OSC_INTRODUCER_PATTERN,
   ANSI_STRING_TERMINATOR_PATTERN,
+  iterateAnsiSegments,
   matchAnsiOscAt,
   scanAnsiCsiAt,
-  splitAnsiSegments,
 } from "./ansi-sequences.js";
 
 /*
@@ -294,7 +294,7 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
     used += fittedWidth;
     budgetSpent = true;
   };
-  for (const segment of splitAnsiSegments(input)) {
+  for (const segment of iterateAnsiSegments(input)) {
     if (segment.kind === "ansi") {
       // CSI retains only C0/DEL controls; TAB is the sole visible-width member.
       const widthControls = segment.controls.filter((control) => control === "\t");

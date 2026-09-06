@@ -9,6 +9,7 @@
     "terminal": {"emoji":"⌨️","title":"Terminal","detailKeys":["action","sessionId","command","cwd"]},
     "portal": {"emoji":"🌐","title":"Portal","detailKeys":["action","port","id","title","path"]},
     "process": {"emoji":"🧰","title":"Process","detailKeys":["sessionId"]},
+    "gateway_process": {"emoji":"🧰","title":"Background Shell","detailKeys":["action","sessionId"]},
     "read": {"emoji":"📖","title":"Read","detailKeys":["path"]},
     "write": {"emoji":"✍️","title":"Write","detailKeys":["path"]},
     "edit": {"emoji":"📝","title":"Edit","detailKeys":["path"]},

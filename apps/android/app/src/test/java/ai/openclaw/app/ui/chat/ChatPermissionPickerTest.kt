@@ -26,8 +26,8 @@ class ChatPermissionPickerTest {
   }
 
   @Test
-  fun modeLabelsIncludeDefault() {
-    assertEquals("Default", chatPermissionModeLabel(null))
+  fun modeLabelsDistinguishPolicyDefault() {
+    assertEquals("Policy default", chatPermissionModeLabel(null))
     assertEquals("Full access", chatPermissionModeLabel(ChatPermissionMode.Full))
   }
 }

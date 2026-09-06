@@ -82,7 +82,7 @@ export async function stopCodexConversationTurn(params: {
     return { stopped: false, message: "No active Codex run to stop." };
   }
   const lookup = buildBindingLookup(params);
-  const binding = await params.bindingStore.read(params.identity);
+  const binding = params.bindingStore.read(params.identity);
   if (binding?.threadId !== active.threadId) {
     return {
       stopped: false,
@@ -139,7 +139,7 @@ export async function steerCodexConversationTurn(params: {
     return { steered: false, message: "No active Codex run to steer." };
   }
   const lookup = buildBindingLookup(params);
-  const binding = await params.bindingStore.read(params.identity);
+  const binding = params.bindingStore.read(params.identity);
   if (binding?.threadId !== active.threadId) {
     return {
       steered: false,
@@ -193,7 +193,7 @@ export async function setCodexConversationModel(params: {
     return "Usage: /codex model <model>";
   }
   const lookup = buildBindingLookup(params);
-  const binding = await requireThreadBinding(params.bindingStore, params.identity);
+  const binding = requireThreadBinding(params.bindingStore, params.identity);
   if (binding.connectionScope === "supervision") {
     throw new ModelSelectionLockedError();
   }
@@ -272,7 +272,7 @@ export async function setCodexConversationFastMode(params: {
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
 }): Promise<string> {
-  const binding = await requireThreadBinding(params.bindingStore, params.identity);
+  const binding = requireThreadBinding(params.bindingStore, params.identity);
   if (params.enabled == null) {
     return `Codex fast mode: ${isCodexFastServiceTier(binding.serviceTier) ? "on" : "off"}.`;
   }
@@ -358,11 +358,11 @@ export function formatPermissionsMode(
   return mode === "full" ? "full access" : (mode ?? "default");
 }
 
-async function requireThreadBinding(
+function requireThreadBinding(
   bindingStore: CodexAppServerBindingStore,
   identity: CodexAppServerBindingIdentity,
 ) {
-  const binding = await bindingStore.read(identity);
+  const binding = bindingStore.read(identity);
   if (!binding?.threadId) {
     throw new Error("No Codex thread is attached to this OpenClaw session yet.");
   }

@@ -44,8 +44,12 @@ const isWorkerRsyncReceiverConfig = (config: TsdownConfig) =>
     "worker/workspace-rsync-receiver",
     "src/worker/workspace-rsync-receiver.ts",
   );
+const isWorkerGitHubExecLauncherConfig = (config: TsdownConfig) =>
+  hasWorkerEntry(config, "worker/github-exec-launcher", "src/agents/github-exec-launcher.ts");
 const isWorkerBuildConfig = (config: TsdownConfig) =>
-  isWorkerDeployConfig(config) || isWorkerRsyncReceiverConfig(config);
+  isWorkerDeployConfig(config) ||
+  isWorkerRsyncReceiverConfig(config) ||
+  isWorkerGitHubExecLauncherConfig(config);
 
 const FS_SAFE_CALLER_PROBE = `
 import assert from "node:assert/strict";
@@ -453,7 +457,7 @@ describe("tsdown config", () => {
   );
 
   it.each(
-    ["runtime", "declarations", "worker", "receiver"].flatMap((target) =>
+    ["runtime", "declarations", "worker", "receiver", "github-launcher"].flatMap((target) =>
       [false, true].map((verbose) => ({ target, verbose })),
     ),
   )(
@@ -462,15 +466,19 @@ describe("tsdown config", () => {
       vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
       const root = fs.realpathSync(createTempDir("openclaw-tsdown-dependencies-"));
       const declarations = target === "declarations";
-      const bundleAll = target === "worker" || target === "receiver";
+      const bundleAll = ["worker", "receiver", "github-launcher"].includes(target);
       const selected = configs.find(
         target === "worker"
           ? isWorkerDeployConfig
           : target === "receiver"
             ? isWorkerRsyncReceiverConfig
-            : (entry) =>
-                entry.name ===
-                (declarations ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0] : TSDOWN_UNIFIED_CONFIG_GROUP),
+            : target === "github-launcher"
+              ? isWorkerGitHubExecLauncherConfig
+              : (entry) =>
+                  entry.name ===
+                  (declarations
+                    ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0]
+                    : TSDOWN_UNIFIED_CONFIG_GROUP),
       );
       expect(selected).toBeDefined();
       const packages = [
@@ -678,11 +686,15 @@ describe("tsdown config", () => {
   it("builds self-contained worker deploy executables with every dependency bundled", () => {
     const workerConfig = configs.find(isWorkerDeployConfig);
     const receiverConfig = configs.find(isWorkerRsyncReceiverConfig);
+    const launcherConfig = configs.find(isWorkerGitHubExecLauncherConfig);
     expect(workerConfig?.entry).toEqual({
       "worker/worker": "src/worker/worker-deploy-entry.ts",
     });
     expect(receiverConfig?.entry).toEqual({
       "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
+    });
+    expect(launcherConfig?.entry).toEqual({
+      "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts",
     });
     const packageVersion = (
       JSON.parse(fs.readFileSync("package.json", "utf8")) as {
@@ -711,17 +723,19 @@ describe("tsdown config", () => {
       codeSplitting: false,
       assetFileNames: "worker/[name][extname]",
     });
-    expect(receiverConfig?.define).toBeUndefined();
-    expect(receiverConfig?.alias).toBeUndefined();
-    expect(receiverConfig?.plugins).toBeUndefined();
-    expect(receiverConfig?.outputOptions).toEqual({ codeSplitting: false });
+    for (const config of [receiverConfig, launcherConfig]) {
+      expect(config?.define).toBeUndefined();
+      expect(config?.alias).toBeUndefined();
+      expect(config?.plugins).toBeUndefined();
+      expect(config?.outputOptions).toEqual({ codeSplitting: false });
+    }
 
     const context = {
       format: "es",
       options: {},
       pkgType: "module",
     } as Parameters<OutExtensions>[0];
-    for (const config of [workerConfig, receiverConfig]) {
+    for (const config of [workerConfig, receiverConfig, launcherConfig]) {
       expect(config?.dts).toBe(false);
       expect(config?.outDir).toBe("dist");
       expect(config?.shims).toBe(true);

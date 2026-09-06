@@ -90,7 +90,7 @@ suite.define(() => {
           await row.getByRole("button", { name: "Open session menu" }).click();
         }
         await openSessionMenuSubmenu(page, batch ? "Move 2 to group" : "Move to group");
-        await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group…" }));
+        await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
         const input = page.getByLabel("New group name");
         await input.fill(group);
         await capture("editing");
@@ -98,10 +98,7 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.groups.put");
 
         // Deletion/recreation changes the durable identity, unlike ordinary reset.
-        await gateway.setMethodResponse(
-          "sessions.list",
-          sessionsListResponse([replacement, survivor]),
-        );
+        await gateway.setSessionsListResponse(sessionsListResponse([replacement, survivor]));
         await gateway.emitGatewayEvent("sessions.changed", {
           ...replacement,
           sessionKey: original.key,

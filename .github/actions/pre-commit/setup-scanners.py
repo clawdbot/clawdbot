@@ -1,4 +1,4 @@
-"""Install the pinned CI scanners and prepare local-only pre-commit hooks."""
+"""Install pinned zizmor and prepare its local-only pre-commit hook."""
 
 import json
 import os
@@ -19,18 +19,10 @@ def main():
     subprocess.run([sys.executable, "-I", "-m", "venv", str(venv)], check=True)
     subprocess.run([
         python, "-I", "-m", "pip", "install", "--disable-pip-version-check",
-        "pre-commit==4.6.2", "pre-commit-hooks==6.0.0", "zizmor==1.29.0",
+        "pre-commit==4.6.2", "zizmor==1.29.0",
     ], check=True)
 
-    # System hooks inherit the environment, not the parent's -I. Bind the Python
-    # scanner to this venv with its own -I; never resolve its interpreter symlink.
     hooks = [
-        {
-            "id": "detect-private-key", "name": "detect private key",
-            "entry": shlex.join([python, "-I", "-m", "pre_commit_hooks.detect_private_key"]),
-            "language": "system", "types": ["text"],
-            "exclude": r"(^|/)(\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)",
-        },
         {
             "id": "zizmor", "name": "zizmor",
             "entry": shlex.join([str(venv / "bin/zizmor")]),

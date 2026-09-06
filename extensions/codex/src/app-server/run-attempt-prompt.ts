@@ -449,6 +449,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       codexHome: appServer.start.env?.CODEX_HOME,
       config: params.config,
       contextEngineActive: Boolean(activeContextEngine),
+      expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,
       projectedTurnTokens: estimateCodexAppServerProjectedTurnTokens({
         prompt: turnState.codexTurnPromptText,
         developerInstructions: buildRenderedCodexDeveloperInstructions(),

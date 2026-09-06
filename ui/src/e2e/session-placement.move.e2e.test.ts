@@ -179,7 +179,7 @@ suite.define(() => {
         },
       };
       // The move owner refreshes the roster; the RPC acknowledgement is not its projection.
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([movedSession]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([movedSession]));
       await gateway.resolveDeferred("sessions.move", {
         ok: true,
         key: movedSession.key,
@@ -229,7 +229,7 @@ suite.define(() => {
         ...session.placement,
         runner: { kind: "device", status: "available" },
       } as typeof session.placement;
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([session]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await page.getByRole("button", { name: "Runs on device" }).waitFor();
       expect(await page.locator(".chat-pane__placement-note").count()).toBe(0);
@@ -238,7 +238,7 @@ suite.define(() => {
         ...session.placement,
         runner: { kind: "device", status: "offline" },
       } as typeof session.placement;
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([session]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       const continueAction = page.getByText("Continue on Gateway…", { exact: true });
@@ -617,10 +617,11 @@ suite.define(() => {
         ).runnerFreshnessPresentation = state;
         inspect();
       });
-      const listCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list", { agentId: "main" });
+      const rosterMatch = { includeGlobal: true, agentId: "main" };
+      const listCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
-      await gateway.waitForRequest("sessions.list", { after: listCount });
+      await gateway.waitForRequest("sessions.list", { after: listCount, match: rosterMatch });
       await gateway.resolveDeferred("sessions.list", chatSessionListResponse([parent, offline]));
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       expect(

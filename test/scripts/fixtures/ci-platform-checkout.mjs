@@ -5,6 +5,10 @@ import { createConnection } from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import {
+  createWindowsProcessCensus,
+  requestWindowsProcessCensus,
+} from "./ci-windows-process-census.mjs";
 
 const [mode, root, policyScenario, ...args] = process.argv.slice(2);
 const linux = policyScenario.startsWith("linux:");
@@ -12,6 +16,8 @@ const scenario = linux ? policyScenario.slice("linux:".length) : policyScenario;
 const fixture = fileURLToPath(import.meta.url);
 const instance = randomUUID();
 let ownWindowsCreationTime;
+let census;
+let actorLease;
 const workspace = path.join(root, "workspace");
 const runnerTemp = path.join(root, "temp");
 const lease = path.join(root, "lease");
@@ -81,45 +87,28 @@ function stall(attempt) {
   }
 }
 
-function readWindowsProcessCensus(pids) {
-  const result = spawnSync(
-    "python",
-    ["-I", "-S", fileURLToPath(new URL("./ci-windows-process-census.py", import.meta.url))],
-    { input: JSON.stringify(pids), encoding: "utf8", timeout: 1_000, killSignal: "SIGKILL" },
-  );
-  if (result.error || result.status !== 0 || result.stderr !== "") {
-    throw new Error(
-      "Fixture Windows process census failed (" +
-        (result.error?.code ?? result.status) +
-        "): " +
-        result.stderr,
-    );
+function assertActorLease() {
+  if (mode !== "supervise" && fs.readFileSync(lease, "utf8") !== actorLease) {
+    throw new Error("Fixture actor lease retired");
   }
-  const observations = JSON.parse(result.stdout);
-  if (
-    !Array.isArray(observations) ||
-    observations.length !== pids.length ||
-    observations.some(
-      (entry, index) =>
-        entry?.pid !== pids[index] ||
-        typeof entry.alive !== "boolean" ||
-        (!(typeof entry.creationTime === "string" && /^\d+$/.test(entry.creationTime)) &&
-          !(entry.alive === false && entry.creationTime === null)),
-    )
-  ) {
-    throw new Error("Fixture Windows process census returned invalid identities");
-  }
-  return new Map(observations.map((entry) => [entry.pid, entry]));
 }
 
-function record(pid, role, attempt = 0) {
+function readWindowsProcessCensus(pids) {
+  return mode === "supervise"
+    ? census.read(pids)
+    : requestWindowsProcessCensus(root, actorLease, pids);
+}
+
+async function record(pid, role, attempt = 0) {
   if (process.platform === "win32" && pid === process.pid && !ownWindowsCreationTime) {
-    const identity = readWindowsProcessCensus([pid]).get(pid);
+    const identity = (await readWindowsProcessCensus([pid])).get(pid);
     if (!identity.alive || !identity.creationTime) {
       throw new Error("Fixture actor could not capture its own Windows birth");
     }
     ownWindowsCreationTime = identity.creationTime;
   }
+  // Registration cannot outlive the exact lease held before the native await.
+  assertActorLease();
   publish(`pids/${pid}.json`, {
     pid,
     role,
@@ -140,11 +129,11 @@ function records() {
     .map((file) => JSON.parse(fs.readFileSync(path.join(recordsDir, file), "utf8")));
 }
 
-function liveRecords() {
+async function liveRecords() {
   const owned = records().filter(
     (entry) =>
       !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)) &&
-      // The creator owns this shell through track(close), not a later PID lookup.
+      // The creator owns this shell through its actual close, not a later PID lookup.
       !(process.platform === "win32" && entry.role === "shell"),
   );
   if (owned.length === 0) {
@@ -153,7 +142,7 @@ function liveRecords() {
   const alive = new Set();
   const pids = new Set(owned.map((entry) => entry.pid));
   const windowsCensus =
-    process.platform === "win32" ? readWindowsProcessCensus([...pids]) : undefined;
+    process.platform === "win32" ? await readWindowsProcessCensus([...pids]) : undefined;
   if (windowsCensus) {
     for (const entry of owned) {
       if (typeof entry.creationTime !== "string" || !/^\d+$/.test(entry.creationTime)) {
@@ -202,6 +191,7 @@ function liveRecords() {
       }
     }
   }
+  assertActorLease();
   return owned.filter((entry) => {
     if (
       alive.has(entry.pid) &&
@@ -240,8 +230,9 @@ function isWorkflowDescendant(pid, shellPid) {
   return false;
 }
 
-function boundary(name) {
-  const alive = liveRecords();
+async function boundary(name) {
+  const alive = await liveRecords();
+  assertActorLease();
   fs.appendFileSync(
     eventsFile,
     `${JSON.stringify({
@@ -272,6 +263,21 @@ function observe(child) {
   return { child, exited, closed, getOutcome: () => outcome };
 }
 
+async function until(predicate, label, deadline) {
+  for (;;) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${label}`);
+    }
+    const satisfied = await predicate();
+    // Truthful completion after expiry cannot authorize namespace release.
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${label}`);
+    }
+    if (satisfied) return;
+    await delay(Math.max(0, Math.min(10, deadline - Date.now())));
+  }
+}
+
 async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lease)) {
   // Readiness belongs to the owned child's lifetime. The supervisor's existing
   // watchdog bounds startup; an independent short timer can preempt legal Git work.
@@ -297,15 +303,24 @@ function launch(role, attempt) {
 }
 
 function holdLease() {
+  actorLease = fs.readFileSync(lease, "utf8");
+  const isLive = () => {
+    try {
+      return fs.readFileSync(lease, "utf8") === actorLease;
+    } catch (error) {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    }
+  };
   // Orphans stop themselves when the supervisor releases the lease; no PID discovery/kills.
   // The independent ceiling also covers a supervisor killed before it can unlink the lease.
   const deadline = Date.now() + 60_000;
   setInterval(() => {
-    if (!fs.existsSync(lease) || Date.now() >= deadline) {
+    if (!isLive() || Date.now() >= deadline) {
       process.exit(0);
     }
   }, 20);
-  if (!fs.existsSync(lease)) {
+  if (!isLive()) {
     process.exit(0);
   }
 }
@@ -366,16 +381,16 @@ async function command() {
     }
   }
   holdLease();
-  if (!options.performance || mode !== "observe") record(process.pid, mode);
+  if (!options.performance || mode !== "observe") await record(process.pid, mode);
   if (mode === "sentinel") {
     return;
   }
   if (mode === "observe") {
-    boundary(args[0]);
+    await boundary(args[0]);
     process.exit(0);
   }
   if (options.performance && ["curl", "tar", "sha256sum", "npm"].includes(mode)) {
-    boundary(`consumer:${mode}`);
+    await boundary(`consumer:${mode}`);
     recordCommand(mode, process.cwd(), args);
     if (mode === "tar") {
       const directory = insideOwnedPath(args[args.indexOf("-C") + 1]);
@@ -390,14 +405,14 @@ async function command() {
   if (mode === "find") {
     insideOwnedPath(args[0]);
     // Observe before the real deletion, while prior Git children can still write.
-    boundary("delete");
+    await boundary("delete");
     const result = spawnSync("/usr/bin/find", args, { stdio: "inherit" });
     process.exit(result.status ?? 1);
   }
   if (mode === "rm") {
     const target = insideOwnedPath(args.at(-1));
     if (target === path.join(workspace, "publish")) {
-      boundary("delete");
+      await boundary("delete");
     }
     recordCommand(mode, process.cwd(), args);
     const result = spawnSync("/bin/rm", args, { stdio: "inherit" });
@@ -417,7 +432,7 @@ async function command() {
         process.exit(0);
       }
     });
-    record(process.pid, mode, attempt);
+    await record(process.pid, mode, attempt);
     if (mode === "child") {
       // Startup faults belong to the caller, not every consumer of this shared fixture.
       const startDelay = path.join(root, `tree-start-delay-${attempt}.json`);
@@ -434,7 +449,7 @@ async function command() {
     const cwd = insideOwnedPath(process.cwd());
     recordCommand(mode, cwd, args);
     if (options.performance && mode === "node") {
-      boundary("consumer:node");
+      await boundary("consumer:node");
       const allowed = [
         options.env.PERFORMANCE_REPORT_SELECTOR,
         options.env.PERFORMANCE_PUBLISHER_HELPER,
@@ -455,7 +470,7 @@ async function command() {
       // The workflow's package-script capability probe; never evaluate candidate code.
       process.exit(0);
     }
-    boundary(`consumer:${mode}`);
+    await boundary(`consumer:${mode}`);
     if (mode === "go") {
       const [build, changeDirectory, source, outputFlag, output, target] = args;
       if (
@@ -528,7 +543,7 @@ async function command() {
   }
   const operation = args.shift();
   if (operation === "init" && !localGit) {
-    boundary("init");
+    await boundary("init");
     const config = path.join(root, "fixture-config.json");
     if (fs.existsSync(config)) {
       await delay(JSON.parse(fs.readFileSync(config, "utf8")).initDelayMs);
@@ -588,9 +603,9 @@ async function command() {
     const attempt = fs.existsSync(treeCounter)
       ? JSON.parse(fs.readFileSync(treeCounter, "utf8")) + 1
       : 1;
-    boundary(`${operation}:${resultAttempt}`);
+    await boundary(`${operation}:${resultAttempt}`);
     publish("tree-attempt.json", attempt);
-    record(process.pid, "parent", attempt);
+    await record(process.pid, "parent", attempt);
     if (operation === "clone" || operation === "worktree") {
       const directory = insideOwnedPath(operation === "clone" ? args.at(-1) : args.at(-2));
       if (operation === "clone" && options.docsPublish && fs.existsSync(directory)) {
@@ -626,7 +641,7 @@ async function command() {
     if (options.cancelDuringCleanup) {
       const pid = process.ppid;
       publish("owner.json", { pid, startTime: getFileLockProcessStartTime(pid) });
-      record(pid, "owner");
+      await record(pid, "owner");
       if (
         options.cleanupCancelMatch &&
         new RegExp(options.cleanupCancelMatch).test([operation, ...args].join(" "))
@@ -643,7 +658,7 @@ async function command() {
       );
     }
     if (scenario.startsWith("cancel-") || commandResult?.code === "cancel") {
-      const owned = liveRecords();
+      const owned = await liveRecords();
       const alive = owned.filter((entry) => entry.attempt === attempt);
       if (
         !["parent", "child", "grandchild"].every((role) =>
@@ -845,7 +860,7 @@ async function command() {
     stall(attempt);
     return;
   } else if (operation === "checkout") {
-    boundary(cwd === path.join(workspace, ".ci-harness") ? "harness-checkout" : "checkout");
+    await boundary(cwd === path.join(workspace, ".ci-harness") ? "harness-checkout" : "checkout");
     if (scenario === "checkout-failure") {
       process.exit(23);
     }
@@ -873,20 +888,20 @@ async function command() {
       (options.docsAgent && args.join(" ") === "--quiet") ||
       options.maturity)
   ) {
-    boundary("diff");
+    await boundary("diff");
     process.exit(options.diffResult ?? (options.maturity ? 0 : 1));
   } else if (
     ["add", "commit"].includes(operation) ||
     (operation === "config" && (options.docsPublish || options.docsAgent)) ||
     (operation === "rebase" && args[0] === "--abort")
   ) {
-    boundary(operation === "rebase" ? "rebase-abort" : operation);
+    await boundary(operation === "rebase" ? "rebase-abort" : operation);
     // An abort without an active rebase is an ordinary ignored Git failure.
     process.exit(operation === "rebase" ? 128 : 0);
   } else if (options.docsAgent && ["ls-files", "diff"].includes(operation)) {
-    boundary(operation);
+    await boundary(operation);
   } else if (operation === "cat-file" || (operation === "show" && options.objects)) {
-    boundary(`${operation}:${args.at(-1)}`);
+    await boundary(`${operation}:${args.at(-1)}`);
     const spec = args.at(-1);
     if (spec.endsWith("^{commit}")) {
       process.exit(options.baseAvailableAfter === 0 ? 0 : 1);
@@ -897,7 +912,7 @@ async function command() {
     }
     process.exit(object ? ((operation === "cat-file" ? object.probe : object.code) ?? 0) : 1);
   } else if (operation === "rev-parse") {
-    boundary("rev-parse");
+    await boundary("rev-parse");
     if (args[0] === "--verify") {
       fs.writeSync(1, "fixture quiet probe stdout\n");
       fs.writeSync(2, "fixture quiet probe stderr\n");
@@ -909,22 +924,22 @@ async function command() {
     }
     fs.writeSync(1, `${args.map((ref) => resolveRef(cwd, ref)).join("\n")}\n`);
   } else if (operation === "tag" && args[0] === "--points-at") {
-    boundary("tag");
+    await boundary("tag");
   } else if (operation === "merge-base" && options.mergeBase) {
-    boundary("merge-base");
+    await boundary("merge-base");
     if (args[0] === "--is-ancestor") {
       process.exit(options.mergeBase.ancestor ? 0 : 1);
     }
     fs.writeSync(1, `${options.mergeBase.revision}\n`);
   } else if (operation === "check-ref-format") {
-    boundary("check-ref-format");
+    await boundary("check-ref-format");
     fs.writeSync(1, "fixture quiet probe stdout\n");
     fs.writeSync(2, "fixture quiet probe stderr\n");
     process.exit(options.invalidRef ? 1 : 0);
   } else if (operation === "remote" && args[0] === "get-url") {
     fs.writeSync(1, "https://example.invalid/fixture.git\n");
   } else if (operation === "show" && args.join(" ").startsWith("-s --format=%P ")) {
-    boundary("show-parents");
+    await boundary("show-parents");
     const snapshot = options.mergeSnapshots?.find((entry) => entry.sha === args.at(-1));
     const head = snapshot?.head ?? "a".repeat(40);
     fs.writeSync(1, `${"c".repeat(40)} ${head}\n`);
@@ -938,7 +953,7 @@ async function supervise() {
   fs.mkdirSync(recordsDir);
   fs.writeFileSync(eventsFile, "");
   fs.writeFileSync(commandsFile, "");
-  fs.writeFileSync(lease, "owned\n");
+  fs.writeFileSync(lease, instance);
   const bin = path.join(root, "bin");
   const commandPath = `${bin}${path.delimiter}${process.env.PATH}`;
   const home = path.join(runnerTemp, "home");
@@ -995,6 +1010,8 @@ async function supervise() {
   let workflow;
   let sentinel;
   let stopping;
+  let exitObservation = Promise.resolve();
+  let censusFailed = false;
   let outputBytes = 0;
   const outputLimit = 256 * 1024;
   const streamEnds = new Set();
@@ -1023,15 +1040,17 @@ async function supervise() {
     outputBytes += chunk.length;
   };
   const stop = (error) => {
-    if (error && !stopping) {
-      report.error = String(error);
-    }
-    stopping ??= (async () => {
-      const deadline = Date.now() + 4_000;
+    if (error && !stopping) report.error = String(error);
+    stopping ??= Promise.resolve().then(async () => {
+      const cleanupEnd = Date.now() + 4_000;
+      const actorEnd = census ? cleanupEnd - 1_000 : cleanupEnd;
+      let cleanupError;
+      let retirement;
+      // The exit census owns its pending observation before sampler retirement.
+      const retireCensus = () => (retirement ??= exitObservation.then(() => census.close()));
       try {
         if (shell?.pid && !workflow.getOutcome()) {
-          // TERM reaches both exec-Python and Bash's raw Python child. Killing
-          // their group first would bypass the owner's detached-Git finally drain.
+          // TERM lets the workflow owner drain its detached Git before pipe EOF.
           if (process.platform === "win32") {
             const taskkill = path.join(process.env.SystemRoot, "System32", "taskkill.exe");
             const result = spawnSync(taskkill, ["/PID", String(shell.pid), "/T", "/F"], {
@@ -1046,108 +1065,122 @@ async function supervise() {
             try {
               process.kill(-shell.pid, "SIGTERM");
             } catch (err) {
-              if (err.code !== "ESRCH") {
-                throw err;
-              }
+              if (err.code !== "ESRCH") throw err;
             }
           }
         }
       } catch (err) {
         report.cleanupErrors.push(String(err));
       }
-      // Preserve EXIT evidence with the sentinel still alive, then release the
-      // lease. The lifecycle itself never times out or masquerades as a join.
       const lifecycle = (async () => {
-        await workflow?.exited;
+        // Join the asynchronous EXIT boundary while the sentinel and lease are live.
+        await exitObservation;
         fs.rmSync(lease, { force: true });
-        // The creator owns even a sentinel blocked before its lease check or registration.
         sentinel?.child.kill("SIGKILL");
         await Promise.all([workflow?.closed, sentinel?.closed]);
         if (workflow && streamEnds.size !== 2) {
           throw new Error("Workflow streams closed without verified EOF");
         }
+        await until(
+          async () => {
+            report.cleanupRemaining = await liveRecords();
+            return report.cleanupRemaining.length === 0;
+          },
+          "fixture cleanup",
+          actorEnd,
+        );
+        if (report.cleanupErrors.length) throw new Error(report.cleanupErrors.join("; "));
       })();
-      let timer;
+      let actorCutoff;
       try {
         await Promise.race([
           lifecycle,
           new Promise((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error("CI_CHECKOUT_LIFETIME: unverified fixture closure")),
-              Math.max(0, deadline - Date.now()),
+            actorCutoff = setTimeout(
+              () => {
+                const error = new Error("CI_CHECKOUT_LIFETIME: unverified fixture closure");
+                cleanupError ??= error;
+                if (census) void retireCensus().catch((err) => (cleanupError ??= err));
+                reject(error);
+              },
+              Math.max(0, actorEnd - Date.now()),
             );
           }),
         ]);
-        if (Date.now() >= deadline) {
-          throw new Error("CI_CHECKOUT_LIFETIME: fixture cleanup deadline exceeded");
-        }
-        report.cleanupVerified = report.cleanupErrors.length === 0;
       } catch (err) {
-        report.cleanupErrors.push(String(err));
+        cleanupError ??= err;
       } finally {
-        clearTimeout(timer);
-        // Even an unverified owner must release cooperative helpers; the root
-        // remains retained, and this does not turn a timed-out join into success.
+        clearTimeout(actorCutoff);
+        // A timeout cannot discard a started exit observation or publish release.
+        await exitObservation;
         fs.rmSync(lease, { force: true });
         sentinel?.child.kill("SIGKILL");
-      }
-      // The one-second census is reporting only. Neither stale PID records nor
-      // a failed census can change the physical closure already observed above.
-      try {
-        report.cleanupRemaining = liveRecords();
-      } catch (error) {
-        // Physical closure does not excuse lost diagnostics. Preserve main's
-        // retained namespace on census failure, without a release receipt.
-        console.error(`Fixture cleanup unverified; retaining ${root}: ${String(error)}`);
-        if (report.error) {
-          console.error(report.error);
+        if (census) {
+          try {
+            await retireCensus();
+          } catch (err) {
+            cleanupError ??= err;
+          }
+          if (censusFailed) report.error = census.diagnostics();
         }
+      }
+      if (!cleanupError) {
+        report.ownedProcesses = records();
+        report.boundaries = fs
+          .readFileSync(eventsFile, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map(JSON.parse);
+        report.readyAttempts = fs
+          .readdirSync(root)
+          .filter((name) => /^ready-\d+\.json$/u.test(name))
+          .map((name) => JSON.parse(fs.readFileSync(path.join(root, name), "utf8")))
+          .toSorted((left, right) => left - right);
+        report.commands = fs
+          .readFileSync(commandsFile, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map(JSON.parse);
+        report.output = fs.readFileSync(path.join(root, "workflow.log"), "utf8");
+        if (options.publisher || options.performance) {
+          // Model Actions masking, including the mask-registration line itself.
+          const masks = [...report.output.matchAll(/^::add-mask::(.+)$/gm)].map(
+            (match) => match[1],
+          );
+          for (const value of [
+            ...masks,
+            options.env.CONTENTS_TOKEN,
+            options.env.GH_TOKEN,
+            options.env.CLAWGRIT_REPORTS_APP_TOKEN,
+          ]) {
+            if (value) report.output = report.output.replaceAll(value, "[redacted]");
+          }
+        }
+      }
+      // Report assembly is synchronous, but it must still finish within the original budget.
+      if (Date.now() >= cleanupEnd) {
+        cleanupError ??= new Error("Timed out waiting for fixture cleanup");
+      }
+      if (cleanupError) {
+        // Only the completed report releases the namespace; exit alone does not.
+        const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+        console.error(`Fixture cleanup unverified; retaining ${root}: ${detail}`);
+        if (censusFailed) console.error(census.diagnostics());
         fs.closeSync(output);
         process.exit(1);
       }
-      report.ownedProcesses = records();
-      report.boundaries = fs
-        .readFileSync(eventsFile, "utf8")
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map(JSON.parse);
-      report.readyAttempts = fs
-        .readdirSync(root)
-        .filter((name) => /^ready-\d+\.json$/u.test(name))
-        .map((name) => JSON.parse(fs.readFileSync(path.join(root, name), "utf8")))
-        .toSorted((left, right) => left - right);
-      report.commands = fs
-        .readFileSync(commandsFile, "utf8")
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map(JSON.parse);
-      report.output = fs.readFileSync(path.join(root, "workflow.log"), "utf8");
-      if (options.publisher || options.performance) {
-        // Model Actions masking, including the mask-registration line itself.
-        const masks = [...report.output.matchAll(/^::add-mask::(.+)$/gm)].map((match) => match[1]);
-        for (const value of [
-          ...masks,
-          options.env.CONTENTS_TOKEN,
-          options.env.GH_TOKEN,
-          options.env.CLAWGRIT_REPORTS_APP_TOKEN,
-        ]) {
-          if (value) report.output = report.output.replaceAll(value, "[redacted]");
-        }
-      }
+      report.cleanupVerified = true;
       publish("report.json", report);
       fs.closeSync(output);
-      process.exit(report.error || !report.cleanupVerified ? 1 : 0);
-    })();
+      process.exit(report.error ? 1 : 0);
+    });
     return stopping;
   };
-  // Keep the useful IPC channel attached through termination; an explicit stop
-  // request must not trigger the parent's disconnect/close accounting bug.
+  // Keep IPC attached until real close; disconnect is not an output-lifetime proof.
   process.on("message", (message) => {
-    if (message?.type === "ci-checkout:stop") {
-      void stop("test parent requested stop");
-    }
+    if (message?.type === "ci-checkout:stop") void stop("test parent requested stop");
   });
   process.once("disconnect", () => void stop("test parent disconnected"));
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
@@ -1155,6 +1188,22 @@ async function supervise() {
   }
   setTimeout(() => void stop("fixture deadline exceeded"), 45_000);
   try {
+    if (process.platform === "win32") {
+      census = createWindowsProcessCensus({
+        root,
+        token: instance,
+        onFailure: (error) => {
+          censusFailed = true;
+          void stop(error);
+        },
+      });
+      // Interpreter startup belongs to the existing supervisor watchdog, not a query deadline.
+      await census.ready;
+      if (stopping) {
+        await stopping;
+        return;
+      }
+    }
     if (process.platform !== "win32") {
       // A noexec mount can make PATH skip mocks and select real tools. Verify
       // resolution and executability before the workflow gets any chance to run.
@@ -1192,8 +1241,8 @@ async function supervise() {
     }
     sentinel = observe(
       spawn(process.execPath, [fixture, "sentinel", root, policyScenario], {
-        // Parent emergency teardown also owns a sentinel blocked before registration.
-        stdio: "ignore",
+        // Creator ownership precedes registration; retain startup diagnostics too.
+        stdio: ["ignore", output, output],
       }),
     );
     sentinel.child.once("error", (error) => void stop(error));
@@ -1259,20 +1308,20 @@ async function supervise() {
       stream.once("end", () => streamEnds.add(stream));
       stream.once("error", (error) => report.cleanupErrors.push(String(error)));
     }
-    shell.once("exit", (code, signal) => {
-      report.code = code;
-      report.signal = signal;
-      // Capture the leader's real EXIT before stop can release any descendants.
+    exitObservation = observed.exited.then(async (outcome) => {
+      if (outcome.error) return;
+      report.code = outcome.code;
+      report.signal = outcome.signal;
       try {
         if (options.docsAgent && fs.readFileSync(path.join(root, "github-output"), "utf8")) {
-          boundary("output");
+          await boundary("output");
         }
         if (
           options.objects &&
           fs.existsSync(path.join(root, "github-env")) &&
           fs.readFileSync(path.join(root, "github-env"), "utf8").includes("PRE_COMMIT_CONFIG_PATH=")
         ) {
-          boundary("config-publication");
+          await boundary("config-publication");
         }
         for (const [name, file] of options.publisher || options.maturity || options.performance
           ? [
@@ -1284,15 +1333,15 @@ async function supervise() {
             fs.existsSync(path.join(root, file)) &&
             fs.readFileSync(path.join(root, file), "utf8")
           )
-            boundary(name);
+            await boundary(name);
         }
-        boundary("exit");
+        await boundary("exit");
       } catch (error) {
-        report.error = report.error ? `${report.error}; ${String(error)}` : String(error);
+        report.cleanupErrors.push(String(error));
       }
     });
     if (shell.pid) {
-      record(shell.pid, "shell");
+      await record(shell.pid, "shell");
     }
     const ready = (name) =>
       waitForReady(
@@ -1335,13 +1384,11 @@ async function supervise() {
         () => Boolean(stopping),
       ))
     ) {
-      boundary("backoff-cancel");
+      await boundary("backoff-cancel");
       shell.kill("SIGTERM");
     }
     const outcome = await observed.exited;
-    if (outcome.error) {
-      throw new Error(outcome.error);
-    }
+    if (outcome.error) throw new Error(outcome.error);
     await stop();
   } catch (error) {
     await stop(error);

@@ -29,7 +29,6 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-pre
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { createAttemptCarryover } from "./run/attempt-result.js";
-import { advanceCodeModeRecovery } from "./run/code-mode-reconciliation.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -91,6 +90,7 @@ export async function runPreparedEmbeddedLoop(
     () =>
       prepareEmbeddedRunRuntime({
         runParams: params,
+        sessionAdmission: input.sessionAdmission,
         provider,
         modelId,
         agentDir,
@@ -551,16 +551,6 @@ export async function runPreparedEmbeddedLoop(
       if (assistantFailureOutcome.action === "retry") {
         continue;
       }
-      if (
-        advanceCodeModeRecovery({
-          attempt,
-          hostOwnsToolSurface: !pluginHarnessOwnsTransport,
-          retryState: terminalRetryState,
-          activateInternalPrompt: sessionPromptState.activateInternalPrompt,
-        })
-      ) {
-        continue;
-      }
       let assistantProfileFailureReason = assistantFailureOutcome.assistantProfileFailureReason;
       const terminalToolPresentationText = terminalToolPresentation.read();
       const finalizedTerminal = await prepareTerminalWithSettledTurnFinalization({
@@ -667,6 +657,8 @@ export async function runPreparedEmbeddedLoop(
         replayState: accumulatedReplayState,
         activePromptPersisted: sessionPromptState.activePrompt.persisted,
         activateInternalPrompt: sessionPromptState.activateInternalPrompt,
+        activateCompactionContinuation: sessionPromptState.activateCompactionContinuation,
+        clearCompactionContinuation: sessionPromptState.clearCompactionContinuation,
         setSuppressNextUserMessagePersistence: (value) => {
           sessionPromptState.suppressNextUserMessagePersistence = value;
         },
@@ -703,6 +695,9 @@ export async function runPreparedEmbeddedLoop(
       return terminalResolution.result;
     }
   } finally {
+    // Successful registration already cleared the marker; every earlier exit
+    // must restore terminal suppression before asynchronous settlement begins.
+    contextRecoveryState.restoreTimeoutRecoveryAbandonment();
     permissionChanges.close();
     await settleEmbeddedRun({
       runInput: admittedRunInput,

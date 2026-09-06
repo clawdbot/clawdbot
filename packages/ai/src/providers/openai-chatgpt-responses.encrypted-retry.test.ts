@@ -393,7 +393,11 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     };
 
     const failed = await streamOpenAICodexResponses(model, context, options).result();
-    expect(failed).toMatchObject({ stopReason: "error", errorMessage: "unsupported_parameter" });
+    expect(failed).toMatchObject({
+      stopReason: "error",
+      errorMessage: "400: unsupported_parameter",
+      errorCode: "unsupported_parameter",
+    });
     expect(failed.providerReplay).toBeUndefined();
     expect(onCompactionRejected).not.toHaveBeenCalled();
     await streamOpenAICodexResponses(model, nextTurn(context, failed), options).result();

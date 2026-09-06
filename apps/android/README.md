@@ -11,6 +11,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Configure foreground on-device Voice Wake and Gateway-synced wake words in **Settings → Voice**.
 - Use **Settings → OpenClaw** for guided Gateway setup and repair. New replies stay visible at the end of the conversation; scrolling back preserves your reading position until you return or tap **Jump to latest**.
 - Enable camera, location, and other phone capabilities through onboarding or Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
+- View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
 - Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
 
@@ -78,13 +79,13 @@ build timestamp shared by every debug variant in that invocation. Release
 tasks still require explicit `openclawBuildCommit` and
 `openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
-Android release archives use the pinned version in `apps/android/version.json`. Update it with:
+Prepare and finalize Android release metadata through the shared mobile cutter:
 
 ```bash
-pnpm android:version
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 pnpm android:version:check
-pnpm android:version:pin -- --from-gateway
-pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060501
 ```
 
 Release-owner signing sync:

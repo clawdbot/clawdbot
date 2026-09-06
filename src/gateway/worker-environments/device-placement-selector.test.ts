@@ -64,12 +64,18 @@ async function selectNodes(
   options: {
     requirement?: DevicePlacementRequirement;
     config?: OpenClawConfig;
+    commands?: string[];
+    declaredCommands?: string[];
     availability?: (deviceId: string) => Promise<DeviceWorkerAvailability>;
   } = {},
 ) {
   const proofs = new Map(
     environments.map((environment) => {
-      const proof = nodeProof(environment);
+      const proof = {
+        ...nodeProof(environment),
+        ...(options.commands ? { commands: options.commands } : {}),
+        ...(options.declaredCommands ? { declaredCommands: options.declaredCommands } : {}),
+      };
       return [proof.nodeId, proof] as const;
     }),
   );
@@ -249,8 +255,9 @@ describe("paired-device automatic placement selection", () => {
       name: "a declared command missing from Gateway policy",
       commands: ["runtime.exec"],
       config: {},
-      reason: "command not allowlisted",
-      policyDenied: true,
+      guidance:
+        /review gateway\.nodes\.commands\.allow.*gateway\.nodes\.commands\.deny.*deny overrides allow/,
+      wrongGuidance: /plugin|reconnect|approve/,
     },
     {
       name: "an explicit deny overriding an explicit allow",
@@ -258,46 +265,56 @@ describe("paired-device automatic placement selection", () => {
       config: {
         gateway: { nodes: { commands: { allow: ["runtime.exec"], deny: ["runtime.exec"] } } },
       },
-      reason: "command not allowlisted",
-      policyDenied: true,
+      guidance:
+        /review gateway\.nodes\.commands\.allow.*gateway\.nodes\.commands\.deny.*deny overrides allow/,
+      wrongGuidance: /plugin|reconnect|approve/,
     },
     {
       name: "an allowed command missing from a nonempty device surface",
       commands: ["runtime.other"],
       config: CONFIG,
-      reason: "command not declared by node",
-      policyDenied: false,
+      guidance: /plugin.*device.*reconnect.*approve/,
+      wrongGuidance: /commands\.allow/,
     },
     {
       name: "an allowed command on a device declaring no commands",
       commands: [],
       config: CONFIG,
-      reason: "node did not declare commands",
-      policyDenied: false,
+      guidance: /plugin.*device.*reconnect.*approve/,
+      wrongGuidance: /commands\.allow/,
+    },
+    {
+      name: "a declared command awaiting pairing approval",
+      commands: [],
+      declaredCommands: ["runtime.exec"],
+      config: CONFIG,
+      guidance: /pending.*approval.*openclaw nodes pending.*openclaw nodes approve/,
+      wrongGuidance: /commands\.allow|plugin|reconnect/,
     },
   ])("explains $name with the matching recovery action", async (scenario) => {
     const environment = nodeEnvironment("runner", 1);
     const result = await selectNodes([environment], {
       requirement: REMOTE_REQUIREMENT,
       config: scenario.config,
-      availability: async () => ({
-        available: true,
-        node: { ...nodeProof(environment), commands: scenario.commands },
-      }),
+      commands: scenario.commands,
+      declaredCommands: scenario.declaredCommands,
     });
 
-    expect(result).toEqual({ ok: false, error: expect.stringContaining(scenario.reason) });
     expect(result).toEqual({
       ok: false,
-      error: expect.stringMatching(
-        scenario.policyDenied
-          ? /review gateway\.nodes\.commands\.allow.*gateway\.nodes\.commands\.deny.*deny overrides allow/
-          : /plugin.*device.*reconnect.*approve/,
-      ),
+      error: expect.stringContaining("runtime.exec"),
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: expect.stringContaining("runner"),
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: expect.stringMatching(scenario.guidance),
     });
     expect(result).not.toEqual({
       ok: false,
-      error: expect.stringMatching(scenario.policyDenied ? /plugin|reconnect/ : /commands\.allow/),
+      error: expect.stringMatching(scenario.wrongGuidance),
     });
   });
 

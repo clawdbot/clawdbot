@@ -1355,15 +1355,15 @@ async function buildResponsesPayload(
       });
     }
     if (hasCompletedToolOutput) {
-      // End the requester turn before the delayed worker settles. The terminal
-      // result must therefore use the runtime's direct channel fallback.
+      // A visible acknowledgment ends the requester turn; NO_REPLY keeps a
+      // delegated visible turn alive and hands completion to requester settlement.
       if (
         terminalCompletionCase === "empty" &&
         QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(prompt)
       ) {
         return buildAssistantEvents(QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER);
       }
-      return buildAssistantEvents("NO_REPLY");
+      return buildAssistantEvents("Worker started.");
     }
   }
   // Protected completion context is excluded from the current user prompt;
@@ -2767,10 +2767,12 @@ export async function startQaMockOpenAiServer(params?: {
       ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
         ? { previewPauseMs: finalOnlyMarkerPauseMs }
         : {}),
-      ...(repeatedRequestRecovery
+      // Stall one request; later failures let the normal retry budget settle the turn.
+      ...(repeatedRequestRecovery &&
+      scenarioState.repeatedRequestRecoveryAttempts <= QA_REPEATED_REQUEST_STALL_ATTEMPT
         ? {
             responsePauseMs:
-              scenarioState.repeatedRequestRecoveryAttempts >= QA_REPEATED_REQUEST_STALL_ATTEMPT
+              scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
                 ? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS
                 : QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS,
           }

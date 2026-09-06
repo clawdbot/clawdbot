@@ -24,11 +24,10 @@ import {
   updateExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
-  type ExecApprovalsResolved,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
-import { requestExecHostViaSocket, type ExecHostRequest } from "../infra/exec-host.js";
+import { requestExecHostViaSocket } from "../infra/exec-host.js";
 import {
   extractShellWrapperCommand,
   isShellWrapperInvocation,
@@ -463,20 +462,6 @@ async function sendExecFinishedEvent(
       suppressNotifyOnExit: params.suppressNotifyOnExit,
     }),
   );
-}
-
-async function runViaMacAppExecHost(params: {
-  approvals: ExecApprovalsResolved;
-  request: ExecHostRequest;
-  signal?: AbortSignal;
-}): ReturnType<typeof requestExecHostViaSocket> {
-  const { approvals, request } = params;
-  return await requestExecHostViaSocket({
-    socketPath: approvals.socketPath,
-    token: approvals.token,
-    request,
-    signal: params.signal,
-  });
 }
 
 async function sendJsonPayloadResult(
@@ -973,7 +958,15 @@ async function dispatchInvoke(
     isCmdExeInvocation,
     sanitizeEnv,
     runCommand,
-    runViaMacAppExecHost: useMacAppExecHost ? runViaMacAppExecHost : undefined,
+    runViaMacAppExecHost: useMacAppExecHost
+      ? async ({ approvals, request, signal }) =>
+          await requestExecHostViaSocket({
+            socketPath: approvals.socketPath,
+            token: approvals.token,
+            request,
+            signal,
+          })
+      : undefined,
     sendNodeEvent,
     buildExecEventPayload,
     sendInvokeResult: async (result) => {

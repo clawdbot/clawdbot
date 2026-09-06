@@ -13,6 +13,7 @@ import {
 } from "../../infra/node-commands.js";
 import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { buildNodeCommandRejectionHint } from "../node-command-rejection-hint.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { invokeNodeWithReadinessRetry } from "../node-invoke-readiness.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
@@ -24,7 +25,6 @@ import {
   releaseNodeWakeLifecycle,
 } from "../node-wake-state.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import { handleNodeInvokeProgress } from "./nodes.handlers.invoke-progress.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
@@ -580,8 +580,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               context,
               client,
               approvalAuthority: forwardedParams.approvalAuthority,
-            }) === undefined &&
-            resolveDispatchAuthorization(context.getRuntimeConfig()).ok,
+            }) === undefined,
           onDispatchReady: (invokeId) => {
             nodeCommandDispatched = true;
             nodeInvokeStream?.onDispatchReady(invokeId);

@@ -22,6 +22,7 @@ import {
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
+  CLAUDE_TERMINAL_START_COMMAND,
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
 } from "./session-catalog.js";
@@ -1098,7 +1099,7 @@ describe("Claude session catalog", () => {
     const authorizedCommands = new Set(
       createClaudeSessionNodeInvokePolicies().flatMap((policy) => policy.commands),
     );
-    expect(authorizedCommands).toEqual(new Set(commands));
+    expect(authorizedCommands).toEqual(new Set([...commands, CLAUDE_TERMINAL_START_COMMAND]));
     const nodes = [
       {
         nodeId: "node-a",
@@ -2924,6 +2925,7 @@ describe("Claude session catalog", () => {
       CLAUDE_SESSIONS_LIST_COMMAND,
       CLAUDE_SESSION_READ_COMMAND,
       CLAUDE_TERMINAL_RESUME_COMMAND,
+      CLAUDE_TERMINAL_START_COMMAND,
     ]);
     expect(commands.every((command) => command.dangerous === false)).toBe(true);
     await expect(commands[0]?.handle(JSON.stringify({ cursor: " wrapped " }))).rejects.toThrow(
@@ -2935,6 +2937,7 @@ describe("Claude session catalog", () => {
       CLAUDE_SESSION_READ_COMMAND,
       CLAUDE_CLI_NODE_RUN_COMMAND,
       CLAUDE_TERMINAL_RESUME_COMMAND,
+      CLAUDE_TERMINAL_START_COMMAND,
     ]);
     if (!policy) {
       throw new Error("expected Claude node invoke policy");
@@ -2943,6 +2946,28 @@ describe("Claude session catalog", () => {
     expect(policy.handle({ command: CLAUDE_TERMINAL_RESUME_COMMAND, invokeNode } as never)).toEqual(
       { ok: true },
     );
+    for (const [terminal, admin, allowed] of [
+      [undefined, true, true],
+      [true, true, true],
+      [false, true, false],
+      [undefined, false, false],
+    ] as const) {
+      expect(
+        await policy.handle({
+          command: CLAUDE_TERMINAL_START_COMMAND,
+          nodeId: "node",
+          params: {},
+          invokeNode,
+          config: {
+            gateway: {
+              cliAgents: { enabled: true },
+              ...(terminal === undefined ? {} : { terminal: { enabled: terminal } }),
+            },
+          },
+          client: { scopes: admin ? ["operator.admin"] : [] },
+        }),
+      ).toMatchObject({ ok: allowed });
+    }
     expect(invokeNode).not.toHaveBeenCalled();
     await expect(
       policy.handle({ command: CLAUDE_SESSIONS_LIST_COMMAND, invokeNode } as never),
@@ -3005,7 +3030,8 @@ describe("Claude session catalog", () => {
     }
     process.env.PATH = binDir;
     nodeHostMocks.userShellPaths.set("claude", binDir);
-    const provider = captureCatalogProvider(createPluginRuntimeMock());
+    const runtime = createPluginRuntimeMock();
+    const provider = captureCatalogProvider(runtime);
 
     await expect(
       provider.startTerminalSession?.({
@@ -3036,8 +3062,98 @@ describe("Claude session catalog", () => {
         cwd: "/work/new-session",
         nodeId: "paired-node",
       }),
-    ).rejects.toThrow(
-      "Paired-node Claude terminal start is unavailable; omit hostId to start on the gateway host",
+    ).resolves.toEqual({
+      kind: "node",
+      nodeId: "paired-node",
+      command: CLAUDE_TERMINAL_START_COMMAND,
+      paramsJSON: JSON.stringify({ cwd: "/work/new-session" }),
+      cwd: "/work/new-session",
+      title: "claude",
+    });
+    const fresh = createClaudeSessionNodeHostCommands().find(
+      (command) => command.command === CLAUDE_TERMINAL_START_COMMAND,
+    )!;
+    expect(fresh.isAvailable?.({ config: {}, env: { HOME: home, PATH: binDir } })).toBe(true);
+    const io = { signal: new AbortController().signal, emitChunk: vi.fn(), onInput: vi.fn() };
+    await fresh.handle(
+      JSON.stringify({ cwd: binDir, initialMessage: "--help", cols: 100, rows: 30 }),
+      io,
+    );
+    expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
+      {
+        file: executable,
+        args: ["--", "--help"],
+        cwd: binDir,
+        requiredCwd: true,
+        pathEnv: binDir,
+        cols: 100,
+        rows: 30,
+      },
+      io,
+    );
+    await expect(
+      fresh.handle(
+        JSON.stringify({ cwd: binDir, cols: 80, rows: 24, agentId: "remote-agent" }),
+        io,
+      ),
+    ).rejects.toThrow("unknown terminal start parameter");
+    const onHost = vi.fn();
+    let rejectNodes!: (error: Error) => void;
+    const pending = provider.list({
+      onHost,
+      listNodes: () =>
+        new Promise((_, reject) => {
+          rejectNodes = reject;
+        }),
+    });
+    await vi.waitFor(() =>
+      expect(onHost).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: "gateway:local", canStartTerminal: true, sessions: [] }),
+      ),
+    );
+    rejectNodes(new Error("node registry down"));
+    expect(await pending).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ hostId: "gateway:local", canStartTerminal: true }),
+        expect.objectContaining({ hostId: "node:registry", canStartTerminal: false }),
+      ]),
+    );
+    await expect(
+      provider.list({
+        onHost,
+        listNodes: async () => ({
+          nodes: [
+            {
+              nodeId: "ready",
+              connected: true,
+              invocableCommands: [CLAUDE_TERMINAL_START_COMMAND],
+            },
+            {
+              nodeId: "resume-only",
+              connected: true,
+              invocableCommands: [CLAUDE_TERMINAL_RESUME_COMMAND],
+            },
+            {
+              nodeId: "offline",
+              connected: false,
+              invocableCommands: [CLAUDE_TERMINAL_START_COMMAND],
+            },
+            {
+              nodeId: "denied",
+              connected: true,
+              commands: [CLAUDE_TERMINAL_START_COMMAND],
+              invocableCommands: [],
+            },
+          ],
+        }),
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ hostId: "gateway:local", canStartTerminal: true, sessions: [] }),
+      expect.objectContaining({ hostId: "node:ready", canStartTerminal: true, sessions: [] }),
+    ]);
+    expect(runtime.nodes.invoke).not.toHaveBeenCalled();
+    expect(onHost).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "node:ready", canStartTerminal: true, sessions: [] }),
     );
   });
 
@@ -3355,7 +3471,11 @@ describe("Claude session catalog", () => {
         cwd: process.cwd(),
         nodeId: "remote-node",
       }),
-    ).rejects.toThrow("Paired-node Claude terminal start is unavailable");
+    ).resolves.toMatchObject({
+      kind: "node",
+      nodeId: "remote-node",
+      command: CLAUDE_TERMINAL_START_COMMAND,
+    });
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "remote-node" }));
   });

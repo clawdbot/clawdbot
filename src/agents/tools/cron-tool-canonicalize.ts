@@ -9,7 +9,7 @@ import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script", "command"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
   "text",
@@ -73,7 +73,7 @@ function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KIND
 }
 
 function isCronPayloadKind(value: unknown): value is (typeof CRON_PAYLOAD_KINDS)[number] {
-  return value === "systemEvent" || value === "agentTurn" || value === "script";
+  return isStringOption(value, CRON_PAYLOAD_KINDS);
 }
 
 function isStringArrayOrNull(value: unknown): boolean {
@@ -251,12 +251,13 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
     if (isNonEmptyString(payload.script)) {
       payload.kind = "script";
     } else {
+      // Timeout alone inherits the stored kind; text+timeout is an agent prompt shorthand.
       const hasAgentTurnSignal =
         isNonEmptyString(payload.message) ||
         isNonEmptyString(payload.model) ||
         payload.model === null ||
         isNonEmptyString(payload.thinking) ||
-        typeof payload.timeoutSeconds === "number" ||
+        (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
         typeof payload.lightContext === "boolean" ||
         typeof payload.allowUnsafeExternalContent === "boolean" ||
         (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));

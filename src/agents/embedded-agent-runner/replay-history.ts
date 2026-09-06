@@ -27,7 +27,7 @@ import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcrip
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
+  dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
@@ -58,6 +58,7 @@ import {
   providerRequiresSignedThinking,
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
+  shouldMergeConsecutiveUserTurns,
 } from "../transcript-policy.js";
 import {
   hasNonzeroUsage,
@@ -890,9 +891,10 @@ export async function sanitizeSessionHistory(params: {
         normalizeOpenAIResponsesToolCallIds(
           // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
           // invalidated by a switch, every later replay must keep dropping them.
-          downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
-            dropReplayableReasoningBefore: latestModelSwitchTimestamp ?? undefined,
-          }),
+          dropStaleOpenAIReasoning(
+            openAIRepairedToolCalls,
+            latestModelSwitchTimestamp ?? undefined,
+          ),
         ),
       )
     : sanitizedToolCalls;
@@ -1004,6 +1006,10 @@ export async function validateReplayTurns(params: {
   const validatedGemini = policy.validateGeminiTurns
     ? validateGeminiTurns(params.messages)
     : params.messages;
-  return policy.validateAnthropicTurns ? validateAnthropicTurns(validatedGemini) : validatedGemini;
+  return policy.validateAnthropicTurns
+    ? validateAnthropicTurns(validatedGemini, {
+        mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(policy, params.modelApi),
+      })
+    : validatedGemini;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

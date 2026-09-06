@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
-import type { AgentsConfig } from "../config/types.agents.js";
+import { listAgentIds } from "../agents/agent-scope.js";
+import { type AgentsConfig, getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
 import { drainSystemEvents, enqueueSystemEvent } from "../infra/system-events.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
@@ -15,9 +15,9 @@ import {
 } from "./test-helpers.e2e.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
+  connectWebchatClient,
   installGatewayTestHooks,
   rpcReq,
-  startConnectedServerWithClient,
   waitForSystemEvent,
   withGatewayServer,
   writeSessionStore,
@@ -130,16 +130,51 @@ describe("Gateway test environment lifecycle", () => {
     },
   );
 
+  it.each(["list", "entries"])(
+    "keeps the %s fixture roster visible to real runtime readers while an RPC is pending",
+    async (roster) => {
+      const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+      await withGatewayServer(async ({ port }) => {
+        const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+        try {
+          for (const agentId of ["first", "second"]) {
+            const workspace = path.join(process.env.OPENCLAW_STATE_DIR!, agentId);
+            testState.agentsConfig =
+              roster === "list"
+                ? { list: [{ id: agentId, workspace }] }
+                : { ownership: "explicit", entries: { [agentId]: { workspace } } };
+            const request = rpcReq(ws, "health");
+            try {
+              // A retained real-IO reader can run before the request is dispatched.
+              // It must see this case's roster, not pin the suite's on-disk default.
+              expect(actual.getRuntimeConfig().agents?.entries).toEqual({
+                [agentId]: { workspace },
+              });
+              expect(getRuntimeConfig().agents).toEqual(actual.getRuntimeConfig().agents);
+              expect((await request).ok).toBe(true);
+            } finally {
+              await request;
+            }
+          }
+        } finally {
+          ws.close();
+        }
+      });
+    },
+  );
+
   it.each(["session store", "config mock"])(
     "keeps config readable while the %s fixture publishes an update",
     async (fixture) => {
       const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
       const { writeConfigFile } = createGatewayConfigOverrides(actual);
-      await writeConfigFile({ session: { reset: { idleMinutes: 30 } } });
+      const agents: AgentsConfig = { ownership: "explicit", entries: { main: {}, authored: {} } };
+      await writeConfigFile({ agents, session: { reset: { idleMinutes: 30 } } });
+      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, fixture: {} } };
       const configPath = process.env.OPENCLAW_CONFIG_PATH!;
-      const readIdleMinutes = () =>
-        actual.loadConfig({ pin: false, skipPluginValidation: true, skipShellEnvFallback: true })
-          .session?.reset?.idleMinutes;
+      const readAuthoredConfig = () =>
+        actual.loadConfig({ pin: false, skipPluginValidation: true, skipShellEnvFallback: true });
+      const readIdleMinutes = () => readAuthoredConfig().session?.reset?.idleMinutes;
       expect(readIdleMinutes()).toBe(30);
       const writeFile = fs.writeFile.bind(fs);
       const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
@@ -160,9 +195,11 @@ describe("Gateway test environment lifecycle", () => {
           testState.sessionConfig = { reset: { idleMinutes: 60 } };
           await writeSessionStore({ entries: {} });
         } else {
-          await writeConfigFile({ session: { reset: { idleMinutes: 60 } } });
+          await writeConfigFile({ agents, session: { reset: { idleMinutes: 60 } } });
         }
         expect(readIdleMinutes()).toBe(60);
+        expect(listAgentIds(actual.getRuntimeConfig())).toEqual(["main", "fixture"]);
+        expect(listAgentIds(readAuthoredConfig())).toEqual(["main", "authored"]);
       } finally {
         writeSpy.mockRestore();
       }
@@ -170,20 +207,16 @@ describe("Gateway test environment lifecycle", () => {
   );
 
   it.each(["list", "entries"])(
-    "publishes the canonical %s agent fixture before a real reader pins config",
+    "publishes the canonical %s agent fixture without persisting its runtime overrides",
     async (roster) => {
       const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
       const configPath = process.env.OPENCLAW_CONFIG_PATH!;
       const workspace = path.dirname(configPath);
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({
-          agents: {
-            entries: { main: {} },
-            defaults: { userTimezone: "UTC" },
-          },
-        }),
-      );
+      const authoredAgents = {
+        entries: { main: {} },
+        defaults: { userTimezone: "UTC" },
+      } satisfies AgentsConfig;
+      await fs.writeFile(configPath, JSON.stringify({ agents: authoredAgents }));
       testState.agentsConfig =
         roster === "list"
           ? {
@@ -196,71 +229,101 @@ describe("Gateway test environment lifecycle", () => {
       testState.agentConfig = { workspace, timeoutSeconds: 45 };
       testState.sessionStorePath = path.join(workspace, "sessions.json");
 
-      await writeSessionStore({ entries: {} });
       resetConfigRuntimeState();
+      await writeSessionStore({ entries: {} });
       const realConfig = actual.getRuntimeConfig();
       const mockedConfig = getRuntimeConfig();
       for (const config of [realConfig, mockedConfig]) {
-        expect.soft(config.agents?.entries).toEqual({ main: {}, secondary: { workspace } });
-        expect.soft(config.agents?.defaults).toMatchObject({
+        expect(config.agents?.entries).toEqual({ main: {}, secondary: { workspace } });
+        expect(config.agents?.defaults).toMatchObject({
           userTimezone: "UTC",
           workspace,
           timeoutSeconds: 45,
         });
-        expect.soft(config.session?.store).toBe(testState.sessionStorePath);
+        expect(config.session?.store).toBe(testState.sessionStorePath);
       }
       expect(mockedConfig.agents).toEqual(realConfig.agents);
+      const authoredConfig = actual.loadConfig({
+        pin: false,
+        skipPluginValidation: true,
+        skipShellEnvFallback: true,
+      });
+      expect(authoredConfig.agents?.entries).toEqual(authoredAgents.entries);
+      expect(authoredConfig.agents?.defaults?.userTimezone).toBe("UTC");
+      expect(JSON.parse(await fs.readFile(configPath, "utf8")).agents).toEqual(authoredAgents);
     },
   );
 
   it("publishes agent-only RPC edits and removals without losing file-authored config", async () => {
     const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
     const { writeConfigFile } = createGatewayConfigOverrides(actual);
-    const started = await startConnectedServerWithClient();
-    try {
-      const root = path.dirname(process.env.OPENCLAW_CONFIG_PATH!);
-      const store = path.join(root, "agents", "{agentId}", "sessions.json");
-      const authoredAgents = {
-        ownership: "explicit",
-        entries: { main: { name: "Authored main" } },
-        defaults: { userTimezone: "UTC", timeoutSeconds: 90 },
-      } satisfies AgentsConfig;
-      await writeConfigFile({ agents: authoredAgents, session: { store } });
-      await writeSessionStore({ storePath: path.join(root, "seed.sqlite"), entries: {} });
-      const entries: Record<string, object> = { main: {}, secondary: {} };
-      testState.agentsConfig = { ownership: "explicit", entries };
-      testState.agentConfig = { timeoutSeconds: 45 };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+      try {
+        const configPath = process.env.OPENCLAW_CONFIG_PATH!;
+        const root = path.dirname(configPath);
+        const store = path.join(root, "agents", "{agentId}", "sessions.json");
+        const authoredAgents = {
+          ownership: "explicit",
+          entries: { main: { name: "Authored main" } },
+          defaults: { userTimezone: "UTC", timeoutSeconds: 90 },
+        } satisfies AgentsConfig;
+        await writeConfigFile({ agents: authoredAgents, session: { store } });
+        await writeSessionStore({ storePath: path.join(root, "seed.sqlite"), entries: {} });
+        const entries: Record<string, object> = { main: {}, secondary: {} };
+        testState.agentsConfig = { ownership: "explicit", entries };
+        testState.agentConfig = { timeoutSeconds: 45 };
 
-      const expectPublished = async (expectedEntries: object, timeoutSeconds: number) => {
-        expect((await rpcReq(started.ws, "sessions.subscribe", {})).ok).toBe(true);
-        resetConfigRuntimeState();
-        const realConfig = actual.getRuntimeConfig();
-        const mockedConfig = getRuntimeConfig();
-        expect.soft(realConfig.agents?.entries).toEqual(expectedEntries);
-        expect.soft(realConfig.agents?.defaults).toMatchObject({
-          userTimezone: "UTC",
-          timeoutSeconds,
-        });
-        expect.soft(realConfig.session?.store).toBe(store);
-        expect(mockedConfig.agents).toEqual(realConfig.agents);
-      };
-      await expectPublished(entries, 45);
-      delete entries.secondary;
-      delete testState.agentConfig.timeoutSeconds;
-      await expectPublished({ main: {} }, 90);
-      testState.agentsConfig = undefined;
-      testState.agentConfig = undefined;
-      await expectPublished(authoredAgents.entries, 90);
+        const expectPublished = async (expectedEntries: object, timeoutSeconds: number) => {
+          const request = rpcReq(ws, "sessions.subscribe", {});
+          try {
+            // The real reader must observe the current fixture before any RPC await.
+            const realConfig = actual.getRuntimeConfig();
+            const mockedConfig = getRuntimeConfig();
+            expect(realConfig.agents?.entries).toEqual(expectedEntries);
+            expect(realConfig.agents?.defaults).toMatchObject({
+              userTimezone: "UTC",
+              timeoutSeconds,
+            });
+            expect(realConfig.session?.store).toBe(store);
+            expect(mockedConfig.agents).toEqual(realConfig.agents);
+            const authoredConfig = actual.loadConfig({
+              pin: false,
+              skipPluginValidation: true,
+              skipShellEnvFallback: true,
+            });
+            expect(authoredConfig.agents?.entries).toEqual(authoredAgents.entries);
+            expect(authoredConfig.agents?.defaults?.timeoutSeconds).toBe(90);
+            expect(authoredConfig.session?.store).toBe(store);
+            expect((await request).ok).toBe(true);
+            expect(JSON.parse(await fs.readFile(configPath, "utf8")).agents).toEqual(
+              authoredAgents,
+            );
+          } finally {
+            await request;
+          }
+        };
+        await expectPublished(entries, 45);
+        entries.secondary = { name: "Updated fixture" };
+        await expectPublished({ main: {}, secondary: { name: "Updated fixture" } }, 45);
+        delete entries.secondary;
+        delete testState.agentConfig.timeoutSeconds;
+        await expectPublished({ main: {} }, 90);
+        testState.agentsConfig = undefined;
+        testState.agentConfig = undefined;
+        await expectPublished(authoredAgents.entries, 90);
 
-      authoredAgents.entries.main.name = "Updated file intent";
-      await writeConfigFile({ agents: authoredAgents, session: { store } });
-      testState.agentConfig = { timeoutSeconds: 30 };
-      await expectPublished(authoredAgents.entries, 30);
-    } finally {
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    }
+        authoredAgents.entries.main.name = "Updated file intent";
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({ agents: authoredAgents, session: { store } }),
+        );
+        testState.agentConfig = { timeoutSeconds: 30 };
+        await expectPublished(authoredAgents.entries, 30);
+      } finally {
+        ws.close();
+      }
+    });
   });
 
   it("restores startup-owned environment when a direct E2E server closes", async () => {

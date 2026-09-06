@@ -25,8 +25,8 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
@@ -226,9 +226,9 @@ export async function compactEmbeddedAgentSession(
   };
   const resolvedParams = {
     ...params,
-    ...(params.sessionEntry
-      ? { sessionEntry: projectPublicSessionEntry(params.sessionEntry) }
-      : {}),
+    sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
+    agentHarnessId: resolveSessionPinnedHarnessId(entry) ?? params.agentHarnessId,
+    modelSelectionLocked: entry?.modelSelectionLocked ?? params.modelSelectionLocked,
     agentId: runtimeTarget.agentId,
     sessionId: runtimeTarget.sessionId,
     sessionKey: runtimeTarget.sessionKey,
@@ -362,10 +362,7 @@ async function compactEmbeddedAgentSessionImpl(
     modelId: preparedParams.model,
     boundHarnessRuntime: preparedParams.agentHarnessId,
     preparedRuntimePlan: preparedParams.runtimePlan,
-    selectedHarnessRuntime:
-      preparedParams.modelSelectionLocked === true
-        ? normalizeOptionalAgentRuntimeId(preparedParams.agentHarnessId)
-        : undefined,
+    selectedHarnessRuntime: resolveSessionPinnedHarnessId(preparedParams.sessionEntry),
   });
   if (params.abortSignal?.aborted) {
     return createCompactionAbortedResult();
@@ -452,18 +449,12 @@ async function compactResolvedContextEngine(
   releaseContextEngineOwnership: () => void,
 ): Promise<EmbeddedAgentCompactResult> {
   const runtimeTarget = params.sessionTarget;
-  const lockedHarnessRuntime =
-    params.modelSelectionLocked === true
-      ? normalizeOptionalAgentRuntimeId(params.agentHarnessId)
-      : undefined;
-  if (
-    params.modelSelectionLocked === true &&
-    (!lockedHarnessRuntime || lockedHarnessRuntime === "auto")
-  ) {
+  const lockedHarnessRuntime = resolveSessionPinnedHarnessId(params.sessionEntry);
+  if (lockedHarnessRuntime === "auto") {
     return lockedCompactionRuntimeFailure();
   }
-  // A model lock makes the persisted harness authoritative. Config may select
-  // a runtime only for unlocked sessions that have no concrete pin.
+  // A concrete model lock does not pin the observed or requested runtime. Only
+  // durable native ownership can forbid a prepared transport's host fallback.
   const {
     runtimePolicySessionKey,
     runtimePolicyAgentId,
@@ -474,16 +465,15 @@ async function compactResolvedContextEngine(
     runtimeProvider: ceRuntimeProvider,
     contextConfigProvider: ceContextConfigProvider,
     modelId: ceModelId,
-    attemptNativeHarnessCompaction,
+    attemptNativeHarnessCompaction: selectedNativeHarnessCompaction,
   } = resolveCompactionRuntimeSelection({
     ...params,
     modelId: params.model,
     boundHarnessRuntime: params.agentHarnessId,
     preparedRuntimePlan: params.runtimePlan,
-    selectedHarnessRuntime: params.modelSelectionLocked === true ? lockedHarnessRuntime : undefined,
+    selectedHarnessRuntime: lockedHarnessRuntime,
   });
-  const lockedNativeHarness =
-    params.modelSelectionLocked === true && selectedHarnessRuntime !== "openclaw";
+  const lockedNativeHarness = Boolean(lockedHarnessRuntime && lockedHarnessRuntime !== "openclaw");
   // Ensure the policy-selected harness plugin so selection can pick implicit codex.
   await ensureSelectedAgentHarnessPlugin({
     config: params.config,
@@ -529,6 +519,8 @@ async function compactResolvedContextEngine(
     convergenceErrorPrefix: "Prepared queued compaction",
   });
   const preparedHarnessRuntime = selectedPreparedHarness.id;
+  const attemptNativeHarnessCompaction =
+    selectedNativeHarnessCompaction && preparedHarnessRuntime !== "openclaw";
   const runtimeAuthPlan = runtimeAuthPreparation.plan;
   const effectiveRuntimeModel = await materializePreparedRuntimeModel<ProviderRuntimeModel>({
     plan: runtimeAuthPlan,

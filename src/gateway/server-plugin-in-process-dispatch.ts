@@ -2,10 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import {
   dispatchGatewayRequestInProcessRaw,
@@ -37,22 +41,50 @@ type OperatorToolGatewayAuthority = {
     NonNullable<GatewayRequestOptions["client"]>["authenticatedUserProfile"]
   >;
   scopes: readonly string[];
-  active: boolean;
+  operatorRoleActor?: GatewayOperatorRoleActor;
+  signal: AbortSignal;
 };
 
 const operatorToolGatewayAuthority = new AsyncLocalStorage<OperatorToolGatewayAuthority>();
 
-/** Retains one verified operator identity only for its awaited tool invocation. */
+/** Retains operator attribution and authority only for the awaited tool invocation. */
 export async function withOperatorToolGatewayAuthority<T>(
-  authority: Omit<OperatorToolGatewayAuthority, "active">,
+  authority: Omit<OperatorToolGatewayAuthority, "signal">,
   run: () => Promise<T>,
 ): Promise<T> {
-  const activeAuthority = { ...authority, active: true };
+  const lifetime = new AbortController();
   try {
-    return await operatorToolGatewayAuthority.run(activeAuthority, run);
+    return await operatorToolGatewayAuthority.run({ ...authority, signal: lifetime.signal }, run);
   } finally {
-    activeAuthority.active = false;
+    lifetime.abort(new Error("operator tool invocation authority expired"));
   }
+}
+
+/** Transfer bounded cleanup without retaining the finished operator invocation. */
+export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
+  const authority = operatorToolGatewayAuthority.getStore();
+  if (!authority) {
+    return run();
+  }
+  authority.signal.throwIfAborted();
+  const scope = getPluginRuntimeGatewayRequestScope();
+  // Retain the effective actor and scopes after releasing the invocation;
+  // profile attribution alone does not establish authority.
+  const client = createSyntheticPluginRuntimeClient({
+    authenticatedUserProfile: authority.authenticatedUserProfile,
+    scopes: [...authority.scopes],
+    operatorRoleActor: authority.operatorRoleActor ??
+      scope?.client?.internal?.operatorRoleActor ?? {
+        kind: "operator",
+        profileId: authority.authenticatedUserProfile.profileId,
+      },
+  });
+  return operatorToolGatewayAuthority.exit(() =>
+    withPluginRuntimeGatewayRequestScope(
+      { ...scope, client, isWebchatConnect: scope?.isWebchatConnect ?? (() => false) },
+      run,
+    ),
+  );
 }
 
 type DispatchGatewayMethodInProcessOptions = {
@@ -99,13 +131,12 @@ function resolveInProcessGatewayDispatch(
   options?: DispatchGatewayMethodInProcessOptions,
 ): ResolvedInProcessGatewayDispatch {
   const inheritedOperatorAuthority = operatorToolGatewayAuthority.getStore();
-  if (inheritedOperatorAuthority && !inheritedOperatorAuthority.active) {
-    throw new Error("operator tool invocation authority expired");
-  }
+  inheritedOperatorAuthority?.signal.throwIfAborted();
   const scope = getPluginRuntimeGatewayRequestScope();
   const scopedOperatorProfile = scope?.client?.authenticatedUserProfile;
   const scopedRoleActor = scope?.client?.internal?.operatorRoleActor;
-  const explicitSystemActor = !scope?.client ? options?.operatorRoleActor : undefined;
+  const explicitSystemActor =
+    !scope?.client && !inheritedOperatorAuthority ? options?.operatorRoleActor : undefined;
   const verifiedOperatorAuthority =
     inheritedOperatorAuthority ??
     (scopedOperatorProfile?.profileId
@@ -118,19 +149,21 @@ function resolveInProcessGatewayDispatch(
   // retain the verified role actor separately so target policy remains enforced.
   const isHostOwnedAgentRun = method === "agent" && Boolean(options?.agentRunTracking);
   const operatorAuthority = isHostOwnedAgentRun ? undefined : verifiedOperatorAuthority;
-  const operatorRoleActor: GatewayOperatorRoleActor | undefined = isHostOwnedAgentRun
-    ? inheritedOperatorAuthority
-      ? {
-          kind: "operator",
-          profileId: inheritedOperatorAuthority.authenticatedUserProfile.profileId,
-        }
-      : (scopedRoleActor ??
-        (scopedOperatorProfile?.profileId
-          ? { kind: "operator", profileId: scopedOperatorProfile.profileId }
-          : scope?.client
-            ? undefined
-            : (explicitSystemActor ?? { kind: "system" })))
-    : (scopedRoleActor ?? explicitSystemActor);
+  const operatorRoleActor: GatewayOperatorRoleActor | undefined =
+    inheritedOperatorAuthority?.operatorRoleActor ??
+    (isHostOwnedAgentRun
+      ? inheritedOperatorAuthority
+        ? {
+            kind: "operator",
+            profileId: inheritedOperatorAuthority.authenticatedUserProfile.profileId,
+          }
+        : (scopedRoleActor ??
+          (scopedOperatorProfile?.profileId
+            ? { kind: "operator", profileId: scopedOperatorProfile.profileId }
+            : scope?.client
+              ? undefined
+              : (explicitSystemActor ?? { kind: "system" })))
+      : (scopedRoleActor ?? explicitSystemActor));
   // The router installs a nested scope; retain the admitted resolver for later commit checks.
   const resolveGatewayContext = options?.resolveGatewayContext ?? scope?.resolveGatewayContext;
   const context = getInProcessGatewayRequestContext(resolveGatewayContext);
@@ -271,6 +304,66 @@ function resolveInProcessGatewayDispatch(
     context,
     delegatedToolPolicyHandoffId,
     isWebchatConnect,
+  };
+}
+
+/** Authorizes a sessionless agent execution against its captured Gateway and caller. */
+export function prepareInProcessAgentExecution(params: {
+  agentId: string;
+  pluginRuntimeOwnerId: string;
+  resolveGatewayContext?: GatewayContextResolver;
+}) {
+  const inheritedAuthority = operatorToolGatewayAuthority.getStore();
+  const resolved = resolveInProcessGatewayDispatch("agent", {
+    agentRunTracking: "plugin_subagent",
+    pluginRuntimeOwnerId: params.pluginRuntimeOwnerId,
+    resolveGatewayContext: params.resolveGatewayContext,
+  });
+  // Profile verification updates the original connection. Sessionless work needs
+  // that live principal, not the dispatch copy carrying session tracking metadata.
+  const client = getPluginRuntimeGatewayRequestScope()?.client ?? resolved.client;
+  const assertLifetime = () => {
+    resolved.assertContextCurrent();
+    inheritedAuthority?.signal.throwIfAborted();
+  };
+  const assertCurrent = () => {
+    assertLifetime();
+    const error = authorizeGatewaySessionCreation({
+      cfg: resolved.context.getRuntimeConfig(),
+      agentId: params.agentId,
+      client,
+    });
+    if (error) {
+      unwrapGatewayMethodDispatchResponse("agent", { ok: false, error });
+    }
+  };
+  return {
+    context: resolved.context,
+    signal: inheritedAuthority?.signal,
+    assertCurrent,
+    async authorize() {
+      assertLifetime();
+      const { authorizeGatewayRequestPreDispatch, createRequestGatewayMethodRegistry } =
+        await import("./server-methods.js");
+      assertLifetime();
+      const { error } = await authorizeGatewayRequestPreDispatch({
+        method: "agent",
+        requestParams: { agentId: params.agentId },
+        client,
+        context: resolved.context,
+        methodRegistry:
+          resolved.context.getGatewayMethodRegistry?.() ?? createRequestGatewayMethodRegistry(),
+      });
+      assertLifetime();
+      if (error) {
+        unwrapGatewayMethodDispatchResponse("agent", { ok: false, error });
+      }
+      assertCurrent();
+    },
+    run<T>(run: () => Promise<T>): Promise<T> {
+      assertCurrent();
+      return operatorToolGatewayAuthority.exit(run);
+    },
   };
 }
 

@@ -112,12 +112,13 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   allowExplicitSourceRoute?: boolean;
   deliveryConfirmed?: boolean;
 }): boolean {
+  const deliveryFact =
+    readEmbeddedMessageDeliveryFact(readToolResultDetails(params.hookResult)?.messageDelivery) ??
+    readEmbeddedMessageDeliveryFact(readToolResultDetails(params.result)?.messageDelivery);
   const confirmedCurrentSourceRoute =
+    deliveryFact?.sourceReplyDelivered === true ||
     resultConfirmsCurrentSourceRoute(params.result) ||
     resultConfirmsCurrentSourceRoute(params.hookResult);
-  const deliveryFact = readEmbeddedMessageDeliveryFact(
-    readToolResultDetails(params.hookResult ?? params.result)?.messageDelivery,
-  );
   if (params.sourceReplyDeliveryMode !== "message_tool_only" && !confirmedCurrentSourceRoute) {
     return false;
   }

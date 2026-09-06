@@ -69,8 +69,9 @@ Experience review starts only when all of these conditions hold:
 
 A later foreground completion in the same session restarts the quiet period.
 Pending reviews belong to an agent and session together, so agents using `global`
-retain separate candidates. Only one experience review runs at a time. The
-foreground answer is never delayed.
+retain separate candidates. Experience, history, and collection reviews share
+one Workshop slot within the [shared background work budget](/concepts/queue#background-work).
+The foreground answer is never delayed.
 
 The reviewer continues the finished turn from the same transcript prefix, but
 runs under a private detached session identity. This keeps the foreground session

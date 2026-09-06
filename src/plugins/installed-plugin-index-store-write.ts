@@ -24,6 +24,7 @@ import {
 } from "./installed-plugin-index-install-owner.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
+import { findForeignManagedNpmInstallRecordPluginIds } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import {
   INSTALLED_PLUGIN_INDEX_STATE_KEY,
@@ -354,6 +355,17 @@ function resolveRefreshedPersistedInstalledPluginIndex(
       : null;
   if (canRefreshPersistedPolicyState(persisted, params)) {
     return refreshPersistedPolicyState(persisted, params);
+  }
+  if (params.reason === "manual" && !params.installRecords) {
+    const foreignPluginIds = findForeignManagedNpmInstallRecordPluginIds(
+      extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+      params,
+    );
+    if (foreignPluginIds.length > 0) {
+      throw new Error(
+        `Plugin registry refresh cannot verify npm install ownership outside the selected state directory: ${foreignPluginIds.join(", ")}. Reinstall copied plugins in this state directory, then run \`openclaw plugins registry --refresh\` again.`,
+      );
+    }
   }
   return refreshInstalledPluginIndex({
     ...params,

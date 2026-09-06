@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 // Image runtime tests cover model-backed image routing, auth/profile handling,
 // provider payload transforms, and MiniMax/Copilot special paths.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -76,27 +77,6 @@ type AuthRequestCall = {
   preferredProfile?: string;
   store?: unknown;
 };
-
-function requireMockCallAt<const Calls extends readonly unknown[][]>(
-  mock: { mock: { calls: Calls } },
-  index: number,
-  label: string,
-): Calls[number] {
-  // Tests inspect exact dependency calls because image runtime behavior is
-  // mostly provider/auth orchestration.
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${index}`);
-  }
-  return call as Calls[number];
-}
-
-function requireFirstMockCall<const Calls extends readonly unknown[][]>(
-  mock: { mock: { calls: Calls } },
-  label: string,
-): Calls[number] {
-  return requireMockCallAt(mock, 0, label);
-}
 
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
@@ -300,7 +280,7 @@ describe("describeImageWithModelCore", () => {
     expect(authRequest?.store).toBe(authStore);
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "test-api-key");
-    const [fetchUrl, fetchOptionsValue] = requireFirstMockCall(fetchMock, "fetch");
+    const [fetchUrl, fetchOptionsValue] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
     const fetchOptions = requireRecord(fetchOptionsValue, "fetch options");
     expect(fetchUrl).toBe("https://api.minimax.io/v1/coding_plan/vlm");
     expect(fetchOptions).toEqual({
@@ -380,7 +360,7 @@ describe("describeImageWithModelCore", () => {
     });
 
     const guardedOptions = requireRecord(
-      requireFirstMockCall(imageTestFetchWithSsrFGuardMock, "guarded fetch")[0],
+      expectDefined(imageTestFetchWithSsrFGuardMock.mock.calls[0], "guarded fetch call 0")[0],
       "guarded fetch options",
     );
     expect(guardedOptions.dispatcherPolicy).toEqual({
@@ -413,7 +393,7 @@ describe("describeImageWithModelCore", () => {
       sentinelValue,
       "MiniMax VLM request",
     );
-    const [, fetchOptionsValue] = requireFirstMockCall(fetchMock, "fetch");
+    const [, fetchOptionsValue] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
     const fetchOptions = requireRecord(fetchOptionsValue, "fetch options");
     expect(new Headers(fetchOptions.headers as HeadersInit).get("Authorization")).toBe(
       ["Bearer", "test-token"].join(" "),
@@ -455,9 +435,9 @@ describe("describeImageWithModelCore", () => {
       text: "generic ok",
       model: "custom-vision",
     });
-    const [streamRequest] = requireFirstMockCall(
-      registerProviderStreamForModelMock,
-      "provider stream registration",
+    const [streamRequest] = expectDefined(
+      registerProviderStreamForModelMock.mock.calls[0],
+      "provider stream registration call 0",
     );
     expect(streamRequest).toEqual({
       model: {
@@ -529,7 +509,7 @@ describe("describeImageWithModelCore", () => {
     // empty-string secret; the empty key flows through to the model runtime.
     expect(requireApiKeyMock).not.toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
-    const completeCall = requireFirstMockCall(completeMock, "complete");
+    const completeCall = expectDefined(completeMock.mock.calls[0], "complete call 0");
     expect(requireRecord(completeCall[2], "stream options").apiKey).toBe("");
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -614,7 +594,7 @@ describe("describeImageWithModelCore", () => {
         provider: "minimax",
       }),
     );
-    const [fetchUrl] = requireFirstMockCall(fetchMock, "fetch");
+    const [fetchUrl] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
     expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
   });
 
@@ -664,7 +644,7 @@ describe("describeImageWithModelCore", () => {
         provider: "minimax-cn",
       }),
     );
-    const [fetchUrl] = requireFirstMockCall(fetchMock, "fetch");
+    const [fetchUrl] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
     expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
   });
 
@@ -701,7 +681,7 @@ describe("describeImageWithModelCore", () => {
       model: "MiniMax-VL-01",
     });
 
-    const [fetchUrl] = requireFirstMockCall(fetchMock, "fetch");
+    const [fetchUrl] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
     expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
   });
 
@@ -834,7 +814,7 @@ describe("describeImageWithModelCore", () => {
         skipAgentDiscovery: true,
       },
     );
-    const [completeModel] = requireFirstMockCall(completeMock, "complete");
+    const [completeModel] = expectDefined(completeMock.mock.calls[0], "complete call 0");
     expect(requireRecord(completeModel, "complete model").api).toBe("openai-responses");
   });
 
@@ -950,9 +930,9 @@ describe("describeImageWithModelCore", () => {
       model: "google/gemma-4-e2b",
     });
     expect(registryFind).not.toHaveBeenCalled();
-    const [resolveRequestValue] = requireFirstMockCall(
-      resolveModelWithRegistryMock,
-      "model registry resolution",
+    const [resolveRequestValue] = expectDefined(
+      resolveModelWithRegistryMock.mock.calls[0],
+      "model registry resolution call 0",
     );
     const resolveRequest = requireRecord(resolveRequestValue, "model registry request");
     expect(resolveRequest.provider).toBe("lmstudio");

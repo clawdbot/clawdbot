@@ -2,13 +2,14 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
+import type { TrajectoryBundleManifest } from "../trajectory/types.js";
 import { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -181,19 +182,22 @@ async function listDirectoryNames(dirPath: string): Promise<string[]> {
   }
 }
 
-async function waitForPath(filePath: string, timeoutMs = 60_000): Promise<void> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      await fs.stat(filePath);
-      return;
-    } catch {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 500);
-      });
-    }
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
+async function waitForTrajectoryBundle(bundleDir: string): Promise<TrajectoryBundleManifest> {
+  return await vi.waitFor(
+    async () => {
+      const manifest = JSON.parse(
+        await fs.readFile(path.join(bundleDir, "manifest.json"), "utf8"),
+      ) as TrajectoryBundleManifest;
+      // The exporter writes files sequentially. An early file can exist while
+      // later files are missing or incomplete; the manifest records every byte.
+      expect(manifest.contents?.length).toBeGreaterThan(0);
+      for (const file of manifest.contents ?? []) {
+        expect((await fs.stat(path.join(bundleDir, file.path))).size).toBe(file.bytes);
+      }
+      return manifest;
+    },
+    { timeout: 60_000, interval: 500 },
+  );
 }
 
 function formatTextPreview(texts: string[], maxChars = 800): string {
@@ -552,7 +556,7 @@ describeLive("gateway live trajectory export", () => {
       expect(runtimeEvents.length).toBeGreaterThan(0);
 
       const bundleDir = path.join(workspaceDir, ".openclaw", "trajectory-exports", "bundle");
-      const beforeExport = new Set(await listDirectoryNames(tempDir));
+      const beforeExport = new Set(await listDirectoryNames(path.dirname(bundleDir)));
       const exportRunId = `chat-export-${randomUUID()}`;
       const exportEventStartIndex = gatewayEvents.length;
       logLiveStep("export:start", { bundleDir, exportRunId });
@@ -589,7 +593,7 @@ describeLive("gateway live trajectory export", () => {
       expect(exportSignal.instructionText).toContain("Approve once");
       const approvalId = exportSignal.approvalId ?? (await approveTrajectoryExport(client));
       logLiveStep("export:approved", { approvalId });
-      await waitForPath(path.join(bundleDir, "events.jsonl"), 60_000);
+      const manifest = await waitForTrajectoryBundle(bundleDir);
       logLiveStep("export:done", { approvalId, finalText: exportSignal.instructionText });
       const bundleNames = await listDirectoryNames(bundleDir);
       for (const expectedName of [
@@ -604,14 +608,6 @@ describeLive("gateway live trajectory export", () => {
       }
       expect(beforeExport.has("bundle")).toBe(false);
 
-      const manifest = JSON.parse(
-        await fs.readFile(path.join(bundleDir, "manifest.json"), "utf8"),
-      ) as {
-        eventCount?: number;
-        runtimeEventCount?: number;
-        transcriptEventCount?: number;
-        supplementalFiles?: string[];
-      };
       for (const supplementalFile of manifest.supplementalFiles ?? []) {
         expect(bundleNames).toContain(supplementalFile);
       }

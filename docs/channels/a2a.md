@@ -167,7 +167,7 @@ Agent Card discovery is intentionally public: anyone who can reach the gateway c
 
 Every JSON-RPC request requires a configured peer bearer token; there is no unauthenticated mode. Each authenticated peer is also the sender identity used for normal OpenClaw channel ingress policy. Use different high-entropy tokens for each peer, keep tokens out of source control, and rotate tokens by updating the gateway environment and restarting.
 
-Requests are limited to 1 MiB. Extracted message text is capped at 64 KiB and includes an explicit truncation marker when shortened. The default sliding-window limit is 30 requests per minute for each peer; set `rateLimitPerMinute` to `0` only on a separately protected network. Rate-limited requests return a JSON-RPC error while keeping HTTP status 200.
+Requests are limited to 1 MiB, JSON-RPC batches to 30 entries, and serialized JSON-RPC responses to 1 MiB. Extracted message text is capped at 64 KiB and includes an explicit truncation marker when shortened. The default sliding-window limit is 30 requests per minute for each peer; schema-invalid requests count toward that limit. Set `rateLimitPerMinute` to `0` only on a separately protected network. Rate-limited requests return a JSON-RPC error while keeping HTTP status 200.
 
 Outbound destinations come only from operator-configured peer URLs. Inbound callers cannot supply a proxy target or redirect OpenClaw to another destination.
 

@@ -472,6 +472,7 @@ suite.define(() => {
       webChrome: true,
       pathname: "",
       readySelector: ".sidebar-brand",
+      preserveCollapsedNavigation: false,
       proofName: "native-titlebar",
     },
     {
@@ -479,8 +480,9 @@ suite.define(() => {
       chunk: /\/assets\/sidebar-attention-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
       label: "sidebar-attention",
       webChrome: false,
-      pathname: "settings/appearance",
-      readySelector: ".shell--settings",
+      pathname: "chat/main?nav=collapsed",
+      readySelector: ".shell--nav-collapsed",
+      preserveCollapsedNavigation: true,
       proofName: "sidebar-attention",
     },
   ])("recovers $name visibly after its chunk fails", async (testCase) => {
@@ -513,6 +515,13 @@ suite.define(() => {
           });
         }
 
+        if (testCase.preserveCollapsedNavigation) {
+          await page.evaluate(() => {
+            const url = new URL(window.location.href);
+            url.searchParams.set("nav", "collapsed");
+            window.history.replaceState(window.history.state, "", url);
+          });
+        }
         await retryThroughReload(page, error);
         if (testCase.webChrome) {
           const toolbar = page.locator(".macos-titlebar-controls");

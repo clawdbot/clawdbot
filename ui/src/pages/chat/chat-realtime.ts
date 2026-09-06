@@ -99,7 +99,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     state.requestUpdate();
   };
   const refreshCameraDevices = async (session: RealtimeTalkSession) => {
-    const result = await discoverRealtimeTalkCameras(false);
+    const result = await discoverRealtimeTalkCameras(() => false);
     if (state.realtimeTalkSession !== session) {
       return;
     }

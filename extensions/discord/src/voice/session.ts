@@ -25,6 +25,7 @@ export type VoiceOperationResult = {
   ok: boolean;
   message: string;
   channelId?: string;
+  channelName?: string;
   guildId?: string;
 };
 

@@ -58,6 +58,7 @@ import type {
 import { emit } from "./state.js";
 import {
   ensureLoaded,
+  ensureLoadedForOperation,
   persist,
   persistOrRestore,
   pruneCronJobScratchAfterCommit,
@@ -312,7 +313,7 @@ export async function add(
         `cron declarationKey namespace "${systemOwnedDeclarationNamespace}" is system-owned; jobs cannot be created with it`,
       );
     }
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForOperation(state);
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
@@ -463,9 +464,11 @@ export async function add(
 export async function removeStaleJobFamily(
   state: CronServiceState,
   family: { declarationKey: string; name: string; ownerPluginTag: string },
+  opts?: { commitGuard?: () => void },
 ): Promise<number> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForOperation(state);
+    opts?.commitGuard?.();
     return removeStaleCronJobFamilyRows(state.deps.storePath, family);
   });
 }
@@ -484,7 +487,7 @@ async function updateLoadedJob(params: {
   if (patch.payload && isSystemOwnedCronPayloadKind(patch.payload.kind)) {
     throw new Error("system-owned payloads cannot be patched by cron clients");
   }
-  await ensureLoaded(state, { skipRecompute: true });
+  await ensureLoadedForOperation(state);
   const job = findJobOrThrow(state, id);
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from its owner until the next reconcile,
@@ -580,7 +583,7 @@ export async function remove(
   const result = await locked(state, async () => {
     warnIfDisabled(state, "remove");
     const previousStore = state.store;
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForOperation(state);
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
@@ -610,7 +613,7 @@ export async function remove(
       postPersistNotifications,
       suppressScheduledJobId: id,
     });
-    const activeMarker = noteActiveCronJobRemoval(id);
+    const activeMarker = noteActiveCronJobRemoval(id, opts?.commitGuard);
     const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
     const sessionStorePath =
       state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
@@ -677,7 +680,7 @@ export async function removeAgentJobsTransactional<T>(
 ): Promise<T> {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove agent jobs");
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForOperation(state);
     const id = normalizeOptionalAgentId(agentId);
     if (!id || !state.store) {
       return await commit();
@@ -717,11 +720,18 @@ export async function removeAgentJobsTransactional<T>(
         }
         throw error;
       }
-      state.store = snapshot.store;
-      state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
       try {
-        if (!(await persist(state))) {
-          throw new Error("cron: rollback store write did not complete", { cause: error });
+        if (state.deps.cronEnabled) {
+          state.store = snapshot.store;
+          state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+          if (!(await persist(state))) {
+            throw new Error("cron: rollback store write did not complete", { cause: error });
+          }
+        } else {
+          const deletedSnapshot = snapshotStoreForRollback(state);
+          state.store = snapshot.store;
+          state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+          await persistOrRestore(state, deletedSnapshot, { preserveConcurrentAdds: true });
         }
         armTimer(state);
       } catch (rollbackError) {

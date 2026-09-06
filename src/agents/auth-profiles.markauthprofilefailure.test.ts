@@ -306,7 +306,7 @@ describe("markAuthProfileFailure", () => {
     expect(store.usageStats?.["anthropic:default"]?.failureCounts?.billing).toBe(1);
   });
 
-  it("resets error count when previous cooldown has expired to prevent escalation", async () => {
+  it("preserves rate-limit count after expiry so failed probes back off", async () => {
     const agentDir = makeAgentDir("expired-cooldown");
     const now = Date.now();
     // Simulate state left on disk after 3 rapid failures within a 1-min cooldown
@@ -344,13 +344,12 @@ describe("markAuthProfileFailure", () => {
     });
 
     const stats = store.usageStats?.["anthropic:default"];
-    // Error count should reset to 1 (not escalate to 4) because the
-    // previous cooldown expired. Cooldown should be ~30s, not ~5 min.
+    // Expiry makes the profile eligible for a half-open probe; a failed probe
+    // keeps the consecutive count so the next retry grows from 2m to 4m.
     expect(stats?.errorCount).toBe(1);
-    expect(stats?.failureCounts?.rate_limit).toBe(1);
+    expect(stats?.failureCounts?.rate_limit).toBe(4);
     const cooldownMs = (stats?.cooldownUntil ?? 0) - now;
-    // calculateAuthProfileCooldownMs(1) = 30_000 (stepped: 30s -> 1m -> 5m)
-    expectCooldownInRange(cooldownMs, 25_000, 35_000);
+    expectCooldownInRange(cooldownMs, 235_000, 245_000);
   });
 
   it("does not persist cooldown windows for OpenRouter profiles", async () => {

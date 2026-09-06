@@ -14,7 +14,10 @@ import {
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
 import type { NodeHostClient } from "./client.js";
+import { sampleNodeHostStats } from "./host-stats.js";
+import { buildNodeEventParams } from "./node-event-params.js";
 import type { prepareNodeHostRuntime, NodeHostInventory } from "./runtime.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareNodeHostRuntime>>;
@@ -111,6 +114,7 @@ export function startNodeHostConnection({
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
   let gatewayCapabilities: ReadonlySet<string> = new Set();
+  let hostStatsTimer: NodeJS.Timeout | undefined;
   const optionalPublicationStates = new Map<
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
@@ -131,7 +135,36 @@ export function startNodeHostConnection({
     gatewayHelloReceived = false;
     connectedGatewayProtocol = 0;
     gatewayCapabilities = new Set();
+    if (hostStatsTimer) {
+      clearInterval(hostStatsTimer);
+      hostStatsTimer = undefined;
+    }
     retireOptionalPublications();
+  };
+
+  const startHostStatsPublication = () => {
+    const generation = gatewayConnectionGeneration;
+    const connectionClient = publicationClient;
+    let failureLogged = false;
+    const publish = async () => {
+      // A queued timer or late rejection must never act for a replacement connection.
+      if (generation !== gatewayConnectionGeneration || !gatewayHelloReceived) {
+        return;
+      }
+      try {
+        // payloadJSON keeps the native bridge's fire-and-forget node-event frame usable.
+        const params = buildNodeEventParams(NODE_HOST_STATS_EVENT, sampleNodeHostStats());
+        await connectionClient.request("node.event", params);
+      } catch (error) {
+        if (generation === gatewayConnectionGeneration && !failureLogged) {
+          failureLogged = true;
+          writeStderrLine(`node host stats publish failed: ${redactSensitiveText(String(error))}`);
+        }
+      }
+    };
+    void publish();
+    hostStatsTimer = setInterval(() => void publish(), NODE_HOST_STATS_INTERVAL_MS);
+    hostStatsTimer.unref();
   };
 
   const queueOptionalPublication = (
@@ -406,6 +439,7 @@ export function startNodeHostConnection({
         ...(connection.cloudflareAccess ? { cloudflareAccess: connection.cloudflareAccess } : {}),
       });
       gatewayHelloReceived = true;
+      startHostStatsPublication();
       connectedGatewayProtocol = connection.protocol;
       gatewayCapabilities = new Set(connection.capabilities);
       publishRunnerInventory();

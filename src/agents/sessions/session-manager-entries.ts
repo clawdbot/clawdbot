@@ -42,7 +42,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   protected appendEntry<T extends SessionEntry>(
     entry: T,
     options?: AppendPersistenceOptions,
-  ): { entry: T; anchor?: TranscriptEntryAnchor } {
+  ): { entry: T; anchor?: TranscriptEntryAnchor; appended: boolean } {
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Match the persisted JSON/toJSON shape exactly.
     const canonicalEntry = JSON.parse(JSON.stringify(entry)) as T;
     if (!isIndexedSessionEntry(canonicalEntry)) {
@@ -101,17 +101,28 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       }
     }
     this.pendingDeliberateAppend = false;
-    return { entry: canonicalEntry, anchor: persistenceResult?.anchor };
+    return {
+      entry: canonicalEntry,
+      anchor: persistenceResult?.anchor,
+      // Detached managers append locally; only the storage owner supplies a durable anchor.
+      appended: persistenceResult?.appended ?? true,
+    };
   }
 
-  private resolveCurrentTurnEntryId(): string | null {
+  resolveCurrentTurnEntryId(isInterruptedTail?: (entry: SessionEntry) => boolean): string | null {
     let parentId = this.appendParentId;
     let remainingAncestors = this.byId.size;
     // Compaction rewrites context without consuming the current user turn.
-    // Stop at message and reset boundaries so old keyed turns stay closed.
+    // Walk physical parents: opaque/context-excluded users still close older
+    // turns. Replay may recognize its interrupted tail, never skip missing rows.
     while (parentId && remainingAncestors-- > 0) {
       const parent = this.byId.get(parentId);
-      if (!parent || (!isSessionContextMetadataEntry(parent) && parent.type !== "compaction")) {
+      if (
+        !parent ||
+        (!isSessionContextMetadataEntry(parent) &&
+          parent.type !== "compaction" &&
+          !isInterruptedTail?.(parent))
+      ) {
         break;
       }
       parentId = parent.parentId;
@@ -129,7 +140,12 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   appendMessageWithTranscriptAnchor(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
-  ): { entryId: string; message: SessionMessageEntry["message"]; anchor?: TranscriptEntryAnchor } {
+  ): {
+    entryId: string;
+    message: SessionMessageEntry["message"];
+    anchor?: TranscriptEntryAnchor;
+    appended: boolean;
+  } {
     if (message.role === "assistant") {
       applyAssistantDeliveryDirectives(message);
     }
@@ -154,7 +170,12 @@ export class SessionManagerEntries extends SessionManagerPersistence {
         if (this.persistenceTarget && !anchor) {
           throw new Error(`Session transcript anchor was not returned: ${current.id}`);
         }
-        return { entryId: current.id, message: current.message, ...(anchor ? { anchor } : {}) };
+        return {
+          entryId: current.id,
+          message: current.message,
+          ...(anchor ? { anchor } : {}),
+          appended: false,
+        };
       }
     }
     const entry: SessionMessageEntry = {
@@ -164,11 +185,12 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       timestamp: new Date().toISOString(),
       message,
     };
-    const { entry: persisted, anchor } = this.appendEntry(entry, options);
+    const { entry: persisted, anchor, appended } = this.appendEntry(entry, options);
     return {
       entryId: persisted.id,
       message: persisted.message,
       ...(anchor ? { anchor } : {}),
+      appended,
     };
   }
 
@@ -377,25 +399,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       this.labelTimestampsById.delete(targetId);
     }
     return entry.id;
-  }
-
-  getBranch(fromId?: string): SessionEntry[] {
-    const path: SessionEntry[] = [];
-    const seen = new Set<string>();
-    let currentId = fromId ?? this.leafId;
-    while (currentId && !seen.has(currentId)) {
-      seen.add(currentId);
-      const current = this.byId.get(currentId);
-      if (current) {
-        const normalizedCurrent = this.normalizeEntryParent(current);
-        path.push(normalizedCurrent);
-        currentId = normalizedCurrent.parentId;
-      } else {
-        currentId = this.opaqueParentsById.get(currentId) ?? null;
-      }
-    }
-    path.reverse();
-    return path;
   }
 
   buildSessionContext(): SessionContext {

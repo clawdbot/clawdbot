@@ -103,7 +103,7 @@ function createTool(params: {
 describe("sessions_search tool", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("rejects a literal global target owned by another fixed-store agent", async () => {
+  it("rejects a literal global target owned by another fixed-store agent when agent-to-agent is disabled", async () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({
       agentId: "research",
@@ -115,7 +115,7 @@ describe("sessions_search tool", () => {
           defaults: { sessionStore: { agentId: "ops" } },
           entries: { research: {}, ops: {} },
         },
-        tools: { sessions: { visibility: "all" } },
+        tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: false } },
       },
       results: [hit({ sessionKey: "global", agentId: "ops" })],
       requests,

@@ -356,7 +356,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
         await expect
-          .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+          .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
           .toBe("true");
         if (preference.kind === "cloud") {
           await page.evaluate(() => {

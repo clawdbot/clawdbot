@@ -1,7 +1,12 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import {
+  resolveNodeCommandAllowlist,
+  resolveRequiredNodeCommandAuthority,
+} from "../node-command-policy.js";
+import { buildNodeCommandRejectionHint } from "../node-command-rejection-hint.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { readNodeSessionWithheldCommands } from "../node-registry.js";
 import { deviceUnavailableText, resolveDeviceWorkerAvailability } from "./device-provider.js";
 
 type DevicePlacementEligibility =
@@ -20,6 +25,8 @@ export async function resolveDevicePlacementEligibility(params: {
     pairingGeneration?: string;
     platform?: string;
     deviceFamily?: string;
+    declaredCommands?: readonly string[];
+    commands?: readonly string[];
   };
 }): Promise<DevicePlacementEligibility> {
   const { deviceId, requirement } = params;
@@ -57,18 +64,23 @@ export async function resolveDevicePlacementEligibility(params: {
     commands: declaredCommands,
     approvedCommands: declaredCommands,
   });
-  for (const command of requirement.requiredNodeCommands) {
-    const decision = isNodeCommandAllowed({ command, declaredCommands, allowlist });
-    if (!decision.ok) {
-      const recovery =
-        decision.reason === "command not allowlisted"
-          ? "review gateway.nodes.commands.allow and gateway.nodes.commands.deny (deny overrides allow)"
-          : "check that its plugin is installed and enabled on the device, then reconnect and approve the node's commands";
-      return {
-        ok: false,
-        error: `paired-device command ${command} is unavailable for ${deviceId} (${decision.reason}); ${recovery}`,
-      };
-    }
+  const requiredNodeCommand = resolveRequiredNodeCommandAuthority({
+    requiredCommands: requirement.requiredNodeCommands,
+    declaredCommands: params.currentNode?.declaredCommands ?? declaredCommands,
+    effectiveCommands: params.currentNode?.commands ?? declaredCommands,
+    withheldCommands: params.currentNode ? readNodeSessionWithheldCommands(params.currentNode) : [],
+    allowlist,
+  });
+  if (requiredNodeCommand && requiredNodeCommand.state !== "invocable") {
+    return {
+      ok: false,
+      error: buildNodeCommandRejectionHint(
+        requiredNodeCommand.state,
+        requiredNodeCommand.command,
+        { nodeId: deviceId, platform: params.currentNode?.platform },
+        params.config,
+      ),
+    };
   }
   if (requirement.consumesWorkerSlot && node.workerHost.capacity.available <= 0) {
     return {

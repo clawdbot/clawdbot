@@ -1,7 +1,8 @@
 import path from "node:path";
 import type { Plugin } from "vite";
-import type { Vitest } from "vitest/node";
-import { isVitestWorkerMetadataRequest } from "../../scripts/lib/vitest-cli-mode.mts";
+// The runner config loader closes before hooks run; capture the native parser while loading.
+import { parseCLI, type Vitest } from "vitest/node";
+import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import {
   isVitestWorkerDeclaration,
   requestVitestWorkerArtifacts,
@@ -32,7 +33,7 @@ export function compiledSubprocessesPlugin(): Plugin {
       if (
         !supplied ||
         vitest.config.watch ||
-        isVitestWorkerMetadataRequest(process.argv.slice(2))
+        !parseVitestExecutionArgs(process.argv.slice(2), parseCLI)
       ) {
         return;
       }

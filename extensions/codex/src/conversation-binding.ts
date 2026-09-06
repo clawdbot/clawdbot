@@ -311,7 +311,7 @@ async function startCodexConversationThread(
     sessionKey: params.sessionKey,
     config: params.config,
   });
-  const existingBinding = await params.bindingStore.read(identity);
+  const existingBinding = params.bindingStore.read(identity);
   assertCodexBindingMayBeReplaced(existingBinding, "starting a conversation-bound Codex thread");
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
     authProfileId: params.authProfileId ?? existingBinding?.authProfileId,
@@ -346,7 +346,7 @@ async function startCodexConversationThread(
   } else {
     await bind();
   }
-  const storedBinding = await params.bindingStore.read(identity);
+  const storedBinding = params.bindingStore.read(identity);
   if (!storedBinding) {
     throw new Error("Codex session binding disappeared while starting its conversation thread.");
   }
@@ -438,9 +438,9 @@ async function handleCodexConversationInboundClaim(
     const incognito = isIncognitoSessionKey(
       data.source?.sessionKey ?? (data.legacyBinding ? sessionKey : undefined),
     );
-    // Start the snapshot before enqueueing, but do not await: yielding here
-    // would let detach overtake an already-arrived bound message.
-    const queuedOwner = options.bindingStore.read(identity);
+    // Capture the binding before enqueueing so detach cannot overtake
+    // an already-arrived bound message.
+    const expected = options.bindingStore.read(identity);
     const result = await withCodexConversationThreadActivity(data.bindingId, async () => {
       const currentPublicBinding = getSessionBindingService().resolveByConversation({
         channel: publicBinding.channel,
@@ -450,8 +450,7 @@ async function handleCodexConversationInboundClaim(
           ? { parentConversationId: publicBinding.parentConversationId }
           : {}),
       });
-      const expected = await queuedOwner;
-      const current = await options.bindingStore.read(identity);
+      const current = options.bindingStore.read(identity);
       if (
         currentPublicBinding?.bindingId !== publicBinding.bindingId ||
         (expected &&
@@ -503,7 +502,7 @@ async function handleCodexConversationBindingResolved(
     return;
   }
   const identity = conversationBindingIdentity(data);
-  const binding = await options.bindingStore.read(identity);
+  const binding = options.bindingStore.read(identity);
   assertCodexBindingMayBeReplaced(binding, "clearing a denied conversation binding");
   if (binding && (!data.start?.id || binding.conversationStartId === data.start.id)) {
     await withCodexConversationThreadActivity(identity.bindingId, () =>
@@ -624,11 +623,8 @@ function codexConversationSandboxOrPermissions(
   // globally configured Codex apps even when a network profile adds config.
   // Per-app user config overrides apps._default, so the feature kill switch
   // is the only authoritative boundary for this handlerless runtime.
-  const disabledApps = mergeCodexThreadConfigs(buildDisabledAppsConfigPatch(), {
-    "features.apps": false,
-  })!;
   const config = buildCodexProjectDocThreadConfig(
-    mergeCodexThreadConfigs(networkProxy?.configPatch, disabledApps),
+    mergeCodexThreadConfigs(networkProxy?.configPatch, buildDisabledAppsConfigPatch()),
   );
   return networkProxy ? { config } : { sandbox, config };
 }
@@ -643,7 +639,7 @@ async function writeThreadBindingFromResponse(
   let retained = false;
   let sameOwner = false;
   try {
-    const current = await params.bindingStore.read(params.identity);
+    const current = params.bindingStore.read(params.identity);
     assertCodexBindingMayBeReplaced(current, "storing a conversation-bound Codex thread");
     const trackSubscription = !params.incognito && isCodexAppServerClientRuntimeLive(client);
     sameOwner = isSameCodexAppServerThreadOwner(current, {
@@ -701,7 +697,7 @@ async function writeThreadBindingFromResponse(
 }
 
 async function bindThread(params: CodexThreadBindingParams, threadId?: string): Promise<void> {
-  const current = await params.bindingStore.read(params.identity);
+  const current = params.bindingStore.read(params.identity);
   assertCodexBindingMayBeReplaced(current, "binding a conversation-bound Codex thread");
   const resolved = await resolveThreadBindingRuntime(params);
   const clientLease: CodexAppServerClientLease = {
@@ -780,7 +776,7 @@ async function runBoundTurn(params: {
 }): Promise<BoundTurnResult> {
   const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
   const identity = conversationBindingIdentity(params.data);
-  const binding = await params.bindingStore.read(identity);
+  const binding = params.bindingStore.read(identity);
   if (!binding?.threadId) {
     throw new Error("bound Codex conversation has no thread binding");
   }
@@ -789,7 +785,7 @@ async function runBoundTurn(params: {
     identity,
     threadId: binding.threadId,
     run: async () => {
-      const current = await params.bindingStore.read(identity);
+      const current = params.bindingStore.read(identity);
       if (!isSameCodexAppServerThreadOwner(current, binding)) {
         throw new Error("Codex conversation binding changed before its turn.");
       }
@@ -1149,7 +1145,7 @@ async function runBoundTurn(params: {
             let retained = false;
             if (turnSucceeded) {
               retained = await params.bindingStore.withLease(identity, async () => {
-                const latest = await params.bindingStore.read(identity);
+                const latest = params.bindingStore.read(identity);
                 if (latest?.threadId !== threadId || latest.clientId !== client.getInstanceId()) {
                   return false;
                 }
@@ -1234,10 +1230,10 @@ async function prepareConversationBinding(
   options: { forceNew?: boolean } = {},
 ): Promise<void> {
   const identity = conversationBindingIdentity(params.data);
-  const snapshot = await params.bindingStore.read(identity);
+  const snapshot = params.bindingStore.read(identity);
   const run = () =>
     params.bindingStore.withLease(identity, async () => {
-      const current = await params.bindingStore.read(identity);
+      const current = params.bindingStore.read(identity);
       if (current?.threadId !== snapshot?.threadId || current?.clientId !== snapshot?.clientId) {
         throw new Error("Codex conversation binding changed before preparation.");
       }
@@ -1256,9 +1252,7 @@ async function prepareConversationBinding(
             config: params.config,
           })
         : undefined;
-      const sourceBinding = sourceIdentity
-        ? await params.bindingStore.read(sourceIdentity)
-        : undefined;
+      const sourceBinding = sourceIdentity ? params.bindingStore.read(sourceIdentity) : undefined;
       assertCodexBindingMayBeReplaced(current, "initializing a conversation-bound Codex thread");
       assertCodexBindingMayBeReplaced(
         sourceBinding,
@@ -1291,13 +1285,13 @@ async function prepareConversationBinding(
       // policy. Transfer bounded visible history into a fresh bound-only thread.
       const threadId = requested?.threadId;
       await bindThread(bindingParams, options.forceNew ? undefined : threadId);
-      const stored = await params.bindingStore.read(identity);
+      const stored = params.bindingStore.read(identity);
       if (!stored) {
         throw new Error("Codex conversation binding disappeared while initializing its thread.");
       }
       if (sourceIdentity && params.data.source && !current?.conversationSourceTransferComplete) {
         await params.bindingStore.withLease(sourceIdentity, async () => {
-          const source = await params.bindingStore.read(sourceIdentity);
+          const source = params.bindingStore.read(sourceIdentity);
           if (source && source.threadId === params.data.source?.threadId) {
             const sourceSessionKey =
               sourceIdentity.sessionKey ??

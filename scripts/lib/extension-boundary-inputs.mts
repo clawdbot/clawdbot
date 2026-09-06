@@ -17,7 +17,7 @@ export const BOUNDARY_PLUGIN_UNITS = [
   ["memory-core", "api"],
   ["matrix", "test-api"],
   ["discord", "api"],
-  ["slack", "api"],
+  ["slack", "test-api"],
   ["telegram", "api"],
   ["whatsapp", "api"],
 ] as const;
@@ -30,6 +30,7 @@ const GENERATOR_INPUTS = [
   "scripts/lib/extension-boundary-inputs.mts",
   "scripts/lib/compiler-input-snapshot.mts",
   "scripts/lib/build-artifact-cache.mts",
+  "scripts/lib/bounded-output-tail.mjs",
   "scripts/lib/local-check-runtime.mts",
   "scripts/lib/managed-child-process.mts",
   "scripts/lib/vitest-resource-ownership.mts",

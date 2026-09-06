@@ -162,6 +162,7 @@ export async function advanceSessionPlacementDraft(params: {
       agentId: recovery.agentId,
       target: recovery.target,
       message: recovery.message,
+      mentions: recovery.mentions,
       attachments: recovery.attachments,
       messageId: recovery.messageId,
       recovering: params.recovering,

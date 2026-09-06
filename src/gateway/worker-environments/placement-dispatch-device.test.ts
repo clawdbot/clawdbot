@@ -42,9 +42,9 @@ vi.mock("../../config/config.js", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const CODEX_COMMAND = "codex.exec-server.stdio.v1";
 const MISSING_COMMAND_GUIDANCE =
-  "paired-device command codex.exec-server.stdio.v1 is unavailable for device-1 (command not declared by node); check that its plugin is installed and enabled on the device, then reconnect and approve the node's commands";
+  /codex\.exec-server\.stdio\.v1.*device-1.*plugin or device runtime.*device.*reconnect.*approve/;
 const POLICY_COMMAND_GUIDANCE =
-  "paired-device command codex.exec-server.stdio.v1 is unavailable for device-1 (command not allowlisted); review gateway.nodes.commands.allow and gateway.nodes.commands.deny (deny overrides allow)";
+  /codex\.exec-server\.stdio\.v1.*device-1.*review gateway\.nodes\.commands\.allow.*gateway\.nodes\.commands\.deny.*deny overrides allow/;
 const OPENCLAW_DEVICE_REQUIREMENT = { requiredNodeCommands: [], consumesWorkerSlot: true };
 const CODEX_DEVICE_REQUIREMENT = {
   requiredNodeCommands: [CODEX_COMMAND],
@@ -620,7 +620,7 @@ describe("device worker placement dispatch", () => {
 
     expect(result.ok).toBe(expected);
     if (!result.ok && "message" in scenario && scenario.message) {
-      expect(result.error).toContain(scenario.message);
+      expect(result.error).toMatch(scenario.message);
     }
   });
 
@@ -679,7 +679,7 @@ describe("device worker placement dispatch", () => {
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.placements.current()).toMatchObject({
       state: "failed",
-      recoveryError: expect.stringContaining(scenario.expectedMessage),
+      recoveryError: expect.stringMatching(scenario.expectedMessage),
     });
   });
 

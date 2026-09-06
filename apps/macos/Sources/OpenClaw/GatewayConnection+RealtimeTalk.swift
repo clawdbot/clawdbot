@@ -53,7 +53,8 @@ extension GatewayConnection {
                     ifCurrentServerLease: lease)
                 return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
                     let task = Task {
-                        for await push in pushes {
+                        for await delivery in pushes {
+                            guard delivery.isCurrent, let push = delivery.push else { continue }
                             guard case let .event(event) = push else { continue }
                             switch continuation.yield(event) {
                             case .enqueued:
@@ -87,7 +88,7 @@ extension GatewayConnection {
 
     func subscribe(
         bufferingNewest: Int,
-        ifCurrentServerLease lease: ServerLease) -> AsyncStream<GatewayPush>
+        ifCurrentServerLease lease: ServerLease) -> AsyncStream<PushDelivery>
     {
         let id = UUID()
         let connection = self
@@ -96,8 +97,8 @@ extension GatewayConnection {
                 continuation.finish()
                 return
             }
-            if let snapshot = self.lastSnapshot {
-                switch continuation.yield(.snapshot(snapshot)) {
+            if let snapshot = self.lastSnapshot, let delivery = self.makePushDelivery(.snapshot(snapshot)) {
+                switch continuation.yield(delivery) {
                 case .enqueued:
                     break
                 case .dropped, .terminated:
@@ -127,7 +128,7 @@ extension GatewayConnection {
     }
 
     func finishRealtimeTalkSubscribers(socketGeneration: UInt64? = nil) {
-        let subscribers: [AsyncStream<GatewayPush>.Continuation]
+        let subscribers: [AsyncStream<PushDelivery>.Continuation]
         if let socketGeneration {
             if let removed = self.realtimeTalkSubscribers.removeValue(forKey: socketGeneration) {
                 subscribers = Array(removed.values)

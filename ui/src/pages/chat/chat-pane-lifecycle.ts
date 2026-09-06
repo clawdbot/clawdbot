@@ -174,7 +174,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       if (!state || !this.active || !this.presented) {
         return;
       }
-      state.handleChatDraftChange(draft);
+      state.handleChatDraftChange(draft, []);
       state.requestUpdate?.();
     });
   }
@@ -221,9 +221,14 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       togglePanelSlot("terminal");
       return;
     }
-    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)) {
+    const sidebarShortcutSlot = matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
+      ? "workspace"
+      : matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat, event)
+        ? "companion"
+        : null;
+    if (sidebarShortcutSlot) {
       event.preventDefault();
-      togglePanelSlot("workspace");
+      togglePanelSlot(sidebarShortcutSlot);
       return;
     }
 
@@ -304,9 +309,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       pageState.assistantAgentId = paneAgentId;
       pageState.agentsSelectedId = paneAgentId;
     }
-    if (this.compact) {
-      pageState.sidebarLayout = { ...pageState.sidebarLayout, open: false };
-    }
+    pageState.sidebarLayout = this.restorePaneSidebarLayout(pageState.sidebarLayout);
     pageState.getWorkContext = () => this.workContext;
     // Task tabs can precede main chat in DOM order; viewport reads and commands
     // must resolve through the same transcript owner.
@@ -364,7 +367,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       this.applySessionHandoff(pageState.sessionKey, sessionHandoff, true);
     }
     if (this.draft !== undefined) {
-      this.state.handleChatDraftChange(this.draft);
+      this.state.handleChatDraftChange(this.draft, []);
     }
     const handleBrowserAnnotation = (event: Event) => this.receiveBrowserAnnotation(event);
     window.addEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation);
@@ -550,7 +553,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       this.state &&
       this.draft !== this.state.chatMessage
     ) {
-      this.state.handleChatDraftChange(this.draft);
+      this.state.handleChatDraftChange(this.draft, []);
     }
   }
 

@@ -40,6 +40,7 @@ type GatewayRequestContextParams = {
   gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
+  mentionInbox?: GatewayRequestContext["mentionInbox"];
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
   ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
   getPortalService?: () => GatewayRequestContext["portalService"];
@@ -195,6 +196,7 @@ export function createGatewayRequestContext(
     sessionViewerPresence: params.runtimeState.sessionViewerPresence,
     sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
+    mentionInbox: params.mentionInbox,
     notifyPluginMetadataChanged: params.notifyPluginMetadataChanged,
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
     ensureSandboxHostPort: params.ensureSandboxHostPort,

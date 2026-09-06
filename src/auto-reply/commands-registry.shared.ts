@@ -166,6 +166,19 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineBuiltinCommand(
+      "dashboard",
+      "Create or update this session's dashboard.",
+      "tools",
+      "standard",
+      {
+        args: [
+          defineCommandArgument("request", "Dashboard requirements", {
+            captureRemaining: true,
+          }),
+        ],
+      },
+    ),
+    defineBuiltinCommand(
       "learn",
       "Draft a reusable skill from recent work or named sources.",
       "tools",
@@ -462,6 +475,7 @@ export function buildBuiltinChatCommands(
       activeRunSafe: true,
     }),
     defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power"),
+    defineBuiltinCommand("update", "Update OpenClaw and restart.", "tools", "power"),
     defineBuiltinCommand("activation", "Set group activation mode.", "management", "power", {
       args: [
         defineCommandArgument("mode", "mention or always", { choices: ["mention", "always"] }),

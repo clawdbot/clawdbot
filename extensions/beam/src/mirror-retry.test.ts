@@ -171,22 +171,27 @@ describe("Beam terminal retry policy", () => {
     let phase: "build" | "final" = "build";
     let rejectedTargetWrites = 0;
     const store: BeamStore = {
-      put: async (session) => {
-        if (session.completed && phase === "build") {
-          throw new Error("hold terminal state while filling capacity");
-        }
-        if (session.completed && session.beamId === targetBeamId && rejectedTargetWrites === 0) {
-          rejectedTargetWrites += 1;
-          throw new Error("temporary target terminal failure");
-        }
-        if (session.completed && phase === "final" && session.beamId !== targetBeamId) {
-          throw new Error("hold non-target terminal state");
-        }
-        if (session.beamId === targetBeamId) {
-          acceptedTargetStates.push(session.completed);
-        }
-        await keyedStore.register(session.beamId, session);
-      },
+      update: async (beamId, updateValue) =>
+        await keyedStore.update!(beamId, (current) => {
+          const session = updateValue(current);
+          if (!session) {
+            return undefined;
+          }
+          if (session.completed && phase === "build") {
+            throw new Error("hold terminal state while filling capacity");
+          }
+          if (session.completed && session.beamId === targetBeamId && rejectedTargetWrites === 0) {
+            rejectedTargetWrites += 1;
+            throw new Error("temporary target terminal failure");
+          }
+          if (session.completed && phase === "final" && session.beamId !== targetBeamId) {
+            throw new Error("hold non-target terminal state");
+          }
+          if (session.beamId === targetBeamId) {
+            acceptedTargetStates.push(session.completed);
+          }
+          return session;
+        }),
       get: (beamId) => keyedStore.lookup(beamId),
       list: async () => (await keyedStore.entries()).map((entry) => entry.value),
     };

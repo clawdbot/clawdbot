@@ -9,6 +9,7 @@ import {
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
+import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import {
   resolveSkillInvocationPolicy,
   resolveSkillManifestMetadata,
@@ -30,7 +31,7 @@ vi.mock("../loading/plugin-skills.js", () => ({
 async function writeInstallableSkill(
   workspaceDir: string,
   name: string,
-  installSpec: SkillInstallSpec = {
+  installSpec: SkillInstallSpec | SkillInstallSpec[] = {
     id: "deps",
     kind: "node",
     package: "example-package",
@@ -43,7 +44,7 @@ async function writeInstallableSkill(
     `---
 name: ${name}
 description: test skill
-metadata: ${JSON.stringify({ openclaw: { install: [installSpec] } })}
+metadata: ${JSON.stringify({ openclaw: { install: Array.isArray(installSpec) ? installSpec : [installSpec] } })}
 ---
 
 # ${name}
@@ -166,6 +167,60 @@ describe("installSkill before_install hooks", () => {
       expect(stat.isDirectory()).toBe(true);
     });
   });
+
+  it.each([
+    { kind: "node", explicitId: false },
+    { kind: "download", explicitId: false },
+    { kind: "node", explicitId: true },
+    { kind: "download", explicitId: true },
+  ] as const)(
+    "installs the advertised $kind recipe after OS filtering (explicit ID: $explicitId)",
+    async ({ kind, explicitId }) => {
+      const handler = vi.fn().mockReturnValue({ block: true, blockReason: "Recipe observed" });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_install", handler }]),
+      );
+
+      await withWorkspaceCase(async ({ workspaceDir }) => {
+        const foreignOs = process.platform === "darwin" ? "linux" : "darwin";
+        const specs = [foreignOs, process.platform, undefined].map((os, index) => {
+          const spec: SkillInstallSpec =
+            kind === "node"
+              ? { kind, package: `example-package-${index}` }
+              : { kind, url: `https://example.invalid/recipe-${index}.tar.gz` };
+          if (explicitId) {
+            spec.id = `recipe-${index}`;
+          }
+          if (os) {
+            spec.os = [os];
+          }
+          return spec;
+        });
+        await writeInstallableSkill(workspaceDir, "platform-recipes", specs);
+        const report = buildWorkspaceSkillStatus(workspaceDir, {
+          entries: loadTestWorkspaceSkillEntries(workspaceDir),
+        });
+        const options = report.skills[0]!.install;
+        expect(options).toHaveLength(kind === "download" ? 2 : 1);
+
+        for (const [index, option] of options.entries()) {
+          const sourceIndex = index + 1;
+          const result = await installSkill({
+            workspaceDir,
+            skillName: "platform-recipes",
+            installId: option.id,
+          });
+
+          expect(result.message).toBe("Recipe observed");
+          expect(handler.mock.calls.at(-1)?.[0]).toMatchObject({
+            skill: { installSpec: specs[sourceIndex] },
+          });
+          expect(option.id).toBe(explicitId ? `recipe-${sourceIndex}` : `${kind}-${sourceIndex}`);
+        }
+        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("keeps the default npm prefix out of env-overridden state paths", () => {
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);

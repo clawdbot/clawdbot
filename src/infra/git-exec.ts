@@ -3,7 +3,7 @@ import path from "node:path";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createCommandError } from "../process/command-error.js";
 import type { SpawnResult } from "../process/exec-result.js";
-import { runCommandBuffered, runCommandWithTimeout } from "../process/exec.js";
+import { runCommandBuffered, runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export const GIT_TIMEOUT_MS = 120_000;
@@ -26,25 +26,27 @@ export async function enqueueGitRefMutation<T>(
   return await gitRefMutations.enqueue(key, run);
 }
 
+export function withForegroundGitMaintenance(argv: string[]): string[] {
+  // Maintenance and legacy auto-GC must stay in their cancellable process tree.
+  return argv[0] === "git"
+    ? ["git", "-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false", ...argv.slice(1)]
+    : argv;
+}
+
 export async function executeGitCommand(
   cwd: string,
   args: string[],
-  options: {
-    baseEnv?: NodeJS.ProcessEnv;
-    env?: NodeJS.ProcessEnv;
-    input?: string | Uint8Array;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-  } = {},
+  options: Pick<
+    CommandOptions,
+    "baseEnv" | "env" | "input" | "timeoutMs" | "signal" | "killProcessTree" | "maxOutputBytes"
+  > = {},
 ): Promise<SpawnResult & { timeoutMs: number }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  const result = await runCommandWithTimeout(["git", "-C", cwd, ...args], {
-    timeoutMs,
-    baseEnv: options.baseEnv,
-    env: options.env,
-    input: options.input,
-    signal: options.signal,
-  });
+  const argv = ["git", "-C", cwd, ...args];
+  const result = await runCommandWithTimeout(
+    options.killProcessTree ? withForegroundGitMaintenance(argv) : argv,
+    { ...options, timeoutMs },
+  );
   return { ...result, timeoutMs };
 }
 

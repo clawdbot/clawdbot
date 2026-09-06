@@ -100,6 +100,20 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
+  it.each(["src/gateway/methods/core-descriptors.ts", "src/gateway/method-scopes.ts"])(
+    "keeps static method policy independent of session storage: %s",
+    (entryPath) => {
+      const graph = collectStaticValueImportGraph(entryPath);
+      const sessionStorageImports = [...graph.keys()]
+        .map((filePath) => path.relative(repoRoot, filePath))
+        .filter((filePath) =>
+          filePath.startsWith(path.join("src", "config", "sessions") + path.sep),
+        );
+
+      expect(sessionStorageImports).toEqual([]);
+    },
+  );
+
   it("keeps remote catalog refresh networking behind the overlay boundary", () => {
     const startupGraph = collectStaticValueImportGraph(
       "src/plugins/gateway-startup-plugin-providers.ts",
@@ -169,7 +183,7 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
     expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
     expect(serverImpl).not.toContain('from "../secrets/runtime.js"');
-    expect(readSource("src/gateway/server-reload-handlers.ts")).not.toContain(
+    expect(readSource("src/gateway/server-reload-managed.ts")).not.toContain(
       'from "../secrets/runtime.js"',
     );
     const wsConnection = readSource("src/gateway/server/ws-connection.ts");
@@ -306,7 +320,7 @@ describe("gateway startup import boundaries", () => {
       "cronReconciliation.invalidate();",
     );
     expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "void stopOutboundDeliveryRecoveryForClose();",
+      "void stopDeliveryRecoveryForClose();",
     );
     expect(beginHelperStart).toBeGreaterThan(-1);
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
@@ -316,7 +330,7 @@ describe("gateway startup import boundaries", () => {
       "stopConfigReloaderForClose().catch",
     );
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
-      "stopOutboundDeliveryRecoveryForClose(),",
+      "stopDeliveryRecoveryForClose(),",
     );
     expect(postReadyStart).toBeGreaterThan(-1);
     expect(postReadyBlock).toContain("isClosing: () => lifecycle.closePreludeStarted");

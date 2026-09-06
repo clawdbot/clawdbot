@@ -50,10 +50,15 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     }
   };
 
-  const settleFanout = async (sends: Array<() => void | Promise<unknown>>): Promise<void> => {
-    // Public gateway callers intentionally fire-and-forget fanout. Settle every
-    // sender so one transport failure cannot become an unhandled rejection.
-    await Promise.allSettled(sends.map((send) => Promise.resolve().then(send)));
+  const settleFanout = async <Entry>(
+    entries: Iterable<Entry>,
+    createSend: (entry: Entry) => () => ReturnType<NodeSendEventFn>,
+  ): Promise<void> => {
+    // Build sender closures before yielding without retaining iterator tuples.
+    // Settle failures because public Gateway callers fire-and-forget this fanout.
+    await Promise.allSettled(
+      Array.from(entries, (entry) => Promise.resolve().then(createSend(entry))),
+    );
   };
 
   const subscribe = (nodeId: string, pairingGeneration: string, sessionKey: string) => {
@@ -187,11 +192,10 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     // Serialize once per event and reuse across all subscribed nodes to keep
     // fanout deterministic and avoid repeated JSON conversion.
     await settleFanout(
-      [...subscribers].map(
-        ([nodeId, pairingGeneration]) =>
-          () =>
-            sendEvent({ nodeId, pairingGeneration, event, payloadJSON }),
-      ),
+      subscribers,
+      ([nodeId, pairingGeneration]) =>
+        () =>
+          sendEvent({ nodeId, pairingGeneration, event, payloadJSON }),
     );
   };
 
@@ -208,16 +212,15 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
       return;
     }
     await settleFanout(
-      [...nodeSubscriptions].map(
-        ([nodeId, subscription]) =>
-          () =>
-            sendEvent({
-              nodeId,
-              pairingGeneration: subscription.pairingGeneration,
-              event,
-              payloadJSON,
-            }),
-      ),
+      nodeSubscriptions,
+      ([nodeId, subscription]) =>
+        () =>
+          sendEvent({
+            nodeId,
+            pairingGeneration: subscription.pairingGeneration,
+            event,
+            payloadJSON,
+          }),
     );
   };
 

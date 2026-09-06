@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   GatewayProtocolRequestTimeoutError,
   type GatewayProtocolRequestOptions,
@@ -25,16 +26,6 @@ function createClient(
     } as unknown as GatewaySessionMessageRequestClient,
     request,
   };
-}
-
-function deferred<T>() {
-  let resolve: (value: T) => void = () => undefined;
-  let reject: (error: unknown) => void = () => undefined;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
 }
 
 function createStalledRequestClient(stalledMethod: string, stalledKey: string) {
@@ -176,7 +167,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   ])(
     "coalesces $name aliases before the first canonical acknowledgment",
     async ({ requestedKey, canonicalKey }) => {
-      const acknowledgement = deferred<unknown>();
+      const acknowledgement = createDeferred<unknown>();
       const { client, request } = createClient(async (method) =>
         method === "sessions.messages.subscribe" ? await acknowledgement.promise : {},
       );
@@ -208,7 +199,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   );
 
   it("upgrades a provisional canonical alias without creating a competing plain observer", async () => {
-    const acknowledgement = deferred<unknown>();
+    const acknowledgement = createDeferred<unknown>();
     const replay = { approvals: [{ id: "approval-after-ack" }] };
     const { client, request } = createClient(async (method, params) => {
       if (method === "sessions.messages.unsubscribe") {
@@ -250,7 +241,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("keeps unacknowledged subscriptions isolated by canonical agent", async () => {
-    const acknowledgement = deferred<unknown>();
+    const acknowledgement = createDeferred<unknown>();
     const { client, request } = createClient(async (_method, params) =>
       params.agentId === "main" ? await acknowledgement.promise : { key: params.key },
     );
@@ -359,7 +350,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("coalesces concurrent releases of the final lease", async () => {
-    const unsubscribe = deferred<unknown>();
+    const unsubscribe = createDeferred<unknown>();
     const { client, request } = createClient(async (method, params) =>
       method === "sessions.messages.subscribe" ? { key: params.key } : await unsubscribe.promise,
     );
@@ -376,7 +367,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("waits for a closing observer before acquiring its replacement", async () => {
-    const unsubscribe = deferred<unknown>();
+    const unsubscribe = createDeferred<unknown>();
     const { client, request } = createClient(async (method, params) =>
       method === "sessions.messages.subscribe" ? { key: params.key } : await unsubscribe.promise,
     );
@@ -494,7 +485,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("lets concurrent plain observers recover when the first approval request is unauthorized", async () => {
-    const approval = deferred<unknown>();
+    const approval = createDeferred<unknown>();
     const { client, request } = createClient(async (method, params) => {
       if (method === "sessions.messages.unsubscribe") {
         return {};
@@ -525,7 +516,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("releases the last plain owner after its provisional approval upgrade fails", async () => {
-    const approval = deferred<unknown>();
+    const approval = createDeferred<unknown>();
     const { client, request } = createClient(async (method, params) => {
       if (method === "sessions.messages.unsubscribe") {
         return {};
@@ -606,7 +597,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("rejects a subscribe acknowledgment from a retired connection", async () => {
-    const response = deferred<unknown>();
+    const response = createDeferred<unknown>();
     const { client, request } = createClient(async () => await response.promise);
     const coordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
     const pending = coordinator.acquire("main");

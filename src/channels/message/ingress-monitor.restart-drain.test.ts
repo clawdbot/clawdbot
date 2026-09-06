@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import { channelIngressGatewayRestartEntrypoint } from "../../../test/fixtures/channel-ingress-gateway-restart-entrypoint.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import {
   beginGatewayRestartSignalAdmission,
   markGatewayRestartDraining,
@@ -69,10 +73,8 @@ function createMonitor(
 
 function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
   return new Promise((resolve, reject) => {
-    const fixture = fileURLToPath(
-      new URL("../../../test/fixtures/channel-ingress-gateway-restart.ts", import.meta.url),
-    );
-    const child = spawn(process.execPath, ["--import", "tsx", fixture, stateDir], {
+    const fixture = resolveRuntimeWorkerUrl(channelIngressGatewayRestartEntrypoint);
+    const child = spawn(process.execPath, [...resolveRuntimeWorkerArgv(fixture), stateDir], {
       cwd: process.cwd(),
       env: { ...process.env, TMPDIR: stateDir },
       stdio: ["ignore", "ignore", "pipe", "ipc"],
@@ -118,7 +120,12 @@ function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
       clearTimeout(startupTimer);
       clearTimeout(idleTimer);
       if (failure) {
-        reject(failure);
+        reject(
+          new Error(
+            `${failure.message}; code=${String(code)} signal=${String(signal)} stderr=${stderr}`,
+            { cause: failure },
+          ),
+        );
         return;
       }
       if (code !== 0 || !proof) {

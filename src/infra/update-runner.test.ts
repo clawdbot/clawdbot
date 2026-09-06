@@ -1,11 +1,12 @@
 // Covers gateway update runner scenarios.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import * as processExec from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
@@ -18,8 +19,10 @@ import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
   runGatewayUpdate,
+  runGatewayUpdatePreflight,
 } from "./update-runner.js";
 
+const { runCommandWithTimeout } = processExec;
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -551,6 +554,82 @@ describe("runGatewayUpdate", () => {
     const targetSha = await runRealGit(sourceRoot, "rev-parse", "HEAD");
     return { sourceRoot, localRoot, baseSha, targetSha };
   }
+
+  it.each(["build", "locked worktree creation"] as const)(
+    "cancels preflight %s and removes its Git worktree before returning",
+    async (phase) => {
+      const { localRoot, baseSha, targetSha } = await createTrackedGitFixture(false);
+      const controller = new AbortController();
+      const stopped = new Error("preflight owner stopped");
+      let buildResult: Awaited<ReturnType<typeof runCommandWithTimeout>> | undefined;
+      let worktree: string | undefined;
+      const commandSpy = vi
+        .spyOn(processExec, "runCommandWithTimeout")
+        .mockImplementation(async (argv, optionsOrTimeout) => {
+          const options =
+            typeof optionsOrTimeout === "number"
+              ? { timeoutMs: optionsOrTimeout }
+              : optionsOrTimeout;
+          if (argv[0] !== "pnpm") {
+            const result = await runCommandWithTimeout(argv, options);
+            if (
+              phase === "locked worktree creation" &&
+              argv.includes("worktree") &&
+              argv.includes("add")
+            ) {
+              worktree = argv.at(-2);
+              assert.ok(worktree);
+              // Git can retain this lock when creation is forcibly terminated during checkout.
+              await runRealGit(localRoot, "worktree", "lock", "--reason", "initializing", worktree);
+              controller.abort(stopped);
+            }
+            return result;
+          }
+          if (argv[1] === "build") {
+            worktree = options.cwd;
+            buildResult = await runCommandWithTimeout(
+              [
+                process.execPath,
+                "-e",
+                'process.stdout.write("ready\\n"); setInterval(() => {}, 1000)',
+              ],
+              { ...options, onOutputChunk: () => controller.abort(stopped) },
+            );
+            return buildResult;
+          }
+          return {
+            stdout: argv[1] === "--version" ? PNPM_VERSION : "",
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+            noOutputTimedOut: false,
+          };
+        });
+      try {
+        await expect(
+          runGatewayUpdatePreflight(
+            localRoot,
+            5000,
+            { mode: "tracked", upstreamRef: "origin/main", upstreamSha: targetSha },
+            controller.signal,
+          ),
+        ).rejects.toBe(stopped);
+      } finally {
+        commandSpy.mockRestore();
+      }
+      if (phase === "build") {
+        expect(buildResult?.termination).toBe("signal");
+      }
+      assert.ok(worktree);
+      expect(await pathExists(path.dirname(worktree))).toBe(false);
+      expect(await runRealGit(localRoot, "worktree", "list", "--porcelain")).not.toContain(
+        worktree,
+      );
+      expect(await runRealGit(localRoot, "rev-parse", "HEAD")).toBe(baseSha);
+    },
+  );
 
   function createRealGitUpdateRunner(params: { finalHead?: { root: string; sha: string } } = {}) {
     let headReads = 0;

@@ -959,8 +959,8 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(modelInput[2]).toMatchObject({
       customType: "openclaw.runtime-context",
     });
-    expect(modelInput[2]?.content).toContain(
-      "Use it to continue answering the active user request now.",
+    expect(modelInput[2]?.content).toBe(
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\ncurrent runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
     );
     // User messages are form-canonicalized from array to plain string.
     expect(modelInput[0]?.content).toBe("old ask");

@@ -468,7 +468,7 @@ export async function prepareNodeHostRuntime(params?: {
       if (workerSupervisor && !preparedContainerInitialized) {
         initializeWorkerSupervisor();
       }
-      const skillBins = new SkillBinsCache(client, pathEnv);
+      let skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
       let pluginDisconnectCleanup: Promise<void> = Promise.resolve();
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
@@ -671,6 +671,8 @@ export async function prepareNodeHostRuntime(params?: {
         },
         cancelAll() {
           connectionGeneration += 1;
+          // Retired refreshes may still finish; their cache must never serve the next connection.
+          skillBins = new SkillBinsCache(client, pathEnv);
           for (const active of activeInvokes.values()) {
             active.controller.abort();
           }

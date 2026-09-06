@@ -94,7 +94,7 @@ flow:
             expr: "conversationOutbound.filter((message) => String(message.text ?? '').trim() === config.expectedMarker)"
         - set: gatewayLog
           value:
-            expr: "String(readGatewayLogs() ?? '').slice(logCursor)"
+            expr: "String(readGatewayLogs(logCursor) ?? '')"
         - assert:
             expr: conversationOutbound.length === 1 && matchingOutbound.length === 1
             message:

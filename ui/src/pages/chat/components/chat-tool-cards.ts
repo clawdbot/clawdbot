@@ -24,6 +24,7 @@ import {
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
 import { getToolCallTitle } from "../tool-titles.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffStatChips } from "./chat-diff-render.ts";
@@ -212,25 +213,29 @@ function renderToolRowContent(
           : undefined;
     return html`
       <span class="chat-tool-row__verb">${verb}</span>
-      ${workspaceFilePath && onOpenWorkspaceFile
-        ? html`<button
-            class="chat-tool-row__file-link"
-            type="button"
-            title=${t("chat.toolCards.openFile")}
-            @click=${(event: MouseEvent) => {
-              event.stopPropagation();
-              onOpenWorkspaceFile({ path: workspaceFilePath });
-            }}
-          >
-            ${compactToolTarget(view.target, view.kind)}
-          </button>`
-        : html`<span class="chat-tool-row__target"
-            >${compactToolTarget(view.target, view.kind)}</span
-          >`}
+      ${
+        workspaceFilePath && onOpenWorkspaceFile
+          ? html`<button
+              class="chat-tool-row__file-link"
+              type="button"
+              title=${t("chat.toolCards.openFile")}
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                onOpenWorkspaceFile({ path: workspaceFilePath });
+              }}
+            >
+              ${compactToolTarget(view.target, view.kind)}
+            </button>`
+          : html`<span class="chat-tool-row__target"
+              >${compactToolTarget(view.target, view.kind)}</span
+            >`
+      }
       ${stat ? renderDiffStatChips(stat) : nothing}
-      ${!workspaceFilePath && view.targetDetail && view.kind !== "edit" && view.kind !== "write"
-        ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
-        : nothing}
+      ${
+        !workspaceFilePath && view.targetDetail && view.kind !== "edit" && view.kind !== "write"
+          ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
+          : nothing
+      }
     `;
   }
 
@@ -252,9 +257,9 @@ function renderToolRowContent(
   }
   return html`
     <span class="chat-tool-msg-summary__label">${displayLabel}</span>
-    ${displayName
-      ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
-      : nothing}
+    ${
+      displayName ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>` : nothing
+    }
   `;
 }
 
@@ -391,24 +396,30 @@ export function renderToolApprovalReviews(card: ToolCard) {
                 >${adverse ? icons.shieldX : icons.shieldCheck}</span
               >
               <span class="chat-tool-review__label">${toolReviewLabel(review)}</span>
-              ${review.riskLevel
-                ? html`<span class="chat-tool-review__chip"
-                    >${t("chat.toolCards.review.risk", { level: review.riskLevel })}</span
-                  >`
-                : nothing}
-              ${review.userAuthorization
-                ? html`<span class="chat-tool-review__chip"
-                    >${t("chat.toolCards.review.authorization", {
-                      level: review.userAuthorization,
-                    })}</span
-                  >`
-                : nothing}
+              ${
+                review.riskLevel
+                  ? html`<span class="chat-tool-review__chip"
+                      >${t("chat.toolCards.review.risk", { level: review.riskLevel })}</span
+                    >`
+                  : nothing
+              }
+              ${
+                review.userAuthorization
+                  ? html`<span class="chat-tool-review__chip"
+                      >${t("chat.toolCards.review.authorization", {
+                        level: review.userAuthorization,
+                      })}</span
+                    >`
+                  : nothing
+              }
             </div>
-            ${review.status === "in_progress"
-              ? nothing
-              : html`<div class="chat-tool-review__rationale">
-                  ${review.rationale ?? t("chat.toolCards.review.noRationale")}
-                </div>`}
+            ${
+              review.status === "in_progress"
+                ? nothing
+                : html`<div class="chat-tool-review__rationale">
+                    ${review.rationale ?? t("chat.toolCards.review.noRationale")}
+                  </div>`
+            }
           </div>
         `;
       })}
@@ -427,7 +438,7 @@ export function renderToolCard(
   const outcome = resolveToolCardOutcome(card, opts.runActive);
   const progressReceipt = renderProgressCardReceipt(card, outcome);
   if (progressReceipt) {
-    return progressReceipt;
+    return renderPluginToolResult(card, opts, progressReceipt);
   }
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
@@ -450,45 +461,86 @@ export function renderToolCard(
     <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
   `;
 
-  return html`
-    <div class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded ? "is-open" : ""}">
-      ${isFileRow
-        ? html`<div
-            class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--file ${isRunning
-              ? "chat-tool-row--running"
-              : ""}"
-            @pointerenter=${syncToolDisclosureOverflow}
-            @focusin=${syncToolDisclosureOverflow}
-          >
-            <button
-              class="chat-tool-row__toggle"
-              type="button"
-              aria-expanded=${String(expanded)}
-              aria-label=${resolveToolRowText(card, opts.runActive)}
-              @click=${() => opts.onToggleExpanded(card.id)}
-            ></button>
-            ${rowContent}
-          </div>`
-        : html`<button
-            class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${isRunning
-              ? "chat-tool-row--running"
-              : ""}"
-            type="button"
-            aria-expanded=${String(expanded)}
-            @pointerenter=${syncToolDisclosureOverflow}
-            @focus=${syncToolDisclosureOverflow}
-            @click=${(event: MouseEvent) => {
-              if (shouldToggleSelectableDisclosure(event)) {
-                opts.onToggleExpanded(card.id);
-              }
-            }}
-          >
-            ${rowContent}
-          </button>`}
-      ${expanded
-        ? html` <div class="chat-tool-msg-body">${renderExpandedToolCardContent(card, opts)}</div> `
-        : nothing}
-      ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
-    </div>
-  `;
+  return renderPluginToolResult(
+    card,
+    opts,
+    html`
+      <div
+        class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded ? "is-open" : ""}"
+      >
+        ${
+          isFileRow
+            ? html`<div
+                class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--file ${
+                  isRunning ? "chat-tool-row--running" : ""
+                }"
+                @pointerenter=${syncToolDisclosureOverflow}
+                @focusin=${syncToolDisclosureOverflow}
+              >
+                <button
+                  class="chat-tool-row__toggle"
+                  type="button"
+                  aria-expanded=${String(expanded)}
+                  aria-label=${resolveToolRowText(card, opts.runActive)}
+                  @click=${() => opts.onToggleExpanded(card.id)}
+                ></button>
+                ${rowContent}
+              </div>`
+            : html`<button
+                class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${
+                  isRunning ? "chat-tool-row--running" : ""
+                }"
+                type="button"
+                aria-expanded=${String(expanded)}
+                @pointerenter=${syncToolDisclosureOverflow}
+                @focus=${syncToolDisclosureOverflow}
+                @click=${(event: MouseEvent) => {
+                  if (shouldToggleSelectableDisclosure(event)) {
+                    opts.onToggleExpanded(card.id);
+                  }
+                }}
+              >
+                ${rowContent}
+              </button>`
+        }
+        ${
+          expanded
+            ? html`
+                <div class="chat-tool-msg-body">${renderExpandedToolCardContent(card, opts)}</div>
+              `
+            : nothing
+        }
+        ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
+      </div>
+    `,
+  );
+}
+
+export function renderPluginToolResult(
+  card: ToolCard | null | undefined,
+  opts: ToolRenderOptions & { expanded: boolean },
+  defaultView: unknown,
+) {
+  if (!card) {
+    return defaultView;
+  }
+  return renderPluginSurface(
+    "tool-result",
+    {
+      sessionKey: opts.sessionKey ?? "",
+      agentId: opts.agentId,
+      toolName: card.name,
+      toolCallId: card.callId ?? card.id,
+      input: card.args,
+      output: {
+        text: card.outputText,
+        details: card.details,
+        isError: card.isError,
+        completed: card.completed,
+      },
+      expanded: opts.expanded,
+    },
+    defaultView,
+    opts.presented ?? true,
+  );
 }

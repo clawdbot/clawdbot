@@ -5,6 +5,7 @@ import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/pro
 import { describe, expect, it, vi } from "vitest";
 import { stopCrabboxLease } from "./crabbox-worker-command.js";
 import {
+  commandResult,
   createWarmProvider,
   LEASE_ID,
   openWarmImageStore,
@@ -27,11 +28,84 @@ const HELD_STOP = `
 `;
 
 describe("Crabbox stop lifetime", () => {
+  it.each(["destroy", "dispose", "inspection loss"] as const)(
+    "retains heartbeat custody through %s and later disposal",
+    async (entrance) => {
+      vi.useFakeTimers();
+      const heartbeatStarted = createDeferred<void>();
+      const finishHeartbeat = createDeferred<void>();
+      let heartbeatSignal: AbortSignal | undefined;
+      let recognized = true;
+      const { provider, calls } = createWarmProvider(({ argv, options }) => {
+        if (argv[1] === "heartbeat") {
+          heartbeatSignal = options.signal;
+          heartbeatStarted.resolve();
+          // Abort requests termination; the command runner still owns child settlement.
+          return finishHeartbeat.promise.then(() => commandResult());
+        }
+        if (argv[1] === "inspect" && !recognized) {
+          return commandResult({ code: 4, stderr: `${LEASE_ID} was not found` });
+        }
+        return undefined;
+      });
+      const lease = { leaseId: LEASE_ID, profile: { ...PROFILE, warmImage: false } };
+      const operations: Promise<unknown>[] = [];
+      try {
+        await provider.inspect(lease);
+        await vi.advanceTimersByTimeAsync(0);
+        await heartbeatStarted.promise;
+
+        recognized = entrance !== "inspection loss";
+        let closed = false;
+        operations.push(
+          (entrance === "destroy"
+            ? provider.destroy(lease)
+            : entrance === "dispose"
+              ? provider.dispose()
+              : provider.inspect(lease)
+          ).finally(() => {
+            closed = true;
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(heartbeatSignal?.aborted).toBe(true);
+
+        recognized = true;
+        await provider.inspect(lease);
+        await vi.advanceTimersByTimeAsync(0);
+        let disposed = false;
+        operations.push(
+          provider.dispose().finally(() => {
+            disposed = true;
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(closed).toBe(false);
+        expect(disposed).toBe(false);
+        expect(calls.filter(({ argv }) => argv[1] === "heartbeat")).toHaveLength(1);
+        expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+
+        finishHeartbeat.resolve();
+        await Promise.all(operations);
+        expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(
+          entrance === "destroy" ? 1 : 0,
+        );
+        await vi.advanceTimersByTimeAsync(180_000);
+        expect(calls.filter(({ argv }) => argv[1] === "heartbeat")).toHaveLength(1);
+      } finally {
+        finishHeartbeat.resolve();
+        await Promise.allSettled(operations);
+        await provider.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
-    { entrance: "destroy", exitCode: 0, elapsedMs: 4 * 60_000, outcome: "success" },
-    { entrance: "direct stop", exitCode: 0, elapsedMs: 4 * 60_000, outcome: "success" },
-    { entrance: "destroy", exitCode: 5, elapsedMs: 4 * 60_000, outcome: "failure" },
-    { entrance: "destroy", exitCode: 0, elapsedMs: 6 * 60_000, outcome: "timeout" },
+    { entrance: "destroy", exitCode: 0, elapsedMs: 6 * 60_000, outcome: "success" },
+    { entrance: "direct stop", exitCode: 0, elapsedMs: 6 * 60_000, outcome: "success" },
+    { entrance: "destroy", exitCode: 5, elapsedMs: 6 * 60_000, outcome: "failure" },
+    { entrance: "destroy", exitCode: 0, elapsedMs: 18 * 60_000, outcome: "timeout" },
   ])(
     "preserves $entrance custody through late $outcome",
     async ({ entrance, exitCode, elapsedMs, outcome }) => {

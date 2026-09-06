@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import { QaGatewayChildLifecycle, type QaGatewayStopOptions } from "./gateway-child-lifecycle.js";
 import {
+  createQaGatewayChildLogAccess,
   formatQaGatewayProcessBoundaryStartupFailure,
   monitorQaGatewayChildFailure,
   throwQaGatewayChildFailure,
@@ -23,7 +24,6 @@ import {
   type QaGatewayChildParams,
   type QaGatewayChildStateMutationContext,
 } from "./gateway-child-setup.js";
-import { redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { readProcessTreeCpuMs, readProcessTreeRssBytes } from "./process-tree-cpu.js";
 
@@ -192,7 +192,7 @@ async function startOwnedGatewayChild(
       await launchReady(true, attempt);
       break;
     } catch (error) {
-      const attemptLogs = redactQaGatewayDebugText(output.readSince(attemptLogMark));
+      const attemptLogs = output.readRedactedSince(attemptLogMark);
       const retry = resolveQaGatewayStartupRetry({
         attempt,
         details: attemptLogs.trim() ? attemptLogs : formatErrorMessage(error),
@@ -250,6 +250,7 @@ async function startOwnedGatewayChild(
     configPath,
     runtimeEnv: runningEnv,
     logs,
+    ...createQaGatewayChildLogAccess(output),
     runCli(args: readonly string[]) {
       throwActiveChildFailure();
       return runQaGatewayCliCommand({
@@ -271,7 +272,7 @@ async function startOwnedGatewayChild(
       await signalActiveProcess(signal);
       if (signal === "SIGUSR1") {
         await waitForQaGatewayRestartBoundary({
-          readLogsSince: (mark) => redactQaGatewayDebugText(output.readSince(mark)),
+          readLogsSince: (mark) => output.readSince(mark),
           mark: restartLogMark,
         });
         await waitForGatewayReady({
@@ -296,10 +297,9 @@ async function startOwnedGatewayChild(
         } catch (error) {
           const retry = resolveQaGatewayStartupRetry({
             attempt: 1,
-            details: [
-              redactQaGatewayDebugText(output.readSince(replacementLogMark)),
-              formatErrorMessage(error),
-            ].join("\n"),
+            details: [output.readRedactedSince(replacementLogMark), formatErrorMessage(error)].join(
+              "\n",
+            ),
             migrationConvergenceRestartUsed: false,
           });
           if (retry?.kind !== "migration-convergence-restart") {

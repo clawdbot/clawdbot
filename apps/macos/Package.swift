@@ -21,7 +21,7 @@ let package = Package(
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"),
         .package(
             url: "https://github.com/openclaw/Peekaboo.git",
-            revision: "8d5e638e6ac9e93fae7d8dcb2ac0a0f01f3d49ec"),
+            revision: "44eff916c3330739108cc1d73683338d4250503a"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.4.1"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),
@@ -78,6 +78,7 @@ let package = Package(
             ],
             resources: [
                 .copy("Resources/OpenClaw.icns"),
+                .copy("Resources/AppIcons"),
                 .copy("Resources/DeviceModels"),
                 .copy("Resources/ProviderIcons"),
             ],

@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
+import type { AgentHarnessQuestionGatewayCall } from "../../harness/gateway-question-dispatch.js";
 import { runAgentHarnessGatewayQuestion } from "../../harness/gateway-question.js";
 import { registerQueuedUserMessageRetirement } from "../../sessions/queued-user-message-retirement.js";
 import {
@@ -90,7 +91,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         ],
         sessionKey,
         timeoutMs: 60_000,
-        gatewayCall: vi.fn(),
+        gatewayCall: vi.fn<AgentHarnessQuestionGatewayCall>(),
         delivery: { onBlockReply },
       });
       const steer = vi.fn(async () => undefined);

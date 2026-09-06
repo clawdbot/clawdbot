@@ -146,6 +146,8 @@ One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delive
 
 ### Recurring jobs
 
+Configured intervals and stagger windows retain millisecond precision in human-readable output: `--every 90s` displays as `every 1m 30s`, and `--stagger 1001ms` as `stagger 1s 1ms`. Use `automations show <job-id>` for the full duration when the list column is truncated. Relative next-run and last-run labels remain rounded.
+
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
 
 Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.

@@ -50,7 +50,7 @@ export function createDiscordSendReceipt(params: {
 }): MessageReceipt {
   const platformMessageIds = params.platformMessageIds
     .map((messageId) => messageId.trim())
-    .filter((messageId) => messageId && messageId !== "unknown");
+    .filter(Boolean);
   const results: Array<MessageReceiptSourceResult & { receipt?: MessageReceipt }> =
     platformMessageIds.map((messageId, index) => {
       const result: MessageReceiptSourceResult & { receipt?: MessageReceipt } = {
@@ -94,7 +94,9 @@ export function createDiscordSendResult(params: {
   threadId?: string | number;
   reply?: DiscordReplyReference;
 }): DiscordSendResult {
-  const messageId = params.result.id || "unknown";
+  // A missing Discord ID is ambiguous, not an acknowledgement. Leave it empty
+  // so shared delivery custody cannot mistake a placeholder for platform evidence.
+  const messageId = params.result.id ?? "";
   const channelId = params.result.channel_id ?? params.fallbackChannelId;
   const receiptParams: Parameters<typeof createDiscordSendReceipt>[0] = {
     platformMessageIds: params.result.platformMessageIds?.length

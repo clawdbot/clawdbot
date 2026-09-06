@@ -483,7 +483,8 @@ export function runServiceChildWindowsJobAnchor(): void {
             null,
             1,
             CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-            buildWindowsJobEnvironmentBlock(next.env),
+            // NULL inherits; an explicitly empty environment must remain an empty block.
+            next.env === undefined ? null : buildWindowsJobEnvironmentBlock(next.env),
             next.cwd ?? null,
             {
               StartupInfo: {

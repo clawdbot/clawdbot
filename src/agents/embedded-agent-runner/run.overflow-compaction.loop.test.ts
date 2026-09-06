@@ -190,7 +190,9 @@ describe("embedded run retry dispatch", () => {
         sessionKey: "global",
         sandbox: null,
       });
-      expect(mocks.runAttempt).toHaveBeenCalledWith(result.preparedAttempt);
+      expect(mocks.runAttempt).toHaveBeenCalledTimes(1);
+      expect(mocks.runAttempt.mock.calls[0]?.[0]).toEqual(result.preparedAttempt);
+      expect(mocks.runAttempt.mock.calls[0]?.[1]).toBeUndefined();
     },
   );
 
@@ -274,7 +276,9 @@ describe("embedded run retry dispatch", () => {
     );
     expect(replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
     expect(result.preparedAttempt.initialReplayState).toBe(replayState);
-    expect(mocks.runAttempt).toHaveBeenCalledWith(result.preparedAttempt);
+    expect(mocks.runAttempt).toHaveBeenCalledTimes(1);
+    expect(mocks.runAttempt.mock.calls[0]?.[0]).toEqual(result.preparedAttempt);
+    expect(mocks.runAttempt.mock.calls[0]?.[1]).toBeUndefined();
     expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
   });
 

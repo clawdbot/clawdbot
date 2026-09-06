@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { resolveNpmJsonEntries } from "../../../lib/npm-json-output.mts";
 import {
   assertRecoveryApplied,
   assertRecoveryHistory,
@@ -514,18 +515,41 @@ async function customRestore() {
 async function packageEvidence() {
   const [baseline, candidate] = process.argv.slice(3);
   assert(baseline && candidate, "package evidence requires baseline and candidate");
-  const metadata = await command(
-    "baseline-package",
-    ["view", baseline, "version", "dist", "--json"],
-    { binary: "npm" },
+  const version = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION;
+  assert(version, "package evidence requires the installed baseline version");
+  // Resolve mutable tags once at installation; evidence must describe those same bytes.
+  const exactBaseline = `openclaw@${version}`;
+  const entries = resolveNpmJsonEntries(
+    await command("baseline-package", ["view", exactBaseline, "version", "dist", "--json"], {
+      binary: "npm",
+    }),
   );
-  assert.equal(metadata.version, "2026.7.1-2");
-  assert.equal(
-    metadata.dist.integrity,
-    "sha512-ycF3yPcbjN6bUPeaUx6Mh6vze1hQWoD3CT/wWcmD7a8xaHHHRUaAlaq+lFxMHf1ssEgODVAwjlzYqp2twkYZ7g==",
+  assert.equal(entries.length, 1);
+  const metadata = entries[0];
+  assert(metadata && typeof metadata === "object");
+  assert.equal(metadata.version, version);
+  assert(typeof metadata.dist.integrity === "string" && metadata.dist.integrity.length > 0);
+  // npm pack computes integrity from the fetched tarball even with --dry-run.
+  const packed = resolveNpmJsonEntries(
+    await command(
+      "baseline-package-pack",
+      ["pack", exactBaseline, "--ignore-scripts", "--dry-run", "--json"],
+      { binary: "npm" },
+    ),
   );
+  assert.equal(packed.length, 1);
+  const artifact = packed[0];
+  assert(artifact && typeof artifact === "object");
+  assert.equal(artifact.name, "openclaw");
+  assert.equal(artifact.version, version);
+  assert.equal(artifact.integrity, metadata.dist.integrity);
   saveEvidence({
     baseline: metadata,
+    baselineArtifact: {
+      name: artifact.name,
+      version: artifact.version,
+      integrity: artifact.integrity,
+    },
     candidate: recoveryFileIdentity(candidate),
     storage: [stateDir, process.env.TMPDIR].map((directory) => {
       const stat = fs.statfsSync(directory);

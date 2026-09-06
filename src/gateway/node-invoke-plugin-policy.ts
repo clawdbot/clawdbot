@@ -5,7 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
+import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type {
   OpenClawPluginNodeInvokePolicyContext,

@@ -18,7 +18,10 @@ import {
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerPreparedAuthHandoff,
 } from "./auth-bridge.js";
-import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
+import {
+  assertCodexSessionRuntimeOwnership,
+  resolveCodexBindingAppServerConnection,
+} from "./binding-connection.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   isCodexPairedNodeRemoteExecPlacementSandbox,
@@ -72,9 +75,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     offAnnounced: false,
     resetAnnounced: false,
   };
-  const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker({
-    enabled: profilerEnabled,
-  });
+  const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker();
   const runtimeArtifactRequest =
     params.captureRuntimeArtifact || params.expectedRuntimeArtifact
       ? params.expectedRuntimeArtifact
@@ -206,7 +207,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  let startupBinding = await bindingStore.read(bindingIdentity);
+  let startupBinding = bindingStore.read(bindingIdentity);
+  assertCodexSessionRuntimeOwnership(startupBinding, params.expectedSessionRuntimeOwnership);
   if (!startupBinding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
     const reclaimed = await reclaimCurrentCodexSessionGeneration({
       bindingStore,
@@ -217,7 +219,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     if (!reclaimed) {
       throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
     }
-    startupBinding = await bindingStore.read(bindingIdentity);
+    startupBinding = bindingStore.read(bindingIdentity);
   }
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
@@ -418,111 +420,118 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   } else {
     params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
-  const startupBindingBeforeRotation = startupBinding;
-  const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
-    binding: startupBinding,
-    bindingStore,
-    identity: bindingIdentity,
-    sessionFile: params.sessionFile,
-    agentDir,
-    codexHome: appServer.start.env?.CODEX_HOME,
-    config: params.config,
-    contextEngineActive: Boolean(activeContextEngine),
-  });
-  startupBinding = startupBindingResolution.binding;
-  const initialInactiveThreadBootstrapBindingForcedFreshStart =
-    initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
-  preDynamicStartupStages.mark("rotate-binding");
-  // Rotation returns the original binding on the common resume path; only a
-  // cleared or replaced native thread changes its model, policy, or connection.
-  if (startupBinding !== startupBindingBeforeRotation) {
-    reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
-    configuredAppServer = resolveRuntimeOptionsForBinding(startupBinding, {
-      modelProvider: reviewerPolicyContext.modelProvider,
-      model: reviewerPolicyContext.model,
+  try {
+    const startupBindingBeforeRotation = startupBinding;
+    const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
+      binding: startupBinding,
+      bindingStore,
+      identity: bindingIdentity,
+      sessionFile: params.sessionFile,
+      agentDir,
+      codexHome: appServer.start.env?.CODEX_HOME,
+      config: params.config,
+      contextEngineActive: Boolean(activeContextEngine),
+      expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,
     });
-    resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
-    appServer = resolvedAppServer.appServer;
+    startupBinding = startupBindingResolution.binding;
+    const initialInactiveThreadBootstrapBindingForcedFreshStart =
+      initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
+    preDynamicStartupStages.mark("rotate-binding");
+    // Rotation returns the original binding on the common resume path; only a
+    // cleared or replaced native thread changes its model, policy, or connection.
+    if (startupBinding !== startupBindingBeforeRotation) {
+      reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
+      configuredAppServer = resolveRuntimeOptionsForBinding(startupBinding, {
+        modelProvider: reviewerPolicyContext.modelProvider,
+        model: reviewerPolicyContext.model,
+      });
+      resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
+      appServer = resolvedAppServer.appServer;
+    }
+    const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
+      appServer,
+      permissionMode: params.permissionMode,
+      sessionRoot: params.sessionRoot,
+      defaultRoot: effectiveWorkspace,
+    });
+    if (sessionPermissionPolicy) {
+      params.permissionMode = sessionPermissionPolicy.mode;
+      params.sessionRoot = sessionPermissionPolicy.root;
+      (params.execOverrides ??= {}).mode = sessionPermissionPolicy.execMode;
+    }
+    const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+      configuredEvents: options.nativeHookRelay?.events,
+      appServer,
+    });
+    const mutable = {
+      startupBinding,
+      startupContextTokens: startupBindingResolution.startupContextTokens,
+      pluginAppServer: appServer,
+      // Captured before rotation: a rotated-away thread's observed density is the
+      // best available sample for sizing the fresh thread's continuity projection.
+      continuityCalibration: startupBindingBeforeRotation?.continuityCalibration,
+    };
+    const resolveRuntimeOptionsForCurrentBinding = (selection: {
+      modelProvider?: string;
+      model?: string;
+    }) =>
+      resolveFinalAppServer(
+        resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
+        selection,
+      ).appServer;
+    return {
+      params,
+      options,
+      attemptStartedAt,
+      profilerEnabled,
+      codexModelCallTrace,
+      codexModelContentCapture,
+      codexModelCallId,
+      fastModeAutoStartedAtMs,
+      fastModeAutoProgressState,
+      preDynamicStartupStages,
+      attemptClientFactory,
+      runtimeArtifactRequest,
+      pluginConfig,
+      computerUseConfig,
+      sessionAgentId,
+      policyAgentId,
+      resolvedWorkspace,
+      sandboxSessionKey,
+      contextSessionKey,
+      sandbox,
+      agentDir,
+      shellEnvironment,
+      disableLoginShell,
+      bindingIdentity,
+      bindingStore,
+      activeContextEngine,
+      isInactiveThreadBootstrapBinding,
+      usesSupervisionConnection,
+      startupAuthProfileId,
+      startupAuthRequirement: preparedAuthRoute?.authRequirement,
+      startupPreparedAuth,
+      startupClientAuthProfileId,
+      effectiveWorkspace,
+      effectiveCwd,
+      appServer,
+      sessionPermissionPolicy,
+      nativeHookRelayEvents,
+      runAbortController,
+      terminalState,
+      abortExplicitly,
+      abortFromUpstream,
+      resolveReviewerPolicyContext,
+      resolveRuntimeOptionsForCurrentBinding,
+      mutable,
+      initialStartupBindingHadInactiveThreadBootstrap,
+      initialInactiveThreadBootstrapBindingForcedFreshStart,
+    };
+  } catch (error) {
+    // The attempt owns this listener only after connection preparation returns.
+    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    throw error;
   }
-  const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
-    appServer,
-    permissionMode: params.permissionMode,
-    sessionRoot: params.sessionRoot,
-    defaultRoot: effectiveWorkspace,
-  });
-  if (sessionPermissionPolicy) {
-    params.permissionMode = sessionPermissionPolicy.mode;
-    params.sessionRoot = sessionPermissionPolicy.root;
-    (params.execOverrides ??= {}).mode = sessionPermissionPolicy.execMode;
-  }
-  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
-    configuredEvents: options.nativeHookRelay?.events,
-    appServer,
-  });
-  const mutable = {
-    startupBinding,
-    startupContextTokens: startupBindingResolution.startupContextTokens,
-    pluginAppServer: appServer,
-    // Captured before rotation: a rotated-away thread's observed density is the
-    // best available sample for sizing the fresh thread's continuity projection.
-    continuityCalibration: startupBindingBeforeRotation?.continuityCalibration,
-  };
-  const resolveRuntimeOptionsForCurrentBinding = (selection: {
-    modelProvider?: string;
-    model?: string;
-  }) =>
-    resolveFinalAppServer(
-      resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
-      selection,
-    ).appServer;
-  return {
-    params,
-    options,
-    attemptStartedAt,
-    profilerEnabled,
-    codexModelCallTrace,
-    codexModelContentCapture,
-    codexModelCallId,
-    fastModeAutoStartedAtMs,
-    fastModeAutoProgressState,
-    preDynamicStartupStages,
-    attemptClientFactory,
-    runtimeArtifactRequest,
-    pluginConfig,
-    computerUseConfig,
-    sessionAgentId,
-    policyAgentId,
-    resolvedWorkspace,
-    sandboxSessionKey,
-    contextSessionKey,
-    sandbox,
-    agentDir,
-    shellEnvironment,
-    disableLoginShell,
-    bindingIdentity,
-    bindingStore,
-    activeContextEngine,
-    isInactiveThreadBootstrapBinding,
-    usesSupervisionConnection,
-    startupAuthProfileId,
-    startupAuthRequirement: preparedAuthRoute?.authRequirement,
-    startupPreparedAuth,
-    startupClientAuthProfileId,
-    effectiveWorkspace,
-    effectiveCwd,
-    appServer,
-    sessionPermissionPolicy,
-    nativeHookRelayEvents,
-    runAbortController,
-    terminalState,
-    abortExplicitly,
-    abortFromUpstream,
-    resolveReviewerPolicyContext,
-    resolveRuntimeOptionsForCurrentBinding,
-    mutable,
-    initialStartupBindingHadInactiveThreadBootstrap,
-    initialInactiveThreadBootstrapBindingForcedFreshStart,
-  };
 }
 
 export type CodexAttemptConnection = Awaited<ReturnType<typeof prepareCodexAttemptConnection>>;

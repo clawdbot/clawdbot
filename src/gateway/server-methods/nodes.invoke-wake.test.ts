@@ -6,7 +6,9 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type { NodeCommandRejectionReason } from "../node-command-policy.js";
 import * as nodeInvokePluginPolicy from "../node-invoke-plugin-policy.js";
 import { NodeRegistry, type NodeInvokeResult } from "../node-registry.js";
 import {
@@ -49,7 +51,9 @@ const mocks = vi.hoisted(() => ({
   isNodePairingGenerationCurrent: vi.fn(),
   resolveNodeCommandAllowlist: vi.fn<(cfg: MockNodeConfig) => Set<string>>(() => new Set()),
   isNodeCommandAllowed: vi.fn<
-    (params: MockNodeCommandPolicyParams) => { ok: true } | { ok: false; reason: string }
+    (
+      params: MockNodeCommandPolicyParams,
+    ) => { ok: true } | { ok: false; reason: NodeCommandRejectionReason }
   >(() => ({ ok: true })),
   isForegroundRestrictedPluginNodeCommand: vi.fn((command: string) =>
     command.startsWith("canvas."),
@@ -87,7 +91,8 @@ vi.mock("../../infra/device-pairing-node-state.js", () => ({
   isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
 }));
 
-vi.mock("../node-command-policy.js", () => ({
+vi.mock("../node-command-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../node-command-policy.js")>()),
   DEFAULT_DANGEROUS_NODE_COMMANDS: ["sms.send", "sms.search"],
   resolveNodeCommandAllowlist: mocks.resolveNodeCommandAllowlist,
   isNodeCommandAllowed: mocks.isNodeCommandAllowed,
@@ -871,6 +876,7 @@ describe("node.invoke APNs wake path", () => {
         allowlist.has(candidate) ? { ok: true } : { ok: false, reason: "command not allowlisted" },
       );
       registry = new NodeRegistry({
+        getConfig: mocks.getRuntimeConfig,
         resolveCurrentPairingState: async () => {
           if (pairingDelayMs > 0) {
             await new Promise((resolve) => {
@@ -1160,128 +1166,121 @@ describe("node.invoke APNs wake path", () => {
     });
   });
 
-  it("explains the explicit opt-in required for dangerous commands", async () => {
-    mocks.isNodeCommandAllowed.mockReturnValue({
-      ok: false,
+  it.each([
+    {
+      name: "the explicit opt-in required for dangerous commands",
+      command: "sms.search",
       reason: "command not allowlisted",
-    });
-    const nodeRegistry = {
-      get: vi.fn(() => ({
-        nodeId: "android-sms-node",
-        commands: ["sms.search"],
-        platform: "android",
-      })),
-      invoke: vi.fn(),
-    };
-
-    const respond = await invokeNode({
-      nodeRegistry,
-      requestParams: {
-        nodeId: "android-sms-node",
-        command: "sms.search",
-      },
-    });
-
-    const call = firstRespondCall(respond);
-    expect(call[0]).toBe(false);
-    expect(call[2]?.message).toBe(
-      'node command not allowed: "sms.search" requires explicit gateway.nodes.commands.allow opt-in',
-    );
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-  });
-
-  it("explains when a declared node command surface awaits approval", async () => {
-    mocks.isNodeCommandAllowed.mockReturnValue({
-      ok: false,
+      declaredCommands: ["sms.search"],
+      guidance: /requires explicit gateway\.nodes\.commands\.allow opt-in/,
+      wrongGuidance: /plugin|reconnect|approve|is blocked/,
+    },
+    {
+      name: "an explicit deny overriding a dangerous-command opt-in",
+      command: "sms.search",
+      reason: "command not allowlisted",
+      declaredCommands: ["sms.search"],
+      denied: true,
+      guidance: /is blocked by gateway\.nodes\.commands\.deny/,
+      wrongGuidance: /plugin|reconnect|approve|requires explicit/,
+    },
+    {
+      name: "a command missing from the Gateway allowlist",
+      command: "runtime.exec",
+      reason: "command not allowlisted",
+      declaredCommands: ["runtime.exec"],
+      guidance: /is not in the Gateway allowlist/,
+      wrongGuidance: /plugin|reconnect|approve/,
+    },
+    {
+      name: "the trusted Talk node requirement",
+      command: "talk.ptt.start",
+      reason: "command not allowlisted",
+      declaredCommands: ["talk.ptt.start"],
+      guidance: /requires a trusted Talk-capable node/,
+      wrongGuidance: /plugin|reconnect|approve/,
+    },
+    {
+      name: "a declared command awaiting approval on an empty effective surface",
+      command: "system.notify",
       reason: "node did not declare commands",
-    });
-    const nodeRegistry = {
-      get: vi.fn(() => ({
-        nodeId: "linux-node",
-        commands: [],
-        declaredCommands: ["system.notify", "camera.list", "location.get"],
-        platform: "linux",
-      })),
-      invoke: vi.fn(),
-    };
-
-    const respond = await invokeNode({
-      nodeRegistry,
-      requestParams: {
-        nodeId: "linux-node",
-        command: "system.notify",
-      },
-    });
-
-    const call = firstRespondCall(respond);
-    expect(call[0]).toBe(false);
-    expect(call[2]?.message).toBe(
-      "node command not allowed: the node's declared command surface is pending approval; run `openclaw nodes pending`, then `openclaw nodes approve <requestId>`",
-    );
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-  });
-
-  it("does not claim approval can add an undeclared command", async () => {
-    mocks.isNodeCommandAllowed.mockReturnValue({
-      ok: false,
+      declaredCommands: ["system.notify", "camera.list"],
+      guidance: /pending approval.*openclaw nodes pending.*openclaw nodes approve <requestId>/,
+      wrongGuidance: /commands\.allow|plugin|reconnect/,
+    },
+    {
+      name: "a declared command awaiting approval alongside effective commands",
+      command: "system.notify",
+      reason: "command not declared by node",
+      declaredCommands: ["system.notify", "camera.list"],
+      guidance: /pending approval.*openclaw nodes pending.*openclaw nodes approve <requestId>/,
+      wrongGuidance: /commands\.allow|plugin|reconnect/,
+    },
+    {
+      name: "an undeclared command on an empty effective surface",
+      command: "system.notify",
       reason: "node did not declare commands",
-    });
-    const nodeRegistry = {
-      get: vi.fn(() => ({
-        nodeId: "linux-node",
-        commands: [],
-        declaredCommands: ["camera.list"],
-        platform: "linux",
-      })),
-      invoke: vi.fn(),
-    };
-
-    const respond = await invokeNode({
-      nodeRegistry,
-      requestParams: {
-        nodeId: "linux-node",
-        command: "system.notify",
-      },
-    });
-
-    const call = firstRespondCall(respond);
-    expect(call[0]).toBe(false);
-    expect(call[2]?.message).toBe(
-      "node command not allowed: the node did not declare any supported commands",
-    );
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-  });
-
-  it("distinguishes explicit command denials from missing opt-ins", async () => {
+      declaredCommands: ["camera.list"],
+      guidance: /plugin or device runtime.*device.*reconnect.*approve/,
+      wrongGuidance: /commands\.allow|pending approval/,
+    },
+    {
+      name: "an undeclared command alongside effective commands",
+      command: "system.notify",
+      reason: "command not declared by node",
+      declaredCommands: ["camera.list"],
+      guidance: /plugin or device runtime.*device.*reconnect.*approve/,
+      wrongGuidance: /commands\.allow|pending approval/,
+    },
+  ] as const)("explains $name without changing the denial reason", async (scenario) => {
+    const { command, reason } = scenario;
     mocks.getRuntimeConfig.mockReturnValue({
-      gateway: { nodes: { commands: { deny: ["sms.search"] } } },
+      gateway: {
+        nodes: {
+          commands: {
+            allow: "denied" in scenario ? [command] : [],
+            deny: "denied" in scenario ? [command] : [],
+          },
+        },
+      },
     });
-    mocks.isNodeCommandAllowed.mockReturnValue({
-      ok: false,
-      reason: "command not allowlisted",
-    });
+    mocks.isNodeCommandAllowed.mockReturnValue({ ok: false, reason });
     const nodeRegistry = {
       get: vi.fn(() => ({
-        nodeId: "android-sms-node",
-        commands: ["sms.search"],
-        platform: "android",
+        nodeId: "recovery-node",
+        commands:
+          reason === "node did not declare commands"
+            ? []
+            : reason === "command not declared by node"
+              ? ["camera.list"]
+              : [command],
+        declaredCommands: [...scenario.declaredCommands],
+        platform: "linux",
       })),
       invoke: vi.fn(),
     };
 
     const respond = await invokeNode({
       nodeRegistry,
-      requestParams: {
-        nodeId: "android-sms-node",
-        command: "sms.search",
-      },
+      requestParams: { nodeId: "recovery-node", command },
     });
 
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
-    expect(call[2]?.message).toBe(
-      'node command not allowed: "sms.search" is blocked by gateway.nodes.commands.deny',
-    );
+    expect(call[2]).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      details: { reason, command },
+    });
+    expect(call[2]?.message).toContain(command);
+    expect(call[2]?.message).toContain("recovery-node");
+    expect(call[2]?.message).toContain("linux");
+    expect(call[2]?.message).toMatch(scenario.guidance);
+    expect(call[2]?.message).not.toMatch(scenario.wrongGuidance);
+    if (reason === "command not allowlisted") {
+      expect(call[2]?.message).toMatch(
+        /review gateway\.nodes\.commands\.allow.*gateway\.nodes\.commands\.deny.*deny overrides allow/,
+      );
+    }
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
@@ -1856,8 +1855,8 @@ describe("node.invoke APNs wake path", () => {
 
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
-    expect(call[2]?.message).toBe(
-      'node command not allowed: "computer.act" is blocked by gateway.nodes.commands.deny',
+    expect(call[2]?.message).toMatch(
+      /computer\.act.*is blocked by gateway\.nodes\.commands\.deny.*deny overrides allow/,
     );
     expectRecordFields(call[2]?.details, "error details", {
       reason: "command not allowlisted",
@@ -1884,63 +1883,65 @@ describe("node.invoke APNs wake path", () => {
       allowlist.has(command) ? { ok: true } : { ok: false, reason: "command not allowlisted" },
     );
 
+    const nodeId = "mac-node-final-policy-reload";
+    const connId = `conn:${nodeId}`;
     const dispatch = vi.fn();
-    let releasePairingValidation!: () => void;
-    const nodeRegistry = {
-      get: vi.fn(() => ({
-        nodeId: "mac-node-final-policy-reload",
-        connId: "mac-node-final-policy-connection",
-        commands: ["system.which"],
-        platform: "macOS 26.0.0",
-      })),
-      invoke: vi.fn(
-        async (params: {
-          nodeId: string;
-          command: string;
-          isDispatchAuthorized?: () => boolean;
-        }) => {
-          await new Promise<void>((resolve) => {
-            releasePairingValidation = resolve;
-          });
-          if (!params.isDispatchAuthorized?.()) {
-            return {
-              ok: false,
-              error: {
-                code: "APPROVAL_AUTHORITY_CLOSED",
-                message: "runtime authority closed before node dispatch",
-              },
-            };
-          }
-          dispatch();
-          return { ok: true, payload: { path: "/usr/bin/git" } };
-        },
-      ),
-    };
-
-    const invocation = invokeNode({
-      nodeRegistry,
-      requestParams: {
-        nodeId: "mac-node-final-policy-reload",
-        command: "system.which",
-        params: { bins: ["git"] },
-        idempotencyKey: "idem-final-policy-reload",
+    const pairingEntered = createDeferred();
+    const pairingReleased = createDeferred();
+    const registry = new NodeRegistry({
+      getConfig: () => runtimeConfig,
+      resolveCurrentPairingState: async () => {
+        pairingEntered.resolve();
+        await pairingReleased.promise;
+        return { identity: "identity", generation: `generation:${nodeId}:1` };
       },
     });
-    await vi.waitFor(() => expect(nodeRegistry.invoke).toHaveBeenCalledOnce());
-    runtimeConfig = { gateway: { nodes: { commands: { deny: ["system.which"] } } } };
-    releasePairingValidation();
-
-    expect(firstRespondCall(await invocation)).toMatchObject([
-      false,
-      undefined,
+    registry.register(
       {
-        details: {
-          nodeError: { code: "APPROVAL_AUTHORITY_CLOSED" },
-          nodeCommandDispatched: false,
+        ...createNodeClient(nodeId, ["system.which"]),
+        usesSharedGatewayAuth: false,
+        socket: {
+          readyState: WebSocket.OPEN,
+          bufferedAmount: 0,
+          close: vi.fn(),
+          send: dispatch,
         },
-      },
-    ]);
-    expect(dispatch).not.toHaveBeenCalled();
+      } as never,
+      { pairingIdentity: "identity", pairingGeneration: `generation:${nodeId}:1` },
+    );
+    try {
+      const invocation = invokeNode({
+        nodeRegistry: {
+          get: registry.get.bind(registry),
+          getForPairingGeneration: registry.getForPairingGeneration.bind(registry),
+          invoke: registry.invoke.bind(registry),
+        },
+        requestParams: {
+          nodeId,
+          command: "system.which",
+          params: { bins: ["git"] },
+          idempotencyKey: "idem-final-policy-reload",
+        },
+      });
+      await pairingEntered.promise;
+      runtimeConfig = { gateway: { nodes: { commands: { deny: ["system.which"] } } } };
+      pairingReleased.resolve();
+
+      expect(firstRespondCall(await invocation)).toMatchObject([
+        false,
+        undefined,
+        {
+          details: {
+            nodeError: { code: "POLICY_CHANGED" },
+            nodeCommandDispatched: false,
+          },
+        },
+      ]);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      pairingReleased.resolve();
+      registry.unregister(connId);
+    }
   });
 
   it("does not retroactively grant a command enabled while waiting for reconnect", async () => {
@@ -1999,8 +2000,8 @@ describe("node.invoke APNs wake path", () => {
 
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
-    expect(call[2]?.message).toBe(
-      'node command not allowed: "computer.act" is blocked by gateway.nodes.commands.deny',
+    expect(call[2]?.message).toMatch(
+      /computer\.act.*is blocked by gateway\.nodes\.commands\.deny.*deny overrides allow/,
     );
     expectRecordFields(call[2]?.details, "error details", {
       reason: "command not allowlisted",

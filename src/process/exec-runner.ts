@@ -155,7 +155,6 @@ async function runCommandWithOutputEncoding(
   const cancelController = new AbortController();
   let termination: CommandTerminationReason | undefined;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-  let childExited = false;
   let commandSettled = false;
   let combinedOutputBytes = 0;
   let combinedCapturedBytes = 0;
@@ -202,12 +201,11 @@ async function runCommandWithOutputEncoding(
     baseEnv,
     env,
     processTree: killProcessTree ? { mode: "graceful" } : undefined,
-    isChildExited: () => childExited,
+    isChildExited: () => childExitState !== undefined,
     isCommandSettled: () => commandSettled,
     killGraceMs: resolvedKillGraceMs,
   });
   nodeChild.once("exit", (code, signalValue) => {
-    childExited = true;
     childExitState = { code, signal: signalValue };
     // Successful tree output belongs to its command deadline, not the diagnostic
     // idle cutoff. Failed, terminated, and unowned output still gets a bounded drain.
@@ -234,14 +232,14 @@ async function runCommandWithOutputEncoding(
     if (
       termination ||
       commandSettled ||
-      (childExited &&
+      (childExitState &&
         reason !== "output-limit" &&
-        (!ownsExitedProcessTree || childExitState?.code !== 0))
+        (!ownsExitedProcessTree || childExitState.code !== 0))
     ) {
       return;
     }
     termination = reason;
-    if (childExited) {
+    if (childExitState) {
       // An escaped pipe holder can survive group termination; bound its final drain.
       releaseOutput ??= releaseChildProcessOutputAfterExit(nodeChild);
     }
@@ -255,7 +253,7 @@ async function runCommandWithOutputEncoding(
       resolvedNoOutputTimeoutMs === undefined ||
       commandSettled ||
       termination ||
-      (childExited && !ownsExitedProcessTree)
+      (childExitState && !ownsExitedProcessTree)
     ) {
       return;
     }
@@ -327,10 +325,8 @@ async function runCommandWithOutputEncoding(
       }
     } else {
       const remaining = Math.max(0, maxCombinedOutputBytes - combinedBytesBeforeChunk);
-      if (remaining > 0) {
-        appendCapturedOutput(capture, buffer.subarray(0, remaining), maxBytes, captureMode);
-      }
-      capture.truncatedBytes += Math.max(0, buffer.byteLength - remaining);
+      const maxCaptureBytes = Math.min(maxBytes, capture.bytes + remaining);
+      appendCapturedOutput(capture, buffer, maxCaptureBytes, captureMode);
     }
     if (
       (combinedLimitExceeded &&

@@ -90,6 +90,7 @@ export const GATEWAY_CLIENT_CAPS = {
   PLUGIN_APPROVALS: "plugin-approvals",
   TASK_SUGGESTIONS: "task-suggestions",
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",
+  TERMINAL_SESSION_METADATA: "terminal-session-metadata",
   TOOL_EVENTS: "tool-events",
   UI_COMMANDS: "ui-commands",
   USAGE_REFRESHING: "usage-refreshing",

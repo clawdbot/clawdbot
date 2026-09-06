@@ -29,7 +29,6 @@ export function resolveTestProjectsRunnerSpawnParams(
 export function spawnTestProjectsRunner(argv: string[], env: NodeJS.ProcessEnv) {
   const repoRoot = resolveRepoRoot(import.meta.url);
   const testProjectsRunnerPath = path.join(repoRoot, "scripts", "test-projects-child.mts");
-  let forwardedSignal: NodeJS.Signals | null = null;
   const spawnParams = resolveTestProjectsRunnerSpawnParams(env);
   const child = spawn(
     process.execPath,
@@ -38,15 +37,10 @@ export function spawnTestProjectsRunner(argv: string[], env: NodeJS.ProcessEnv) 
   );
   // The orchestrator must join its bounded native children and record their outcomes.
   // A competing leaf-sized force timer kills it before that cleanup can complete.
-  const teardown = installVitestProcessGroupCleanup({
-    child,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
-  });
+  const cleanup = installVitestProcessGroupCleanup({ child });
   const completion = createVitestProcessCompletion({
     child,
     detached: spawnParams.detached,
-  }).finally(teardown);
-  return { child, completion, getForwardedSignal: () => forwardedSignal };
+  }).finally(cleanup.teardown);
+  return { child, completion, getForwardedSignal: cleanup.getForwardedSignal };
 }

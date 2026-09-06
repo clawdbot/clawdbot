@@ -11,7 +11,11 @@ import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { chatHistoryRequests, getChatHistoryLoadState } from "./chat-history-state.ts";
+import {
+  chatHistoryRequests,
+  getChatHistoryLoadState,
+  setChatHistoryLoad,
+} from "./chat-history-state.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -36,7 +40,7 @@ export async function loadChatHistory(
   const startup = opts.startup === true;
   const requests = chatHistoryRequests(state);
   if (!state.client || !state.connected) {
-    requests.historyLoad = { phase: "pending-connection", sessionKey, requestAgentId, startup };
+    setChatHistoryLoad(state, { phase: "pending-connection", sessionKey, requestAgentId, startup });
     state.chatLoading = true;
     state.requestUpdate?.();
     return undefined;
@@ -94,10 +98,10 @@ export async function loadChatHistory(
     const current = requests.historyLoad;
     if (current.phase === "in-flight" && current.promise === promise) {
       if (result) {
-        requests.historyLoad = {
+        setChatHistoryLoad(state, {
           phase: "committed",
           key: `${sessionKey}\u0000${requestAgentId ?? ""}`,
-        };
+        });
       } else if (
         state.sessionKey === sessionKey &&
         (!isUiSelectedGlobalSessionKey(state, sessionKey) ||
@@ -106,22 +110,22 @@ export async function loadChatHistory(
           current.client !== state.client ||
           current.connectionEpoch !== state.connectionEpoch)
       ) {
-        requests.historyLoad = {
+        setChatHistoryLoad(state, {
           phase: "pending-connection",
           sessionKey,
           requestAgentId,
           startup,
-        };
+        });
         state.chatLoading = true;
       } else {
-        requests.historyLoad = { phase: "idle" };
+        setChatHistoryLoad(state, { phase: "idle" });
         state.chatLoading = false;
       }
       state.requestUpdate?.();
     }
     return result;
   });
-  requests.historyLoad = {
+  setChatHistoryLoad(state, {
     phase: "in-flight",
     client,
     connectionEpoch,
@@ -130,7 +134,7 @@ export async function loadChatHistory(
     sessionKey,
     requestAgentId,
     startup,
-  };
+  });
   return promise;
 }
 

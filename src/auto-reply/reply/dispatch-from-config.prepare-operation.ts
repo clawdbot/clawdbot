@@ -115,7 +115,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       result: attachSourceReplyDeliveryMode({ queuedFinal, counts }),
     };
   };
-  const fastAbort = await fastAbortResolver({ ctx, cfg });
+  const fastAbort = await fastAbortResolver({
+    ctx,
+    cfg,
+    isCommandTargetCurrent: params.replyOptions?.isCommandTargetCurrent,
+  });
   if (fastAbort.handled) {
     return await finishFastCommand({
       payload: {

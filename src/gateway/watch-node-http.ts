@@ -67,7 +67,11 @@ import {
 } from "./http-common.js";
 import { readPreparedGatewayIngressAttribution } from "./ingress-attribution.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
-import { hasForwardedRequestHeaders, isLoopbackAddress, resolveRequestClientIp } from "./net.js";
+import {
+  hasForwardedRequestHeaders,
+  isLoopbackAddress,
+  resolveRequestClientIpFromHeaders,
+} from "./net.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 import type { NodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
@@ -76,6 +80,7 @@ import type {
   NodeEventTransport,
   NodeRegistry,
   NodeSession,
+  NodeSessionConnectParams,
   SerializedEventPayload,
 } from "./node-registry.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
@@ -119,7 +124,7 @@ type WatchNodeSession = {
   connId: string;
   invalidatedReason?: string;
   lastSeenAtMs: number;
-  expiresTimer: ReturnType<typeof setTimeout>;
+  expiresTimer?: ReturnType<typeof setTimeout>;
   queue: QueuedNodeEvent[];
   queuedBytes: number;
   waiter?: {
@@ -173,7 +178,7 @@ function resolveWatchClientAddress(
     };
   }
   const trustedProxies = config.gateway?.trustedProxies ?? [];
-  const clientIp = resolveRequestClientIp(
+  const clientIp = resolveRequestClientIpFromHeaders(
     req,
     trustedProxies,
     config.gateway?.allowRealIpFallback === true,
@@ -894,14 +899,14 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         return;
       }
 
-      const registeredConnect = connect as ConnectParams & {
-        declaredCaps?: string[];
-        declaredCommands?: string[];
-        declaredComputerUse?: unknown;
-        declaredPermissions?: Record<string, boolean>;
-      };
+      const registeredConnect = connect as NodeSessionConnectParams;
+      // Retain the bounded declaration before policy narrows the active surface;
+      // reallow must restore only commands this connection actually declared.
+      registeredConnect.sessionCapsCeiling = connect.caps ?? [];
+      registeredConnect.sessionCommandsCeiling = connect.commands ?? [];
       registeredConnect.declaredCaps = reconciliation.declaredCaps;
       registeredConnect.declaredCommands = reconciliation.declaredCommands;
+      registeredConnect.withheldCommands = reconciliation.withheldCommands;
       registeredConnect.declaredComputerUse = reconciliation.declaredComputerUse;
       registeredConnect.declaredPermissions = reconciliation.declaredPermissions;
       registeredConnect.caps = reconciliation.effectiveCaps;
@@ -921,7 +926,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           nodeId: derivedDeviceId,
           connId,
           lastSeenAtMs: now(),
-          expiresTimer: setTimeout(() => undefined, SESSION_IDLE_MS),
           queue: [],
           queuedBytes: 0,
         };
@@ -939,6 +943,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
             remoteIp: clientIp,
             pairingIdentity: nodePairingState.identity.key,
             pairingGeneration: nodePairingGeneration.key,
+            approvedSurface: nodePairingState.approvedSurface,
           },
           createTransport(session),
         );

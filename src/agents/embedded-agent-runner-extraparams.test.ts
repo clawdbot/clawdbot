@@ -21,7 +21,6 @@ const ANTHROPIC_DEFAULT_BETAS = [
   "interleaved-thinking-2025-05-14",
 ];
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
-const ANTHROPIC_COMPACTION_BETA = "compact-2026-01-12";
 const ANTHROPIC_OAUTH_BETAS = ["oauth-2025-04-20", "claude-code-20250219"];
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
@@ -221,54 +220,6 @@ function createAnthropicFastModeWrapper(baseStreamFn: StreamFn | undefined, fast
   return createAnthropicServiceTierWrapper(baseStreamFn, fastMode ? "auto" : "standard_only");
 }
 
-function createAnthropicCompactionWrapper(
-  baseStreamFn: StreamFn | undefined,
-  extraParams: Record<string, unknown> | undefined,
-) {
-  const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
-  return ((model, context, options) => {
-    if (
-      extraParams?.anthropicServerCompaction !== true ||
-      isAnthropicOauthApiKey(options?.apiKey) ||
-      !isDirectAnthropicModel(model)
-    ) {
-      return underlying(model, context, options);
-    }
-    const originalOnPayload = options?.onPayload;
-    const configuredThreshold =
-      typeof extraParams.anthropicCompactThreshold === "number"
-        ? Math.floor(extraParams.anthropicCompactThreshold)
-        : undefined;
-    const threshold = Math.max(
-      50_000,
-      configuredThreshold ?? Math.floor((model.contextWindow ?? 0) * 0.7),
-    );
-    return underlying(model, context, {
-      ...options,
-      headers: {
-        ...options?.headers,
-        "anthropic-beta": [options?.headers?.["anthropic-beta"], ANTHROPIC_COMPACTION_BETA]
-          .filter(Boolean)
-          .join(","),
-      },
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          payloadObj.context_management ??= {
-            edits: [
-              {
-                type: "compact_20260112",
-                trigger: { type: "input_tokens", value: threshold },
-              },
-            ],
-          };
-        }
-        return originalOnPayload?.(payload, model);
-      },
-    });
-  }) as StreamFn;
-}
-
 import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "../llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.js";
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
@@ -385,9 +336,6 @@ function installFullProviderRuntimeDepsForTest() {
         const fastMode = resolveAnthropicFastMode(params.context.extraParams);
         if (fastMode !== undefined) {
           streamFn = createAnthropicFastModeWrapper(streamFn, fastMode);
-        }
-        if (params.context.extraParams?.anthropicServerCompaction === true) {
-          streamFn = createAnthropicCompactionWrapper(streamFn, params.context.extraParams);
         }
         return streamFn;
       }
@@ -1365,18 +1313,18 @@ describe("applyExtraParamsToAgent", () => {
 
   it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "inferrs",
-      applyModelId: "google/gemma-4-E2B-it",
+      applyProvider: "llmman",
+      applyModelId: "gemma4",
       model: {
         api: "openai-completions",
-        provider: "inferrs",
-        id: "google/gemma-4-E2B-it",
-        name: "Gemma 4 E2B (inferrs)",
-        baseUrl: "http://127.0.0.1:8080/v1",
+        provider: "llmman",
+        id: "gemma4",
+        name: "Gemma 4 (llmman)",
+        baseUrl: "http://127.0.0.1:17434/v1",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 131072,
+        contextWindow: 65536,
         maxTokens: 4096,
         compat: {
           requiresStringContent: true,
@@ -3257,50 +3205,6 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(payload.service_tier).toBe(expected);
-  });
-
-  it("injects configured Anthropic server compaction through the provider runtime", () => {
-    const cfg = buildModelConfig("anthropic/claude-sonnet-4-5", {
-      anthropicServerCompaction: true,
-      anthropicCompactThreshold: 120_000,
-    });
-    const payload = runAnthropicServiceTierCase({ cfg });
-    const headers = runAnthropicHeaderCase({
-      cfg,
-      modelId: "claude-sonnet-4-5",
-      options: { apiKey: "sk-ant-api03-test-key" },
-    });
-
-    expect(payload.context_management).toEqual({
-      edits: [
-        {
-          type: "compact_20260112",
-          trigger: { type: "input_tokens", value: 120_000 },
-        },
-      ],
-    });
-    expect(headers?.["anthropic-beta"]).toContain(ANTHROPIC_COMPACTION_BETA);
-  });
-
-  it.each([
-    {
-      name: "is omitted",
-      extraParamsOverride: {},
-    },
-    {
-      name: "uses OAuth auth",
-      extraParamsOverride: { anthropicServerCompaction: true },
-      options: { apiKey: "sk-ant-oat-test-token" },
-    },
-    {
-      name: "uses a proxy endpoint",
-      extraParamsOverride: { anthropicServerCompaction: true },
-      baseUrl: "https://proxy.example.test/v1",
-    },
-  ])("does not inject Anthropic server compaction when the opt-in $name", (params) => {
-    const payload = runAnthropicServiceTierCase(params);
-
-    expect(payload).not.toHaveProperty("context_management");
   });
 
   it.each([

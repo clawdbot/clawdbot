@@ -238,8 +238,8 @@ export function resolveSlackInstallationIdentity(params: {
   const apiAppId = normalizeOptionalString(auth.app_id);
   const enterpriseId = normalizeOptionalString(auth.enterprise_id);
   // Slack auth.test does not return app_id for bot tokens. Socket Mode derives it
-  // from the app token; HTTP authenticates the signed event that carries api_app_id.
-  // Durable Agent View and managed-thread markers only persist under this app id.
+  // from the app token; HTTP learns it from the first signed event (provider
+  // onContextIdentity). Durable Agent View markers only persist under this id.
   const transportApiAppId = normalizeOptionalString(params.transportApiAppId);
   if (isEnterpriseInstall) {
     if (!enterpriseId) {

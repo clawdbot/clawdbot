@@ -316,6 +316,7 @@ vi.mock("../../infra/agent-run-registry.js", () => ({
   claimAgentRunContext: mocks.registerAgentRunContext,
   clearAgentRunContext: mocks.clearAgentRunContext,
   getAgentRunContext: vi.fn(() => undefined),
+  getAgentRunLifecycleGeneration: () => mocks.lifecycleGeneration,
   resolveProjectedAgentRunProgressState: vi.fn(() => undefined),
   registerAgentRunContext: mocks.registerAgentRunContext,
 }));
@@ -1114,6 +1115,8 @@ export function applyGatewaySubagentRegistryTestDeps(
       endedAt: Date.now(),
     })) as SubagentRegistryDeps["callGateway"],
     loadAgentRuntimePluginRegistryHandle: () => undefined,
+    // Handler fixtures own no browser sessions; lifecycle cleanup has separate coverage.
+    cleanupBrowserSessionsForLifecycleEnd: async () => {},
     ...overrides,
   });
 }

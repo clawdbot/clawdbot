@@ -12,6 +12,7 @@ export {
   emitAcpRuntimeEvent,
   persistAcpTurnTranscript,
   persistCliTurnTranscript,
+  resolveAcpLifecycleEndFields,
   resolveCliTranscriptReplyText,
   runAgentAttempt,
   sessionTranscriptHasContent,

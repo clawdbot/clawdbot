@@ -19,6 +19,10 @@ import {
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import {
+  resolveChannelGroups,
+  resolveChannelGroupsConfigPath,
+} from "openclaw/plugin-sdk/channel-policy";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   ensureConfiguredBindingRouteReady,
@@ -270,17 +274,15 @@ const IMESSAGE_DIAGNOSTIC_DROP_REASONS = new Set([
   "agent echo in self-chat",
   "echo",
   "from me",
+  "no mention",
   "reflected assistant content",
   "self-chat echo",
 ]);
-const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me"]);
-
-function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
-  return IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS.has(reason);
-}
+const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me", "no mention"]);
 
 function describeIMessageInboundDropDiagnostic(params: {
   accountId: string;
+  groupsConfigPath: string;
   reason: string;
   message: Pick<IMessagePayload, "chat_id" | "created_at" | "guid" | "id" | "is_group">;
 }): string | null {
@@ -291,13 +293,17 @@ function describeIMessageInboundDropDiagnostic(params: {
     typeof params.message.id === "number" || typeof params.message.id === "string"
       ? String(params.message.id)
       : "unknown";
+  const mentionHint =
+    params.reason === "no mention"
+      ? ` Mention the agent (default patterns come from its identity name/emoji), or set ${params.groupsConfigPath}["${params.message.chat_id}"].requireMention=false. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`
+      : "";
   return (
     `imessage: dropped inbound message account=${params.accountId} reason=${JSON.stringify(
       params.reason,
     )} ` +
     `chat_id=${params.message.chat_id ?? "unknown"} group=${params.message.is_group === true} ` +
     `message_id=${messageId} guid=${params.message.guid ? "present" : "missing"} ` +
-    `created_at=${params.message.created_at ?? "unknown"}`
+    `created_at=${params.message.created_at ?? "unknown"}${mentionHint}`
   );
 }
 
@@ -355,6 +361,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const accountInfo = resolveIMessageAccount({
     cfg,
     accountId: opts.accountId,
+  });
+  const groupsConfigPath = resolveChannelGroupsConfigPath({
+    cfg,
+    channel: "imessage",
+    accountId: accountInfo.accountId,
+    groups: resolveChannelGroups(cfg, "imessage", accountInfo.accountId),
   });
   const approvalGatewayRuntime =
     opts.channelRuntime?.runtimeContexts.get<IMessageApprovalGatewayRuntime>({
@@ -683,13 +695,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
-  async function handleMessageNow(
-    message: IMessagePayload,
-    ingressLifecycle?: IMessageIngressLifecycle,
-  ) {
-    await handleMessageNowInner(message, ingressLifecycle);
-  }
-
   // iMessage delivers a poll's comment as a separate inline reply to the poll
   // balloon; fold it into the poll so the agent votes once instead of also
   // replying to the caption in prose (a redundant restatement of the vote).
@@ -719,7 +724,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     };
   }
 
-  async function handleMessageNowInner(
+  async function handleMessageNow(
     rawMessage: IMessagePayload,
     ingressLifecycle?: IMessageIngressLifecycle,
   ) {
@@ -804,12 +809,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       const diagnostic = describeIMessageInboundDropDiagnostic({
         accountId: accountInfo.accountId,
+        groupsConfigPath,
         reason: decision.reason,
         message,
       });
       if (diagnostic) {
         const throttleKey = `${rateLimitKey}:${decision.reason}`;
-        const shouldThrottleDiagnostic = shouldThrottleIMessageInboundDropDiagnostic(
+        const shouldThrottleDiagnostic = IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS.has(
           decision.reason,
         );
         if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.check(throttleKey)) {
@@ -1408,7 +1414,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (isApprovalCommand) {
         // Resolve approval commands through the ordinary authenticated command
         // pipeline, but ahead of the chat lane containing the run they release.
-        await handleMessageNowInner(repairedMessage);
+        await handleMessageNow(repairedMessage);
         return { kind: "completed" };
       }
       const conversation = resolveApprovalControlConversation(repairedMessage);

@@ -39,6 +39,7 @@ import {
   parseStreamingJson,
   type ToolArgumentPreviewSchedule,
 } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
@@ -200,7 +201,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         });
       }
       stream.push({ type: "start", partial: output });
-      await consumeChatStream(model, output, stream, mistralStream);
+      await consumeChatStream(model, output, stream, mistralStream, options?.signal);
 
       if (options?.signal?.aborted) {
         throw transportAbortError(options.signal);
@@ -399,6 +400,7 @@ async function consumeChatStream(
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
   mistralStream: AsyncIterable<CompletionEvent>,
+  signal?: AbortSignal,
 ): Promise<void> {
   let currentBlock: TextContent | ThinkingContent | null = null;
   let terminalFinishReason: string | undefined;
@@ -589,6 +591,7 @@ async function consumeChatStream(
   };
 
   for await (const event of mistralStream) {
+    notifyLlmRequestActivity(signal);
     const chunk = event.data;
     // Mistral's streamed CompletionChunk carries an id field. Keep the first non-empty one,
     // mirroring how OpenAI-style streaming exposes a stable response identifier per stream.

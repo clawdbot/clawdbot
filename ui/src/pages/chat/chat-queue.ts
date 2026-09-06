@@ -329,17 +329,6 @@ export function removeQueuedMessageWithoutReleasing(
   return located?.item ?? null;
 }
 
-export function removeVisibleOrScopedQueuedMessageWithoutReleasing(
-  host: ChatQueueScopedSessionHost,
-  id: string,
-  sessionKey: string | undefined,
-): ChatQueueItem | null {
-  return (
-    removeQueuedMessageWithoutReleasing(host, id) ??
-    (sessionKey ? removeQueuedMessageWithoutReleasing(host, id) : null)
-  );
-}
-
 export function excludeComposerAttachments(
   host: { chatAttachments?: ChatAttachment[] },
   attachments: readonly ChatAttachment[] | undefined,

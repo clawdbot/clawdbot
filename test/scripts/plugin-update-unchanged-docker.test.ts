@@ -1,6 +1,6 @@
 // Plugin Update Unchanged Docker tests cover plugin update unchanged docker script behavior.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -16,6 +16,7 @@ import {
 
 const PLUGIN_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const CORRUPT_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
+const CORRUPT_UPDATE_DOCKER_SCRIPT = "scripts/e2e/update-corrupt-plugin-docker.sh";
 const PLUGIN_UPDATE_PROBE_SCRIPT = "scripts/e2e/lib/plugin-update/probe.mjs";
 const PLUGIN_UPDATE_REGISTRY_SCRIPT = "scripts/e2e/lib/plugin-update/registry-server.mjs";
 const CORRUPT_PLUGIN_ID = "demo-corrupt-plugin";
@@ -83,6 +84,19 @@ function runProbeStatus(
   }
 }
 
+function corruptPolicyConfig(
+  allow: unknown,
+  codexEnabled = false,
+  corruptEntry = { enabled: false },
+) {
+  return {
+    plugins: {
+      allow,
+      entries: { [CORRUPT_PLUGIN_ID]: corruptEntry, codex: { enabled: codexEnabled } },
+    },
+  };
+}
+
 function runProbeFileStatus(
   command: string,
   filePath: string,
@@ -92,6 +106,47 @@ function runProbeFileStatus(
     stdio: "pipe",
   });
   return { status: result.status, stderr: result.stderr };
+}
+
+function runCorruptUpdateDockerBaseline(env: Record<string, string>) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-corrupt-update-docker-"));
+  const binDir = path.join(root, "bin");
+  const dockerArgsPath = path.join(root, "docker-args");
+  const packagePath = path.join(root, "candidate.tgz");
+  try {
+    mkdirSync(binDir);
+    writeFileSync(packagePath, "fake package");
+    writeFileSync(
+      path.join(binDir, "docker"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "run" ]]; then
+  printf '%s\n' "$@" > "$DOCKER_ARGS_PATH"
+fi
+`,
+      { mode: 0o755 },
+    );
+    const result = spawnSync("bash", [CORRUPT_UPDATE_DOCKER_SCRIPT], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        DOCKER_ARGS_PATH: dockerArgsPath,
+        OPENCLAW_CURRENT_PACKAGE_TGZ: packagePath,
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        ...env,
+      },
+    });
+    const dockerArgs = existsSync(dockerArgsPath) ? readFileSync(dockerArgsPath, "utf8") : "";
+    return {
+      baseline: dockerArgs
+        .split("\n")
+        .find((entry) => entry.startsWith("OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE=")),
+      result,
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 async function waitForPortFile(portFile: string): Promise<number> {
@@ -275,9 +330,14 @@ describe("plugin update unchanged Docker E2E", () => {
 
   it("bounds corrupt plugin update commands and prints diagnostics on hangs", () => {
     const script = readFileSync(CORRUPT_UPDATE_SCENARIO_SCRIPT, "utf8");
+    const nonCodexRoute =
+      'node "$entry" config set agents.defaults.model anthropic/claude-sonnet-4-6 >/dev/null';
+    const codexOptOut = 'node "$entry" config set plugins.entries.codex.enabled false >/dev/null';
 
     expect(script).toContain('plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force');
     expect(script).toContain("config set plugins.allow '[\"demo-corrupt-plugin\"]'");
+    expect(script).toContain(nonCodexRoute);
+    expect(script.indexOf(nonCodexRoute)).toBeLessThan(script.indexOf(codexOptOut));
     expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS");
     expect(script).toContain(
       "openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS 900",
@@ -310,28 +370,53 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(script.match(/assert-corrupt-policy-preserved/g)).toHaveLength(3);
   });
 
+  it("inherits the shared upgrade-survivor baseline for corrupt plugin updates", () => {
+    const result = runCorruptUpdateDockerBaseline({
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
+    });
+
+    expect(result.result.status, result.result.stderr).toBe(0);
+    expect(result.baseline).toBe("OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE=openclaw@2026.7.1-2");
+  });
+
+  it("keeps an explicit corrupt-plugin baseline ahead of the shared baseline", () => {
+    const result = runCorruptUpdateDockerBaseline({
+      OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE: "openclaw@2026.6.34",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
+    });
+
+    expect(result.result.status, result.result.stderr).toBe(0);
+    expect(result.baseline).toBe("OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE=openclaw@2026.6.34");
+  });
+
   it.each([
-    ["explicit disable", { enabled: false }],
-    ["typed quarantine", { enabled: true }],
-  ])("preserves the explicit allow policy after %s recovery", (_recovery, entry) => {
+    ["explicit disable", { enabled: false }, [CORRUPT_PLUGIN_ID]],
+    ["typed quarantine", { enabled: true }, [CORRUPT_PLUGIN_ID]],
+    ["target-owned additions", { enabled: false }, [CORRUPT_PLUGIN_ID, "memory-core", "codex"]],
+  ])("preserves the explicit allow policy after %s recovery", (_recovery, entry, allow) => {
     expect(() =>
-      runProbe("assert-corrupt-policy-preserved", {
-        plugins: {
-          allow: [CORRUPT_PLUGIN_ID],
-          entries: { [CORRUPT_PLUGIN_ID]: entry, codex: { enabled: false } },
-        },
-      }),
+      runProbe("assert-corrupt-policy-preserved", corruptPolicyConfig(allow, false, entry)),
     ).not.toThrow();
   });
 
-  it("rejects corrupt update recovery that revokes the explicit allow policy", () => {
-    const revokedPolicy = runProbeStatus("assert-corrupt-policy-preserved", {
-      plugins: {
-        entries: { [CORRUPT_PLUGIN_ID]: { enabled: false }, codex: { enabled: false } },
-      },
-    });
-    expect(revokedPolicy.status).not.toBe(0);
-    expect(revokedPolicy.stderr).toContain("expected plugins.allow to preserve");
+  it.each([
+    ["non-array allow policy", CORRUPT_PLUGIN_ID, false, "plugins.allow to be an array"],
+    ["missing fixture membership", ["memory-core"], false, "exactly once"],
+    ["duplicate fixture membership", [CORRUPT_PLUGIN_ID, CORRUPT_PLUGIN_ID], false, "exactly once"],
+    [
+      "loss of the Codex opt-out",
+      [CORRUPT_PLUGIN_ID],
+      true,
+      "explicit Codex opt-out to survive, got true",
+    ],
+  ])("rejects corrupt update recovery with %s", (_case, allow, codexEnabled, expectedError) => {
+    const result = runProbeStatus(
+      "assert-corrupt-policy-preserved",
+      corruptPolicyConfig(allow, codexEnabled),
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(expectedError);
   });
 
   it("accepts disabled or quarantined corrupt plugin warnings and rejects neither", () => {

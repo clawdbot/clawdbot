@@ -6,6 +6,7 @@ import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
+import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import {
   redactLoginFailureError,
   resolveAuthHintKind,
@@ -16,6 +17,8 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
+
+registerLoginEnglish();
 
 type LoginFailureKind =
   | "auth-required"
@@ -369,17 +372,19 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
     >
       <div class="login-gate__failure-title">${feedback.title}</div>
       <div class="login-gate__failure-summary">${feedback.summary}</div>
-      ${feedback.refreshAction
-        ? html`
-            <button
-              type="button"
-              class="btn primary login-gate__failure-refresh"
-              @click=${refreshLoginGatePage}
-            >
-              ${feedback.refreshAction.label}
-            </button>
-          `
-        : nothing}
+      ${
+        feedback.refreshAction
+          ? html`
+              <button
+                type="button"
+                class="btn primary login-gate__failure-refresh"
+                @click=${refreshLoginGatePage}
+              >
+                ${feedback.refreshAction.label}
+              </button>
+            `
+          : nothing
+      }
       <ol class="login-gate__failure-steps">
         ${feedback.steps.map((step) => html`<li>${renderLoginFailureStep(step)}</li>`)}
       </ol>
@@ -487,9 +492,9 @@ function renderLoginGate(props: LoginGateProps) {
                 }}
               />
               <openclaw-tooltip
-                .content=${props.showGatewayPassword
-                  ? t("login.hidePassword")
-                  : t("login.showPassword")}
+                .content=${
+                  props.showGatewayPassword ? t("login.hidePassword") : t("login.showPassword")
+                }
               >
                 <button
                   type="button"

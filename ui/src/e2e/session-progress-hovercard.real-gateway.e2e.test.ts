@@ -120,7 +120,7 @@ suite.define(() => {
         }
       };
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_CAPTURE === "1" ? suite.artifactDir : null;
+      const artifactDir = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? suite.artifactDir : null;
       await suite.withPage(
         {
           hasTouch: false,

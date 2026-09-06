@@ -55,10 +55,6 @@ function normalizeDiscordDmOwnerEntry(entry: string): string | undefined {
   return typeof candidate === "string" && /^\d+$/.test(candidate) ? candidate : undefined;
 }
 
-function isContextAborted(abortSignal?: AbortSignal): boolean {
-  return Boolean(abortSignal?.aborted);
-}
-
 export async function buildDiscordMessageProcessContext(params: {
   ctx: DiscordMessagePreflightContext;
   text: string;
@@ -498,7 +494,7 @@ export async function buildDiscordMessageProcessContext(params: {
                     abortSignal,
                   },
                 );
-                return isContextAborted(abortSignal)
+                return abortSignal?.aborted
                   ? []
                   : await toInboundMediaFactsWithMetadata(referencedReplyMediaList, {
                       messageId: replyContext.id,

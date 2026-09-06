@@ -157,7 +157,7 @@ export async function loadCodexEffectiveMcpCatalog(
   params: AgentHarnessMcpCatalogParams,
   options: { bindingStore: CodexAppServerBindingStore },
 ): Promise<McpToolCatalog | undefined> {
-  const binding = await options.bindingStore.read(
+  const binding = options.bindingStore.read(
     sessionBindingIdentity({
       agentId: params.agentId,
       sessionId: params.sessionId,

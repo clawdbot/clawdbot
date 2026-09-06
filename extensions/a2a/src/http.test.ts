@@ -401,6 +401,109 @@ describe("A2A HTTP authentication and request limits", () => {
       });
     }
   });
+
+  it("rejects oversized batches with one bounded error", async () => {
+    const harness = await startHttpHarness();
+    const response = await harness.post(Array.from({ length: 1_000 }, () => null));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: null,
+      error: { code: -32000, message: expect.stringContaining("batch") },
+    });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+  });
+
+  it("charges schema-invalid requests to the peer rate limit", async () => {
+    const harness = await startHttpHarness({ a2aConfig: { rateLimitPerMinute: 1 } });
+
+    const invalid = await harness.post({ jsonrpc: "2.0", id: "invalid" });
+    await expect(invalid.json()).resolves.toMatchObject({ error: { code: -32600 } });
+
+    const limited = await harness.post({
+      jsonrpc: "2.0",
+      id: "limited",
+      method: "GetTask",
+      params: { id: "missing" },
+    });
+    await expect(limited.json()).resolves.toMatchObject({
+      id: "limited",
+      error: { code: -32000, message: expect.stringContaining("rate limited") },
+    });
+  });
+
+  it("replaces oversized RPC results with a bounded error", async () => {
+    const harness = await startHttpHarness();
+    const task = harness.taskStore.create("ctx-large", "alpha");
+    const oversizedText = "x".repeat(1024 * 1024);
+    harness.taskStore.completeNext(task.contextId, oversizedText, "alpha");
+    const requestBody = JSON.stringify({
+      jsonrpc: "2.0",
+      id: "large-result",
+      method: "GetTask",
+      params: { id: task.id },
+    });
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+
+    const response = await harness.post(requestBody);
+
+    await expect(response.json()).resolves.toMatchObject({
+      id: "large-result",
+      error: { code: -32000, message: expect.stringContaining("response") },
+    });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+    expect(
+      stringifySpy.mock.calls.some(
+        ([value]) =>
+          (value as { result?: { artifacts?: Array<{ parts?: Array<{ text?: string }> }> } })
+            ?.result?.artifacts?.[0]?.parts?.[0]?.text === oversizedText,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the overflow fallback bounded when its request ID cannot fit", async () => {
+    const harness = await startHttpHarness();
+    const requestBody = JSON.stringify({
+      jsonrpc: "2.0",
+      id: "i".repeat(1024 * 1024 - 25),
+    });
+    expect(Buffer.byteLength(requestBody)).toBeLessThanOrEqual(1024 * 1024);
+
+    const response = await harness.post(requestBody);
+
+    await expect(response.json()).resolves.toMatchObject({
+      id: null,
+      error: { code: -32000, message: expect.stringContaining("response") },
+    });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+  });
+
+  it("preserves batch response IDs when aggregate results exceed the response limit", async () => {
+    const harness = await startHttpHarness();
+    const taskA = harness.taskStore.create("ctx-large-a", "alpha");
+    const taskB = harness.taskStore.create("ctx-large-b", "alpha");
+    harness.taskStore.completeNext(taskA.contextId, "a".repeat(600 * 1024), "alpha");
+    harness.taskStore.completeNext(taskB.contextId, "b".repeat(600 * 1024), "alpha");
+
+    const response = await harness.post([
+      { jsonrpc: "2.0", id: "large-a", method: "GetTask", params: { id: taskA.id } },
+      { jsonrpc: "2.0", id: "large-b", method: "GetTask", params: { id: taskB.id } },
+    ]);
+
+    await expect(response.json()).resolves.toEqual([
+      {
+        jsonrpc: "2.0",
+        id: "large-a",
+        error: { code: -32000, message: expect.stringContaining("response") },
+      },
+      {
+        jsonrpc: "2.0",
+        id: "large-b",
+        error: { code: -32000, message: expect.stringContaining("response") },
+      },
+    ]);
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+  });
 });
 
 describe("A2A JSON-RPC protocol boundary", () => {

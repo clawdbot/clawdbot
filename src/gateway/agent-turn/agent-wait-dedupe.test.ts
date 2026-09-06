@@ -64,6 +64,44 @@ afterEach(() => {
 });
 
 describe("agent.wait gateway dedupe observations", () => {
+  it("retains chat input identity when terminal writers replace admission metadata", async () => {
+    const runId = "run-chat-request-identity";
+    const key = `chat:${runId}`;
+    const dedupe = new Map<string, DedupeEntry>([
+      [
+        key,
+        {
+          ts: 100,
+          ok: true,
+          requestIdentity: "submitted-mention-selection",
+        },
+      ],
+    ]);
+    setGatewayDedupeEntry({
+      dedupe,
+      key,
+      entry: { ts: 200, ok: true, payload: { runId, status: "ok", endedAt: 200 } },
+    });
+    expect(dedupe.get(key)?.requestIdentity).toBe("submitted-mention-selection");
+    setGatewayDedupeEntry({
+      dedupe,
+      key,
+      entry: {
+        ts: 300,
+        ok: false,
+        requestIdentity: "stale-writer-selection",
+        payload: { runId, status: "error", endedAt: 300 },
+      },
+    });
+    expect(dedupe.get(key)?.requestIdentity).toBe("submitted-mention-selection");
+    const waiter = waitThroughGateway({ runId, timeoutMs: 0 }, "chat");
+    await waiter.promise;
+    expect(waiter.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId, status: "error", endedAt: 300 }),
+    );
+  });
+
   it.each([
     ["agent", "timeout"],
     ["chat", "ok"],

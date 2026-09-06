@@ -50,6 +50,7 @@ type TokenResponseJson = {
 };
 type TokenRequestOptions = {
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   timeoutMs?: number;
 };
 
@@ -161,8 +162,9 @@ async function postTokenForm(
   throwIfOAuthLoginAborted(options.signal);
   const { response, release } = await fetchWithSsrFGuard({
     url: TOKEN_URL,
-    // Fake-IP proxies map public hosts into these ranges. The exact-host allowlist
-    // keeps redirects and every other hostname fail-closed.
+    // Match device-code login's operator proxy policy. The guard keeps direct DNS
+    // pinning when no proxy applies; the exact-host policy also permits fake-IP DNS.
+    mode: "trusted_env_proxy",
     policy: OAUTH_TOKEN_SSRF_POLICY,
     init: {
       method: "POST",
@@ -171,6 +173,7 @@ async function postTokenForm(
     },
     timeoutMs,
     signal: options.signal,
+    beforeRequest: options.assertCurrent,
     auditContext: "openai-chatgpt-oauth-token",
   });
   try {
@@ -254,7 +257,7 @@ export async function exchangeOpenAIAuthorizationCode(
         code_verifier: verifier,
         redirect_uri: redirectUri,
       }),
-      { signal: options.signal, timeoutMs },
+      { ...options, timeoutMs },
     );
   } catch (error) {
     return {
@@ -279,7 +282,7 @@ export async function refreshOpenAIAccessToken(
         refresh_token: refreshToken,
         client_id: CLIENT_ID,
       }),
-      { signal: options.signal, timeoutMs },
+      { ...options, timeoutMs },
     );
     return await readOpenAITokenResponse(response, "refresh", refreshToken);
   } catch (error) {

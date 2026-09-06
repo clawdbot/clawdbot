@@ -42,6 +42,13 @@ function sessionHovercardMenuOpen(owner: ParentNode): boolean {
 }
 
 export class SessionProgressHovercardProvider extends ReactiveElement {
+  // Let Lit replay dependencies assigned before the lazy element upgrades.
+  static override properties = {
+    client: { attribute: false, noAccessor: true },
+    context: { attribute: false, noAccessor: true },
+    gateway: { attribute: false, noAccessor: true },
+  };
+
   private applicationClient: GatewayBrowserClient | null = null;
   private applicationContext: ApplicationContext | null = null;
   private applicationGateway: ApplicationGateway | null = null;
@@ -420,6 +427,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
             lastMessagePreview: sidebarRow.lastMessagePreview,
             createdActor: sidebarRow.createdActor,
             participants: sidebarRow.participants,
+            expandedParticipants: sidebarRow.expandedParticipants,
             participantCount: sidebarRow.participantCount,
             workContext: sidebarRow.workContext,
             createdAt: sidebarRow.createdAt,

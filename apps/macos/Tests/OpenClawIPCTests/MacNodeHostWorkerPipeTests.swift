@@ -162,7 +162,7 @@ struct MacNodeHostWorkerPipeTests {
         await gateway.disconnect()
     }
 
-    @Test func `disconnect retires pairing subscription before the next gateway route`() async throws {
+    @Test func `route revocation and disconnect retire pairing subscription before the next route`() async throws {
         let gateway = GatewayNodeSession()
         let transport = GatewayTestWebSocketSession()
         let worker = MacNodeHostWorker(session: gateway)
@@ -172,12 +172,17 @@ struct MacNodeHostWorkerPipeTests {
             let firstSocket = try #require(transport.latestTask())
             try await self.emit(requestId: "first-route", socket: firstSocket)
             let original = try await self.waitForEvents(1, worker: worker)
+            // Revoke the native route while the socket can still deliver an event.
+            // The next valid event is a positive barrier for inspecting actual worker input.
+            #expect(await worker.setRoute(nil, authorityGeneration: 2))
+            try await self.emit(requestId: "revoked-route", socket: firstSocket)
             await gateway.disconnect()
-            try await self.connect(gateway, transport: transport, worker: worker, authorityGeneration: 2)
+            try await self.connect(gateway, transport: transport, worker: worker, authorityGeneration: 3)
             let secondSocket = try #require(transport.latestTask())
             try await self.emit(requestId: "second-route", socket: secondSocket)
             let events = try await self.waitForEvents(2, worker: worker)
             #expect(events.count == 2)
+            #expect(events.first?.payload == self.pairingPayload(requestId: "first-route"))
             #expect(events.last?.generation != original.first?.generation)
             #expect(events.last?.payload == self.pairingPayload(requestId: "second-route"))
             #expect(transport.snapshotMakeCount() == 2)

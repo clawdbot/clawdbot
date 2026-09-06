@@ -39,7 +39,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 - QA runner metadata the shared `openclaw qa` host can inspect
 - channel-specific config metadata merged into catalog and validation surfaces
 
-**Do not use it for:** registering native runtime hooks, declaring plugin code entrypoints, or npm install metadata. Those belong in your plugin code and `package.json`.
+**Do not use it for:** registering native runtime hooks, declaring the full plugin runtime entrypoint, or npm install metadata. Those belong in your plugin code and `package.json`.
 
 ## Minimal example
 
@@ -148,6 +148,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `channels`                           | No       | `string[]`                   | Channel ids owned by this plugin. Used for discovery and config validation.                                                                                                                                                                                                                                                                                                                      |
 | `providers`                          | No       | `string[]`                   | Provider ids owned by this plugin.                                                                                                                                                                                                                                                                                                                                                               |
 | `providerCatalogEntry`               | No       | `string`                     | Lightweight provider-catalog module path, relative to the plugin root, for manifest-scoped provider catalog metadata that can be loaded without activating the full plugin runtime.                                                                                                                                                                                                              |
+| `capabilityCatalogEntry`             | No       | `string`                     | Lightweight module of typed speech, realtime transcription, and realtime voice provider descriptors, relative to the plugin root. See [Capability catalogs](#capability-catalogs).                                                                                                                                                                                                               |
 | `modelSupport`                       | No       | `object`                     | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                                                                                                                                                                                                      |
 | `modelCatalog`                       | No       | `object`                     | Declarative model catalog metadata for providers owned by this plugin. This is the control-plane contract for future read-only listing, onboarding, model pickers, aliases, and suppression without loading plugin runtime.                                                                                                                                                                      |
 | `modelPricing`                       | No       | `object`                     | Provider-owned hosted-pricing publication policy. Use it to opt local/self-hosted providers out of published pricing or map provider refs to supported public pricing catalogs without hardcoding provider ids in core.                                                                                                                                                                          |
@@ -184,9 +185,21 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                                                                                                                                                                      |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                                                                                                                                                          |
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                     |
-| `icon`                               | No       | `string`                     | HTTPS image URL for marketplace/catalog cards. ClawHub accepts any valid `https://` URL and falls back to the default plugin icon when this is omitted or invalid.                                                                                                                                                                                                                               |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                                                                                                                                                                    |
 | `uiHints`                            | No       | `Record<string, object>`     | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                                                                                                                                                                                |
+
+## Plugin icon
+
+Place the portable plugin icon at `assets/icon.png`, relative to the plugin root. No manifest
+field is required. Use a square PNG that remains recognizable at 16 px; 512×512 is recommended.
+Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
+
+OpenClaw adopts this fixed package path as its icon convention, matching the path proposed in
+[Agent Plugins 1.1](https://github.com/agentplugins/agent-plugins-spec/pull/66). Other Agent Plugins
+consumers may not discover it unless that proposal is adopted. The fixed path keeps packages
+portable and inspectable, avoids manifest path indirection and precedence rules, and lets OpenClaw
+render the icon without a runtime network request. Top-level plugin-branding icon URLs are not
+loaded; provider-auth artwork remains server-owned catalog metadata.
 
 Prefer top-level `sessionRouteStateOwners` for static doctor ownership. The
 older `doctorContract.sessionRouteStateOwners: true` declaration plus a
@@ -279,6 +292,36 @@ plugin can recreate.
 ```
 
 OpenClaw includes these servers only while the owning plugin is enabled. Relative `command`, `args`, `cwd`, and `workingDirectory` paths resolve from the plugin root. User configuration remains authoritative: `mcp.servers.<name>` can replace a plugin default or set `enabled: false` to omit it. MCP App rendering and server-tool calls still require the normal MCP Apps setting and effective tool policy; declaring a server does not bypass either boundary.
+
+## controlUi reference
+
+`controlUi` declares a trusted native browser entry and optional stylesheets for
+the Control UI. Paths are relative to the plugin root and must name compiled
+JavaScript and CSS. Assets follow the Gateway's authentication policy, are
+captured as immutable revisions, and refresh only through the explicit UI reload
+flow.
+
+User-installed native UI requires **Settings → Labs → Custom plugin UI**
+(`gateway.controlUi.experimental.customPlugins`, default `false`). Native UI
+from enabled bundled plugins remains available. See
+[Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui) for
+restart and browser reload requirements. This gate does not disable the
+plugin's backend APIs or the sandboxed dashboard bindings below.
+
+```json
+{
+  "controlUi": {
+    "entry": "dist/control-ui/<content-hash>/index.js",
+    "styles": ["dist/control-ui/<content-hash>/index.css"]
+  }
+}
+```
+
+Use `package.json.openclaw.controlUi` for the source entry and let
+`openclaw plugins build` generate this declaration. Native UI executes with the
+browser application's trust; it is distinct from the scoped dashboard widget
+bindings below. See [Feature plugins](/plugins/feature-plugins) for authoring,
+replacements, reload, and activation receipts.
 
 ## dashboard reference
 
@@ -475,31 +518,32 @@ If a tool has no `toolMetadata`, OpenClaw preserves the existing behavior and lo
 
 Each `providerAuthChoices` entry describes one onboarding or auth choice. OpenClaw reads this before provider runtime loads. Provider setup lists use these manifest choices, descriptor-derived setup choices, and install-catalog metadata without loading provider runtime.
 
-| Field                  | Required | Type                                                                  | What it means                                                                                             |
-| ---------------------- | -------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `provider`             | Yes      | `string`                                                              | Provider id this choice belongs to.                                                                       |
-| `method`               | Yes      | `string`                                                              | Auth method id to dispatch to.                                                                            |
-| `choiceId`             | Yes      | `string`                                                              | Stable auth-choice id used by onboarding and CLI flows.                                                   |
-| `choiceLabel`          | No       | `string`                                                              | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                         |
-| `choiceHint`           | No       | `string`                                                              | Short helper text for the picker.                                                                         |
-| `icon`                 | No       | HTTPS URL                                                             | Artwork shown beside this choice in supported onboarding clients.                                         |
-| `website`              | No       | HTTPS URL                                                             | Product, sign-in, or installation page shown by supported onboarding clients.                             |
-| `assistantPriority`    | No       | `number`                                                              | Lower values sort earlier in assistant-driven interactive pickers.                                        |
-| `assistantVisibility`  | No       | `"visible"` \| `"manual-only"`                                        | Hide the choice from assistant pickers while still allowing manual CLI selection.                         |
-| `deprecatedChoiceIds`  | No       | `string[]`                                                            | Legacy choice ids that should redirect users to this replacement choice.                                  |
-| `groupId`              | No       | `string`                                                              | Optional group id for grouping related choices.                                                           |
-| `groupLabel`           | No       | `string`                                                              | User-facing label for that group.                                                                         |
-| `groupHint`            | No       | `string`                                                              | Short helper text for the group.                                                                          |
-| `onboardingFeatured`   | No       | `boolean`                                                             | Surface this group in the featured tier of the interactive onboarding picker, before the "More..." entry. |
-| `optionKey`            | No       | `string`                                                              | Internal option key for simple one-flag auth flows.                                                       |
-| `cliFlag`              | No       | `string`                                                              | CLI flag name, such as `--openrouter-api-key`.                                                            |
-| `cliOption`            | No       | `string`                                                              | Full CLI option shape, such as `--openrouter-api-key <key>`.                                              |
-| `cliDescription`       | No       | `string`                                                              | Description used in CLI help.                                                                             |
-| `appGuidedSecret`      | No       | `boolean`                                                             | One pasted secret plus provider defaults is sufficient for app-guided setup.                              |
-| `appGuidedActionLabel` | No       | `string`                                                              | Short command label shown when starting provider-owned app-guided setup.                                  |
-| `appGuidedDiscovery`   | No       | `boolean`                                                             | The matching runtime auth method owns read-only local discovery through `appGuidedSetup`.                 |
-| `appGuidedAuth`        | No       | `"oauth"` \| `"device-code"`                                          | Provider-owned interactive login that native setup clients can render generically.                        |
-| `onboardingScopes`     | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`.  |
+| Field                  | Required | Type                                                                  | What it means                                                                                                                       |
+| ---------------------- | -------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`             | Yes      | `string`                                                              | Provider id this choice belongs to.                                                                                                 |
+| `method`               | Yes      | `string`                                                              | Auth method id to dispatch to.                                                                                                      |
+| `choiceId`             | Yes      | `string`                                                              | Stable auth-choice id used by onboarding and CLI flows.                                                                             |
+| `choiceLabel`          | No       | `string`                                                              | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                                                   |
+| `choiceHint`           | No       | `string`                                                              | Short helper text for the picker.                                                                                                   |
+| `icon`                 | No       | HTTPS URL                                                             | Artwork shown beside this choice in supported onboarding clients.                                                                   |
+| `website`              | No       | HTTPS URL                                                             | Product, sign-in, or installation page shown by supported onboarding clients.                                                       |
+| `assistantPriority`    | No       | `number`                                                              | Lower values sort earlier in assistant-driven interactive pickers.                                                                  |
+| `assistantVisibility`  | No       | `"visible"` \| `"manual-only"`                                        | Hide the choice from assistant pickers while still allowing manual CLI selection.                                                   |
+| `deprecatedChoiceIds`  | No       | `string[]`                                                            | Legacy choice ids that should redirect users to this replacement choice.                                                            |
+| `groupId`              | No       | `string`                                                              | Optional group id for grouping related choices.                                                                                     |
+| `groupLabel`           | No       | `string`                                                              | User-facing label for that group.                                                                                                   |
+| `groupHint`            | No       | `string`                                                              | Short helper text for the group.                                                                                                    |
+| `onboardingFeatured`   | No       | `boolean`                                                             | Surface this group in the featured tier of the interactive onboarding picker, before the "More..." entry.                           |
+| `optionKey`            | No       | `string`                                                              | Internal option key for simple one-flag auth flows.                                                                                 |
+| `cliFlag`              | No       | `string`                                                              | CLI flag name, such as `--openrouter-api-key`.                                                                                      |
+| `cliOption`            | No       | `string`                                                              | Full CLI option shape, such as `--openrouter-api-key <key>`.                                                                        |
+| `cliDescription`       | No       | `string`                                                              | Description used in CLI help.                                                                                                       |
+| `personalAccount`      | No       | `boolean`                                                             | Offer this method in Connected accounts; it must stage one inline credential without importing host logins or writing shared state. |
+| `appGuidedSecret`      | No       | `boolean`                                                             | One pasted secret plus provider defaults is sufficient for app-guided setup.                                                        |
+| `appGuidedActionLabel` | No       | `string`                                                              | Short command label shown when starting provider-owned app-guided setup.                                                            |
+| `appGuidedDiscovery`   | No       | `boolean`                                                             | The matching runtime auth method owns read-only local discovery through `appGuidedSetup`.                                           |
+| `appGuidedAuth`        | No       | `"oauth"` \| `"device-code"`                                          | Provider-owned interactive login that native setup clients can render generically.                                                  |
+| `onboardingScopes`     | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`.                            |
 
 When `appGuidedDiscovery` is true, the matching provider auth method must expose
 `appGuidedSetup.detect` and `appGuidedSetup.prepare`. Detection must be
@@ -509,6 +553,30 @@ proposal in isolation and commits it only after success. A provider can also
 expose `appGuidedSetup.detectAvailability` to mark its setup choice as detected
 when the local service is reachable but no model qualifies for automatic setup.
 The availability probe is also read-only.
+
+When `personalAccount` is true, the method runs through the shared wizard protocol
+with a credential-free environment/config, no agent directory or preseeded secret,
+and plaintext input mode. It must return exactly one inline credential for its
+provider and honor cancellation. It must not import a native CLI login, resolve a
+SecretRef, write credentials/config, or require shared model activation. The
+Gateway owns the private per-person commit; `configPatch`, `defaultModel`, and the
+returned shared profile id are not applied. Mark credential prompts sensitive.
+Use this capability only when the provider permits this credential use.
+
+Personal-account calls always supply `ctx.assertCurrent`. Preserve this
+closure-bound check through provider helpers and invoke it immediately before
+external effects, including discovery, polling and token exchange after any
+interactive or asynchronous wait. With `fetchWithSsrFGuard`, pass it as
+`beforeRequest` so it runs after DNS/proxy preparation and on redirects. Keep
+forwarding `ctx.signal` to cancel in-flight work; a signal alone does not recheck
+the person's current permission. Standalone CLI/onboarding calls may omit the
+check because they do not carry a Gateway person's authority.
+
+An optional `matchesPersonalAccount(credential, existing)` auth-method hook can
+prove that an OAuth reconnect is the same provider account. Match the complete
+identity, not an email or a shared workspace alone. Without that proof, a new
+OAuth account slot is created and old chat pins retain their original credential.
+API keys and static tokens reuse a slot only when their literal value matches.
 
 ## cliCommands reference
 
@@ -666,6 +734,8 @@ Use `setup` when setup and onboarding surfaces need cheap plugin-owned metadata 
 Top-level `cliBackends` stays valid and continues to describe CLI inference backends. `setup.cliBackends` is the setup-specific descriptor surface for control-plane/setup flows that should stay metadata-only.
 
 When present, `setup.providers` and `setup.cliBackends` are the preferred descriptor-first lookup surface for setup discovery. If the descriptor only narrows the candidate plugin and setup still needs richer setup-time runtime hooks, set `requiresRuntime: true` and keep `setup-api` in place as the fallback execution path.
+
+Without an explicit `openclaw.setupEntry`, OpenClaw resolves the conventional `setup-api` file at the package root or in package-local `dist/`. Standalone runtime builds include that public surface automatically.
 
 OpenClaw includes `setup.providers[].envVars` in generic provider auth and env-var lookups. Put setup and status env metadata there.
 
@@ -1471,7 +1541,9 @@ Use it when setup, doctor, status, or read-only presence flows need a cheap yes/
 }
 ```
 
-Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`; when `env` is present, OpenClaw uses it without loading that module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
+Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`. A complete, non-empty `specifier` and `exportName` pair takes precedence over `env`. If either field is absent or blank, the probe uses its `env` metadata without loading a module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
+
+For both state probes, OpenClaw builds rewrite source specifiers only for complete module pairs, naming the exact emitted JavaScript artifact, including its `.js` or `.cjs` extension. Env-backed incomplete pairs are preserved unchanged. Built checkout metadata uses paths relative to the plugin root; standalone packages use the plugin-local `dist/` directory.
 
 ## Discovery precedence (duplicate plugin ids)
 
@@ -1516,6 +1588,28 @@ Example schema extension:
 ```
 
 ## Validation behavior
+
+### Capability catalogs
+
+`capabilityCatalogEntry` declares a lightweight module relative to the selected
+plugin root, for example `"./capability-catalog.ts"`. It exports actual speech,
+realtime transcription, or realtime voice provider descriptors without importing
+the full plugin entry. See the [typed SDK contract](/plugins/sdk-subpaths#capability-catalog-entry).
+
+Each supplied family is authoritative, including an empty array. An omitted
+family, or a plugin without this declaration, retains the existing `register()`
+discovery contract for installed plugins. A malformed, missing, or broken declared
+entry fails with a repair diagnostic; it does not fall through to full registration.
+Already registered runtime providers remain authoritative, including live broker
+and readiness closures.
+
+The entry uses the same plugin-root boundary checks, installed-owner precedence,
+prepared metadata generation, and source/built artifact policy as other plugin
+surfaces. Repository builds include declared entries and rewrite emitted manifest
+paths to the corresponding JavaScript artifacts. Plugin reload owns invalidation;
+catalog requests do not poll files for changes.
+
+### Configuration validation
 
 - Required-field errors identify every missing field after schema defaults are applied. For dependencies on multiple fields, the error reports the dependency condition without claiming that fields already present are missing.
 - Unknown `channels.*` keys are **errors**, unless the channel id is declared by a plugin manifest. If the same id also appears in `plugins.allow`, `plugins.entries`, or `plugins.installs` (a plugin that is referenced but not currently discoverable), OpenClaw downgrades this to a **warning** instead.

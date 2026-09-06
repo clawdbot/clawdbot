@@ -20,11 +20,11 @@ describe("browser maintenance cleanup ownership", () => {
 
     await closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:main"] });
     const cleanupParams = closeTrackedBrowserTabs.mock.calls[0]?.[0];
-    expect(cleanupParams?.getResolvedBrowserConfig()).toBe(firstResolved);
+    expect(await cleanupParams?.getResolvedBrowserConfig()).toBe(firstResolved);
 
     getBrowserControlState.mockReturnValue({ resolved: secondResolved });
-    expect(cleanupParams?.getResolvedBrowserConfig()).toBe(secondResolved);
+    expect(await cleanupParams?.getResolvedBrowserConfig()).toBe(secondResolved);
     getBrowserControlState.mockReturnValue(null);
-    expect(cleanupParams?.getResolvedBrowserConfig()).toBeNull();
+    expect(await cleanupParams?.getResolvedBrowserConfig()).toBeNull();
   });
 });

@@ -207,6 +207,9 @@ export function toCssPlacement(rect: BoardGridRect): string {
 
 // Keep this numeric inset aligned with the app-level --widget-frame-inset token.
 const BOARD_WIDGET_FRAME_INSET = 12;
+// board.css keeps a 1px border even when frameless. Reserve both edges so
+// viewport-sized content does not lose 2px on every resize report.
+const BOARD_WIDGET_BORDER_PX = 1;
 const BOARD_WIDGET_AUTO_MIN_ROWS = 2;
 const BOARD_WIDGET_AUTO_MAX_ROWS = 20;
 // Mirrors the 38px header grid row in board.css: coarse-pointer layouts keep
@@ -242,6 +245,7 @@ function autoBoardWidgetHeightPx(
   }
   return (
     contentHeightPx +
+    BOARD_WIDGET_BORDER_PX * 2 +
     chromeRowPx +
     ((widget.presentation ?? "card") === "card" ? BOARD_WIDGET_FRAME_INSET * 2 : 0)
   );

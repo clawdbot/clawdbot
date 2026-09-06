@@ -2,6 +2,7 @@ import * as auditActivity from "./audit-activity.js";
 import * as auditRun from "./audit-run.js";
 import * as audit from "./audit.js";
 import * as config from "./config.js";
+import * as humanMentions from "./human-mentions.js";
 import * as openclaw from "./openclaw.js";
 import * as taskSuggestions from "./task-suggestions.js";
 import * as tasks from "./tasks.js";
@@ -29,6 +30,28 @@ export const OperationsProtocolSchemas = {
   AuditEvent: audit.AuditEventSchema,
   AuditListParams: audit.AuditListParamsSchema,
   AuditListResult: audit.AuditListResultSchema,
+  UserProfileAuthLink: users.UserProfileAuthLinkSchema,
+  UserModelAccount: users.UserModelAccountSchema,
+  UsersListModelAccountsParams: users.UsersListModelAccountsParamsSchema,
+  UsersListModelAccountsResult: users.UsersListModelAccountsResultSchema,
+  UsersSelectModelAccountParams: users.UsersSelectModelAccountParamsSchema,
+  UsersSelectModelAccountResult: users.UsersSelectModelAccountResultSchema,
+  ChatAccountSelection: users.ChatAccountSelectionSchema,
+  UsersListAuthLinksParams: users.UsersListAuthLinksParamsSchema,
+  UsersListAuthLinksResult: users.UsersListAuthLinksResultSchema,
+  UsersLinkAuthProfileParams: users.UsersLinkAuthProfileParamsSchema,
+  UsersLinkAuthProfileResult: users.UsersLinkAuthProfileResultSchema,
+  UsersUnlinkAuthProfileParams: users.UsersUnlinkAuthProfileParamsSchema,
+  UsersUnlinkAuthProfileResult: users.UsersUnlinkAuthProfileResultSchema,
+  UsersAuthConnectCatalogParams: users.UsersAuthConnectCatalogParamsSchema,
+  UsersAuthConnectCatalogResult: users.UsersAuthConnectCatalogResultSchema,
+  UsersAuthConnectStartParams: users.UsersAuthConnectStartParamsSchema,
+  UsersAuthConnectStartResult: users.UsersAuthConnectStartResultSchema,
+  UsersAuthConnectAnswerParams: users.UsersAuthConnectAnswerParamsSchema,
+  UsersAuthConnectStatusParams: users.UsersAuthConnectStatusParamsSchema,
+  UsersAuthConnectCancelParams: users.UsersAuthConnectCancelParamsSchema,
+  UsersAuthConnectStatusResult: users.UsersAuthConnectStatusResultSchema,
+  UsersAuthConnectResult: users.UsersAuthConnectResultSchema,
   PersonalGitHubStatus: users.PersonalGitHubStatusSchema,
   UsersGitHubStatusParams: users.UsersGitHubStatusParamsSchema,
   UsersGitHubStatusResult: users.UsersGitHubStatusResultSchema,
@@ -41,6 +64,15 @@ export const OperationsProtocolSchemas = {
   UsersGitHubDisconnectParams: users.UsersGitHubDisconnectParamsSchema,
   UsersGitHubDisconnectResult: users.UsersGitHubDisconnectResultSchema,
   UsersPrefsChangedEvent: users.UsersPrefsChangedEventSchema,
+  HumanMention: humanMentions.HumanMentionSchema,
+  MentionableUser: humanMentions.MentionableUserSchema,
+  UsersMentionableParams: humanMentions.UsersMentionableParamsSchema,
+  UsersMentionableResult: humanMentions.UsersMentionableResultSchema,
+  MentionInboxItem: humanMentions.MentionInboxItemSchema,
+  MentionsListParams: humanMentions.MentionsListParamsSchema,
+  MentionsDismissParams: humanMentions.MentionsDismissParamsSchema,
+  MentionsListResult: humanMentions.MentionsListResultSchema,
+  MentionsChangedEvent: humanMentions.MentionsChangedEventSchema,
   TaskSuggestion: taskSuggestions.TaskSuggestionSchema,
   TaskSuggestionEvent: taskSuggestions.TaskSuggestionEventSchema,
   TaskSuggestionResolution: taskSuggestions.TaskSuggestionResolutionSchema,

@@ -451,21 +451,63 @@ describe("gateway lock", () => {
     }
   });
 
-  it("ignores active-port metadata when the lock owner cannot be verified", async () => {
-    const env = await makeEnv();
-    const { lockPath, configPath } = resolveLockPath(env);
-    const payload = createLockPayload({ configPath, startTime: 111, port: 48789 });
-    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
-
-    await expect(
-      readActiveGatewayLockPort({
+  it.each([
+    { state: "missing", file: "config", expected: "absent" },
+    { state: "dead", file: "config", expected: "absent" },
+    { state: "other role", file: "state", expected: "absent" },
+    { state: "active", file: "state", expected: "active" },
+    { state: "missing port", file: "config", expected: "unavailable" },
+    ...["config", "state"].flatMap((file) =>
+      ["corrupt", "unreadable", "unknown owner"].map((state) => ({
+        state,
+        file,
+        expected: "unavailable",
+      })),
+    ),
+  ])(
+    "preserves strict lock inspection for $state $file locks without changing discovery",
+    async ({ state, file, expected }) => {
+      const env = await makeEnv();
+      const { lockPath, stateLockPath, configPath } = resolveLockPath(env);
+      const target = file === "state" ? stateLockPath : lockPath;
+      if (state !== "missing") {
+        const payload = createLockPayload({
+          configPath,
+          startTime: 111,
+          ...(state !== "missing port" ? { port: 48789 } : {}),
+          ...(state === "other role" ? { role: "sqlite-maintenance" as const } : {}),
+        });
+        await fs.writeFile(target, state === "corrupt" ? "{" : JSON.stringify(payload));
+      }
+      if (state === "unreadable") {
+        const readFile = fs.readFile;
+        vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+          if (filePath === target) {
+            throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+          }
+          return readFile(filePath, options);
+        });
+      }
+      const options = {
         env,
         lockDir: resolveTestLockDir(env),
-        platform: "darwin",
-        readProcessCmdline: () => null,
-      }),
-    ).resolves.toBeUndefined();
-  });
+        platform: "linux" as const,
+        readProcessStartTime: () => (state === "dead" ? 222 : null),
+        readProcessCmdline: () => (state === "unknown owner" ? null : ["openclaw-gateway"]),
+      };
+      await expect(readActiveGatewayLockPort(options)).resolves.toBe(
+        expected === "active" ? 48789 : undefined,
+      );
+      const strict = readActiveGatewayLockIdentity({ ...options, requireInspection: true });
+      if (expected === "unavailable") {
+        await expect(strict).rejects.toBeInstanceOf(GatewayLockError);
+      } else if (expected === "active") {
+        await expect(strict).resolves.toMatchObject({ pid: process.pid, port: 48789 });
+      } else {
+        await expect(strict).resolves.toBeUndefined();
+      }
+    },
+  );
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
     const env = await makeEnv();

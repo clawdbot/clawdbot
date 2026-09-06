@@ -668,7 +668,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           stateDir,
         });
         expect(staleClaimId).toEqual(expect.any(String));
-        vi.setSystemTime(Date.now() + 30_001);
+        vi.setSystemTime(Date.now() + 60_001);
         if (!staleClaimId) {
           throw new Error("test invariant: the original producer claim must be available");
         }
@@ -693,7 +693,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         expect(recoveredClaimId).not.toBe(staleClaimId);
         expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
           recoveryState: "producer_claimed",
-          availableAt: Date.now() + 30_000,
+          availableAt: Date.now() + 60_000,
           producerClaimId: recoveredClaimId,
         });
         expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)?.platformSendStartedAt).toBeUndefined();
@@ -758,10 +758,10 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
               claimId,
               stateDir,
             }),
-          ).toBe(Date.now() + 30_000);
+          ).toBe(Date.now() + 60_000);
           expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
             recoveryState,
-            availableAt: Date.now() + 30_000,
+            availableAt: Date.now() + 60_000,
             ...(recoveryState === "producer_claimed"
               ? { producerClaimId: claimId }
               : { platformSendAttemptId: claimId }),

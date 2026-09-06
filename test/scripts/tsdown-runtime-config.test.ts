@@ -101,6 +101,9 @@ describe("tsdown config", () => {
     const rsyncReceiver = configs.find((config) =>
       entryKeys(config).includes("worker/workspace-rsync-receiver"),
     );
+    const githubExecLauncher = configs.find((config) =>
+      entryKeys(config).includes("worker/github-exec-launcher"),
+    );
 
     expect(deployWorker?.minify).toEqual({
       codegen: true,
@@ -108,6 +111,7 @@ describe("tsdown config", () => {
       mangle: { keepNames: true },
     });
     expect(rsyncReceiver?.minify).toBeUndefined();
+    expect(githubExecLauncher?.minify).toBeUndefined();
     expect(requireUnifiedDistGraph().minify).toBeUndefined();
   });
 
@@ -269,7 +273,7 @@ describe("tsdown config", () => {
     );
   });
 
-  it("keeps Gateway plugin reload targets behind one stable dist entry", () => {
+  it("preserves the reload entry lazy-loaded by already-running v2026.9.1 Gateways", () => {
     const distGraph = requireUnifiedDistGraph();
 
     expect(entrySources(distGraph)["gateway/plugin-channel-reload-targets"]).toBe(

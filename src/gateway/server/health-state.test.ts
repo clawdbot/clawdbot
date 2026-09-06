@@ -1,6 +1,10 @@
 // Health-state tests cover probe coalescing, sensitive snapshots, and broadcast version behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
 import type { HealthSummary } from "../health/types.js";
 
 /**
@@ -86,6 +90,27 @@ async function loadHealthState() {
 }
 
 describe("buildGatewaySnapshot update metadata", () => {
+  it("reads suspension synchronously without waiting for health collection", async () => {
+    const healthState = await loadHealthState();
+    resetGatewayWorkAdmission();
+    const read = () =>
+      healthState.buildGatewaySnapshot({ client: null, revisionProjector }).suspension;
+    try {
+      expect(read()).toEqual({ phase: "accepting" });
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(read()).toEqual({ phase: "preparing" });
+      suspension?.drain();
+      expect(read()).toEqual({ phase: "draining" });
+      suspension?.commit();
+      expect(read()).toEqual({ phase: "prepared" });
+      suspension?.release();
+      expect(read()).toEqual({ phase: "accepting" });
+      expect(collectGatewayHealthSnapshotMock).not.toHaveBeenCalled();
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+  });
+
   it.each([
     { agent: { model: "openai/gpt-5.6-luna" }, expected: true },
     { agent: {}, expected: false },

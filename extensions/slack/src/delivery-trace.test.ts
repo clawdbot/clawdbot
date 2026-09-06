@@ -1,3 +1,4 @@
+import type { WebClient } from "@slack/web-api";
 // Slack delivery trace goldens: replayable wire-level lifecycle recordings.
 //
 // Drives the real dispatch wiring (dispatchPreparedSlackMessage → deliverSlackPayload
@@ -25,6 +26,8 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
+import { setSlackSessionStatus } from "./session-status.js";
+import { markSlackStreamsStopped } from "./streaming.js";
 
 type RecordedWireCall = {
   method: string;
@@ -82,19 +85,19 @@ type SlackTraceState = {
   rejectStartStreamCode: string | undefined;
 };
 
-const traceState = vi.hoisted(
-  (): SlackTraceState => ({
-    recordWireCall: () => {},
-    client: null,
-    turn: null,
-    turnStarted: null,
-    turnOutcome: null,
-    dispatchDone: null,
-    counts: { tool: 0, block: 0, final: 0 },
-    tsCounter: 0,
-    rejectStartStreamCode: undefined,
-  }),
-);
+const traceRuntimeError = vi.fn();
+
+const traceState = vi.hoisted((): SlackTraceState => ({
+  recordWireCall: () => {},
+  client: null,
+  turn: null,
+  turnStarted: null,
+  turnOutcome: null,
+  dispatchDone: null,
+  counts: { tool: 0, block: 0, final: 0 },
+  tsCounter: 0,
+  rejectStartStreamCode: undefined,
+}));
 
 // Replace only the core agent turn. Everything downstream of the captured
 // deliver/typing/replyOptions wiring (dedupe, thread plan, native stream ladder,
@@ -145,6 +148,7 @@ vi.mock("./client.js", async (importOriginal) => {
     createSlackWebClient: traceClient,
     createSlackWriteClient: traceClient,
     getSlackWriteClient: traceClient,
+    getSlackListenerWriteClient: traceClient,
   };
 });
 
@@ -244,8 +248,8 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     // the partial is recorded as IN-only script context.
     { kind: "partial", text: "Deploy status:" },
     { kind: "advance", ms: 300 },
-    // Default tool progress messages flow as tool-kind payloads under native
-    // streaming; short text stays inside the SDK buffer (accepted, not visible).
+    // Default tool progress is a logical reply and must reach Slack before
+    // its delivery callback completes, even when the text is short.
     { kind: "tool-progress", name: "deploy_checks", phase: "start" },
     { kind: "advance", ms: 300 },
     { kind: "final", text: NATIVE_FINAL_TEXT },
@@ -471,18 +475,14 @@ function createRecordingSlackClient(): Record<string, unknown> {
         return { ok: true, user: { team_id: TEAM_ID } };
       },
     },
-    assistant: {
-      threads: {
-        setStatus: async (args: Record<string, unknown>) => {
-          record({
-            method: "assistant.threads.setStatus",
-            target: `${asWireString(args.channel_id)}/${asWireString(args.thread_ts)}`,
-            payload: stripToken(args),
-            result: { ok: true },
-          });
-          return { ok: true };
-        },
-      },
+    apiCall: async (method: string, args: Record<string, unknown>) => {
+      record({
+        method,
+        target: `${asWireString(args.channel_id)}/${asWireString(args.thread_ts)}`,
+        payload: stripToken(args),
+        result: { ok: true },
+      });
+      return { ok: true };
     },
     conversations: { open: unexpected("conversations.open") },
     reactions: { add: unexpected("reactions.add"), remove: unexpected("reactions.remove") },
@@ -513,17 +513,10 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
   if (!client) {
     throw new Error("trace Slack client not initialized");
   }
-  const setStatus = (
-    client as {
-      assistant: {
-        threads: { setStatus: (args: Record<string, unknown>) => Promise<unknown> };
-      };
-    }
-  ).assistant.threads.setStatus;
   const prepared = {
     ctx: {
       cfg,
-      runtime: { log: () => {}, error: () => {} },
+      runtime: { log: () => {}, error: traceRuntimeError },
       botToken: "xoxb-trace",
       app: { client },
       teamId: TEAM_ID,
@@ -532,27 +525,12 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
       textLimit: 4000,
       typingReaction: "",
       allowFrom: [],
-      // Mirrors the monitor's setSlackThreadStatus wiring
-      // (extensions/slack/src/monitor/context.ts): typing travels over
-      // assistant.threads.setStatus and is part of the recorded lifecycle.
-      setSlackThreadStatus: async (p: {
+      setSlackSessionStatus: (p: {
         channelId: string;
         threadTs?: string;
-        status: string;
-        loadingMessages?: string[];
-      }) => {
-        if (!p.threadTs) {
-          return;
-        }
-        await setStatus({
-          channel_id: p.channelId,
-          thread_ts: p.threadTs,
-          status: p.status,
-          ...(p.loadingMessages?.length
-            ? { loading_messages: p.loadingMessages.slice(0, 10) }
-            : {}),
-        });
-      },
+        status: "processing" | "active" | "suspended";
+        title?: string;
+      }) => setSlackSessionStatus({ ...p, client: client as unknown as WebClient }),
     },
     account: {
       accountId: "default",
@@ -573,10 +551,10 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
         : progressCard
           ? // Native task cards are the progress default; this scenario owns the
             // Block Kit opt-out path.
-            { streaming: { progress: { nativeTaskCards: false } } }
+            { streaming: { progress: { nativeTaskCards: false, toolProgress: true } } }
           : nativeProgress
-            ? // Empty progress config on purpose: proves the shipped default.
-              { streaming: { mode: "progress" } }
+            ? // Exercise the opt-in native tool log.
+              { streaming: { mode: "progress", progress: { toolProgress: true } } }
             : {
                 streaming: {
                   mode: "partial",
@@ -622,6 +600,7 @@ async function setupSlackTrace(
 ) {
   traceState.recordWireCall = recorder.recordWireCall;
   traceState.tsCounter = 0;
+  traceRuntimeError.mockClear();
   traceState.counts = { tool: 0, block: 0, final: 0 };
   traceState.turn = null;
   traceState.turnStarted = createDeferred<void>();
@@ -842,7 +821,56 @@ describe("slack delivery trace goldens", () => {
     });
   }
 
+  it("discards a Slack-stopped native stream without a duplicate final or stop request", async () => {
+    let streamTs: string | undefined;
+    const events = await runDeliveryTraceScenario({
+      scenario: {
+        name: "slack-stopped-native-stream",
+        steps: [
+          { kind: "reply-start" },
+          { kind: "partial", text: NATIVE_PROGRESS_NARRATION },
+          { kind: "tool-progress", name: "write", phase: "start" },
+          // The progress compositor emits its initial card at 1500ms.
+          { kind: "advance", ms: 2000 },
+          { kind: "cancel" },
+          { kind: "final", text: "Late answer that must not be posted" },
+          { kind: "idle" },
+        ],
+      },
+      setup: async (recorder) => {
+        const handleStep = await setupSlackTrace(
+          {
+            recordWireCall: (call) => {
+              if (call.method === "chat.startStream") {
+                streamTs = (call.result as { ts?: string })?.ts;
+              }
+              recorder.recordWireCall(call);
+            },
+          },
+          "progress-native-unified",
+        );
+        return async (step) => {
+          if (step.kind === "cancel") {
+            expect(streamTs).toBeDefined();
+            markSlackStreamsStopped(traceState.client as unknown as WebClient, CHANNEL_ID, [
+              streamTs!,
+            ]);
+          }
+          await handleStep(step);
+        };
+      },
+      normalize: createSlackTsNormalizer(),
+    });
+    const outMethods = events.filter((event) => event.dir === "out").map((event) => event.kind);
+    expect(outMethods).toContain("chat.startStream");
+    expect(outMethods).not.toContain("chat.stopStream");
+    expect(outMethods).not.toContain("chat.postMessage");
+    expect(collectSlackWireTexts(events).join("\n")).not.toContain("Late answer");
+    expect(traceRuntimeError).not.toHaveBeenCalled();
+  });
+
   it("removes a progress card detached by a later human message", async () => {
+    let progressEvents = 0;
     const events = await runDeliveryTraceScenario({
       scenario: {
         name: "progress-session-card-detached",
@@ -850,7 +878,7 @@ describe("slack delivery trace goldens", () => {
           { kind: "reply-start" },
           { kind: "tool-progress", name: "read", phase: "start" },
           { kind: "advance", ms: 2000 },
-          { kind: "partial", text: "Writing the implementation" },
+          { kind: "tool-progress", name: "write", phase: "start" },
           { kind: "advance", ms: 2000 },
           { kind: "final", text: "The replacement session card is complete." },
           { kind: "idle" },
@@ -859,24 +887,19 @@ describe("slack delivery trace goldens", () => {
       setup: async (recorder) => {
         const dispatch = await setupSlackTrace(recorder, "progress-session-card");
         return async (step) => {
-          if (step.kind === "partial") {
-            traceState.tsCounter += 1;
-            noteSlackDraftConversationMessage({
-              accountId: "default",
-              channelId: CHANNEL_ID,
-              threadTs: INBOUND_TS,
-              messageTs: `1767225601.${String(traceState.tsCounter).padStart(6, "0")}`,
-              userId: "U_SECOND",
-              botUserId: "UBOT",
-            });
-            // A changed authored status moves progress below the human message;
-            // ordinary tool activity intentionally leaves the summary unchanged.
-            await traceState.turn?.replyOptions.onItemEvent?.({
-              kind: "preamble",
-              itemId: "preamble-1",
-              progressText: step.text,
-            });
-            return;
+          if (step.kind === "tool-progress") {
+            progressEvents += 1;
+            if (progressEvents === 2) {
+              traceState.tsCounter += 1;
+              noteSlackDraftConversationMessage({
+                accountId: "default",
+                channelId: CHANNEL_ID,
+                threadTs: INBOUND_TS,
+                messageTs: `1767225601.${String(traceState.tsCounter).padStart(6, "0")}`,
+                userId: "U_SECOND",
+                botUserId: "UBOT",
+              });
+            }
           }
           await dispatch(step);
         };
@@ -886,10 +909,7 @@ describe("slack delivery trace goldens", () => {
 
     const workingPosts = events.filter(
       (event) =>
-        event.kind === "chat.postMessage" &&
-        Array.isArray(
-          (event.data as { payload?: { blocks?: unknown } } | undefined)?.payload?.blocks,
-        ),
+        event.kind === "chat.postMessage" && JSON.stringify(event.data).includes("🔄 *Working*"),
     );
     expect(workingPosts).toHaveLength(2);
     const firstCardId = (workingPosts[0]?.data as { result?: { ts?: string } } | undefined)?.result
@@ -905,26 +925,13 @@ describe("slack delivery trace goldens", () => {
           (event.data as { target?: string } | undefined)?.target === firstCardId,
       ),
     ).toBe(true);
-    const completedCard = events.find(
-      (event) =>
-        event.kind === "chat.update" &&
-        (event.data as { target?: string } | undefined)?.target === secondCardId,
-    );
-    expect(completedCard?.data).toMatchObject({
-      payload: {
-        blocks: expect.arrayContaining([
-          {
-            type: "section",
-            text: { type: "mrkdwn", text: "Completed: *Writing the implementation*" },
-          },
-          {
-            type: "actions",
-            elements: expect.arrayContaining([
-              expect.objectContaining({ action_id: "openclaw:session_link" }),
-            ]),
-          },
-        ]),
-      },
-    });
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "chat.update" &&
+          (event.data as { target?: string } | undefined)?.target === secondCardId &&
+          JSON.stringify(event.data).includes("✅ *Working*"),
+      ),
+    ).toBe(true);
   });
 });

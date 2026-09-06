@@ -99,7 +99,8 @@ async function prepareControlAuth(
     readConsistency: "latest",
   });
   const model = resolveSessionModelRef(config, entry, sessionAgentId);
-  const store = resolveCodexAppServerAuthProfileStore({ agentDir, config });
+  const authProfileId = entry?.authProfileOverride ?? options.authProfileId;
+  const store = resolveCodexAppServerAuthProfileStore({ agentDir, config, authProfileId });
   const { plan, attempts } = prepareAgentRuntimeAuth({
     provider: model.provider,
     modelId: model.model,
@@ -107,7 +108,7 @@ async function prepareControlAuth(
     agentDir,
     workspaceDir,
     authProfileStore: store,
-    sessionAuthProfileId: entry?.authProfileOverride ?? options.authProfileId,
+    sessionAuthProfileId: authProfileId,
     sessionAuthProfileSource: entry?.authProfileOverrideSource,
     harnessId: "codex",
     harnessAuthBootstrap: "harness",

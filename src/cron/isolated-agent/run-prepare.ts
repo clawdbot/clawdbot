@@ -309,12 +309,14 @@ export async function prepareCronRunContext(params: {
       fallbackEntry,
       resetBoundaryReason,
       update,
+      assertCommitAllowed,
     }: {
       storePath: string;
       sessionKey: string;
       fallbackEntry: SessionEntry;
       resetBoundaryReason?: "cron-stale";
       update: (entry: SessionEntry | undefined) => SessionEntry;
+      assertCommitAllowed?: () => void;
     }) => {
       const { applySessionEntryLifecycleMutation, patchSessionEntryCore } =
         await loadSessionAccessorRuntime();
@@ -338,7 +340,7 @@ export async function prepareCronRunContext(params: {
       await patchSessionEntryCore(
         { storePath, sessionKey, agentId },
         (_entry, context) => update(context.existingEntry),
-        { fallbackEntry, replaceEntry: true },
+        { fallbackEntry, replaceEntry: true, assertCommitAllowed },
       );
     };
     const persistSessionEntry = createPersistCronSessionEntry({
