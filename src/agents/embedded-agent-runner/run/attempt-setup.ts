@@ -342,7 +342,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   // Disabled pruning must not resolve provider hooks and cold-load plugin metadata.
   const cacheTtlSettings =
     contextPruning?.mode === "cache-ttl" &&
-    isCacheTtlEligibleProvider(attempt.provider, attempt.modelId, attempt.model.api)
+    isCacheTtlEligibleProvider(attempt.provider, attempt.modelId, attempt.model)
       ? resolveCacheTtlPruningSettings(contextPruning)
       : undefined;
   const previousCacheTtlTransform = activeSession.agent.transformContext;

@@ -297,7 +297,7 @@ export async function settleEmbeddedAttemptStream(input: {
       config: attempt.config,
       provider: attempt.provider,
       modelId: attempt.modelId,
-      modelApi: attempt.model.api,
+      model: attempt.model,
       isCacheTtlEligibleProvider,
       toolResultPromptProjectionState: input.toolResultPromptProjectionState,
     });

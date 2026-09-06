@@ -8,12 +8,25 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
   return {
     ...actual,
     resolveProviderCacheTtlEligibility: (params: {
-      context: { provider: string; modelId: string; modelApi?: string };
+      context: {
+        provider: string;
+        modelId: string;
+        modelApi?: string;
+        baseUrl?: string;
+        supportsPromptCacheKey?: boolean;
+      };
     }) => {
       // Provider runtime owns model-family-specific eligibility; tests mirror
       // plugin decisions without loading actual provider plugins.
       if (params.context.provider === "anthropic") {
         return true;
+      }
+      if (params.context.provider === "openai") {
+        return (
+          params.context.supportsPromptCacheKey ??
+          (params.context.baseUrl === "https://api.openai.com/v1" ||
+            params.context.baseUrl === "https://chatgpt.com/backend-api/codex")
+        );
       }
       if (params.context.provider === "moonshot" || params.context.provider === "zai") {
         return true;
@@ -53,39 +66,91 @@ describe("isCacheTtlEligibleProvider", () => {
     expect(isCacheTtlEligibleProvider("openrouter", "zai/glm-5")).toBe(true);
   });
 
-  it("rejects unsupported providers and models", () => {
-    expect(isCacheTtlEligibleProvider("openai", "gpt-4o")).toBe(false);
+  it.each([
+    {
+      name: "native OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      compat: undefined,
+      expected: true,
+    },
+    {
+      name: "ChatGPT OAuth",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      compat: undefined,
+      expected: true,
+    },
+    {
+      name: "custom proxy",
+      baseUrl: "https://openai-proxy.example/v1",
+      compat: undefined,
+      expected: false,
+    },
+    {
+      name: "opted-in custom proxy",
+      baseUrl: "https://openai-proxy.example/v1",
+      compat: { supportsPromptCacheKey: true },
+      expected: true,
+    },
+    {
+      name: "opted-out native OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      compat: { supportsPromptCacheKey: false },
+      expected: false,
+    },
+  ])(
+    "passes the resolved route to the $name provider hook",
+    ({ api, baseUrl, compat, expected }) => {
+      expect(
+        isCacheTtlEligibleProvider("openai", "gpt-4o", {
+          provider: "openai",
+          id: "gpt-4o",
+          api: api ?? "openai-responses",
+          baseUrl,
+          compat,
+        } as never),
+      ).toBe(expected);
+    },
+  );
+
+  it("does not widen OpenRouter while consulting provider hooks", () => {
     expect(isCacheTtlEligibleProvider("openrouter", "openai/gpt-4o")).toBe(false);
   });
 
   it("allows direct Google Gemini cache-ttl models", () => {
     expect(
-      isCacheTtlEligibleProvider("google", "gemini-3.1-pro-preview", "google-generative-ai"),
+      isCacheTtlEligibleProvider("google", "gemini-3.1-pro-preview", {
+        api: "google-generative-ai",
+      } as never),
     ).toBe(true);
-    expect(isCacheTtlEligibleProvider("google", "gemini-2.5-flash", "google-generative-ai")).toBe(
-      true,
-    );
+    expect(
+      isCacheTtlEligibleProvider("google", "gemini-2.5-flash", {
+        api: "google-generative-ai",
+      } as never),
+    ).toBe(true);
   });
 
   it("rejects non-cacheable Google model families", () => {
     expect(
-      isCacheTtlEligibleProvider("google", "gemini-live-2.5-flash-preview", "google-generative-ai"),
+      isCacheTtlEligibleProvider("google", "gemini-live-2.5-flash-preview", {
+        api: "google-generative-ai",
+      } as never),
     ).toBe(false);
   });
 
   it("allows custom anthropic-messages providers", () => {
-    expect(isCacheTtlEligibleProvider("litellm", "claude-sonnet-4-6", "anthropic-messages")).toBe(
-      true,
-    );
+    expect(
+      isCacheTtlEligibleProvider("litellm", "claude-sonnet-4-6", {
+        api: "anthropic-messages",
+      } as never),
+    ).toBe(true);
   });
 
   it("allows anthropic Bedrock models", () => {
     expect(
-      isCacheTtlEligibleProvider(
-        "amazon-bedrock",
-        "us.anthropic.claude-sonnet-4-20250514-v1:0",
-        "anthropic-messages",
-      ),
+      isCacheTtlEligibleProvider("amazon-bedrock", "us.anthropic.claude-sonnet-4-20250514-v1:0", {
+        api: "anthropic-messages",
+      } as never),
     ).toBe(true);
   });
 });

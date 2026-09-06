@@ -409,8 +409,8 @@ export type ProviderPlugin = {
   /**
    * Provider-owned cache TTL eligibility.
    *
-   * Use this when a proxy provider supports Anthropic-style prompt caching for
-   * only a subset of upstream models.
+   * Use this when a provider can determine eligibility from its resolved model
+   * route or capabilities.
    */
   isCacheTtlEligible?: (ctx: ProviderCacheTtlEligibilityContext) => boolean | undefined;
   /**

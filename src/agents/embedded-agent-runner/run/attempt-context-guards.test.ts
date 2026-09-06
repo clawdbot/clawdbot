@@ -195,7 +195,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
     expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
       "provider-1",
       "model-1",
-      "anthropic-messages",
+      input.attempt.model,
     );
     expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
     const messages: AgentMessage[] = [
@@ -277,7 +277,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
       expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
         "anthropic",
         "claude-sonnet-4-6",
-        "anthropic-messages",
+        input.attempt.model,
       );
       expect(hoisted.readLastCacheTtlTimestamp).toHaveBeenCalledExactlyOnceWith(
         input.sessionManager,

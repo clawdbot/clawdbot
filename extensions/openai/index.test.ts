@@ -494,6 +494,53 @@ describe("openai plugin", () => {
     ).toStrictEqual([]);
   });
 
+  it.each([
+    {
+      name: "native OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      compat: undefined,
+      expected: true,
+    },
+    {
+      name: "ChatGPT OAuth",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      compat: undefined,
+      expected: true,
+    },
+    {
+      name: "custom proxy",
+      baseUrl: "https://openai-proxy.example/v1",
+      compat: undefined,
+      expected: false,
+    },
+    {
+      name: "opted-in custom proxy",
+      baseUrl: "https://openai-proxy.example/v1",
+      compat: { supportsPromptCacheKey: true },
+      expected: true,
+    },
+    {
+      name: "opted-out native OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      compat: { supportsPromptCacheKey: false },
+      expected: false,
+    },
+  ])("registers $name cache-TTL eligibility", async ({ api, baseUrl, compat, expected }) => {
+    const { providers } = await registerOpenAIPluginWithHook();
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+
+    expect(
+      openaiProvider.isCacheTtlEligible?.({
+        provider: "openai",
+        modelId: "gpt-4o",
+        modelApi: api ?? "openai-responses",
+        baseUrl,
+        supportsPromptCacheKey: compat?.supportsPromptCacheKey,
+      }),
+    ).toBe(expected);
+  });
+
   it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", async () => {
     const { on, providers } = await registerOpenAIPluginWithHook({
       pluginConfig: { personality: "friendly" },
