@@ -82,6 +82,20 @@ afterEach(() => {
   resetProcessRegistryForTests();
 });
 
+function createRunExit(overrides: Partial<RunExit> = {}): RunExit {
+  return {
+    reason: "exit",
+    exitCode: 0,
+    exitSignal: null,
+    durationMs: 1,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    noOutputTimedOut: false,
+    ...overrides,
+  };
+}
+
 async function runExecWithExit(params: {
   exit: RunExit;
   stdout?: string | string[];
@@ -130,16 +144,7 @@ function runtimeManagedRun(input: SpawnInput, stdout = ""): ManagedRun {
     startedAtMs: Date.now(),
     stdin: { write: vi.fn(), end: vi.fn(), destroy: vi.fn() },
     cancel: vi.fn(),
-    wait: vi.fn(async () => ({
-      reason: "exit" as const,
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    })),
+    wait: vi.fn(async () => createRunExit()),
   };
 }
 
@@ -191,16 +196,7 @@ describe("runExecProcess cursor tracking", () => {
     const { run } = await runExecWithExit({
       stdout: raw,
       usePty: true,
-      exit: {
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      },
+      exit: createRunExit(),
     });
 
     expect(run.session.cursorKeyMode).toBe(expected);
@@ -406,16 +402,7 @@ describe("sandbox exec preparation failures", () => {
     );
     run.disableUpdates();
     stdout?.("background output\n");
-    exit.resolve({
-      reason: "exit",
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    });
+    exit.resolve(createRunExit());
     const outcome = await run.promise;
 
     expect(beforeSpawn).toHaveBeenCalledOnce();
@@ -642,16 +629,14 @@ describe("sandbox exec finalization suspension", () => {
       markBackgrounded(run.session);
       expect(getActiveBackgroundExecSessionCount()).toBe(1);
 
-      exit.resolve({
-        reason: processTimesOut ? "overall-timeout" : "exit",
-        exitCode: processTimesOut ? null : 0,
-        exitSignal: processTimesOut ? "SIGKILL" : null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: processTimesOut,
-        noOutputTimedOut: false,
-      });
+      exit.resolve(
+        createRunExit({
+          reason: processTimesOut ? "overall-timeout" : "exit",
+          exitCode: processTimesOut ? null : 0,
+          exitSignal: processTimesOut ? "SIGKILL" : null,
+          timedOut: processTimesOut,
+        }),
+      );
       await vi.waitFor(() => expect(finalizeExec).toHaveBeenCalledOnce());
       expect(run.session.finalizing).toBe(true);
       producer?.onStderr?.("during cleanup\n");
@@ -773,16 +758,7 @@ describe("terminal execution-context release", () => {
       if (path === "observed") {
         acknowledgeNotifyOnExit(run.session);
       }
-      exit.resolve({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      exit.resolve(createRunExit());
       const outcome = await run.promise;
       expect(observed).toEqual(trace);
       expect(outcome.status).toBe(path.endsWith("failure") ? "failed" : "completed");
@@ -867,16 +843,7 @@ describe("exec settlement recovery", () => {
     const joined = waitForExecScope(scopeKey).then(() => {
       observed.push("scope-released");
     });
-    exit.resolve({
-      reason: "exit",
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    });
+    exit.resolve(createRunExit());
 
     const outcome = await run.promise;
     await joined;
@@ -890,16 +857,7 @@ describe("runExecProcess exit outcomes", () => {
   it("keeps non-zero normal exits in the completed path", async () => {
     const { outcome } = await runExecWithExit({
       stdout: "done",
-      exit: {
-        reason: "exit",
-        exitCode: 1,
-        exitSignal: null,
-        durationMs: 123,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      },
+      exit: createRunExit({ exitCode: 1, durationMs: 123 }),
       timeoutSec: 30,
     });
     expect(outcome.status).toBe("completed");
@@ -912,16 +870,13 @@ describe("runExecProcess exit outcomes", () => {
 
   it("classifies timed out exits with registered-background guidance", async () => {
     const { outcome } = await runExecWithExit({
-      exit: {
+      exit: createRunExit({
         reason: "overall-timeout",
         exitCode: null,
         exitSignal: "SIGKILL",
         durationMs: 123,
-        stdout: "",
-        stderr: "",
         timedOut: true,
-        noOutputTimedOut: false,
-      },
+      }),
       timeoutSec: 30,
     });
     expect(outcome.status).toBe("failed");
@@ -942,16 +897,7 @@ describe("runExecProcess exit outcomes", () => {
 
   it("classifies missing shell commands without timeout guidance", async () => {
     const { outcome } = await runExecWithExit({
-      exit: {
-        reason: "exit",
-        exitCode: 127,
-        exitSignal: null,
-        durationMs: 123,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      },
+      exit: createRunExit({ exitCode: 127, durationMs: 123 }),
       timeoutSec: 30,
     });
 
