@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveTerminalReplySilenceContract } from "./get-reply-run-context.js";
+import { resolveTerminalReplySilenceContract } from "./get-reply-run-helpers.js";
 
 describe("resolveTerminalReplySilenceContract", () => {
   it("declares the heartbeat silence contract so reasoning-only stops settle as silence", () => {

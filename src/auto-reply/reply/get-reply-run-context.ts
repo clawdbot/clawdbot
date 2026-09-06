@@ -15,7 +15,6 @@ import {
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
-import type { SilentReplyPolicy } from "../../shared/silent-reply-policy.js";
 import { hasControlCommand } from "../command-detection.js";
 import {
   isNativeCommandTurn,
@@ -33,6 +32,7 @@ import {
   hasInboundHistoryBody,
   hasReplyTargetContext,
   resolvePromptSilentReplyConversationType,
+  resolveTerminalReplySilenceContract,
 } from "./get-reply-run-helpers.js";
 import { resolvePromptSourceReplyMode } from "./get-reply-run-source-mode.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
@@ -58,38 +58,6 @@ import {
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
-
-/**
- * Resolves the per-turn silence contract: whether an assistant turn may settle
- * without a visible reply, and what the runner should expect of its terminal
- * reply. A heartbeat owns an explicit silence contract — "nothing to report" is
- * a valid outcome — so it must be declared here rather than left to the
- * runner's trigger-owned default, which only covers the visible-reply
- * requirement and not the reasoning-only retry family; leaving it undeclared
- * makes the runner classify a silent heartbeat turn as a provider failure and
- * force-deliver an unsolicited visible answer.
- */
-export function resolveTerminalReplySilenceContract(input: {
-  isHeartbeat: boolean;
-  isGroupChat: boolean;
-  isDirectedTurn: boolean;
-  isAmbientRoomEvent: boolean;
-  silentReplyPolicy: SilentReplyPolicy;
-}): {
-  allowEmptyAssistantReplyAsSilent: boolean;
-  terminalReplyExpectation: "required" | "optional";
-} {
-  if (input.isHeartbeat) {
-    return { allowEmptyAssistantReplyAsSilent: true, terminalReplyExpectation: "optional" };
-  }
-  return {
-    allowEmptyAssistantReplyAsSilent:
-      input.isGroupChat &&
-      !input.isDirectedTurn &&
-      (input.isAmbientRoomEvent || input.silentReplyPolicy === "allow"),
-    terminalReplyExpectation: input.isAmbientRoomEvent ? "optional" : "required",
-  };
-}
 
 export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const {

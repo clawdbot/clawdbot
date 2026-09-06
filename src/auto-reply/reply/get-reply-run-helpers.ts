@@ -6,7 +6,10 @@ import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import type {
+  SilentReplyConversationType,
+  SilentReplyPolicy,
+} from "../../shared/silent-reply-policy.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
@@ -246,4 +249,36 @@ export function hasReplyTargetContext(ctx: MsgContext | TemplateContext): boolea
   }
   const replyChain = (ctx as { ReplyChain?: unknown }).ReplyChain;
   return Array.isArray(replyChain) && replyChain.length > 0;
+}
+
+/**
+ * Resolves the per-turn silence contract: whether an assistant turn may settle
+ * without a visible reply, and what the runner should expect of its terminal
+ * reply. A heartbeat owns an explicit silence contract — "nothing to report" is
+ * a valid outcome — so it must be declared here rather than left to the
+ * runner's trigger-owned default, which only covers the visible-reply
+ * requirement and not the reasoning-only retry family; leaving it undeclared
+ * makes the runner classify a silent heartbeat turn as a provider failure and
+ * force-deliver an unsolicited visible answer.
+ */
+export function resolveTerminalReplySilenceContract(input: {
+  isHeartbeat: boolean;
+  isGroupChat: boolean;
+  isDirectedTurn: boolean;
+  isAmbientRoomEvent: boolean;
+  silentReplyPolicy: SilentReplyPolicy;
+}): {
+  allowEmptyAssistantReplyAsSilent: boolean;
+  terminalReplyExpectation: "required" | "optional";
+} {
+  if (input.isHeartbeat) {
+    return { allowEmptyAssistantReplyAsSilent: true, terminalReplyExpectation: "optional" };
+  }
+  return {
+    allowEmptyAssistantReplyAsSilent:
+      input.isGroupChat &&
+      !input.isDirectedTurn &&
+      (input.isAmbientRoomEvent || input.silentReplyPolicy === "allow"),
+    terminalReplyExpectation: input.isAmbientRoomEvent ? "optional" : "required",
+  };
 }
