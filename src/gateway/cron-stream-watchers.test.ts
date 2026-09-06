@@ -124,7 +124,10 @@ describe("cron stream watchers", () => {
     vi.useFakeTimers();
     const inputs: Array<{ jobId: string }> = [];
     const cancels: Record<string, ReturnType<typeof vi.fn>> = {};
-    const spawn = vi.fn(async (input: { scopeKey: string }) => {
+    const spawn = vi.fn(async (input: SpawnInput) => {
+      if (!input.scopeKey) {
+        throw new Error("Expected a scoped stream source");
+      }
       const jobId = input.scopeKey.replace("cron-stream:", "");
       inputs.push({ jobId });
       const stubborn = jobId === "stubborn-job";
