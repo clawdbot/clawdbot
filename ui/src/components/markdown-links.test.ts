@@ -757,12 +757,18 @@ describe("toSanitizedMarkdownHtml links", () => {
       ["bare issue", "https://github.com/openclaw/openclaw/issues/3435", "#3435", "issue"],
       ["autolink", "<https://github.com/openclaw/openclaw/pull/3434>", "#3434", "pull"],
       ["bare www item", "https://www.github.com/openclaw/openclaw/issues/3435", "#3435", "issue"],
-      ["repository", "https://github.com/openclaw/openclaw", "openclaw/openclaw"],
-      ["repository file", "https://github.com/blader/humanizer/blob/main/SKILL.md", "SKILL.md"],
+      ["repository", "https://github.com/openclaw/openclaw", "openclaw/openclaw", undefined],
+      [
+        "repository file",
+        "https://github.com/blader/humanizer/blob/main/SKILL.md",
+        "SKILL.md",
+        undefined,
+      ],
       [
         "other path",
         "https://github.com/openclaw/openclaw/actions/runs/123",
         "github.com/actions/runs/123",
+        undefined,
       ],
       [
         "pull shorthand",
@@ -788,18 +794,54 @@ describe("toSanitizedMarkdownHtml links", () => {
         "#3434",
         "pull",
       ],
-      ["labelled link", "[the fix](https://github.com/openclaw/openclaw/pull/3434)", "the fix"],
-      ["www host", "[the fix](https://www.github.com/openclaw/openclaw/pull/3434)", "the fix"],
-      ["http scheme", "[the fix](http://github.com/openclaw/openclaw/pull/3434)", "the fix"],
-      ["list item", "- [the fix](https://github.com/openclaw/openclaw/pull/3434)", "the fix"],
-      ["wrong number", "[#3435](https://github.com/openclaw/openclaw/pull/3434)", "#3435"],
+      [
+        "labelled link",
+        "[the fix](https://github.com/openclaw/openclaw/pull/3434)",
+        "the fix",
+        undefined,
+      ],
+      [
+        "www host",
+        "[the fix](https://www.github.com/openclaw/openclaw/pull/3434)",
+        "the fix",
+        undefined,
+      ],
+      [
+        "http scheme",
+        "[the fix](http://github.com/openclaw/openclaw/pull/3434)",
+        "the fix",
+        undefined,
+      ],
+      [
+        "list item",
+        "- [the fix](https://github.com/openclaw/openclaw/pull/3434)",
+        "the fix",
+        undefined,
+      ],
+      [
+        "wrong number",
+        "[#3435](https://github.com/openclaw/openclaw/pull/3434)",
+        "#3435",
+        undefined,
+      ],
       [
         "wrong repository",
         "[other/project#3434](https://github.com/openclaw/openclaw/pull/3434)",
         "other/project#3434",
+        undefined,
       ],
-      ["padded label", "[ #3434 ](https://github.com/openclaw/openclaw/pull/3434)", " #3434 "],
-      ["code-span label", "[`#3434`](https://github.com/openclaw/openclaw/pull/3434)", "#3434"],
+      [
+        "padded label",
+        "[ #3434 ](https://github.com/openclaw/openclaw/pull/3434)",
+        " #3434 ",
+        undefined,
+      ],
+      [
+        "code-span label",
+        "[`#3434`](https://github.com/openclaw/openclaw/pull/3434)",
+        "#3434",
+        undefined,
+      ],
     ])("marks %s", (_kind, input, expectedText, expectedKind) => {
       const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
       const link = fragment.querySelector<HTMLAnchorElement>("a");
