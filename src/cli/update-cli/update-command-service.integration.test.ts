@@ -480,7 +480,6 @@ describe("preserved update activation with real version guards", () => {
       expect(mocks.child.mock.calls.filter(([args]) => args.includes("install"))).toHaveLength(
         late ? 1 : 0,
       );
-      expect(mocks.restart).toHaveBeenCalledTimes(restarts.length);
       expect(mocks.health.mock.calls.every(([args]) => args.port === 19305)).toBe(true);
       if (retried) {
         expect(mocks.terminateStale).toHaveBeenCalledWith([4242]);

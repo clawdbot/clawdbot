@@ -165,8 +165,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     let handoff:
       | { status: "started"; pid?: number; command: string }
-      | { status: "already-running"; command: string; message: string }
-      | { status: "unavailable"; command: string; message: string }
+      | { status: "already-running" | "unavailable"; command: string; message: string }
       | null = null;
     let managedHandoffOwner: GatewayRestartIntent["successorOwner"];
     let ackDelivered = false;
@@ -689,12 +688,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             },
           })
         : null;
-    if (
-      (ackDelivered || ackQueued) &&
-      result.status !== "ok" &&
-      handoff?.status !== "started" &&
-      !restart
-    ) {
+    if ((ackDelivered || ackQueued) && result.status !== "ok" && handoff?.status !== "started") {
       await notify(outcomeRun, "finished");
     }
     context?.logGateway?.info(
