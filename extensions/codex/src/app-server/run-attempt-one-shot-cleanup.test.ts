@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
@@ -26,8 +27,6 @@ import { createClientHarness, waitForHarnessRequest } from "./test-support.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-const readTaskProcessSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
-
 async function stopTaskOwnedProcess(pid: number): Promise<void> {
   try {
     process.kill(pid, "SIGKILL");
@@ -36,15 +35,7 @@ async function stopTaskOwnedProcess(pid: number): Promise<void> {
       throw error;
     }
   }
-  await expect
-    .poll(
-      async () => {
-        const rows = await readTaskProcessSnapshot(Date.now() + 2_000, [pid]);
-        return rows.some((row) => row.pid === pid && !row.state.startsWith("Z"));
-      },
-      { timeout: 2_000 },
-    )
-    .toBe(false);
+  await expect.poll(() => isPidAlive(pid), { timeout: 2_000 }).toBe(false);
 }
 
 function runOneShot(client: CodexAppServerClient, abortSignal?: AbortSignal) {
@@ -279,17 +270,9 @@ process.stdin.on("end", () => ${
         const signalled = shutdown === "forced" || shutdown === "signalled";
         expect(child.exitCode).toBe(signalled ? null : 0);
         expect(child.signalCode).toBe(signalled ? "SIGKILL" : null);
-        if (shutdown === "unknown" || shutdown === "retired-command") {
-          expect(process.kill(descendantPid, 0)).toBe(true);
-        } else {
-          const snapshot = await processSnapshot.readCodexAppServerProcessSnapshot(
-            Date.now() + 2_000,
-            [descendantPid],
-          );
-          expect(
-            snapshot.some((row) => row.pid === descendantPid && !row.state.startsWith("Z")),
-          ).toBe(false);
-        }
+        await expect
+          .poll(() => isPidAlive(descendantPid), { timeout: 2_000 })
+          .toBe(shutdown === "unknown" || shutdown === "retired-command");
         // This is the cleanup guard that also records the one-shot recovery
         // receipt; a clean root exit must not bypass its failure path.
         if (shutdown === "confirmed") {

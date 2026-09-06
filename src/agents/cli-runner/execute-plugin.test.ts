@@ -573,7 +573,7 @@ describe("plugin-owned CLI execution host boundary", () => {
       nativeTools: ["WebFetch"],
       runId: "plugin-approval-first",
     });
-    const originalHandle = registerOwnerSession(first.context, "original-live-process");
+    registerOwnerSession(first.context, "original-live-process");
 
     const runApprovedTurn = async (context: PreparedCliRunContext, repeat: boolean) => {
       await runPlugin(context, async function* (execution) {
@@ -612,7 +612,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     });
     expect(mockCallGatewayTool).toHaveBeenCalledOnce();
 
-    originalHandle.handle.close("restart");
+    await closeCliLiveSession(first.context, "restart");
     registerOwnerSession(first.context, "replacement-live-process");
     const replacement = await createExecution({
       config,

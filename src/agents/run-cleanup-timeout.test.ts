@@ -11,6 +11,17 @@ describe("agent cleanup timeout", () => {
     warn: vi.fn(),
   };
 
+  const timeoutWithDetails = (getTimeoutDetails: () => string) =>
+    runAgentCleanupStep({
+      runId: "run-trajectory",
+      sessionId: "session-trajectory",
+      step: "agent-trajectory-flush",
+      cleanup: () => new Promise<never>(() => {}),
+      log,
+      timeoutMs: 5,
+      getTimeoutDetails,
+    });
+
   beforeEach(() => {
     vi.useFakeTimers();
     log.warn.mockClear();
@@ -89,18 +100,9 @@ describe("agent cleanup timeout", () => {
   });
 
   it("bounds cleanup timeout details before logging", async () => {
-    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
     const oversizedDetails = `queuedBytes=${"9".repeat(CLEANUP_TIMEOUT_DETAILS_MAX_CHARS * 2)}`;
 
-    const result = runAgentCleanupStep({
-      runId: "run-trajectory",
-      sessionId: "session-trajectory",
-      step: "agent-trajectory-flush",
-      cleanup,
-      log,
-      timeoutMs: 5,
-      getTimeoutDetails: () => oversizedDetails,
-    });
+    const result = timeoutWithDetails(() => oversizedDetails);
 
     await vi.advanceTimersByTimeAsync(5);
     await expect(result).resolves.toBeUndefined();
@@ -117,21 +119,12 @@ describe("agent cleanup timeout", () => {
   });
 
   it("keeps truncated cleanup timeout details UTF-16 safe", async () => {
-    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
     const prefixLength =
       CLEANUP_TIMEOUT_DETAILS_MAX_CHARS - CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX.length;
     const detailsPrefix = "a".repeat(prefixLength - 1);
     const oversizedDetails = `${detailsPrefix}😀${"b".repeat(CLEANUP_TIMEOUT_DETAILS_MAX_CHARS)}`;
 
-    const result = runAgentCleanupStep({
-      runId: "run-trajectory",
-      sessionId: "session-trajectory",
-      step: "agent-trajectory-flush",
-      cleanup,
-      log,
-      timeoutMs: 5,
-      getTimeoutDetails: () => oversizedDetails,
-    });
+    const result = timeoutWithDetails(() => oversizedDetails);
 
     await vi.advanceTimersByTimeAsync(5);
     await expect(result).resolves.toBeUndefined();
@@ -168,18 +161,9 @@ describe("agent cleanup timeout", () => {
 
   it("bounds cleanup timeout detail errors before logging", async () => {
     // Diagnostic failures must not produce unbounded logs or fail cleanup.
-    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
 
-    const result = runAgentCleanupStep({
-      runId: "run-trajectory",
-      sessionId: "session-trajectory",
-      step: "agent-trajectory-flush",
-      cleanup,
-      log,
-      timeoutMs: 5,
-      getTimeoutDetails: () => {
-        throw new Error("details unavailable ".repeat(CLEANUP_TIMEOUT_DETAILS_MAX_CHARS));
-      },
+    const result = timeoutWithDetails(() => {
+      throw new Error("details unavailable ".repeat(CLEANUP_TIMEOUT_DETAILS_MAX_CHARS));
     });
 
     await vi.advanceTimersByTimeAsync(5);

@@ -400,16 +400,25 @@ describe("generic plugin-owned live session registry", () => {
     expect(original.close).not.toHaveBeenCalled();
   });
 
-  it("rejects the same process handle under a different owner despite a matching fingerprint", async () => {
-    const original = await createOwner({ sessionId: "original-owner" });
-    const other = await createOwner({ sessionId: "different-owner" });
-    original.register();
-
-    expect(other.capability.fingerprint).toBe(original.capability.fingerprint);
-    expect(() => other.capability.register(original.session)).toThrow();
-    expect(other.capability.current()).toBeUndefined();
-    expect(original.capability.current()).toBe(original.session);
-  });
+  it.each([false, true])(
+    "rejects the same process handle under a different owner (retired=%s)",
+    async (retired) => {
+      const original = await createOwner({ sessionId: "original-owner" });
+      const other = await createOwner({ sessionId: "different-owner" });
+      original.register();
+      if (retired) {
+        original.capability.remove(original.session);
+      }
+      try {
+        expect(other.capability.fingerprint).toBe(original.capability.fingerprint);
+        expect(() => other.capability.register(original.session)).toThrow();
+        expect(other.capability.current()).toBeUndefined();
+        expect(original.capability.current()).toBe(retired ? undefined : original.session);
+      } finally {
+        other.capability.remove(original.session);
+      }
+    },
+  );
 
   it.each([
     {
@@ -645,9 +654,9 @@ describe("generic plugin-owned live session registry", () => {
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       )
-      .then((result) => {
+      .then((settledOutcome) => {
         settled = true;
-        return result;
+        return settledOutcome;
       });
     try {
       if (outcome === "stalled") {

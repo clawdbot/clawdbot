@@ -37,6 +37,7 @@ type CliLiveSessionRecord = {
 
 const liveSessions = new Map<string, CliLiveSessionRecord>();
 const retiredSessionCleanup = new Map<string, Promise<void>>();
+const retiringSessionHandles = new WeakSet<CliBackendLiveSessionHandle>();
 
 function buildCliLiveRegistryKey(owner: CliLiveSessionOwner): string {
   return `${owner.backendId}:${buildCliLiveOwnerKey(owner)}`;
@@ -255,6 +256,7 @@ export function createCliLiveSessionCapability(params: {
         !handle.generation.trim() ||
         liveSessions.has(ownerKey) ||
         // Owner keys stay private; one process handle must never cross owners.
+        retiringSessionHandles.has(handle) ||
         Array.from(liveSessions.values()).some((record) => record.handle === handle)
       ) {
         throw new Error("CLI live session registration does not match its admitted owner.");
@@ -304,11 +306,13 @@ export function createCliLiveSessionCapability(params: {
       record.capture?.revoke();
       liveSessions.delete(ownerKey);
       record.approvalGrants.clear();
+      retiringSessionHandles.add(handle);
       // Native runtime artifacts remain process-owned until its child exits.
-      record.cleanupPromise = handle
-        .waitForExit()
+      record.cleanupPromise = Promise.resolve()
+        .then(() => handle.waitForExit())
         .then(() => record.cleanup?.())
         .then(() => {
+          retiringSessionHandles.delete(handle);
           if (retiredSessionCleanup.get(ownerKey) === record.cleanupPromise) {
             retiredSessionCleanup.delete(ownerKey);
           }
