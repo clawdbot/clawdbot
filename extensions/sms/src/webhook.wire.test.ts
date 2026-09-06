@@ -1,4 +1,5 @@
 // Sms tests cover webhook responses as the sender receives them on the wire.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { postRawWebhook, withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSmsWebhookHandler } from "./webhook.js";
@@ -74,7 +75,7 @@ describe("createSmsWebhookHandler over a real connection", () => {
       ingress: { enqueue: enqueueSmsIngress },
     });
     let routeError: unknown;
-    const requestReceived = Promise.withResolvers<void>();
+    const requestReceived = createDeferred<void>();
     await withServer(
       (req, res) => {
         void handler(req, res).catch((error: unknown) => {

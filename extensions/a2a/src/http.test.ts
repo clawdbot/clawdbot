@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createMockIncomingRequest,
   createMockServerResponse,
@@ -337,7 +338,7 @@ describe("A2A HTTP authentication and request limits", () => {
 
   it("delivers the JSON-RPC timeout response before closing a partial upload", async () => {
     const harness = await startHttpHarness();
-    const requestReceived = Promise.withResolvers<void>();
+    const requestReceived = createDeferred<void>();
     await withServer(
       (req, res) => {
         void harness.handler(req, res);

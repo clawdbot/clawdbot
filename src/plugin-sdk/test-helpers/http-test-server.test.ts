@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withServer } from "./http-test-server.js";
 
 describe("withServer", () => {
@@ -7,7 +8,7 @@ describe("withServer", () => {
     { outcome: "throws", rejectCallback: true },
   ])("closes an active response when its callback $outcome", async ({ rejectCallback }) => {
     const callbackError = new Error("callback failed");
-    const started = Promise.withResolvers<void>();
+    const started = createDeferredCore();
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let streamEnded = false;
     const outcome = withServer(
