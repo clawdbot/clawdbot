@@ -1578,6 +1578,13 @@ export function resolvePersistCandidateForWrite(params: {
         sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
       })
     : rootAuthoredConfig;
+  // Include paths and their recorded evidence need the same roster coordinates.
+  // Reindex the pre-migration source without migrating its field values.
+  const includeProjectionSourceBeforeMigrations = persistCanonicalRoster
+    ? projectAuthoredAgentRosterForWrite({
+        rootAuthoredConfig: params.sourceConfigBeforeMigrations,
+      })
+    : params.sourceConfigBeforeMigrations;
   const includeProjectionRootAuthoredConfig =
     persistCanonicalRoster && !hasAgentRosterProperty(projectedAuthoredRoster)
       ? setPathValueCreatingParents(
@@ -1613,7 +1620,7 @@ export function resolvePersistCandidateForWrite(params: {
   const withPreservedIncludes = preserveUntouchedIncludes({
     runtimeConfig: params.runtimeConfig,
     sourceConfig: params.sourceConfig,
-    sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
+    sourceConfigBeforeMigrations: includeProjectionSourceBeforeMigrations,
     nextConfig: params.nextConfig,
     rootAuthoredConfig: includeProjectionRootAuthoredConfig,
     persistedCandidate: persistedBase,
@@ -1624,7 +1631,7 @@ export function resolvePersistCandidateForWrite(params: {
     persistedCandidate: withPreservedIncludes,
     runtimeConfig: params.runtimeConfig,
     sourceConfig: params.sourceConfig,
-    sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
+    sourceConfigBeforeMigrations: includeProjectionSourceBeforeMigrations,
     explicitSetPaths,
     rootAuthoredConfig: includeProjectionRootAuthoredConfig,
     // Includes were validated and restored above; ancestor merges retain their directives.
