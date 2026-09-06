@@ -152,35 +152,6 @@
   min-width: 0;
 }
 
-.plugins-readonly {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--warn) 28%, var(--border));
-  border-radius: var(--radius-md);
-  background: var(--warn-subtle);
-  color: var(--warn);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.45;
-}
-
-.plugins-readonly svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.plugins-readonly > span:first-child {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-}
-
 .plugins-page-error {
   display: flex;
   align-items: center;
@@ -395,21 +366,6 @@ h3.plugins-subheader {
 }
 
 .plugins-remove:hover:not(:disabled) {
-  background: var(--danger-subtle);
-  color: var(--danger);
-}
-
-.plugins-remove-confirm {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--danger);
-  font-size: var(--control-ui-text-xs);
-  white-space: nowrap;
-}
-
-.plugins-remove-confirm .btn.danger {
-  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
   background: var(--danger-subtle);
   color: var(--danger);
 }
@@ -1015,11 +971,6 @@ h3.plugins-subheader {
 @media (max-width: 560px) {
   .plugins-toolbar--fields > .settings-segmented {
     height: auto;
-  }
-
-  .plugins-remove-confirm {
-    flex-wrap: wrap;
-    white-space: normal;
   }
 
   .plugins-row-message {

@@ -6,9 +6,27 @@ import {
   MODEL_SELECTION_LOCKED_MESSAGE,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
+import {
+  expectContinueResult,
+  makeSessionEntry,
+  makeTypingController,
+  mockCallInput,
+} from "./get-reply-directives.target-session.test-helpers.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import {
+  prepareReplyConversation,
+  type PreparedReplyConversation,
+} from "./prompt-session-context.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+  type ReplyPreRunRejectionCode,
+} from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const mocks = vi.hoisted(() => ({
@@ -17,54 +35,9 @@ const mocks = vi.hoisted(() => ({
   listAgentEntries: vi.fn(),
   resolveFastModeState: vi.fn(),
   resolveReplyExecOverrides: vi.fn(),
+  resolveGroupRequireMention: vi.fn(async (_params: unknown) => false),
   shouldHandleTextCommands: vi.fn(() => false),
 }));
-
-function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    sessionId: "session-id",
-    updatedAt: Date.now(),
-    ...overrides,
-  };
-}
-
-function makeTypingController() {
-  return {
-    onReplyStart: async () => {},
-    startTypingLoop: async () => {},
-    startTypingOnText: async () => {},
-    refreshTypingTtl: () => {},
-    isActive: () => false,
-    markRunComplete: () => {},
-    markDispatchIdle: () => {},
-    cleanup: vi.fn(),
-  };
-}
-
-function mockCallInput(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  const input = call[0];
-  if (!input || typeof input !== "object") {
-    throw new Error(`expected mock input ${index}`);
-  }
-  return input as Record<string, unknown>;
-}
-
-function expectContinueResult(
-  value: Awaited<ReturnType<typeof resolveReplyDirectives>>,
-  fields: Record<string, unknown>,
-) {
-  expect(value.kind).toBe("continue");
-  if (value.kind !== "continue") {
-    throw new Error(`expected continue result, got ${value.kind}`);
-  }
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(value.result[key as keyof typeof value.result]).toEqual(expected);
-  }
-}
 
 async function resolveHelloWithModelDefaults(params: {
   defaultThinking: "off" | "low" | "medium";
@@ -73,6 +46,7 @@ async function resolveHelloWithModelDefaults(params: {
   cfg?: Parameters<typeof resolveReplyDirectives>[0]["cfg"];
   body?: string;
   sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
   agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
   agentEntries?: Array<{ id?: string; thinkingDefault?: "off" | "low" }>;
   hasConfiguredThinkingDefault?: boolean;
@@ -86,6 +60,7 @@ async function resolveHelloWithModelDefaults(params: {
   sessionCtx?: Partial<TemplateContext>;
   opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
   modelError?: unknown;
+  conversation?: PreparedReplyConversation;
 }) {
   const resolveDefaultThinkingLevel = vi.fn(
     async (selection?: { model?: string }) =>
@@ -110,6 +85,20 @@ async function resolveHelloWithModelDefaults(params: {
   }
   const typing = makeTypingController();
 
+  const sessionCtx = {
+    Body: params.body ?? "hello",
+    BodyStripped: params.body ?? "hello",
+    BodyForAgent: params.body ?? "hello",
+    CommandBody: params.body ?? "hello",
+    commandText: params.body ?? "hello",
+    agentText: params.body ?? "hello",
+    rawText: params.body ?? "hello",
+    Provider: "whatsapp",
+    ...params.sessionCtx,
+  } as TemplateContext;
+
+  const sessionEntry = params.sessionEntry ?? makeSessionEntry();
+
   const result = await resolveReplyDirectives({
     ctx: buildTestCtx({
       Body: params.body ?? "hello",
@@ -121,23 +110,19 @@ async function resolveHelloWithModelDefaults(params: {
     agentDir: "/tmp/main-agent",
     workspaceDir: "/tmp",
     agentCfg: params.agentCfg ?? {},
-    sessionCtx: {
-      Body: params.body ?? "hello",
-      BodyStripped: params.body ?? "hello",
-      BodyForAgent: params.body ?? "hello",
-      CommandBody: params.body ?? "hello",
-      commandText: params.body ?? "hello",
-      agentText: params.body ?? "hello",
-      rawText: params.body ?? "hello",
-      Provider: "whatsapp",
-      ...params.sessionCtx,
-    } as TemplateContext,
-    sessionEntry: params.sessionEntry ?? makeSessionEntry(),
-    sessionStore: {},
+    sessionCtx,
+    sessionEntry,
+    sessionStore: params.sessionStore ?? {},
     sessionKey: "agent:main:whatsapp:+2000",
     storePath: "/tmp/sessions.json",
     sessionScope: "per-sender",
-    groupResolution: undefined,
+    conversation:
+      params.conversation ??
+      prepareReplyConversation({
+        ctx: sessionCtx,
+        sessionEntry: params.sessionStore?.["agent:main:whatsapp:+2000"] ?? sessionEntry,
+        isHeartbeat: params.opts?.isHeartbeat,
+      }),
     isGroup: false,
     triggerBodyNormalized: "hello",
     resetTriggered: false,
@@ -217,6 +202,7 @@ vi.mock("./directive-handling.parse.js", async () => {
     await import("./get-reply-directives.target-session.test-helpers.js");
   return {
     parseInlineSessionDirectives: vi.fn(parseInlineDirectivesForTargetSessionTest),
+    resolveReplyDirectiveCommand: vi.fn(() => undefined),
   };
 });
 
@@ -244,11 +230,10 @@ vi.mock("./get-reply-fast-path.js", () => ({
 
 vi.mock("./groups.js", () => ({
   defaultGroupActivation: vi.fn(() => "always"),
-  resolveGroupRequireMention: vi.fn(async () => false),
+  resolveGroupRequireMention: (params: unknown) => mocks.resolveGroupRequireMention(params),
 }));
 
 vi.mock("./model-selection.js", () => ({
-  createFastTestModelSelectionState: vi.fn(),
   createModelSelectionState: (...args: unknown[]) => mocks.createModelSelectionState(...args),
   resolveContextTokens: vi.fn(() => 4096),
 }));
@@ -269,6 +254,7 @@ describe("resolveReplyDirectives", () => {
     mocks.listAgentEntries.mockReset();
     mocks.resolveFastModeState.mockReset();
     mocks.resolveReplyExecOverrides.mockReset();
+    mocks.resolveGroupRequireMention.mockReset().mockResolvedValue(false);
     mocks.shouldHandleTextCommands.mockReset().mockReturnValue(false);
 
     mocks.listAgentEntries.mockReturnValue([]);
@@ -313,6 +299,66 @@ describe("resolveReplyDirectives", () => {
     expect(modelSelectionInput.hasOneTurnModelOverride).toBe(true);
   });
 
+  it("passes persisted session identity into system-event group activation resolution", async () => {
+    const wrapperSessionEntry = makeSessionEntry({ sessionId: "wrapper-session" });
+    const targetSessionEntry = makeSessionEntry({
+      sessionId: "target-session",
+      chatType: "channel",
+      groupId: "C123",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "slack", to: "C123" } }),
+    });
+
+    await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry: wrapperSessionEntry,
+      sessionStore: { "agent:main:whatsapp:+2000": targetSessionEntry },
+      ctx: { InternalTurnSource: "heartbeat" },
+      sessionCtx: { InternalTurnSource: "heartbeat", Provider: undefined },
+    });
+
+    expect(mockCallInput(mocks.resolveGroupRequireMention).group).toMatchObject({
+      channel: "slack",
+      groupId: "C123",
+    });
+  });
+
+  it("uses the base room identity for isolated heartbeat group activation", async () => {
+    const baseSessionKey = "agent:main:slack:channel:C123";
+    const baseSessionEntry = makeSessionEntry({
+      sessionId: "base-session",
+      chatType: "channel",
+      groupId: "C123",
+      groupChannel: "#general",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "slack", to: "C123" } }),
+    });
+    const isolatedSessionEntry = makeSessionEntry({
+      sessionId: "isolated-session",
+      heartbeatIsolatedBaseSessionKey: baseSessionKey,
+    });
+
+    await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      conversation: prepareReplyConversation({
+        ctx: { InternalTurnSource: "heartbeat" },
+        sessionEntry: baseSessionEntry,
+      }),
+      sessionStore: {
+        "agent:main:whatsapp:+2000": isolatedSessionEntry,
+        [baseSessionKey]: baseSessionEntry,
+      },
+      ctx: { InternalTurnSource: "heartbeat" },
+      sessionCtx: { InternalTurnSource: "heartbeat", Provider: undefined },
+    });
+
+    expect(mockCallInput(mocks.resolveGroupRequireMention).group).toMatchObject({
+      channel: "slack",
+      groupId: "C123",
+      groupChannel: "#general",
+    });
+  });
+
   it("returns a terminal retry when model preparation sees a rotated session", async () => {
     const error = new SessionWorkStartInvalidatedError(
       'Session "agent:main:whatsapp:+2000" changed while starting work. Retry.',
@@ -346,27 +392,60 @@ describe("resolveReplyDirectives", () => {
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
   });
 
-  it("marks terminal directive replies for delivery under source suppression", async () => {
-    mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
-      kind: "reply",
+  it.each<{
+    label: string;
+    body: string;
+    reply: ReplyPayload;
+    reason?: ReplyPreRunRejectionCode;
+  }>([
+    {
+      label: "model acknowledgement",
+      body: "/model openai/gpt-5.5",
       reply: {
-        text: "Model set to fable (anthropic/claude-fable-5) for this session only; configured default unchanged.",
+        text: "Model set to openai/gpt-5.5 for this session only; configured default unchanged.",
       },
-    });
+    },
+    {
+      label: "model rejection",
+      body: "/model openai/REJECTED_PRIVATE_TOKEN",
+      reply: { text: 'Model "openai/REJECTED_PRIVATE_TOKEN" is not allowed.', isError: true },
+      reason: "model-selection-rejected",
+    },
+    {
+      label: "combined directive rejection",
+      body: "/model openai/REJECTED_PRIVATE_TOKEN\n/think high",
+      reply: { text: 'Model "openai/REJECTED_PRIVATE_TOKEN" is not allowed.', isError: true },
+      reason: "session-directive-rejected",
+    },
+  ])(
+    "preserves $label delivery and its invocation rejection fact",
+    async ({ body, reply, reason }) => {
+      const runState: ReplyOperationRunState = {};
+      const opts: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
+      mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
+        kind: "reply",
+        reply: { ...reply },
+        preRunRejection: reason,
+      });
 
-    const { result } = await resolveHelloWithModelDefaults({
-      body: "/model fable",
-      commandAuthorized: true,
-      defaultThinking: "off",
-      defaultReasoning: "on",
-    });
+      const { result } = await resolveHelloWithModelDefaults({
+        body,
+        commandAuthorized: true,
+        defaultThinking: "off",
+        defaultReasoning: "on",
+        opts,
+      });
 
-    expect(result.kind).toBe("reply");
-    if (result.kind !== "reply" || !result.reply || Array.isArray(result.reply)) {
-      throw new Error("expected a single directive reply");
-    }
-    expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
-  });
+      expect(result).toEqual({ kind: "reply", reply });
+      expect(runState.preRunRejection).toBe(reason);
+      if (result.kind !== "reply" || !result.reply || Array.isArray(result.reply)) {
+        throw new Error("expected a single directive reply");
+      }
+      expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(
+        true,
+      );
+    },
+  );
 
   it("preserves explicitly suppressed command-shaped text for the model", async () => {
     const body = "/model openai/gpt-5.5";
@@ -568,7 +647,7 @@ describe("resolveReplyDirectives", () => {
       sessionKey: "agent:main:whatsapp:+2000",
       storePath: "/tmp/sessions.json",
       sessionScope: "per-sender",
-      groupResolution: undefined,
+      conversation: prepareReplyConversation({ ctx: { Provider: "whatsapp" } }),
       isGroup: false,
       triggerBodyNormalized: "hello",
       resetTriggered: false,
@@ -647,7 +726,7 @@ describe("resolveReplyDirectives", () => {
       sessionKey: "agent:main:telegram:+2000",
       storePath: "/tmp/sessions.json",
       sessionScope: "per-sender",
-      groupResolution: undefined,
+      conversation: prepareReplyConversation({ ctx: { Provider: "telegram" } }),
       isGroup: false,
       triggerBodyNormalized: "/trace on",
       resetTriggered: false,
@@ -889,7 +968,7 @@ describe("resolveReplyDirectives", () => {
       sessionKey: "agent:main:slack:C123",
       storePath: "/tmp/sessions.json",
       sessionScope: "per-sender",
-      groupResolution: undefined,
+      conversation: prepareReplyConversation({ ctx: sessionCtx }),
       isGroup: false,
       triggerBodyNormalized: "new session",
       resetTriggered: true,
@@ -955,7 +1034,7 @@ describe("resolveReplyDirectives", () => {
       sessionKey: "agent:main:slack:C123",
       storePath: "/tmp/sessions.json",
       sessionScope: "per-sender",
-      groupResolution: undefined,
+      conversation: prepareReplyConversation({ ctx: sessionCtx }),
       isGroup: false,
       triggerBodyNormalized: "new session",
       resetTriggered: true,

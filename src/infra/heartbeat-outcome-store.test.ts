@@ -125,6 +125,39 @@ describe("heartbeat outcome store", () => {
     ).toEqual({ count: 1 });
   });
 
+  it("ignores outcomes whose transient base has no durable session node", async () => {
+    const env = await createEnv();
+    const sessionKey = "agent:main:cron:job:run:transient";
+    const runSessionKey = `${sessionKey}:heartbeat`;
+    await upsertSessionEntryCore(
+      { agentId: "main", env, sessionKey: runSessionKey },
+      { sessionId: "transient-heartbeat", updatedAt: 1 },
+    );
+    const db = openOpenClawAgentDatabase({ agentId: "main", env }).db;
+    expect(
+      db.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?").get(sessionKey),
+    ).toBeUndefined();
+    expect(
+      db.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?").get(runSessionKey),
+    ).toEqual({ session_key: runSessionKey });
+
+    expect(() =>
+      persistHeartbeatOutcome({
+        agentId: "main",
+        sessionKey,
+        runSessionKey,
+        response: { outcome: "progress", notify: false, summary: "Transient heartbeat" },
+        occurredAt: 500,
+        env,
+      }),
+    ).not.toThrow();
+
+    expect(db.prepare("SELECT COUNT(*) AS count FROM heartbeat_outcomes").get()).toEqual({
+      count: 0,
+    });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
   it("injects once per user run, keeps retries, and resets after a new heartbeat", async () => {
     const env = await createEnv();
     const base = {

@@ -153,7 +153,6 @@ jobs:
         with:
           cache-mode: off
           install-bun: "true"
-          install-deps: "false"
 
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain

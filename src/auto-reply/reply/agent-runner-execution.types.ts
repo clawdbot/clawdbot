@@ -1,6 +1,7 @@
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -11,6 +12,11 @@ import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+export type CompletedAgentAuthSelection = Pick<
+  FollowupRun["run"],
+  "authProfileId" | "authProfileIdSource"
+>;
 
 /** One attempted runtime fallback candidate and its failure reason. */
 export type RuntimeFallbackAttempt = {
@@ -39,6 +45,8 @@ export type AgentTurnInternalResult =
   | AbortedAgentTurn
   | {
       kind: "completed";
+      maintenanceAuthProfile?: CompletedAgentAuthSelection;
+      compactionRequestBudget?: CompactionRequestBudget;
       result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
@@ -63,6 +71,8 @@ export type AgentTurnInternalResult =
 
 type SettledAgentTurnBase = {
   kind: "settled";
+  maintenanceAuthProfile?: CompletedAgentAuthSelection;
+  compactionRequestBudget?: CompactionRequestBudget;
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   resolved: { provider: string; model: string };
   fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };

@@ -32,6 +32,7 @@ import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type * as GatewayMethodTypes from "./server-methods/types.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 function makeControlUiResponse() {
@@ -53,7 +54,7 @@ const wsMockState = vi.hoisted(() => ({
   } | null,
 }));
 
-vi.mock("ws", () => ({
+vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
   WebSocket: class MockWebSocket {
     static readonly OPEN = 1;
     on = vi.fn();
@@ -328,7 +329,7 @@ function makeOperatorWsClient(connId: string, socket: TestSocket, scopes: string
 function makeOperatorWsClients(
   entries: Array<{ connId: string; socket: TestSocket; scopes: string[] }>,
 ) {
-  return new Set<GatewayWsClient>(
+  return new GatewayClientRegistry(
     entries.map(({ connId, socket, scopes }) => makeOperatorWsClient(connId, socket, scopes)),
   );
 }
@@ -350,7 +351,7 @@ function makeScopedBroadcastClients() {
   const talkSocket = makeRecordingSocket();
   const writeSocket = makeRecordingSocket();
   const adminSocket = makeRecordingSocket();
-  const clients = new Set<GatewayWsClient>([
+  const clients = new GatewayClientRegistry([
     makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
     makeGatewayWsClient("c-node", nodeSocket, {
       role: "node",
@@ -408,7 +409,7 @@ describe("gateway broadcaster", () => {
     const socket = makeRecordingSocket();
     socket.bufferedAmount = 1234;
     const client = makeOperatorWsClient("c-admin", socket, ["operator.admin"]);
-    const clients = new Set<GatewayWsClient>([client]);
+    const clients = new GatewayClientRegistry([client]);
     const { getBufferedAmount } = createGatewayBroadcaster({ clients });
 
     expect(getBufferedAmount("c-admin")).toBe(1234);
@@ -448,7 +449,7 @@ describe("gateway broadcaster", () => {
   it("stamps targeted frames on the per-client sequence so drops surface as gaps", () => {
     const socket = makeRecordingSocket();
     const client = makeOperatorWsClient("c-seq", socket, ["operator.read"]);
-    const clients = new Set<GatewayWsClient>([client]);
+    const clients = new GatewayClientRegistry([client]);
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     broadcastToConnIds("tick", { ts: 1 }, new Set(["c-seq"]));
@@ -472,7 +473,7 @@ describe("gateway broadcaster", () => {
       scopes: [],
     } as unknown as GatewayWsClient["connect"]);
     worker.connectionKind = "worker";
-    const clients = new Set<GatewayWsClient>([worker]);
+    const clients = new GatewayClientRegistry([worker]);
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     for (const event of ["heartbeat", "presence", "health", "tick", "shutdown", "chat"]) {
@@ -488,7 +489,7 @@ describe("gateway broadcaster", () => {
     const client = makeOperatorWsClient("c-invalidated", socket, ["operator.read"]);
     client.invalidated = true;
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new Set([client]),
+      clients: new GatewayClientRegistry([client]),
     });
 
     broadcast("heartbeat", { ts: 1 });
@@ -515,7 +516,7 @@ describe("gateway broadcaster", () => {
       platform: "chrome",
       mode: GATEWAY_CLIENT_MODES.UI,
     };
-    const clients = new Set([legacy, first, second]);
+    const clients = new GatewayClientRegistry([legacy, first, second]);
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
     sessionMessageSubscribers.subscribe(first.connId, "session-a");
     sessionMessageSubscribers.subscribe(second.connId, "session-b");
@@ -544,7 +545,7 @@ describe("gateway broadcaster", () => {
     const readSocket = makeRecordingSocket();
     const adminSocket = makeRecordingSocket();
 
-    const clients = new Set<GatewayWsClient>([
+    const clients = new GatewayClientRegistry([
       makeOperatorWsClient("c-approvals", approvalsSocket, ["operator.approvals"]),
       makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
@@ -603,7 +604,7 @@ describe("gateway broadcaster", () => {
   it("requires operator.questions for question broadcasts", () => {
     const questionSocket = makeRecordingSocket();
     const readSocket = makeRecordingSocket();
-    const clients = new Set<GatewayWsClient>([
+    const clients = new GatewayClientRegistry([
       makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
     ]);
@@ -886,7 +887,7 @@ describe("gateway broadcaster", () => {
     try {
       const slowReadSocket = makeRecordingSocket();
       slowReadSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-      const clients = new Set<GatewayWsClient>([
+      const clients = new GatewayClientRegistry([
         makeOperatorWsClient("c-slow-read", slowReadSocket, ["operator.read"]),
       ]);
 

@@ -1,36 +1,28 @@
 #!/usr/bin/env node
-// Captures composer mic-hover proof shots: idle vs hovered talk control, plus
-// the mic button's x position in both states (the hover-shift regression).
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+// Captures composer mic-hover proof shots: idle vs hovered talk control, plus
+// the mic button's x position in both states (the hover-shift regression).
+import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { readControlUiProofOption } from "./lib/control-ui-proof-args.mts";
 
-function readOption(name: string): string | undefined {
-  const prefix = `--${name}=`;
-  const inline = process.argv.slice(2).find((arg) => arg.startsWith(prefix));
-  if (inline) {
-    return inline.slice(prefix.length);
-  }
-  const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 ? process.argv[index + 1] : undefined;
-}
-
-const outputDir = path.resolve(
-  readOption("output-dir") ?? ".artifacts/control-ui-e2e/composer-mic-hover-proof",
+const outputDir = createControlUiE2eArtifactDir(
+  "composer-mic-hover-proof",
+  readControlUiProofOption(process.argv, "output-dir") ??
+    ".artifacts/control-ui-e2e/composer-mic-hover-proof",
 );
-const label = readOption("label") ?? "after";
+const label = readControlUiProofOption(process.argv, "label") ?? "after";
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 if (!canRunPlaywrightChromium(executablePath)) {
   throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);
 }
 
-await mkdir(outputDir, { recursive: true });
 const server = await startControlUiE2eServer(undefined, { source: true });
 const browser = await chromium.launch({ executablePath });
 const context = await browser.newContext({

@@ -16,8 +16,9 @@ import {
   stopCrabbox,
   warmupCrabbox,
 } from "./crabbox-runtime.js";
+import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
 
-export type MantisVisualTaskVisionMode = "image-describe" | "metadata";
+type MantisVisualTaskVisionMode = "image-describe" | "metadata";
 
 export type MantisVisualTaskOptions = {
   browserUrl?: string;
@@ -96,34 +97,16 @@ type VisionAssertion = {
   visible?: boolean;
 };
 
-type MantisVisualTaskSummary = {
-  artifacts: {
+type MantisVisualTaskSummary = MantisCrabboxReportSummary & {
+  artifacts: MantisCrabboxReportSummary["artifacts"] & {
     driverResultPath: string;
-    reportPath: string;
-    screenshotPath?: string;
-    summaryPath: string;
-    videoPath?: string;
   };
   browserUrl: string;
-  crabbox: {
-    bin: string;
-    createdLease: boolean;
-    id: string;
-    provider: string;
-    slug?: string;
-    state?: string;
-    vncCommand: string;
-  };
   driver?: MantisVisualDriverResult;
-  error?: string;
-  finishedAt: string;
-  outputDir: string;
   recording: {
     error?: string;
     required: boolean;
   };
-  startedAt: string;
-  status: "pass" | "fail";
   visionMode: MantisVisualTaskVisionMode;
 };
 
@@ -396,53 +379,31 @@ function browserLaunchScript() {
 }
 
 function renderReport(summary: MantisVisualTaskSummary) {
-  const lines = [
-    "# Mantis Visual Task",
-    "",
-    `Status: ${summary.status}`,
-    `Browser URL: ${summary.browserUrl}`,
-    `Vision mode: ${summary.visionMode}`,
-    `Output: ${summary.outputDir}`,
-    `Started: ${summary.startedAt}`,
-    `Finished: ${summary.finishedAt}`,
-    "",
-    "## Crabbox",
-    "",
-    `- Provider: ${summary.crabbox.provider}`,
-    `- Lease: ${summary.crabbox.id}${summary.crabbox.slug ? ` (${summary.crabbox.slug})` : ""}`,
-    `- Created by run: ${summary.crabbox.createdLease}`,
-    `- State: ${summary.crabbox.state ?? "unknown"}`,
-    `- VNC: \`${summary.crabbox.vncCommand}\``,
-    "",
-    "## Artifacts",
-    "",
-    summary.artifacts.screenshotPath
-      ? `- Screenshot: \`${path.basename(summary.artifacts.screenshotPath)}\``
-      : "- Screenshot: missing",
-    summary.artifacts.videoPath
-      ? `- Video: \`${path.basename(summary.artifacts.videoPath)}\``
-      : "- Video: missing",
-    `- Driver result: \`${path.basename(summary.artifacts.driverResultPath)}\``,
-    "",
-    "## Vision",
-    "",
-    summary.driver?.vision.text ? summary.driver.vision.text : "No vision text recorded.",
-    summary.driver?.expectText ? `Expected text: ${summary.driver.expectText}` : undefined,
-    summary.driver?.vision.assertion?.visible !== undefined
-      ? `Visible: ${summary.driver.vision.assertion.visible}`
-      : undefined,
-    summary.driver?.vision.assertion?.evidence
-      ? `Evidence: ${summary.driver.vision.assertion.evidence}`
-      : undefined,
-    summary.driver?.vision.assertion?.reason
-      ? `Reason: ${summary.driver.vision.assertion.reason}`
-      : undefined,
-    summary.driver?.matched !== undefined ? `Matched: ${summary.driver.matched}` : undefined,
-    summary.recording.error ? `Recording error: ${summary.recording.error}` : undefined,
-    summary.error ? `Error: ${summary.error}` : undefined,
-    "",
-  ].filter((line) => line !== undefined);
-  return `${lines.join("\n")}\n`;
+  return renderMantisCrabboxReport({
+    afterArtifacts: [
+      "## Vision",
+      "",
+      summary.driver?.vision.text ? summary.driver.vision.text : "No vision text recorded.",
+      summary.driver?.expectText ? `Expected text: ${summary.driver.expectText}` : undefined,
+      summary.driver?.vision.assertion?.visible !== undefined
+        ? `Visible: ${summary.driver.vision.assertion.visible}`
+        : undefined,
+      summary.driver?.vision.assertion?.evidence
+        ? `Evidence: ${summary.driver.vision.assertion.evidence}`
+        : undefined,
+      summary.driver?.vision.assertion?.reason
+        ? `Reason: ${summary.driver.vision.assertion.reason}`
+        : undefined,
+      summary.driver?.matched !== undefined ? `Matched: ${summary.driver.matched}` : undefined,
+      summary.recording.error ? `Recording error: ${summary.recording.error}` : undefined,
+      summary.error ? `Error: ${summary.error}` : undefined,
+      "",
+    ],
+    artifactRows: [`- Driver result: \`${path.basename(summary.artifacts.driverResultPath)}\``],
+    headerRows: [`Browser URL: ${summary.browserUrl}`, `Vision mode: ${summary.visionMode}`],
+    summary,
+    title: "Mantis Visual Task",
+  });
 }
 
 export async function runMantisVisualDriver(

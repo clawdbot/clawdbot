@@ -1,0 +1,609 @@
+diff --git a/dist/chunks/cac.D805sv8h.js b/dist/chunks/cac.D805sv8h.js
+index 3b3446e1720bf0f2a6f78e11f091260fffc57c84..9b076b8fea2d246c5a1e3cc48f36a4c246a74510 100644
+--- a/dist/chunks/cac.D805sv8h.js
++++ b/dist/chunks/cac.D805sv8h.js
+@@ -2318,7 +2318,12 @@ function parseCLI(argv, config = {}) {
+ 	if (arrayArgs[0] !== "vitest") throw new Error(`Expected "vitest" as the first argument, received "${arrayArgs[0]}"`);
+ 	arrayArgs[0] = "/index.js";
+ 	arrayArgs.unshift("node");
+-	let { args, options } = createCLI(config).parse(arrayArgs, { run: false });
++	const cli = createCLI(config);
++	let { args, options } = cli.parse(arrayArgs, { run: false });
++	// Validate without executing; help/version clear the matched command in parse().
++	cli.matchedCommand?.checkUnknownOptions();
++	cli.matchedCommand?.checkOptionValue();
++	cli.matchedCommand?.checkRequiredArgs();
+ 	if (arrayArgs[2] === "watch" || arrayArgs[2] === "dev") options.watch = true;
+ 	if (arrayArgs[2] === "run" && !options.watch) options.run = true;
+ 	if (arrayArgs[2] === "related") {
+diff --git a/dist/chunks/index.B89dZ0-N.js b/dist/chunks/index.B89dZ0-N.js
+index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f05781803 100644
+--- a/dist/chunks/index.B89dZ0-N.js
++++ b/dist/chunks/index.B89dZ0-N.js
+@@ -6599,6 +6599,7 @@ class FileSystemModuleCache {
+ 	rootCache;
+ 	metadataFilePath;
+ 	version = "1.0.0-beta.7";
++	lockfileHash;
+ 	fsCacheRoots = /* @__PURE__ */ new WeakMap();
+ 	fsEnvironmentHashMap = /* @__PURE__ */ new WeakMap();
+ 	fsCacheKeyGenerators = /* @__PURE__ */ new Set();
+@@ -6628,6 +6629,9 @@ class FileSystemModuleCache {
+ 		return false;
+ 	}
+ 	async clearCache(log = true) {
++		// Disk deletion also retires paths retained by live module graphs.
++		this.fsCacheRoots = /* @__PURE__ */ new WeakMap();
++		this.vitest.clearAllCachePaths();
+ 		const fsCachePaths = [this.rootCache, ...this.vitest.projects.map((r) => r.config.fsModuleCachePath || this.rootCache)];
+ 		const uniquePaths = Array.from(new Set(fsCachePaths));
+ 		await Promise.all(uniquePaths.map((directory) => rm(directory, {
+@@ -6706,6 +6710,11 @@ class FileSystemModuleCache {
+ 	invalidateAllCachePaths(environment) {
+ 		debugFs$1?.(`the ${environment.name} environment cache is invalidated`);
+ 		this.fsCacheKeys.get(environment)?.clear();
++		for (const module of environment.moduleGraph.idToModuleMap.values()) {
++			for (const transform of [module.transformResult, module.invalidationState]) {
++				if (transform && typeof transform !== "string") delete transform.__vitestTmp;
++			}
++		}
+ 	}
+ 	getMemoryCachePath(environment, id) {
+ 		const result = this.fsCacheKeys.get(environment)?.get(id);
+@@ -6763,7 +6772,7 @@ class FileSystemModuleCache {
+ 				return value;
+ 			});
+ 			// everything in the key that does not depend on the module, as one digest
+-			environmentHash = hash("sha1", (process.env.NODE_ENV ?? "") + this.version + cacheConfig, "hex");
++			environmentHash = hash("sha1", (process.env.NODE_ENV ?? "") + this.version + this.lockfileHash + cacheConfig, "hex");
+ 			this.fsEnvironmentHashMap.set(environment, environmentHash);
+ 		}
+ 		hashString += id + fileContent + environmentHash + coverageAffectsCache;
+@@ -6800,31 +6809,30 @@ class FileSystemModuleCache {
+ 	// or a new version of vite/vitest is installed
+ 	// for the same reason we also cache config file content, but that won't catch changes made in external plugins
+ 	async ensureCacheIntegrity() {
+-		if (![this.vitest.getRootProject(), ...this.vitest.projects].some((p) => p.config.fsModuleCache)) return;
+-		const metadata = await this.readMetadata();
+-		const currentLockfileHash = getLockfileHash(this.vitest.vite.config.root);
+-		// no metadata found, just store a new one, don't reset the cache
+-		if (!metadata) {
+-			debugFs$1?.(`fs metadata file was created with hash ${currentLockfileHash}`);
+-			try {
+-				if (!existsSync(this.rootCache)) mkdirSync(this.rootCache, { recursive: true });
+-				await writeFile(this.metadataFilePath, JSON.stringify({ lockfileHash: currentLockfileHash }, null, 2), "utf-8");
+-			} catch (error) {
+-				// Recording the metadata is best-effort and losing the file shouldn't
+-				// abort the entire execution
+-				debugFs$1?.(`failed to write fs cache metadata: ${error}`);
++		if ([this.vitest.getRootProject(), ...this.vitest.projects].some((p) => p.config.fsModuleCache)) {
++			const metadata = await this.readMetadata();
++			const currentLockfileHash = getLockfileHash(this.vitest.vite.config.root);
++			if (metadata?.lockfileHash !== currentLockfileHash) {
++				if (metadata) {
++					await this.clearCache(false);
++					this.vitest.vite.config.logger.info(`fs cache was cleared because lockfile has changed`, {
++						timestamp: true,
++						environment: y.yellow("[vitest]")
++					});
++					debugFs$1?.(`fs cache was cleared because lockfile has changed`);
++				}
++				debugFs$1?.(`fs metadata file was created with hash ${currentLockfileHash}`);
++				try {
++					if (!existsSync(this.rootCache)) mkdirSync(this.rootCache, { recursive: true });
++					await writeFile(this.metadataFilePath, JSON.stringify({ lockfileHash: currentLockfileHash }, null, 2), "utf-8");
++				} catch (error) {
++					// Recording the metadata is best-effort and losing the file shouldn't
++					// abort the entire execution
++					debugFs$1?.(`failed to write fs cache metadata: ${error}`);
++				}
+ 			}
+-			return;
++			this.lockfileHash = currentLockfileHash;
+ 		}
+-		// if lockfile didn't change, don't do anything
+-		if (metadata.lockfileHash === currentLockfileHash) return;
+-		// lockfile changed, let's clear all caches
+-		await this.clearCache(false);
+-		this.vitest.vite.config.logger.info(`fs cache was cleared because lockfile has changed`, {
+-			timestamp: true,
+-			environment: y.yellow("[vitest]")
+-		});
+-		debugFs$1?.(`fs cache was cleared because lockfile has changed`);
+ 	}
+ }
+ /**
+@@ -9723,7 +9731,9 @@ class ModuleFetcher {
+ 		if ("code" in result) trace.setAttribute("vitest.fetched_module.code_length", result.code.length);
+ 	}
+ 	async getCachePath(environment, moduleGraphModule) {
+-		if (!this.fsCacheEnabled) return null;
++		// VCS and configureVitest imports precede project/cache-key initialization.
++		// Use normal Vite transforms until persistent cache integrity is established.
++		if (!this.fsCacheEnabled || this.fsCache.lockfileHash === void 0) return null;
+ 		const moduleId = moduleGraphModule.id;
+ 		const memoryCacheKey = this.fsCache.getMemoryCachePath(environment, moduleId);
+ 		// undefined means there is no key in memory
+@@ -10875,7 +10885,8 @@ class PoolRunner {
+ 							stopSpan.recordException(response.error);
+ 							this.project.vitest.state.catchError(response.error, "Teardown Error");
+ 						}
+-						resolve();
++						// Only the responding transport can promise an explicit graceful exit.
++						resolve(response.willExit ? Promise.resolve().then(() => this.worker.waitForExit?.()) : undefined);
+ 						this.off("message", onStop);
+ 					}
+ 				};
+@@ -10890,21 +10901,21 @@ class PoolRunner {
+ 					__vitest_worker_request__: true,
+ 					otelCarrier: this.getOTELCarrier()
+ 				});
+-			}), STOP_TIMEOUT).finally(() => {
++			}), STOP_TIMEOUT).finally(async () => {
+ 				stopSpan.end();
++				// Deadline/error paths must also terminate and join the worker.
++				await this._traces.$(`vitest.${this.worker.name}.stop`, { context: this._otel?.workerContext }, () => this.worker.stop());
+ 			});
+-			this._eventEmitter.removeAllListeners();
+-			this._offCancel();
+-			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
+-			// Stop the worker process (this sets _fork/_thread to undefined)
+-			// Worker's event listeners (error, message) are implicitly removed when worker terminates
+-			await this._traces.$(`vitest.${this.worker.name}.stop`, { context: this._otel?.workerContext }, () => this.worker.stop());
+ 			this._state = RunnerState.STOPPED;
+ 		} catch (error) {
+-			// Ensure we transition to stopped state even on error
++			// Ensure failed graceful shutdown cannot report a successful test run.
++			this.project.vitest.state.catchError(error, "Teardown Error");
+ 			this._state = RunnerState.STOPPED;
+ 			throw error;
+ 		} finally {
++			this._eventEmitter.removeAllListeners();
++			this._offCancel();
++			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
+ 			this._lastTestFiles = [];
+ 			this._operationLock.resolve();
+ 			this._operationLock = null;
+@@ -11044,10 +11055,22 @@ class ForksPoolWorker {
+ 			this._fork.stderr.pipe(this.stderr, { end: false });
+ 		}
+ 	}
+-	async stop() {
++	waitForExit() {
+ 		const fork = this.fork;
++		return new Promise((resolve, reject) => {
++			const onExit = (code, signal) => {
++				if (code === 0 && signal == null) resolve();
++				else reject(new Error(`Worker exited during graceful shutdown (code: ${code}, signal: ${signal})`));
++			};
++			if (fork.exitCode != null || fork.signalCode != null) onExit(fork.exitCode, fork.signalCode);
++			else fork.once("exit", onExit);
++		});
++	}
++	async stop() {
++		const fork = this._fork;
++		if (!fork) return;
+ 		const waitForExit = new Promise((resolve) => {
+-			if (fork.exitCode != null) resolve();
++			if (fork.exitCode != null || fork.signalCode != null) resolve();
+ 			else fork.once("exit", resolve);
+ 		});
+ 		/*
+@@ -11056,10 +11079,12 @@ class ForksPoolWorker {
+ 		* - https://github.com/jestjs/jest/blob/25a8785584c9d54a05887001ee7f498d489a5441/packages/jest-worker/src/workers/ChildProcessWorker.ts#L463-L477
+ 		* - https://github.com/tinylibs/tinypool/blob/40b4b3eb926dabfbfd3d0a7e3d1222d4dd1c0d2d/src/runtime/process-worker.ts#L56
+ 		*/
+-		const sigkillTimeout = setTimeout(() => fork.kill("SIGKILL"), SIGKILL_TIMEOUT);
+-		fork.kill();
+-		await waitForExit;
+-		clearTimeout(sigkillTimeout);
++		if (fork.exitCode == null && fork.signalCode == null) {
++			const sigkillTimeout = setTimeout(() => fork.kill("SIGKILL"), SIGKILL_TIMEOUT);
++			fork.kill();
++			await waitForExit;
++			clearTimeout(sigkillTimeout);
++		}
+ 		if (fork.stdout) {
+ 			await streamFlushed(fork.stdout);
+ 			fork.stdout.unpipe(this.stdout);
+@@ -11485,7 +11510,7 @@ class Pool {
+ 			// Runner termination can also already start from task cancellation.
+ 			if (!runner.isTerminated) {
+ 				const id = setTimeout(() => this.logger.error(`[vitest-pool]: Timeout terminating ${task.worker} worker for test files ${formatFiles(task)}.`), this.options.teardownTimeout);
+-				this.exitPromises.push(runner.stop({ force: resolver.isRejected }).then(() => clearTimeout(id)).catch((error) => this.logger.error(`[vitest-pool]: Failed to terminate ${task.worker} worker for test files ${formatFiles(task)}.`, error)));
++				this.exitPromises.push(runner.stop({ force: resolver.isRejected }).finally(() => clearTimeout(id)).catch((error) => this.logger.error(`[vitest-pool]: Failed to terminate ${task.worker} worker for test files ${formatFiles(task)}.`, error)));
+ 			}
+ 			this.freeWorkerId(poolId);
+ 		} 
+@@ -11727,6 +11752,8 @@ function createPool(ctx) {
+ 			const groupResults = await Promise.allSettled(promises);
+ 			results.push(...groupResults);
+ 		}
++		// Join worker teardown before reporters and the CLI compute the run result.
++		await pool.close();
+ 		const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+ 		if (errors.length > 0) throw new AggregateError(errors, "Errors occurred while running tests. For more information, see serialized error.");
+ 	}
+@@ -12005,6 +12032,7 @@ class TestProject {
+ 	config;
+ 	viteConfig;
+ 	vite;
++	namePrefix;
+ 	hash;
+ 	/** @internal */ typechecker;
+ 	/** @internal */ _resolver;
+@@ -12018,13 +12046,18 @@ class TestProject {
+ 	typecheckFilesList = null;
+ 	_globalSetups;
+ 	_provided = {};
+-	constructor(vitest, server, viteConfig, projectConfig) {
++	constructor(vitest, server, viteConfig, projectConfig, namePrefix = "") {
+ 		this.vitest = vitest;
+ 		this.globalConfig = vitest.config;
+ 		this.tmpDir = join(tmpdir(), nanoid());
+ 		this.vite = server;
+ 		this.viteConfig = viteConfig;
+ 		this.config = projectConfig;
++		// Container identity is fixed when the entry resolves and must survive sibling attachment.
++		Object.defineProperty(this, "namePrefix", {
++			value: namePrefix,
++			enumerable: true
++		});
+ 		this.hash = generateHash(this.config.root + this.config.name);
+ 		this._provideObject(projectConfig.provide);
+ 	}
+@@ -12307,8 +12340,8 @@ class TestProject {
+ 		}
+ 	}
+ 	/** @internal */
+-	static _createBasicProject(vitest) {
+-		const project = new TestProject(vitest, vitest.vite, vitest.viteConfig, vitest.config);
++	static _createBasicProject(vitest, namePrefix = "") {
++		const project = new TestProject(vitest, vitest.vite, vitest.viteConfig, vitest.config, namePrefix);
+ 		project.runner = vitest.runner;
+ 		project._resolver = vitest._resolver;
+ 		project._fetcher = vitest._fetcher;
+@@ -12325,8 +12358,8 @@ class TestProject {
+ 	*
+ 	* @internal
+ 	*/
+-	static _spawnSibling(parent, config) {
+-		const sibling = new TestProject(parent.vitest, parent.vite, parent.viteConfig, config);
++	static _spawnSibling(parent, config, namePrefix = parent.namePrefix) {
++		const sibling = new TestProject(parent.vitest, parent.vite, parent.viteConfig, config, namePrefix);
+ 		sibling.runner = parent.runner;
+ 		sibling._resolver = parent._resolver;
+ 		sibling._fetcher = parent._fetcher;
+@@ -12442,7 +12475,8 @@ async function resolveProjectEntries(harness, globalViteConfig, globalConfig, de
+ 		debug?.(`no projects declared, the root config is the only project`);
+ 		baseEntries = [{
+ 			viteConfig: globalViteConfig,
+-			projectConfig: globalConfig
++			projectConfig: globalConfig,
++			namePrefix: ""
+ 		}];
+ 	}
+ 	// Ensure project names are unique across declared projects (and any
+@@ -12545,6 +12579,28 @@ async function resolveDeclaredProjectEntries(context, definitions) {
+ 	const fileProjects = [...configFiles, ...nonConfigDirectories];
+ 	const promises = [];
+ 	projectConfigs.forEach((options, index) => {
++		if (typeof options.config === "string") {
++			const configRoot = parentConfig.root;
++			const configFile = resolve(configRoot, options.config);
++			const { config: _, root: optionRoot, test: testOptions, namePrefix, ...restOptions } = options;
++			if (namePrefix !== void 0 && typeof namePrefix !== "string") throw new TypeError("The file-backed project namePrefix must be a string.");
++			const customRoot = testOptions?.root ?? optionRoot;
++			const root = customRoot === void 0 ? dirname(configFile) : resolve(configRoot, customRoot);
++			const test = customRoot === void 0 ? testOptions : {
++				...testOptions,
++				root
++			};
++			debug?.(`project at ${configFile} resolves its own Vite config with root ${root}`);
++			promises.push(concurrent(() => resolveSingleProjectEntry(context, {
++				...restOptions,
++				test,
++				root,
++				configFile,
++				namePrefix,
++				replayExecutedProject: namePrefix !== void 0
++			}, configFile)));
++			return;
++		}
+ 		const ownServerReason = getOwnServerReason(context, options);
+ 		if (ownServerReason === void 0) {
+ 			debug?.(`inline project ${inlineProjectLabel(options, index)} shares the Vite server of ${parentViteConfig.configFile ?? parentConfig.root}`);
+@@ -12574,10 +12630,12 @@ async function resolveDeclaredProjectEntries(context, definitions) {
+ 		// resolved pair: the root (or the container) also runs as a regular project
+ 		if (parentViteConfig.configFile === path) {
+ 			debug?.(`project at ${path} is the declaring config itself, reusing its resolved config`);
++			const ancestors = context.ancestors.length > 1 ? context.ancestors.slice(0, -1) : void 0;
+ 			promises.push(Promise.resolve({
+ 				viteConfig: parentViteConfig,
+ 				projectConfig: parentConfig,
+-				ancestors: context.ancestors.length > 1 ? context.ancestors.slice(0, -1) : void 0
++				ancestors,
++				namePrefix: ancestors?.at(-1) ?? ""
+ 			}));
+ 			continue;
+ 		}
+@@ -12610,7 +12668,7 @@ async function flattenContainerEntries(context, entries) {
+ 		// inline projects cannot declare `projects`; the declaring config's own
+ 		// entry (emitted when it references its own config file) is kept as-is —
+ 		// its `projects` are the definitions currently being resolved
+-		if (entry.inline || definitions === void 0 || entry.projectConfig === context.parentConfig) {
++		if (entry.replayExecutedProject || entry.inline || definitions === void 0 || entry.projectConfig === context.parentConfig) {
+ 			result.push(entry);
+ 			continue;
+ 		}
+@@ -12820,18 +12878,21 @@ function resolveSharedServerEntry(context, options, index) {
+ 			moduleRunnerOptions: parentConfig._moduleRunnerOptions
+ 		}
+ 	});
+-	mergedOptions.name = resolveProjectName(mergedOptions.name, index, context.ancestors.at(-1));
++	const namePrefix = context.ancestors.at(-1) ?? "";
++	mergedOptions.name = resolveProjectName(mergedOptions.name, index, namePrefix);
+ 	return {
+ 		viteConfig: parentViteConfig,
+ 		projectConfig: resolveTestConfig(harness.logger, mergedOptions, parentViteConfig, parentConfig),
+ 		inline: true,
+ 		sharedServer: true,
++		namePrefix,
+ 		ancestors: context.ancestors.length ? [...context.ancestors] : void 0
+ 	};
+ }
+ async function resolveSingleProjectEntry(context, options, workspacePath) {
+ 	const { harness, rootViteConfig, rootConfig, parentViteConfig, parentConfig, cliOverrides } = context;
+-	const { configFile, ...restOptions } = options;
++	const { configFile, namePrefix: explicitNamePrefix, replayExecutedProject, ...restOptions } = options;
++	const namePrefix = explicitNamePrefix ?? context.ancestors.at(-1) ?? "";
+ 	const captures = {};
+ 	// only inline entries (keyed by their index) extend another config;
+ 	// file-based projects own all of their values
+@@ -12865,7 +12926,7 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
+ 	for (const key in parentViteConfig.env) projectViteConfig.env[key] ??= parentViteConfig.env[key];
+ 	const mergedOptions = projectViteConfig.test ?? {};
+ 	// resolved after `viteResolveConfig` so a plugin can still set `test.name`
+-	mergedOptions.name = resolveProjectName(mergedOptions.name, workspacePath, context.ancestors.at(-1));
++	mergedOptions.name = resolveProjectName(mergedOptions.name, workspacePath, namePrefix);
+ 	const projectConfig = resolveTestConfig(harness.logger, mergedOptions, projectViteConfig, parentConfig);
+ 	projectViteConfig.test = projectConfig;
+ 	if (inheritsParentConfig && options.extends === void 0 && configFile) warnDuplicateInheritedPlugins(harness.logger, projectConfig, projectViteConfig, parentViteConfig, configFile, rootConfig.root);
+@@ -12883,6 +12944,8 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
+ 		viteConfig: projectViteConfig,
+ 		projectConfig,
+ 		inline: isInlineEntry,
++		namePrefix,
++		replayExecutedProject,
+ 		ancestors: context.ancestors.length ? [...context.ancestors] : void 0
+ 	};
+ }
+@@ -12975,6 +13038,7 @@ function expandBrowserInstancesInEntries(globalConfig, entries, names) {
+ 			result.push({
+ 				viteConfig,
+ 				projectConfig: clonedConfig,
++				namePrefix: entry.namePrefix,
+ 				ancestors: entry.ancestors
+ 			});
+ 		});
+@@ -13036,6 +13100,7 @@ function expandBenchmarksInEntries(entries, names, benchmarkOnly) {
+ 		result.push({
+ 			viteConfig: entry.viteConfig,
+ 			projectConfig: benchmarkConfig,
++			namePrefix: entry.namePrefix,
+ 			ancestors: entry.ancestors,
+ 			sharedServer: entry.sharedServer
+ 		});
+@@ -13182,7 +13247,7 @@ function resolveDirectoryConfig(directory) {
+ 	if (configFile) return resolve(directory, configFile);
+ 	return null;
+ }
+-function resolveProjectName(name, workspacePath, containerLabel) {
++function resolveProjectName(name, workspacePath, namePrefix) {
+ 	let { label, color } = typeof name === "string" ? { label: name } : {
+ 		label: "",
+ 		...name
+@@ -13196,7 +13261,7 @@ function resolveProjectName(name, workspacePath, containerLabel) {
+ 	}
+ 	// Projects declared by a container config are namespaced by the container's
+ 	// name: the "unit" project of an "app" container is named "app (unit)".
+-	if (containerLabel) label = `${containerLabel} (${label})`;
++	if (namePrefix) label = `${namePrefix} (${label})`;
+ 	return {
+ 		label,
+ 		color
+@@ -13226,7 +13291,7 @@ async function attachProjectsFromEntries(vitest, entries) {
+ 	}
+ 	const projects = [];
+ 	for (const entry of entries) {
+-		const { viteConfig, projectConfig, hidden } = entry;
++		const { viteConfig, projectConfig, hidden, namePrefix } = entry;
+ 		const primary = primaryByViteConfig.get(viteConfig);
+ 		if (primary) {
+ 			if (hidden) continue;
+@@ -13239,14 +13304,14 @@ async function attachProjectsFromEntries(vitest, entries) {
+ 			// a shared-server project reuses only the Vite server
+ 			if (entry.sharedServer) {
+ 				debug?.(`project ${projectLabel(projectConfig.name)} reuses the Vite server of ${projectLabel(primary.name)} with its own module runner`);
+-				const project = new TestProject(vitest, primary.vite, viteConfig, projectConfig);
++				const project = new TestProject(vitest, primary.vite, viteConfig, projectConfig, namePrefix);
+ 				project._sharedViteServer = true;
+ 				project._initializeRunners(primary.vite);
+ 				projects.push(project);
+ 				continue;
+ 			}
+ 			debug?.(`project ${projectLabel(projectConfig.name)} shares the Vite server and module runner of ${projectLabel(primary.name)}`);
+-			const sibling = TestProject._spawnSibling(primary, projectConfig);
++			const sibling = TestProject._spawnSibling(primary, projectConfig, namePrefix);
+ 			// Browser-instance siblings share the primary's single (browser) Vite
+ 			// server; each gets its own `ProjectBrowser` view onto it.
+ 			if (primary._parentBrowser) sibling.browser = primary._parentBrowser.spawn(sibling);
+@@ -13259,7 +13324,7 @@ async function attachProjectsFromEntries(vitest, entries) {
+ 		debug?.(`creating a Vite server for project ${projectLabel(projectConfig.name)}`);
+ 		const children = childrenByViteConfig.get(viteConfig) ?? [];
+ 		const { server, parent } = await createClusterServer(vitest, viteConfig, projectConfig, children);
+-		const project = new TestProject(vitest, server, viteConfig, projectConfig);
++		const project = new TestProject(vitest, server, viteConfig, projectConfig, namePrefix);
+ 		// a shared entry can create the container's server on first use,
+ 		// but the server still belongs to the declaring config
+ 		project._sharedViteServer = !!entry.sharedServer;
+@@ -20618,6 +20683,7 @@ class Vitest {
+ 		// populate will merge all configs into every project,
+ 		// we don't want that when just listing tags
+ 		if (!resolved.listTags) populateProjectsTags(this.coreWorkspaceProject, this.projects);
++		await this._fsCache.ensureCacheIntegrity();
+ 		this.reporters = await createReporters(resolved.reporters, this);
+ 		// API setup (watch mode only). Must run after the reporters array is built
+ 		// above, since `setup()` appends the UI/API WebSocket reporter to it. For a
+@@ -20634,7 +20700,6 @@ class Vitest {
+ 				setup(this, browserServer);
+ 			}
+ 		}
+-		await this._fsCache.ensureCacheIntegrity();
+ 		await Promise.all([...this._onSetServer.map((fn) => fn()), this._traces.waitInit()]);
+ 	}
+ 	/** @internal */
+@@ -20675,7 +20740,7 @@ class Vitest {
+ 		if (this.coverageProvider?.onFileTransform) this.clearAllCachePaths();
+ 	}
+ 	clearAllCachePaths() {
+-		this.projects.forEach(({ vite }) => {
++		new Set([this.getRootProject(), ...this.projects]).forEach(({ vite }) => {
+ 			Object.values(vite.environments).forEach((environment) => this._fsCache.invalidateAllCachePaths(environment));
+ 		});
+ 	}
+diff --git a/dist/chunks/index.OVGXnVRj.js b/dist/chunks/index.OVGXnVRj.js
+index a7b39bf9e1dd97c44fb78888d02f9e7cc4b0ceef..8dcd740f54fe7e190aa39935808a30d80e6e1b40 100644
+--- a/dist/chunks/index.OVGXnVRj.js
++++ b/dist/chunks/index.OVGXnVRj.js
+@@ -4964,12 +4964,12 @@ function requireFakeTimersSrc () {
+ 	                    return this.refed;
+ 	                },
+ 	                refresh: function () {
++	                    clock.timerHeap.remove(timer);
+ 	                    timer.callAt =
+ 	                        clock.now +
+ 	                        (parseInt(String(timer.delay)) ||
+ 	                            (clock.duringTick ? 1 : 0));
+ 
+-	                    clock.timerHeap.remove(timer);
+ 	                    timer.order = uniqueTimerOrder++;
+ 	                    setTimer(clock, timer);
+ 	                    clock.timerHeap.push(timer);
+diff --git a/dist/chunks/init-forks.CiCtIMPj.js b/dist/chunks/init-forks.CiCtIMPj.js
+index dbb1a04882b2ff60ab0968d6dabd10dfad696eb2..818981f891f170e197a16e41dfe98b341b64fc3c 100644
+--- a/dist/chunks/init-forks.CiCtIMPj.js
++++ b/dist/chunks/init-forks.CiCtIMPj.js
+@@ -13,7 +13,12 @@ processOn("error", onError);
+ function workerInit(options) {
+ 	const { runTests } = options;
+ 	init({
+-		post: (v) => processSend(v),
++		// Flush the response, then exit explicitly while native profiler signal handlers
++		// are still installed. The parent joins actual exit within its stop deadline.
++		post: (v) => {
++			if (v.__vitest_worker_response__ && v.type === "stopped") return processSend({ ...v, willExit: true }, (error) => processExit(error ? 1 : process.exitCode));
++			return processSend(v);
++		},
+ 		on: (cb) => processOn("message", cb),
+ 		off: (cb) => processOff("message", cb),
+ 		teardown: () => {
+diff --git a/dist/chunks/plugin.d.BbcoZhuj.d.ts b/dist/chunks/plugin.d.BbcoZhuj.d.ts
+index f399a7658b43c34df38c976e6f41744d9af7a5fd..60e2a21c06055643819affb23c563e242db96906 100644
+--- a/dist/chunks/plugin.d.BbcoZhuj.d.ts
++++ b/dist/chunks/plugin.d.BbcoZhuj.d.ts
+@@ -1032,13 +1032,14 @@ declare class TestProject {
+ 	config: ResolvedConfig;
+ 	viteConfig: ResolvedConfig$1;
+ 	vite: ViteDevServer;
++	readonly namePrefix: string;
+ 	hash: string;
+ 	private runner;
+ 	private closingPromise;
+ 	private typecheckFilesList;
+ 	private _globalSetups?;
+ 	private _provided;
+-	constructor(vitest: Vitest, server: ViteDevServer, viteConfig: ResolvedConfig$1, projectConfig: ResolvedConfig);
++	constructor(vitest: Vitest, server: ViteDevServer, viteConfig: ResolvedConfig$1, projectConfig: ResolvedConfig, namePrefix?: string);
+ 	/**
+ 	* Provide a value to the test context. This value will be available to all tests with `inject`.
+ 	*/
+@@ -2694,6 +2695,8 @@ interface PoolWorker {
+ 	send: (message: WorkerRequest) => void;
+ 	deserialize: (data: unknown) => unknown;
+ 	start: () => Promise<void>;
++	/** Observe exit when a stopped response declares willExit; reject abnormal termination. */
++	waitForExit?: () => Promise<void>;
+ 	stop: () => Promise<void>;
+ 	/**
+ 	* This is called on workers that already satisfy certain constraints:
+@@ -2759,6 +2762,8 @@ type WorkerResponse = {
+ 	error?: unknown;
+ } | {
+ 	type: "stopped";
++	/** The transport will exit itself after sending this response. */
++	willExit?: true;
+ 	error?: unknown;
+ } | {
+ 	type: "testfileFinished";
+@@ -4432,6 +4437,7 @@ interface ResolvedConfig extends Omit<Required<UserConfig>, "project" | "config"
+ interface ResolvedProjectEntry {
+ 	viteConfig: ResolvedConfig$1;
+ 	projectConfig: ResolvedConfig;
++	namePrefix: string;
+ 	/**
+ 	* When set, this entry exists only so browser-instance siblings can attach
+ 	* to a parent that owns the Vite server and (later) the browser provider.
+@@ -4489,6 +4495,16 @@ interface UserWorkspaceConfig extends UserConfig$1 {
+ type UserProjectConfigFn = (env: ConfigEnv) => UserWorkspaceConfig | Promise<UserWorkspaceConfig>;
+ type UserProjectConfigExport = UserWorkspaceConfig | Promise<UserWorkspaceConfig> | UserProjectConfigFn;
+ type TestProjectInlineConfiguration = (UserWorkspaceConfig & {
++	/**
++	* Load a file-backed project while allowing explicit project options such as `root`.
++	* Unlike `extends`, the file owns its complete project config and is evaluated once.
++	*/
++	config?: string;
++	/**
++	* Preserve the resolved container prefix when replaying an executed file project.
++	* When present, the file is treated as a standalone project.
++	*/
++	namePrefix?: string;
+ 	/**
+ 	* Relative path to the extendable config. All other options will be merged with this config.
+ 	* If `true`, the project will inherit all options from the root config.
+diff --git a/dist/chunks/run.CQOUYP-x.js b/dist/chunks/run.CQOUYP-x.js
+index 50374ec931f5343cc2e8ba05de075fe38d211a69..2c8f745748733f4a588b6ad58cf64901c5a3c4b7 100644
+--- a/dist/chunks/run.CQOUYP-x.js
++++ b/dist/chunks/run.CQOUYP-x.js
+@@ -3782,14 +3782,17 @@ function throttle(fn, ms) {
+ 	let pendingCall;
+ 	return function call(...args) {
+ 		const now = unixNow();
+-		if (now - last > ms) {
++		if (now - last >= ms) {
+ 			last = now;
+ 			clearTimeout(pendingCall);
+ 			pendingCall = void 0;
+ 			return fn.apply(this, args);
+ 		}
+ 		// Make sure fn is still called even if there are no further calls
+-		pendingCall ??= setTimeout(call.bind(this), ms, ...args);
++		pendingCall ??= setTimeout(() => {
++			pendingCall = undefined;
++			call.apply(this, args);
++		}, ms);
+ 	};
+ }
+ // throttle based on summary reporter's DURATION_UPDATE_INTERVAL_MS
+diff --git a/dist/node.d.ts b/dist/node.d.ts
+index b16dc78accec849d1c888134fb67371cecbd8e5b..8ad079878960a999d1bce4699ba1819da4003b2b 100644
+--- a/dist/node.d.ts
++++ b/dist/node.d.ts
+@@ -425,6 +425,7 @@ declare class ForksPoolWorker implements PoolWorker {
+ 	stop(): Promise<void>;
+ 	deserialize(data: unknown): unknown;
+ 	private emitError;
++	waitForExit(): Promise<void>;
+ 	private get fork();
+ }
+ 

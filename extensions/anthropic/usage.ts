@@ -3,7 +3,6 @@ import type {
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { validateAnthropicSetupToken } from "openclaw/plugin-sdk/provider-auth";
 import {
   addProviderUsageModel,
   asProviderUsageObject,
@@ -262,8 +261,11 @@ export async function resolveAnthropicUsageAuth(
   if (adminKey) {
     return { token: encodeAdminToken(adminKey) };
   }
-  if (apiKey && validateAnthropicSetupToken(apiKey) === undefined) {
-    return { token: apiKey };
+  if (apiKey) {
+    const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
+    if (validateAnthropicSetupToken(apiKey) === undefined) {
+      return { token: apiKey };
+    }
   }
 
   // Claude owns its native refresh-token family. Do not resolve a copied

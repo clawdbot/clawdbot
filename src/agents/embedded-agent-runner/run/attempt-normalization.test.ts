@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
   assertAgentHarnessRunAdmission,
   buildContextEngineCompactionSessionTarget,
@@ -12,27 +14,49 @@ import {
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
-  listSessionEntriesCore: vi.fn(() => []),
+  listSessionEntriesReadOnly: vi.fn(() => []),
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore:
     vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
   updateSessionEntry: vi.fn(async () => undefined),
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", () => sessionAccessorMocks);
+vi.mock("../../../config/sessions/session-accessor.js", () => ({
+  ...sessionAccessorMocks,
+  loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntry,
+}));
 
 beforeEach(() => {
-  sessionAccessorMocks.listSessionEntriesCore.mockReset().mockReturnValue([]);
+  sessionAccessorMocks.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
   sessionAccessorMocks.loadSessionEntry.mockReset();
   sessionAccessorMocks.patchSessionEntryCore.mockReset().mockResolvedValue(null);
   sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
 });
 
 it.each([0, 2])(
-  "retains compaction facts across cancellation with %s ingress records",
+  "retains compaction facts when parent Stop arrives during persistence (%s ingress records)",
   async (recordedCompactionCount) => {
     const persistence = createDeferred();
     const controller = new AbortController();
+    const generation = getAgentEventLifecycleGeneration();
+    const params = {
+      abortSignal: controller.signal,
+      prompt: "Stop while persisting",
+      runId: "normalization-stop",
+      sessionId: "normalization-stop",
+      sessionFile: "agent:main:normalization-stop",
+      timeoutMs: 30_000,
+      workspaceDir: "/tmp",
+    };
+    const laneController = createEmbeddedRunLaneController({
+      getParams: () => params,
+      getLifecycleGeneration: () => generation,
+      initialQueuedLifecycleGeneration: generation,
+      globalLane: "normalization-stop-global",
+      sessionLane: "normalization-stop-session",
+      setParams: vi.fn(),
+      setLifecycleGeneration: vi.fn(),
+    });
     const cancelled = new Error("cancelled while user persistence was pending");
     const contextRecoveryState = createEmbeddedRunContextRecoveryState();
     contextRecoveryState.autoCompactionCount = recordedCompactionCount;
@@ -40,14 +64,13 @@ it.each([0, 2])(
     // Cancellation exits before model normalization; only the completed-attempt boundary is live.
     const normalization = normalizeEmbeddedRunAttempt({
       runInput: {
-        runParams: { abortSignal: controller.signal },
-        laneController: { throwIfAborted: () => controller.signal.throwIfAborted() },
+        runParams: params,
+        laneController,
       },
       preparedRuntime: { snapshot: () => ({}) },
       recordedCompactionCount,
       dispatchedAttempt: {
         rawAttempt: { compactionCount: 2, compactionTokensAfter: 40.9 },
-        cancellationRequested: true,
       },
       sessionPromptState: {
         activePrompt: { persisted: true },
@@ -358,7 +381,7 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
       sessionId: "session-before",
       updatedAt: 1,
     });
-    sessionAccessorMocks.listSessionEntriesCore.mockReturnValue([
+    sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([
       {
         sessionKey: "agent:main:other",
         entry: { sessionId: "session-after", updatedAt: 2 },

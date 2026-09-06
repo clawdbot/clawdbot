@@ -15,6 +15,8 @@ export type MemorySearchCommandOptions = MemoryCommandOptions & {
   minScore?: number;
 };
 
+export type MemoryResetCommandOptions = { agent?: string; yes?: boolean };
+
 export type MemoryForgetCommandOptions = MemoryCommandOptions & {
   session?: string[];
   hookSource?: string[];

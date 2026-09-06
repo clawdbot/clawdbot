@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emptyMetadataSnapshot,
@@ -7,6 +8,7 @@ import {
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
+import { WizardSession } from "../wizard/session.js";
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -100,7 +102,9 @@ describe("Codex runtime plugin install repair", () => {
         metadata.index.plugins[0]!.rootDir = artifactDir;
         mocks.metadata.mockReturnValue(metadata);
         const cfg: OpenClawConfig = { plugins: { entries: { codex: { enabled } } } };
+        const beforePersistentEffect = vi.fn();
         const confirm = vi.fn(async () => {
+          expect(beforePersistentEffect).not.toHaveBeenCalled();
           if (promptError) {
             throw promptError;
           }
@@ -114,6 +118,7 @@ describe("Codex runtime plugin install repair", () => {
           model: "openai/gpt-5.6-luna",
           prompter: { confirm, note: vi.fn(async () => {}) } as never,
           runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          beforePersistentEffect,
         });
         if (promptError) {
           await expect(pending).rejects.toBe(promptError);
@@ -138,6 +143,7 @@ describe("Codex runtime plugin install repair", () => {
         expect(cfg.plugins?.entries?.codex?.enabled).toBe(enabled);
         expect(confirm).toHaveBeenCalledTimes(enabled ? 0 : 1);
         if (accepted && !enabled) {
+          expect(beforePersistentEffect).toHaveBeenCalledOnce();
           expect(mocks.writeInstallRecords).toHaveBeenCalledWith(
             expect.objectContaining({
               codex: expect.objectContaining({
@@ -148,12 +154,54 @@ describe("Codex runtime plugin install repair", () => {
             expect.any(Object),
           );
         } else {
+          expect(beforePersistentEffect).not.toHaveBeenCalled();
           expect(mocks.writeInstallRecords).not.toHaveBeenCalled();
         }
         expect(mocks.ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
       });
     },
   );
+
+  it("bridges fresh runtime installer progress through a hosted wizard", async () => {
+    mocks.ensureOnboardingPluginInstalled.mockImplementationOnce(async ({ cfg, prompter }) => {
+      prompter.progress("Installing runtime").stop();
+      const accepted = await prompter.confirm({
+        message: "Continue installation?",
+        initialValue: false,
+      });
+      return {
+        cfg,
+        pluginId: "codex",
+        installed: accepted,
+        status: accepted ? "installed" : "skipped",
+      };
+    });
+    const { ensureCodexRuntimePluginForModelSelection } =
+      await import("./codex-runtime-plugin-install.js");
+    const session = new WizardSession(async (prompter) => {
+      const result = await ensureCodexRuntimePluginForModelSelection({
+        cfg: {},
+        model: "openai/gpt-5.6-luna",
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      });
+      expect(result.ok).toBe(true);
+    });
+    try {
+      const progress = await session.next();
+      expect(progress).toMatchObject({
+        done: false,
+        step: { type: "progress", message: "Installing runtime" },
+      });
+      const confirmation = await session.next();
+      expect(confirmation.step).toMatchObject({ type: "confirm", initialValue: false });
+      await session.answer(confirmation.step!.id, true);
+      await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
+    } finally {
+      session.cancel();
+      await session.whenSettled();
+    }
+  });
 
   it("surfaces non-fatal ClawHub repair notices to warning-only callers", async () => {
     const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
@@ -442,6 +490,42 @@ describe("Codex runtime plugin install repair", () => {
       expect.objectContaining({ entry: expect.objectContaining({ pluginId: "copilot" }) }),
     );
   });
+
+  it.each(["selected onboarding", "ordinary selection", "silent supervision"] as const)(
+    "requests official capability review only for the explicit caller: %s",
+    async (caller) => {
+      const reviewOfficialArtifacts = caller === "selected onboarding" ? true : undefined;
+      const prompter = createWizardPrompter();
+      mocks.ensureOnboardingPluginInstalled.mockImplementationOnce(async (params) => {
+        expect(params.reviewOfficialArtifacts).toBe(reviewOfficialArtifacts);
+        if (caller === "silent supervision") {
+          expect(await params.onCapabilityConsent({})).toBeUndefined();
+        }
+        return { cfg: params.cfg, installed: true, pluginId: "codex", status: "installed" };
+      });
+      const { ensureCodexRuntimePluginForModelSelection, ensureCodexRuntimePluginForSupervision } =
+        await import("./codex-runtime-plugin-install.js");
+      const ensure =
+        caller === "silent supervision"
+          ? ensureCodexRuntimePluginForSupervision
+          : ensureCodexRuntimePluginForModelSelection;
+      const result = await ensure({
+        cfg: {
+          agents: {
+            defaults: { models: { "openai/fixture-model": { agentRuntime: { id: "codex" } } } },
+          },
+        },
+        model: "openai/fixture-model",
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        ...(reviewOfficialArtifacts ? { reviewOfficialArtifacts } : {}),
+        ...(caller === "silent supervision" ? { output: "silent" } : {}),
+      });
+      expect(result).toMatchObject({ ok: true, required: true });
+      expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
+      expect(prompter.confirm).not.toHaveBeenCalled();
+    },
+  );
 
   it("silences installer output and rejects prompts in non-interactive mode", async () => {
     const note = vi.fn(async () => {});

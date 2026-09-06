@@ -1,6 +1,7 @@
 /**
  * Shared metadata and result types for embedded-agent runner surfaces.
  */
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type {
   CliSessionBinding,
@@ -19,7 +20,7 @@ import type {
 import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
-import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
+import type { ModelRef } from "../model-ref-shared.js";
 import type { AgentRuntimeCredentialSource } from "../runtime-plan/types.js";
 import type { NormalizedUsage } from "../usage.js";
 
@@ -49,6 +50,8 @@ export type EmbeddedAgentMeta = {
   contextTokens?: number;
   contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   agentHarnessId?: string;
+  /** Runtime-owned selection, independent of the final response or credential source. */
+  runtimeModelSelection?: ModelRef;
   /** Redacted credential source selected for the terminal physical model attempt. */
   credentialSource?: AgentRuntimeCredentialSource;
   fallbackAttempts?: FallbackAttempt[];
@@ -112,7 +115,7 @@ export type TraceAttempt = {
     | "surface_error"
     | "candidate_failed"
     | "rotate_profile"
-    | "same_model_rate_limit"
+    | "same_model_transient"
     | "fallback_model"
     | "aborted"
     | "error";
@@ -202,6 +205,8 @@ export type EmbeddedAgentRunMeta = {
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
+  /** A visible parent delegated its otherwise-empty result to completion children. */
+  continuationPending?: true;
   error?: {
     kind:
       | "context_overflow"
@@ -260,6 +265,7 @@ export type EmbeddedAgentRunResult = {
   didSendViaMessagingTool?: boolean;
   // True if message_tool_only delivered a visible reply to the current source conversation.
   didDeliverSourceReplyViaMessageTool?: boolean;
+  sourceReplyDelivered?: true;
   // True if a deterministic approval prompt was sent through the tool-result channel.
   didSendDeterministicApprovalPrompt?: boolean;
   // Texts successfully sent via messaging tools during the run.

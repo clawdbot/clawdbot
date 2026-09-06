@@ -1,12 +1,15 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceResponseOutcome } from "openclaw/plugin-sdk/realtime-voice";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { describe, expect, it } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 type RealtimeOutcome = {
+  callbackOrder: string[];
   errors: string[];
   outcomes: RealtimeVoiceResponseOutcome[];
   transcripts: Array<{ speaker: string; text: string; final: boolean }>;
@@ -14,44 +17,28 @@ type RealtimeOutcome = {
 };
 
 type CaptureRealtimeOutcomeOptions = {
+  closeOnToolCall?: boolean;
   completeQueuedResponse?: boolean;
   queuedUserMessage?: string;
   onClientEvent?: (event: Record<string, unknown>) => void;
   throwOnResponseDone?: boolean;
 };
 
-async function waitForFixtureEvent(promise: Promise<void>, label: string): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), 2_000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function captureRealtimeOutcome(
   eventInput: Record<string, unknown> | Record<string, unknown>[],
   options: CaptureRealtimeOutcomeOptions = {},
 ): Promise<RealtimeOutcome> {
   const events = Array.isArray(eventInput) ? eventInput : [eventInput];
-  const outcome: RealtimeOutcome = { errors: [], outcomes: [], transcripts: [], tools: [] };
-  let markServerEventHandled: () => void = () => {};
-  const serverEventHandled = new Promise<void>((resolve) => {
-    markServerEventHandled = resolve;
-  });
-  let markResponseCreatedHandled: () => void = () => {};
-  const responseCreatedHandled = new Promise<void>((resolve) => {
-    markResponseCreatedHandled = resolve;
-  });
-  let markQueuedResponseCompleted: () => void = () => {};
-  const queuedResponseCompleted = new Promise<void>((resolve) => {
-    markQueuedResponseCompleted = resolve;
-  });
+  const outcome: RealtimeOutcome = {
+    callbackOrder: [],
+    errors: [],
+    outcomes: [],
+    transcripts: [],
+    tools: [],
+  };
+  const serverEventHandled = createDeferred<void>();
+  const responseCreatedHandled = createDeferred<void>();
+  const queuedResponseCompleted = createDeferred<void>();
   const server = createServer();
   const sockets = new Set<WebSocket>();
   let queuedTurnTriggered = false;
@@ -75,7 +62,7 @@ async function captureRealtimeOutcome(
               }),
             );
           }
-          markServerEventHandled();
+          serverEventHandled.resolve();
           return;
         }
         if (
@@ -112,23 +99,36 @@ async function captureRealtimeOutcome(
     onClearAudio() {},
     onError: (error) => outcome.errors.push(error.message),
     onResponseDone: (responseOutcome) => {
+      outcome.callbackOrder.push("outcome");
       outcome.outcomes.push(responseOutcome);
       if (responseOutcome.responseId === "response_2") {
-        markQueuedResponseCompleted();
+        queuedResponseCompleted.resolve();
       }
       if (options.throwOnResponseDone && responseOutcome.responseId === "response_1") {
         throw new Error("consumer callback failed");
       }
     },
-    onTranscript: (speaker, text, final) => outcome.transcripts.push({ speaker, text, final }),
-    onToolCall: (tool) => outcome.tools.push(tool),
+    onTranscript: (speaker, text, final) => {
+      outcome.callbackOrder.push("transcript");
+      outcome.transcripts.push({ speaker, text, final });
+    },
+    onToolCall: (tool) => {
+      outcome.callbackOrder.push("tool");
+      outcome.tools.push(tool);
+      if (options.closeOnToolCall) {
+        bridge.close();
+      }
+    },
     onEvent: (observed) => {
+      if (observed.direction === "server" && observed.type === "response.done") {
+        outcome.callbackOrder.push("terminal");
+      }
       if (observed.direction === "server" && observed.type === "response.created") {
-        markResponseCreatedHandled();
+        responseCreatedHandled.resolve();
       }
       if (observed.direction === "server" && observed.type === events.at(-1)?.type) {
         if (!options.queuedUserMessage) {
-          markServerEventHandled();
+          serverEventHandled.resolve();
         }
       }
     },
@@ -137,14 +137,20 @@ async function captureRealtimeOutcome(
   try {
     await bridge.connect();
     if (options.queuedUserMessage) {
-      await waitForFixtureEvent(responseCreatedHandled, "response.created");
+      await withTimeout(responseCreatedHandled.promise, 2_000, {
+        message: "timed out waiting for response.created",
+      });
       bridge.sendUserMessage?.(options.queuedUserMessage);
-      await waitForFixtureEvent(serverEventHandled, "the queued response.create");
+      await withTimeout(serverEventHandled.promise, 2_000, {
+        message: "timed out waiting for the queued response.create",
+      });
       if (options.completeQueuedResponse) {
-        await waitForFixtureEvent(queuedResponseCompleted, "the completed queued response");
+        await withTimeout(queuedResponseCompleted.promise, 2_000, {
+          message: "timed out waiting for the completed queued response",
+        });
       }
     } else {
-      await serverEventHandled;
+      await serverEventHandled.promise;
     }
     return outcome;
   } finally {
@@ -219,6 +225,7 @@ describe("xAI realtime terminal event ownership", () => {
     );
 
     expect(outcome).toEqual({
+      callbackOrder: ["outcome", "terminal"],
       errors: [],
       outcomes: [{ status: "completed" }],
       transcripts: [],
@@ -229,6 +236,34 @@ describe("xAI realtime terminal event ownership", () => {
       "conversation.item.create",
       "response.create",
     ]);
+  });
+
+  it("stops terminal output when a tool callback closes the bridge", async () => {
+    const outcome = await captureRealtimeOutcome(
+      {
+        type: "response.done",
+        response: {
+          id: "response_1",
+          status: "completed",
+          output: [
+            completedTool,
+            { ...completedTool, id: "item_late", call_id: "call_late" },
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_audio", transcript: "late answer" }],
+            },
+          ],
+        },
+      },
+      { closeOnToolCall: true },
+    );
+
+    expect(outcome.errors).toEqual([]);
+    expect(outcome.tools).toEqual([expectedTool]);
+    expect(outcome.transcripts).toEqual([]);
+    expect(outcome.outcomes).toEqual([{ responseId: "response_1", status: "completed" }]);
+    expect(outcome.callbackOrder).toEqual(["tool", "outcome", "terminal"]);
   });
 
   it.each([
@@ -406,6 +441,7 @@ describe("xAI realtime terminal event ownership", () => {
       return;
     }
     expect(actual.outcomes).toHaveLength(1);
+    expect(actual.callbackOrder.slice(-2)).toEqual(["outcome", "terminal"]);
     const rawStatus = responseDone.response?.status;
     if (
       rawStatus !== "completed" &&

@@ -305,14 +305,20 @@ class FailingTextToSpeechShadow : ShadowTextToSpeech() {
   ): Int {
     submitted += text.toString()
     return when (failureMode) {
-      SpeechFailureMode.Immediate -> TextToSpeech.ERROR
+      SpeechFailureMode.Immediate -> {
+        TextToSpeech.ERROR
+      }
+
       SpeechFailureMode.Callback -> {
         Handler(Looper.getMainLooper()).post {
           utteranceProgressListener.onError(utteranceId, TextToSpeech.ERROR_SYNTHESIS)
         }
         TextToSpeech.SUCCESS
       }
-      null -> super.speak(text, queueMode, params, utteranceId)
+
+      null -> {
+        super.speak(text, queueMode, params, utteranceId)
+      }
     }
   }
 }

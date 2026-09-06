@@ -179,12 +179,12 @@ export async function readSystemdDefinitionMutationCapability(
   const selected = path.basename(resolveSystemdUnitPath(env));
   const names =
     selected === "openclaw-gateway.service" ? [selected, "openclaw.service"] : [selected];
-  const deadlineAt = options?.timeoutMs ? Date.now() + options.timeoutMs : undefined;
+  const deadlineAt = options?.timeoutMs ? performance.now() + options.timeoutMs : undefined;
   for (const name of names) {
     try {
       await assertNoSystemSystemdOwnership(
         name,
-        deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - Date.now()),
+        deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - performance.now()),
       );
     } catch (error) {
       const owned =
@@ -201,8 +201,13 @@ export async function withSystemdDefinitionMutation<T>(
   env: GatewayServiceEnv,
   environment: GatewayServiceEnv,
   run: (mutation: SystemdDefinitionMutation) => Promise<T>,
+  options?: { timeoutMs?: number },
 ): Promise<T> {
-  let initial = await inspect(env, environment);
+  const deadlineAt =
+    options?.timeoutMs && options.timeoutMs > 0 ? performance.now() + options.timeoutMs : undefined;
+  const remainingTimeoutMs = () =>
+    deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - performance.now());
+  let initial = await inspect(env, environment, remainingTimeoutMs());
   assertServiceDefinitionWritable(initial.capability);
   const { unit, generated } = resolveMutationTargets(env, environment);
   // Group-writable umasks must not create directories that inspect() would reject.
@@ -216,7 +221,7 @@ export async function withSystemdDefinitionMutation<T>(
     .toSorted();
   const execute = async (): Promise<T> => {
     const refresh = async (unchanged = false, firstUnitPublication = false) => {
-      const current = await inspect(env, environment);
+      const current = await inspect(env, environment, remainingTimeoutMs());
       assertServiceDefinitionWritable(current.capability);
       const expected = new Map(initial.fingerprint);
       // LoadUnit can reveal shared defaults only after the first base publication.
@@ -254,7 +259,17 @@ export async function withSystemdDefinitionMutation<T>(
       const directory = await fs.realpath(path.dirname(file));
       const temporary = path.join(directory, `${path.basename(file)}.${randomUUID()}.tmp`);
       try {
-        await fs.writeFile(temporary, contents, { flag: "wx", mode });
+        // Keep owner-write during preparation so the descriptor can be reopened
+        // even when the final snapshot mode is read-only.
+        await fs.writeFile(temporary, contents, { flag: "wx", mode: mode | 0o200 });
+        const temporaryHandle = await fs.open(temporary, constants.O_WRONLY | constants.O_NOFOLLOW);
+        try {
+          // Creation mode is filtered by umask. Apply the admitted mode through
+          // the already-open inode so rollback restores the exact snapshot mode.
+          await temporaryHandle.chmod(mode);
+        } finally {
+          await temporaryHandle.close();
+        }
         const written = await fs.lstat(temporary);
         await refresh(true);
         // Locks coordinate OpenClaw writers, not external editors: POSIX rename
@@ -286,7 +301,7 @@ export async function withSystemdDefinitionMutation<T>(
       if (published === undefined) {
         return;
       }
-      const current = await inspect(env, environment);
+      const current = await inspect(env, environment, remainingTimeoutMs());
       // A refreshed global snapshot never grants ownership of another artifact's edit.
       if (current.capability.kind !== "writable" || current.fingerprint.get(file) !== published) {
         return;
@@ -304,13 +319,21 @@ export async function withSystemdDefinitionMutation<T>(
     };
     return await run({ snapshots: initial.snapshots, publish, restore });
   };
-  const lockOptions = {
-    stale: 60_000,
-    retries: { retries: 100, factor: 1, minTimeout: 50, maxTimeout: 100 },
+  const lockOptions = () => {
+    const timeoutMs = remainingTimeoutMs();
+    return {
+      stale: 60_000,
+      retries: {
+        retries: timeoutMs === undefined ? 100 : Math.max(0, Math.ceil(timeoutMs / 50) - 1),
+        factor: 1,
+        minTimeout: 50,
+        maxTimeout: 100,
+      },
+    };
   };
   const acquire = async (index: number): Promise<T> =>
     index === targets.length
       ? execute()
-      : withFileLock(targets[index]!, lockOptions, () => acquire(index + 1));
+      : withFileLock(targets[index]!, lockOptions(), () => acquire(index + 1));
   return await acquire(0);
 }

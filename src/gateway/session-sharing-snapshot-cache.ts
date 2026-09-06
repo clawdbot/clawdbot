@@ -130,11 +130,11 @@ export function loadCachedSessionSharingSnapshot(params: {
   const resolved = params.resolve();
   const canonicalKey = snapshotKey(resolved.canonicalKey, resolved.canonicalAgentId);
   const canonicalCached = snapshotCache.get(canonicalKey);
-  if (canonicalCached) {
-    rememberSnapshotAlias(requestedKey, canonicalKey);
-    return canonicalCached;
+  if (!canonicalCached) {
+    rememberSnapshot(canonicalKey, resolved.snapshot);
   }
-  rememberSnapshot(canonicalKey, resolved.snapshot);
-  rememberSnapshotAlias(requestedKey, canonicalKey);
-  return resolved.snapshot;
+  if (requestedKey !== canonicalKey) {
+    rememberSnapshotAlias(requestedKey, canonicalKey);
+  }
+  return canonicalCached ?? resolved.snapshot;
 }

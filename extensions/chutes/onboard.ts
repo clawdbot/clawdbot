@@ -12,11 +12,12 @@ export const CHUTES_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(mani
 
 const chutesPresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: CHUTES_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => ({
+  resolveParams: (cfg: OpenClawConfig) => ({
     providerId: "chutes",
     api: "openai-completions",
     baseUrl: CHUTES_BASE_URL,
-    catalogModels: structuredClone(CHUTES_MODEL_CATALOG),
+    // Replace mode skips discovery; merge mode must not persist generated pricing as authored pins.
+    catalogModels: cfg.models?.mode === "replace" ? structuredClone(CHUTES_MODEL_CATALOG) : [],
     aliases: [
       ...CHUTES_MODEL_CATALOG.map((model) => `chutes/${model.id}`),
       {

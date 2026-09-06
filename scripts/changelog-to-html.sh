@@ -42,17 +42,18 @@ extract_version_section() {
 }
 
 markdown_to_html() {
-  local text=$1
-  text=$(echo "$text" | sed 's/^##### \(.*\)$/<h5>\1<\/h5>/')
-  text=$(echo "$text" | sed 's/^#### \(.*\)$/<h4>\1<\/h4>/')
-  text=$(echo "$text" | sed 's/^### \(.*\)$/<h3>\1<\/h3>/')
-  text=$(echo "$text" | sed 's/^## \(.*\)$/<h2>\1<\/h2>/')
-  text=$(echo "$text" | sed 's/^- \*\*\([^*]*\)\*\*\(.*\)$/<li><strong>\1<\/strong>\2<\/li>/')
-  text=$(echo "$text" | sed 's/^- \([^*].*\)$/<li>\1<\/li>/')
-  text=$(echo "$text" | sed 's/\*\*\([^*]*\)\*\*/<strong>\1<\/strong>/g')
-  text=$(echo "$text" | sed 's/`\([^`]*\)`/<code>\1<\/code>/g')
-  text=$(echo "$text" | sed 's/\[\([^]]*\)\](\([^)]*\))/<a href="\2">\1<\/a>/g')
-  echo "$text"
+  # Keep substitution order and literal HTML unchanged, but process the whole
+  # section once instead of spawning nine sed processes for every changelog line.
+  sed \
+    -e 's/^##### \(.*\)$/<h5>\1<\/h5>/' \
+    -e 's/^#### \(.*\)$/<h4>\1<\/h4>/' \
+    -e 's/^### \(.*\)$/<h3>\1<\/h3>/' \
+    -e 's/^## \(.*\)$/<h2>\1<\/h2>/' \
+    -e 's/^- \*\*\([^*]*\)\*\*\(.*\)$/<li><strong>\1<\/strong>\2<\/li>/' \
+    -e 's/^- \([^*].*\)$/<li>\1<\/li>/' \
+    -e 's/\*\*\([^*]*\)\*\*/<strong>\1<\/strong>/g' \
+    -e 's/`\([^`]*\)`/<code>\1<\/code>/g' \
+    -e 's/\[\([^]]*\)\](\([^)]*\))/<a href="\2">\1<\/a>/g'
 }
 
 version_content=$(extract_version_section "$VERSION" "$CHANGELOG_FILE")
@@ -65,27 +66,29 @@ fi
 
 echo "<h2>OpenClaw $VERSION</h2>"
 
-in_list=false
-while IFS= read -r line; do
-  if [[ "$line" =~ ^- ]]; then
-    if [[ "$in_list" == false ]]; then
-      echo "<ul>"
-      in_list=true
+{
+  in_list=false
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^- ]]; then
+      if [[ "$in_list" == false ]]; then
+        echo "<ul>"
+        in_list=true
+      fi
+      printf '%s\n' "$line"
+    else
+      if [[ "$in_list" == true ]]; then
+        echo "</ul>"
+        in_list=false
+      fi
+      if [[ -n "$line" ]]; then
+        printf '%s\n' "$line"
+      fi
     fi
-    markdown_to_html "$line"
-  else
-    if [[ "$in_list" == true ]]; then
-      echo "</ul>"
-      in_list=false
-    fi
-    if [[ -n "$line" ]]; then
-      markdown_to_html "$line"
-    fi
-  fi
-done <<< "$version_content"
+  done <<< "$version_content"
 
-if [[ "$in_list" == true ]]; then
-  echo "</ul>"
-fi
+  if [[ "$in_list" == true ]]; then
+    echo "</ul>"
+  fi
+} | markdown_to_html
 
 echo "<p><a href=\"https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md\">View full changelog</a></p>"

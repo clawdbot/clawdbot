@@ -3,16 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import {
+  loadControlUiSourceCatalog,
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
-  mergeControlUiTranslationMaps,
 } from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "../../scripts/lib/control-ui-i18n-config.ts";
 import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
-import { registerActivityEnglish } from "../src/i18n/locales/en-activity.ts";
-import { registerPluginConsentEnglish } from "../src/i18n/locales/en-plugin-consent.ts";
-import { registerSessionPlacementEnglish } from "../src/i18n/locales/en-session-placement.ts";
-import { en } from "../src/i18n/locales/en.ts";
 
 const localeModulePrefix = "virtual:openclaw-control-ui-locale/";
 const resolvedLocaleModulePrefix = `\0${localeModulePrefix}`;
@@ -22,12 +18,7 @@ const i18nAssetsDir = path.resolve(
   "../src/i18n/.i18n",
 );
 const locales = new Set(CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => locale));
-const sourceCatalog = mergeControlUiTranslationMaps(
-  en,
-  registerActivityEnglish.catalog,
-  registerSessionPlacementEnglish.catalog,
-  registerPluginConsentEnglish.catalog,
-);
+const sourceCatalog = loadControlUiSourceCatalog();
 
 export function controlUiLocaleModulesPlugin(): Plugin {
   return {

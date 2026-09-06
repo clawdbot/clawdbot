@@ -49,11 +49,13 @@ function positiveInteger(value: number | undefined): number | undefined {
 
 function truncateText(value: string, maxLength: number | undefined): string {
   const limit = positiveInteger(maxLength);
-  if (!limit) {
+  if (!limit || value.length <= limit) {
     return value;
   }
-  const chars = Array.from(value);
-  return chars.length > limit ? chars.slice(0, limit).join("") : value;
+  // A code point uses at most two UTF-16 units; later units cannot affect this prefix.
+  return Array.from(value.slice(0, limit * 2))
+    .slice(0, limit)
+    .join("");
 }
 
 function truncateUtf8Bytes(value: string, limit: number): string {
@@ -81,8 +83,7 @@ function truncatePresentationText(value: string, limits: TextLimits | undefined)
   if (limits?.encoding === "utf16-units") {
     return truncateUtf16Safe(value, limit);
   }
-  const chars = Array.from(value);
-  return chars.length > limit ? chars.slice(0, limit).join("") : value;
+  return truncateText(value, limit);
 }
 
 function splitPresentationText(value: string, limits: TextLimits | undefined): string[] {
@@ -383,17 +384,14 @@ function countRenderableSelectBlocks(
   if (capabilities?.selects === false) {
     return 0;
   }
-  return blocks.filter((block) => {
-    if (block.type !== "select") {
-      return false;
+  let count = 0;
+  for (const block of blocks) {
+    // A valid maxOptions is at least one, so one accepted option reserves the slot.
+    if (block.type === "select" && block.options.some((option) => adaptOption(option, limits))) {
+      count += 1;
     }
-    const maxOptions = positiveInteger(limits?.maxOptions);
-    const renderableOptions = block.options
-      .map((option) => adaptOption(option, limits))
-      .filter(Boolean)
-      .slice(0, maxOptions ?? undefined);
-    return renderableOptions.length > 0;
-  }).length;
+  }
+  return count;
 }
 
 function createGlobalButtonSelection(params: {

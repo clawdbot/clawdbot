@@ -1,4 +1,6 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
 import { EventStream } from "./event-stream.js";
 
 function createNumberStream(): EventStream<number, number> {
@@ -9,6 +11,33 @@ function createNumberStream(): EventStream<number, number> {
 }
 
 describe("EventStream", () => {
+  it("releases consumed events while retaining unread events and the final result", async ({
+    signal,
+  }) => {
+    const result = await runNodeScript(
+      [
+        "--expose-gc",
+        "--import",
+        "tsx",
+        fileURLToPath(new URL("./event-stream.retention.test-support.ts", import.meta.url)),
+      ],
+      { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
+      15_000,
+      {
+        cwd: fileURLToPath(new URL("../../../../", import.meta.url)),
+        signal,
+        maxBuffer: 64 * 1024,
+        requireProcessTreeExit: process.platform !== "win32",
+      },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([
+      { completed: false, consumedRetained: false, finalRetained: false },
+      { completed: true, consumedRetained: false, finalRetained: true },
+    ]);
+  }, 30_000);
+
   it("preserves interleaved queued and waiting push/pull order", async () => {
     const stream = createNumberStream();
     const iterator = stream[Symbol.asyncIterator]();
@@ -33,9 +62,11 @@ describe("EventStream", () => {
       stream.push(value);
     }
 
+    const prefix: IteratorResult<number>[] = [];
     for (let value = 0; value < 1024; value += 1) {
-      expect(await iterator.next()).toEqual({ value, done: false });
+      prefix.push(await iterator.next());
     }
+    expect(prefix).toEqual(Array.from({ length: 1024 }, (_, value) => ({ value, done: false })));
     const queueState = stream as unknown as { queue: number[]; queueHead: number };
     expect(queueState.queueHead).toBe(0);
     expect(queueState.queue).toHaveLength(1024);
@@ -44,9 +75,13 @@ describe("EventStream", () => {
       stream.push(value);
     }
     stream.end();
+    const remaining: IteratorResult<number>[] = [];
     for (let value = 1024; value < 2052; value += 1) {
-      expect(await iterator.next()).toEqual({ value, done: false });
+      remaining.push(await iterator.next());
     }
+    expect(remaining).toEqual(
+      Array.from({ length: 1028 }, (_, index) => ({ value: index + 1024, done: false })),
+    );
     expect(await iterator.next()).toEqual({ value: undefined, done: true });
   });
 

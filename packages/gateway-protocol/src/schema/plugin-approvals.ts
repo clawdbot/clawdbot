@@ -53,6 +53,12 @@ export const PluginApprovalRequestParamsSchema = closedObject({
   ),
   toolName: Type.Optional(nullableMetadata(Type.String())),
   toolCallId: Type.Optional(nullableMetadata(Type.String())),
+  mcpTool: Type.Optional(
+    closedObject({
+      server: Type.String({ minLength: 1, pattern: "\\S" }),
+      tool: Type.String({ minLength: 1, pattern: "\\S" }),
+    }),
+  ),
   allowedDecisions: Type.Optional(
     nullableMetadata(
       Type.Array(Type.String({ enum: ["allow-once", "allow-always", "deny"] }), {

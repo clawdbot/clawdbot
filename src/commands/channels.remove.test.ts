@@ -193,6 +193,13 @@ describe("channelsRemoveCommand", () => {
   it("asks users to add an external channel plugin before removing its account", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({
+        agents: {
+          ownership: "explicit",
+          entries: {
+            research: { workspace: "/tmp/research-workspace" },
+            ops: { workspace: "/tmp/ops-workspace" },
+          },
+        },
         channels: {
           "external-chat": {
             enabled: true,
@@ -207,6 +214,7 @@ describe("channelsRemoveCommand", () => {
     await channelsRemoveCommand(
       {
         channel: "external-chat",
+        agent: "ops",
         account: "default",
         delete: true,
       },
@@ -216,6 +224,9 @@ describe("channelsRemoveCommand", () => {
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
+    );
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
       'Channel plugin "external-chat" is not installed. Run openclaw channels add --channel external-chat first.',
@@ -322,6 +333,45 @@ describe("channelsRemoveCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       'Deleted external-chat account "default". Discarded no stored ingress events.',
     );
+  });
+
+  it.each([
+    { account: "", label: "empty" },
+    { account: "   ", label: "whitespace" },
+  ])("rejects a $label --account before deleting or writing config", async ({ account }) => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            token: "token-1",
+          },
+        },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    const scopedPlugin = createExternalChatDeletePlugin();
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: scopedPlugin,
+          source: "test",
+        },
+      ]),
+    );
+
+    await expect(
+      channelsRemoveCommand({ channel: "external-chat", account, delete: true }, runtime, {
+        hasFlags: true,
+      }),
+    ).rejects.toThrow("--account must not be blank");
+
+    expect(scopedPlugin.config.deleteAccount).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("stops an active gateway channel runtime before deleting a runtime-backed account", async () => {

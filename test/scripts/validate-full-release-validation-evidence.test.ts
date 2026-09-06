@@ -92,6 +92,123 @@ function validate(
 }
 
 describe("full release validation evidence", () => {
+  it.each(["main", pinnedBranch])(
+    "binds npm beta coverage to its exact publication tag on %s",
+    (branch) => {
+      const validateEvidenceReuseStrictly = vi.fn();
+      const result = validateFullReleaseValidationEvidence({
+        run: releaseRun({ head_branch: branch }),
+        manifest: releaseManifest({
+          version: 4,
+          workflowRef: branch,
+          workflowFullRef: `refs/heads/${branch}`,
+          releaseProfile: "beta",
+          rerunGroup: "all",
+          runReleaseSoak: "false",
+          validationInputs: { coveragePolicy: "npm-beta-v1", targetVersion: "2026.8.28-beta.1" },
+        }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedReleaseTag: "v2026.8.28-beta.1",
+        isTrustedMainAncestor: () => true,
+        validateEvidenceReuseStrictly,
+      });
+      expect(result.coveragePolicy).toBe("npm-beta-v1");
+      expect(validateEvidenceReuseStrictly).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { label: "unknown policy", coveragePolicy: "unknown" },
+    { label: "old schema", version: 3 },
+    { label: "stable profile", releaseProfile: "stable" },
+    { label: "soak", runReleaseSoak: "true" },
+    { label: "focused group", rerunGroup: "performance" },
+    { label: "stable target", targetVersion: "2026.8.28" },
+    { label: "stable publication on beta dist-tag", expectedReleaseTag: "v2026.8.28" },
+    { label: "different beta", expectedReleaseTag: "v2026.8.28-beta.2" },
+    { label: "missing publication tag", expectedReleaseTag: undefined },
+  ])("rejects npm beta direct evidence for $label", (drift) => {
+    const {
+      label: _label,
+      coveragePolicy,
+      targetVersion,
+      expectedReleaseTag,
+      ...manifestDrift
+    } = drift;
+    expect(() =>
+      validateFullReleaseValidationEvidence({
+        run: releaseRun({ head_branch: "main" }),
+        manifest: releaseManifest({
+          version: 4,
+          workflowRef: "main",
+          workflowFullRef: "refs/heads/main",
+          releaseProfile: "beta",
+          rerunGroup: "all",
+          runReleaseSoak: "false",
+          ...manifestDrift,
+          validationInputs: {
+            coveragePolicy: coveragePolicy ?? "npm-beta-v1",
+            targetVersion: targetVersion ?? "2026.8.28-beta.1",
+          },
+        }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedReleaseTag: Object.hasOwn(drift, "expectedReleaseTag")
+          ? expectedReleaseTag
+          : "v2026.8.28-beta.1",
+        isTrustedMainAncestor: () => true,
+      }),
+    ).toThrow(/coverage policy/iu);
+  });
+
+  it.each([
+    ["2026.8.28", "release/2026.8.28", "v2026.8.28", true],
+    ["2026.8.28", "v2026.8.28", "v2026.8.28", true],
+    ["2026.8.28", "release/2026.8.28-1", "v2026.8.28-1", true],
+    ["2026.8.28-1", "release/2026.8.28-1", "v2026.8.28-1", true],
+    ["2026.8.28", "release/2026.8.28-1", "v2026.8.28", false],
+    ["2026.8.28", "release/2026.8.28-1", "v2026.8.28-2", false],
+    ["2026.8.28", "release/2026.8.27", "v2026.8.28", false],
+    ["2026.8.28", "main", "v2026.8.28", false],
+    ["2026.8.28", "", "v2026.8.28", false],
+    ["2026.8.33", "extended-stable/2026.8.33", "v2026.8.33", false],
+  ] as const)(
+    "binds npm stable evidence %s/%s to final publication %s",
+    (targetVersion, context, expectedReleaseTag, accepted) => {
+      const validateEvidence = () =>
+        validateFullReleaseValidationEvidence({
+          run: releaseRun({ head_branch: "main" }),
+          manifest: releaseManifest({
+            version: 4,
+            workflowRef: "main",
+            workflowFullRef: "refs/heads/main",
+            releaseProfile: "stable",
+            rerunGroup: "all",
+            runReleaseSoak: "true",
+            targetRef: context.startsWith("v") ? context : targetSha,
+            validationInputs: {
+              coveragePolicy: "npm-stable-v1",
+              targetContextRef: context.startsWith("v") ? "" : context,
+              targetVersion,
+            },
+          }),
+          expectedRepository: "openclaw/openclaw",
+          expectedRunId: "123",
+          expectedTargetSha: targetSha,
+          expectedReleaseTag,
+          isTrustedMainAncestor: () => true,
+        });
+      if (accepted) {
+        expect(validateEvidence().coveragePolicy).toBe("npm-stable-v1");
+      } else {
+        expect(validateEvidence).toThrow();
+      }
+    },
+  );
+
   it("normalizes REST and gh run metadata", () => {
     const normalized = normalizeFullReleaseValidationRun(releaseRun());
 

@@ -47,17 +47,10 @@ function selectChatSendAgentReplyPayloads(params: {
   return params.deliveredReplies
     .filter((entry) => {
       const { payload } = entry;
-      if (getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority) {
-        return entry.kind === "final" && payload.isError !== true;
-      }
-      if (isSourceReplyTranscriptMirrorPayload(payload)) {
-        return entry.kind === "final" && payload.isError !== true;
-      }
-      return (
-        !params.hasReturnedAgentErrorPayloads &&
-        (entry.kind === "block" || entry.kind === "final") &&
-        isReplyPayloadStatusNotice(payload)
-      );
+      return getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority ||
+        isSourceReplyTranscriptMirrorPayload(payload)
+        ? entry.kind === "final" && payload.isError !== true
+        : !params.hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload);
     })
     .map((entry) => entry.payload);
 }

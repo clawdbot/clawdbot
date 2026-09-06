@@ -2,6 +2,10 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
+import {
+  formatErrorMessage,
+  PlatformMessageNotDispatchedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readResponseTextPrefix,
@@ -10,6 +14,7 @@ import {
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
+import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import { looksLikeSmsPhoneNumber, normalizeSmsPhoneNumber } from "./phone.js";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import type { ResolvedSmsAccount, SmsInboundMessage, SmsSendResult } from "./types.js";
@@ -304,13 +309,17 @@ export async function readTwilioWebhookForm(req: IncomingMessage): Promise<Recor
   const body = await readRequestBodyWithLimit(req, {
     maxBytes: WEBHOOK_BODY_LIMIT_BYTES,
     timeoutMs: WEBHOOK_BODY_TIMEOUT_MS,
+    // Defer destruction so the webhook can answer 413 before the connection closes.
+    destroyOnLimit: false,
   });
   return parseTwilioFormBody(body);
 }
 
+export const TWIML_CONTENT_TYPE = "text/xml; charset=utf-8";
+
 export function respondTwiml(res: ServerResponse, statusCode: number, body = ""): void {
   res.statusCode = statusCode;
-  res.setHeader("content-type", "text/xml; charset=utf-8");
+  res.setHeader("content-type", TWIML_CONTENT_TYPE);
   res.end(body || "<Response></Response>");
 }
 
@@ -369,6 +378,17 @@ function normalizeRequestHeaders(headers: HeadersInit | undefined): Record<strin
   return Object.fromEntries(Object.entries(headers));
 }
 
+function assertTwilioRequestCredentialsAvailable(account: ResolvedSmsAccount): void {
+  try {
+    assertSmsCredentialOwnerAvailable(account);
+  } catch (error) {
+    throw new PlatformMessageNotDispatchedError(
+      `SMS request stopped before Twilio dispatch: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+}
+
 async function requestTwilioApi(params: {
   url: string;
   account: ResolvedSmsAccount;
@@ -385,6 +405,7 @@ async function requestTwilioApi(params: {
     },
   } satisfies RequestInit;
   if (params.fetchImpl) {
+    assertTwilioRequestCredentialsAvailable(params.account);
     const response = await params.fetchImpl(params.url, init);
     return {
       ok: response.ok,
@@ -393,9 +414,19 @@ async function requestTwilioApi(params: {
     };
   }
 
+  let requestDispatched = false;
   const guarded = await fetchWithSsrFGuard({
     url: params.url,
     init,
+    beforeRequest: () => {
+      if (requestDispatched) {
+        assertSmsCredentialOwnerAvailable(params.account);
+        return;
+      }
+      assertTwilioRequestCredentialsAvailable(params.account);
+      // A later callback means the preceding request returned a redirect response.
+      requestDispatched = true;
+    },
     auditContext: "sms-twilio-api",
     policy: { allowedHostnames: [params.allowedHostname] },
     requireHttps: true,
@@ -569,6 +600,7 @@ export async function sendSmsViaTwilio(params: {
   fetchImpl?: typeof fetch;
   onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<SmsSendResult> {
+  assertSmsCredentialOwnerAvailable(params.account);
   if (!params.account.fromNumber && !params.account.messagingServiceSid) {
     throw new Error("Twilio SMS send requires fromNumber or messagingServiceSid.");
   }

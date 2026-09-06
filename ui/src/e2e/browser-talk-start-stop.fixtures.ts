@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 
@@ -419,32 +418,44 @@ export async function installOversizedWebRtcSdpFixture(page: Page) {
   });
 }
 
-export async function captureComposerProof(page: Page, fileName: string) {
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "voice-controls");
-  await mkdir(artifactDir, { recursive: true });
+export async function captureComposerProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  const artifactDir = path.join(owner.artifactDir, "voice-controls");
   await page
     .locator(".agent-chat__composer-shell")
     .screenshot({ path: path.join(artifactDir, fileName) });
 }
 
-export async function captureMicrophoneLossProof(page: Page, fileName: string) {
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "voice-controls");
-  await mkdir(artifactDir, { recursive: true });
+export async function captureMicrophoneLossProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  const artifactDir = path.join(owner.artifactDir, "voice-controls");
   // The error floats above the composer bounds; retain the real chat context.
   await page.screenshot({ path: path.join(artifactDir, fileName), fullPage: true });
 }
 
-export async function captureVideoTalkProof(page: Page, fileName: string) {
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "video-talk");
-  await mkdir(artifactDir, { recursive: true });
+export async function captureVideoTalkProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  const artifactDir = path.join(owner.artifactDir, "video-talk");
   await page
     .locator(".agent-chat__composer-shell")
     .screenshot({ path: path.join(artifactDir, fileName) });
 }
 
-export async function captureWebRtcSdpAlertProof(page: Page, fileName: string) {
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "webrtc-sdp");
-  await mkdir(artifactDir, { recursive: true });
+export async function captureWebRtcSdpAlertProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  const artifactDir = path.join(owner.artifactDir, "webrtc-sdp");
   await page
     .locator('.agent-chat__talk-status[role="alert"]')
     .screenshot({ path: path.join(artifactDir, fileName) });

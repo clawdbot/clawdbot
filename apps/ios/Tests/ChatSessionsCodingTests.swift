@@ -3,6 +3,40 @@ import OpenClawChatUI
 import Testing
 
 struct ChatSessionsCodingTests {
+    @Test func `decodes gateway model selection target from session defaults`() throws {
+        let data = Data(#"""
+        {
+            "defaults": {
+                "modelProvider": "openai",
+                "model": "gpt-5.6-sol",
+                "contextTokens": 200000,
+                "modelSelectionTarget": "agent"
+            },
+            "sessions": []
+        }
+        """#.utf8)
+
+        let response = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+
+        #expect(response.defaults?.modelSelectionTarget == "agent")
+    }
+
+    @Test func `older gateway session defaults remain decodable without a target`() throws {
+        let data = Data(#"""
+        {
+            "defaults": {
+                "model": "gpt-5.6-sol",
+                "contextTokens": 200000
+            },
+            "sessions": []
+        }
+        """#.utf8)
+
+        let response = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+
+        #expect(response.defaults?.modelSelectionTarget == nil)
+    }
+
     @Test func `decodes session organization and read state fields`() throws {
         let data = Data(#"""
         {

@@ -2,11 +2,9 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type Question,
   type QuestionRecord,
   type QuestionRequestParams,
-  type QuestionResolveParams,
   validateQuestionGetParams,
   validateQuestionListParams,
   validateQuestionRequestParams,
@@ -43,25 +41,11 @@ import {
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { SecretStoreWriteService } from "./secrets.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 15 * 60 * 1_000;
 
 class QuestionRequestValidationError extends Error {}
-
-function validationError(
-  method: string,
-  errors: Parameters<typeof formatValidationErrors>[0],
-  respond: RespondFn,
-): void {
-  respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `invalid ${method} params: ${formatValidationErrors(errors)}`,
-    ),
-  );
-}
 
 function managerError(error: unknown, respond: RespondFn): boolean {
   if (!(error instanceof QuestionManagerError)) {
@@ -199,8 +183,7 @@ export function createQuestionHandlers(
 ): GatewayRequestHandlers {
   return {
     "question.request": ({ params, respond, context, client }) => {
-      if (!validateQuestionRequestParams(params)) {
-        validationError("question.request", validateQuestionRequestParams.errors, respond);
+      if (!assertValidParams(params, validateQuestionRequestParams, "question.request", respond)) {
         return;
       }
       let request = params as QuestionRequestParams;
@@ -343,11 +326,12 @@ export function createQuestionHandlers(
       }
     },
     "question.waitAnswer": async ({ params, respond, client, context }) => {
-      if (!validateQuestionWaitAnswerParams(params)) {
-        validationError("question.waitAnswer", validateQuestionWaitAnswerParams.errors, respond);
+      if (
+        !assertValidParams(params, validateQuestionWaitAnswerParams, "question.waitAnswer", respond)
+      ) {
         return;
       }
-      const request = params as { id: string; timeoutMs?: number };
+      const request = params;
       try {
         const question = manager.get(request.id);
         if (question) {
@@ -362,13 +346,18 @@ export function createQuestionHandlers(
             return;
           }
         }
-        const answer = await manager.waitAnswer(request.id, request.timeoutMs);
-        const resolvedQuestion = manager.get(request.id);
-        if (resolvedQuestion) {
+        const answer = await manager.waitAnswer(
+          request.id,
+          request.timeoutMs,
+          request.includeResolutionId,
+        );
+        // Reauthorize the original question's immutable routing, not a getter
+        // that could expire/cancel it merely because this observer stopped.
+        if (question) {
           const authorizationError = authorizeQuestionRecord({
             cfg: context.getRuntimeConfig(),
             client,
-            question: resolvedQuestion,
+            question,
             access: "read",
           });
           if (authorizationError) {
@@ -384,11 +373,10 @@ export function createQuestionHandlers(
       }
     },
     "question.resolve": async ({ params, respond, client, context }) => {
-      if (!validateQuestionResolveParams(params)) {
-        validationError("question.resolve", validateQuestionResolveParams.errors, respond);
+      if (!assertValidParams(params, validateQuestionResolveParams, "question.resolve", respond)) {
         return;
       }
-      const request = params as QuestionResolveParams;
+      const request = params;
       try {
         const question = manager.get(request.id);
         if (question) {
@@ -423,7 +411,9 @@ export function createQuestionHandlers(
           }
           respond(
             true,
-            manager.resolve(request.id, request.answers, request.resolvedBy),
+            manager.resolve(request.id, request.answers, request.resolvedBy, {
+              resolutionId: request.resolutionId,
+            }),
             undefined,
           );
           return;
@@ -458,15 +448,18 @@ export function createQuestionHandlers(
             request.id,
             { answers: { [secretQuestion.questionId]: ["stored"] } },
             request.resolvedBy,
-            () => {
-              storeWriteService.write({
-                name: binding.name,
-                value,
-                kind: "secret",
-                ...(allowedHosts !== undefined ? { allowedHosts } : {}),
-                updatedBy: storeWriteService.resolveUpdatedBy(client),
-              });
-              saved = true;
+            {
+              resolutionId: request.resolutionId,
+              commit: () => {
+                storeWriteService.write({
+                  name: binding.name,
+                  value,
+                  kind: "secret",
+                  ...(allowedHosts !== undefined ? { allowedHosts } : {}),
+                  updatedBy: storeWriteService.resolveUpdatedBy(client),
+                });
+                saved = true;
+              },
             },
           );
           await storeWriteService.reloadReference(binding.name);
@@ -497,8 +490,7 @@ export function createQuestionHandlers(
       }
     },
     "question.get": ({ params, respond, client, context }) => {
-      if (!validateQuestionGetParams(params)) {
-        validationError("question.get", validateQuestionGetParams.errors, respond);
+      if (!assertValidParams(params, validateQuestionGetParams, "question.get", respond)) {
         return;
       }
       const id = (params as { id: string }).id;
@@ -520,8 +512,7 @@ export function createQuestionHandlers(
       respond(true, { question }, undefined);
     },
     "question.list": ({ params, respond, client, context }) => {
-      if (!validateQuestionListParams(params)) {
-        validationError("question.list", validateQuestionListParams.errors, respond);
+      if (!assertValidParams(params, validateQuestionListParams, "question.list", respond)) {
         return;
       }
       const cfg = context.getRuntimeConfig();

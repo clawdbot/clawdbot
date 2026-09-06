@@ -7,6 +7,7 @@ import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import type { ImageContent, Model } from "../../../llm/types.js";
 import { interactiveAgentTheme as theme, type Theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { isToolResultError } from "../../tool-result-error.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
@@ -765,8 +766,8 @@ export class ExtensionRunner {
         currentEvent.details = handlerResult.details;
         modified = true;
       }
-      if (handlerResult?.isError !== undefined) {
-        currentEvent.isError = handlerResult.isError;
+      if (handlerResult?.isError !== undefined || isToolResultError(handlerResult)) {
+        currentEvent.isError = handlerResult?.isError ?? true;
         modified = true;
       }
       if (handlerResult?.terminate !== undefined) {

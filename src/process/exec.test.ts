@@ -34,6 +34,43 @@ describe("runCommandWithTimeout", () => {
     ).toBe(false);
   });
 
+  it.skipIf(process.platform === "win32").each(["normal", "cooperative", "forced"] as const)(
+    "reports invocation cleanup and honors the initial SIGINT signal: %s",
+    async (mode) => {
+      const controller = new AbortController();
+      let ready!: () => void;
+      const started = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+      const program =
+        mode === "normal"
+          ? "process.stdout.write('ready'); process.exitCode=17;"
+          : `const timer=setInterval(()=>{},1000); process.on('SIGINT',()=>{${mode === "cooperative" ? "clearInterval(timer);process.stdout.write('interrupted');process.exitCode=17;" : ""}}); process.stdout.write('ready');`;
+      const running = runCommandWithTimeout([process.execPath, "-e", program], {
+        signal: controller.signal,
+        killProcessTree: true,
+        killSignal: "SIGINT",
+        killGraceMs: 100,
+        timeoutMs: 5000,
+        onOutputChunk: () => {
+          ready();
+        },
+      });
+      await started;
+      if (mode !== "normal") {
+        controller.abort();
+      }
+      const result = await running;
+      expect(result.cleanup).toBe(mode);
+      if (mode !== "forced") {
+        expect(result.code).toBe(17);
+      }
+      if (mode === "cooperative") {
+        expect(result.stdout).toContain("interrupted");
+      }
+    },
+  );
+
   it("merges custom env with base env and drops undefined values", () => {
     const resolved = resolveCommandEnv({
       argv: ["node", "script.js"],
@@ -246,56 +283,60 @@ describe("runCommandWithTimeout", () => {
     },
   );
 
-  it("preserves matching output lines even when tail capture truncates them", async () => {
-    const result = await runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
+  it.each([
+    [undefined, 2],
+    [0, 0],
+    [-1, 0],
+    [1, 1],
+    [2, 2],
+  ])(
+    "preserves matching output up to quota %s while tail capture continues",
+    async (limit, count) => {
+      const result = await runCommandWithTimeout(
         [
-          "process.stdout.write('Visit https://example.com/device and enter code ABCD-EFGH\\n')",
-          "process.stdout.write('x'.repeat(200))",
-        ].join(";"),
-      ],
-      {
-        timeoutMs: 3_000,
-        maxOutputBytes: 24,
-        preserveOutputLine: (line) => line.includes("enter code"),
-      },
-    );
+          process.execPath,
+          "-e",
+          [
+            "process.stdout.write('Visit https://example.com/device and enter code ABCD-EFGH\\n')",
+            "process.stdout.write('x'.repeat(200) + 'enter code TAIL')",
+          ].join(";"),
+        ],
+        {
+          timeoutMs: 3_000,
+          maxOutputBytes: 24,
+          maxPreservedOutputLines: limit,
+          preserveOutputLine: (line) => line.includes("enter code"),
+        },
+      );
 
-    expect(result.stdout).toBe("x".repeat(24));
-    expect(result.stdoutTruncatedBytes).toBeGreaterThan(0);
-    expect(result.preservedStdoutLines).toEqual([
-      "Visit https://example.com/device and enter code ABCD-EFGH",
-    ]);
-  });
+      const tail = `${"x".repeat(9)}enter code TAIL`;
+      expect(result.stdout).toBe(tail);
+      expect(result.stdoutTruncatedBytes).toBeGreaterThan(0);
+      expect(result.preservedStdoutLines).toEqual(
+        count
+          ? ["Visit https://example.com/device and enter code ABCD-EFGH", tail].slice(0, count)
+          : undefined,
+      );
+    },
+  );
 
-  it("bounds preserved matching output for long lines without newlines", async () => {
+  it.each([
+    ["long unterminated", "x".repeat(10_000), "x".repeat(24)],
+    ["UTF-8 boundary", `😀${"x".repeat(22)}`, "x".repeat(22)],
+  ])("bounds preserved %s line tails", async (_name, input, expected) => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdout.write('x'.repeat(10_000))"],
+      [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
       {
+        input,
         timeoutMs: 3_000,
         maxOutputBytes: 24,
         preserveOutputLine: () => true,
       },
     );
 
-    expect(result.stdout).toBe("x".repeat(24));
+    expect(result.stdout).toBe(expected);
     expect(result.stdoutTruncatedBytes).toBeGreaterThan(0);
-    expect(result.preservedStdoutLines).toEqual(["x".repeat(24)]);
-  });
-
-  it("keeps preserved line tails on a UTF-8 boundary", async () => {
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdout.write('😀' + 'x'.repeat(22))"],
-      {
-        timeoutMs: 3_000,
-        maxOutputBytes: 24,
-        preserveOutputLine: () => true,
-      },
-    );
-
-    expect(result.preservedStdoutLines).toEqual(["x".repeat(22)]);
+    expect(result.preservedStdoutLines).toEqual([expected]);
   });
 
   it("supports independent stdout head and stderr tail caps", async () => {
@@ -432,33 +473,48 @@ describe("runCommandWithTimeout", () => {
     expect(result.termination).toBe("signal");
   });
 
-  it("keeps truncated UTF-8 output on code point boundaries", async () => {
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdout.write('a😀z')"],
-      {
-        maxOutputBytes: 3,
-        timeoutMs: 3_000,
-      },
-    );
+  it.each([
+    ["tail", Buffer.from("a😀z"), 3, "z", 5],
+    ["head", Buffer.from("abcdef"), 4, "abcd", 2],
+    ["head", Buffer.from("a¢z"), 2, "a", 3],
+    ["head", Buffer.from("a€z"), 3, "a", 4],
+    ["head", Buffer.from("a😀z"), 4, "a", 5],
+    ["head", Buffer.from("\ufeffa😀z"), 6, "\ufeffa", 5],
+    ["head", Buffer.from([0x61, 0xff, 0x62, 0xe2, 0x82, 0xac, 0x7a]), 5, "a�b�", 2],
+  ] as const)(
+    "preserves truncated UTF-8 %s output (%#)",
+    async (outputCapture, input, maxOutputBytes, expected, truncatedBytes) => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
+        {
+          input,
+          maxOutputBytes,
+          outputCapture,
+          timeoutMs: 3_000,
+        },
+      );
 
-    expect(result.stdout).toBe("z");
-    expect(result.stdout).not.toContain("�");
-    expect(result.stdoutTruncatedBytes).toBe(5);
-  });
+      expect(result.stdout).toBe(expected);
+      expect(result.stdoutTruncatedBytes).toBe(truncatedBytes);
+    },
+  );
 
-  it("discards an entirely partial UTF-8 head", async () => {
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdout.write('😀')"],
-      {
-        maxOutputBytes: 3,
-        outputCapture: "head",
-        timeoutMs: 3_000,
-      },
-    );
+  it.each([1, 2, 3])(
+    "discards an entirely partial UTF-8 head at %i bytes",
+    async (maxOutputBytes) => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "process.stdout.write('😀')"],
+        {
+          maxOutputBytes,
+          outputCapture: "head",
+          timeoutMs: 3_000,
+        },
+      );
 
-    expect(result.stdout).toBe("");
-    expect(result.stdoutTruncatedBytes).toBe(4);
-  });
+      expect(result.stdout).toBe("");
+      expect(result.stdoutTruncatedBytes).toBe(4);
+    },
+  );
 
   it("keeps argv values out of transport errors", async () => {
     const privateArg = "private-command-argument";
@@ -597,6 +653,8 @@ describe("runCommandBuffered", () => {
           expect(isPidAlive(descendantPid)).toBe(true);
           expect(settled).toBe(false);
 
+          await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+          // Force delivery now has a separate bounded exit-observation phase.
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
           expect(await command).toMatchObject({ code: null, termination: "timeout" });
           vi.useRealTimers();

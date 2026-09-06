@@ -1,9 +1,7 @@
 import type { SessionConfig } from "@github/copilot-sdk";
 import {
-  callGatewayTool,
   embeddedAgentLog,
   runAgentHarnessGatewayQuestion,
-  type AgentHarnessQuestionGatewayCall,
   type AgentHarnessUserInputQuestion,
   type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -23,10 +21,9 @@ const DEFAULT_USER_INPUT_TIMEOUT_MS = 15 * 60_000;
 export function createCopilotUserInputBridge(params: {
   paramsForRun: EmbeddedRunAttemptParamsV2;
   signal?: AbortSignal;
-  gatewayCall?: AgentHarnessQuestionGatewayCall;
+  gatewayCall?: Parameters<typeof runAgentHarnessGatewayQuestion>[0]["gatewayCall"];
 }): CopilotUserInputBridge {
   let pending: AbortController | undefined;
-  const gatewayCall = params.gatewayCall ?? callGatewayTool;
 
   return {
     async onUserInputRequest(request) {
@@ -46,7 +43,7 @@ export function createCopilotUserInputBridge(params: {
           agentId: params.paramsForRun.agentId,
           runId: params.paramsForRun.runId,
           timeoutMs: params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS,
-          gatewayCall,
+          gatewayCall: params.gatewayCall,
           delivery: params.paramsForRun,
           promptOptions: {
             intro: "Copilot needs input:",

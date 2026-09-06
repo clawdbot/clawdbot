@@ -1,6 +1,6 @@
 // Discord plugin module implements message handler.preflight pluralkit behavior.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { isPreflightAborted, loadPluralKitRuntime } from "./message-handler.preflight-runtime.js";
+import { loadPluralKitRuntime } from "./message-handler.preflight-runtime.js";
 import type { DiscordMessageEvent } from "./message-handler.preflight.types.js";
 
 export async function resolveDiscordPreflightPluralKitInfo(params: {
@@ -23,7 +23,7 @@ export async function resolveDiscordPreflightPluralKitInfo(params: {
       config: params.config,
       signal: params.abortSignal,
     });
-    return isPreflightAborted(params.abortSignal) ? null : info;
+    return params.abortSignal?.aborted ? null : info;
   } catch (err) {
     logVerbose(`discord: pluralkit lookup failed for ${params.message.id}: ${String(err)}`);
     return null;

@@ -18,6 +18,7 @@ import {
   buildContractReplyPayloads,
   createContractToolTerminalObserver,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
@@ -293,6 +294,7 @@ function createStandardMemoryTableHarness(
   const add = options.add ?? vi.fn(async () => undefined);
   const deleteRows = options.deleteRows ?? vi.fn(async () => undefined);
   const openTable = vi.fn(async () => ({
+    close: vi.fn(),
     schema: createAgentScopedSchemaMock(),
     vectorSearch,
     countRows,
@@ -300,6 +302,7 @@ function createStandardMemoryTableHarness(
     delete: deleteRows,
   }));
   const connect = vi.fn(async () => ({
+    close: vi.fn(),
     tableNames: vi.fn(async () => ["memories"]),
     openTable,
   }));
@@ -2207,6 +2210,7 @@ describe("memory plugin e2e", () => {
   });
 
   async function setupAutoCaptureCursorHarness(overrides?: {
+    add?: ReturnType<typeof vi.fn>;
     embeddingsCreate?: ReturnType<typeof vi.fn>;
     searchResults?: Array<Record<string, unknown>>;
   }) {
@@ -2217,7 +2221,10 @@ describe("memory plugin e2e", () => {
       }));
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const toArray = vi.fn(async () => overrides?.searchResults ?? []);
-    const { add, loadLanceDbModule } = createStandardMemoryTableHarness({ toArray });
+    const { add, loadLanceDbModule } = createStandardMemoryTableHarness({
+      toArray,
+      add: overrides?.add,
+    });
 
     installOpenAiMemoryModuleMocks({
       ensureGlobalUndiciEnvProxyDispatcher,
@@ -2240,6 +2247,8 @@ describe("memory plugin e2e", () => {
 
     const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
     const sessionEnd = on.mock.calls.find(([hookName]) => hookName === "session_end")?.[1];
+    const stop = firstObjectArg(mockApi.registerService, "capture service")
+      .stop as () => Promise<void>;
     expect(agentEnd).toBeTypeOf("function");
     expect(sessionEnd).toBeTypeOf("function");
 
@@ -2251,6 +2260,7 @@ describe("memory plugin e2e", () => {
       loadLanceDbModule,
       logger,
       sessionEnd,
+      stop,
     };
   }
 
@@ -2377,38 +2387,90 @@ describe("memory plugin e2e", () => {
     }
   });
 
-  test("skips already-processed auto-capture messages by session cursor", async () => {
+  test.each([false, true])(
+    "keeps completed text from consuming the next capture quota (compacted=%s)",
+    async (compacted) => {
+      const harness = await setupAutoCaptureCursorHarness();
+      const captured = [
+        "Helix for editing",
+        "Fish for shell commands",
+        "Deno for small scripts",
+      ].map((preference, index) => ({
+        role: "user",
+        content: `I prefer ${preference} every day.`,
+        timestamp: index,
+      }));
+      const history = [...captured, { role: "user", content: "That covers this topic." }];
+      const next = { role: "user", content: "I prefer SQLite for local application state." };
+      const context = { agentId: "main", sessionKey: "session-material-repeat" };
+      try {
+        await harness.agentEnd?.({ success: true, messages: history }, context);
+        const retained = compacted ? history.slice(-1) : history;
+        if (compacted) {
+          await harness.agentEnd?.({ success: true, messages: retained }, context);
+        }
+        await harness.agentEnd?.(
+          {
+            success: true,
+            messages: [
+              ...retained,
+              ...captured.map((message) => ({ ...message, timestamp: message.timestamp + 10 })),
+              next,
+            ],
+          },
+          context,
+        );
+        expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+          ...captured.map((message) => message.content),
+          next.content,
+        ]);
+        expect(harness.add).toHaveBeenCalledTimes(4);
+      } finally {
+        cleanupAutoCaptureCursorHarness();
+      }
+    },
+  );
+
+  test("bounds completed text history without refreshing repeated hits", async () => {
     const harness = await setupAutoCaptureCursorHarness();
-
+    const context = { agentId: "main", sessionKey: "session-material-window" };
+    const facts = Array.from({ length: 61 }, (_, index) => ({
+      role: "user",
+      content: `I prefer meeting room ${index} for project planning.`,
+      timestamp: index,
+    }));
+    const history: typeof facts = [];
+    const first = facts[0]!;
+    const newest = facts[60]!;
+    const anchor = { role: "user", content: "That covers this topic.", timestamp: 200 };
+    const next = {
+      role: "user",
+      content: "I prefer written agendas for new projects.",
+      timestamp: 201,
+    };
     try {
+      for (const fact of facts.slice(0, 60)) {
+        history.push(fact);
+        await harness.agentEnd?.({ success: true, messages: [...history] }, context);
+      }
+      history.push({ ...first, timestamp: 100 });
+      await harness.agentEnd?.({ success: true, messages: [...history] }, context);
+      expect(harness.embeddingsCreate).toHaveBeenCalledTimes(60);
+      history.push(newest, anchor);
+      await harness.agentEnd?.({ success: true, messages: history }, context);
+      await harness.agentEnd?.({ success: true, messages: [anchor] }, context);
       await harness.agentEnd?.(
         {
           success: true,
-          messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
+          messages: [anchor, { ...first, timestamp: 202 }, { ...newest, timestamp: 203 }, next],
         },
-        { agentId: "main", sessionKey: "session-a" },
+        context,
       );
-      await harness.agentEnd?.(
-        {
-          success: true,
-          messages: [
-            { role: "user", content: "I prefer Helix for editing code every day." },
-            { role: "user", content: "I prefer Fish for shell commands every day." },
-          ],
-        },
-        { agentId: "main", sessionKey: "session-a" },
-      );
-
-      expect(harness.embeddingsCreate).toHaveBeenCalledTimes(2);
-      expect(harness.embeddingsCreate).toHaveBeenNthCalledWith(1, {
-        model: "text-embedding-3-small",
-        input: "I prefer Helix for editing code every day.",
-      });
-      expect(harness.embeddingsCreate).toHaveBeenNthCalledWith(2, {
-        model: "text-embedding-3-small",
-        input: "I prefer Fish for shell commands every day.",
-      });
-      expect(harness.add).toHaveBeenCalledTimes(2);
+      expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+        ...facts.map((message) => message.content),
+        first.content,
+        next.content,
+      ]);
     } finally {
       cleanupAutoCaptureCursorHarness();
     }
@@ -2459,24 +2521,39 @@ describe("memory plugin e2e", () => {
     },
   );
 
-  test("does not advance auto-capture cursor when message processing fails", async () => {
+  test("retries a failed text block after an earlier block in the message was captured", async () => {
     const embeddingsCreate = vi
       .fn()
+      .mockResolvedValueOnce({ data: [{ embedding: [0.1, 0.2, 0.3] }] })
       .mockRejectedValueOnce(new Error("temporary embedding failure"))
-      .mockResolvedValueOnce({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
+      .mockResolvedValue({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
     const harness = await setupAutoCaptureCursorHarness({ embeddingsCreate });
 
     try {
       const event = {
         success: true,
-        messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "I prefer Helix for editing code every day." },
+              { type: "text", text: "I prefer Fish for shell commands every day." },
+            ],
+          },
+        ],
       };
 
       await harness.agentEnd?.(event, { agentId: "main", sessionKey: "session-failure" });
       await harness.agentEnd?.(event, { agentId: "main", sessionKey: "session-failure" });
 
-      expect(embeddingsCreate).toHaveBeenCalledTimes(2);
-      expect(harness.add).toHaveBeenCalledTimes(1);
+      expect(embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+        "I prefer Helix for editing code every day.",
+        "I prefer Fish for shell commands every day.",
+        "I prefer Fish for shell commands every day.",
+      ]);
+      expect(
+        harness.add.mock.calls.flatMap(([entries]) => entries).map((entry) => entry.text),
+      ).toContain("I prefer Fish for shell commands every day.");
       expect(harness.logger.warn.mock.calls.map(([message]) => String(message))).toEqual([
         "memory-lancedb: capture failed: Error: temporary embedding failure",
       ]);
@@ -2521,33 +2598,479 @@ describe("memory plugin e2e", () => {
     }
   });
 
-  test("evicts auto-capture cursor state on session end", async () => {
+  test.each([false, true])(
+    "skips old compaction survivors after more than twenty captures (duplicate=%s)",
+    async (duplicate) => {
+      const harness = await setupAutoCaptureCursorHarness({
+        searchResults: duplicate
+          ? [
+              {
+                id: "existing-duplicate",
+                text: "some existing memory",
+                vector: [0.1, 0.2, 0.3],
+                importance: 0.7,
+                category: "preference",
+                createdAt: 1,
+                _distance: 0,
+              },
+            ]
+          : [],
+      });
+      const context = { agentId: "main", sessionKey: "session-compaction-survivor" };
+      const history = Array.from({ length: 25 }, (_, index) => ({
+        role: "user",
+        content: `I prefer editor number ${index} for coding each day.`,
+      }));
+      const newMessage = { role: "user", content: "I prefer concise code review notes." };
+      try {
+        for (let end = 1; end <= history.length; end++) {
+          await harness.agentEnd?.({ success: true, messages: history.slice(0, end) }, context);
+        }
+        await harness.agentEnd?.({ success: true, messages: [history[0], newMessage] }, context);
+        expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+          ...history.map((message) => message.content),
+          newMessage.content,
+        ]);
+        expect(harness.add).toHaveBeenCalledTimes(duplicate ? 0 : 26);
+      } finally {
+        cleanupAutoCaptureCursorHarness();
+      }
+    },
+  );
+
+  test("preserves capture progress across a same-key compaction successor", async () => {
     const harness = await setupAutoCaptureCursorHarness();
-
+    const context = { agentId: "main", sessionKey: "session-compaction-successor" };
+    const messages = ["quiet keyboards", "oat milk in coffee", "weekly project summaries"].map(
+      (preference) => ({ role: "user", content: `I prefer ${preference}.` }),
+    );
+    const newMessage = { role: "user", content: "I prefer Saturday mornings for planning." };
     try {
-      const event = {
-        success: true,
-        messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
-      };
-
-      await harness.agentEnd?.(event, { agentId: "main", sessionKey: "session-ended" });
+      await harness.agentEnd?.({ success: true, messages }, { ...context, sessionId: "old" });
       await harness.sessionEnd?.(
         {
-          sessionId: "session-id",
-          sessionKey: "session-ended",
-          messageCount: 1,
-          reason: "deleted",
+          sessionId: "old",
+          sessionKey: context.sessionKey,
+          nextSessionId: "new",
+          reason: "compaction",
+          messageCount: messages.length,
         },
-        { agentId: "main", sessionId: "session-id", sessionKey: "session-ended" },
+        { ...context, sessionId: "old" },
       );
-      await harness.agentEnd?.(event, { agentId: "main", sessionKey: "session-ended" });
-
-      expect(harness.embeddingsCreate).toHaveBeenCalledTimes(2);
-      expect(harness.add).toHaveBeenCalledTimes(2);
+      await harness.agentEnd?.(
+        { success: true, messages: [...messages, newMessage] },
+        { ...context, sessionId: "new" },
+      );
+      expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+        ...messages.map((message) => message.content),
+        newMessage.content,
+      ]);
+      expect(harness.add).toHaveBeenCalledTimes(4);
     } finally {
       cleanupAutoCaptureCursorHarness();
     }
   });
+
+  test.each([
+    { label: "distinct timestamps", timestamp: 1_000, laterTimestamp: 1_001, retained: "all" },
+    { label: "same timestamp", timestamp: 1_000, laterTimestamp: 1_000, retained: "all" },
+    { label: "no timestamps", timestamp: undefined, laterTimestamp: undefined, retained: "all" },
+    {
+      label: "compacted older occurrence",
+      timestamp: 1_000,
+      laterTimestamp: 1_001,
+      retained: "early",
+    },
+    {
+      label: "same timestamp after retained anchor",
+      timestamp: 1_000,
+      laterTimestamp: 1_000,
+      retained: "anchor",
+    },
+    {
+      label: "no timestamp after retained anchor",
+      timestamp: undefined,
+      laterTimestamp: undefined,
+      retained: "anchor",
+    },
+    {
+      label: "same timestamp after retained assistant anchor",
+      timestamp: 1_000,
+      laterTimestamp: 1_000,
+      retained: "assistant",
+    },
+    {
+      label: "no timestamp after retained assistant anchor",
+      timestamp: undefined,
+      laterTimestamp: undefined,
+      retained: "assistant",
+    },
+  ])("captures a later identical message after a quota skip ($label)", async (scenario) => {
+    const harness = await setupAutoCaptureCursorHarness();
+    const context = { agentId: "main", sessionKey: "session-quota-repeat" };
+    const captured = ["quiet keyboards", "oat milk", "weekly summaries"].map((preference) => ({
+      role: "user",
+      content: `I prefer ${preference}.`,
+    }));
+    const skipped = {
+      role: "user",
+      content: "I prefer printed agendas.",
+      ...(scenario.timestamp === undefined ? {} : { timestamp: scenario.timestamp }),
+    };
+    const repeated = {
+      ...skipped,
+      ...(scenario.laterTimestamp === undefined ? {} : { timestamp: scenario.laterTimestamp }),
+    };
+    const initial = [
+      ...captured,
+      skipped,
+      {
+        role: scenario.retained === "assistant" ? "assistant" : "user",
+        content: "That covers this topic.",
+      },
+    ];
+    try {
+      await harness.agentEnd?.({ success: true, messages: initial }, context);
+      await harness.agentEnd?.({ success: true, messages: initial }, context);
+      expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual(
+        captured.map((message) => message.content),
+      );
+      const retained =
+        scenario.retained === "all"
+          ? initial
+          : scenario.retained === "early"
+            ? captured.slice(2)
+            : initial.slice(-1);
+      await harness.agentEnd?.({ success: true, messages: [...retained, repeated] }, context);
+      expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+        ...captured.map((message) => message.content),
+        repeated.content,
+      ]);
+      expect(harness.add).toHaveBeenCalledTimes(4);
+    } finally {
+      cleanupAutoCaptureCursorHarness();
+    }
+  });
+
+  test.each([
+    { kind: "bash", timestamp: 1_000 },
+    { kind: "bash", timestamp: undefined },
+    { kind: "failed turn", timestamp: 1_000 },
+    { kind: "failed turn", timestamp: undefined },
+  ])("recognizes new context after a $kind anchor (timestamp=$timestamp)", async (scenario) => {
+    const harness = await setupAutoCaptureCursorHarness();
+    const context = { agentId: "main", sessionKey: "session-new-context" };
+    const captured = ["quiet keyboards", "oat milk", "weekly summaries"].map((preference) => ({
+      role: "user",
+      content: `I prefer ${preference}.`,
+    }));
+    const skipped = {
+      role: "user",
+      content: "I prefer printed agendas.",
+      timestamp: scenario.timestamp,
+    };
+    const assistant = { role: "assistant", content: "Done.", timestamp: scenario.timestamp };
+    const oldBash = {
+      role: "bashExecution",
+      command: "printf old",
+      output: "old",
+      timestamp: scenario.timestamp,
+    };
+    const newBash = { ...oldBash, command: "printf new", output: "new" };
+    const newUser = { role: "user", content: "Continue from this point." };
+    const history = [
+      ...captured,
+      ...(scenario.kind === "bash" ? [assistant, oldBash] : []),
+      skipped,
+      ...(scenario.kind === "bash" ? [assistant, newBash] : [assistant]),
+    ];
+    const retained = scenario.kind === "bash" ? [assistant, newBash] : [newUser];
+    const compacted = [{ role: "compactionSummary", summary: "Earlier context." }, ...retained];
+    try {
+      await harness.agentEnd?.({ success: true, messages: history }, context);
+      await harness.agentEnd?.({ success: true, messages: history }, context);
+      if (scenario.kind === "failed turn") {
+        await harness.agentEnd?.({ success: false, messages: compacted }, context);
+      }
+      expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual(
+        captured.map((message) => message.content),
+      );
+      await harness.agentEnd?.(
+        { success: true, messages: [...compacted, { ...skipped }] },
+        context,
+      );
+      expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+        ...captured.map((message) => message.content),
+        skipped.content,
+      ]);
+      expect(harness.add).toHaveBeenCalledTimes(4);
+    } finally {
+      cleanupAutoCaptureCursorHarness();
+    }
+  });
+
+  test("keeps retained quota visits after replay annotations and object key order change", async () => {
+    const harness = await setupAutoCaptureCursorHarness();
+    const context = { agentId: "main", sessionKey: "session-replay-annotations" };
+    const captured = ["quiet keyboards", "oat milk", "weekly summaries"].map((preference) => ({
+      role: "user",
+      content: `I prefer ${preference}.`,
+    }));
+    const assistant = {
+      role: "assistant",
+      timestamp: 1,
+      content: [
+        { type: "thinking", thinking: "Review the preferences.", thinkingSignature: "old" },
+        { type: "redacted_thinking", data: "old" },
+        { type: "text", text: "Done." },
+      ],
+      usage: { input: 100 },
+      providerReplay: { type: "anthropic-compaction", replayIndex: 0 },
+    };
+    const skipped = { role: "user", content: "I prefer printed agendas.", timestamp: 2 };
+    const retained = [
+      { role: "compactionSummary", summary: "Earlier context." },
+      {
+        role: assistant.role,
+        timestamp: assistant.timestamp,
+        content: [
+          { type: "thinking", thinking: "Review the preferences." },
+          { type: "redacted_thinking" },
+          { type: "text", text: "Done." },
+        ],
+        usage: { input: 0 },
+      },
+      { timestamp: skipped.timestamp, content: skipped.content, role: skipped.role },
+    ];
+    try {
+      await harness.agentEnd?.(
+        { success: true, messages: [...captured, assistant, skipped] },
+        context,
+      );
+      await harness.agentEnd?.({ success: true, messages: retained }, context);
+      expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual(
+        captured.map((message) => message.content),
+      );
+      await harness.agentEnd?.({ success: true, messages: [...retained, { ...skipped }] }, context);
+      expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+        ...captured.map((message) => message.content),
+        skipped.content,
+      ]);
+      expect(harness.add).toHaveBeenCalledTimes(4);
+    } finally {
+      cleanupAutoCaptureCursorHarness();
+    }
+  });
+
+  test.each([
+    { label: "same timestamp failed survivor", timestamp: 1_000, retainAnchor: false },
+    { label: "missing timestamp failed survivor", timestamp: undefined, retainAnchor: false },
+    { label: "same timestamp earlier quota skip", timestamp: 1_000, retainAnchor: true },
+    { label: "missing timestamp earlier quota skip", timestamp: undefined, retainAnchor: true },
+  ])("preserves unfinished equal occurrences after compaction ($label)", async (scenario) => {
+    const embeddingsCreate = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [{ embedding: [0.1, 0.2, 0.3] }] })
+      .mockResolvedValueOnce({ data: [{ embedding: [0.1, 0.2, 0.3] }] })
+      .mockResolvedValueOnce({ data: [{ embedding: [0.1, 0.2, 0.3] }] })
+      .mockRejectedValueOnce(new Error("temporary embedding failure"))
+      .mockResolvedValue({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
+    const harness = await setupAutoCaptureCursorHarness({ embeddingsCreate });
+    const context = { agentId: "main", sessionKey: "session-pending-survivor" };
+    const captured = ["quiet keyboards", "oat milk", "weekly summaries"].map((preference) => ({
+      role: "user",
+      content: `I prefer ${preference}.`,
+    }));
+    const skipped = {
+      role: "user",
+      content: "I prefer printed agendas.",
+      timestamp: scenario.timestamp,
+    };
+    const anchor = { role: "user", content: "That covers this topic." };
+    const repeated = { ...skipped };
+    const history = [...captured, skipped, anchor];
+    try {
+      await harness.agentEnd?.({ success: true, messages: history }, context);
+      await harness.agentEnd?.({ success: true, messages: [...history, repeated] }, context);
+      const attempted = [...captured.map((message) => message.content), repeated.content];
+      expect(embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual(attempted);
+      await harness.agentEnd?.(
+        { success: true, messages: scenario.retainAnchor ? [skipped, anchor] : [repeated] },
+        context,
+      );
+      expect(embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+        ...attempted,
+        ...(scenario.retainAnchor ? [] : [repeated.content]),
+      ]);
+      expect(harness.add).toHaveBeenCalledTimes(scenario.retainAnchor ? 3 : 4);
+    } finally {
+      cleanupAutoCaptureCursorHarness();
+    }
+  });
+
+  test("keeps the per-turn capture quota across multi-text messages", async () => {
+    const harness = await setupAutoCaptureCursorHarness();
+    const context = { agentId: "main", sessionKey: "session-multi-text-quota" };
+    const content = [
+      "quiet keyboards",
+      "oat milk in coffee",
+      "weekly summaries",
+      "dark themes",
+    ].map((preference) => ({ type: "text", text: `I prefer ${preference}.` }));
+    const messages = [{ role: "user", content }];
+    const newMessage = { role: "user", content: "I prefer Saturday mornings for planning." };
+    try {
+      await harness.agentEnd?.({ success: true, messages }, context);
+      await harness.agentEnd?.({ success: true, messages: [...messages, newMessage] }, context);
+      expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+        ...content.slice(0, 3).map((block) => block.text),
+        newMessage.content,
+      ]);
+      await harness.agentEnd?.(
+        {
+          success: true,
+          messages: [...messages, newMessage, { role: "user", content, timestamp: 1 }],
+        },
+        context,
+      );
+      expect(harness.embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+        ...content.slice(0, 3).map((block) => block.text),
+        newMessage.content,
+        content[3]?.text,
+      ]);
+    } finally {
+      cleanupAutoCaptureCursorHarness();
+    }
+  });
+
+  test("serializes overlapping captures per session while other sessions keep progressing", async () => {
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    const first = { role: "user", content: "I prefer printed agendas for meetings." };
+    const next = { role: "user", content: "I prefer short daily project updates." };
+    const other = { role: "user", content: "I prefer offline notes during long flights." };
+    const embeddingsCreate = vi.fn(async (request: { input: string }) => {
+      if (request.input === first.content) {
+        started.resolve();
+        await release.promise;
+      }
+      return { data: [{ embedding: [0.1, 0.2, 0.3] }] };
+    });
+    const harness = await setupAutoCaptureCursorHarness({ embeddingsCreate });
+    const context = { agentId: "main", sessionKey: "session-overlap" };
+    const pending: Promise<unknown>[] = [];
+    try {
+      pending.push(harness.agentEnd?.({ success: true, messages: [first] }, context));
+      await started.promise;
+      pending.push(harness.agentEnd?.({ success: true, messages: [first, next] }, context));
+      await harness.agentEnd?.(
+        { success: true, messages: [other] },
+        { ...context, sessionKey: "session-other" },
+      );
+      release.resolve();
+      await Promise.all(pending);
+      expect(embeddingsCreate.mock.calls.map(([request]) => request.input)).toEqual([
+        first.content,
+        other.content,
+        next.content,
+      ]);
+      expect(harness.add).toHaveBeenCalledTimes(3);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(pending);
+      cleanupAutoCaptureCursorHarness();
+    }
+  });
+
+  test.each(["embedding", "storage"])(
+    "drains capture %s work and fences new captures on stop",
+    async (phase) => {
+      const started = createDeferred<void>();
+      const release = createDeferred<void>();
+      const hold = async () => {
+        started.resolve();
+        await release.promise;
+      };
+      const embeddingsCreate = vi.fn(async () => {
+        if (phase === "embedding") {
+          await hold();
+        }
+        return { data: [{ embedding: [0.1, 0.2, 0.3] }] };
+      });
+      const add = vi.fn(async () => {
+        if (phase === "storage") {
+          await hold();
+        }
+      });
+      const harness = await setupAutoCaptureCursorHarness({ embeddingsCreate, add });
+      const context = { agentId: "main", sessionKey: "session-stop" };
+      const event = {
+        success: true,
+        messages: [
+          { role: "user", content: "I prefer printed agendas for meetings." },
+          { role: "user", content: "I prefer short daily project updates." },
+        ],
+      };
+      const pending: Promise<unknown>[] = [];
+      try {
+        pending.push(harness.agentEnd?.(event, context));
+        await started.promise;
+        let stopped = false;
+        pending.push(
+          harness.stop().then(() => {
+            stopped = true;
+          }),
+        );
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        const stoppedBeforeRelease = stopped;
+        await harness.agentEnd?.(event, { ...context, sessionKey: "session-during-stop" });
+        release.resolve();
+        await Promise.all(pending);
+        await harness.agentEnd?.(event, { ...context, sessionKey: "session-after-stop" });
+        expect(stoppedBeforeRelease).toBe(false);
+        expect(embeddingsCreate).toHaveBeenCalledTimes(1);
+        expect(add).toHaveBeenCalledTimes(phase === "embedding" ? 0 : 1);
+        expect(harness.logger.warn).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await Promise.allSettled(pending);
+        cleanupAutoCaptureCursorHarness();
+      }
+    },
+  );
+
+  test.each(["deleted", "reset", "new", "shutdown"])(
+    "evicts auto-capture state on session %s",
+    async (reason) => {
+      const harness = await setupAutoCaptureCursorHarness();
+
+      try {
+        const event = {
+          success: true,
+          messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
+        };
+
+        await harness.agentEnd?.(event, { agentId: "main", sessionKey: "session-ended" });
+        await harness.sessionEnd?.(
+          {
+            sessionId: "session-id",
+            sessionKey: "session-ended",
+            messageCount: 1,
+            reason,
+          },
+          { agentId: "main", sessionId: "session-id", sessionKey: "session-ended" },
+        );
+        await harness.agentEnd?.(event, { agentId: "main", sessionKey: "session-ended" });
+
+        expect(harness.embeddingsCreate).toHaveBeenCalledTimes(2);
+        expect(harness.add).toHaveBeenCalledTimes(2);
+      } finally {
+        cleanupAutoCaptureCursorHarness();
+      }
+    },
+  );
 
   test("retries without rejected dimensions and truncates the fallback vector", async () => {
     let nowMs = 1_000;
@@ -2836,10 +3359,21 @@ describe("memory plugin e2e", () => {
     expect(decoded[1]).toBeCloseTo(-2.5);
   });
 
-  test("normalizeEmbeddingVector rejects malformed embedding payloads", () => {
-    expect(() => normalizeEmbeddingVector([0.1, Number.NaN])).toThrow(
+  test.each(
+    [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY].flatMap((coordinate) => [
+      { encoding: "float array", coordinate },
+      { encoding: "base64", coordinate },
+    ]),
+  )("rejects nonfinite $coordinate in $encoding embeddings", ({ encoding, coordinate }) => {
+    const bytes = Buffer.alloc(Float32Array.BYTES_PER_ELEMENT);
+    bytes.writeFloatLE(coordinate);
+    const vector = encoding === "base64" ? bytes.toString("base64") : [coordinate];
+    expect(() => normalizeEmbeddingVector(vector)).toThrow(
       "Embedding response contains non-numeric values",
     );
+  });
+
+  test("normalizeEmbeddingVector rejects malformed embedding payloads", () => {
     expect(() => normalizeEmbeddingVector("abc")).toThrow(
       "Base64 embedding response has invalid byte length",
     );

@@ -62,13 +62,15 @@ export function renderChatTranscriptLayout<T>({
                   ? virtualRow.start - previous.end
                   : 0;
               return html`
-                ${gap > 0
-                  ? html`<div aria-hidden="true" style=${styleMap({ height: `${gap}px` })}></div>`
-                  : nothing}
+                ${
+                  gap > 0
+                    ? html`<div aria-hidden="true" style=${styleMap({ height: `${gap}px` })}></div>`
+                    : nothing
+                }
                 <div
-                  class="chat-virtual-row ${virtualRow.index === 0
-                    ? "chat-virtual-row--first"
-                    : ""}"
+                  class="chat-virtual-row ${
+                    virtualRow.index === 0 ? "chat-virtual-row--first" : ""
+                  }"
                   style=${styleMap({
                     // Keep skipped overscan rows at the virtualizer's known size.
                     containIntrinsicBlockSize: `auto ${virtualRow.size}px`,

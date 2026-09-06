@@ -1,7 +1,9 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -9,16 +11,19 @@ import {
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
-const proofDir = process.env.OPENCLAW_MEDIA_PROOF_DIR?.trim() || null;
+const proofDirParent = process.env.OPENCLAW_MEDIA_PROOF_DIR?.trim() || null;
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = proofDirParent
+    ? createControlUiE2eArtifactDir("managed-media-base-path", proofDirParent)
+    : undefined;
+});
 
 let server: ControlUiE2eServer;
 
 describe("Control UI managed media under a UI base path", () => {
   beforeAll(async () => {
     server = await startControlUiE2eServer();
-    if (proofDir) {
-      await mkdir(proofDir, { recursive: true });
-    }
   });
 
   afterAll(async () => {
@@ -83,7 +88,10 @@ describe("Control UI managed media under a UI base path", () => {
       await image.waitFor({ state: "attached", timeout: 10_000 });
       await expect.poll(() => requests.length).toBeGreaterThan(0);
       if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "state.png"), fullPage: true });
+        await writeFile(
+          path.join(proofDir, "state.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [image]),
+        );
       }
 
       const naturalWidth = await image.evaluate((node) =>

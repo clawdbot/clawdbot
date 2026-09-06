@@ -16,9 +16,11 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
+import { resolveEffectiveModelFallbacks } from "./agent-scope.js";
 import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import { createCliTimeoutError } from "./cli-runner/no-output-timeout-policy.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
@@ -2335,6 +2337,22 @@ describe("runWithModelFallback", () => {
           }),
         }),
     ],
+    [
+      "active turn claim",
+      () =>
+        Object.assign(new Error("session already has an active turn claim"), {
+          name: "ActiveTurnClaimError",
+        }),
+    ],
+    [
+      "wrapped active turn claim",
+      () =>
+        new Error("worker turn failed", {
+          cause: Object.assign(new Error("session already has an active turn claim"), {
+            name: "ActiveTurnClaimError",
+          }),
+        }),
+    ],
   ])("aborts fallback on %s worker coordination failures", async (_label, makeError) => {
     const error = makeError();
     const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
@@ -2549,39 +2567,54 @@ describe("runWithModelFallback", () => {
     expect(error.attempts[0]?.error).not.toBe(rawError);
   });
 
-  it("preserves structured timeout attribution after fallback exhaustion", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/claude-opus-4-7",
-            fallbacks: ["google/gemini-3-pro-preview"],
+  it.each([false, true])(
+    "attributes the final failed candidate after fallback (watchdog=%s)",
+    async (watchdog) => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-7",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
           },
         },
-      },
-    });
-    const run = vi.fn().mockRejectedValue(
-      new FailoverError("CLI produced no output", {
-        reason: "timeout",
-      }),
-    );
-    const error = requireFallbackSummaryError(
-      await captureRejection(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-opus-4-7",
-          run,
-        }),
-      ),
-    );
+      });
+      const timeout = createCliTimeoutError(
+        {},
+        {
+          mode: "no-output",
+          timeoutSeconds: 30,
+          observedActivity: false,
+          activeToolCount: 0,
+          backgroundTaskCount: 0,
+        },
+      );
+      const providerFailure = Object.assign(new Error("500 upstream failure"), { status: 500 });
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(watchdog ? providerFailure : timeout)
+        .mockRejectedValueOnce(watchdog ? timeout : providerFailure);
+      const error = requireFallbackSummaryError(
+        await captureRejection(
+          runWithModelFallback({
+            cfg,
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            run,
+          }),
+        ),
+      );
 
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
-      stopReason: "timeout",
-      timeoutPhase: "provider",
-    });
-  });
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(error.attempts.map(({ status }) => status)).toEqual(
+        watchdog ? [500, 408] : [408, 500],
+      );
+      expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual(
+        watchdog ? { stopReason: "timeout", timeoutPhase: "provider" } : {},
+      );
+    },
+  );
 
   it("carries request attribution through exhausted fallback summaries", async () => {
     const cfg = makeCfg({
@@ -3301,6 +3334,33 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("plans requested and fallback routes without provider runtime hooks when normalization is disabled", () => {
+    const normalize = providerModelNormalizationMock.normalizeProviderModelIdWithRuntime;
+    normalize.mockImplementation(() => {
+      throw new Error("runtime hook entered pure planning");
+    });
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              model: { primary: "custom/primary", fallbacks: ["custom/fallback"] },
+              models: { "custom/fallback": { alias: "other" } },
+            },
+          },
+        }),
+        provider: "custom",
+        model: "primary",
+        requestedRouteResolution: "resolved",
+        allowPluginNormalization: false,
+      }),
+    ).toEqual([
+      { provider: "custom", model: "primary" },
+      { provider: "custom", model: "fallback" },
+    ]);
+    expect(normalize).not.toHaveBeenCalled();
+  });
+
   it("treats normalized default refs as primary and keeps configured fallback chain", () => {
     const cfg = makeCfg({
       agents: {
@@ -4006,6 +4066,42 @@ describe("runWithModelFallback", () => {
     ).toEqual([
       { provider: "anthropic", model: "claude-opus-4-5" },
       { provider: "anthropic", model: "claude-haiku-3-5" },
+    ]);
+  });
+
+  it("keeps the configured-primary tail when inherited fallbacks stay unset", () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+
+    // Reply/command preparation must project inherited fallbacks to `undefined`
+    // so the candidate resolver owns the ladder and appends the configured
+    // primary as the final candidate (C -> B -> A, not C -> B).
+    const fallbacksOverride = resolveEffectiveModelFallbacks({
+      cfg,
+      agentId: "main",
+      hasSessionModelOverride: false,
+    });
+    expect(fallbacksOverride).toBeUndefined();
+
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        fallbacksOverride,
+      }),
+    ).toEqual([
+      { provider: "anthropic", model: "claude-opus-4-5" },
+      { provider: "anthropic", model: "claude-haiku-3-5" },
+      { provider: "openai", model: "gpt-4.1-mini" },
     ]);
   });
 

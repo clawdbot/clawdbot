@@ -33,6 +33,7 @@ import {
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import { getLoadedPwAiModule } from "../pw-ai-module.js";
 import { finalizeRoleSnapshot, type RoleRefMap } from "../pw-role-snapshot.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
 import { scaleAnnotations } from "../screenshot-annotate.js";
@@ -90,7 +91,7 @@ async function collectChromeMcpSnapshotUrls(
     fn: `() => {
       const seen = new Set();
       const out = [];
-      for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+      for (const anchor of document.querySelectorAll("a[href]")) {
         const href = anchor.href || "";
         if (!href || seen.has(href)) continue;
         const text = (anchor.innerText || anchor.textContent || anchor.getAttribute("aria-label") || "")
@@ -539,6 +540,7 @@ export function registerBrowserAgentSnapshotRoutes(
         let buffer: Buffer;
         const shouldUsePlaywright =
           labels ||
+          getLoadedPwAiModule()?.hasCachedPlaywrightBrowserConnection(cdpUrl) ||
           shouldUsePlaywrightForScreenshot({
             profile: profileCtx.profile,
             wsUrl: tab.wsUrl,
@@ -565,6 +567,7 @@ export function registerBrowserAgentSnapshotRoutes(
               fullPage,
               ref,
               element,
+              signal,
             });
             await saveNormalizedScreenshotResponse({
               res,
@@ -587,6 +590,7 @@ export function registerBrowserAgentSnapshotRoutes(
             fullPage,
             type,
             timeoutMs,
+            signal,
           });
           buffer = snap.buffer;
         } else {
@@ -944,6 +948,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 refs: "refs" in snap ? snap.refs : {},
                 type: "png",
                 timeoutMs: plan.timeoutMs,
+                signal,
               });
               const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
                 maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,

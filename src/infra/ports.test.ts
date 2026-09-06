@@ -223,6 +223,49 @@ describe("ports helpers", () => {
 });
 
 describeUnix("inspectPortUsage", () => {
+  it("distinguishes a socat forward from a Gateway profile named socat", async () => {
+    const gatewayServer = net.createServer();
+    const gatewayAddress = await listenServer(gatewayServer, 0, "127.0.0.1");
+    if (!gatewayAddress) {
+      return;
+    }
+    const socatServer = net.createServer();
+    const socatAddress = await listenServer(socatServer, gatewayAddress.port, "127.0.0.2");
+    if (!socatAddress) {
+      await closeServer(gatewayServer);
+      return;
+    }
+    const port = gatewayAddress.port;
+
+    mockUnixCommands({
+      lsof: commandOutput(
+        `p111\ncopenclaw-gatewa\nnTCP 127.0.0.1:${port} (LISTEN)\n` +
+          `p222\ncsocat\nnTCP 127.0.0.2:${port} (LISTEN)\n`,
+      ),
+      commandLine: (pid) =>
+        pid === "111"
+          ? "openclaw-gateway --profile socat"
+          : `socat -lpopenclaw TCP-LISTEN:${port},bind=127.0.0.2,fork TCP:127.0.0.1:${port}`,
+    });
+
+    try {
+      const result = await inspectPortUsage(port, {
+        probeHosts: ["127.0.0.2", "127.0.0.1"],
+      });
+
+      expect(result.status).toBe("busy");
+      expect(result.listeners).toHaveLength(2);
+      expect(result.hints).toEqual([
+        expect.stringContaining("Gateway already running locally"),
+        "Another process is listening on this port.",
+        expect.stringContaining("Multiple listeners detected"),
+      ]);
+    } finally {
+      await closeServer(socatServer);
+      await closeServer(gatewayServer);
+    }
+  });
+
   it("keeps only listener rows that can block a scoped bind", async () => {
     const server = net.createServer();
     const address = await listenServer(server, 0, "127.0.0.1");

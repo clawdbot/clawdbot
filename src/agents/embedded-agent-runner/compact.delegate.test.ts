@@ -73,9 +73,15 @@ beforeAll(async () => {
   ]);
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   workspaceDir = tempDirs.make("openclaw-compaction-delegate-");
   resetCompactHooksHarnessMocks(workspaceDir);
+  const actualScope =
+    await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
+  const scope = await import("../agent-scope.js");
+  vi.mocked(scope.listAgentEntries).mockImplementation(actualScope.listAgentEntries);
+  vi.mocked(scope.resolveSessionAgentId).mockImplementation(actualScope.resolveSessionAgentId);
+  vi.mocked(scope.resolveSessionAgentIds).mockImplementation(actualScope.resolveSessionAgentIds);
   requestPreparedCompaction.mockReset();
   limitHistoryTurnsMock.mockImplementation((messages) => messages);
   hookRunner.hasHooks.mockImplementation(
@@ -85,7 +91,7 @@ beforeEach(() => {
 
 async function createFixture(operation: "summary" | "endpoint", globalAlias = false) {
   const target = {
-    agentId: "main",
+    agentId: globalAlias ? "marketing" : "main",
     sessionId: "compaction-session",
     sessionKey: globalAlias ? "global" : "agent:main:compaction-session",
     storePath: join(workspaceDir, "alternate", "openclaw-agent.sqlite"),
@@ -122,7 +128,10 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
   const modelRegistry = sessions.ModelRegistry.inMemory(authStorage);
   modelRegistry.registerProvider(model.provider, { api: model.api, streamSimple: stream });
   resolveModelMock.mockReturnValue({ model, error: null, authStorage, modelRegistry });
-  vi.mocked(streamResolution.resolveEmbeddedAgentStreamFn).mockReturnValue(stream);
+  vi.mocked(streamResolution.resolveEmbeddedAgentStream).mockReturnValue({
+    streamFn: stream,
+    strategy: "session-custom",
+  });
   applyExtraParamsToAgentMock.mockReturnValue({
     effectiveExtraParams: { responsesCompactEndpoint: operation === "endpoint" },
   });
@@ -145,6 +154,8 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
     config: {
       session: { store: configuredStore },
       agents: {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "marketing" }],
         defaults: { compaction: { mode: "default", keepRecentTokens: 1, postIndexSync: "off" } },
       },
     },

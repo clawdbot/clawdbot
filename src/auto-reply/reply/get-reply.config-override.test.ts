@@ -30,6 +30,9 @@ vi.mock("../../sessions/session-diff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../sessions/session-diff.js")>()),
   captureSessionDiffBaseline: mocks.captureSessionDiffBaseline,
 }));
+vi.mock("./commands.runtime.js", () => ({
+  handleCommands: vi.fn(async () => ({ shouldContinue: true })),
+}));
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("../../plugin-sdk/reply-runtime.js").getReplyFromConfig;
@@ -252,25 +255,44 @@ describe("getReplyFromConfig configOverride", () => {
     );
   });
 
-  it("uses one request-scoped prepared runtime through the raw Plugin SDK resolver", async () => {
-    const preparedRuntime = createPreparedDispatchRuntime();
-    vi.mocked(loadConfigMock).mockImplementation(() => {
-      throw new Error("getRuntimeConfig should not be called for a prepared Gateway dispatch");
-    });
+  it.each([false, true])(
+    "uses the admitted catalog through the SDK resolver (native=%s)",
+    async (native) => {
+      const preparedRuntime = createPreparedDispatchRuntime();
+      vi.mocked(loadConfigMock).mockImplementation(() => {
+        throw new Error("getRuntimeConfig should not be called for a prepared Gateway dispatch");
+      });
 
-    await bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildGetReplyCtx());
+      await bindPreparedReplyDispatchRuntime(
+        preparedRuntime,
+        getReplyFromConfig,
+      )(
+        buildGetReplyCtx(
+          native
+            ? {
+                Body: "/model ollama/picker-secondary -s",
+                RawBody: "/model ollama/picker-secondary -s",
+                CommandBody: "/model ollama/picker-secondary -s",
+                CommandSource: "native",
+                CommandAuthorized: true,
+                CommandTargetSessionKey: "agent:main:telegram:123",
+              }
+            : {},
+        ),
+      );
 
-    expect(loadConfigMock).not.toHaveBeenCalled();
-    expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
-    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        agentDir: "/tmp/prepared-model-owner",
-        workspaceDir: "/tmp/prepared-model-workspace",
-        preparedModelCatalog: preparedRuntime.modelCatalog,
-      }),
-    );
-  });
+      expect(loadConfigMock).not.toHaveBeenCalled();
+      expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
+      expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "main",
+          agentDir: "/tmp/prepared-model-owner",
+          workspaceDir: "/tmp/prepared-model-workspace",
+          preparedModelCatalog: preparedRuntime.modelCatalog,
+        }),
+      );
+    },
+  );
 
   it("rejects a prepared dispatch runtime that crosses the admitted session agent", async () => {
     const preparedRuntime = createPreparedDispatchRuntime({

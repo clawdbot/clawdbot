@@ -1,5 +1,4 @@
 // Text formatter for plugin list rows and verbose plugin details.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { PluginBundleFormat } from "../plugins/manifest-types.js";
@@ -10,7 +9,7 @@ export function formatPluginBundleFormat(bundleFormat: PluginBundleFormat): stri
   return bundleFormat === "agent" ? "agent (Agent Plugins)" : bundleFormat;
 }
 
-export function formatPluginLine(plugin: PluginRecord, verbose = false): string {
+export function formatPluginLine(plugin: PluginRecord): string {
   const status =
     plugin.status === "error"
       ? theme.error("error")
@@ -19,18 +18,7 @@ export function formatPluginLine(plugin: PluginRecord, verbose = false): string 
         : theme.warn("disabled");
   const name = theme.command(plugin.name || plugin.id);
   const idSuffix = plugin.name && plugin.name !== plugin.id ? theme.muted(` (${plugin.id})`) : "";
-  const desc = plugin.description
-    ? theme.muted(
-        plugin.description.length > 60
-          ? `${truncateUtf16Safe(plugin.description, 57)}...`
-          : plugin.description,
-      )
-    : theme.muted("(no description)");
   const format = plugin.format ?? "openclaw";
-
-  if (!verbose) {
-    return `${name}${idSuffix} ${status} ${theme.muted(`[${format}]`)} - ${desc}`;
-  }
 
   const parts = [
     `${name}${idSuffix} ${status}`,
@@ -40,6 +28,9 @@ export function formatPluginLine(plugin: PluginRecord, verbose = false): string 
   ];
   if (plugin.bundleFormat) {
     parts.push(`  bundle format: ${formatPluginBundleFormat(plugin.bundleFormat)}`);
+  }
+  if (plugin.bundleCapabilities?.length) {
+    parts.push(`  bundle capabilities: ${plugin.bundleCapabilities.join(", ")}`);
   }
   if (plugin.version) {
     parts.push(`  version: ${plugin.version}`);

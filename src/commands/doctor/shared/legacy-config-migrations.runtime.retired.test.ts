@@ -45,6 +45,34 @@ function getPath(value: unknown, path: string): unknown {
 }
 
 describe("retired runtime config migrations", () => {
+  it.each([true, false])(
+    "detects and removes messages.suppressToolErrors=%s with a doctor hint",
+    (suppressToolErrors) => {
+      const raw = { messages: { suppressToolErrors, ackReaction: "👀" } };
+
+      expect(findLegacyConfigIssues(raw)).toContainEqual({
+        path: "messages.suppressToolErrors",
+        message:
+          'messages.suppressToolErrors is retired; tool failure warnings now appear only when a run ends without a reply. Run "openclaw doctor --fix".',
+      });
+
+      expect(applyAll(raw).changes).toEqual([
+        "Removed messages.suppressToolErrors (tool failure warnings now appear only when a run ends without a reply).",
+      ]);
+      expect(raw).toEqual({ messages: { ackReaction: "👀" } });
+      expect(findLegacyConfigIssues(raw)).toEqual([]);
+    },
+  );
+
+  it.each([{}, { messages: { ackReaction: "👀" } }])(
+    "leaves config without messages.suppressToolErrors untouched: %j",
+    (raw) => {
+      const expected = structuredClone(raw);
+      expect(applyAll(raw)).toEqual({ raw: expected, changes: [] });
+      expect(findLegacyConfigIssues(raw)).toEqual([]);
+    },
+  );
+
   it.each([
     ["a normal registration", [{ event: "command:new", module: "hooks/legacy.js" }]],
     ["an empty array", []],
@@ -52,19 +80,13 @@ describe("retired runtime config migrations", () => {
     ["a malformed scalar", "hooks/legacy.js"],
     ["a malformed object", { module: "hooks/legacy.js" }],
   ])("detects hooks.internal.handlers by key presence for %s", (_label, handlers) => {
-    const issues = findLegacyConfigIssues({ hooks: { internal: { handlers } } });
-
-    expect(issues).toContainEqual({
+    expect(findLegacyConfigIssues({ hooks: { internal: { handlers } } })).toContainEqual({
       path: "hooks.internal.handlers",
       message: expect.stringContaining("hooks.internal.handlers is retired"),
     });
   });
 
   it("removes retired hook registrations while preserving canonical siblings", () => {
-    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
-      (candidate) => candidate.id === "runtime.retired-internal-hook-handlers",
-    );
-    expect(migration).toBeDefined();
     const raw = {
       hooks: {
         internal: {
@@ -76,9 +98,7 @@ describe("retired runtime config migrations", () => {
         },
       },
     };
-    const changes: string[] = [];
-
-    migration?.apply(raw, changes);
+    const { changes } = applyAll(raw);
 
     expect(raw.hooks.internal).toEqual({
       enabled: true,
@@ -103,15 +123,10 @@ describe("retired runtime config migrations", () => {
     ],
     ["blank extra directories", { load: { extraDirs: ["  "] } }, { load: { extraDirs: ["  "] } }],
   ])("removes legacy-only enabled for %s", (_label, siblings, expected) => {
-    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
-      (candidate) => candidate.id === "runtime.retired-internal-hook-handlers",
-    );
     const raw = {
       hooks: { internal: { enabled: true, handlers: [], ...structuredClone(siblings) } },
     };
-    const changes: string[] = [];
-
-    migration?.apply(raw, changes);
+    const { changes } = applyAll(raw);
 
     expect(raw.hooks.internal).toEqual(expected);
     expect(changes).toEqual([
@@ -125,18 +140,11 @@ describe("retired runtime config migrations", () => {
     ["extra directories", { enabled: true, load: { extraDirs: ["/opt/openclaw/hooks"] } }],
     ["explicit disablement", { enabled: false }],
   ])("preserves canonical enabled state for %s", (_label, expected) => {
-    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
-      (candidate) => candidate.id === "runtime.retired-internal-hook-handlers",
-    );
     const raw = { hooks: { internal: { ...structuredClone(expected), handlers: null } } };
-    const changes: string[] = [];
-
-    migration?.apply(raw, changes);
+    applyAll(raw);
 
     expect(raw.hooks.internal).toEqual(expected);
-    const rerunChanges: string[] = [];
-    migration?.apply(raw, rerunChanges);
-    expect(rerunChanges).toEqual([]);
+    expect(applyAll(raw).changes).toEqual([]);
   });
 
   it("explains the required manual migration before doctor removes registrations", () => {

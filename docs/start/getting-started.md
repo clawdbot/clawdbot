@@ -13,7 +13,7 @@ working chat session.
 ## What you need
 
 - **Node.js 22.22.3+, 24.15+, or 25.9+** (Node 26 is the recommended runtime)
-- **An API key** from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you
+- **An existing Claude Code or Codex CLI login, or a provider API key** — onboarding can reuse it
 
 <Tip>
 Check your Node version with `node --version`.
@@ -21,6 +21,26 @@ Check your Node version with `node --version`.
 PowerShell installer and WSL2 Gateway paths are also supported. See [Windows](/platforms/windows).
 Need to install Node? See [Node setup](/install/node).
 </Tip>
+
+## Try it in one command
+
+```bash
+npx openclaw@latest
+```
+
+On a fresh install, choose **Quick start** after a one-line pointer to the
+[security guide](/gateway/security). That is the only onboarding prompt when
+usable AI access is already available: OpenClaw
+finds an existing Claude Code or Codex CLI login or API key, verifies it with a
+real completion, saves the config, and opens the web dashboard.
+
+The Gateway runs in this terminal until you press **Ctrl+C**; your config stays
+saved. If no detected route works, onboarding opens manual provider setup.
+Choose **Custom setup** to walk through all guided options instead.
+
+To keep the Gateway running in the background later, install the CLI below and
+run `openclaw gateway install`. Run `openclaw` for the TUI or
+`openclaw dashboard` to reopen the web UI.
 
 ## Quick setup
 
@@ -50,14 +70,29 @@ Need to install Node? See [Node setup](/install/node).
 
   </Step>
   <Step title="Complete onboarding">
-    The installer starts the onboarding wizard automatically. Follow it to choose
-    a model provider, set an API key, and configure the Gateway. QuickStart is
-    usually only a few minutes, but provider sign-in, channel pairing, daemon
-    install, network downloads, skills, or optional plugins can make full
-    onboarding take longer. Skip optional steps and return later with
-    `openclaw configure`.
+    The installer starts the guided onboarding wizard automatically. Choose
+    **Quick start** to reuse detected AI access and open the dashboard, or
+    **Custom setup** for the full guided flow. Provider sign-in and optional
+    setup can take longer. Return later with `openclaw configure` for
+    additional settings. `openclaw onboard --classic` opens the classic
+    step-by-step wizard instead.
 
     See [Onboarding (CLI)](/start/wizard) for the full reference.
+
+  </Step>
+  <Step title="Install the Gateway service">
+    Quick start keeps the Gateway in the foreground of this terminal. The next
+    steps need it running in the background. Press **Ctrl+C** to stop the
+    foreground Gateway, then install the service:
+
+    ```bash
+    openclaw gateway install
+    ```
+
+    This installs a LaunchAgent on macOS, a systemd user unit on Linux and
+    WSL2, or a Scheduled Task on native Windows (with a per-user
+    Startup-folder login item as the fallback if task creation is denied).
+    Your config stays saved across the stop and the install.
 
   </Step>
   <Step title="Verify the Gateway is running">

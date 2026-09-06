@@ -241,9 +241,8 @@ describe("Buzz directory relay", () => {
       close: relayClose,
       idleSince: undefined,
       ongoingOperations: 0,
-      prepareSubscription: vi.fn(
-        (): ReturnType<Relay["prepareSubscription"]> =>
-          createSubscriptionStub("sub:1", subscriptionClose),
+      prepareSubscription: vi.fn((): ReturnType<Relay["prepareSubscription"]> =>
+        createSubscriptionStub("sub:1", subscriptionClose),
       ),
       send: vi.fn(async () => {}),
     } as unknown as Relay;
@@ -275,9 +274,8 @@ describe("Buzz directory relay", () => {
       close: relayClose,
       idleSince: undefined,
       ongoingOperations: 0,
-      prepareSubscription: vi.fn(
-        (): ReturnType<Relay["prepareSubscription"]> =>
-          createSubscriptionStub("sub:1", subscriptionClose),
+      prepareSubscription: vi.fn((): ReturnType<Relay["prepareSubscription"]> =>
+        createSubscriptionStub("sub:1", subscriptionClose),
       ),
       send: vi.fn(async () => {}),
     } as unknown as Relay;

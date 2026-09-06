@@ -29,9 +29,10 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import {
-  createCodexUsageLimitPromptError,
+  CodexUsageLimitPromptError,
   formatCodexTurnStartUsageLimitError,
   markCodexAuthProfileBlockedFromRateLimits,
 } from "./usage-limit-error.js";
@@ -66,7 +67,6 @@ export async function startCodexAttemptTurn(
     appServer,
     attemptStartedAt,
     startupAuthProfileId,
-    abortFromUpstream,
   } = connection;
   const { state, turnIdRef } = turnRuntime;
   const { waitForActiveNativeTurnCompletion } = notifications;
@@ -109,11 +109,16 @@ export async function startCodexAttemptTurn(
       }) &&
       resourceState.restartContextEngineCodexThread
     ) {
-      embeddedAgentLog.warn(
-        "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
-        { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
-      );
       try {
+        assertCodexBindingMayBeReplaced(
+          resourceState.thread,
+          "retrying an overflow on a fresh native thread",
+          params.expectedSessionRuntimeOwnership,
+        );
+        embeddedAgentLog.warn(
+          "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
+          { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
+        );
         const clearedBinding = await bindingStore.mutate(bindingIdentity, {
           kind: "clear",
           threadId: resourceState.thread.threadId,
@@ -125,7 +130,7 @@ export async function startCodexAttemptTurn(
           );
         } else {
           resourceState.thread = await resourceState.restartContextEngineCodexThread();
-          const retryBinding = await bindingStore.read(bindingIdentity);
+          const retryBinding = bindingStore.read(bindingIdentity);
           if (
             retryBinding &&
             retryBinding.threadId === resourceState.thread.threadId &&
@@ -171,11 +176,12 @@ export async function startCodexAttemptTurn(
       });
       const message = usageLimitError?.message ?? formatErrorMessage(turnStartError);
       if (isInvalidCodexImagePayloadError(message)) {
-        await clearCodexBindingAfterInvalidImagePayload(bindingStore, bindingIdentity, {
-          phase: "turn_start",
-          threadId: resourceState.thread.threadId,
-          error: message,
-        });
+        await clearCodexBindingAfterInvalidImagePayload(
+          bindingStore,
+          bindingIdentity,
+          { phase: "turn_start", threadId: resourceState.thread.threadId, error: message },
+          params.expectedSessionRuntimeOwnership,
+        );
       }
       void emitCodexAppServerEvent(params, {
         stream: "codex_app_server.lifecycle",
@@ -184,7 +190,7 @@ export async function startCodexAttemptTurn(
       trajectoryRecorder?.recordEvent("session.ended", {
         status: "error",
         threadId: resourceState.thread.threadId,
-        timedOut: state.timedOut,
+        timedOut: state.timeout !== undefined,
         aborted: runAbortController.signal.aborted,
         promptError: message,
       });
@@ -214,8 +220,7 @@ export async function startCodexAttemptTurn(
       });
       const failureKind = classifyCodexModelCallFailureKind({
         error: turnStartError,
-        timedOut: state.timedOut,
-        turnCompletionIdleTimedOut: state.turnCompletionIdleTimedOut,
+        timedOut: state.timeout !== undefined,
         runAborted: runAbortController.signal.aborted,
         abortReason: runAbortController.signal.reason,
         clientClosedAbort: state.clientClosedAbort,
@@ -242,7 +247,7 @@ export async function startCodexAttemptTurn(
             threadId: resourceState.thread.threadId,
           })
         : true;
-      if (!state.timedOut && bindingReleased && !resourceState.startupClientUnsafe) {
+      if (bindingReleased && !resourceState.startupClientUnsafe) {
         const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
           threadId: resourceState.thread.threadId,
           timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -269,7 +274,6 @@ export async function startCodexAttemptTurn(
         log: embeddedAgentLog,
         cleanup: async () => trajectoryRecorder?.flush(),
       });
-      params.abortSignal?.removeEventListener("abort", abortFromUpstream);
       await releaseSharedClientLeaseAndRetireOneShotClient();
       if (usageLimitError) {
         await markCodexAuthProfileBlockedFromRateLimits({
@@ -281,7 +285,7 @@ export async function startCodexAttemptTurn(
           result: buildCodexTurnStartFailureResult({
             params,
             message: usageLimitError.message,
-            promptError: createCodexUsageLimitPromptError(usageLimitError.message),
+            promptError: new CodexUsageLimitPromptError(usageLimitError.message),
             messagesSnapshot,
             systemPromptReport,
           }),

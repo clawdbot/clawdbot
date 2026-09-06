@@ -8,7 +8,7 @@ import {
   createDeepInfraEmbeddingProvider,
   DEFAULT_DEEPINFRA_EMBEDDING_MODEL,
 } from "./embedding-provider.js";
-import { DEEPINFRA_BASE_URL, type DeepInfraSurfaceModel } from "./provider-models.js";
+import { DEEPINFRA_BASE_URL, type DeepInfraSurfaceModel } from "./media-models.js";
 
 const EXCLUDED_EMBEDDING_HEADERS = ["authorization", "content-type", "x-api-key", "api-key"];
 

@@ -1,9 +1,9 @@
 // Control UI tests cover Appearance override provenance and restoring product defaults.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -24,12 +24,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "appearance-settings-defaults",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("appearance-settings-defaults");
+  }
+});
 function settingsStorageKey(): string {
   return controlUiBundledSettingsStorageKey(suite.server.baseUrl);
 }
@@ -169,7 +169,6 @@ async function captureViewport(page: Page, filename: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     path: path.join(uiProofArtifactDir, filename),

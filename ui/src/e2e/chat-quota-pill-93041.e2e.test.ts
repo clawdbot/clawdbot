@@ -1,30 +1,31 @@
 // Real-browser proof + regression for #93041: provider usage from models.authStatus remains
 // available in the desktop composer's context popover. Screenshots go to the ignored artifacts tree.
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   controlUiSessionUrl,
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
 });
 
 const baseTime = 1_700_000_000_000;
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-quota-pill-93041");
+let artifactDir: string;
 const captureOwnershipProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const ownershipProofPhase = process.env.OPENCLAW_UI_PROOF_PHASE?.trim() || "candidate";
-const ownershipProofDir = path.resolve(
-  process.cwd(),
-  ".artifacts/ui-visual-proof/agent-quota-ownership",
-  ownershipProofPhase,
-);
+let ownershipProofDir: string;
 
 const authStatusWithUsage = {
   ts: baseTime,
@@ -204,11 +205,7 @@ async function openChat(
   let context: BrowserContext | undefined;
   let page: Page | undefined;
   try {
-    context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    context = await suite.browser.newContext(createControlUiE2eContextOptions());
     page = await context.newPage();
     page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     const gateway = await installMockGateway(page, {
@@ -333,6 +330,12 @@ async function openVisibleQuotaPopover(page: Page) {
 }
 
 suite.define(() => {
+  beforeEach(() => {
+    artifactDir = createControlUiE2eArtifactDir("chat-quota-pill-93041");
+    if (captureOwnershipProof) {
+      ownershipProofDir = path.join(artifactDir, "agent-quota-ownership", ownershipProofPhase);
+    }
+  });
   it("shows high context pressure without a compact action", async () => {
     const fixture = await openChat(authStatusWithUsage, {
       "sessions.list": highPressureSessions,
@@ -462,9 +465,6 @@ suite.define(() => {
   });
 
   it("binds delayed auth and quota presentation to the selected global agent", async () => {
-    if (captureOwnershipProof) {
-      await mkdir(ownershipProofDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -633,11 +633,12 @@ suite.define(() => {
       await setOwnershipProofCue(page, "Selected agent: Work | Work auth loading");
       await pauseForOwnershipProof(page);
       if (captureOwnershipProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(ownershipProofDir, "01-work-loading.png"),
-        });
+        await writeFile(
+          path.join(ownershipProofDir, "01-work-loading.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring"),
+          ]),
+        );
       }
 
       await replyToAgentMetadata(gateway, "main");
@@ -661,11 +662,12 @@ suite.define(() => {
       );
       await pauseForOwnershipProof(page);
       if (captureOwnershipProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(ownershipProofDir, "02-after-delayed-main.png"),
-        });
+        await writeFile(
+          path.join(ownershipProofDir, "02-after-delayed-main.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring"),
+          ]),
+        );
       }
 
       expect(delayedMainState.agentId).toBe("work");
@@ -706,11 +708,12 @@ suite.define(() => {
         });
       await setOwnershipProofCue(page, "Selected agent: Work | Work account and plan loaded");
       if (captureOwnershipProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(ownershipProofDir, "03-work-settled.png"),
-        });
+        await writeFile(
+          path.join(ownershipProofDir, "03-work-settled.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring"),
+          ]),
+        );
       }
       popover = await openVisibleQuotaPopover(page);
       expect(
@@ -734,11 +737,12 @@ suite.define(() => {
       );
       await pauseForOwnershipProof(page);
       if (captureOwnershipProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(ownershipProofDir, "03-work-settled.png"),
-        });
+        await writeFile(
+          path.join(ownershipProofDir, "04-work-quota-popover.png"),
+          await takeControlUiViewportScreenshot(page, popover, [
+            popover.locator(".context-usage__limit").first(),
+          ]),
+        );
       }
     } finally {
       await page.close().catch(() => {});

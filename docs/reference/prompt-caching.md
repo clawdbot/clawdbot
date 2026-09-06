@@ -57,7 +57,8 @@ Merge order (later wins):
 
 1. `agents.defaults.params` - global default for all models
 2. `agents.defaults.models["provider/model"].params` - per-model override
-3. `agents.entries.*.params` - per-agent override, matched by agent id
+3. `agents.entries.*.models["provider/model"].params` - agent-specific per-model override
+4. `agents.entries.*.params` - agent-wide override, matched by agent id
 
 Source: `src/agents/embedded-agent-runner/extra-params.ts` (`resolveExtraParams`).
 
@@ -96,6 +97,32 @@ agents:
 - `cacheRetention: "short"` maps to the default 5-minute ephemeral cache. `cacheRetention: "long"` requests the 1-hour TTL (`cache_control: { type: "ephemeral", ttl: "1h" }`) when set explicitly. An implicit/env-driven long retention (`OPENCLAW_CACHE_RETENTION=long` with no explicit `cacheRetention`) only upgrades to the 1-hour TTL on `api.anthropic.com` or Vertex AI (`aiplatform.googleapis.com` / `*-aiplatform.googleapis.com`) hosts; other hosts keep the 5-minute cache.
 
 Source: `packages/ai/src/transports/anthropic-payload-policy.ts` (`resolveAnthropicEphemeralCacheControl`, `isLongTtlEligibleEndpoint`).
+
+### Model Studio / DashScope (Qwen)
+
+OpenClaw's direct-provider adapter enables explicit prompt caching by default on
+native or default Model Studio / DashScope OpenAI-compatible routes, using
+`compat.cacheControlFormat: "anthropic"` and the
+existing system, last-tool, and last-conversation cache markers. Explicit model
+compat settings take precedence over detected defaults. Custom proxy endpoints
+receive no automatic format default; set `compat.cacheControlFormat: "anthropic"`
+explicitly only when the proxy supports these markers.
+
+The embedded runner's boundary-aware Chat Completions transport does not yet apply
+these markers; detecting the format alone does not enable explicit caching there.
+
+Explicit `cacheRetention` values reach this transport without enabling
+`compat.supportsPromptCacheKey`; leave that flag unset because this route does not
+need OpenAI's `prompt_cache_key` or `prompt_cache_retention` fields. With no explicit
+retention, the transport keeps its `"short"` default. Model Studio uses a five-minute
+explicit cache window, so `"long"` keeps ephemeral markers without requesting a
+one-hour TTL.
+
+To disable OpenClaw's explicit markers, set `cacheRetention: "none"`. The current
+`compat.cacheControlFormat` schema accepts only `"anthropic"`, not a disable value;
+omitting it uses the detected default. Alibaba's automatic implicit caching is
+separate and cannot be disabled. Supported models, minimum prompt lengths, and
+cache billing are described in [Model Studio context caching](https://www.alibabacloud.com/help/en/model-studio/context-cache).
 
 ### OpenAI (direct API)
 
@@ -159,6 +186,7 @@ If you see unexpected `cacheWrite` spikes after a config or workspace change, ch
 
 ## OpenClaw cache-stability guards
 
+- Delivery instructions live after the system-prompt cache boundary. Native Codex carries the current delivery and target policy in late turn context, so alternating delivery modes does not rebuild its static prompt or message tool catalog when the available capabilities remain unchanged. Actual capability changes still update the catalog.
 - Bundled MCP tool catalogs are sorted deterministically (by server name, then tool name) before tool registration, so `listTools()` order changes do not churn the tools block and bust prompt-cache prefixes.
 - Legacy sessions with persisted image blocks keep the **3 most recent completed turns** intact (counting all completed turns, not just image-bearing ones). Older already-processed image blocks are replaced with a text marker so image-heavy follow-ups do not keep re-sending large stale payloads.
 

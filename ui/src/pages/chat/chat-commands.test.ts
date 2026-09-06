@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import {
   invalidateChatMetadataStore,
@@ -15,6 +15,7 @@ import {
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   applyRemoteSlashCommandsResult,
+  invalidateSessionSlashCommands,
   dispatchChatSlashCommand,
   refreshSlashCommands,
 } from "./chat-commands.ts";
@@ -57,6 +58,77 @@ function remoteCommand(name: string, description: string) {
 }
 
 describe("refreshSlashCommands", () => {
+  it("keeps managed command catalogs scoped to the session when the same viewer switches chats", async () => {
+    const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
+    const request = vi
+      .spyOn(client, "request")
+      .mockResolvedValueOnce({
+        commands: [
+          {
+            ...remoteCommand("notes_alex", "Alex's selected notes"),
+            source: "skill",
+            skillDisplayName: "Notes · Alex",
+            skillModelVisible: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        commands: [
+          {
+            ...remoteCommand("notes_sam", "Sam's selected notes"),
+            source: "skill",
+            skillDisplayName: "Notes · Sam",
+            skillModelVisible: true,
+          },
+        ],
+      });
+    try {
+      await refreshSlashCommands({ client, agentId: "main", sessionKey: "agent:main:alex" });
+      expect(SLASH_COMMANDS.some((command) => command.name === "notes_alex")).toBe(true);
+      await refreshSlashCommands({ client, agentId: "main", sessionKey: "agent:main:sam" });
+      expect(SLASH_COMMANDS.some((command) => command.name === "notes_sam")).toBe(true);
+      expect(SLASH_COMMANDS.some((command) => command.name === "notes_alex")).toBe(false);
+      expect(request).toHaveBeenLastCalledWith("commands.list", {
+        agentId: "main",
+        sessionKey: "agent:main:sam",
+        includeArgs: true,
+        scope: "text",
+      });
+      await refreshSlashCommands({ client, agentId: "main", sessionKey: "agent:main:alex" });
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(SLASH_COMMANDS.some((command) => command.name === "notes_alex")).toBe(true);
+    } finally {
+      request.mockRestore();
+      await refreshSlashCommands({ client: null });
+    }
+  });
+  it("retires in-flight commands after an explicit selection invalidation", async () => {
+    const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
+    const scope = { agentId: "main", sessionKey: "agent:main:shared" };
+    let settle!: (value: { commands: ReturnType<typeof remoteCommand>[] }) => void;
+    const pending = new Promise<{ commands: ReturnType<typeof remoteCommand>[] }>((resolve) => {
+      settle = resolve;
+    });
+    const request = vi
+      .spyOn(client, "request")
+      .mockImplementationOnce(async () => pending)
+      .mockResolvedValue({ commands: [remoteCommand("new_pin", "Updated selection")] });
+    try {
+      const stale = refreshSlashCommands({ client, ...scope });
+      invalidateSessionSlashCommands(client, scope);
+      await refreshSlashCommands({ client, ...scope });
+      settle({ commands: [remoteCommand("old_pin", "Previous selection")] });
+      await stale;
+      await refreshSlashCommands({ client, ...scope });
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(SLASH_COMMANDS.some((command) => command.name === "new_pin")).toBe(true);
+      expect(SLASH_COMMANDS.some((command) => command.name === "old_pin")).toBe(false);
+    } finally {
+      request.mockRestore();
+      await refreshSlashCommands({ client: null });
+    }
+  });
+
   it("resolves localized UI command metadata", () => {
     const clear = SLASH_COMMANDS.find((entry) => entry.name === "clear");
     const redirect = SLASH_COMMANDS.find((entry) => entry.name === "redirect");

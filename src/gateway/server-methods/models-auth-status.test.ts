@@ -11,8 +11,15 @@ import {
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createChatRunState } from "../server-chat-state.js";
@@ -42,20 +49,29 @@ const mocks = vi.hoisted(() => ({
   }),
   listProfilesForProvider: vi.fn((): string[] => []),
   removeAuthProfilesAcrossOwnerStores: vi.fn(async (): Promise<boolean> => true),
-  removeProviderAuthProfilesWithLock: vi.fn(
-    async (): Promise<AuthProfileStore | null> => ({ version: 1, profiles: {} }),
-  ),
+  removeProviderAuthProfilesWithLock: vi.fn(async (): Promise<AuthProfileStore | null> => ({
+    version: 1,
+    profiles: {},
+  })),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
     (params: { agentDir?: string }) => params.agentDir,
   ),
+  setAuthProfileOrder: vi.fn(async (): Promise<AuthProfileStore | null> => ({
+    version: 1,
+    profiles: {},
+  })),
   refreshActiveProviderAuthRuntimeSnapshot: vi.fn(async () => false),
+  refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
   clearCurrentProviderAuthState: vi.fn(),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: unknown) => {}),
   loadDeferredCatalog: vi.fn(),
   readPreparedCatalog: vi.fn(),
-  buildAuthHealthSummary: vi.fn<BuildAuthHealthSummary>(
-    (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
-  ),
+  buildAuthHealthSummary: vi.fn<BuildAuthHealthSummary>((): AuthHealthSummary => ({
+    now: 0,
+    warnAfterMs: 0,
+    profiles: [],
+    providers: [],
+  })),
   loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
   listProviderUsagePluginDescriptors: vi.fn(() => [
     { provider: "anthropic", displayName: "Claude" },
@@ -86,6 +102,7 @@ vi.mock("../../agents/auth-profiles.js", async () => {
     removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
     removeProviderAuthProfilesWithLock: mocks.removeProviderAuthProfilesWithLock,
     resolvePersistedAuthProfileOwnerAgentDir: mocks.resolvePersistedAuthProfileOwnerAgentDir,
+    setAuthProfileOrder: mocks.setAuthProfileOrder,
   };
 });
 
@@ -111,6 +128,10 @@ vi.mock("../../secrets/runtime.js", () => ({
   refreshActiveProviderAuthRuntimeSnapshot: mocks.refreshActiveProviderAuthRuntimeSnapshot,
 }));
 
+vi.mock("../../agents/prepared-model-runtime.js", () => ({
+  refreshPreparedModelRuntimeSnapshots: mocks.refreshPreparedModelRuntimeSnapshots,
+}));
+
 vi.mock("../../agents/model-provider-auth.js", () => ({
   clearCurrentProviderAuthState: mocks.clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread: mocks.warmCurrentProviderAuthStateOffMainThread,
@@ -121,6 +142,7 @@ vi.mock("../server-model-catalog-auth.js", () => ({
   readPreparedCatalog: mocks.readPreparedCatalog,
 }));
 
+import { modelsAuthOrderHandlers } from "./models-auth-order.js";
 import {
   aggregateRefreshableAuthStatus,
   invalidateModelAuthStatusCache,
@@ -131,12 +153,13 @@ import {
 
 function createOptions(
   params: Record<string, unknown> = {},
+  scopes: string[] = ["operator.admin"],
 ): GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> } {
   const respond = vi.fn();
   return {
     req: { type: "req", id: "req-1", method: "models.authStatus", params },
     params,
-    client: null,
+    client: { connect: { scopes } } as never,
     isWebchatConnect: () => false,
     respond,
     context: { getRuntimeConfig: mocks.getRuntimeConfig } as unknown,
@@ -150,6 +173,10 @@ const handler = expectDefined(
 const logoutHandler = expectDefined(
   modelsAuthStatusHandlers["models.authLogout"],
   'modelsAuthStatusHandlers["models.authLogout"] test invariant',
+);
+const orderHandler = expectDefined(
+  modelsAuthOrderHandlers["models.authOrderSet"],
+  'modelsAuthOrderHandlers["models.authOrderSet"] test invariant',
 );
 
 function createActiveRun(providerId: string, authProviderId?: string, agentId = "main") {
@@ -204,6 +231,20 @@ function createLogoutOptions(
     isWebchatConnect: () => false,
     respond,
     context,
+  } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
+}
+
+function createOrderOptions(
+  params: Record<string, unknown>,
+): GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> } {
+  const respond = vi.fn();
+  return {
+    req: { type: "req", id: "req-order", method: "models.authOrderSet", params },
+    params,
+    client: null,
+    isWebchatConnect: () => false,
+    respond,
+    context: { getRuntimeConfig: mocks.getRuntimeConfig } as unknown,
   } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
 }
 
@@ -285,11 +326,7 @@ function resetAuthStatusMocks(): void {
   );
   mocks.resolveDefaultAgentId.mockReturnValue("main");
   setPreparedAuthStore({ version: 1, profiles: {} });
-  setPreparedMetadataSnapshot({
-    index: { plugins: [] },
-    manifestRegistry: { plugins: [] },
-    plugins: [],
-  });
+  setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture());
   mocks.readPreparedCatalog.mockImplementation(async (_context, agentId: string) =>
     createPreparedOwnerSnapshot(agentId),
   );
@@ -303,6 +340,7 @@ function resetAuthStatusMocks(): void {
   mocks.listProfilesForProvider.mockReturnValue([]);
   mocks.removeAuthProfilesAcrossOwnerStores.mockResolvedValue(true);
   mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
+  mocks.setAuthProfileOrder.mockResolvedValue({ version: 1, profiles: {} });
   mocks.resolvePersistedAuthProfileOwnerAgentDir.mockImplementation(
     (params: { agentDir?: string }) => params.agentDir,
   );
@@ -314,6 +352,8 @@ function resetAuthStatusMocks(): void {
   });
   mocks.loadProviderUsageSummary.mockResolvedValue(emptyUsageSummary());
   mocks.refreshActiveProviderAuthRuntimeSnapshot.mockResolvedValue(false);
+  mocks.refreshPreparedModelRuntimeSnapshots.mockResolvedValue();
+  mocks.warmCurrentProviderAuthStateOffMainThread.mockResolvedValue();
 }
 
 function firstDeferredAuthScope() {
@@ -328,6 +368,7 @@ function firstDeferredAuthScope() {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  resetConfigRuntimeState();
 });
 
 function expectLogoutFailurePreservesRun(params: {
@@ -510,6 +551,35 @@ describe("models.authStatus", () => {
     );
   });
 
+  it("does not wait for full catalog discovery during auth status refresh", async () => {
+    let releaseDiscovery!: () => void;
+    const discovery = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    mocks.loadDeferredCatalog.mockImplementation(async (_context, agentId, options) => {
+      const deferredOptions = requireRecord(options);
+      if (deferredOptions.refreshFullCatalog !== false) {
+        await discovery;
+      }
+      return createPreparedOwnerSnapshot(agentId);
+    });
+
+    const request = handler(createOptions({ refresh: true }));
+    try {
+      await expect(
+        Promise.race([
+          Promise.resolve(request).then(() => "replied" as const),
+          new Promise<"timed-out">((resolve) => {
+            setTimeout(() => resolve("timed-out"), 25);
+          }),
+        ]),
+      ).resolves.toBe("replied");
+    } finally {
+      releaseDiscovery();
+    }
+    await request;
+  });
+
   it("reports an unavailable prepared owner without failing the RPC or discovering credentials", async () => {
     mocks.readPreparedCatalog.mockResolvedValueOnce(undefined);
 
@@ -575,40 +645,133 @@ describe("models.authStatus", () => {
     expect(result.providers[0]?.profiles[0]?.logoutSupported).toBe(true);
   });
 
-  it("projects provider capabilities from the published lifecycle metadata", async () => {
-    const plugins = [
-      {
-        id: "provider-auth",
-        origin: "bundled",
-        providerAuthAliases: { "openai-legacy": "openai" },
-        providerAuthChoices: [
-          {
-            provider: "openai-legacy",
-            method: "api-key",
-            choiceId: "openai-api-key",
-            choiceLabel: "OpenAI API key",
-            appGuidedSecret: true,
-          },
-          {
-            provider: "openai",
-            method: "oauth",
-            choiceId: "openai-oauth",
-            choiceLabel: "OpenAI OAuth",
-          },
-          {
-            provider: "github-copilot",
-            method: "oauth",
-            choiceId: "github-copilot-oauth",
-            choiceLabel: "GitHub Copilot OAuth",
-          },
-        ],
+  it("projects profile labels, last use, and explicit priority", async () => {
+    setPreparedAuthStore({
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "access",
+          refresh: "refresh",
+          expires: 1_000_000,
+          email: "owner@example.com",
+          displayName: "Work account",
+        },
       },
-    ];
-    setPreparedMetadataSnapshot({
-      index: { plugins: [] },
-      manifestRegistry: { plugins },
-      plugins,
+      order: { openai: ["openai:default"] },
+      usageStats: { "openai:default": { lastUsed: 42 } },
     });
+    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+
+    const provider = await firstAuthStatusProvider();
+
+    expect(provider?.profileOrder).toEqual(["openai:default"]);
+    expect(provider?.profileOrderStored).toBe(true);
+    expect(provider?.profiles[0]).toMatchObject({
+      displayName: "Work account",
+      email: "owner@example.com",
+      lastUsedAt: 42,
+      source: "saved",
+    });
+  });
+
+  it("omits profile identity for read-only clients", async () => {
+    setPreparedAuthStore({
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "access",
+          refresh: "refresh",
+          expires: 1_000_000,
+          email: "owner@example.com",
+          displayName: "Work account",
+        },
+      },
+      usageStats: { "openai:default": { lastUsed: 42 } },
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+
+    const opts = createOptions({}, ["operator.read"]);
+    await handler(opts);
+
+    const result = firstRespondCall(opts)?.[1] as ModelAuthStatusResult;
+    expect(result.providers[0]?.profiles[0]).not.toHaveProperty("email");
+    expect(result.providers[0]?.profiles[0]).not.toHaveProperty("displayName");
+    expect(result.providers[0]?.profiles[0]).not.toHaveProperty("lastUsedAt");
+  });
+
+  it("marks externally supplied profiles and configuration-owned priority", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      auth: { order: { openai: ["openai:default"] } },
+    });
+    setPreparedAuthStore({
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "access",
+          refresh: "refresh",
+          expires: 1_000_000,
+        },
+      },
+      runtimeExternalProfileIds: ["openai:default"],
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+
+    const provider = await firstAuthStatusProvider();
+
+    expect(provider?.profileOrderLocked).toBe("auth-config");
+    expect(provider?.profiles[0]?.source).toBe("external");
+  });
+
+  it("projects provider capabilities from the published lifecycle metadata", async () => {
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "provider-auth",
+          origin: "bundled",
+          providers: ["OpenAI", "github-copilot", "media-only"],
+          providerAuthAliases: { "openai-legacy": "openai" },
+          providerAuthChoices: [
+            {
+              provider: "openai-legacy",
+              method: "api-key",
+              choiceId: "openai-api-key",
+              choiceLabel: "OpenAI API key",
+              appGuidedSecret: true,
+            },
+            {
+              provider: "openai",
+              method: "oauth",
+              choiceId: "openai-oauth",
+              choiceLabel: "OpenAI OAuth",
+            },
+            {
+              provider: "media-only",
+              method: "api-key",
+              choiceId: "media-only-key",
+              choiceLabel: "Media API key",
+              onboardingScopes: ["image-generation"],
+            },
+            {
+              provider: "github-copilot",
+              method: "oauth",
+              choiceId: "github-copilot-oauth",
+              choiceLabel: "GitHub Copilot OAuth",
+            },
+          ],
+        },
+        {
+          id: "search-tool",
+          setup: { providers: [{ id: "search-tool", authMethods: ["api-key"] }] },
+        },
+      ],
+    });
+    setPreparedMetadataSnapshot(snapshot);
 
     const result = await readAuthStatus();
 
@@ -621,32 +784,23 @@ describe("models.authStatus", () => {
   it("uses the published metadata owner for provider env auth and aliases", async () => {
     const cfg = {};
     const policyHash = resolveInstalledPluginIndexPolicyHash(cfg);
-    const plugins = [
-      {
-        id: "prepared-auth",
-        origin: "bundled",
-        setup: {
-          providers: [{ id: "prepared-owner", envVars: ["PREPARED_OWNER_API_KEY"] }],
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "prepared-auth",
+          origin: "bundled",
+          setup: {
+            providers: [{ id: "prepared-owner", envVars: ["PREPARED_OWNER_API_KEY"] }],
+          },
+          providerAuthAliases: { "prepared-owner-alias": "prepared-owner" },
         },
-        providerAuthAliases: { "prepared-owner-alias": "prepared-owner" },
-      },
-    ];
+      ],
+    });
     mocks.getRuntimeConfig.mockReturnValue(cfg);
     setPreparedMetadataSnapshot({
+      ...snapshot,
       policyHash,
-      index: {
-        version: 1,
-        hostContractVersion: "test",
-        compatRegistryVersion: "test",
-        migrationVersion: 1,
-        policyHash,
-        generatedAtMs: 1,
-        installRecords: {},
-        plugins: [],
-        diagnostics: [],
-      },
-      manifestRegistry: { plugins },
-      plugins,
+      index: { ...snapshot.index, policyHash },
     });
     vi.stubEnv("PREPARED_OWNER_API_KEY", "prepared-owner-secret");
 
@@ -1093,16 +1247,27 @@ describe("models.authStatus", () => {
     }
   });
 
-  it("reports non-env SecretRefs as presence-only config auth", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({
+  it("reports runtime-resolved non-env SecretRefs as presence-only config auth", async () => {
+    const sourceProvider: ModelProviderConfig = {
+      baseUrl: "https://example.test/v1",
+      models: [],
+      apiKey: { source: "file", provider: "mounted-json", id: "model-provider-key" },
+    };
+    const runtimeProvider: ModelProviderConfig = {
+      baseUrl: sourceProvider.baseUrl,
+      models: sourceProvider.models,
+      apiKey: "runtime-secret-value",
+    };
+    const sourceConfig: OpenClawConfig = {
       models: {
         providers: {
-          openai: Object.fromEntries([
-            ["apiKey", { source: "file", provider: "mounted-json", id: "model-provider-key" }],
-          ]),
+          openai: sourceProvider,
         },
       },
-    });
+    };
+    const runtimeConfig: OpenClawConfig = { models: { providers: { openai: runtimeProvider } } };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     mocks.buildAuthHealthSummary.mockReturnValue({
       now: 0,
       warnAfterMs: 0,
@@ -1385,6 +1550,14 @@ describe("models.authStatus", () => {
 
   it("routes claude-cli OAuth profiles to Anthropic usage with plan and billing", async () => {
     const runtimeConfig = {};
+    const plugins = [
+      {
+        id: "anthropic",
+        origin: "bundled" as const,
+        providerAuthAliases: { "claude-cli": "anthropic" },
+      },
+    ];
+    setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture({ plugins }));
     mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     const profile = {
       profileId: "claude-cli",
@@ -1431,6 +1604,7 @@ describe("models.authStatus", () => {
     });
     const refreshed = expectDefined(result, "refreshed auth status");
     expect(refreshed.providers[0]?.displayName).toBe("Claude");
+    expect(refreshed.providers[0]?.authProvider).toBe("anthropic");
     expect(refreshed.providers[0]?.usage).toEqual({
       providerId: "anthropic",
       windows: [{ label: "5h", usedPercent: 22 }],
@@ -1438,6 +1612,11 @@ describe("models.authStatus", () => {
       billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
       accountEmail: "clawd@example.com",
     });
+
+    const readOnly = createOptions({}, ["operator.read"]);
+    await handler(readOnly);
+    const readOnlyResult = firstRespondCall(readOnly)?.[1] as ModelAuthStatusResult;
+    expect(readOnlyResult.providers[0]?.usage).not.toHaveProperty("accountEmail");
   });
 
   it("adds DeepSeek API-key balance summaries to auth status usage", async () => {
@@ -2025,6 +2204,145 @@ describe("models.authStatus", () => {
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(String(requireRecord(error).code)).toMatch(/unavailable/i);
+  });
+});
+
+describe("models.authOrderSet", () => {
+  beforeEach(() => {
+    resetAuthStatusMocks();
+    setPreparedAuthStore({
+      version: 1,
+      profiles: {
+        "openai:one": {
+          type: "oauth",
+          provider: "openai",
+          access: "one",
+          refresh: "one-refresh",
+          expires: 1_000_000,
+        },
+        "openai:two": {
+          type: "oauth",
+          provider: "openai",
+          access: "two",
+          refresh: "two-refresh",
+          expires: 1_000_000,
+        },
+      },
+    });
+  });
+
+  it("persists a complete provider profile order", async () => {
+    const opts = createOrderOptions({
+      provider: "openai",
+      profileIds: ["openai:two", "openai:one"],
+    });
+
+    await orderHandler(opts);
+
+    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/agent",
+      provider: "openai",
+      order: ["openai:two", "openai:one"],
+      sharedStoreWrite: true,
+    });
+    expect(firstRespondCall(opts)?.slice(0, 2)).toEqual([
+      true,
+      { provider: "openai", profileIds: ["openai:two", "openai:one"] },
+    ]);
+  });
+
+  it("acknowledges the durable order before background refresh finishes", async () => {
+    let finishPublication: (() => void) | undefined;
+    mocks.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishPublication = resolve;
+        }),
+    );
+    const opts = createOrderOptions({
+      provider: "openai",
+      profileIds: ["openai:two", "openai:one"],
+    });
+
+    const pending = orderHandler(opts);
+    await pending;
+
+    expect(firstRespondCall(opts)?.[0]).toBe(true);
+    expect(mocks.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+        agentIds: new Set(["main"]),
+      }),
+    );
+
+    finishPublication?.();
+  });
+
+  it.each([
+    {
+      name: "auth order",
+      config: { auth: { order: { openai: ["openai:one", "openai:two"] } } },
+      message: "auth configuration",
+    },
+    {
+      name: "provider profile binding",
+      config: { models: { providers: { openai: { apiKey: "openai:one" } } } },
+      message: "provider configuration",
+    },
+  ])("rejects priority controlled by $name", async ({ config, message }) => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    const opts = createOrderOptions({
+      provider: "openai",
+      profileIds: ["openai:two", "openai:one"],
+    });
+
+    await orderHandler(opts);
+
+    expect(mocks.setAuthProfileOrder).not.toHaveBeenCalled();
+    expect(firstRespondCall(opts)?.[2]?.message).toContain(message);
+  });
+
+  it("clears the stored override with null", async () => {
+    const opts = createOrderOptions({ provider: "openai" });
+
+    await orderHandler(opts);
+
+    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/agent",
+      provider: "openai",
+      order: null,
+      sharedStoreWrite: true,
+    });
+  });
+
+  it("rejects an incomplete provider profile order without writing", async () => {
+    const opts = createOrderOptions({ provider: "openai", profileIds: ["openai:one"] });
+
+    await orderHandler(opts);
+
+    expect(mocks.setAuthProfileOrder).not.toHaveBeenCalled();
+    expect(firstRespondCall(opts)?.[0]).toBe(false);
+    expect(firstRespondCall(opts)?.[2]?.message).toContain("every available profile");
+  });
+
+  it("rejects profiles owned by another provider", async () => {
+    const opts = createOrderOptions({ provider: "anthropic", profileIds: ["openai:one"] });
+
+    await orderHandler(opts);
+
+    expect(mocks.setAuthProfileOrder).not.toHaveBeenCalled();
+    expect(firstRespondCall(opts)?.[0]).toBe(false);
+  });
+
+  it("rejects fields outside the registered request contract", async () => {
+    const opts = createOrderOptions({ provider: "openai", unexpected: true });
+
+    await orderHandler(opts);
+
+    expect(mocks.setAuthProfileOrder).not.toHaveBeenCalled();
+    expect(firstRespondCall(opts)?.[0]).toBe(false);
   });
 });
 

@@ -12,11 +12,10 @@ import {
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
 import {
   buildPortableAuthProfileStoreForAgentCopy,
-  ensureAuthProfileStore,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
@@ -26,7 +25,7 @@ import {
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
@@ -290,9 +289,21 @@ export async function agentsAddCommand(
     let stagedAuthOrder: AuthProfileStore["order"];
     let reportPortableAuthCopy: (() => Promise<void>) | undefined;
 
-    const defaultAgentId = resolveDefaultAgentId(cfg);
-    if (defaultAgentId !== agentId) {
-      const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
+    const copySourceAgentId =
+      tryResolveLegacyCompatibilityAgentId(cfg) ??
+      (await prompter.select({
+        message: "Copy auth profiles from another agent?",
+        initialValue: "__skip__",
+        options: [
+          { value: "__skip__", label: "Skip copying auth profiles" },
+          ...listAgentEntries(cfg)
+            .map((agent) => normalizeAgentId(agent.id))
+            .filter((id) => id !== agentId)
+            .map((id) => ({ value: id, label: id })),
+        ],
+      }));
+    if (copySourceAgentId !== "__skip__" && copySourceAgentId !== agentId) {
+      const sourceAgentDir = resolveAgentDir(cfg, copySourceAgentId);
       const sourceAuthPath = resolveAuthProfileDatabasePath(sourceAgentDir);
       const destAuthPath = resolveAuthProfileDatabasePath(agentDir);
       const sharedMainAgentPath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir());
@@ -321,7 +332,7 @@ export async function agentsAddCommand(
           Object.keys(destStore?.profiles ?? {}).length === 0
         ) {
           const shouldCopy = await prompter.confirm({
-            message: `Copy portable auth profiles from "${defaultAgentId}"?`,
+            message: `Copy portable auth profiles from "${copySourceAgentId}"?`,
             initialValue: false,
           });
           if (shouldCopy) {
@@ -329,7 +340,7 @@ export async function agentsAddCommand(
             const copiedOAuthProfileIds = copiedProfileIds.filter(
               (profileId) => sourceStore.profiles[profileId]?.type === "oauth",
             );
-            const sourceAgentId = defaultAgentId;
+            const sourceAgentId = copySourceAgentId;
             const sourceInheritedMain = sourceIsInheritedMain;
             const destinationAgentDir = agentDir;
             for (const [profileId, credential] of Object.entries(portable.store.profiles)) {
@@ -355,7 +366,7 @@ export async function agentsAddCommand(
             };
           }
         } else if (skippedOAuthProfiles) {
-          const sourceAgentId = defaultAgentId;
+          const sourceAgentId = copySourceAgentId;
           const sourceInheritedMain = sourceIsInheritedMain;
           reportPortableAuthCopy = async () => {
             await prompter.note(
@@ -372,15 +383,9 @@ export async function agentsAddCommand(
       initialValue: false,
     });
     if (wantsAuth) {
-      const authStore = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-        readOnly: true,
-        syncExternalCli: false,
-      });
       while (true) {
         const authChoice = await promptAuthChoiceGrouped({
           prompter,
-          store: authStore,
           includeSkip: true,
           config: nextConfig,
         });
@@ -423,6 +428,8 @@ export async function agentsAddCommand(
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
     nextConfig = await setupChannels(nextConfig, wizardRuntime, prompter, {
+      workspaceDir,
+      deferStatusUntilSelection: true,
       allowIMessageInstall: true,
       allowSignalInstall: true,
       onSelection: (value) => {

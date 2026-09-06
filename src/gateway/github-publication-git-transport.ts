@@ -40,6 +40,24 @@ export async function requirePublicationCommand(
   return result.stdout.toString("utf8").trim();
 }
 
+// Guard ordinary steps on both sides of the await. Effects whose observations
+// must survive revocation use the raw transport and record before rechecking.
+export function createGitHubPublicationCommandRunner(assertCurrent?: () => void) {
+  const step = async <T>(operation: () => Promise<T>): Promise<T> => {
+    assertCurrent?.();
+    const result = await operation();
+    assertCurrent?.();
+    return result;
+  };
+  return {
+    step,
+    run: (...args: Parameters<typeof runPublicationCommand>) =>
+      step(() => runPublicationCommand(...args)),
+    require: (...args: Parameters<typeof requirePublicationCommand>) =>
+      step(() => requirePublicationCommand(...args)),
+  };
+}
+
 // A recursive tree listing scales with repository size (openclaw itself is
 // ~3.3MB), far past the default per-command cap above. Without this explicit
 // bound the attribute scan dies as an output-limit "verification" failure on
@@ -116,20 +134,29 @@ async function readOptionalAttributeFile(file: string): Promise<Buffer | undefin
   }
 }
 
-async function assertGitHubPublicationTreeHasNoFilters(
+export async function readGitHubPublicationTree(
   cwd: string,
   workspaceTree: string,
   run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
-): Promise<void> {
+): Promise<Buffer> {
   const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", workspaceTree], {
     cwd,
     maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES,
   });
   if (listing.code !== 0) {
-    throw new Error("GitHub publication workspace attributes could not be verified.");
+    throw new Error("GitHub publication workspace tree could not be verified.");
   }
+  return listing.stdout;
+}
+
+async function assertGitHubPublicationTreeHasNoFilters(
+  cwd: string,
+  workspaceTree: string,
+  run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
+): Promise<void> {
+  const listing = await readGitHubPublicationTree(cwd, workspaceTree, run);
   const attributeObjects = new Set<string>();
-  for (const record of listing.stdout.toString("latin1").split("\0")) {
+  for (const record of listing.toString("latin1").split("\0")) {
     const tab = record.indexOf("\t");
     if (tab < 0) {
       continue;
@@ -186,71 +213,32 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   cwd: string;
   assertCurrent?: () => void;
 }): Promise<{ sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string }> {
-  const step = async <T>(operation: () => Promise<T>): Promise<T> => {
-    params.assertCurrent?.();
-    const result = await operation();
-    params.assertCurrent?.();
-    return result;
-  };
+  const { step, require: command } = createGitHubPublicationCommandRunner(params.assertCurrent);
+  const git = (args: string[], env?: NodeJS.ProcessEnv) =>
+    command(["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args], {
+      cwd: params.cwd,
+      env,
+    });
   await step(() => assertSafeGitPublicationWorkspace(params.cwd, runPublicationCommand));
-  const sourceHeadCommit = await step(
-    async () =>
-      await requirePublicationCommand(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
-        cwd: params.cwd,
-      }),
-  );
-  const sourceIndexTree = await step(
-    async () =>
-      await requirePublicationCommand(
-        ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
-        { cwd: params.cwd },
-      ),
-  );
+  const sourceHeadCommit = await command(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
+    cwd: params.cwd,
+  });
+  const index = path.resolve(params.cwd, await git(["rev-parse", "--git-path", "index"]));
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-snapshot-"));
   try {
-    const env: NodeJS.ProcessEnv = {
+    const env = {
       GIT_ATTR_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: os.devNull,
       GIT_CONFIG_SYSTEM: os.devNull,
       GIT_INDEX_FILE: path.join(tempDir, "index"),
     };
-    await step(async () => {
-      await requirePublicationCommand(
-        [
-          "git",
-          "-c",
-          `core.hooksPath=${os.devNull}`,
-          "-c",
-          "core.fsmonitor=false",
-          "read-tree",
-          sourceHeadCommit,
-        ],
-        { cwd: params.cwd, env },
-      );
-    });
-    await step(async () => {
-      await requirePublicationCommand(
-        [
-          "git",
-          "-c",
-          `core.attributesFile=${os.devNull}`,
-          "-c",
-          `core.hooksPath=${os.devNull}`,
-          "-c",
-          "core.fsmonitor=false",
-          "add",
-          "-A",
-        ],
-        { cwd: params.cwd, env },
-      );
-    });
-    const workspaceTree = await step(
-      async () =>
-        await requirePublicationCommand(
-          ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
-          { cwd: params.cwd, env },
-        ),
-    );
+    // Preserve staged path inventory, and keep write-tree cache updates off the real index.
+    await step(() => fs.copyFile(index, env.GIT_INDEX_FILE));
+    const sourceIndexTree = await git(["write-tree"], env);
+    await git(["-c", `core.attributesFile=${os.devNull}`, "add", "-A"], env);
+    // Normalize after removals, retaining intent-to-add paths and ignoring copied stat caches.
+    await git(["-c", `core.attributesFile=${os.devNull}`, "add", "--renormalize", "-u"], env);
+    const workspaceTree = await git(["write-tree"], env);
     await step(() =>
       assertGitHubPublicationTreeHasNoFilters(params.cwd, workspaceTree, runPublicationCommand),
     );

@@ -4,22 +4,14 @@ import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 
 export const CLOUD_PROFILE_RETRY_DELAYS_MS = [1_000, 3_000, 10_000, 30_000, 60_000] as const;
 
-export function selectProfiles(
-  profiles: DraftCloudProfile[],
-  client: { recoveryScopeReady?: boolean } | null,
-  recoveryScope: string,
-) {
-  const unsupported = profiles.length > 0 && client?.recoveryScopeReady === true && !recoveryScope;
-  return { profiles: unsupported ? [] : profiles, unsupported };
-}
-
 export function discoverPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
   canWrite: boolean,
   isAdmin: boolean,
+  runtimeId?: string,
 ): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
   return canWrite
-    ? requestPlaceCatalog(client).then((catalog) => ({
+    ? requestPlaceCatalog(client, runtimeId).then((catalog) => ({
         ...catalog,
         profiles: isAdmin ? catalog.profiles : [],
       }))

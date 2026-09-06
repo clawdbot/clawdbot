@@ -8,6 +8,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
 import type {
   PluginHookBeforeDispatchResult,
+  PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
 } from "../../plugins/hook-types.js";
 import type { createHookRunner } from "../../plugins/hooks.js";
@@ -24,6 +25,7 @@ import type {
   ReplyDispatchSettledCounts,
   ReplyDispatcher,
 } from "./reply-dispatcher.types.js";
+import type { StageSandboxMediaResult } from "./stage-sandbox-media.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = {
@@ -39,21 +41,11 @@ type PluginTargetedInboundClaimOutcome = Awaited<
 
 const mocks = vi.hoisted(() => ({
   isRoutableChannel: vi.fn((_channel: string | undefined) => true),
-  routeReply: vi.fn(
-    async (
-      _params: unknown,
-    ): Promise<{
-      ok: boolean;
-      delivered: boolean;
-      messageId?: string;
-      suppressed?: boolean;
-      error?: string;
-    }> => ({
-      ok: true,
-      delivered: true,
-      messageId: "mock",
-    }),
-  ),
+  routeReply: vi.fn<typeof import("./route-reply.js").routeReply>(async () => ({
+    ok: true,
+    delivered: true,
+    messageId: "mock",
+  })),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
@@ -75,6 +67,8 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
   markDiagnosticSessionProgress: vi.fn(),
+  // Opt in when a boundary test also observes the public diagnostic bus.
+  forwardToRealPipeline: false,
 }));
 const messageAuditMocks = vi.hoisted(() => ({
   enabled: true,
@@ -105,7 +99,10 @@ const hookMocks = vi.hoisted(() => ({
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
     >(async () => undefined),
     runReplyDispatch: vi.fn<
-      (eventValue: unknown, _ctx: unknown) => Promise<PluginHookReplyDispatchResult | undefined>
+      (
+        eventValue: PluginHookReplyDispatchEvent,
+        _ctx: unknown,
+      ) => Promise<PluginHookReplyDispatchResult | undefined>
     >(async () => undefined),
     runReplyPayloadSending: vi.fn(async () => undefined),
   },
@@ -116,9 +113,9 @@ const internalHookMocks = vi.hoisted(() => ({
 }));
 const acpMocks = vi.hoisted(() => ({
   listAcpSessionEntries: vi.fn(async () => []),
-  readAcpSessionEntry: vi.fn<(params: { sessionKey: string; cfg?: OpenClawConfig }) => unknown>(
-    () => null,
-  ),
+  readAcpSessionEntry: vi.fn<
+    (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
+  >(() => null),
   readAcpSessionMeta: vi.fn<
     (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
   >(() => null),
@@ -300,9 +297,9 @@ const replyMediaPathMocks = vi.hoisted(() => ({
   ),
 }));
 const stageSandboxMediaMocks = vi.hoisted(() => ({
-  stageSandboxMedia: vi.fn<(params: unknown) => Promise<{ staged: Map<string, string> }>>(
-    async () => ({ staged: new Map() }),
-  ),
+  stageSandboxMedia: vi.fn<(params: unknown) => Promise<StageSandboxMediaResult>>(async () => ({
+    staged: new Map(),
+  })),
 }));
 const runtimePluginMocks = vi.hoisted(() => ({
   pluginRegistry: { plugins: [], tools: [], diagnostics: [] },
@@ -507,16 +504,24 @@ vi.mock("../../agents/tools/ask-user-tool.js", () => ({
   isAskUserPromptPending: askUserMocks.isAskUserPromptPending,
 }));
 
-vi.mock("../../logging/diagnostic.js", () => ({
-  diagnosticLogger: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() },
-  logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
-  logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
-  logMessageQueued: diagnosticMocks.logMessageQueued,
-  logMessageProcessed: diagnosticMocks.logMessageProcessed,
-  logSessionStateChange: diagnosticMocks.logSessionStateChange,
-  logSessionTurnCreated: vi.fn(),
-  markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
-}));
+vi.mock("../../logging/diagnostic.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/diagnostic.js")>();
+  return {
+    diagnosticLogger: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() },
+    logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
+    logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
+    logMessageQueued: diagnosticMocks.logMessageQueued,
+    logMessageProcessed: (params: Parameters<typeof actual.logMessageProcessed>[0]) => {
+      diagnosticMocks.logMessageProcessed(params);
+      if (diagnosticMocks.forwardToRealPipeline) {
+        actual.logMessageProcessed(params);
+      }
+    },
+    logSessionStateChange: diagnosticMocks.logSessionStateChange,
+    logSessionTurnCreated: vi.fn(),
+    markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
+  };
+});
 vi.mock("../../audit/message-audit-events.js", () => ({
   emitTrustedMessageAuditEvent: messageAuditMocks.emitTrustedMessageAuditEvent,
   hasTrustedMessageAuditListeners: () => messageAuditMocks.enabled,
@@ -643,7 +648,7 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
 }));
 vi.mock("./dispatch-acp-manager.runtime.js", () => ({
   getAcpSessionManager: () => acpManagerRuntimeMocks.getAcpSessionManager(),
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+  readAcpSessionEntry: (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) =>
     acpMocks.readAcpSessionEntry(params),
   getSessionBindingService: () => ({
     listBySession: (targetSessionKey: string) =>

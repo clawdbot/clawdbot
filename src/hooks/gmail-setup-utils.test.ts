@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -33,12 +33,12 @@ const noisy = {
 };
 
 beforeEach(() => {
-  vi.resetModules();
   runCommandWithTimeoutMock.mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
 
 async function loadGmailSetupUtils() {
+  vi.resetModules();
   return await import("./gmail-setup-utils.js");
 }
 
@@ -363,20 +363,25 @@ describe("ensureTailscaleEndpoint", () => {
 
 describe("Gmail setup diagnostics and decisions", () => {
   const hasBinaryMock = vi.fn<(bin: string) => boolean>();
+  let configEval: typeof import("../shared/config-eval.js");
+  let utils: typeof import("./gmail-setup-utils.js");
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    configEval = await import("../shared/config-eval.js");
+    utils = await import("./gmail-setup-utils.js");
+  });
+
+  beforeEach(() => {
     // Keep real filesystem probes in the binary-availability cases above.
     hasBinaryMock.mockReset().mockReturnValue(true);
-    vi.spyOn(await import("../shared/config-eval.js"), "hasBinary").mockImplementation(
-      hasBinaryMock,
-    );
+    vi.spyOn(configEval, "hasBinary").mockImplementation(hasBinaryMock);
   });
 
   it.each(["gcloud", "login", "brew", "tailscale status", "tailscale serve"])(
     "%s retains bounded tails from both streams",
     async (boundary) =>
       withEnvAsync({ PATH: "" }, async () => {
-        const utils = await loadGmailSetupUtils();
         runCommandWithTimeoutMock.mockResolvedValue(noisy);
         const run = async () => {
           if (boundary === "login") {
@@ -465,7 +470,7 @@ describe("Gmail setup diagnostics and decisions", () => {
     "retains $reason with code=$code even without output",
     async ({ reason, ...metadata }) =>
       withEnvAsync({ PATH: "" }, async () => {
-        const { runGcloud } = await loadGmailSetupUtils();
+        const { runGcloud } = utils;
         runCommandWithTimeoutMock.mockResolvedValue({ ...success, ...metadata });
         const { message } = await rejection(() => runGcloud(["config", "list"]));
         expect(message).toContain(reason);
@@ -483,7 +488,7 @@ describe("Gmail setup diagnostics and decisions", () => {
   );
 
   it("bounds invalid JSON diagnostics while retaining the parser cause and successful exit metadata", async () => {
-    const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
+    const { ensureTailscaleEndpoint } = utils;
     runCommandWithTimeoutMock.mockResolvedValue({
       ...noisy,
       code: 0,
@@ -503,7 +508,7 @@ describe("Gmail setup diagnostics and decisions", () => {
 
   it("keeps successful gcloud output untouched", async () =>
     withEnvAsync({ PATH: "" }, async () => {
-      const { runGcloud } = await loadGmailSetupUtils();
+      const { runGcloud } = utils;
       const result = { ...noisy, code: 0 };
       runCommandWithTimeoutMock.mockResolvedValue(result);
       expect(await runGcloud(["config", "list"])).toBe(result);
@@ -514,7 +519,7 @@ describe("Gmail setup diagnostics and decisions", () => {
     { code: 1, stdout: "account@example.com\n", login: true },
   ])("auth list code=$code login=$login", async ({ code, stdout, login }) =>
     withEnvAsync({ PATH: "" }, async () => {
-      const { ensureGcloudAuth } = await loadGmailSetupUtils();
+      const { ensureGcloudAuth } = utils;
       runCommandWithTimeoutMock
         .mockResolvedValueOnce({ ...success, code, stdout })
         .mockResolvedValue(success);
@@ -528,7 +533,7 @@ describe("Gmail setup diagnostics and decisions", () => {
 
   it.each([0, 1])("provisions only according to describe exit code %i", async (code) =>
     withEnvAsync({ PATH: "" }, async () => {
-      const { ensureTopic, ensureSubscription } = await loadGmailSetupUtils();
+      const { ensureTopic, ensureSubscription } = utils;
       runCommandWithTimeoutMock
         .mockResolvedValueOnce({ ...success, code })
         .mockResolvedValue(success);
@@ -567,7 +572,7 @@ describe("Gmail setup diagnostics and decisions", () => {
       expected: "gog still not available after brew install",
     },
   ] as const)("retains dependency guidance: $state", async ({ state, platform, expected }) => {
-    const { ensureDependency } = await loadGmailSetupUtils();
+    const { ensureDependency } = utils;
     hasBinaryMock.mockImplementation(
       (bin: string) =>
         state === "installed" || (state === "post install missing" && bin === "brew"),

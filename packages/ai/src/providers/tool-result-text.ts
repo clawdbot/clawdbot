@@ -3,7 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getAiTransportHost } from "../host.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
-const PROVIDER_TOOL_RESULT_MAX_CHARS = 8000;
+const STRUCTURED_TOOL_RESULT_MAX_CHARS = 8000;
 const IMAGE_TOOL_RESULT_TYPES = new Set(["image", "image_url", "input_image"]);
 const AUDIO_TOOL_RESULT_TYPES = new Set(["audio", "input_audio", "output_audio"]);
 const MEDIA_ONLY_TOOL_RESULT_TYPES = new Set([
@@ -102,11 +102,11 @@ function stringifyStructuredBlock(block: Record<string, unknown>): string | unde
   }
 }
 
-function truncateProviderToolText(text: string): string {
-  if (text.length <= PROVIDER_TOOL_RESULT_MAX_CHARS) {
+function truncateStructuredToolText(text: string): string {
+  if (text.length <= STRUCTURED_TOOL_RESULT_MAX_CHARS) {
     return text;
   }
-  return `${truncateUtf16Safe(text, PROVIDER_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
+  return `${truncateUtf16Safe(text, STRUCTURED_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
 }
 
 /** Media metadata alone is not an attachment; provider emitters need inline bytes. */
@@ -167,7 +167,7 @@ export function extractToolResultBlockText(block: unknown): string | undefined {
     return text ? sanitizeSurrogates(text) : undefined;
   }
   const structured = stringifyStructuredBlock(record);
-  return structured ? sanitizeSurrogates(truncateProviderToolText(structured)) : undefined;
+  return structured ? sanitizeSurrogates(truncateStructuredToolText(structured)) : undefined;
 }
 
 export function extractToolResultText(
@@ -189,12 +189,13 @@ export function extractToolResultText(
     }
   }
   if (explicitTexts.length > 0) {
-    const text = (
-      options?.includeStructured ? [...explicitTexts, ...structuredTexts] : explicitTexts
-    ).join("\n");
-    return sanitizeSurrogates(options?.includeStructured ? truncateProviderToolText(text) : text);
+    // Text budgets belong to the caller; clipping here can remove continuation instructions.
+    if (options?.includeStructured && structuredTexts.length > 0) {
+      explicitTexts.push(truncateStructuredToolText(structuredTexts.join("\n")));
+    }
+    return explicitTexts.join("\n");
   }
-  return sanitizeSurrogates(truncateProviderToolText(structuredTexts.join("\n")));
+  return truncateStructuredToolText(structuredTexts.join("\n"));
 }
 
 type ToolResultMediaSupport = { images: boolean; audio: boolean };

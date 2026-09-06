@@ -1,7 +1,9 @@
 import { vi, type Mock } from "vitest";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 
-export type GatewayRequestHandler = (method: string, params?: unknown) => unknown;
+export type GatewayRequestHandler = (
+  ...args: Parameters<GatewayBrowserClient["request"]>
+) => unknown;
 
 export type GatewayRequestMock = Mock<GatewayRequestHandler>;
 
@@ -19,7 +21,8 @@ export function createTestGatewayClient(request: GatewayRequestHandler): Gateway
     get: () => "test-recovery-scope",
   });
   Object.defineProperty(client, "recoveryScopeReady", { configurable: true, get: () => true });
-  client.request = async <T = unknown>(method: string, params?: unknown): Promise<T> =>
-    (await request(method, params)) as T;
+  client.request = async <T = unknown>(
+    ...args: Parameters<GatewayBrowserClient["request"]>
+  ): Promise<T> => (await request(...args)) as T;
   return client;
 }

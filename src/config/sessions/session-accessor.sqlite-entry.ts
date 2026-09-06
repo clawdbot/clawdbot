@@ -4,6 +4,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -16,7 +17,6 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
 import type {
-  ExactSessionEntry,
   SessionAccessScope,
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
@@ -37,7 +37,6 @@ import {
 } from "./session-accessor.sqlite-entry-equality.js";
 import {
   collectSessionEntryLookupKeys,
-  createSessionIdentitySnapshot,
   parseReadableSqliteSessionEntryRow,
   readExactSessionEntryRowValidated,
   readSessionEntryRow,
@@ -48,15 +47,8 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
-import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
-import {
-  applySessionEntryMaintenance,
-  finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
-} from "./session-accessor.sqlite-maintenance.js";
-import {
-  createFallbackSessionEntry,
-  coerceSqliteNumber,
-} from "./session-accessor.sqlite-normalize.js";
+import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
+import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.js";
 import {
   cloneSessionEntry,
   getSessionKysely,
@@ -68,8 +60,11 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
-import { readSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
-import type { SessionEntryListScope } from "./session-accessor.types.js";
+import {
+  readSessionEntriesByStatus,
+  selectSessionEntryRows,
+} from "./session-accessor.sqlite-status.js";
+import type { SessionEntryListScope, SessionEntryReadScope } from "./session-accessor.types.js";
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
@@ -84,11 +79,19 @@ import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from ".
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
 export { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
+export {
+  loadExactSessionEntry,
+  loadExactSessionEntryCandidates,
+  loadExactSessionEntryCandidatesReadOnlyBatch,
+  loadExactSessionEntryReadOnly,
+} from "./session-accessor.sqlite-exact-read.js";
 
 // Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
 
 type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
   skipMaintenance?: boolean;
+  /** Recheck owner cancellation after async preparation, immediately before committing. */
+  shouldCommit?: () => boolean;
   /** Synchronous owner bookkeeping after COMMIT, before observers can cancel the caller. */
   onCommitted?: (entry: SessionEntry) => void;
 };
@@ -140,18 +143,6 @@ export function loadSessionEntryReadOnly(scope: SessionAccessScope): SessionEntr
   return resolveSessionEntry(scope, { readOnly: true }).existing;
 }
 
-/** Loads one exact persisted-key entry from the additive SQLite session store. */
-export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined {
-  const sessionKey = scope.sessionKey.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  const resolved = resolveSqliteScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const entry = readExactSessionEntryRowValidated(database, sessionKey)?.entry;
-  return entry ? { sessionKey, entry } : undefined;
-}
-
 /** Lists persisted session keys without materializing their entry JSON. */
 export function listSessionEntryKeysReadOnly(
   scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
@@ -167,38 +158,24 @@ export function listSessionEntryKeysReadOnly(
   return result.found ? result.value : [];
 }
 
-/** Exact persisted-key probe on the read-only handle, for per-row hot paths. */
-export function loadExactSessionEntryReadOnly(
-  scope: SessionAccessScope,
-): ExactSessionEntry | undefined {
-  const sessionKey = scope.sessionKey.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  const resolved = resolveSqliteScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readExactSessionEntryRowValidated(database, sessionKey)?.entry,
-    toDatabaseOptions(resolved),
-  );
-  return result.found && result.value
-    ? {
-        sessionKey,
-        entry: result.value,
-      }
-    : undefined;
-}
-
 /** Lists direct child rows without cloning or rebuilding the complete session store. */
-export function listSessionChildEntriesReadOnly(scope: SessionAccessScope): SessionEntrySummary[] {
+export function listSessionChildEntriesReadOnly(
+  scope: SessionEntryReadScope,
+): SessionEntrySummary[] {
   const resolved = resolveSqliteScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
     assertCanonicalSqliteSessionKeysCurrent(database);
     const db = getSessionKysely(database.db);
+    const query =
+      scope.projection === "list"
+        ? selectSessionEntryRows(database, scope.projection).select([
+            "current_session_id",
+            "updated_at",
+          ])
+        : db.selectFrom("session_nodes").selectAll();
     const childRows = executeSqliteQuerySync(
       database.db,
-      db
-        .selectFrom("session_nodes")
-        .selectAll()
+      query
         .where((expression) =>
           expression.or([
             expression("parent_session_key", "=", resolved.sessionKey),
@@ -212,7 +189,7 @@ export function listSessionChildEntriesReadOnly(scope: SessionAccessScope): Sess
       if (isInternalSessionEffectsKey(row.session_key)) {
         return [];
       }
-      const entry = parseReadableSqliteSessionEntryRow(database, row);
+      const entry = parseReadableSqliteSessionEntryRow(database, row, scope.projection);
       return entry ? [{ sessionKey: row.session_key, entry }] : [];
     });
   }, toDatabaseOptions(resolved));
@@ -273,7 +250,7 @@ export function countSessionEntryRowsReadOnly(scope: SessionEntryListScope = {})
         .selectFrom("session_nodes")
         .select((expression) => expression.fn.countAll<number | bigint>().as("count")),
     );
-    return row ? coerceSqliteNumber(row.count) : 0;
+    return row ? sqliteNumber(row.count) : 0;
   }, toDatabaseOptions(resolved));
   return result.found ? result.value : 0;
 }
@@ -312,14 +289,29 @@ function listSqliteSessionEntriesFromDatabase(
   resolved: ResolvedSqliteScope,
   scope: SessionEntryListScope,
 ): SessionEntrySummary[] {
-  assertCanonicalSqliteSessionKeysCurrent(database);
-  const snapshot = readSessionEntrySnapshot(database, resolved, scope.readConsistency);
-  const entries = scope.projection === "list" ? snapshot.listEntries : snapshot.entries;
+  const projection = scope.projection ?? "full";
+  const cache = !isIncognitoOpenClawAgentSqlitePath(database.path, {
+    agentId: database.agentId,
+    env: resolved.env,
+  });
+  const snapshot = readSessionEntryCache(database, {
+    cache,
+    latest: scope.readConsistency === "latest",
+    projection,
+  });
+  return projectSessionEntriesForListing(snapshot, projection === "list" && scope.clone !== false);
+}
+
+/** Applies the listing visibility and canonical-key contract to an owned snapshot. */
+export function projectSessionEntriesForListing(
+  snapshot: SessionEntryCacheSnapshot,
+  cloneEntries = false,
+): SessionEntrySummary[] {
   return snapshot.keys.flatMap((sessionKey) => {
     if (isInternalSessionEffectsKey(sessionKey)) {
       return [];
     }
-    const entry = entries.get(sessionKey);
+    const entry = snapshot.entries.get(sessionKey);
     if (!entry) {
       return [];
     }
@@ -329,27 +321,13 @@ function listSqliteSessionEntriesFromDatabase(
         `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
       );
     }
+    // Full snapshots own their nested values; list snapshots may share cached entries.
     return [
       {
         sessionKey,
-        entry: scope.clone === false ? entry : cloneSessionEntry(entry),
+        entry: cloneEntries ? cloneSessionEntry(entry) : entry,
       },
     ];
-  });
-}
-
-function readSessionEntrySnapshot(
-  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
-  resolved: ResolvedSqliteScope,
-  readConsistency: SessionAccessScope["readConsistency"],
-): SessionEntryCacheSnapshot {
-  const cache = !isIncognitoOpenClawAgentSqlitePath(database.path, {
-    agentId: database.agentId,
-    env: resolved.env,
-  });
-  return readSessionEntryCache(database, {
-    cache,
-    latest: readConsistency === "latest",
   });
 }
 
@@ -367,7 +345,7 @@ export function listSessionEntriesByStatus(
 
 /** Lists transcript-bearing SQLite sessions, including retained rows from session-id rotation. */
 export function listSessionTranscriptInstances(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+  scope: SessionEntryListScope = {},
   options: SessionTranscriptInstanceListOptions = {},
 ): SessionTranscriptInstance[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
@@ -376,7 +354,7 @@ export function listSessionTranscriptInstances(
       options.sessionId !== undefined
         ? {
             get: (sessionKey: string) =>
-              readExactSessionEntryRowValidated(database, sessionKey)?.entry,
+              readExactSessionEntryRowValidated(database, sessionKey, scope.projection)?.entry,
           }
         : new Map(
             listSqliteSessionEntriesFromDatabase(database, resolved, {
@@ -394,15 +372,17 @@ export function readSessionUpdatedAtCore(scope: SessionAccessScope): number | un
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const row = readSessionEntryRow(database, resolved.sessionKey)?.row;
-  return row ? coerceSqliteNumber(row.updated_at) : undefined;
+  return row ? sqliteNumber(row.updated_at) : undefined;
 }
 
 /** Applies a partial entry update to the additive SQLite session store. */
 export async function upsertSessionEntryCore(
   scope: SessionAccessScope,
   patch: Partial<SessionEntry>,
+  options: Pick<SessionEntryPatchOptions, "assertCommitAllowed"> = {},
 ): Promise<SessionEntry | null> {
   return await patchSessionEntryCore(scope, () => patch, {
+    ...options,
     fallbackEntry: createFallbackSessionEntry(patch),
   });
 }
@@ -430,7 +410,7 @@ export function replaceSessionEntrySync(scope: SessionAccessScope, entry: Sessio
     writeSessionEntry(database, resolved.sessionKey, entry);
     current = readSessionIdentitySnapshot(database, identityKeys);
   }, toDatabaseOptions(resolved));
-  emitCommittedSessionIdentityDiff(previous, current);
+  emitCommittedSessionIdentityDiff(resolved.agentId, previous, current);
 }
 
 /** Patches one entry in the additive SQLite session store. */
@@ -503,13 +483,14 @@ async function patchSqliteSessionEntrySnapshot(
   params: SqliteSessionEntrySnapshotPatchParams,
 ): Promise<SessionEntry | null> {
   const { options, resolved, sessionKey } = params;
+  let wrote = false;
   const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const prepared = params.readSnapshot(database);
     const existing = prepared[0]?.entry;
     const writeBase = existing ?? options.fallbackEntry;
     if (!writeBase) {
-      return { maintenancePlans: [], result: null };
+      return null;
     }
     const patch = await params.update(cloneSessionEntry(writeBase), {
       existingEntry: existing ? cloneSessionEntry(existing) : undefined,
@@ -533,11 +514,13 @@ async function patchSqliteSessionEntrySnapshot(
             previous: writeBase,
             sessionKey,
           });
-    const maintenancePlans: SessionEntryMaintenancePlan[] = [];
     let result: SessionEntry | null = null;
     let previousIdentity = new Map<string, SessionEntry>();
     let currentIdentity = new Map<string, SessionEntry>();
     runOpenClawAgentWriteTransaction((writeDatabase) => {
+      if (options.shouldCommit?.() === false) {
+        return;
+      }
       const fresh = params.readSnapshot(writeDatabase);
       assertLifecycleTargetSnapshotUnchanged(prepared, fresh, params.operationLabel);
       options.assertCommitAllowed?.();
@@ -545,21 +528,16 @@ async function patchSqliteSessionEntrySnapshot(
         result = cloneSessionEntry(writeBase);
         return;
       }
-      previousIdentity = createSessionIdentitySnapshot(fresh);
+      // Commit reads own these entries; update callbacks only receive detached copies.
+      previousIdentity = new Map(fresh.map((row) => [row.sessionKey, row.entry]));
       const selectedPreviousEntry = fresh[0]?.entry ?? writeBase;
       const persisted = writeSessionEntry(writeDatabase, sessionKey, next, {
+        ...(options.consumePendingReset ? { consumePendingReset: true } : {}),
         previousEntry: selectedPreviousEntry,
       });
-      maintenancePlans.push(
-        applySessionEntryMaintenance(writeDatabase, {
-          activeSessionKey: sessionKey,
-          archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-          maintenanceConfig: options.maintenanceConfig,
-          skipMaintenance: options.skipMaintenance,
-          storePath: params.storePath,
-        }),
-      );
-      currentIdentity = readSessionIdentitySnapshot(writeDatabase, [sessionKey]);
+      wrote = true;
+      // Identity observers only consume sessionId, already owned by this canonical write.
+      currentIdentity = new Map([[sessionKey, persisted]]);
       result = cloneSessionEntry(persisted);
     }, toDatabaseOptions(resolved));
     try {
@@ -567,22 +545,26 @@ async function patchSqliteSessionEntrySnapshot(
         options.onCommitted?.(cloneSessionEntry(result));
       }
     } finally {
-      emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+      emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
     }
-    return { maintenancePlans, result };
+    return result;
   });
-  // Worker materialization runs after the initial write releases the lane;
-  // final deletion reacquires it and revalidates every planned row.
-  await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
-    resolved,
-    committed.maintenancePlans,
-  );
+  if (wrote) {
+    kickSessionEntryMaintenanceAfterWrite({
+      activeSessionKey: sessionKey,
+      archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+      maintenanceConfig: options.maintenanceConfig,
+      scope: resolved,
+      skipMaintenance: options.skipMaintenance,
+      storePath: params.storePath,
+    });
+  }
   kickSessionHistoryDiskBudgetMaintenance({
     ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
     storePath: params.storePath,
     ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
   });
-  return committed.result;
+  return committed;
 }
 
 export async function recordInboundSessionMeta(params: {

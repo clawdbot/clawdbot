@@ -4,9 +4,12 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
-import { resolveInstalledPluginPackageOwnership } from "../plugins/installed-plugin-package-ownership.js";
+import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
+import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { tracePluginLifecyclePhase } from "../plugins/plugin-lifecycle-trace.js";
+import { formatPluginTrustDiagnostic } from "../plugins/plugin-trust.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
@@ -28,6 +31,19 @@ function failPluginInspect(message: string, json: boolean | undefined): void {
     defaultRuntime.error(message);
   }
   defaultRuntime.exit(1);
+}
+
+function writeGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[]): void {
+  for (const { pluginId, level, message } of diagnostics) {
+    if (!pluginId) {
+      const line = formatConsoleDiagnosticLine({
+        level,
+        message: shortenHomeInString(`${level.toUpperCase()}: ${message}`),
+      });
+      // Global discovery diagnostics also matter when the JSON result is an empty array.
+      process.stderr.write(`${line}\n`);
+    }
+  }
 }
 
 function formatInspectSection(title: string, lines: string[]): string[] {
@@ -137,10 +153,11 @@ export async function runPluginsInspectCommand(
     () => loadPluginMetadataSnapshot({ config: cfg, workspaceDir }),
     { command: "inspect" },
   );
+  const ownershipResolver = createInstalledPluginOwnershipResolver(metadataSnapshot.index);
   const resolveInstallRecord = (pluginId: string) => {
     // Runtime child ids need the package owner's record; ambiguous ownership
     // must not borrow provenance from an unrelated same-id install.
-    const ownership = resolveInstalledPluginPackageOwnership(metadataSnapshot.index, pluginId);
+    const ownership = ownershipResolver.resolvePackage(pluginId);
     return ownership.ok ? ownership.value.installRecord : undefined;
   };
   const loggerParams = opts.json ? { logger: quietPluginJsonLogger } : {};
@@ -166,6 +183,7 @@ export async function runPluginsInspectCommand(
           () => buildPluginSnapshotReport(reportParams),
           { command: "inspect", all: true },
         );
+    writeGlobalPluginDiagnostics(report.diagnostics);
     const inspectAll = buildAllPluginInspectReports({
       config: cfg,
       ...loggerParams,
@@ -238,6 +256,7 @@ export async function runPluginsInspectCommand(
     snapshotReport.plugins.find((entry) => entry.id === id) ??
     snapshotReport.plugins.find((entry) => entry.name === id);
   if (!targetPlugin) {
+    writeGlobalPluginDiagnostics(snapshotReport.diagnostics);
     if (id === "skill-workshop") {
       const { detectSkillWorkshopToolPolicyDiagnostic } =
         await import("../skills/workshop/tool-policy-diagnostic.js");
@@ -275,6 +294,7 @@ export async function runPluginsInspectCommand(
         { command: "inspect", pluginId: targetPlugin.id },
       )
     : snapshotReport;
+  writeGlobalPluginDiagnostics(report.diagnostics);
   const inspect = buildPluginInspectReport({
     id: targetPlugin.id,
     config: cfg,
@@ -322,6 +342,9 @@ export async function runPluginsInspectCommand(
   }
   lines.push(`${theme.muted("Source:")} ${shortenHomeInString(inspect.plugin.source)}`);
   lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
+  if (inspect.plugin.trust) {
+    lines.push(`${theme.muted("Trust:")} ${formatPluginTrustDiagnostic(inspect.plugin.trust)}`);
+  }
   if (inspect.plugin.version) {
     lines.push(`${theme.muted("Version:")} ${inspect.plugin.version}`);
   }

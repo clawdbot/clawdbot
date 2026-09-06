@@ -4,14 +4,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 export type LeaseScenario = {
-  lane: "resume" | "current-process" | "repair";
+  lane: "resume" | "fresh-process" | "current-process" | "repair";
+  pluginUpdate?: PostCorePluginUpdateResult;
   preDoctorChannel?: string;
   invalidConfig?: boolean;
   failDoctor?: "pre" | "post";
+  readinessFailure?: "finding" | "execution";
   hostVersion?: string;
-  doctorWrites?: boolean;
   writerConfig?: OpenClawConfig;
   writerRecords?: Record<string, PluginInstallRecord>;
 };
@@ -47,7 +49,49 @@ export async function runUpdateLeaseChild(): Promise<void> {
     process.exitCode = scenario.invalidConfig ? 1 : 0;
     return;
   }
+  if (command === "doctor" && process.argv[3] === "--lint") {
+    assert.deepEqual(process.argv.slice(3), ["--lint", "--json", "--severity-min", "error"]);
+    assert.equal(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE, "1");
+    await record("readiness");
+    if (scenario.readinessFailure === "execution") {
+      throw new Error("readiness fixture failure");
+    }
+    const findings =
+      scenario.readinessFailure === "finding"
+        ? [
+            {
+              checkId: "fixture/post-plugin-readiness",
+              severity: "error",
+              source: "fixture",
+              message: "Fixture plugin is not ready.",
+              fixHint: "Run the fixture repair command.",
+            },
+          ]
+        : [];
+    process.stdout.write(
+      `${JSON.stringify({
+        ok: findings.length === 0,
+        checksRun: 1,
+        checksSkipped: 0,
+        findings,
+      })}\n`,
+    );
+    process.exitCode = findings.length === 0 ? 0 : 1;
+    return;
+  }
   const { withPluginLifecycleLease } = await import("../../plugins/plugin-lifecycle-lease.js");
+  if (command === "update") {
+    assert.equal(scenario.lane, "fresh-process");
+    const resultPath = process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
+    assert.ok(resultPath && scenario.pluginUpdate);
+    await withPluginLifecycleLease({ waitMs: 0 }, async () => record("packages-acquired"));
+    await record("packages-released");
+    const { readConfigFileSnapshot } = await import("../../config/config.js");
+    const { persistValidatedDowngradeConfig } = await import("./update-command-config.js");
+    await persistValidatedDowngradeConfig(await readConfigFileSnapshot());
+    await fs.writeFile(resultPath, JSON.stringify(scenario.pluginUpdate));
+    return;
+  }
   if (command === "doctor") {
     const phase = process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE === "1" ? "post" : "pre";
     assert.deepEqual(process.argv.slice(3), [
@@ -59,6 +103,9 @@ export async function runUpdateLeaseChild(): Promise<void> {
     assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, "1");
     assert.equal(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR, "1");
     assert.equal(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE, "1");
+    assert.equal(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION, "0");
+    assert.equal(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR, "0");
+    assert.equal(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART, "1");
     if (scenario.hostVersion) {
       assert.equal(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION, scenario.hostVersion);
     }
@@ -72,9 +119,6 @@ export async function runUpdateLeaseChild(): Promise<void> {
           (await readConfigFileSnapshot()).config.update?.channel,
           scenario.preDoctorChannel,
         );
-      }
-      if (phase === "pre" && scenario.doctorWrites) {
-        await publish();
       }
     });
     process.stdout.write("doctor fixture output\n");

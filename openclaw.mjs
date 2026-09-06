@@ -277,7 +277,8 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
   };
   return runRespawnedChild(
     process.execPath,
-    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    // pnpm's lexical hash link owns the install; its realpath is only shared package content.
+    [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
     env,
   );
 };

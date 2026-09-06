@@ -67,8 +67,9 @@ function isDeliveredMessageToolOnlySourceReply(
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     toolName,
     args: toolArgs,
-    result: params.context.result,
-    hookResult: params.hookResult,
+    result: params.hookResult ?? params.context.result,
+    // Middleware may retain a delivery summary while redacting its source receipt.
+    hookResult: params.context.result,
     isError,
     allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
       send: confirmedSend,

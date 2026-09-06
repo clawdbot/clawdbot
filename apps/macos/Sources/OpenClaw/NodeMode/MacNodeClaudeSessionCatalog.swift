@@ -818,6 +818,7 @@ extension MacNodeClaudeSessionCatalog {
         }
         guard self.isCLIEntrypoint(row["entrypoint"]),
               row["type"] as? String == "user",
+              row["isMeta"] as? Bool != true,
               let message = row["message"] as? [String: Any],
               message["role"] as? String == "user",
               let content = message["content"]

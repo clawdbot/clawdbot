@@ -3,6 +3,7 @@
  */
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveDeliveryNotSentRetryability } from "../../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import {
   isOutboundDeliveryError,
@@ -145,7 +146,16 @@ function isPermanentNonWriterAnnounceError(error: unknown): boolean {
 function isTransientAnnounceDeliveryError(error: unknown): boolean {
   // Any committed platform send makes another attempt a possible duplicate;
   // permanent owner rejections also override transient-looking wrapped causes.
-  if (hasAnnounceSendEvidence(error) || isPermanentNonWriterAnnounceError(error)) {
+  if (hasAnnounceSendEvidence(error)) {
+    return false;
+  }
+
+  const typedRetryability = resolveDeliveryNotSentRetryability(error);
+  if (typedRetryability !== undefined) {
+    return typedRetryability;
+  }
+
+  if (isPermanentNonWriterAnnounceError(error)) {
     return false;
   }
 
@@ -171,6 +181,10 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
 }
 
 export function isPermanentAnnounceDeliveryError(error: unknown): boolean {
+  const typedRetryability = resolveDeliveryNotSentRetryability(error);
+  if (typedRetryability !== undefined) {
+    return !typedRetryability;
+  }
   return isPermanentNonWriterAnnounceError(error) || hasWriterClaimReboundAnnounceError(error);
 }
 

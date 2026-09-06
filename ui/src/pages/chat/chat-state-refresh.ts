@@ -61,6 +61,7 @@ export function retireChatMetadataRequests(host: ChatPageHost): void {
   host.chatModelCatalog = [];
   host.chatModelCatalogError = null;
   host.chatModelsLoading = false;
+  host.chatAccountSelection = null;
 }
 
 function scheduleChatMetadataRefresh(callback: () => void) {
@@ -133,6 +134,7 @@ function applyChatMetadataResult(
   result: ChatMetadataResult,
 ): void {
   const models = Array.isArray(result.models) ? result.models : undefined;
+  host.chatAccountSelection = result.accountSelection ?? null;
   if (models) {
     host.chatModelCatalog = models;
     host.chatModelCatalogError = null;
@@ -265,7 +267,6 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
     await loadModelCatalog(client, {
       agentId: agentId ?? "",
       refreshIfDue: true,
-      rejectOnFailure: true,
     });
     if (binding.isCurrent()) {
       await refreshChatMetadata(host);

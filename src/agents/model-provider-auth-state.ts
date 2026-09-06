@@ -15,13 +15,6 @@ export type ProviderAuthWarmSnapshot = {
   }>;
 };
 
-type ProviderAuthWarmWorkerHandle = {
-  worker: {
-    terminate: () => unknown;
-  };
-  cancelled: boolean;
-};
-
 // One entry per configured agent, keyed by agentId. Populated by the provider
 // auth warm path; consulted by hasAuthForModelProvider on every model-listing call.
 let currentProviderAuthStates: ReadonlyMap<string, PreparedProviderAuthState> | null = null;
@@ -29,7 +22,7 @@ let currentProviderAuthStates: ReadonlyMap<string, PreparedProviderAuthState> | 
 // Generation counter guards against an in-flight warm publishing stale state
 // after a subsequent warm or clear has invalidated it.
 let currentProviderAuthStateGeneration = 0;
-let currentProviderAuthWarmWorker: ProviderAuthWarmWorkerHandle | undefined;
+let currentProviderAuthWarmWorker: AbortController | undefined;
 
 export function getCurrentProviderAuthStates(): ReadonlyMap<
   string,
@@ -47,11 +40,11 @@ export function isCurrentProviderAuthStateGeneration(generation: number): boolea
   return generation === currentProviderAuthStateGeneration;
 }
 
-export function setCurrentProviderAuthWarmWorker(handle: ProviderAuthWarmWorkerHandle): void {
+export function setCurrentProviderAuthWarmWorker(handle: AbortController): void {
   currentProviderAuthWarmWorker = handle;
 }
 
-export function clearCurrentProviderAuthWarmWorker(handle: ProviderAuthWarmWorkerHandle): void {
+export function clearCurrentProviderAuthWarmWorker(handle: AbortController): void {
   if (currentProviderAuthWarmWorker === handle) {
     currentProviderAuthWarmWorker = undefined;
   }
@@ -62,9 +55,8 @@ export function cancelCurrentProviderAuthWarmWorker(): void {
   if (!current) {
     return;
   }
-  current.cancelled = true;
   currentProviderAuthWarmWorker = undefined;
-  void current.worker.terminate();
+  current.abort();
 }
 
 export function clearCurrentProviderAuthState(): void {

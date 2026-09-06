@@ -110,6 +110,12 @@ function findLastMessageText(
   return text;
 }
 
+function copySessionTitleText(text: string | null): string | null {
+  // V8 slices can pin whole transcript payloads behind a short cached preview.
+  // Copy UTF-16 code units so ownership changes without altering lone surrogates.
+  return text === null ? null : Buffer.from(text, "utf16le").toString("utf16le");
+}
+
 function hydrateSqliteTitleFields(
   target: ResolvedTranscriptReadTarget,
   opts?: { includeInterSession?: boolean },
@@ -169,7 +175,10 @@ function hydrateSqliteTitleFields(
         opts?.includeInterSession === true,
       );
     }
-    const fields = { firstUserMessage: firstText, lastMessagePreview: lastText };
+    const fields = {
+      firstUserMessage: copySessionTitleText(firstText),
+      lastMessagePreview: copySessionTitleText(lastText),
+    };
     const fieldsByVariant = current ? cached.fields : {};
     fieldsByVariant[variant] = fields;
     // Retain only the watermark and bounded strings, never the probe's transcript payloads.

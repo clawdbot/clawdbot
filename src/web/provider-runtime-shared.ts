@@ -1,4 +1,4 @@
-// Shared web provider config, credential, and definition resolution.
+// Shared web provider config and credential resolution.
 import {
   coerceSecretRef,
   isLegacySecretRefEnvMarker,
@@ -12,11 +12,6 @@ type WebProviderConfigSource = {
       fetch?: unknown;
     };
   };
-};
-
-type RuntimeWebProviderMetadata = {
-  providerConfigured?: string;
-  selectedProvider?: string;
 };
 
 type ProviderWithCredential = {
@@ -166,80 +161,4 @@ export function hasWebProviderEntryCredential<
         })
       : undefined,
   );
-}
-
-export function resolveWebProviderDefinition<
-  TProvider extends { id: string },
-  TConfigSource extends WebProviderConfigSource,
-  TConfig extends Record<string, unknown> | undefined,
-  TRuntimeMetadata extends RuntimeWebProviderMetadata,
-  TDefinition,
->(params: {
-  config: TConfigSource | undefined;
-  toolConfig: TConfig;
-  runtimeMetadata: TRuntimeMetadata | undefined;
-  sandboxed?: boolean;
-  providerId?: string;
-  providers: TProvider[];
-  resolveEnabled: (params: { toolConfig: TConfig; sandboxed?: boolean }) => boolean;
-  resolveAutoProviderId: (params: {
-    config: TConfigSource | undefined;
-    toolConfig: TConfig;
-    providers: TProvider[];
-  }) => string;
-  resolveFallbackProviderId?: (params: {
-    config: TConfigSource | undefined;
-    toolConfig: TConfig;
-    providers: TProvider[];
-    providerId: string;
-  }) => string | undefined;
-  createTool: (params: {
-    provider: TProvider;
-    config: TConfigSource | undefined;
-    toolConfig: TConfig;
-    runtimeMetadata: TRuntimeMetadata | undefined;
-  }) => TDefinition | null;
-}): { provider: TProvider; definition: TDefinition } | null {
-  if (!params.resolveEnabled({ toolConfig: params.toolConfig, sandboxed: params.sandboxed })) {
-    return null;
-  }
-  const providers = params.providers.filter(Boolean);
-  if (providers.length === 0) {
-    return null;
-  }
-  const autoProviderId = params.resolveAutoProviderId({
-    config: params.config,
-    toolConfig: params.toolConfig,
-    providers,
-  });
-  const providerId =
-    params.providerId ?? params.runtimeMetadata?.selectedProvider ?? autoProviderId;
-  if (!providerId) {
-    return null;
-  }
-  const provider =
-    providers.find((entry) => entry.id === providerId) ??
-    providers.find(
-      (entry) =>
-        entry.id ===
-        params.resolveFallbackProviderId?.({
-          config: params.config,
-          toolConfig: params.toolConfig,
-          providers,
-          providerId,
-        }),
-    );
-  if (!provider) {
-    return null;
-  }
-  const definition = params.createTool({
-    provider,
-    config: params.config,
-    toolConfig: params.toolConfig,
-    runtimeMetadata: params.runtimeMetadata,
-  });
-  if (!definition) {
-    return null;
-  }
-  return { provider, definition };
 }

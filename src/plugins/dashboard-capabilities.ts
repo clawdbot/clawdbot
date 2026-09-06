@@ -3,7 +3,14 @@ import {
   BOARD_DATA_BINDING_ID_MAX_LENGTH,
   BOARD_WIDGET_TOOL_MAX_LENGTH,
 } from "../../packages/gateway-protocol/src/schema/board.js";
-import { CORE_BOARD_HOST_CAPABILITY_IDS } from "../boards/board-host-capability-ids.js";
+import {
+  CORE_BOARD_DATA_BINDING_IDS,
+  CORE_BOARD_HOST_CAPABILITY_IDS,
+} from "../boards/board-host-capability-ids.js";
+import {
+  GITHUB_ACTIONS_AUTHOR_GUIDANCE,
+  GITHUB_ACTIONS_GRANT_PREFIX,
+} from "../boards/github-actions-capability.js";
 import type {
   PluginDashboardActionVerbRegistration,
   PluginDashboardDataBindingRegistration,
@@ -97,6 +104,7 @@ export function registerPluginDashboardCapabilities(params: {
     }
     if (
       (CORE_BOARD_HOST_CAPABILITY_IDS as readonly string[]).includes(capabilityId) ||
+      capabilityId.startsWith(GITHUB_ACTIONS_GRANT_PREFIX) ||
       capabilityId.startsWith(BOARD_CRON_TRIGGER_PREFIX)
     ) {
       fail(params.record.id, `capability id ${JSON.stringify(capabilityId)} is reserved by core`);
@@ -165,4 +173,32 @@ export function registerPluginDashboardCapabilities(params: {
   for (const registration of actionVerbs) {
     params.registry.dashboardActionVerbs.set(registration.capabilityId, registration);
   }
+}
+
+/** Describe only validated, active registrations, with whole entries under one prompt budget. */
+export function describeDashboardCapabilities(registry: PluginRegistry | null | undefined): string {
+  const limit = 1050;
+  let text = `${GITHUB_ACTIONS_AUTHOR_GUIDANCE} Other core reads (grant the binding ID): ${CORE_BOARD_DATA_BINDING_IDS.join(", ")}.`;
+  const entries = [
+    ...[...(registry?.dashboardDataBindings.values() ?? [])].map((entry) => ({
+      id: entry.capabilityId,
+      text: `read ${entry.capabilityId}: ${entry.description}`,
+    })),
+    ...[...(registry?.dashboardActionVerbs.values() ?? [])].map((entry) => ({
+      id: entry.capabilityId,
+      text: `action ${entry.capabilityId}: ${entry.description}${entry.paramShape ? `; params ${JSON.stringify(entry.paramShape)}` : ""}`,
+    })),
+  ].toSorted((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+  let omitted = 0;
+  for (const entry of entries) {
+    if (text.length + entry.text.length + 2 > limit - 100) {
+      omitted += 1;
+    } else {
+      text += `\n${entry.text}`;
+    }
+  }
+  if (omitted) {
+    text += `\n${omitted} plugin capabilities omitted; see the active plugins' dashboard documentation.`;
+  }
+  return text;
 }

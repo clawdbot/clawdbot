@@ -19,16 +19,13 @@ import type {
 } from "../../api/types.ts";
 import { requestSessionRecovery } from "./recover.ts";
 import type {
+  SessionCapability,
   SessionCompactResult,
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionMessageSubscription,
 } from "./session-capability.ts";
-import {
-  areUiSessionKeysEquivalent,
-  isUiGlobalSessionKey,
-  normalizeAgentId,
-} from "./session-key.ts";
+import { areUiSessionKeysEquivalent, normalizeAgentId } from "./session-key.ts";
 import {
   requestSessionBranchSwitch,
   requestSessionBranches,
@@ -46,7 +43,7 @@ import {
 type SessionScopedOperationsHost = {
   connection: SessionConnectionOwner;
   agentId: () => string | null;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  refreshReplacement: SessionCapability["refreshReplacement"];
   notifyCreated: (key: string) => void;
   reportError: (error: unknown) => void;
 };
@@ -145,10 +142,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       throw new Error("Session message subscription requires an active Gateway connection");
     }
     const normalizedKey = key.trim();
-    const agentId =
-      isUiGlobalSessionKey(normalizedKey) && options.agentId?.trim()
-        ? normalizeAgentId(options.agentId)
-        : null;
+    const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
     const subscription = await getGatewaySessionMessageSubscriptionCoordinator(scope.client, {
       keysEquivalent: areUiSessionKeysEquivalent,
     })

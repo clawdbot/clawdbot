@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   createSqliteSchemaIssue,
@@ -79,6 +80,8 @@ type SqliteTableContract = {
 
 type SqliteSchemaContract = Map<string, SqliteTableContract>;
 
+export type SqliteTableContractReader = (tableName: string) => SqliteTableContract | undefined;
+
 export type CanonicalSqliteNamedIndexContract = {
   definition: string;
   fingerprint: SqliteIndexContract;
@@ -89,6 +92,17 @@ export type CanonicalSqliteNamedIndexContract = {
 
 const schemaContractCache = new Map<string, SqliteSchemaContract>();
 
+/** Reuse actual table facts only within one unchanged read transaction on this connection. */
+export function createSqliteTableContractReader(database: DatabaseSync): SqliteTableContractReader {
+  const tables = new Map<string, SqliteTableContract | undefined>();
+  return (tableName) => {
+    if (!tables.has(tableName)) {
+      tables.set(tableName, collectSqliteTableContract(database, tableName));
+    }
+    return tables.get(tableName);
+  };
+}
+
 /**
  * Require every object from one committed schema while allowing unrelated
  * tables and indexes that do not replace a canonical object.
@@ -98,8 +112,9 @@ export function assertSqliteSchemaContains(
   databaseLabel: string,
   schemaSql: string,
   compatibility: SqliteSchemaCompatibility = {},
+  readTable?: SqliteTableContractReader,
 ): void {
-  const issues = collectSqliteSchemaIssues(database, schemaSql, compatibility);
+  const issues = collectSqliteSchemaIssues(database, schemaSql, compatibility, readTable);
   if (issues.length > 0) {
     throwSqliteSchemaMismatches(databaseLabel, legacySqliteSchemaIssueMessages(issues));
   }
@@ -110,6 +125,7 @@ export function collectSqliteSchemaIssues(
   database: DatabaseSync,
   schemaSql: string,
   compatibility: SqliteSchemaCompatibility = {},
+  readTable?: SqliteTableContractReader,
 ): SqliteSchemaIssue[] {
   const expected = getSqliteSchemaContract(schemaSql);
   const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);
@@ -120,7 +136,9 @@ export function collectSqliteSchemaIssues(
     issues.push(createSqliteSchemaIssue(code, objectName, message));
   };
   for (const [tableName, expectedTable] of expected) {
-    const actualTable = collectSqliteTableContract(database, tableName);
+    const actualTable = readTable
+      ? readTable(tableName)
+      : collectSqliteTableContract(database, tableName);
     if (!actualTable) {
       if (allowedMissingTables.has(tableName)) {
         continue;
@@ -141,11 +159,11 @@ export function collectSqliteSchemaIssues(
     const actualIndexFingerprints = new Set(
       actualTable.indexes.map((index) => JSON.stringify(index)),
     );
-    const expectedIndexFingerprints = new Set(
-      expectedTable.indexes.map((index) => JSON.stringify(index)),
-    );
+    const expectedIndexFingerprints = new Set<string>();
     for (const expectedIndex of expectedTable.indexes) {
-      if (!actualIndexFingerprints.has(JSON.stringify(expectedIndex))) {
+      const fingerprint = JSON.stringify(expectedIndex);
+      expectedIndexFingerprints.add(fingerprint);
+      if (!actualIndexFingerprints.has(fingerprint)) {
         const objectName = expectedIndex.name ?? tableName;
         const namedIndexPresent = expectedIndex.name
           ? actualTable.indexes.some((actualIndex) => actualIndex.name === expectedIndex.name)
@@ -405,9 +423,12 @@ function collectSqliteTableContract(
   database: DatabaseSync,
   tableName: string,
 ): SqliteTableContract | undefined {
-  const table = database
-    .prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
-    .get(tableName) as SqliteSchemaRow | undefined;
+  const table = executeWithCachedStatement(
+    database,
+    "SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name = ?",
+    [tableName],
+    (statement) => statement.get(tableName),
+  ) as SqliteSchemaRow | undefined;
   if (!table) {
     return undefined;
   }
@@ -425,21 +446,25 @@ function collectSqliteTableContract(
     .map((index) => collectSqliteIndexContract(database, index))
     .toSorted(compareJson);
   const triggers = (
-    database
-      .prepare(
-        `
+    executeWithCachedStatement(
+      database,
+      `
           SELECT name, sql
           FROM sqlite_schema
           WHERE type = 'trigger' AND tbl_name = ?
           ORDER BY name
         `,
-      )
-      .all(tableName) as SqliteSchemaRow[]
+      [tableName],
+      (statement) => statement.all(tableName),
+    ) as SqliteSchemaRow[]
   ).map((trigger) => ({
     name: trigger.name,
     sql: normalizeSchemaSql(trigger.sql),
   }));
-  const normalizedTableSql = normalizeSchemaSql(table.sql);
+  // This literal prefix cannot become CREATE VIRTUAL TABLE after normalization.
+  const normalizedTableSql = table.sql?.startsWith("CREATE TABLE ")
+    ? null
+    : normalizeSchemaSql(table.sql);
   const isVirtualTable =
     normalizedTableSql !== null && /^CREATE VIRTUAL TABLE /iu.test(normalizedTableSql);
 
@@ -559,9 +584,12 @@ function collectSqliteIndexContract(
   database: DatabaseSync,
   index: SqliteIndexListRow,
 ): SqliteIndexContract {
-  const row = database
-    .prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?")
-    .get(index.name) as { sql?: unknown } | undefined;
+  const row = executeWithCachedStatement(
+    database,
+    "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?",
+    [index.name],
+    (statement) => statement.get(index.name),
+  ) as { sql?: unknown } | undefined;
   const terms = (
     database
       .prepare(`PRAGMA index_xinfo(${quoteSqliteIdentifier(index.name)})`)

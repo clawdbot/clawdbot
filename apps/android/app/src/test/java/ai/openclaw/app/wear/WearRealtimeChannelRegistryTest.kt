@@ -111,13 +111,17 @@ class WearRealtimeChannelRegistryTest {
                 createCount += 1
                 """{"relaySessionId":"relay-$createCount"}"""
               }
+
               "talk.session.close" -> {
                 closeStarted.complete(Unit)
                 releaseClose.await()
                 closeFinished.complete(Unit)
                 """{"ok":true}"""
               }
-              else -> """{"ok":true}"""
+
+              else -> {
+                """{"ok":true}"""
+              }
             }
           },
           sendGatewayFrame = { _, _, _, _ -> },

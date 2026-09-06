@@ -50,9 +50,12 @@ afterEach(() => {
 });
 
 describe("chat metadata store", () => {
-  it("isolates session publications and releases their snapshots and writers with the last subscriber", async () => {
+  it.each([
+    { sessionKey: "agent:main:locked" },
+    { authProfileId: "personal:person-a:anthropic:one" },
+  ])("isolates selected metadata %j and releases its last subscriber", async (selection) => {
     const client = clientWith(vi.fn().mockResolvedValue(metadata("neutral")));
-    const scope = { agentId: "main", sessionKey: "agent:main:locked" };
+    const scope = { agentId: "main", ...selection };
     const first = subscribeChatMetadata(client, scope, () => {});
     const second = subscribeChatMetadata(client, scope, () => {});
     beginChatMetadataPublication(client, scope).publish(metadata("locked"));

@@ -1,6 +1,6 @@
+import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
-import { readAssistantStreamSegmentIdentity } from "./chat-thread-run-identity.ts";
 import type { AgentEventPayload, ToolStreamHost } from "./tool-stream-contract.ts";
 import { resolveAcceptedSession } from "./tool-stream-status.ts";
 
@@ -51,7 +51,7 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
     return true;
   }
   if (progress.text) {
-    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId });
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
   }
   const persisted =
     progress.itemId &&

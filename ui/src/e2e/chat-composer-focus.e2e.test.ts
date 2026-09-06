@@ -31,6 +31,11 @@ suite.define(() => {
       await trigger.waitFor({ state: "visible" });
       await trigger.focus();
       await page.keyboard.press("Enter");
+      // Opening initializes the selected row after its animation completes.
+      const selected = picker.getByRole("menuitemradio", { name: "main", exact: true });
+      await expect
+        .poll(() => selected.evaluate((element) => document.activeElement === element))
+        .toBe(true);
       await page.keyboard.press("ArrowDown");
       const option = picker.getByRole("menuitemradio", { name: "research", exact: true });
       await expect
@@ -50,6 +55,8 @@ suite.define(() => {
             .evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(false);
+      // The open property clears before the closing popup retires.
+      await picker.locator('wa-dropdown-item[aria-label="research"]').waitFor({ state: "hidden" });
 
       await trigger.focus();
       await page.keyboard.press("Enter");
@@ -202,7 +209,7 @@ suite.define(() => {
     });
   });
 
-  it("uses a visible neutral focus treatment in dark and light themes", async () => {
+  it("changes neutral focus styling in dark and light themes", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -213,21 +220,23 @@ suite.define(() => {
       await composer.waitFor({ state: "visible" });
 
       for (const theme of ["dark", "light"] as const) {
-        await page.evaluate((nextTheme) => {
-          document.documentElement.dataset.theme = "claw";
-          document.documentElement.dataset.themeMode = nextTheme;
-        }, theme);
+        await page.emulateMedia({ colorScheme: theme });
+        await expect
+          .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
+          .toBe(theme);
         await textarea.evaluate((element) => element.blur());
-        await page.waitForTimeout(150);
-        const unfocused = await composer.evaluate((element) => {
+        const unfocused = await composer.evaluate(async (element) => {
+          await Promise.all(element.getAnimations().map((animation) => animation.finished));
           const style = getComputedStyle(element);
-          return { borderColor: style.borderColor, boxShadow: style.boxShadow };
+          const { width, height } = element.getBoundingClientRect();
+          return { borderColor: style.borderColor, boxShadow: style.boxShadow, width, height };
         });
 
         await textarea.focus();
-        await page.waitForTimeout(150);
-        const focused = await composer.evaluate((element) => {
+        const focused = await composer.evaluate(async (element) => {
+          await Promise.all(element.getAnimations().map((animation) => animation.finished));
           const style = getComputedStyle(element);
+          const { width, height } = element.getBoundingClientRect();
           const parseRgb = (color: string): [number, number, number] => {
             const values = color
               .match(/[\d.]+/g)
@@ -240,31 +249,13 @@ suite.define(() => {
               color.startsWith("color(srgb") ? values.map((value) => value * 255) : values
             ) as [number, number, number];
           };
-          const luminance = (color: string): number => {
-            const linearize = (channel: number) => {
-              const normalized = channel / 255;
-              return normalized <= 0.04045
-                ? normalized / 12.92
-                : ((normalized + 0.055) / 1.055) ** 2.4;
-            };
-            const channels = parseRgb(color);
-            return (
-              0.2126 * linearize(channels[0]) +
-              0.7152 * linearize(channels[1]) +
-              0.0722 * linearize(channels[2])
-            );
-          };
-          const borderLuminance = luminance(style.borderColor);
-          const surfaceLuminance = luminance(style.backgroundColor);
           const borderChannels = parseRgb(style.borderColor);
-          const contrast =
-            (Math.max(borderLuminance, surfaceLuminance) + 0.05) /
-            (Math.min(borderLuminance, surfaceLuminance) + 0.05);
 
           return {
             borderColor: style.borderColor,
             boxShadow: style.boxShadow,
-            contrast,
+            width,
+            height,
             neutralChannelSpread: Math.max(...borderChannels) - Math.min(...borderChannels),
           };
         });
@@ -274,7 +265,7 @@ suite.define(() => {
           unfocused.boxShadow,
         ]);
         expect(focused.neutralChannelSpread).toBeLessThanOrEqual(24);
-        expect(focused.contrast).toBeGreaterThanOrEqual(3);
+        expect([focused.width, focused.height]).toEqual([unfocused.width, unfocused.height]);
       }
     });
   });

@@ -1,6 +1,4 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -14,7 +12,7 @@ import {
 } from "./control-ui-asset-retention.test-support.js";
 
 describe("Control UI asset retention", () => {
-  it("verifies each retained asset once per preparation", async () => {
+  it("verifies retained assets through one bounded scratch buffer", async () => {
     const fixture = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-retention-io-")),
     );
@@ -25,71 +23,62 @@ describe("Control UI asset retention", () => {
         let root = "";
         for (const label of ["a", "b", "c"]) {
           root = path.join(fixture, label);
-          const { assetPath: asset } = await writeRetentionBuild(root, label);
+          const { assetPath: asset } = await writeRetentionBuild(root, label, {
+            size: 128 * 1024 + label.charCodeAt(0),
+          });
           const owner = createControlUiAssetRetention(root);
           await owner.prepare();
           const retained = owner.resolveAsset(asset)!;
           retainedPaths.add(retained.filePath);
           expectedBytes += (await fs.stat(retained.filePath)).size;
         }
-        const counts = { lstats: 0, reads: 0, readBytes: 0, hashes: 0, hashBytes: 0 };
-        const buffers = new WeakSet<object>();
+        const buffers = new Set<Buffer>();
+        let readBytes = 0;
+        let wholeFileReads = 0;
         const readFile = fs.readFile;
-        const lstat = fs.lstat;
-        const hash = crypto.createHash;
-        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-          if (typeof args[0] === "string" && retainedPaths.has(args[0])) {
-            counts.lstats++;
-          }
-          return lstat(...args);
-        });
+        const open = fs.open;
         vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
           const result = await readFile(...args);
-          if (
-            typeof args[0] === "string" &&
-            retainedPaths.has(args[0]) &&
-            Buffer.isBuffer(result)
-          ) {
-            counts.reads++;
-            counts.readBytes += result.byteLength;
-            buffers.add(result);
+          if (typeof args[0] === "string" && retainedPaths.has(args[0])) {
+            wholeFileReads++;
           }
           return result;
         });
-        vi.spyOn(crypto, "createHash").mockImplementation((...args) => {
-          const instance = hash(...args);
-          const update = instance.update.bind(instance);
-          instance.update = (data, ...rest) => {
-            if (typeof data === "object" && buffers.has(data)) {
-              counts.hashes++;
-              counts.hashBytes += data.byteLength;
-            }
-            return update(data, ...rest);
-          };
-          return instance;
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await open(...args);
+          if (typeof args[0] !== "string" || !retainedPaths.has(args[0])) {
+            return handle;
+          }
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementation((async (
+            buffer: Buffer,
+            offset: number,
+            length: number,
+            position: number | null,
+          ) => {
+            expect(length).toBeLessThanOrEqual(64 * 1024);
+            buffers.add(buffer);
+            const result = await read(buffer, offset, length, position);
+            readBytes += result.bytesRead;
+            return result;
+          }) as typeof handle.read);
+          return handle;
         });
-        syncBuiltinESMExports();
         const owner = createControlUiAssetRetention(root);
         try {
           await owner.prepare();
         } finally {
           vi.restoreAllMocks();
-          syncBuiltinESMExports();
         }
-        expect(counts).toEqual({
-          lstats: 3,
-          reads: 3,
-          readBytes: expectedBytes,
-          hashes: 3,
-          hashBytes: expectedBytes,
-        });
+        expect(wholeFileReads).toBe(0);
+        expect(readBytes).toBe(expectedBytes);
+        expect(buffers.size).toBe(1);
         for (const retained of retainedPaths) {
           expect(owner.resolveAsset(`assets/${path.basename(retained)}`)?.filePath).toBe(retained);
         }
       });
     } finally {
       vi.restoreAllMocks();
-      syncBuiltinESMExports();
       await fs.rm(fixture, { recursive: true, force: true });
     }
   });
@@ -175,9 +164,11 @@ describe("Control UI asset retention", () => {
       expect(owner.resolveAsset(old.assetPath)).toBeNull();
       const open = fs.open;
       const observed = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        expect(owner.resolveAsset(old.assetPath)?.filePath).toBe(
-          path.join(old.target, old.assetPath),
-        );
+        if (args[0] === path.join(current.root, current.assetPath)) {
+          expect(owner.resolveAsset(old.assetPath)?.filePath).toBe(
+            path.join(old.target, old.assetPath),
+          );
+        }
         return open(...args);
       });
       const preparing = owner.prepare();

@@ -144,7 +144,11 @@ describe("collectStatusScanOverview", () => {
     });
     mocks.callGateway.mockImplementation(async ({ method }: { method?: string }) =>
       method === "status"
-        ? { degradedSecretOwners: [], degradedPlugins: [] }
+        ? {
+            degradedSecretOwners: [],
+            degradedPlugins: [],
+            startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
+          }
         : { channelAccounts: {} },
     );
     mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "quietchat", message: "boom" }]);
@@ -171,6 +175,9 @@ describe("collectStatusScanOverview", () => {
     expect(channelTableCall?.[1]?.showSecrets).toBe(false);
     expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: { raw: true } });
     expect(result.channelIssues).toEqual([{ channel: "quietchat", message: "boom" }]);
+    expect(result.runtimeDegradation?.startupMigrationWarning).toBe(
+      "Retained legacy state; run openclaw doctor --fix.",
+    );
   });
 
   it("can keep channel overview on metadata-only status paths", async () => {

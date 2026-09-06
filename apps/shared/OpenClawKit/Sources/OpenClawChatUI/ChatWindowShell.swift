@@ -3,10 +3,9 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Native macOS chat window: sessions sidebar + transcript detail with the
-/// pickers promoted into the unified window toolbar. The compact menu-bar
-/// panel keeps using `OpenClawChatView` directly; this shell is the full
-/// window experience.
+/// Native macOS chat window with a sessions sidebar and conversation toolbar.
+/// Draft controls belong to the composer; the compact menu-bar panel keeps
+/// using `OpenClawChatView` directly.
 @MainActor
 public struct OpenClawChatWindowShell: View {
     public nonisolated static let assistantTraceDefaultsKey = "openclaw.webchat.showAssistantTrace"
@@ -75,7 +74,6 @@ public struct OpenClawChatWindowShell: View {
                 mediaPlaybackAllowed: self.mediaPlaybackAllowed)
                 .environment(\.openClawChatDesktopLayout, true)
                 .navigationTitle(self.activeSessionTitle)
-                .navigationSubtitle(self.subtitle)
                 .toolbar { self.detailToolbar }
                 .background(self.keyboardShortcutHandlers)
         }
@@ -179,55 +177,19 @@ public struct OpenClawChatWindowShell: View {
         self.activeSessionEntry?.key ?? self.viewModel.sessionKey
     }
 
-    private var subtitle: String {
-        let model = self.currentModelLabel
-        guard let usage = self.viewModel.contextUsage, let cost = usage.totalCost else {
-            return model
-        }
-        let costLabel = ChatContextUsageFormatter.cost(cost)
-        return model.isEmpty ? costLabel : "\(model) · \(costLabel)"
-    }
-
-    private var currentModelLabel: String {
-        if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
-            return self.viewModel.modelSelectionID
-        }
-        let entry = self.viewModel.sessions.first { $0.key == self.viewModel.sessionKey }
-        for candidate in [entry?.model, self.viewModel.sessionDefaults?.model] {
-            if let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty {
-                return trimmed
-            }
-        }
-        return ""
-    }
-
     @ToolbarContentBuilder
     private var detailToolbar: some ToolbarContent {
         if OpenClawSessionColor(name: self.activeSessionEntry?.color) != nil {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 6) {
                     OpenClawSessionColorDot(color: self.activeSessionEntry?.color)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(self.activeSessionTitle)
-                            .font(OpenClawChatTypography.body.weight(.semibold))
-                            .lineLimit(1)
-                        if !self.subtitle.isEmpty {
-                            Text(self.subtitle)
-                                .font(OpenClawChatTypography.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
+                    Text(self.activeSessionTitle)
+                        .font(OpenClawChatTypography.body.weight(.semibold))
+                        .lineLimit(1)
                 }
             }
         }
-        ToolbarItemGroup(placement: .primaryAction) {
-            if let usage = self.viewModel.contextUsage {
-                ChatContextUsageMenu(usage: usage) {
-                    self.viewModel.requestSessionCompact()
-                }
-            }
-
+        ToolbarItem(placement: .primaryAction) {
             self.sessionActionsMenu
         }
     }
@@ -418,43 +380,6 @@ public struct OpenClawChatWindowShell: View {
             guard response == .OK, let url = panel.url else { return }
             try? markdown.write(to: url, atomically: true, encoding: .utf8)
         }
-    }
-}
-
-/// Toolbar gauge + dropdown with token/cost details, mirroring the web UI's
-/// context ring.
-private struct ChatContextUsageMenu: View {
-    let usage: OpenClawChatContextUsage
-    let onCompact: () -> Void
-
-    var body: some View {
-        Menu {
-            Text(self.tokensLine)
-                .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
-            if let cost = self.usage.totalCost {
-                Text(verbatim: String(
-                    format: String(localized: "Thread cost %@"),
-                    ChatContextUsageFormatter.cost(cost)))
-                    .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
-            }
-            Divider()
-            Button(action: self.onCompact) {
-                Text("Compact Thread")
-                    .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
-            }
-        } label: {
-            ChatContextUsageIndicator(usage: self.usage)
-        }
-        .menuIndicator(.hidden)
-        .help(self.tokensLine)
-    }
-
-    private var tokensLine: String {
-        let used = ChatContextUsageFormatter.tokens(self.usage.usedTokens)
-        guard let window = self.usage.contextWindowTokens else {
-            return "\(used) tokens used"
-        }
-        return "\(used) of \(ChatContextUsageFormatter.tokens(window)) tokens used"
     }
 }
 

@@ -427,6 +427,29 @@ openclaw-custodian-page {
   font-size: 12px;
 }
 
+.custodian__history-spinner {
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 6px auto;
+  border: 2px solid color-mix(in srgb, currentcolor 35%, transparent);
+  border-top-color: currentcolor;
+  border-radius: var(--radius-full);
+  animation: custodian-history-spin 0.7s linear infinite;
+}
+
+@keyframes custodian-history-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .custodian__history-spinner {
+    animation: none;
+  }
+}
+
 .custodian__change-list {
   display: flex;
   min-height: 0;

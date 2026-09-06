@@ -9,9 +9,12 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { withEnv } from "../../test-utils/env.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { cliCompactionBackendEntrypoints } from "./cli-compaction-runtime.test-support.js";
 import {
   resetCliCompactionTestDeps,
   runCliTurnCompactionLifecycle,
@@ -1187,10 +1190,25 @@ describe("runCliTurnCompactionLifecycle", () => {
     );
   });
 
-  it.each(["claude-cli", "google-gemini-cli"])(
+  it.each(cliCompactionBackendEntrypoints.map((entry) => [entry.provider, entry] as const))(
     "preserves %s native history and resume binding under compaction pressure",
-    async (provider) => {
-      const backend = resolveCliBackendConfig(provider);
+    async (provider, entry) => {
+      const { pluginId } = entry;
+      const bundled = path.join(tmpDir, "bundled");
+      const pluginRoot = path.join(bundled, pluginId);
+      await fs.mkdir(pluginRoot, { recursive: true });
+      await fs.copyFile(
+        new URL(`../../../extensions/${pluginId}/openclaw.plugin.json`, import.meta.url),
+        path.join(pluginRoot, "openclaw.plugin.json"),
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, "setup-api.mjs"),
+        `export { default } from ${JSON.stringify(resolveRuntimeWorkerUrl(entry).href)};`,
+      );
+      await fs.copyFile(path.join(pluginRoot, "setup-api.mjs"), path.join(pluginRoot, "index.mjs"));
+      const backend = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundled }, () =>
+        resolveCliBackendConfig(provider),
+      );
       expect(backend).not.toBeNull();
       const compactAgentHarnessSession = vi.fn();
       const scenario = await prepareCompactionScenario({

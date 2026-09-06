@@ -3,6 +3,7 @@ summary: "Use the 1Password plugin, bundled skill, or official MCP with OpenClaw
 read_when:
   - You want API keys out of openclaw.json and inside 1Password
   - You run the Gateway headless and need service account auth for op
+  - A Homebrew upgrade broke a manual 1Password exec provider
   - You want agents to read, inject, or maintain secrets with 1Password
 title: "1Password"
 ---
@@ -137,3 +138,41 @@ One-time passcodes are filled by 1Password on the same page; never relay verific
 - A reference is rejected: include the vault explicitly and use stable vault,
   item, section, and field IDs when names are long or contain unsupported
   1Password reference characters.
+
+### Homebrew command symlinks
+
+If a manual exec provider reports `command must not be a symlink` for
+`/opt/homebrew/bin/op` or `/usr/local/bin/op`, use the
+[plugin setup flow](/gateway/1password#resolve-config-secrets-with-the-plugin). Manual exec
+providers require a non-symlink command. Resolving the Homebrew link to a
+versioned `Caskroom` path works only while that version remains installed;
+a later package upgrade or cleanup can remove it.
+
+The plugin resolves `op` from the Gateway process's `PATH` for each resolver
+request, then checks the real executable and its parent directories before
+passing the service-account token. An existing `CLAW_1PASSWORD_OP` override
+can name the stable absolute Homebrew link and receives the same checks.
+The plugin follows a replacement link after an upgrade without storing its
+versioned target in `openclaw.json`. Group- or other-writable executables still
+fail, as do parent directories that let another user replace the checked path.
+
+Before migrating, map every existing credential target to the exact 1Password
+reference its old command reads. A manual provider may put that reference in
+`args` and use an unrelated SecretRef `id`; copying that id into the plugin
+would select a different secret or fail. Choose an unused provider alias with
+`--provider-alias <alias>` if `onepassword` already names a manual provider:
+replacing that provider would also change unlisted references that use its alias.
+Create the plugin token file as shown above, then generate a plan with explicit
+mappings, for example:
+
+```bash
+openclaw onepassword secretref setup \
+  --target 'models.providers.anthropic.apiKey=op://Automation/Anthropic/credential' \
+  --target 'models.providers.openai.apiKey=op://Automation/OpenAI/credential' \
+  --plan-out ./openclaw-1password-secrets-plan.json
+```
+
+Inspect the plan's provider alias and every target before using the status,
+dry-run, apply, audit, and reload commands above. Remove an old manual provider
+only after all references to it have moved; include auth-profile and channel
+credentials in that check.

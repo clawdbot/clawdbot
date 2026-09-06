@@ -1,8 +1,10 @@
 // Control UI E2E tests transcript search through the advertised Gateway method.
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   controlUiSessionPath,
@@ -17,12 +19,12 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-transcript-search",
-);
+let artifactDir: string;
+beforeEach(() => {
+  if (captureProof) {
+    artifactDir = createControlUiE2eArtifactDir("session-transcript-search");
+  }
+});
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let browser: Browser;
@@ -32,6 +34,15 @@ let server: ControlUiE2eServer | undefined;
 
 async function captureUiProof(fileName: string) {
   if (!captureProof || !page) {
+    return;
+  }
+  if (page.video()) {
+    await writeFile(
+      path.join(artifactDir, fileName),
+      await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+        page.locator("#control-ui-main"),
+      ]),
+    );
     return;
   }
   await page.screenshot({ fullPage: true, path: path.join(artifactDir, fileName) });
@@ -65,9 +76,6 @@ async function resolveDeferredAndDrain(
 
 describeControlUiE2e("Control UI session transcript search", () => {
   beforeAll(async () => {
-    if (captureProof) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     try {
       server = await startControlUiE2eServer();

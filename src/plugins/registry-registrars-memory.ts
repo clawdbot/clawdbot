@@ -24,9 +24,34 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     capability: Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0],
   ) => {
-    if (requireMemorySlot(record, "capability")) {
-      registry.memoryCapabilities.push({ pluginId: record.id, capability });
+    if (!requireMemorySlot(record, "capability")) {
+      return;
     }
+    // Dreaming keeps an unselected sidecar active for consolidation. Strip its
+    // slot-owner fields so resolution cannot lend its runtime or recall grant.
+    const memorySlotSelected = record.memorySlotSelected === true;
+    const dropsSlotOwnerFacts =
+      !memorySlotSelected &&
+      (capability.runtime !== undefined ||
+        capability.deterministicRecallToolName !== undefined ||
+        capability.supportsPrivateTranscriptRecall !== undefined);
+    if (dropsSlotOwnerFacts) {
+      reportRegistrationWarning(
+        record,
+        "memory plugin not selected for the memory slot; skipping its indexing runtime and recall registration (consolidation lifecycle preserved)",
+      );
+    }
+    const {
+      runtime: _droppedRuntime,
+      deterministicRecallToolName: _droppedRecallToolName,
+      supportsPrivateTranscriptRecall: _droppedPrivateRecall,
+      ...consolidationCapability
+    } = capability;
+    registry.memoryCapabilities.push({
+      pluginId: record.id,
+      capability: memorySlotSelected ? capability : consolidationCapability,
+      memorySlotSelected,
+    });
   };
 
   const registerMemoryPromptSupplement = (
