@@ -10,6 +10,7 @@ import {
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  getUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
@@ -164,6 +165,16 @@ export async function recordFailedUpdateGatewayState(
   const runtime = await resolveGatewayService()
     .readRuntime(env)
     .catch(() => undefined);
+  const verified = getUpdateRun(run.runId, { env: run.env })?.verification;
+  // A failed serving turn does not invalidate health/version facts for the same process.
+  if (
+    runtime?.status === "running" &&
+    typeof runtime.pid === "number" &&
+    verified?.serviceRunning === true &&
+    verified.pid === runtime.pid
+  ) {
+    return;
+  }
   recordUpdateRunVerification(
     run.runId,
     {

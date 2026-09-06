@@ -14,6 +14,7 @@ import {
   deferOpenClawAgentPostCommitPublication,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   TranscriptEvent,
   TranscriptMessageAppendOptions,
@@ -235,6 +236,7 @@ function appendTranscriptEvent(
     cursor.insertIdentity ??= createTranscriptIdentityInserter(database, scope.sessionId, true);
     cursor.insertIdentity({ ...identity, seq, createdAt });
   }
+  advanceCliHistoryBoundaryInTransaction(database, scope, seq);
   scheduleTranscriptProjectionReconcile(database, scope.sessionId, projectionNeedsRebuild, options);
   return eventJson;
 }

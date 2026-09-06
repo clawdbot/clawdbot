@@ -1861,7 +1861,7 @@ src/agents/mcp-connection-resolver.ts	2
 src/agents/mcp-http-fetch.ts	3
 src/agents/mcp-json-schema-validator.ts	6
 src/agents/mcp-oauth-store.ts	2
-src/agents/mcp-transport-config.ts	12
+src/agents/mcp-transport-config.ts	5
 src/agents/mcp-transport.ts	2
 src/agents/mcp-ui-resource.ts	4
 src/agents/media-generation-task-status-shared.ts	1

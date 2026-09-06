@@ -127,9 +127,23 @@ async function fixture(
         parentId: variation === "wrong-branch" ? null : "user-entry",
         message: {
           role: "assistant",
-          content: [{ type: "text", text: `update-verified-${request.idempotencyKey}` }],
-          provider: "openai",
-          model: "gpt-4.1-mini",
+          content: [
+            {
+              type: "text",
+              text:
+                variation === "response-mismatch"
+                  ? "The service is healthy."
+                  : variation === "response-punctuation"
+                    ? `Verified: update-verified-${request.idempotencyKey}.`
+                    : variation === "response-prefix"
+                      ? `not-update-verified-${request.idempotencyKey}`
+                      : variation === "response-suffix"
+                        ? `update-verified-${request.idempotencyKey}extra`
+                        : `update-verified-${request.idempotencyKey}`,
+            },
+          ],
+          provider: variation === "missing-provider" ? "" : "openai",
+          model: variation === "missing-model" ? "" : "gpt-4.1-mini",
           stopReason:
             variation === "failed-assistant"
               ? "error"
@@ -143,7 +157,20 @@ async function fixture(
         appendTranscriptEventsInTransaction(
           database,
           { ...scope, sessionId },
-          variation === "missing-assistant" ? [user] : [user, assistant],
+          variation === "missing-assistant"
+            ? [user]
+            : variation === "trailing-tool"
+              ? [
+                  user,
+                  assistant,
+                  {
+                    type: "message",
+                    id: "tool-entry",
+                    parentId: "assistant-entry",
+                    message: { role: "toolResult", content: "pending tool result" },
+                  },
+                ]
+              : [user, assistant],
         );
       }, toDatabaseOptions(scope));
       return readbackParams(request);
@@ -210,9 +237,22 @@ describe("update serving verification", () => {
     },
   );
 
-  it.each(["missing-assistant", "failed-assistant", "tool-only", "wrong-run", "wrong-branch"])(
-    "rejects successful RPC/readiness without durable terminal evidence: %s",
-    async (variation) => {
+  it.each([
+    ["missing-assistant", { status: "failed", reason: "persistence-missing" }],
+    ["failed-assistant", { status: "failed", reason: "turn-incomplete" }],
+    ["tool-only", { status: "failed", reason: "turn-incomplete" }],
+    ["trailing-tool", { status: "failed", reason: "turn-incomplete" }],
+    ["missing-provider", { status: "failed", reason: "turn-incomplete" }],
+    ["missing-model", { status: "failed", reason: "turn-incomplete" }],
+    ["wrong-run", { status: "failed", reason: "turn-incomplete" }],
+    ["wrong-branch", { status: "failed", reason: "turn-incomplete" }],
+    ["response-mismatch", { status: "failed", reason: "response-mismatch" }],
+    ["response-prefix", { status: "failed", reason: "response-mismatch" }],
+    ["response-suffix", { status: "failed", reason: "response-mismatch" }],
+    ["response-punctuation", { status: "verified" }],
+  ] as const)(
+    "reports the persisted serving outcome after successful RPC/readiness: %s",
+    async (variation, expected) => {
       await fixture(async ({ verify, seed }) => {
         rpc.mockImplementation(async (options: CallOptions) => {
           options.onHelloOk?.(hello());
@@ -227,7 +267,7 @@ describe("update serving verification", () => {
             result: { meta: { agentMeta: { sessionId: proof.sessionId } } },
           };
         });
-        expect(await verify()).toEqual({ status: "failed", reason: "persistence-missing" });
+        expect(await verify()).toMatchObject(expected);
       });
     },
   );
@@ -287,11 +327,12 @@ describe("update serving verification", () => {
             },
           },
         ]);
-        expect(readUpdateServingTranscript(proof)).toBeUndefined();
+        expect(readUpdateServingTranscript(proof)).toEqual({ status: "not-found" });
       }, toDatabaseOptions(scope));
-      expect(readUpdateServingTranscript(proof)?.transcript.assistant.entryId).toBe(
-        "pending-assistant",
-      );
+      expect(readUpdateServingTranscript(proof)).toMatchObject({
+        status: "persisted",
+        transcript: { assistant: { entryId: "pending-assistant" } },
+      });
     });
   });
 
