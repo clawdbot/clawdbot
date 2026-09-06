@@ -1,26 +1,22 @@
 /** Resolves external auth overlays through metadata and synchronous provider hooks. */
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type {
+  ProviderExternalAuthProfile,
+  ProviderExternalAuthProfileResolver,
+} from "./provider-external-auth.types.js";
 import type { createProviderHookRuntime } from "./provider-hook-runtime-core.js";
 import { resolveExternalAuthProfileProviderPluginIds } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
-import type {
-  ProviderExternalAuthProfile,
-  ProviderResolveExternalAuthProfilesContext,
-} from "./types.js";
 
 export function createProviderExternalAuthResolver(
   hooks: Pick<ReturnType<typeof createProviderHookRuntime>, "resolveProviderPluginsForHooks">,
 ) {
   const { resolveProviderPluginsForHooks } = hooks;
 
-  function resolveExternalAuthProfilesWithPlugins(params: {
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-    context: ProviderResolveExternalAuthProfilesContext;
-  }): ProviderExternalAuthProfile[] {
+  function resolveExternalAuthProfilesWithPlugins(
+    params: Parameters<ProviderExternalAuthProfileResolver>[0],
+  ): ReturnType<ProviderExternalAuthProfileResolver> {
     const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
     const env = params.env ?? process.env;
     const config = params.config ?? {};

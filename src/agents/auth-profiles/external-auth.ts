@@ -4,8 +4,10 @@
  * and decides which runtime profiles may be persisted back to the store.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-external-auth.js";
-import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
+import type {
+  ProviderExternalAuthProfile,
+  ProviderExternalAuthProfileResolver,
+} from "../../plugins/provider-external-auth.types.js";
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { MINIMAX_CLI_PROFILE_ID } from "./constants.js";
@@ -23,7 +25,6 @@ import {
 import type { AuthProfileStore } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
-type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
 type ExternalCliOverlayOptions = {
   allowKeychainPrompt?: boolean;
   config?: OpenClawConfig;
@@ -31,14 +32,14 @@ type ExternalCliOverlayOptions = {
   externalCliProfileIds?: Iterable<string>;
 };
 
-let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
+let resolveExternalAuthProfilesForRuntime: ProviderExternalAuthProfileResolver | undefined;
 
 /** Test-only resolver injection for provider external auth profiles. */
 const testing = {
   resetResolveExternalAuthProfilesForTest(): void {
     resolveExternalAuthProfilesForRuntime = undefined;
   },
-  setResolveExternalAuthProfilesForTest(resolver: ResolveExternalAuthProfiles): void {
+  setResolveExternalAuthProfilesForTest(resolver: ProviderExternalAuthProfileResolver): void {
     resolveExternalAuthProfilesForRuntime = resolver;
   },
 };
@@ -181,7 +182,7 @@ export function syncPersistedExternalCliAuthProfiles(
 
 // Only external-profile-dependent operations are bound; module state stays above.
 export function createExternalAuthRuntime(
-  resolveExternalAuthProfilesWithPlugins: ResolveExternalAuthProfiles,
+  resolveExternalAuthProfilesWithPlugins: ProviderExternalAuthProfileResolver,
 ) {
   function resolveExternalAuthProfiles(params: {
     store: AuthProfileStore;

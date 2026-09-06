@@ -1,4 +1,5 @@
 // Public usage fetch helpers for provider plugins.
+import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 
 export type {
   ProviderUsageCostBreakdown,
@@ -14,22 +15,35 @@ export type {
 // Registration uses the pure auth/format helpers below. Provider request code loads
 // only on fetch; the shared HTTP owner still bounds requests and response bodies.
 export const fetchClaudeUsage: typeof import("../infra/provider-usage.fetch.claude.js").fetchClaudeUsage =
-  async (...args) =>
-    (await import("../infra/provider-usage.fetch.claude.js")).fetchClaudeUsage(...args);
+  createLazyRuntimeMethod(
+    () => import("../infra/provider-usage.fetch.claude.js"),
+    (runtime) => runtime.fetchClaudeUsage,
+  );
 export const fetchCodexUsage: typeof import("../infra/provider-usage.fetch.codex.js").fetchCodexUsage =
-  async (...args) =>
-    (await import("../infra/provider-usage.fetch.codex.js")).fetchCodexUsage(...args);
+  createLazyRuntimeMethod(
+    () => import("../infra/provider-usage.fetch.codex.js"),
+    (runtime) => runtime.fetchCodexUsage,
+  );
 export const fetchDeepSeekUsage: typeof import("../infra/provider-usage.fetch.deepseek.js").fetchDeepSeekUsage =
-  async (...args) =>
-    (await import("../infra/provider-usage.fetch.deepseek.js")).fetchDeepSeekUsage(...args);
+  createLazyRuntimeMethod(
+    () => import("../infra/provider-usage.fetch.deepseek.js"),
+    (runtime) => runtime.fetchDeepSeekUsage,
+  );
 export const fetchGeminiUsage: typeof import("../infra/provider-usage.fetch.gemini.js").fetchGeminiUsage =
-  async (...args) =>
-    (await import("../infra/provider-usage.fetch.gemini.js")).fetchGeminiUsage(...args);
+  createLazyRuntimeMethod(
+    () => import("../infra/provider-usage.fetch.gemini.js"),
+    (runtime) => runtime.fetchGeminiUsage,
+  );
 export const fetchMinimaxUsage: typeof import("../infra/provider-usage.fetch.minimax.js").fetchMinimaxUsage =
-  async (...args) =>
-    (await import("../infra/provider-usage.fetch.minimax.js")).fetchMinimaxUsage(...args);
+  createLazyRuntimeMethod(
+    () => import("../infra/provider-usage.fetch.minimax.js"),
+    (runtime) => runtime.fetchMinimaxUsage,
+  );
 export const fetchZaiUsage: typeof import("../infra/provider-usage.fetch.zai.js").fetchZaiUsage =
-  async (...args) => (await import("../infra/provider-usage.fetch.zai.js")).fetchZaiUsage(...args);
+  createLazyRuntimeMethod(
+    () => import("../infra/provider-usage.fetch.zai.js"),
+    (runtime) => runtime.fetchZaiUsage,
+  );
 export { clampPercent, PROVIDER_LABELS } from "../infra/provider-usage.shared.js";
 export {
   addProviderUsageModel,

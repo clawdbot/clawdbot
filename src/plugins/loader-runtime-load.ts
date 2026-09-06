@@ -39,21 +39,29 @@ const externalAuth = Object.freeze(
 );
 const authStore = Object.freeze(createAuthProfileStoreRuntime(externalAuth));
 const authAvailability = Object.freeze(createProviderAuthAvailability(authStore));
-const modelAuth = Object.freeze(
-  createRuntimeModelAuth({
-    ensureAuthProfileStore: authStore.ensureAuthProfileStore,
-    isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
-  }),
-);
-const modelConfig: Readonly<PluginRuntime["modelConfig"]> = Object.freeze({
-  resolveDefaultModelForAgent,
-  resolveAllowedModelRef: resolveAllowedModelRefCore,
-});
-const capabilityCatalogContext = createPluginCapabilityCatalogContext(authAvailability);
+let modelAuth: NativePluginLoadBindings["modelAuth"] | undefined;
+let modelConfig: NativePluginLoadBindings["modelConfig"] | undefined;
+let capabilityCatalogContext: NativePluginLoadBindings["capabilityCatalogContext"] | undefined;
+// Imports of store/hook facades must not construct unrelated policy surfaces.
+// Consumers share immutable defaults and retain their own mutable method views.
 const loaderBindings: NativePluginLoadBindings = Object.freeze({
-  modelAuth,
-  modelConfig,
-  capabilityCatalogContext,
+  get modelAuth() {
+    return (modelAuth ??= Object.freeze(
+      createRuntimeModelAuth({
+        ensureAuthProfileStore: authStore.ensureAuthProfileStore,
+        isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
+      }),
+    ));
+  },
+  get modelConfig() {
+    return (modelConfig ??= Object.freeze({
+      resolveDefaultModelForAgent,
+      resolveAllowedModelRef: resolveAllowedModelRefCore,
+    }));
+  },
+  get capabilityCatalogContext() {
+    return (capabilityCatalogContext ??= createPluginCapabilityCatalogContext(authAvailability));
+  },
 });
 
 type NativePluginBindings = {
@@ -74,7 +82,7 @@ export const nativePluginBindings: Readonly<NativePluginBindings> = Object.freez
 });
 
 export function resolvePluginCapabilityCatalogContext() {
-  return capabilityCatalogContext;
+  return loaderBindings.capabilityCatalogContext;
 }
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   return loadOpenClawPluginsCore(options, loaderBindings);
@@ -105,8 +113,8 @@ export function loadOpenClawPluginsWithInternalOverrides(
 }
 
 export function resolveNativePluginModelAuth(): PluginRuntime["modelAuth"] {
-  return { ...modelAuth };
+  return { ...loaderBindings.modelAuth };
 }
 export function resolveNativePluginModelConfig(): PluginRuntime["modelConfig"] {
-  return { ...modelConfig };
+  return { ...loaderBindings.modelConfig };
 }

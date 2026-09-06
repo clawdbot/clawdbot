@@ -5,7 +5,7 @@
  */
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
+import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveAgentCredentialMapFromStore } from "../agent-auth-credentials.js";
 import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
 import { overlayExternalAuthProfiles } from "./external-auth-runtime.js";
