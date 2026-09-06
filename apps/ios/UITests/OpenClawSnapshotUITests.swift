@@ -23,8 +23,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
         name: "03-agent-connected")
     private static let settingsScreenshotTarget = ScreenshotTarget(
         initialTab: "settings",
-        initialDestination: "settings",
+        initialDestination: "gateway",
         name: "04-settings-connected")
+    private static let settingsFallbackTarget = ScreenshotTarget(
+        initialTab: "settings",
+        initialDestination: "settings",
+        name: "settings-fallback")
     private static let appReadinessAccessibilityIdentifier = "RootTabs.Ready"
 
     private var app: XCUIApplication?
@@ -69,14 +73,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testReleaseSettingsScreenshot() {
-        self.captureReleaseScreenshot(ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "gateway",
-            name: "04-settings-connected"))
+        self.captureReleaseScreenshot(Self.settingsScreenshotTarget)
     }
 
     func testWatchMessageDeliveryIsReachableFromSettings() throws {
-        self.launchApp(for: Self.settingsScreenshotTarget)
+        self.launchApp(for: Self.settingsFallbackTarget)
         let app = try XCTUnwrap(self.app)
         XCTAssertTrue(app.descendants(matching: .any)["SettingsHub.Fallback"].waitForExistence(timeout: 8))
         let watch = app.buttons["settings-watch-row"]
@@ -155,7 +156,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             Self.controlScreenshotTarget,
             Self.chatScreenshotTarget,
             Self.agentScreenshotTarget,
-            Self.settingsScreenshotTarget,
+            Self.settingsFallbackTarget,
         ] {
             self.launchApp(for: target)
             let app = try XCTUnwrap(self.app)
