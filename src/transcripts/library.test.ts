@@ -16,7 +16,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { activeSessions } from "./capture.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
@@ -127,63 +127,98 @@ describe("transcript library SQLite reads", () => {
   });
 
   it("paginates equal instants and unknown dates using original identity ties and date-string semantics", async () => {
-    const env = captureEnv(["TZ"]);
-    setTestEnvValue("TZ", "America/Los_Angeles");
-    try {
-      const { store } = fixture();
-      const ordered = [
-        session("local", { startedAt: "2026-08-20T06:00:00" }),
-        session("later", { startedAt: "2026-08-20T06:30:00Z" }),
-        session("fraction-tail", { startedAt: "2026-08-20T06:00:00.9999Z" }),
-        session("basic", { startedAt: "2026-08-20T06:00:00+0000" }),
-        session("fraction", { startedAt: "2026-08-20T06:00:00.0005Z" }),
-        session("same", { startedAt: "2026-08-19T23:00:00-07:00" }),
-        session("same", { startedAt: "2026-08-20T06:00:00.000Z" }),
-        session("earlier", { startedAt: "2026-08-20T05:30:00Z" }),
-        session("unknown", { startedAt: "2026-08-21Tbad" }),
-        session("unknown", { startedAt: "2026-08-22Tbad" }),
-        session("unknown-z", { startedAt: "2026-08-20Tbad" }),
-      ];
-      for (const row of ordered.toReversed()) {
-        await store.writeSession(row);
-      }
-      const seen: Array<{ sessionId: string; startedAt: string; selector: string }> = [];
-      let cursor: string | undefined;
-      for (let index = 0; index < ordered.length; index++) {
-        const page = listTranscriptLibrary(store, { limit: 1, cursor });
-        expect(page.sessions).toHaveLength(1);
-        const { sessionId, startedAt, selector } = page.sessions[0]!;
-        seen.push({ sessionId, startedAt, selector });
-        if (index === ordered.length - 1) {
-          expect(page.nextCursor).toBeNull();
-        } else {
-          expect(page.nextCursor).toEqual(expect.any(String));
-          cursor = page.nextCursor!;
-        }
-      }
-      expect(seen).toEqual(
-        ordered.map((row) => ({
-          sessionId: row.sessionId,
-          startedAt: row.startedAt,
-          selector: transcriptSessionSelector(row),
-        })),
-      );
-      expect(
-        listTranscriptLibrary(store, {
-          startedAfter: "2026-08-20T06:00:00.0005Z",
-          startedBefore: "2026-08-20T06:00:00.001Z",
-        }).sessions.map(({ sessionId }) => sessionId),
-      ).toEqual(["basic", "fraction", "same", "same"]);
-      expect(
-        listTranscriptLibrary(store, {
-          startedAfter: "2026-08-20T06:00:00",
-          startedBefore: "2026-08-20T13:00:00.001Z",
-        }).sessions.map(({ sessionId }) => sessionId),
-      ).toEqual(["local"]);
-    } finally {
-      env.restore();
+    const { store } = fixture();
+    const ordered = [
+      session("later", { startedAt: "2026-08-20T06:30:00Z" }),
+      session("fraction-tail", { startedAt: "2026-08-20T06:00:00.9999Z" }),
+      session("basic", { startedAt: "2026-08-20T06:00:00+0000" }),
+      session("fraction", { startedAt: "2026-08-20T06:00:00.0005Z" }),
+      session("same", { startedAt: "2026-08-19T23:00:00-07:00" }),
+      session("same", { startedAt: "2026-08-20T06:00:00.000Z" }),
+      session("earlier", { startedAt: "2026-08-20T05:30:00Z" }),
+      session("unknown", { startedAt: "2026-08-21Tbad" }),
+      session("unknown", { startedAt: "2026-08-22Tbad" }),
+      session("unknown-z", { startedAt: "2026-08-20Tbad" }),
+    ];
+    for (const row of ordered.toReversed()) {
+      await store.writeSession(row);
     }
+    const seen: Array<{ sessionId: string; startedAt: string; selector: string }> = [];
+    let cursor: string | undefined;
+    for (let index = 0; index < ordered.length; index++) {
+      const page = listTranscriptLibrary(store, { limit: 1, cursor });
+      expect(page.sessions).toHaveLength(1);
+      const { sessionId, startedAt, selector } = page.sessions[0]!;
+      seen.push({ sessionId, startedAt, selector });
+      expect(page.nextCursor).toEqual(index === ordered.length - 1 ? null : expect.any(String));
+      cursor = page.nextCursor ?? undefined;
+    }
+    expect(seen).toEqual(
+      ordered.map((row) => ({
+        sessionId: row.sessionId,
+        startedAt: row.startedAt,
+        selector: transcriptSessionSelector(row),
+      })),
+    );
+    expect(
+      listTranscriptLibrary(store, {
+        startedAfter: "2026-08-20T06:00:00.0005Z",
+        startedBefore: "2026-08-20T06:00:00.001Z",
+      }).sessions.map(({ sessionId }) => sessionId),
+    ).toEqual(["basic", "fraction", "same", "same"]);
   });
+
+  it(
+    "uses the process timezone for unzoned stored dates and range bounds",
+    { timeout: 45_000 },
+    () => {
+      const stateDir = tempDirs.make("transcript-library-timezone-");
+      const local = session("local", { startedAt: "2026-08-20T06:00:00" });
+      const earlier = session("earlier", { startedAt: "2026-08-20T06:30:00Z" });
+      const child = spawnNodeEvalSync(
+        `
+        import assert from "node:assert/strict";
+        import { TranscriptsStore, transcriptSessionSelector } from ${JSON.stringify(new URL("./store.ts", import.meta.url).href)};
+        import { listTranscriptLibrary } from ${JSON.stringify(new URL("./library.ts", import.meta.url).href)};
+        import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(new URL("../state/openclaw-state-db.ts", import.meta.url).href)};
+        const store = new TranscriptsStore(${JSON.stringify(path.join(stateDir, "transcripts"))});
+        const local = ${JSON.stringify(local)};
+        try {
+          await store.writeSession(local);
+          await store.writeSession(${JSON.stringify(earlier)});
+          const first = listTranscriptLibrary(store, { limit: 1 });
+          assert.deepEqual(first.sessions.map(row => row.sessionId), ["local"]);
+          assert.equal(typeof first.nextCursor, "string");
+          const next = listTranscriptLibrary(store, { limit: 1, cursor: first.nextCursor });
+          assert.deepEqual(next.sessions.map(row => row.sessionId), ["earlier"]);
+          assert.equal(next.nextCursor, null);
+          assert.deepEqual(listTranscriptLibrary(store, {
+            startedAfter: "2026-08-20T06:00:00",
+            startedBefore: "2026-08-20T13:00:00.001Z",
+          }).sessions.map(row => row.sessionId), ["local"]);
+          assert.deepEqual(listTranscriptLibrary(store, {
+            startedAfter: "2026-08-20T13:00:00.000Z",
+            startedBefore: "2026-08-20T13:00:00.001Z",
+          }).sessions.map(row => row.sessionId), ["local"]);
+          assert.deepEqual(await store.readSession(transcriptSessionSelector(local)), local);
+        } finally {
+          closeOpenClawStateDatabaseForTest();
+        }
+      `,
+        {
+          imports: ["tsx"],
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            TZ: "America/Los_Angeles",
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+          },
+        },
+      );
+      expect(child.status, child.stderr).toBe(0);
+    },
+  );
 
   it.each(["at-cap", "oversized-ascii", "oversized-utf8"] as const)(
     "bounds %s stored date input before the JavaScript parser",

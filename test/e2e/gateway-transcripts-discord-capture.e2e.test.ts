@@ -11,12 +11,12 @@ import type {
   TranscriptsGetResult,
   TranscriptsListResult,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { buildMockOpenAiResponsesProvider } from "../../src/gateway/test-openai-responses-model.js";
+import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../src/test-utils/env.js";
 import { withIsolatedTestHome } from "../../test/test-env.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { OpenClawPluginApi } from "../plugins/types.js";
-import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type TranscriptCapturePorts = { gateway: number; provider: number };
 
@@ -128,12 +128,16 @@ describe("Gateway admitted Discord transcript capture", () => {
     const workspace = path.join(isolated.tempHome, "workspace");
     const configPath = path.join(stateDir, "openclaw.json");
     let gateway:
-      | Awaited<ReturnType<typeof import("./test-helpers.e2e.js").startGatewayWithClient>>
+      | Awaited<
+          ReturnType<typeof import("../../src/gateway/test-helpers.e2e.js").startGatewayWithClient>
+        >
       | undefined;
     let fixture: DiscordCaptureFixture | undefined;
     let restoreDiscordRuntime: (() => void) | undefined;
     let routedService:
-      | ReturnType<typeof import("../transcripts/auto-start.js").createTranscriptsAutoStartService>
+      | ReturnType<
+          typeof import("../../src/transcripts/auto-start.js").createTranscriptsAutoStartService
+        >
       | undefined;
     let cleanupRuntime: (() => Promise<void>) | undefined;
     const requests: Record<string, unknown>[] = [];
@@ -336,9 +340,9 @@ describe("Gateway admitted Discord transcript capture", () => {
         { resolveOpenClawDevSourceRoot },
         { preparePluginLoaderAliases, resolvePluginRuntimeModulePathWithDiagnostics },
       ] = await Promise.all([
-        import("../plugins/loader-module-runtime.js"),
-        import("../plugins/dev-source-root.js"),
-        import("../plugins/sdk-alias.js"),
+        import("../../src/plugins/loader-module-runtime.js"),
+        import("../../src/plugins/dev-source-root.js"),
+        import("../../src/plugins/sdk-alias.js"),
       ]);
       phase("plugin-loader:imported");
       const devSourceRoot = resolveOpenClawDevSourceRoot();
@@ -384,34 +388,38 @@ describe("Gateway admitted Discord transcript capture", () => {
       phase("fixture-module:loaded");
       phase("host-runtime:import");
       summaryTranscript = capturedText;
-      const { startGatewayWithClient } = await import("./test-helpers.e2e.js");
-      const { createPluginRuntime } = await import("../plugins/runtime/index.js");
-      const { createPluginRegistry } = await import("../plugins/registry.js");
-      const { createPluginRecord } = await import("../plugins/loader-records.js");
+      const { startGatewayWithClient } = await import("../../src/gateway/test-helpers.e2e.js");
+      const { createPluginRuntime } = await import("../../src/plugins/runtime/index.js");
+      const { createPluginRegistry } = await import("../../src/plugins/registry.js");
+      const { createPluginRecord } = await import("../../src/plugins/loader-records.js");
       const {
         getActivePluginRegistry,
         setActivePluginRegistry,
         captureActivePluginRegistrySnapshot,
         restoreActivePluginRegistrySnapshot,
-      } = await import("../plugins/runtime.js");
-      const { getPluginRuntimeLoadContext } = await import("../plugins/runtime/load-context.js");
+      } = await import("../../src/plugins/runtime.js");
+      const { getPluginRuntimeLoadContext } =
+        await import("../../src/plugins/runtime/load-context.js");
       const { withPluginRuntimeRegistryScope } =
-        await import("../plugins/runtime/gateway-request-scope.js");
+        await import("../../src/plugins/runtime/gateway-request-scope.js");
       const { refreshPreparedModelRuntimeSnapshots, loadPublishedGatewayReplyDispatchRuntime } =
-        await import("../agents/prepared-model-runtime.js");
+        await import("../../src/agents/prepared-model-runtime.js");
       const { resetPreparedModelRuntimeSnapshotsForTest } =
-        await import("../agents/prepared-model-runtime.test-support.js");
+        await import("../../src/agents/prepared-model-runtime.test-support.js");
       const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
-        await import("../config/config.js");
-      const { resetConfigOverrides } = await import("../config/runtime-overrides.js");
+        await import("../../src/config/config.js");
+      const { resetConfigOverrides } = await import("../../src/config/runtime-overrides.js");
       const { drainSessionStoreWriterQueuesForTest, clearSessionStoreCacheForTest } =
-        await import("../config/sessions/store-writer-state.js");
-      const { closeOpenClawStateDatabaseByPath } = await import("../state/openclaw-state-db.js");
-      const { activeSessions, resolveSourceProvider } = await import("../transcripts/capture.js");
-      const { createTranscriptsAutoStartService } = await import("../transcripts/auto-start.js");
+        await import("../../src/config/sessions/store-writer-state.js");
+      const { closeOpenClawStateDatabaseByPath } =
+        await import("../../src/state/openclaw-state-db.js");
+      const { activeSessions, resolveSourceProvider } =
+        await import("../../src/transcripts/capture.js");
+      const { createTranscriptsAutoStartService } =
+        await import("../../src/transcripts/auto-start.js");
       const { readConfiguredTranscriptStarts } =
-        await import("../transcripts/configured-start-status.js");
-      const { TranscriptsStore } = await import("../transcripts/store.js");
+        await import("../../src/transcripts/configured-start-status.js");
+      const { TranscriptsStore } = await import("../../src/transcripts/store.js");
       phase("host-runtime:imported");
       const previousRegistry = captureActivePluginRegistrySnapshot();
       cleanupRuntime = async () => {
