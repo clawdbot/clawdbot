@@ -6,6 +6,7 @@ import {
   config,
   emptyRoute,
   issue,
+  issuesUpdatedAfterWindow,
   json,
   logger,
   repo,
@@ -85,23 +86,19 @@ describe("GitHub reports source", () => {
     ).toHaveLength(1);
   });
 
-  it("splits capped issue searches, fetches merged_by only in the window and caches duplicate PRs", async () => {
-    const merged = { ...issue(2), pull_request: { merged_at: at }, closed_at: at };
-    const oldMerge = {
-      ...issue(3),
-      created_at: "2026-08-19T00:00:00Z",
-      pull_request: { merged_at: "2026-08-19T01:00:00Z" },
-      closed_at: "2026-08-19T01:00:00Z",
-    };
-    let searches = 0;
-    const queries: string[] = [];
+  it("credits event dates despite later updates and deduplicates overlapping searches", async () => {
+    const { opened, merged, openedAndClosed } = issuesUpdatedAfterWindow;
     const { api, fetchImpl } = source((url) => {
       if (url.pathname === "/search/issues") {
-        queries.push(url.searchParams.get("q") ?? "");
-        searches++;
-        return searches === 1
-          ? json({ total_count: 1000, items: [] })
-          : json({ total_count: 3, items: [merged, oldMerge, merged] });
+        const query = url.searchParams.get("q") ?? "";
+        const items = query.includes(" created:")
+          ? [opened, openedAndClosed]
+          : query.includes(" closed:")
+            ? [openedAndClosed]
+            : query.includes(" merged:")
+              ? [merged]
+              : [];
+        return json({ total_count: items.length, items });
       }
       if (url.pathname === "/repos/example/app/pulls/2") {
         return json({ merged_by: { login: "reviewer" } });
@@ -109,18 +106,80 @@ describe("GitHub reports source", () => {
       return emptyRoute(url);
     });
     const result = await api.collect(config, window, roster);
-    expect(result.items.filter((item) => item.kind === "pr_merged")).toEqual([
-      expect.objectContaining({ actor: "reviewer", number: 2, atMs: Date.parse(at) }),
+    expect(result.items).toEqual([
+      expect.objectContaining({ kind: "issue_opened", number: 1, actor: "builder" }),
+      expect.objectContaining({ kind: "pr_merged", number: 2, actor: "reviewer" }),
+      expect.objectContaining({ kind: "issue_closed", number: 3, actor: "builder" }),
+      expect.objectContaining({ kind: "issue_opened", number: 3, actor: "builder" }),
     ]);
-    expect(result.items.some((item) => item.kind === "pr_closed")).toBe(false);
-    expect(result.status.stats.searchSplits).toBe(1);
-    expect(queries).toHaveLength(3);
-    expect(new Set(queries).size).toBe(3);
+    expect(result.status.warnings).toEqual([]);
     expect(fetchImpl.mock.calls.filter(([url]) => String(url).includes("/pulls/2"))).toHaveLength(
       1,
     );
-    expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("/pulls/3"))).toBe(false);
   });
+
+  it.each(["created", "closed", "merged"])(
+    "splits and paginates capped %s searches, warns on incomplete results and deduplicates PR lookups",
+    async (qualifier) => {
+      const merged = { ...issue(2), pull_request: { merged_at: at }, closed_at: at };
+      const oldMerge = {
+        ...issue(3),
+        created_at: "2026-08-19T00:00:00Z",
+        pull_request: { merged_at: "2026-08-19T01:00:00Z" },
+        closed_at: "2026-08-19T01:00:00Z",
+      };
+      let searches = 0;
+      const queries: string[] = [];
+      const { api, fetchImpl } = source((url) => {
+        if (url.pathname === "/search/issues") {
+          const query = url.searchParams.get("q") ?? "";
+          queries.push(query);
+          if (!query.includes(` ${qualifier}:`)) {
+            return json({ total_count: 1, items: [merged] });
+          }
+          searches++;
+          if (searches === 1) {
+            return json({ total_count: 1000, items: [] });
+          }
+          if (searches === 2) {
+            return json(
+              { total_count: 3, items: [merged] },
+              { Link: `<${url}&page=2>; rel="next"` },
+            );
+          }
+          if (searches === 3) {
+            return json({ total_count: 3, incomplete_results: true, items: [oldMerge, merged] });
+          }
+          return json({ total_count: 0, items: [] });
+        }
+        if (url.pathname === "/repos/example/app/pulls/2") {
+          return json({ merged_by: { login: "reviewer" } });
+        }
+        return emptyRoute(url);
+      });
+      const result = await api.collect(config, window, roster);
+      expect(result.items.filter((item) => item.kind === "pr_merged")).toEqual([
+        expect.objectContaining({ actor: "reviewer", number: 2, atMs: Date.parse(at) }),
+      ]);
+      expect(result.items.some((item) => item.kind === "pr_closed")).toBe(false);
+      expect(result.status.stats.searchSplits).toBe(1);
+      expect(result.status.stale).toBe(true);
+      expect(result.status.warnings).toEqual([
+        expect.stringContaining("incomplete search results"),
+      ]);
+      expect(queries).toHaveLength(6);
+      expect(queries.filter((query) => query.includes(` ${qualifier}:`))).toEqual([
+        `org:example ${qualifier}:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z`,
+        `org:example ${qualifier}:2026-08-20T00:00:00.000Z..2026-08-20T11:59:59.000Z`,
+        `org:example ${qualifier}:2026-08-20T00:00:00.000Z..2026-08-20T11:59:59.000Z`,
+        `org:example ${qualifier}:2026-08-20T12:00:00.000Z..2026-08-20T23:59:59.000Z`,
+      ]);
+      expect(fetchImpl.mock.calls.filter(([url]) => String(url).includes("/pulls/2"))).toHaveLength(
+        1,
+      );
+      expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("/pulls/3"))).toBe(false);
+    },
+  );
 
   it("collects commit coauthors from mapped login and noreply trailers, dropping unknown names", async () => {
     const { api } = source((url) =>
@@ -152,6 +211,7 @@ describe("GitHub reports source", () => {
         return json(Array.from({ length: 12 }, (_, i) => repo(`app${i}`)));
       }
       if (url.pathname === "/search/commits") {
+        expect(url.searchParams.get("q")).toContain(" committer-date:");
         searches++;
         if (searches === 1) {
           return json({ total_count: 1000, items: [] });
@@ -181,10 +241,10 @@ describe("GitHub reports source", () => {
       if (url.pathname === "/orgs/example/repos") {
         return json([repo(), repo("other"), repo("old", true), repo("excluded")]);
       }
-      if (url.pathname === "/search/issues") {
+      if (url.pathname === "/search/issues" && url.searchParams.get("q")?.includes(" created:")) {
         return json({
           total_count: 4,
-          items: [issue(), issue(2, "other"), issue(3, "old"), issue(4, "excluded")],
+          items: [issue(), issue(1, "other"), issue(3, "old"), issue(4, "excluded")],
         });
       }
       if (url.pathname === "/repos/example/app/issues/comments") {
@@ -218,6 +278,7 @@ describe("GitHub reports source", () => {
     expect(JSON.stringify(result.status)).not.toContain(config.token);
     expect(result.items.map((item) => item.repo)).not.toContain("example/old");
     expect(result.items.map((item) => item.repo)).not.toContain("example/excluded");
+    expect(result.items.filter((item) => item.kind === "issue_opened")).toHaveLength(2);
     expect(result.items.filter((item) => item.kind === "issue_comment")).toEqual([
       expect.objectContaining({ body: " Full body ", actor: "reviewer" }),
     ]);
@@ -266,7 +327,7 @@ describe("GitHub reports source", () => {
 
   it("emits opened/closed events and advisory credit within half-open windows", async () => {
     const { api } = source((url) => {
-      if (url.pathname === "/search/issues") {
+      if (url.pathname === "/search/issues" && url.searchParams.get("q")?.includes(" created:")) {
         return json({
           total_count: 3,
           items: [
@@ -359,6 +420,33 @@ describe("GitHub reports source", () => {
     await expect(api.loadRoster(config)).rejects.toThrow("aborted");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["created", "closed", "merged"])(
+    "aborts a %s search without fetching more pages or searches",
+    async (qualifier) => {
+      const controller = new AbortController();
+      const queries: string[] = [];
+      const { api, fetchImpl } = source((url) => {
+        if (url.pathname === "/search/issues") {
+          const query = url.searchParams.get("q") ?? "";
+          queries.push(query);
+          if (query.includes(` ${qualifier}:`)) {
+            controller.abort(new Error(config.token));
+            return json(
+              { total_count: 2, items: [issue()] },
+              { Link: `<${url}&page=2>; rel="next"` },
+            );
+          }
+        }
+        return emptyRoute(url);
+      }, controller.signal);
+      await expect(api.collect(config, window, roster)).rejects.toThrow(
+        "GitHub collection aborted",
+      );
+      expect(queries.at(-1)).toContain(` ${qualifier}:`);
+      expect(fetchImpl).toHaveBeenCalledTimes(queries.length + 1);
+    },
+  );
 
   it("cancels a rate limit sleep promptly", async () => {
     vi.useFakeTimers();

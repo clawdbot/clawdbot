@@ -2,13 +2,15 @@ import { z } from "zod";
 import type { ActivityWindow } from "../../types.js";
 import { GithubClient, GithubSourceError, parse, pathWithQuery } from "./client.js";
 
+type SearchQualifier = "created" | "closed" | "merged" | "committer-date";
+
 export function searchPath(
   kind: "issues" | "commits",
+  qualifier: SearchQualifier,
   org: string,
   start: number,
   end: number,
 ): string {
-  const qualifier = kind === "issues" ? "updated" : "committer-date";
   return pathWithQuery(`/search/${kind}`, {
     q: `org:${org} ${qualifier}:${new Date(start * 1000).toISOString()}..${new Date(end * 1000).toISOString()}`,
   });
@@ -21,6 +23,7 @@ export function searchSeconds(window: ActivityWindow): [number, number] {
 export async function* search<T>(
   client: GithubClient,
   kind: "issues" | "commits",
+  qualifier: SearchQualifier,
   org: string,
   window: ActivityWindow,
   itemSchema: z.ZodType<T>,
@@ -36,7 +39,7 @@ export async function* search<T>(
     end: number,
     initial?: Awaited<ReturnType<GithubClient["get"]>>,
   ): AsyncGenerator<T> {
-    let page = initial ?? (await client.get(searchPath(kind, org, start, end)));
+    let page = initial ?? (await client.get(searchPath(kind, qualifier, org, start, end)));
     let result = parse(schema, page.data);
     if (result.total_count >= 1000 && start < end) {
       client.status.stats.searchSplits = Number(client.status.stats.searchSplits) + 1;

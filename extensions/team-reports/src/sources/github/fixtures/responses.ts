@@ -35,9 +35,25 @@ export function issue(number = 1, repoName = "app") {
     repository_url: `https://api.github.test/repos/example/${repoName}`,
     user: { login: "builder" },
     created_at: at,
+    updated_at: at,
     closed_at: null,
   };
 }
+export const issuesUpdatedAfterWindow = {
+  opened: { ...issue(), updated_at: "2026-08-21T00:03:00Z" },
+  merged: {
+    ...issue(2),
+    created_at: "2026-08-19T12:00:00Z",
+    closed_at: at,
+    pull_request: { merged_at: at },
+    updated_at: "2026-08-22T12:00:00Z",
+  },
+  openedAndClosed: {
+    ...issue(3),
+    closed_at: at,
+    updated_at: "2026-08-21T00:04:00Z",
+  },
+};
 export function commit(sha = "abc", message = "Ship the fix", repoName = "app") {
   return {
     sha,

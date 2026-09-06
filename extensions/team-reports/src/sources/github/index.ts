@@ -161,7 +161,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       const repos = await listRepos(client, cfg);
       const items = new Map<string, GithubItem>();
       const active = new Set<string>();
-      const mergedBy = new Map<string, string | undefined>();
+      const seenIssues = new Set<string>();
       const add = (item: GithubItem) => {
         checkAbort(runtime.signal);
         if (item.atMs >= window.sinceMs && item.atMs < window.untilMs) {
@@ -216,64 +216,74 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         for (const repo of candidates) {
           active.add(repo.full_name.toLowerCase());
         }
-        await client.attempt(`Issue search for ${org}`, async () => {
-          for await (const issue of search(client, "issues", org, window, issueSchema)) {
-            const repoName = /\/repos\/([^/]+\/[^/]+)\/?$/
-              .exec(issue.repository_url)?.[1]
-              ?.toLowerCase();
-            const repo = repoName ? repos.get(repoName) : undefined;
-            if (!repo) {
-              continue;
-            }
-            active.add(repo.full_name.toLowerCase());
-            const common = {
-              repo: repo.full_name,
-              number: issue.number,
-              title: issue.title,
-              url: issue.html_url,
-              actor: issue.user?.login ?? "",
-            };
-            if (inWindow(issue.created_at, window)) {
-              add({
-                ...common,
-                kind: issue.pull_request ? "pr_opened" : "issue_opened",
-                atMs: Date.parse(issue.created_at),
-              });
-            }
-            if (issue.pull_request?.merged_at) {
-              if (!inWindow(issue.pull_request.merged_at, window)) {
+        for (const qualifier of ["created", "closed", "merged"] as const) {
+          await client.attempt(`Issue ${qualifier} search for ${org}`, async () => {
+            for await (const issue of search(
+              client,
+              "issues",
+              qualifier,
+              org,
+              window,
+              issueSchema,
+            )) {
+              const repoName = /\/repos\/([^/]+\/[^/]+)\/?$/
+                .exec(issue.repository_url)?.[1]
+                ?.toLowerCase();
+              const repo = repoName ? repos.get(repoName) : undefined;
+              if (!repo) {
                 continue;
               }
-              const key = `${repo.full_name}#${issue.number}`;
-              if (!mergedBy.has(key)) {
-                // Cache failed/missing lookups too; never substitute the PR author for the merger.
-                mergedBy.set(key, undefined);
+              const key = `${repo.full_name.toLowerCase()}#${issue.number}`;
+              if (seenIssues.has(key)) {
+                continue;
+              }
+              // Deduplicate event searches before emitting events or looking up the merger.
+              seenIssues.add(key);
+              active.add(repo.full_name.toLowerCase());
+              const common = {
+                repo: repo.full_name,
+                number: issue.number,
+                title: issue.title,
+                url: issue.html_url,
+                actor: issue.user?.login ?? "",
+              };
+              if (inWindow(issue.created_at, window)) {
+                add({
+                  ...common,
+                  kind: issue.pull_request ? "pr_opened" : "issue_opened",
+                  atMs: Date.parse(issue.created_at),
+                });
+              }
+              if (issue.pull_request?.merged_at) {
+                if (!inWindow(issue.pull_request.merged_at, window)) {
+                  continue;
+                }
+                let actor: string | undefined;
                 await client.attempt(`Merger for ${key}`, async () => {
                   const pull = parse(
                     pullSchema,
                     (await client.get(`${repoPath(repo.full_name)}/pulls/${issue.number}`)).data,
                   );
-                  mergedBy.set(key, pull.merged_by?.login);
+                  actor = pull.merged_by?.login;
                 });
-              }
-              const actor = mergedBy.get(key);
-              if (actor) {
+                if (actor) {
+                  add({
+                    ...common,
+                    actor,
+                    kind: "pr_merged",
+                    atMs: Date.parse(issue.pull_request.merged_at),
+                  });
+                }
+              } else if (inWindow(issue.closed_at, window)) {
                 add({
                   ...common,
-                  actor,
-                  kind: "pr_merged",
-                  atMs: Date.parse(issue.pull_request.merged_at),
+                  kind: issue.pull_request ? "pr_closed" : "issue_closed",
+                  atMs: Date.parse(issue.closed_at ?? ""),
                 });
               }
-            } else if (inWindow(issue.closed_at, window)) {
-              add({
-                ...common,
-                kind: issue.pull_request ? "pr_closed" : "issue_closed",
-                atMs: Date.parse(issue.closed_at ?? ""),
-              });
             }
-          }
-        });
+          });
+        }
         if (candidates.length === 0) {
           continue;
         }
@@ -283,7 +293,9 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
           await collectRepoCommits(candidates);
         } else {
           await client.attempt(`Commit search for ${org}`, async () => {
-            const first = await client.get(searchPath("commits", org, ...searchSeconds(window)));
+            const first = await client.get(
+              searchPath("commits", "committer-date", org, ...searchSeconds(window)),
+            );
             const count = parse(
               z.object({ total_count: z.number().int().nonnegative() }),
               first.data,
@@ -297,6 +309,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
               for await (const commit of search(
                 client,
                 "commits",
+                "committer-date",
                 org,
                 window,
                 searchCommitSchema,
