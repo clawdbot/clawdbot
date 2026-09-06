@@ -188,26 +188,18 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
   aliasFileName: PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName,
   sourceIncludes: LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS,
 }));
-/** Compatibility chunks kept for live gateways loading old CLI exit modules. */
+/** Compatibility chunks for old updater and CLI exit modules after package replacement. */
 const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
-  // v2026.8.2 and the exact d413210 build load these after replacing dist/.
-  // Remove only after both source artifacts fall outside the supported upgrade window.
-  {
-    dest: "dist/shared-Y6bNiw2w.js",
+  // v2026.8.2, the exact d413210 build, and v2026.9.1 load these after replacing dist/.
+  // Remove only after the source artifacts fall outside the supported upgrade window.
+  ...["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js", "shared-DFJEouXv.js"].map((fileName) => ({
+    dest: `dist/${fileName}`,
     contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
-  },
-  {
-    dest: "dist/shared-DTaQo6Hi.js",
-    contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
-  },
-  {
-    dest: "dist/memory-state-CcqRgDZU.js",
+  })),
+  ...["memory-state-CcqRgDZU.js", "memory-state-DwGdReW4.js"].map((fileName) => ({
+    dest: `dist/${fileName}`,
     contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
-  },
-  {
-    dest: "dist/memory-state-DwGdReW4.js",
-    contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
-  },
+  })),
 ];
 
 /**

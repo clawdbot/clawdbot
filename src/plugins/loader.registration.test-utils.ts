@@ -25,7 +25,7 @@ import {
 import * as hookRunnerGlobal from "./hook-runner-global.js";
 import {
   clearPluginInteractiveHandlers,
-  resolvePluginInteractiveNamespaceMatch,
+  resolvePluginInteractiveRegistrationsMatch,
 } from "./interactive-registry.js";
 import {
   claimPluginInteractiveCallbackDedupe,
@@ -70,6 +70,7 @@ import {
 } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  getActivePluginChannelRegistry,
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   getActivePluginRegistryWorkspaceDir,
@@ -361,7 +362,13 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.nodeInvokePolicies).toStrictEqual([]);
     expect(registry.securityAuditCollectors).toStrictEqual([]);
     expect(registry.interactiveHandlers).toStrictEqual([]);
-    expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
+    expect(
+      resolvePluginInteractiveRegistrationsMatch(
+        getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+        "slack",
+        "failme:payload",
+      ),
+    ).toBeNull();
     expect(getContextEngineRegistration("failme-context")).toBeUndefined();
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
@@ -1183,7 +1190,11 @@ describe("loadOpenClawPlugins", () => {
         pluginId: "cached-command-interactive",
       }),
     ]);
-    const match = resolvePluginInteractiveNamespaceMatch("telegram", "hue:on");
+    const match = resolvePluginInteractiveRegistrationsMatch(
+      getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+      "telegram",
+      "hue:on",
+    );
     expect(match?.namespace).toBe("hue");
     expect(match?.payload).toBe("on");
 
@@ -1197,14 +1208,24 @@ describe("loadOpenClawPlugins", () => {
 
     setActivePluginRegistry(createEmptyPluginRegistry());
     expect(getPluginCommandSpecs()).toStrictEqual([]);
-    expect(resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")).toBeNull();
+    expect(
+      resolvePluginInteractiveRegistrationsMatch(
+        getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+        "telegram",
+        "hue:on",
+      ),
+    ).toBeNull();
 
     loadOpenClawPlugins(loadOptions);
 
     expect(getPluginCommandSpecs()).toEqual([
       { name: "hue", description: "Control Hue lights", acceptsArgs: false },
     ]);
-    const registration = resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")?.registration;
+    const registration = resolvePluginInteractiveRegistrationsMatch(
+      getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+      "telegram",
+      "hue:on",
+    )?.registration;
     expect(registration?.pluginId).toBe("cached-command-interactive");
     expect(registration?.namespace).toBe("hue");
     expect(registration?.channel).toBe("telegram");
