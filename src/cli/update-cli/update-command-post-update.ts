@@ -103,6 +103,20 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   let rollbackStopState: PreManagedServiceStop | undefined;
   // Rollback and later plugin maintenance can replace the suspension owner.
   const currentServiceStop = () => rollbackStopState ?? params.preManagedServiceStop;
+  const resumeWindowsAutoStart = async (result: UpdateRunResult) => {
+    const stopped = currentServiceStop();
+    await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
+      stopped,
+      true,
+      stopped
+        ? createWindowsTaskAutoStartGuard({
+            root: result.root ?? params.root,
+            before: stopped,
+            timeoutMs: params.updateStepTimeoutMs,
+          })
+        : undefined,
+    );
+  };
   let rolledBack = false;
   let completedDowntimeMs: number | undefined;
   let pendingRestartAtMs =
@@ -272,18 +286,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         ) {
           await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
         } else {
-          const stopped = currentServiceStop();
-          await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-            stopped,
-            true,
-            stopped
-              ? createWindowsTaskAutoStartGuard({
-                  root: finalResult.root ?? params.root,
-                  before: stopped,
-                  timeoutMs: params.updateStepTimeoutMs,
-                })
-              : undefined,
-          );
+          await resumeWindowsAutoStart(finalResult);
         }
       } catch (cause) {
         restoreFailure = { cause };
@@ -407,19 +410,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     return reportedResult;
   };
   const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
-    const stopped = currentServiceStop();
     try {
-      await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-        stopped,
-        true,
-        stopped
-          ? createWindowsTaskAutoStartGuard({
-              root: result.root ?? params.root,
-              before: stopped,
-              timeoutMs: params.updateStepTimeoutMs,
-            })
-          : undefined,
-      );
+      await resumeWindowsAutoStart(result);
     } catch (cause) {
       // The attempted restore already failed; reporting must not attempt it again.
       await reportResult(result, false, { cause });
