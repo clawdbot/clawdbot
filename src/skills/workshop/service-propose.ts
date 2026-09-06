@@ -31,10 +31,6 @@ import { readWritableWorkshopSkill } from "./workspace-skill-read.js";
 
 export class SkillProposalStaleTargetError extends Error {}
 
-function proposalStoreOptions(env?: NodeJS.ProcessEnv) {
-  return env ? { env } : {};
-}
-
 export function normalizeProposalOrigin(
   origin: SkillProposalOrigin | undefined,
 ): SkillProposalOrigin | undefined {
@@ -274,7 +270,7 @@ async function createPendingSkillProposal(
       type: "created",
       actor: input.eventActor,
     }),
-    store: { ...proposalStoreOptions(input.env), agentId },
+    store: { ...(input.env ? { env: input.env } : {}), agentId },
   });
   await dispatchSkillProposalChanged({
     event,
